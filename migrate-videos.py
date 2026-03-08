@@ -31,7 +31,7 @@ import requests
 from pathlib import Path
 
 # ─── Config ──────────────────────────────────
-CF_ACCOUNT_ID = os.environ.get('CF_ACCOUNT_ID', 'bgg2Xv7khuDAXXHwJTqXl_wiVvqmS2MbhnQcOcYl')
+CF_ACCOUNT_ID = os.environ.get('CF_ACCOUNT_ID', '116afe32d02c61855e5716424d3c2c22')
 CF_STREAM_TOKEN = os.environ.get('CF_STREAM_TOKEN', 'Id6OF3ZcCn5SC-Gxu_NHzzd2yr_FVjtBhnKkwAgi')
 KIDS_DIR = 'src/content/kids'
 DOWNLOAD_DIR = '/tmp/soard-video-migration'
