@@ -28,6 +28,7 @@
     "cta2Link": "#stories"
   },
   "featuredKidSlug": "amari",
+  "featuredStoryImage": "kids/amari/photo-01",
   "heroKidSlug": "adrian",
   "heroKidPhotoId": "",
   "kidShowcase": [
@@ -131,6 +132,14 @@
     "hero": "kids/griffin/hero",
     "story": "kids/eli/photo-01",
     "selection": "kids/georgia/photo-01"
+  },
+  "communityPhotos": {
+    "hero": "kids/camp-twin-lakes/hero"
+  },
+  "waysToGivePhotos": {
+    "hero": "kids/summer/hero",
+    "breakPhoto": "kids/summer/hero",
+    "legacyPhoto": "kids/oakley/photo-15"
   },
   "newsletter": {
     "listId": ""

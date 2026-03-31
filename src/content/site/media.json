@@ -17,39 +17,5 @@
     "instagram": "https://www.instagram.com/sunshineonaranneyday",
     "youtube": "https://www.youtube.com/@sunshineonaranneyday"
   },
-  "metaDescription": "Official media kit for Sunshine on a Ranney Day — bio, mission statement, founder's story, logos, and brand assets for press and media use.",
-  "pressLogos": [
-    {
-      "id": "press-logo-today-show",
-      "alt": "Today Show"
-    },
-    {
-      "id": "press-logo-11alive",
-      "alt": "11Alive"
-    },
-    {
-      "id": "press-logo-fox5",
-      "alt": "Fox 5 Atlanta"
-    },
-    {
-      "id": "press-logo-wsb-tv",
-      "alt": "WSB-TV"
-    },
-    {
-      "id": "press-logo-ajc",
-      "alt": "Atlanta Journal-Constitution"
-    },
-    {
-      "id": "press-logo-atlanta-magazine",
-      "alt": "Atlanta Magazine"
-    },
-    {
-      "id": "press-logo-styleblueprint",
-      "alt": "StyleBlueprint"
-    },
-    {
-      "id": "press-logo-41nbc",
-      "alt": "41NBC"
-    }
-  ]
+  "metaDescription": "Official media kit for Sunshine on a Ranney Day — bio, mission statement, founder's story, logos, and brand assets for press and media use."
 }
