@@ -4,6 +4,10 @@
  * Large-scale renovations at schools, camps, and nonprofits
  * serving children with special needs.
  *
+ * DESIGN: Magazine-style editorial layouts — each project gets its own
+ * visual moment. Alternating splits, immersive hero cards, color panels.
+ * No two sections look the same.
+ *
  * PERF NOTES:
  * - Editorial split hero (no full-bleed image)
  * - Hero image: fetchpriority="high", eager loading, LQIP blur-up
@@ -15,8 +19,9 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import CFImage from '../components/ui/CFImage.astro';
 import { getWebPageSchema, getBreadcrumbSchema, buildSchemaGraph } from '../utils/schema';
 import { getCollection } from 'astro:content';
-import { cfRaw, cfSrcset, cfLqip } from '../utils/cf-image';
+import { cfRaw, cfSrcset, cfLqip, CF_BASE as CF } from '../utils/cf-image';
 import { getSiteStats } from '../utils/stats';
+import siteSettings from '../content/site/settings.json';
 
 /* ── Community Projects from content collection ── */
 const allProjects = await getCollection('community');
@@ -27,21 +32,21 @@ const projects = allProjects
 const { livesImpacted } = await getSiteStats();
 const totalImpact = livesImpacted.toLocaleString() + '+';
 
-/* ── Gallery photos — the 3 projects with images ── */
-const galleryPhotos = [
-  { id: 'kids/camp-twin-lakes/hero', alt: 'Camp Twin Lakes renovation by SOARD' },
-  { id: 'kids/summit-counseling-center/hero', alt: 'Summit Counseling Center renovation' },
-  { id: 'kids/murphy-harpst/hero', alt: 'Murphy-Harpst Children\'s Center renovation' },
-];
+/* ── Separate projects by type ── */
+const inProgress = projects.find(p => p.badge === 'In Progress');
+const completed = projects.filter(p => p.badge !== 'In Progress');
+const withPhotos = completed.filter(p => p.imageId);
+const withoutPhotos = completed.filter(p => !p.imageId);
 
-/* ── Spotlight photo ── */
-const spotlightPhoto = 'kids/camp-twin-lakes/hero';
+/* ── Hero photo (from admin settings, with fallback) ── */
+const cp = siteSettings.communityPhotos || {};
+const heroProject = completed.find(p => p.slug === 'camp-twin-lakes') || withPhotos[0];
+const heroPhotoId = cp.hero || heroProject?.imageId || 'kids/camp-twin-lakes/hero';
 
 /* ── Schema ── */
 const pageUrl = 'https://sunshineonaranneyday.com/community/';
 const breadcrumbs = [
   { name: 'Home', url: 'https://sunshineonaranneyday.com/' },
-  { name: 'Rooms', url: 'https://sunshineonaranneyday.com/rooms/' },
   { name: 'Community Projects', url: pageUrl },
 ];
 const jsonLd = buildSchemaGraph(
@@ -60,42 +65,41 @@ const jsonLd = buildSchemaGraph(
   jsonLd={jsonLd}
   breadcrumbs={breadcrumbs}
 >
+  <!-- Preload hero LCP image — srcset/sizes must match the <img> -->
+  <link slot="head" rel="preload" as="image" imagesrcset={`${CF}/${heroPhotoId}/w=400,h=500,fit=cover,q=65 400w, ${CF}/${heroPhotoId}/w=560,h=700,fit=cover,q=65 560w, ${CF}/${heroPhotoId}/w=800,h=1000,fit=cover,q=65 800w`} imagesizes="(max-width:768px) 85vw, 420px" fetchpriority="high" />
 
-  <!-- Noscript: ensure all content visible if JS is blocked -->
-  <!-- ══════ HERO — Typographic Opening ══════ -->
-  <section class="cp-hero" aria-label="Community Projects">
-    <div class="cp-hero-inner">
-      <div class="section-label cp-hero-label">Community Projects</div>
-      <h1 class="cp-hero-num" aria-label={`${totalImpact} children reached`}>{totalImpact}</h1>
-      <p class="cp-hero-context">children reached through community partnerships</p>
-      <div class="cp-hero-divider" aria-hidden="true"></div>
-      <div class="cp-hero-bottom">
-        <p class="cp-hero-lead">When one room isn't enough, we think bigger. We partner with schools, camps, and nonprofits to transform entire facilities — classrooms, therapy rooms, and gathering spaces that serve thousands of children every year.</p>
-        <div class="cp-hero-ctas">
+  <!-- ══════ HERO — Editorial Split ══════ -->
+  <section class="hero" aria-label="Community Projects">
+    <div class="hero-inner">
+      <div class="hero-text">
+        <p class="hero-eyebrow">Community Projects</p>
+        <h1 class="hero-headline">Thinking <em>bigger</em>.</h1>
+        <p class="hero-lead">When one room isn't enough, we think bigger. We partner with schools, camps, and nonprofits to transform entire facilities — classrooms, therapy rooms, and gathering spaces that serve thousands of children every year.</p>
+        <div class="hero-ctas">
           <a href="#projects" class="btn btn-primary">See Our Partners</a>
           <a href="/donate" class="btn btn-dark">Donate Today</a>
         </div>
       </div>
-    </div>
-  </section>
-
-  <!-- ══════ PHOTO GALLERY — Editorial Strip ══════ -->
-  <section class="cp-gallery" aria-label="Community project photos">
-    <div class="cp-gallery-inner">
-      {galleryPhotos.map((photo, i) => (
-        <div class="cp-gallery-photo" data-reveal data-delay={String(i)} style={`background-image:url(${cfLqip(photo.id)})`}>
-          <CFImage
-            src={photo.id}
-            alt={photo.alt}
-            width={600} height={450}
-            sizes="(max-width:768px) 85vw, 33vw"
-            widths={[300, 400, 600]}
+      <div class="hero-photo-wrap">
+        <div class="hero-frame" style={`background-image:url('${cfLqip(heroPhotoId)}')`}>
+          <img
+            src={`${CF}/${heroPhotoId}/w=800,h=1000,fit=cover,q=65`}
+            srcset={`${CF}/${heroPhotoId}/w=400,h=500,fit=cover,q=65 400w, ${CF}/${heroPhotoId}/w=560,h=700,fit=cover,q=65 560w, ${CF}/${heroPhotoId}/w=800,h=1000,fit=cover,q=65 800w`}
+            sizes="(max-width:768px) 85vw, 420px"
+            alt="Camp Twin Lakes facility renovated by SOARD"
+            width="800" height="1000"
+            fetchpriority="high"
             loading="eager"
-            fit="cover"
-            class="lqip-img"
+            decoding="sync"
+            class="hero-img lqip-img"
           />
         </div>
-      ))}
+        <div class="hero-accent" aria-hidden="true"></div>
+        <div class="hero-stat">
+          <span class="hero-stat-num" aria-label={`${totalImpact} children reached`}>{totalImpact}</span>
+          <span class="hero-stat-label">children reached<br/>through partnerships</span>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -124,74 +128,108 @@ const jsonLd = buildSchemaGraph(
     </div>
   </section>
 
-  <!-- ══════ PROJECTS ══════ -->
+  <!-- ══════ CURRENTLY BUILDING — In-Progress Feature ══════ -->
+  {inProgress && (
+    <section class="cp-building" aria-label="Current project">
+      <div class="cp-building-inner" data-reveal>
+        <div class="cp-building-content">
+          <div class="cp-building-badge">
+            <span class="cp-building-dot" aria-hidden="true"></span>
+            Currently Building
+          </div>
+          <span class="cp-building-year">{inProgress.year}</span>
+          <h2 class="cp-building-name">{inProgress.name}</h2>
+          <p class="cp-building-desc">{inProgress.description}</p>
+          <div class="cp-building-impact">
+            <span class="cp-building-impact-num">{inProgress.impact}</span>
+            <span class="cp-building-impact-label">{inProgress.impactLabel}</span>
+          </div>
+        </div>
+        <div class="cp-building-visual" aria-hidden="true">
+          <div class="cp-building-graphic">
+            <span class="cp-building-graphic-num">{inProgress.impact}</span>
+            <span class="cp-building-graphic-label">{inProgress.impactLabel}</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  )}
+
+  <!-- ══════ PROJECTS — Magazine Editorial ══════ -->
   <section class="cp-projects" id="projects" aria-labelledby="projects-heading">
     <div class="cp-projects-header" data-reveal>
       <div class="section-label">Our Partners</div>
       <h2 id="projects-heading">Organizations we've <em class="highlight">transformed</em>.</h2>
+      <p class="cp-projects-sub">Each partnership is a story of transformation — facilities redesigned, spaces reimagined, and thousands of lives changed.</p>
     </div>
 
-    <div class="cp-projects-grid">
-      {projects.map((project, i) => (
-        <article class="cp-card" data-reveal data-delay={String(i % 2)}>
-          {project.imageId ? (
-            <div class="cp-card-photo" style={`background-image:url(${cfLqip(project.imageId)})`}>
-              <CFImage
-                src={project.imageId}
-                alt={project.imageAlt || `${project.name} project by SOARD`}
-                width={600} height={400}
-                sizes="(max-width:768px) 90vw, 45vw"
-                widths={[300, 400, 600]}
-                loading="lazy"
-                fit="cover"
-                class="lqip-img"
-              />
-            </div>
-          ) : (
-            <div class="cp-card-color" style={`background: ${project.color};`}>
-              <span class="cp-card-color-num">{project.impact}</span>
-              <span class="cp-card-color-label">{project.impactLabel}</span>
-            </div>
-          )}
-          {project.badge && <span class="cp-card-badge">{project.badge}</span>}
-          <div class="cp-card-body">
-            <span class="cp-card-year">{project.year}</span>
-            <h3 class="cp-card-name">{project.name}</h3>
-            {project.imageId && (
-              <div class="cp-card-impact">
-                <span class="cp-card-num">{project.impact}</span>
-                <span class="cp-card-label">{project.impactLabel}</span>
-              </div>
-            )}
-            <p class="cp-card-desc">{project.description}</p>
-          </div>
-        </article>
-      ))}
-    </div>
-  </section>
-
-  <!-- ══════ SPOTLIGHT ══════ -->
-  <section class="cp-spotlight" aria-labelledby="spotlight-heading">
-    <div class="cp-spotlight-inner">
-      <div class="cp-spotlight-visual" data-reveal>
-        <div class="cp-spotlight-frame" style={`background-image:url(${cfLqip(spotlightPhoto)})`}>
+    <!-- Lead project — full-width immersive card -->
+    {heroProject && (
+      <div class="cp-feature" data-reveal>
+        <div class="cp-feature-img" style={`background-image:url(${cfLqip(heroProject.imageId)})`}>
           <CFImage
-            src={spotlightPhoto}
-            alt="Camp Twin Lakes facility renovated by SOARD"
-            width={800} height={600}
-            sizes="(max-width:768px) 90vw, 45vw"
-            widths={[400, 600, 800]}
+            src={heroProject.imageId}
+            alt={heroProject.imageAlt || `${heroProject.name} renovation by SOARD`}
+            width={1200} height={600}
+            sizes="(max-width:768px) 100vw, 80vw"
+            widths={[600, 900, 1200]}
             loading="lazy"
+            fit="cover"
             class="lqip-img"
           />
         </div>
+        <div class="cp-feature-scrim"></div>
+        <div class="cp-feature-body">
+          <span class="cp-feature-year">{heroProject.year}</span>
+          <h3 class="cp-feature-name">{heroProject.name}</h3>
+          <p class="cp-feature-desc">{heroProject.description}</p>
+          <div class="cp-feature-impact">
+            <span class="cp-feature-impact-num">{heroProject.impact}</span>
+            <span class="cp-feature-impact-label">{heroProject.impactLabel}</span>
+          </div>
+        </div>
       </div>
-      <div class="cp-spotlight-text" data-reveal data-delay="1">
-        <div class="section-label">2022 Spotlight</div>
-        <h2 id="spotlight-heading">Transforming The Drake House for families <em class="highlight">starting over</em>.</h2>
-        <p>The Drake House provides housing and education for single mothers and their children experiencing homelessness. Over 40% of Atlanta's homeless population are women and children.</p>
-        <p>SOARD renovated their headquarters — classrooms, activity spaces, a community kitchen, and teen gathering rooms — creating an environment where families can recover, learn, and rebuild with dignity.</p>
-      </div>
+    )}
+
+    <!-- Remaining projects — alternating editorial splits -->
+    <div class="cp-stories">
+      {completed.filter(p => p.slug !== heroProject?.slug).map((project, i) => (
+        <article class={`cp-story ${i % 2 === 1 ? 'cp-story--reversed' : ''}`} data-reveal>
+          {project.imageId ? (
+            <div class="cp-story-visual">
+              <div class="cp-story-frame" style={`background-image:url(${cfLqip(project.imageId)})`}>
+                <CFImage
+                  src={project.imageId}
+                  alt={project.imageAlt || `${project.name} renovation by SOARD`}
+                  width={700} height={500}
+                  sizes="(max-width:768px) 90vw, 45vw"
+                  widths={[400, 600, 700]}
+                  loading="lazy"
+                  fit="cover"
+                  class="lqip-img"
+                />
+              </div>
+            </div>
+          ) : (
+            <div class="cp-story-visual">
+              <div class="cp-story-color" style={`background: ${project.color};`}>
+                <span class="cp-story-color-num">{project.impact}</span>
+                <span class="cp-story-color-label">{project.impactLabel}</span>
+              </div>
+            </div>
+          )}
+          <div class="cp-story-content">
+            <span class="cp-story-year">{project.year}</span>
+            {project.badge && <span class="cp-story-badge">{project.badge}</span>}
+            <h3 class="cp-story-name">{project.name}</h3>
+            <div class="cp-story-impact">
+              <span class="cp-story-impact-num">{project.impact}</span>
+              <span class="cp-story-impact-label">{project.impactLabel}</span>
+            </div>
+            <p class="cp-story-desc">{project.description}</p>
+          </div>
+        </article>
+      ))}
     </div>
   </section>
 
@@ -228,145 +266,96 @@ const jsonLd = buildSchemaGraph(
   .lqip-img:not(.lqip-pending) { transition: opacity 0.4s ease; }
 
   /* ══════════════════════════════════════════
-     HERO — Typographic Opening
+     HERO — Editorial Split
+     Standardized hero-* naming (matches home/apply/donate)
      ══════════════════════════════════════════ */
-  .cp-hero {
+  .hero {
+    position: relative;
     background: var(--c-cream);
-    padding: clamp(48px, 10vh, 120px) 0 clamp(40px, 6vh, 72px);
+    contain: layout style;
+    padding: clamp(40px, 8vh, 100px) 0 40px;
     overflow: hidden;
   }
 
-  .cp-hero-inner {
-    max-width: 1000px;
+  .hero-inner {
+    max-width: var(--max-width-wide, 1400px);
     margin: 0 auto;
-    padding: 0 var(--page-padding, clamp(1rem, 4vw, 2rem));
-  }
-
-  .cp-hero-label {
-    opacity: 0;
-    animation: cpFadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.05s both;
-  }
-
-  /* The number IS the hero */
-  .cp-hero-num {
-    font-family: var(--font-display);
-    font-size: clamp(80px, 16vw, 180px);
-    font-weight: 700;
-    line-height: 0.85;
-    letter-spacing: -0.04em;
-    color: var(--c-dark);
-    margin: var(--space-lg) 0 var(--space-md);
-    /* LCP — no opacity:0 */
-    animation: cpSlide 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-
-  .cp-hero-context {
-    font-size: clamp(14px, 1.5vw, 18px);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--c-text-light);
-    opacity: 0;
-    animation: cpFadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
-  }
-
-  .cp-hero-divider {
-    width: 48px;
-    height: 3px;
-    background: var(--c-yellow);
-    border-radius: 2px;
-    margin: var(--space-2xl) 0;
-    opacity: 0;
-    animation: cpFadeUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both;
-  }
-
-  .cp-hero-bottom {
+    padding: 0 var(--page-padding);
     display: grid;
-    grid-template-columns: 1fr auto;
-    gap: var(--space-2xl);
-    align-items: end;
-    opacity: 0;
-    animation: cpFadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.3s both;
+    grid-template-columns: 1.15fr 0.85fr;
+    gap: clamp(32px, 5vw, 80px);
+    align-items: center;
+    min-height: clamp(480px, 70vh, 720px);
   }
 
-  .cp-hero-lead {
-    max-width: 560px;
-    font-size: clamp(15px, 1.2vw, 17px);
+  /* ── Text column ── */
+  .hero-eyebrow {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--c-text-light);
+    margin-bottom: 28px;
+    opacity: 0;
+    animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.05s both;
+  }
+
+  .hero-headline {
+    font-size: clamp(42px, 6.5vw, 88px);
+    line-height: 1.04;
+    letter-spacing: -0.035em;
+    color: var(--c-dark);
+    margin-bottom: 28px;
+    /* NO opacity:0 — this is the LCP element, must paint immediately */
+    animation: heroSlide 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .hero-headline em {
+    font-style: italic;
+    background-image: linear-gradient(transparent 52%, var(--c-yellow-soft) 52%);
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    padding: 0 0.05em;
+  }
+
+  .hero-lead {
+    font-size: clamp(16px, 1.3vw, 19px);
     line-height: 1.7;
     color: var(--c-text-muted);
+    max-width: 480px;
+    margin-bottom: 36px;
+    opacity: 0;
+    animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
   }
 
-  .cp-hero-ctas {
+  .hero-ctas {
     display: flex;
     gap: 14px;
     flex-wrap: wrap;
-    flex-shrink: 0;
+    opacity: 0;
+    animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both;
   }
 
-  @keyframes cpFadeUp {
-    from { opacity: 0; transform: translateY(24px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-  @keyframes cpSlide {
-    from { transform: translateY(20px); }
-    to { transform: translateY(0); }
+  /* ── Photo column — portrait (4:5), accent, stat badge ── */
+  .hero-photo-wrap {
+    position: relative;
+    /* NO opacity:0 — hero image is LCP candidate, must paint on load */
+    animation: heroPhotoIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
-  @media (prefers-reduced-motion: reduce) {
-    .cp-hero-label, .cp-hero-context, .cp-hero-divider,
-    .cp-hero-bottom { opacity: 1; transform: none; animation: none; }
-  }
-
-  @media (max-width: 768px) {
-    .cp-hero { padding: clamp(32px, 6vh, 64px) 0 clamp(24px, 4vh, 48px); }
-    .cp-hero-num { font-size: clamp(64px, 18vw, 120px); }
-    .cp-hero-bottom {
-      grid-template-columns: 1fr;
-      gap: var(--space-xl);
-    }
-  }
-
-  @media (max-width: 480px) {
-    .cp-hero-num { font-size: clamp(52px, 16vw, 80px); }
-    .cp-hero-lead { font-size: 15px; }
-    .cp-hero-ctas .btn { padding: 12px 26px; font-size: 14px; }
-  }
-
-  /* ══════════════════════════════════════════
-     GALLERY — Three-photo editorial strip
-     ══════════════════════════════════════════ */
-  .cp-gallery {
-    background: var(--c-cream);
-    padding-bottom: clamp(40px, 6vh, 72px);
-  }
-
-  .cp-gallery-inner {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 0 var(--page-padding, clamp(1rem, 4vw, 2rem));
-    display: grid;
-    grid-template-columns: 1.2fr 0.9fr 0.9fr;
-    gap: var(--space-md);
-  }
-
-  .cp-gallery-photo {
-    border-radius: var(--border-radius-lg);
+  .hero-frame {
+    display: block;
+    position: relative;
+    border-radius: 24px;
     overflow: hidden;
+    aspect-ratio: 4 / 5;
+    box-shadow: 0 32px 80px rgba(0, 0, 0, 0.12), 0 8px 24px rgba(0, 0, 0, 0.06);
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
   }
 
-  .cp-gallery-photo:first-child {
-    aspect-ratio: 4 / 3;
-  }
-
-  .cp-gallery-photo:nth-child(2),
-  .cp-gallery-photo:nth-child(3) {
-    aspect-ratio: 1 / 1;
-  }
-
-  .cp-gallery-photo :global(img) {
+  .hero-frame img {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -374,23 +363,88 @@ const jsonLd = buildSchemaGraph(
     transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .cp-gallery-photo:hover :global(img) {
-    transform: scale(1.04);
+  .hero-frame:hover img {
+    transform: scale(1.03);
+  }
+
+  /* Yellow accent element behind the photo */
+  .hero-accent {
+    position: absolute;
+    z-index: -1;
+    bottom: -16px;
+    right: -16px;
+    width: 55%;
+    height: 55%;
+    border-radius: 20px;
+    background: var(--c-yellow);
+    opacity: 0.35;
+  }
+
+  /* Floating stat badge */
+  .hero-stat {
+    position: absolute;
+    bottom: -24px;
+    left: -24px;
+    background: var(--c-dark);
+    color: #fff;
+    border-radius: 16px;
+    padding: 20px 28px;
+    text-align: center;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.15);
+    opacity: 0;
+    animation: heroUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) 0.4s both;
+  }
+
+  .hero-stat-num {
+    font-family: var(--font-display);
+    font-size: 40px;
+    font-weight: 700;
+    color: var(--c-yellow);
+    line-height: 1;
+    display: block;
+  }
+
+  .hero-stat-label {
+    display: block;
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.7);
+    margin-top: 4px;
+    line-height: 1.4;
+  }
+
+  @keyframes heroUp {
+    from { opacity: 0; transform: translateY(24px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes heroSlide {
+    from { transform: translateY(20px); }
+    to { transform: translateY(0); }
+  }
+  @keyframes heroPhotoIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .hero-eyebrow, .hero-lead, .hero-ctas,
+    .hero-photo-wrap, .hero-stat { opacity: 1; transform: none; animation: none; }
   }
 
   @media (max-width: 768px) {
-    .cp-gallery-inner {
-      grid-template-columns: 1fr 1fr;
-      gap: var(--space-sm);
-    }
-    .cp-gallery-photo:first-child {
-      grid-column: 1 / -1;
-      aspect-ratio: 16 / 9;
-    }
-    .cp-gallery-photo:nth-child(2),
-    .cp-gallery-photo:nth-child(3) {
-      aspect-ratio: 4 / 3;
-    }
+    .hero { padding: clamp(32px, 6vh, 64px) 0 32px; }
+    .hero-inner { grid-template-columns: 1fr; gap: var(--space-2xl); min-height: auto; }
+    .hero-headline { font-size: clamp(36px, 9vw, 52px); }
+    .hero-ctas { flex-direction: column; }
+    .hero-ctas .btn { width: 100%; }
+    .hero-accent { bottom: -12px; right: -12px; }
+    .hero-stat { left: 16px; bottom: -16px; padding: 16px 22px; }
+    .hero-stat-num { font-size: 32px; }
+  }
+
+  @media (max-width: 480px) {
+    .hero-headline { font-size: clamp(32px, 8.5vw, 42px); }
+    .hero-ctas .btn { padding: 12px 26px; font-size: 14px; }
   }
 
   /* ══════════════════════════════════════════
@@ -411,10 +465,7 @@ const jsonLd = buildSchemaGraph(
     gap: var(--space-xl);
   }
 
-  .cp-ribbon-stat {
-    text-align: center;
-    flex: 1;
-  }
+  .cp-ribbon-stat { text-align: center; flex: 1; }
 
   .cp-ribbon-num {
     display: block;
@@ -426,10 +477,7 @@ const jsonLd = buildSchemaGraph(
     letter-spacing: -0.02em;
   }
 
-  .cp-ribbon-pct {
-    font-size: 0.55em;
-    vertical-align: super;
-  }
+  .cp-ribbon-pct { font-size: 0.55em; vertical-align: super; }
 
   .cp-ribbon-label {
     display: block;
@@ -451,16 +499,163 @@ const jsonLd = buildSchemaGraph(
 
   @media (max-width: 600px) {
     .cp-ribbon { padding-block: var(--space-2xl); }
-    .cp-ribbon-inner {
-      flex-wrap: wrap;
-      gap: var(--space-xl) var(--space-md);
-    }
+    .cp-ribbon-inner { flex-wrap: wrap; gap: var(--space-xl) var(--space-md); }
     .cp-ribbon-stat { flex: 0 0 calc(50% - var(--space-md)); }
     .cp-ribbon-divider { display: none; }
   }
 
   /* ══════════════════════════════════════════
-     PROJECTS — 2-column editorial grid
+     CURRENTLY BUILDING — In-Progress Feature
+     ══════════════════════════════════════════ */
+  .cp-building {
+    background: var(--c-cream);
+    padding-block: var(--space-5xl);
+  }
+
+  .cp-building-inner {
+    max-width: 1200px;
+    margin-inline: auto;
+    padding-inline: var(--page-padding, clamp(1rem, 4vw, 2rem));
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: clamp(40px, 6vw, 80px);
+    align-items: center;
+    background: var(--c-dark);
+    border-radius: 24px;
+    padding: clamp(40px, 6vw, 72px);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .cp-building-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    background: rgba(255, 218, 36, 0.15);
+    border: 1px solid rgba(255, 218, 36, 0.3);
+    border-radius: 100px;
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--c-yellow);
+  }
+
+  .cp-building-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c-yellow);
+    animation: cpPulse 2s ease-in-out infinite;
+  }
+
+  @keyframes cpPulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.4); }
+  }
+
+  .cp-building-year {
+    display: block;
+    margin-top: var(--space-lg);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  .cp-building-name {
+    font-family: var(--font-display);
+    font-size: clamp(1.5rem, 3vw, 2.25rem);
+    color: var(--c-white);
+    line-height: 1.2;
+    margin: var(--space-sm) 0 var(--space-lg);
+  }
+
+  .cp-building-desc {
+    font-size: 0.95rem;
+    line-height: 1.7;
+    color: rgba(255, 255, 255, 0.75);
+    max-width: 520px;
+  }
+
+  .cp-building-impact {
+    margin-top: var(--space-xl);
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-sm);
+  }
+
+  .cp-building-impact-num {
+    font-family: var(--font-display);
+    font-size: clamp(1.5rem, 3vw, 2rem);
+    font-weight: 700;
+    color: var(--c-yellow);
+    line-height: 1;
+  }
+
+  .cp-building-impact-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  /* Right side — decorative graphic */
+  .cp-building-visual {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .cp-building-graphic {
+    text-align: center;
+    padding: var(--space-3xl);
+    border: 2px solid rgba(255, 255, 255, 0.08);
+    border-radius: 50%;
+    aspect-ratio: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 200px;
+  }
+
+  .cp-building-graphic-num {
+    font-family: var(--font-display);
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.12);
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .cp-building-graphic-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.08);
+    margin-top: var(--space-sm);
+  }
+
+  @media (max-width: 768px) {
+    .cp-building { padding-block: var(--space-3xl); }
+    .cp-building-inner {
+      grid-template-columns: 1fr;
+      padding: clamp(32px, 5vw, 48px);
+    }
+    .cp-building-visual { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cp-building-dot { animation: none; }
+  }
+
+  /* ══════════════════════════════════════════
+     PROJECTS — Magazine Editorial Layout
      ══════════════════════════════════════════ */
   .cp-projects {
     padding-block: var(--space-5xl);
@@ -483,100 +678,209 @@ const jsonLd = buildSchemaGraph(
 
   .cp-projects-header h2 em { font-style: normal; }
 
-  .cp-projects-grid {
+  .cp-projects-sub {
+    margin-top: var(--space-md);
+    font-size: clamp(15px, 1.2vw, 17px);
+    line-height: 1.7;
+    color: var(--c-text-muted);
+    max-width: 560px;
+  }
+
+  /* ── Lead project — full-width immersive card ── */
+  .cp-feature {
     max-width: 1200px;
     margin-inline: auto;
     padding-inline: var(--page-padding, clamp(1rem, 4vw, 2rem));
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-xl);
+    margin-bottom: var(--space-4xl);
   }
 
-  .cp-card {
+  .cp-feature {
     position: relative;
-    background: var(--c-white);
-    border-radius: 20px;
+    border-radius: 24px;
     overflow: hidden;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+    min-height: 480px;
     display: flex;
-    flex-direction: column;
-    transition: all 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+    align-items: flex-end;
   }
 
-  .cp-card:hover {
-    transform: translateY(-8px);
-    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.1);
-  }
-
-  /* Photo cards */
-  .cp-card-photo {
-    overflow: hidden;
+  .cp-feature-img {
+    position: absolute;
+    inset: 0;
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
   }
 
-  .cp-card-photo :global(img) {
+  .cp-feature-img :global(img) {
     width: 100%;
-    aspect-ratio: 3 / 2;
+    height: 100%;
     object-fit: cover;
     display: block;
-    transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
   }
 
-  .cp-card:hover .cp-card-photo :global(img) {
-    transform: scale(1.05);
+  .cp-feature:hover .cp-feature-img :global(img) {
+    transform: scale(1.03);
   }
 
-  /* Color block cards (no photo) — the color IS the visual */
-  .cp-card-color {
-    aspect-ratio: 3 / 2;
+  .cp-feature-scrim {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      to top,
+      rgba(30, 31, 37, 0.92) 0%,
+      rgba(30, 31, 37, 0.6) 40%,
+      rgba(30, 31, 37, 0.1) 70%,
+      transparent 100%
+    );
+    z-index: 1;
+  }
+
+  .cp-feature-body {
+    position: relative;
+    z-index: 2;
+    padding: clamp(32px, 5vw, 56px);
+    max-width: 640px;
+  }
+
+  .cp-feature-year {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.6);
+  }
+
+  .cp-feature-name {
+    font-family: var(--font-display);
+    font-size: clamp(1.5rem, 3vw, 2.25rem);
+    color: var(--c-white);
+    line-height: 1.2;
+    margin: var(--space-xs) 0 var(--space-md);
+  }
+
+  .cp-feature-desc {
+    font-size: 0.9rem;
+    line-height: 1.65;
+    color: rgba(255, 255, 255, 0.8);
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .cp-feature-impact {
+    margin-top: var(--space-lg);
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-sm);
+  }
+
+  .cp-feature-impact-num {
+    font-family: var(--font-display);
+    font-size: clamp(1.75rem, 3vw, 2.5rem);
+    font-weight: 700;
+    color: var(--c-yellow);
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .cp-feature-impact-label {
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(255, 255, 255, 0.5);
+  }
+
+  @media (max-width: 768px) {
+    .cp-feature { min-height: 400px; }
+  }
+
+  @media (max-width: 480px) {
+    .cp-feature { min-height: 360px; }
+    .cp-feature-desc { -webkit-line-clamp: 2; }
+  }
+
+  /* ── Project Stories — Alternating editorial splits ── */
+  .cp-stories {
+    max-width: 1200px;
+    margin-inline: auto;
+    padding-inline: var(--page-padding, clamp(1rem, 4vw, 2rem));
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4xl);
+  }
+
+  .cp-story {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(32px, 5vw, 64px);
+    align-items: center;
+  }
+
+  .cp-story--reversed {
+    direction: rtl;
+  }
+
+  .cp-story--reversed > * {
+    direction: ltr;
+  }
+
+  /* Visual column */
+  .cp-story-frame {
+    border-radius: var(--border-radius-lg);
+    overflow: hidden;
+    aspect-ratio: 4 / 3;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.1), 0 6px 20px rgba(0, 0, 0, 0.05);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
+
+  .cp-story-frame :global(img) {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .cp-story-frame:hover :global(img) {
+    transform: scale(1.03);
+  }
+
+  /* Color panels (no image) */
+  .cp-story-color {
+    border-radius: var(--border-radius-lg);
+    aspect-ratio: 4 / 3;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 4px;
-    padding: var(--space-xl);
+    gap: 6px;
+    padding: var(--space-2xl);
   }
 
-  .cp-card-color-num {
+  .cp-story-color-num {
     font-family: var(--font-display);
-    font-size: clamp(2.5rem, 5vw, 3.5rem);
+    font-size: clamp(3rem, 6vw, 4.5rem);
     font-weight: 700;
     color: rgba(255, 255, 255, 0.95);
     line-height: 1;
     letter-spacing: -0.02em;
   }
 
-  .cp-card-color-label {
+  .cp-story-color-label {
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(255, 255, 255, 0.65);
   }
 
-  .cp-card-badge {
-    position: absolute;
-    top: var(--space-md);
-    right: var(--space-md);
-    padding: 3px 12px;
-    background: var(--c-yellow);
-    color: var(--c-dark);
-    font-size: 0.65rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    border-radius: 100px;
-    z-index: 2;
-  }
-
-  .cp-card-body {
-    padding: var(--space-xl) var(--space-xl) var(--space-2xl);
-    flex: 1;
-  }
-
-  .cp-card-year {
+  /* Content column */
+  .cp-story-year {
     font-size: 0.7rem;
     font-weight: 700;
     color: var(--c-text-light);
@@ -584,49 +888,66 @@ const jsonLd = buildSchemaGraph(
     letter-spacing: 0.08em;
   }
 
-  .cp-card-name {
-    font-family: var(--font-display);
-    font-size: clamp(1.1rem, 1.5vw, 1.3rem);
+  .cp-story-badge {
+    display: inline-block;
+    margin-left: var(--space-sm);
+    padding: 2px 10px;
+    background: var(--c-yellow);
     color: var(--c-dark);
-    line-height: 1.3;
-    margin: var(--space-xs) 0 var(--space-sm);
+    font-size: 0.6rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-radius: 100px;
+    vertical-align: middle;
   }
 
-  .cp-card-impact {
+  .cp-story-name {
+    font-family: var(--font-display);
+    font-size: clamp(1.25rem, 2.5vw, 1.75rem);
+    color: var(--c-dark);
+    line-height: 1.25;
+    margin: var(--space-sm) 0 var(--space-md);
+  }
+
+  .cp-story-impact {
     display: flex;
     align-items: baseline;
     gap: var(--space-sm);
-    margin-bottom: var(--space-sm);
+    margin-bottom: var(--space-md);
   }
 
-  .cp-card-num {
+  .cp-story-impact-num {
     font-family: var(--font-display);
-    font-size: 1.5rem;
+    font-size: clamp(1.75rem, 3vw, 2.25rem);
     font-weight: 700;
     color: var(--c-dark);
     line-height: 1;
+    letter-spacing: -0.02em;
   }
 
-  .cp-card-label {
+  .cp-story-impact-label {
     font-size: 0.65rem;
     font-weight: 600;
-    color: var(--c-text-muted);
+    color: var(--c-text-light);
     text-transform: uppercase;
     letter-spacing: 0.06em;
   }
 
-  .cp-card-desc {
-    font-size: 0.85rem;
-    line-height: 1.65;
+  .cp-story-desc {
+    font-size: 0.9rem;
+    line-height: 1.7;
     color: var(--c-text-muted);
   }
 
   @media (max-width: 768px) {
     .cp-projects { padding-block: var(--space-3xl); }
-    .cp-projects-grid {
+    .cp-stories { gap: var(--space-3xl); }
+    .cp-story {
       grid-template-columns: 1fr;
-      gap: var(--space-lg);
+      gap: var(--space-xl);
     }
+    .cp-story--reversed { direction: ltr; }
   }
 
   /* ══════════════════════════════════════════
@@ -674,75 +995,6 @@ const jsonLd = buildSchemaGraph(
 
   .cp-quote blockquote footer strong {
     color: var(--c-dark);
-  }
-
-  /* ══════════════════════════════════════════
-     SPOTLIGHT — Drake House
-     ══════════════════════════════════════════ */
-  .cp-spotlight {
-    padding-block: var(--space-5xl);
-  }
-
-  .cp-spotlight-inner {
-    max-width: 1200px;
-    margin-inline: auto;
-    padding-inline: var(--space-lg);
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: clamp(40px, 6vw, 80px);
-    align-items: center;
-  }
-
-  .cp-spotlight-text .section-label {
-    margin-bottom: var(--space-md);
-  }
-
-  .cp-spotlight-text h2 {
-    font-size: clamp(1.5rem, 3vw, 2.25rem);
-    line-height: 1.2;
-    margin-bottom: var(--space-lg);
-  }
-
-  .cp-spotlight-text h2 em { font-style: normal; }
-
-  .cp-spotlight-text p {
-    margin-top: var(--space-md);
-    line-height: 1.7;
-    color: var(--c-text);
-    font-size: 0.95rem;
-  }
-
-  .cp-spotlight-text p:first-of-type {
-    font-size: 1.05rem;
-    color: var(--c-text);
-  }
-
-  .cp-spotlight-frame {
-    border-radius: var(--border-radius-lg);
-    overflow: hidden;
-    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.1), 0 6px 20px rgba(0, 0, 0, 0.05);
-    background-size: cover;
-    background-position: center;
-    background-repeat: no-repeat;
-  }
-
-  .cp-spotlight-frame :global(img) {
-    width: 100%;
-    height: auto;
-    display: block;
-    transition: transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-
-  .cp-spotlight-frame:hover :global(img) {
-    transform: scale(1.03);
-  }
-
-  @media (max-width: 768px) {
-    .cp-spotlight { padding-block: var(--space-3xl); }
-    .cp-spotlight-inner {
-      grid-template-columns: 1fr;
-      gap: var(--space-2xl);
-    }
   }
 
   /* ══════════════════════════════════════════
@@ -839,15 +1091,11 @@ const jsonLd = buildSchemaGraph(
 
   @media (prefers-reduced-motion: reduce) {
     [data-reveal] { opacity: 1; transform: none; transition: none; }
-    .cp-gallery-photo :global(img),
-    .cp-card,
-    .cp-card-photo :global(img),
-    .cp-spotlight-frame :global(img) {
-      transition: none;
-    }
-    .cp-gallery-photo:hover :global(img),
-    .cp-card:hover,
-    .cp-card:hover .cp-card-photo :global(img),
-    .cp-spotlight-frame:hover :global(img) { transform: none; }
+    .cp-hero-frame img,
+    .cp-feature-img :global(img),
+    .cp-story-frame :global(img) { transition: none; }
+    .cp-hero-frame:hover img,
+    .cp-feature:hover .cp-feature-img :global(img),
+    .cp-story-frame:hover :global(img) { transform: none; }
   }
 </style>
