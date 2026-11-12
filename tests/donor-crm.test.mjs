@@ -849,3 +849,56 @@ test('three records of one name: one Same person? at a time, the next once that 
   await doIt({ act: 'same', a: same[0].a.key, b: same[0].b.key, same: false });
   assert.equal((await needs()).filter((x) => x.kind === 'same').length, 0);
 });
+
+test('a record whose name reads as an organization’s is asked about at any amount; “It’s a person” ends it for good', async () => {
+  await db.prepare('CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, action TEXT, entity_type TEXT, entity_slug TEXT, entity_name TEXT, changes TEXT, path TEXT, git_status TEXT, created_at TEXT)').run();
+  await add(pay({ id: 'nf1', contact: 'ct_lark', first: 'Lark & Wren', last: 'Foundation', email: 'office@larkwren.example', amount: 100000, created: S(NOW - 200 * DAY) }));
+  await add(pay({ id: 'nf2', contact: 'ct_sc', first: 'Sara', last: 'Church', email: 'sara@example.com', amount: 5000 }));
+  let named = (await needs()).filter((x) => x.kind === 'named');
+  assert.deepEqual(named.map((x) => [x.name, x.cents, x.person]), [['Lark & Wren Foundation', 100000, true], ['Sara Church', 5000, true]], 'most first, by all it gave');
+  // A person whose name has one of the words in it
+  await doIt({ act: 'big', subject: named[1].subject, also: named[1].also, person: true });
+  named = (await needs()).filter((x) => x.kind === 'named');
+  assert.deepEqual(named.map((x) => x.name), ['Lark & Wren Foundation']);
+  const v = await C.personView(env, 'ct_sc', { now: NOW });
+  assert.match(v.history[0]?.what || '', /person, not an organization/, 'in their History');
+  // For good: even giving Champion's amount later, they aren't asked about as a big giver either
+  await add(pay({ id: 'nf3', contact: 'ct_sc', first: 'Sara', last: 'Church', email: 'sara@example.com', amount: 2000000 }));
+  assert.ok(!(await needs()).some((x) => x.subject === 'contact:ct_sc'));
+  // Kept as an organization: its gifts are the organization's, and it isn't asked about again
+  const r = await doIt({ act: 'org-new', name: named[0].name, links: [{ kind: named[0].link, subject: named[0].linkSubject }] });
+  assert.equal((await list()).find((p) => p.key === r.key)?.total, 100000);
+  assert.ok(!(await needs()).some((x) => x.kind === 'named' || x.kind === 'big'));
+});
+
+test('a name that reads as an organization’s and gave Champion’s amount is a big giver, and can be said to be a person', async () => {
+  await add(pay({ id: 'nb1', contact: 'ct_hb', first: 'Harbor', last: 'Trust', email: 'trust@harbor.example', amount: 1500000, created: S(NOW - 20 * DAY) }));
+  const it = (await needs()).find((x) => x.subject === 'contact:ct_hb');
+  assert.equal(it.kind, 'big');
+  assert.equal(it.person, true);
+  await doIt({ act: 'big', subject: it.subject, also: it.also, person: true });
+  assert.ok(!(await C.needsView(env, { now: NOW + 400 * DAY })).items.some((x) => x.subject === 'contact:ct_hb'), 'not asked again, a year on either');
+});
+
+test('Not now on a big giver holds a year; once under Champion’s amount, a name answered once isn’t asked about again', async () => {
+  await add(pay({ id: 'nn1', contact: 'ct_ob', first: 'Oak Bay', last: 'Holdings', email: 'ob@example.com', amount: 1200000, created: S(NOW - 10 * DAY) }));
+  const it = (await needs()).find((x) => x.subject === 'contact:ct_ob');
+  assert.equal(it.kind, 'big');
+  await doIt({ act: 'big', subject: it.subject, also: it.also });
+  assert.ok(!(await needs()).some((x) => x.subject === 'contact:ct_ob'));
+  // A year on its gift is older than 12 months: not a big giver, and already answered
+  assert.ok(!(await C.needsView(env, { now: NOW + 366 * DAY })).items.some((x) => x.subject === 'contact:ct_ob'));
+});
+
+test('a record that reads as an organization’s but was said to be the same as a person isn’t asked about', async () => {
+  await add(pay({ id: 'sj1', contact: 'ct_pf', first: 'Pine', last: 'Foundation', email: 'pine@example.com', amount: 30000 }));
+  await add(pay({ id: 'sj2', contact: 'ct_pp', first: 'Pat', last: 'Pine', email: 'pat@example.com', amount: 20000 }));
+  assert.ok((await needs()).some((x) => x.kind === 'named' && x.subject === 'contact:ct_pf'));
+  await doIt({ act: 'same', a: 'c:ct_pf', b: 'c:ct_pp', same: true });
+  assert.ok(!(await needs()).some((x) => x.kind === 'named'));
+});
+
+test('which names read as an organization’s', () => {
+  for (const n of ['Lark Foundation', 'Smith & Co.', 'Smith & Co', 'Acme Co. Builders', 'Peachtree Rotary Club', 'Vale Homes', 'River LLC', 'North Group']) assert.ok(C.ORG_WORDS.test(n), n);
+  for (const n of ['Coco Smith', 'Corey Coleman', 'Jane Doe', 'Fundy Clark', 'Trusty Lee', 'Cole Homeson']) assert.ok(!C.ORG_WORDS.test(n), n);
+});

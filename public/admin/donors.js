@@ -261,7 +261,10 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
     return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); };
   }, []);
   const open = (p) => { go(p); setPlace(p); window.scrollTo({ top: 0, behavior: 'instant' }); };
-  const ctx = { addToast, open, partners, createPartner };
+  // What's done here is in effect at once (private D1, Zeffy, Mercury), so no message offers Publish unless it says it
+  // waits for it ({ publish: true }: a partner's level, a partner card made)
+  const toast = (msg, type, action = null, o = {}) => addToast(msg, type, action, { publish: false, ...o });
+  const ctx = { addToast: toast, open, partners, createPartner };
   const pick = (id) => {
     if (id === 'partners') location.hash = '#partners';
     else if (id === 'community') location.hash = '#partners/community-partners';
@@ -277,7 +280,7 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
     <${AreaTabs} current=${place.tab === 'checks' ? 'checks' : 'donors'} partners=${partnersCount} community=${communityCount} onPick=${pick} />
     ${place.tab === 'checks' ? html`<div class="page-header"><div><h2>Checks into Zeffy</h2>
         <p class="page-sub">Every check deposited in Mercury, on its way into Zeffy: the site reads each one and fills in its card, and a person sends it.</p></div></div>
-      <div class="jc"><${Checks} addToast=${addToast} onCount=${setChecksWaiting} /></div>`
+      <div class="jc"><${Checks} addToast=${toast} onCount=${setChecksWaiting} /></div>`
       : html`<${DonorList} ctx=${ctx} view=${place.needs ? 'needs' : place.thanks ? 'thanks' : null} onView=${(w) => open({ tab: 'people', needs: w === 'needs', thanks: w === 'thanks' })} onOpen=${(d) => open(placeOfDonor(d))} />`}
   </div>`;
 }
@@ -298,6 +301,8 @@ let lastPlace = null;
 let lastOwner = '';
 /** Read the list again when it next shows (a change on a donor's page moves gifts between donors) */
 const listChanged = () => { if (lastList) lastList = { ...lastList, stale: true }; };
+// The sidebar's count of gifts to thank: read again at once, or the count just read here
+const thanksChanged = (value) => window.dispatchEvent(new CustomEvent('soard-thanks-changed', value === undefined ? undefined : { detail: { value } }));
 
 function DonorList({ ctx, view, onView, onOpen }) {
   const [v, setV] = useState(lastList);
@@ -327,6 +332,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
     setErr(null);
     lastList = j;
     setV(j);
+    thanksChanged(j.thanks || 0);
   };
   // Shown at once from the last read, then read again (a change on a donor's page can move gifts)
   useEffect(() => { load(); }, []);
@@ -426,10 +432,12 @@ async function sayThanks(ctx, g, state, done) {
   const r = await change({ act: 'thanks', id: g.id, state });
   if (!r.success) { ctx.addToast(r.error, 'error'); return false; }
   listChanged();
+  thanksChanged();
   const undo = async () => {
     const u = await change({ act: 'thanks', id: g.id, state: 'todo' });
     if (!u.success) { ctx.addToast(u.error, 'error'); return; }
     listChanged();
+    thanksChanged();
     await done?.();
   };
   ctx.addToast(state === 'thanked' ? `Thanked: ${amountOf(g)} from ${g.name || 'them'}` : `No thank-you needed: ${amountOf(g)}`, 'success', { label: 'Undo', fn: undo });
@@ -491,8 +499,10 @@ async function makeChampion(item, ctx) {
     if (!r.success) throw new Error(r.error || 'it didn’t save');
     if (!r.changed?.includes(item.slug)) throw new Error('someone changed them at the same moment. Look again and try once more');
   } catch (e) { ctx.addToast(`Couldn’t move ${item.name}: ${e.message}`, 'error'); return false; }
+  // A partner's level is the website's: the Publish bar counts it at once
+  window.dispatchEvent(new CustomEvent('soard-content-changed'));
   await change({ act: 'level', org: item.org, done: true, was: item.levelLabel });
-  ctx.addToast(`${item.name} moves to Champion when you publish`, 'success');
+  ctx.addToast(`${item.name} moves to Champion when you publish`, 'success', null, { publish: true });
   return true;
 }
 
@@ -529,7 +539,7 @@ function NeedsList({ ctx, onChanged, only = null }) {
   if (err) return html`<div class="notice notice--danger"><div class="notice__body">${err}</div><div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div></div>`;
   if (!v) return html`<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
   const items = only ? v.filter(only) : v;
-  if (!items.length) return html`<p class="dn-status dn-done">Nothing needs you. The site asks here when a name might be a partner, two records might be one person, a gift could count for two organizations, or someone’s giving says Champion.</p>`;
+  if (!items.length) return html`<p class="dn-status dn-done">Nothing needs you. The site asks here when a name might be a partner or reads as an organization’s, two records might be one person, a gift could count for two organizations, or someone’s giving says Champion.</p>`;
   const btn = (id, label, fn, primary = false) => html`<button type="button" class=${`btn btn-sm ${primary ? 'btn-primary' : 'btn-ghost'}`} disabled=${!!busy} onClick=${() => doIt(id, fn)}>${busy === id ? html`<span class="spinner spinner-14" />` : null}${label}</button>`;
   const who = (s) => html`<a class="link" href=${`#donors/${encodeURIComponent(s.ref)}`}>${s.name}</a>`;
   return html`<ul class="dn-needs" aria-label="Needs you">${items.map((it) => {
@@ -539,10 +549,18 @@ function NeedsList({ ctx, onChanged, only = null }) {
       <p class="dn-need__sub">A Funding partner, ${it.levelLabel} on the Partners page now. Champion is for major sponsors: $10,000 or more.</p>
       <div class="dn-need__do">${btn(id, 'Move to Champion…', () => makeChampion(it, ctx), true)}${btn(`${id}:no`, 'Not now', () => said({ act: 'level', org: it.org, done: false }, 'It won’t ask about them again for a year'))}
         <a class="link" href=${`#donors/org/${encodeURIComponent(it.org)}`}>See their giving</a></div></li>`;
+    // A name that reads as an organization's: a contact can be said to be a person, for good
+    const isPerson = (label = 'It’s a person') => (it.person ? btn(`${id}:person`, label, () => said({ act: 'big', subject: it.subject, also: it.also || [], person: true }, `${it.name} stays a person, and it won’t ask again`)) : null);
+    const keep = btn(id, 'Keep it as an organization', async () => { const k = await keepAsOrg(it.name, { kind: it.link, subject: it.linkSubject }, ctx); return k ? true : false; }, true);
     if (it.kind === 'big') return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">${it.name} gave ${usd(it.cents12)} in the last 12 months and isn’t an organization here.</p>
       <p class="dn-need__sub">${it.people?.length ? `Given by ${it.people.join(', ')}. ` : ''}Keep it as an organization to see all its giving together. Only staff see it; putting it on the website is a separate step.</p>
-      <div class="dn-need__do">${btn(id, 'Keep it as an organization', async () => { const k = await keepAsOrg(it.name, { kind: it.link, subject: it.linkSubject }, ctx); return k ? true : false; }, true)}${btn(`${id}:no`, 'Not now', () => said({ act: 'big', subject: it.subject, also: it.also || [] }, 'It won’t ask about it again for a year'))}</div></li>`;
+      <div class="dn-need__do">${keep}${isPerson()}${btn(`${id}:no`, 'Not now', () => said({ act: 'big', subject: it.subject, also: it.also || [] }, 'It won’t ask about it again for a year'))}</div></li>`;
+    if (it.kind === 'named') return html`<li key=${id} class="card dn-need">
+      <p class="dn-need__q">Is ${it.name} an organization?</p>
+      <p class="dn-need__sub">Its name reads as one, but it shows as a person here. It gave ${usd(it.cents)} in all. Keep it as an organization to list it with the organizations; only staff see it.</p>
+      <div class="dn-need__do">${keep}${isPerson('No, it’s a person')}
+        ${it.link === 'contact' ? html`<a class="link" href=${zeffyContactUrl(it.linkSubject)} target="_blank" rel="noopener">Open in Zeffy</a>` : null}</div></li>`;
     if (it.kind === 'near') return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">Is ${it.link === 'company' ? html`“${it.subject}”` : it.name} ${it.orgName}?</p>
       <p class="dn-need__sub">${it.link === 'company' ? `A company named on ${usd(it.cents)} of gifts${it.people?.length ? ` (${it.people.join(', ')})` : ''}.` : `A Zeffy contact who gave ${usd(it.cents)}.`} ${it.why}. Yes counts its gifts for ${it.orgName}.</p>
@@ -1001,7 +1019,7 @@ function OrgPage({ orgKey, ctx, onBack }) {
     const r = await change({ act: 'website', key: v.key, slug });
     if (!r.success) { ctx.addToast(`${v.name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug) }); return; }
     listChanged();
-    ctx.addToast(`${v.name} is on the Partners page after you publish`, 'success', { label: 'Open its partner card', fn: () => { location.hash = `#partners/${encodeURIComponent(slug)}`; } });
+    ctx.addToast(`${v.name} is on the Partners page after you publish`, 'success', { label: 'Open its partner card', fn: () => { location.hash = `#partners/${encodeURIComponent(slug)}`; } }, { publish: true });
     // By address: this can finish from a toast after the page was left
     goTo({ tab: 'people', org: r.key });
   };

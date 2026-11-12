@@ -57,6 +57,8 @@ const payments = [
   pay({ id: 'maria_1', created: S(NOW - 25 * DAY), amount: 5000, contact: 'ct_maria1', email: 'maria@example.com', first: 'Maria', last: 'Lopez' }),
   pay({ id: 'maria_2', created: S(NOW - 300 * DAY), amount: 7000, contact: 'ct_maria2', email: 'mlopez@example.org', first: 'Maria J.', last: 'Lopez' }),
   pay({ id: 'ann_ivers', created: S(NOW - 45 * DAY), amount: 3000000, contact: 'ct_ann', email: 'ann@example.com', first: 'Ann', last: 'Ivers', company: 'Ivers Foundation' }),
+  // A foundation giving under its own Zeffy record, under Champion's amount: is it an organization?
+  pay({ id: 'lark_1', created: S(NOW - 50 * DAY), amount: 100000, contact: 'ct_lark', email: 'office@larkwren.example', first: 'Lark & Wren', last: 'Foundation' }),
   ...Array.from({ length: 130 }, (_, i) => pay({ id: `fill_${i}`, created: S(NOW - (i + 2) * DAY), amount: 1000 + i * 10, contact: `ct_fill_${i}`, email: `filler${i}@example.com`, first: 'Filler', last: `Donor ${String(i).padStart(3, '0')}` })),
 ];
 const realFetch = globalThis.fetch;
@@ -197,8 +199,10 @@ try {
   ok(JSON.stringify(await page.$$eval('.hub-tab', (b) => b.map((x) => x.textContent.replace(/\d+/g, '').trim()))) === JSON.stringify(['Donors', 'Partners', 'Community partners', 'Checks']), 'the area’s tabs: Donors, Partners, Community partners, Checks');
   ok(/^Donors$/.test(await textOf(page, '.hub-tab.active')), 'the Donors tab is open');
   const pills = await page.$$eval('.ppl-filter', (b) => b.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
-  ok(pills[0] === 'Everyone 138' && pills[1] === 'Organizations 1' && /^New \d+$/.test(pills[2]) && /^Lapsed 1$/.test(pills[4]) && pills[5] === 'Not yet this year 0' && /^Needs you \d+$/.test(pills[6]), `people and organizations counted (${pills.join(' | ')}); a ticket buyer isn’t a donor; nothing to thank from before thank-yous began`);
-  ok((await rowNames(page)).length === 100 && /Show 38 more of 138/.test(await textOf(page, '.dn-more')), 'the first 100, then Show more');
+  ok(pills[0] === 'Everyone 139' && pills[1] === 'Organizations 1' && /^New \d+$/.test(pills[2]) && /^Lapsed 1$/.test(pills[4]) && pills[5] === 'Not yet this year 0' && /^Needs you \d+$/.test(pills[6]), `people and organizations counted (${pills.join(' | ')}); a ticket buyer isn’t a donor; nothing to thank from before thank-yous began`);
+  ok((await rowNames(page)).length === 100 && /Show 39 more of 139/.test(await textOf(page, '.dn-more')), 'the first 100, then Show more');
+  const badge = () => page.$eval('.sidebar a[href="#donors"]', (a) => a.querySelector('.nav-count')?.textContent.trim() || '').catch(() => 'no link');
+  ok(await badge() === '', 'no count on Donors & Partners in the sidebar while no gift waits for a thank-you');
   await page.screenshot({ path: join(OUT, 'people.png') });
   await showShot(page, '1-donors');
   await axe(page, 'the People list');
@@ -306,6 +310,7 @@ try {
   await page.evaluate(() => document.querySelector('.ask-overlay [data-ask="yes"]')?.click());
   await page.waitForFunction(() => !document.querySelector('.dn-suggest'), { timeout: 8000 }).catch(() => {});
   ok((await partnersNow()).find((x) => x.slug === 'acme')?.level === 'champion', 'Acme is Champion (on the next publish)');
+  ok(await page.evaluate(() => [...document.querySelectorAll('.toast')].some((t) => /Acme Builders moves to Champion when you publish/.test(t.textContent) && [...t.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Publish'))), 'a partner’s level waits for Publish: its message offers Publish');
   ok(/Champion partner/.test(await textOf(page, '.dn-head h2')) && !(await page.$('.dn-suggest')), 'the page says Champion, and the suggestion is gone');
   await page.click('.kd-rail .dn-check input');
   await page.waitForFunction(() => /Kept anonymous/.test(document.querySelector('.dn-head h2')?.textContent || ''), { timeout: 6000 }).catch(() => {});
@@ -330,6 +335,7 @@ try {
   await page.waitForSelector('.dn-needs', { timeout: 8000 });
   const needText = await textOf(page, '.dn-needs');
   ok(/Is “Pella Window & Door of Georgia” Pella\?/.test(needText) && /Same person\? Maria Lopez and Maria J\. Lopez/.test(needText) && /Ivers Foundation gave \$30,000/.test(needText), `a near name, one person twice, a big giver (${needText.slice(0, 160)})`);
+  ok(/Is Lark & Wren Foundation an organization\?/.test(needText) && /It gave \$1,000 in all/.test(needText), 'a foundation under Champion’s amount that shows as a person is asked about too');
   await page.screenshot({ path: join(OUT, 'needs.png'), fullPage: true });
   await showShot(page, '2-needs-you');
   await axe(page, 'Needs you');
@@ -339,14 +345,17 @@ try {
   await press('Same person');
   ok(!/Maria/.test(await textOf(page, '.dn-needs, .dn-done')), 'Same person: asked no more');
   await press('Keep it as an organization');
-  ok(/Nothing needs you/.test(await textOf(page, '.dn-done')), 'nothing left');
+  ok(!/Ivers/.test(await textOf(page, '.dn-needs, .dn-done')), 'Ivers kept as an organization: asked no more');
+  await press('No, it’s a person');
+  ok(/Nothing needs you/.test(await textOf(page, '.dn-done')), 'No, it’s a person: nothing left');
+  ok(await page.evaluate(() => [...document.querySelectorAll('.toast')].some((t) => /Lark & Wren Foundation stays a person/.test(t.textContent) && !/publish/i.test(t.textContent))), 'it says so, and offers no Publish (nothing here is on the website)');
   // The search from before is kept (Back keeps the place): cleared first
   await page.$eval('input[aria-label="Search donors"]', (i) => { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); });
   await page.evaluate(() => [...document.querySelectorAll('.ppl-filter')].find((b) => b.textContent.trim().startsWith('Organizations'))?.click());
   await wait(500);
   const orgs = await rowNames(page);
   ok(['Acme Builders', 'Ivers Foundation', 'Pella'].every((n) => orgs.includes(n)) && orgs.length === 3, `Organizations: Acme, Pella (linked), Ivers (kept here) (${orgs.join(', ')})`);
-  ok((await rowNames(page)).length && (await page.evaluate(() => [...document.querySelectorAll('.ppl-filter')].find((b) => b.textContent.trim().startsWith('Everyone'))?.textContent.replace(/\s+/g, ' ').trim())) === 'Everyone 138', 'the two Marias are one; Pella and Ivers took their gifts from Lee and Ann');
+  ok((await rowNames(page)).length && (await page.evaluate(() => [...document.querySelectorAll('.ppl-filter')].find((b) => b.textContent.trim().startsWith('Everyone'))?.textContent.replace(/\s+/g, ' ').trim())) === 'Everyone 139', 'the two Marias are one; Pella and Ivers took their gifts from Lee and Ann');
 
   console.log('Put on the website');
   await page.evaluate(() => [...document.querySelectorAll('.dn-name')].find((b) => b.textContent.trim() === 'Ivers Foundation')?.click());
@@ -443,7 +452,7 @@ try {
   await page.goto(`${origin}/admin/#donors`, { waitUntil: 'networkidle2' });
   await page.waitForSelector('.dn-table', { timeout: 8000 });
   // The list shows the copy it read last at once, then reads again: wait for that read (the new donors in it)
-  await page.waitForFunction(() => /Everyone 142/.test(document.querySelector('.ppl-filters')?.textContent.replace(/\s+/g, ' ') || ''), { timeout: 8000 }).catch(() => {});
+  await page.waitForFunction(() => /Everyone 143/.test(document.querySelector('.ppl-filters')?.textContent.replace(/\s+/g, ' ') || ''), { timeout: 8000 }).catch(() => {});
   await wait(300);
   const pills2 = await page.$$eval('.ppl-filter', (b) => b.map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
   ok(pills2.includes('To thank 2') && pills2.includes('Not yet this year 1'), `To thank counts the check and the $2,000 gift, not the $40 one; the year-end list has last year’s donor (${pills2.join(' | ')})`);
@@ -467,15 +476,24 @@ try {
   ok(/No one looks after them yet/.test(await textOf(page, '.dn-needs')), 'and who looks after them');
   await showShot(page, '7-to-thank');
   await axe(page, 'To thank');
-  // Thanked, then Undo
+  ok(await badge() === '2', `the sidebar counts the gifts to thank on Donors & Partners (${await badge()})`);
+  ok(/2 gifts wait for a thank-you/.test(await textOf(page, '.sidebar a[href="#donors"]')), 'and says so to a screen reader');
+  // Thanked, then Undo: just after a website save elsewhere (the admin once took any message then as waiting for Publish)
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('soard-content-changed')));
   await page.evaluate(() => [...document.querySelectorAll('.dn-need')].find((li) => /Rosa Diaz/.test(li.textContent))?.querySelector('.btn-primary')?.click());
   await page.waitForFunction(() => document.querySelectorAll('.dn-needs[aria-label="To thank"] .dn-need').length === 1, { timeout: 8000 }).catch(() => {});
   ok(/Thank Tom Banks/.test(await textOf(page, '.dn-needs')) && !/Rosa/.test(await textOf(page, '.dn-needs')), 'Thanked: off the list');
   await page.waitForFunction(() => /To thank 1/.test(document.querySelector('.ppl-filters')?.textContent.replace(/\s+/g, ' ') || ''), { timeout: 8000 }).catch(() => {});
   ok(/To thank 1/.test(await textOf(page, '.ppl-filters')), 'and the count goes down');
+  await page.waitForFunction(() => document.querySelector('.sidebar a[href="#donors"] .nav-count')?.textContent.trim() === '1', { timeout: 6000 }).catch(() => {});
+  ok(await badge() === '1', `the sidebar’s count goes down at once (${await badge()})`);
+  const thankToast = await page.evaluate(() => [...document.querySelectorAll('.toast')].filter((t) => /Thanked: \$250 from Rosa Diaz/.test(t.textContent)).map((t) => ({ text: t.textContent, buttons: [...t.querySelectorAll('button')].map((b) => b.textContent.trim()) })).at(-1));
+  ok(thankToast && !/publish/i.test(thankToast.text) && JSON.stringify(thankToast.buttons) === '["Undo"]', `a thank-you is never offered Publish, even just after a website save (${JSON.stringify(thankToast)})`);
   await page.evaluate(() => [...document.querySelectorAll('.toast')].filter((t) => /Thanked: \$250 from Rosa Diaz/.test(t.textContent)).at(-1)?.querySelectorAll('button').forEach((b) => { if (b.textContent.trim() === 'Undo') b.click(); }));
   await page.waitForFunction(() => document.querySelectorAll('.dn-needs[aria-label="To thank"] .dn-need').length === 2, { timeout: 8000 }).catch(() => {});
   ok(/Rosa Diaz/.test(await textOf(page, '.dn-needs')), 'Undo puts it back');
+  await page.waitForFunction(() => document.querySelector('.sidebar a[href="#donors"] .nav-count')?.textContent.trim() === '2', { timeout: 6000 }).catch(() => {});
+  ok(await badge() === '2', 'and the sidebar’s count with it');
   // His page, from the list
   await page.evaluate(() => [...document.querySelectorAll('.dn-need')].find((li) => /Tom Banks/.test(li.textContent))?.querySelectorAll('a').forEach((a) => { if (a.textContent.trim() === 'Open Tom Banks') a.click(); }));
   await page.waitForSelector('.dn-thank', { timeout: 8000 });

@@ -30,15 +30,16 @@ import { givenName, zeffyGet } from './_zeffy.js';
 import { nameKey, nearPartners, categoriesOf, levelOf } from '../../public/admin/partners-shared.js';
 import { logAudit } from './_audit.js';
 import { staffDirectory } from './_staff-access.js';
-import { isStaffEmail } from './_board-roles.js';
+import { isStaffEmail, NOT_STAFF } from './_board-roles.js';
 import { thanksToDo, thanksCount, thanksFor, markThanks, WHY as THANK_WHY } from './_donor-thanks.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY;
 // Champion on the Partners page: "Major sponsors: $10K or more" (partners-shared.js LEVELS), over the last 12 months
 export const CHAMPION_CENTS = 1000000;
-// A contact's name that reads as an organization's (a foundation that gives under its own name)
-const ORG_WORDS = /\b(foundation|fund|trust|inc|llc|corp|corporation|company|church|association|bank|holdings|enterprises|ministries|society|institute|council|charitable)\b/i;
+// A contact's name that reads as an organization's (a foundation, a company or a club that gives under its own name).
+// A person's name can have one of these words in it ("Church"): "It’s a person" answers that for good
+export const ORG_WORDS = /\b(foundation|fund|trust|inc|llc|pllc|llp|ltd|corp|corporation|company|church|association|bank|holdings|enterprises|ministry|ministries|society|institute|council|charitable|club|group|partners|associates|services|consultants|construction|builders|homes|realty|properties|school|academy|university)\b|\bco\.(?=\s|$)|&\s*co\b/i;
 const NAME_STOP = new Set(['the', 'and', 'of', 'inc', 'llc', 'co', 'corp', 'company', 'group', 'ltd', 'mr', 'mrs', 'ms', 'dr', 'jr', 'sr', 'ii', 'iii', 'iv']);
 const clean = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 const words = (s) => clean(s).toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/&/g, ' and ').split(/[^a-z0-9]+/).filter((t) => t && !NAME_STOP.has(t));
@@ -164,7 +165,7 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
     } else if (c.kind === 'anon') anon.set(s, !!c.answer);
     else if (c.kind === 'payment') pay.set(s, String(c.note || ''));
     else if (c.kind === 'level') level.set(s, { answer: !!c.answer, at: c.at, note: c.note || null });
-    else if (c.kind === 'big') big.set(s, { at: c.at });
+    else if (c.kind === 'big') big.set(s, { at: c.at, person: c.note === 'person' });
     else if (c.kind === 'forward') forward.set(s, t);
     else if (c.kind === 'moved') movedDone.add(s);
     else if (c.kind === 'owner') { if (c.answer && c.note) owners.set(s, { email: String(c.note), at: c.at }); else owners.delete(s); }
@@ -384,7 +385,6 @@ const usd = (cents) => { const c = Math.round(Number(cents) || 0); return `$${(c
 export async function staffList(DB) {
   let dir = [];
   try { dir = await staffDirectory(DB); } catch { /* not read yet */ }
-  const { NOT_STAFF } = await import('./_reveal-invites.js');
   const out = new Map();
   for (const a of dir) {
     if (!a.active || !a.email) continue;
@@ -526,7 +526,10 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     if (!subject) throw bad('Which name?');
     // The same giver under another of its names: not asked about for a year either
     const also = (Array.isArray(body.also) ? body.also : []).map(String).filter(Boolean).slice(0, 5);
-    await DB.batch([subject, ...also].map((s) => callStmt(DB, { kind: 'big', subject: s, answer: 0 }, by, now)));
+    // "It’s a person": a contact whose name reads as an organization's isn't asked about again
+    const person = body.person === true && subject.startsWith('contact:');
+    await DB.batch([subject, ...also].map((s) => callStmt(DB, { kind: 'big', subject: s, answer: 0, note: person ? 'person' : null }, by, now)));
+    if (person) await audit(DB, by, 'Said to be a person, not an organization', { subject }, crm.canon(`c:${subject.slice(8)}`));
     return { ok: true };
   }
   if (a === 'org-new') {
@@ -906,27 +909,37 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
     if (said && (said.answer || !yearAgo(said.at))) continue;
     items.push({ id: `level:${k}`, kind: 'level', org: k, slug: o.slug, name: o.name, level: o.level, levelLabel: o.levelLabel, cents12 });
   }
-  // Big givers with no organization here: a company name, or a contact whose name reads as an organization's
+  // Givers with no organization here: a company name or a contact that gave Champion's amount in the last 12 months
+  // (big), and a contact whose name reads as an organization's, whatever it gave (named: a foundation giving under its
+  // own Zeffy record would otherwise show as a person). One a person said is the same as another isn't asked about
   const bigOnes = [
-    ...[...companies.values()].filter((c) => !asked.has(c.key)).map((c) => ({ subject: `company:${c.key}`, link: 'company', linkSubject: c.name, name: c.name, cents12: c.cents12, anonymous: c.anonymous, people: [...c.people.values()].slice(0, 3) })),
-    ...[...contacts.values()].filter((c) => ORG_WORDS.test(c.name)).map((c) => ({ subject: `contact:${c.id}`, link: 'contact', linkSubject: c.id, name: c.name, cents12: c.cents12, anonymous: c.anonymous, people: [] })),
+    ...[...companies.values()].filter((c) => !asked.has(c.key)).map((c) => ({ subject: `company:${c.key}`, link: 'company', linkSubject: c.name, name: c.name, cents: c.cents, cents12: c.cents12, anonymous: c.anonymous, people: [...c.people.values()].slice(0, 3) })),
+    ...[...contacts.values()].filter((c) => ORG_WORDS.test(c.name) && c.cents > 0 && crm.keysOf(c.person).length === 1).map((c) => ({ subject: `contact:${c.id}`, link: 'contact', linkSubject: c.id, name: c.name, cents: c.cents, cents12: c.cents12, anonymous: c.anonymous, named: true, people: [] })),
   ];
   // One name asked about once: a company typed on gifts and a Zeffy contact of the same name are one giver (the
   // company's name is linked; the contact's then matches by itself)
   const bigByName = new Map();
   for (const b of bigOnes) {
-    if (b.cents12 < CHAMPION_CENTS || b.anonymous) continue;
+    if (b.anonymous || (b.cents12 < CHAMPION_CENTS && !b.named)) continue;
     const nk = nameKey(b.name) || b.subject;
-    if (bigByName.has(nk)) { bigByName.get(nk).also.push(b.subject); continue; }
+    const had = bigByName.get(nk);
+    if (had) { had.also.push(b.subject); had.cents12 = Math.max(had.cents12, b.cents12); had.cents = Math.max(had.cents, b.cents); had.named ||= b.named; continue; }
     bigByName.set(nk, { ...b, also: [] });
   }
   for (const b of bigByName.values()) {
-    if ([b.subject, ...b.also].some((s) => !yearAgo(crm.calls.big.get(s)?.at))) continue;
-    items.push({ id: `big:${b.subject}`, kind: 'big', subject: b.subject, also: b.also, link: b.link, linkSubject: b.linkSubject, name: b.name, cents12: b.cents12, people: b.people });
+    const said = [b.subject, ...b.also].map((s) => crm.calls.big.get(s)).filter(Boolean);
+    // "It’s a person" is for good; Not now on a big giver holds a year; a name answered once isn't asked about again
+    // until it gives Champion's amount
+    if (said.some((c) => c.person)) continue;
+    const big = b.cents12 >= CHAMPION_CENTS;
+    if (big ? said.some((c) => !yearAgo(c.at)) : said.length) continue;
+    items.push({ id: `big:${b.subject}`, kind: big ? 'big' : 'named', subject: b.subject, also: b.also, link: b.link, linkSubject: b.linkSubject, name: b.name, cents12: b.cents12, cents: b.cents, person: b.link === 'contact', people: b.people });
   }
   for (const u of unplaced) if (!crm.calls.movedDone.has(u.contact)) items.push({ id: `moved:${u.contact}`, kind: 'moved', contact: u.contact, to: u.to, at: u.at });
-  const order = { level: 0, big: 1, near: 2, clash: 3, same: 4, moved: 5 };
-  return items.sort((x, y) => order[x.kind] - order[y.kind] || (y.cents12 || y.cents || 0) - (x.cents12 || x.cents || 0));
+  const order = { level: 0, big: 1, near: 2, clash: 3, same: 4, named: 5, moved: 6 };
+  // Most first: a level or a big giver by the last 12 months, a name that reads as an organization's by all it gave
+  const amount = (x) => (x.kind === 'named' ? x.cents : x.cents12 || x.cents || 0) || 0;
+  return items.sort((x, y) => order[x.kind] - order[y.kind] || amount(y) - amount(x));
 }
 
 /** Admin → Donors & Partners: everyone who gives, people and organizations, how many things need a person, how many gifts wait for a thank-you, and the team (owners) */

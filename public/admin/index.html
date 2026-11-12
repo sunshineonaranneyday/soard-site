@@ -25333,18 +25333,21 @@ ${sections || '<p>No one yet.</p>'}
     };
 
     /** A number or flag the sidebar shows, shared by every reader: one request
-     *  at a time, refreshed while someone's looking and the tab is visible */
-    function sharedPoll(url, read, everyMs) {
+     *  at a time, refreshed while someone's looking and the tab is visible, and
+     *  at once on `on`: an event an area sends when it changes what's counted
+     *  (read again), or when it has just read the number itself ({ detail: { value } }) */
+    function sharedPoll(url, read, everyMs, { on = null } = {}) {
       const s = { v: read(null), at: 0, subs: new Set(), timer: null };
+      const put = (v) => { if (v !== s.v) { s.v = v; s.subs.forEach((f) => f(v)); } };
       const refresh = async () => {
         s.at = Date.now();
         try {
           const r = await fetch(url, { cache: 'no-store' });
           if (!r.ok) return;
-          const v = read(await r.json());
-          if (v !== s.v) { s.v = v; s.subs.forEach((f) => f(v)); }
+          put(read(await r.json()));
         } catch { /* keeps what it had until the next look */ }
       };
+      const heard = (e) => { if (e?.detail && 'value' in e.detail) { s.at = Date.now(); put(e.detail.value); } else refresh(); };
       const back = () => { if (!document.hidden && Date.now() - s.at > everyMs / 2) refresh(); };
       function use() {
         const [v, setV] = useState(s.v);
@@ -25353,11 +25356,16 @@ ${sections || '<p>No one yet.</p>'}
           if (s.subs.size === 1) {
             s.timer = setInterval(() => { if (!document.hidden) refresh(); }, everyMs);
             document.addEventListener('visibilitychange', back);
+            if (on) window.addEventListener(on, heard);
           }
           if (Date.now() - s.at > everyMs / 2) refresh();
           return () => {
             s.subs.delete(setV);
-            if (!s.subs.size) { clearInterval(s.timer); document.removeEventListener('visibilitychange', back); }
+            if (!s.subs.size) {
+              clearInterval(s.timer);
+              document.removeEventListener('visibilitychange', back);
+              if (on) window.removeEventListener(on, heard);
+            }
           };
         }, []);
         return v;
@@ -25370,6 +25378,8 @@ ${sections || '<p>No one yet.</p>'}
     const advisoryNew = sharedPoll('/api/advisory-applications-admin?count=1', (j) => (j?.success ? j.new || 0 : 0), 300e3);
     // Families at Applied, waiting for a first look: Applications' badge
     const applicantsNew = sharedPoll('/api/applicants-count', (j) => (j?.success ? j.applied || 0 : 0), 300e3);
+    // Gifts waiting for a thank-you (Donors & Partners → To thank): its badge. Donors says when one is marked
+    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j?.success ? j.thanks || 0 : 0), 300e3, { on: 'soard-thanks-changed' });
     // One of the Board area's admins (Board → Members): the menu and ⌘K show Board only to them
     const boardAdminGate = sharedPoll('/api/board-admin?me=1', (j) => j?.admin === true, 30 * 60e3);
     const navShown = (it, boardAdmin) => it.gate !== 'board' || boardAdmin;
@@ -25685,13 +25695,16 @@ ${sections || '<p>No one yet.</p>'}
         setDeploying(false);
       };
 
-      const addToast = (msg, type = 'info', action = null) => {
-        // A save only reaches the admin's database: every save's success
-        // message says when the site changes, and offers Publish
-        if (type === 'success' && !action && Date.now() - lastSaveAt.current < 4000) {
+      const addToast = (msg, type = 'info', action = null, { publish } = {}) => {
+        // A save only reaches the admin's database: a change that waits for
+        // Publish says when the site changes, and offers Publish. The caller
+        // says whether its change waits (publish: true or false); one that
+        // doesn't say is taken as waiting when a website save just happened
+        const waits = type === 'success' && (publish ?? (!action && Date.now() - lastSaveAt.current < 4000));
+        if (waits) {
           // (unless the message already says so)
           if (!/publish/i.test(String(msg))) msg = `${String(msg).replace(/[.!…]+$/, '')}. The site updates when you publish.`;
-          action = { label: 'Publish', fn: () => promptDeploy() };
+          action ||= { label: 'Publish', fn: () => promptDeploy() };
         }
         const id = ++toastId;
         setToasts(t => [...t, { id, msg, type, action }]);
@@ -25994,6 +26007,7 @@ ${sections || '<p>No one yet.</p>'}
       const liveOn = liveNow.use();
       const advisoryCount = advisoryNew.use();
       const appliedCount = applicantsNew.use();
+      const thanksCount = thanksWaiting.use();
       const familyReplies = useReplies();
       const me = useIdentity();
       const mine = useMemo(() => personOfIdentity(me, team), [me, team]);
@@ -26011,6 +26025,7 @@ ${sections || '<p>No one yet.</p>'}
         if (id === 'applications' && appliedCount) return { n: appliedCount, note: `${plural(appliedCount, 'family waits', 'families wait')} for a first look` };
         if (id === 'press-hub' && pressNeedsLook) return { n: pressNeedsLook, note: `${plural(pressNeedsLook, 'found article needs', 'found articles need')} a look` };
         if (id === 'people-hub' && advisoryCount) return { n: advisoryCount, note: `${plural(advisoryCount, 'new advisory application', 'new advisory applications')}` };
+        if (id === 'donors' && thanksCount) return { n: thanksCount, note: `${plural(thanksCount, 'gift waits', 'gifts wait')} for a thank-you` };
         return null;
       };
       // A plain click moves inside the admin; ⌘/Ctrl/Shift/middle click opens the area's address in a new tab

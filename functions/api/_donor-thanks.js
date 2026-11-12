@@ -6,12 +6,13 @@
  *   - every gift Zeffy didn't take online: a check, a donor-advised fund, a gift in kind, anything entered by hand;
  *   - every gift of $1,000 or more, however it came (the Slack "Major gift" line), as one gift however Zeffy split
  *     the charge (./_board-gifts.js joinCharges); a monthly gift only its first time.
- * Online gifts under $1,000 need nothing. Tickets, purchases and imported history are never asked about.
+ * Online gifts under $1,000 need nothing. Tickets and purchases are never asked about. Gifts imported into Zeffy (a
+ * gala's, from its auction platform) are asked about like any other: Zeffy sends their givers nothing either.
  *
  * Only gifts that are new to the site count: dated after thank-yous began here, or first seen by the site after it
  * had read all of Zeffy's history (a check typed in late with its own date, a donor-advised fund marked paid weeks
- * on). Everything before is taken as thanked already. A monthly gift waits for that whole read, so its first time is
- * known for sure.
+ * on). An import is new only by its date: one of old history read later was thanked long ago. Everything before is
+ * taken as thanked already. A monthly gift waits for that whole read, so its first time is known for sure.
  *
  * Once a gift is To thank it stays so until a person says Thanked or Not needed. It closes by itself only when Zeffy
  * shows it refunded in full, or answers twice, hours apart, that it has no such payment: never because a read of
@@ -68,7 +69,7 @@ export const online = (r) => r.type !== 'manual' && !OFFLINE.has(String(r.method
  * its whole amount); `first`: false for a monthly gift's later times. → 'check' | 'daf' | 'kind' | 'hand' | 'major'
  */
 export function thankWhy(gift, { first = true } = {}) {
-  if (!gift || gift.type === 'imported' || !(Number(gift.cents) > 0)) return null;
+  if (!gift || !(Number(gift.cents) > 0)) return null;
   if (gift.every && !first) return null;
   const m = String(gift.method || '').toLowerCase();
   if (gift.inKind || m === 'in_kind') return 'kind';
@@ -136,7 +137,8 @@ export async function syncThanks(env, { now = Date.now(), fetchImpl = fetch, ask
       const rs = charges.map((id) => byId.get(id)).filter(Boolean);
       const t = charges.map((c) => byCharge.get(c)).find(Boolean) || null;
       const firstSeen = rs.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), rs[0]?.first_seen || iso(now));
-      const isNew = g.at >= startS || (!!st.wholeAt && firstSeen > st.wholeAt);
+      // An import is new by its date only: old history imported now was thanked when it was given
+      const isNew = g.at >= startS || (g.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
       if (!t && !isNew) continue;
       // A monthly gift: its first time only, known once all the history is read
       let first = true;

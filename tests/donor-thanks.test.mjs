@@ -57,7 +57,7 @@ beforeEach(async () => {
 
 // ─── Which gifts ────────────────────────────────────────────────────
 
-test('the rule: anything Zeffy didn’t take online, and $1,000 or more however it came; never imported, tickets or refunds', () => {
+test('the rule: anything Zeffy didn’t take online, and $1,000 or more however it came; never tickets or refunds', () => {
   const g = (o) => ({ cents: 10000, method: 'card', type: 'online', ...o });
   assert.equal(T.thankWhy(g({ method: 'cheque' })), 'check');
   assert.equal(T.thankWhy(g({ method: 'daf' })), 'daf');
@@ -67,7 +67,9 @@ test('the rule: anything Zeffy didn’t take online, and $1,000 or more however 
   assert.equal(T.thankWhy(g({})), null, 'online under $1,000: Zeffy thanked them');
   assert.equal(T.thankWhy(g({ cents: 100000 })), 'major');
   assert.equal(T.thankWhy(g({ cents: 99999 })), null);
-  assert.equal(T.thankWhy(g({ type: 'imported', method: 'cheque' })), null, 'imported history was thanked long ago');
+  assert.equal(T.thankWhy(g({ type: 'imported', method: 'cheque' })), 'check', 'an imported check: Zeffy sends nothing (whether it is new is the date’s to say)');
+  assert.equal(T.thankWhy(g({ type: 'imported', method: 'card', cents: 50000 })), null, 'an imported card gift under $1,000: its platform sent the receipt');
+  assert.equal(T.thankWhy(g({ type: 'imported', method: 'card', cents: 250000 })), 'major');
   assert.equal(T.thankWhy(g({ cents: 0, method: 'cheque' })), null, 'a ticket, or refunded in full');
   assert.equal(T.thankWhy(g({ every: 'monthly', cents: 200000 }), { first: false }), null, 'a monthly gift only its first time');
   assert.equal(T.thankWhy(g({ every: 'monthly', cents: 200000 }), { first: true }), 'major');
@@ -95,6 +97,23 @@ test('gifts from before thank-yous began are taken as thanked; a back-dated chec
   // A check dated last month, typed into Zeffy today
   await note(pay({ id: 'late_chk', method: 'cheque', created: S(START - 20 * DAY), amount: 30000 }), START + 2 * HOUR);
   assert.deepEqual((await todo()).map((x) => x.id), ['late_chk']);
+});
+
+test('an import: a gala’s gifts dated after thank-yous began are To thank; old history imported later never is', async () => {
+  await db.prepare("INSERT INTO donor_state (key, value) VALUES ('donors', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify({ filledAt: new Date(START + HOUR).toISOString() })).run();
+  await T.syncThanks(env, { now: START + HOUR + MIN });
+  // Last year's gifts, imported today: first seen after the history read, dated long before
+  await note(pay({ id: 'imp_old_big', type: 'imported', created: S(START - 400 * DAY), amount: 500000, contact: 'ct_old', first: 'Olive', last: 'Old', email: 'olive@example.com' }), START + 2 * HOUR);
+  await note(pay({ id: 'imp_old_chk', type: 'imported', method: 'cheque', created: S(START - 400 * DAY), amount: 20000, contact: 'ct_old', first: 'Olive', last: 'Old', email: 'olive@example.com' }), START + 2 * HOUR);
+  assert.equal((await todo()).length, 0, 'old history, imported now, was thanked long ago');
+  // A gala held after thank-yous began, imported from its auction platform weeks later
+  const gala = START + 10 * DAY;
+  for (const p of [
+    pay({ id: 'gala_big', type: 'imported', created: S(gala), amount: 250000, contact: 'ct_gb', first: 'Gil', last: 'Big', email: 'gil@example.com', description: 'Gala Donations & Auction - Import' }),
+    pay({ id: 'gala_chk', type: 'imported', method: 'cheque', created: S(gala), amount: 30000, contact: 'ct_gc', first: 'Cora', last: 'Check', email: 'cora@example.com', description: 'Gala Donations & Auction - Import' }),
+    pay({ id: 'gala_small', type: 'imported', created: S(gala), amount: 15000, contact: 'ct_gs', first: 'Sal', last: 'Small', email: 'sal@example.com', description: 'Gala Donations & Auction - Import' }),
+  ]) await note(p, gala + 40 * DAY);
+  assert.deepEqual((await todo()).map((x) => [x.id, x.why]).sort(), [['gala_big', 'major'], ['gala_chk', 'check']], 'its $1,000 gift and its check; a card gift under $1,000 needs nothing');
 });
 
 test('a gift Zeffy split into charges is one gift: two card charges of $600 within the hour are a $1,200 gift to thank, once', async () => {
