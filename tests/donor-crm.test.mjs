@@ -989,7 +989,7 @@ test('History stays with the donor: a record split off, an organization put on t
   assert.ok((await C.orgView(env, 'p:bright-futures', { now: NOW })).history.some((h) => /Note added/.test(h.what)));
 });
 
-test('a giver known by email, then given a Zeffy contact: their notes and owner show at once, and are filed under it', async () => {
+test('a giver known by email, then given a Zeffy contact: their notes show at once; notes, owner and "same person" are filed under it on the next read', async () => {
   await withTeam();
   await add(pay({ id: 'nc1', contact: null, first: 'Lou', last: 'Park', email: 'lou@example.com', amount: 5000 }));
   const ref = (await list()).find((p) => p.name === 'Lou Park').ref;
@@ -999,7 +999,7 @@ test('a giver known by email, then given a Zeffy contact: their notes and owner 
   await doIt({ act: 'owner', key, email: 'jordan@soardcharity.com' });
   await add(pay({ id: 'nc2', contact: 'ct_lou', first: 'Lou', last: 'Park', email: 'lou@example.com', amount: 5000 }));
   let page = await C.personView(env, 'ct_lou', { now: NOW });
-  assert.deepEqual([page.notes.length, page.owner], [1, 'jordan@soardcharity.com'], 'at once');
+  assert.deepEqual([page.notes.length, page.owner], [1, null], 'the notes at once; the owner as the list has it (no one, until the next read)');
   await C.followMerges(db, { now: NOW });
   page = await C.personView(env, 'ct_lou', { now: NOW });
   assert.equal(await db.prepare("SELECT subject FROM donor_notes").first('subject'), 'c:ct_lou');
@@ -1016,4 +1016,34 @@ test('the list says who looks after each gift to thank, so the To thank pill can
   assert.equal(v.thanks, 2);
   assert.deepEqual(v.thanksOwners.slice().sort(), ['', 'alex@soardcharity.com']);
   assert.deepEqual((await C.thanksView(env, { now: NOW })).items.map((t) => t.owner || '').sort(), ['', 'alex@soardcharity.com']);
+});
+
+test('“same person” said of a giver known by email holds once Zeffy gives them a contact', async () => {
+  await add(pay({ id: 'lp1', contact: 'ct_lp', first: 'Lou', last: 'Park', email: 'lou.work@example.com', amount: 5000 }));
+  await add(pay({ id: 'lh1', contact: null, first: 'Lou', last: 'Park', email: 'lou.home@example.com', amount: 7000 }));
+  await doIt({ act: 'same', a: 'c:ct_lp', b: 'e:lou.home@example.com', same: true });
+  assert.equal((await list()).filter((p) => p.name === 'Lou Park').length, 1);
+  await add(pay({ id: 'lh2', contact: 'ct_lou2', first: 'Lou', last: 'Park', email: 'lou.home@example.com', amount: 2000 }));
+  await C.followMerges(db, { now: NOW });
+  const lou = (await list()).filter((p) => p.name === 'Lou Park');
+  assert.deepEqual(lou.map((p) => p.total), [14000], 'still one person, all three gifts');
+  assert.ok(!(await needs()).some((i) => i.kind === 'same'), 'not asked again');
+});
+
+test('Partners → Merge into: a Zeffy contact that counted for the old partner by its own name counts for the one it went into', async () => {
+  await db.prepare(partner('pella-wd', 'Pella Window & Door')).run();
+  await add(pay({ id: 'pz', contact: 'ct_pella', first: 'Pella', last: '', email: 'ap@pella.example', amount: 300000 }));
+  assert.equal((await list()).find((p) => p.key === 'p:pella')?.total, 300000);
+  await C.mergeOrgCalls(db, 'pella', 'pella-wd');
+  await db.prepare("DELETE FROM partners WHERE slug = 'pella'").run();
+  assert.equal((await list()).find((p) => p.key === 'p:pella-wd')?.total, 300000);
+});
+
+test('“Keep it as an organization” never takes a name someone linked since the page was read', async () => {
+  await add(pay({ id: 'bf', contact: 'ct_bf2', first: 'Bo', last: 'Fox', email: 'bo@example.com', company: 'BF Holdings', amount: 1500000 }));
+  const big = (await needs()).find((i) => i.kind === 'big');
+  await doIt({ act: 'link', kind: 'company', subject: 'BF Holdings', org: 'p:acme' });
+  await assert.rejects(doIt({ act: 'org-new', name: big.name, links: [{ kind: big.link, subject: big.linkSubject }] }), (e) => e.status === 409 && /counts for Acme Builders already/.test(e.message));
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 1500000, 'Acme keeps it');
+  assert.ok(!(await list()).some((p) => p.key.startsWith('o:')), 'and nothing was made');
 });

@@ -79,6 +79,8 @@ const SCHEMA = [
   // A monthly gift's first time (./_donor-thanks.js), and gifts first seen since a time (the thank-you run's question)
   'CREATE INDEX IF NOT EXISTS donor_payments_sub ON donor_payments(sub)',
   'CREATE INDEX IF NOT EXISTS donor_payments_seen ON donor_payments(first_seen)',
+  // A giver known by email: whose contact it is now (./_donor-crm.js followMerges, every whole read)
+  'CREATE INDEX IF NOT EXISTS donor_payments_email ON donor_payments(email)',
   'CREATE TABLE IF NOT EXISTS donor_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
 ];
 const ready = new WeakSet();
@@ -564,7 +566,10 @@ export async function donorOfPayment(env, id, { crm = null } = {}) {
   const r = await env.DB.prepare(`SELECT ${READ_COLS.join(', ')} FROM donor_payments WHERE id = ?`).bind(String(id)).first();
   if (!r) return null;
   if (crm) {
-    const rows = await rowsFor(env.DB, r.contact ? [`c:${r.contact}`] : r.email ? [`e:${r.email}`] : [donorKey(r)]);
+    // As the list places it: with every record a person said is the same giver (a joined record's organization)
+    const own = r.contact ? `c:${r.contact}` : r.email ? `e:${r.email}` : donorKey(r);
+    const keys = crm.keysOf(crm.canon(own));
+    const rows = await rowsFor(env.DB, keys.includes(own) ? keys : [...keys, own]);
     return placer(rows.some((x) => x.id === r.id) ? rows : [...rows, r], crm)(r).owner;
   }
   // As groupRows has it: no contact, but an email a contact has, is that contact's

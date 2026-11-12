@@ -16,8 +16,9 @@
  *            (none in 18 months); Organizations; Not yet this year (gave last year, nothing yet this year: the
  *            year-end list); To thank (gifts Zeffy sends no thank-you for, and every gift of $1,000 or more:
  *            functions/api/_donor-thanks.js); Needs you (a near name, a gift two organizations could have, two records
- *            that may be one person, a partner whose giving says Champion, a big giver with no organization). Each
- *            filters by who on the team looks after them (Owner).
+ *            that may be one person, a partner whose giving says Champion, a big giver with no organization, a name
+ *            that reads as an organization's). The list and To thank filter by who on the team looks after them
+ *            (Owner); Needs you is about records, not whose they are, so it's everyone's.
  *            A donor's page, built like a kid's: what to thank them for, giving, the team's notes and gifts; beside
  *            them stage, owner, Zeffy, Keep anonymous, organizations and History.
  * Checks     every check deposited in Mercury and its Zeffy record (./checks.js)
@@ -283,8 +284,8 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   if (place.donor || place.gift) {
     // A gift's link settling on its donor's own address is the same page (n stays): it isn't read twice
     return html`<div class="dn"><${DonorPage} key=${place.n} donor=${place.donor} gift=${place.gift} fromList=${!!place.fromList} ctx=${ctx} onBack=${goBack} backLabel=${backLabel}
-      onDonor=${(ref) => { history.replaceState(null, '', `#donors/${encodeURIComponent(ref)}`); setPlace({ tab: 'people', donor: ref, gift: place.gift, fromList: place.fromList, n: place.n }); }}
-      onOrg=${(key) => { history.replaceState(null, '', `#donors/org/${encodeURIComponent(key)}`); setPlace({ tab: 'people', org: key, n: place.n }); }} /></div>`;
+      onDonor=${(ref) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/${encodeURIComponent(ref)}`); setPlace({ tab: 'people', donor: ref, gift: place.gift, fromList: place.fromList, n: place.n }); }}
+      onOrg=${(key) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/org/${encodeURIComponent(key)}`); setPlace({ tab: 'people', org: key, n: place.n }); }} /></div>`;
   }
   return html`<div class="dn">
     <${AreaTabs} current=${place.tab === 'checks' ? 'checks' : 'donors'} partners=${partnersCount} community=${communityCount} onPick=${pick} />
@@ -595,8 +596,11 @@ function NeedsList({ ctx, onChanged, only = null }) {
   const [v, setV] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(null);
+  const latest = useLatest();
   const load = async () => {
+    const current = latest();
     const j = await get('?needs=1');
+    if (!current()) return;
     if (!j.success) { setErr(j.error); return; }
     setErr(null);
     setV(j.items);
@@ -607,10 +611,11 @@ function NeedsList({ ctx, onChanged, only = null }) {
     refocus(e?.currentTarget);
     setBusy(id);
     const ok = await fn();
-    setBusy(null);
-    // Answered, or not (someone answered it first, it's gone since): the list as it is now
+    // Answered, or not (someone answered it first, it's gone since): the list as it is now, and the card stays busy
+    // until then (never pressed twice)
     if (ok !== false) listChanged();
     await load();
+    setBusy(null);
     onChanged?.();
   };
   // An answer to the question as this page asked it: answered since (another tab, a teammate), nothing changes
@@ -929,6 +934,9 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   const [joining, setJoining] = useState(false);
   // Only the latest read lands (a quick move to another donor never shows the one before)
   const seq = useRef(0);
+  // Left (another donor, the list, another area): a read or a change still out lands nowhere, and moves no one
+  const left = useRef(false);
+  useEffect(() => () => { left.current = true; seq.current++; }, []);
   const load = async () => {
     const mine = ++seq.current;
     const fresh = () => mine === seq.current;
@@ -1015,6 +1023,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
               const r = await change({ act: 'split', key: a.key });
               if (!r.success) { ctx.addToast(r.error, 'error'); return; }
               listChanged();
+              if (left.current) return;
               // This page stays with the person (the record split off may be the address it was opened at)
               if (r.ref && r.ref !== donor) onDonor(r.ref); else await load();
             }}>Not the same person</button></li>`)}</ul>` : null}
@@ -1078,6 +1087,8 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
   const [renaming, setRenaming] = useState(false);
   const [busy, setBusy] = useState(false);
   const seq = useRef(0);
+  const left = useRef(false);
+  useEffect(() => () => { left.current = true; seq.current++; }, []);
   const load = async () => {
     const mine = ++seq.current;
     setErr(null);
@@ -1130,7 +1141,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     if (!r.success) { ctx.addToast(r.error, 'error'); return; }
     listChanged();
     ctx.addToast(`${v.name} taken out`, 'success');
-    onBack();
+    if (!left.current) onBack();
   };
   const findNames = async (q) => {
     if (q.trim().length < 2) return [];

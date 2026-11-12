@@ -416,3 +416,57 @@ test('To thank: the one waiting longest first (since it came in), named as the l
   await note(pay({ id: 'w2', amount: 30000, method: 'cheque', type: 'manual', created: S(START + 10 * MIN), contact: 'ct_n', email: 'nobody.named@example.com', first: '', last: '' }), START + 3 * HOUR);
   assert.deepEqual((await T.thanksToDo(db)).map((x) => [x.id, x.name]), [['w1', 'Jane Doe'], ['w2', 'nobody.named@example.com']]);
 });
+
+// ─── Found in the second review: a thank-you covers the charges it was said for ───
+
+test('a check that joins a gift already said Not needed is To thank on its own; a $50 card charge that joins isn’t', async () => {
+  await note(pay({ id: 'c1', amount: 150000, created: S(START + HOUR) }));
+  await doIt({ act: 'thanks', id: 'c1', state: 'skipped' });
+  await note(pay({ id: 'k1', amount: 500000, method: 'cheque', type: 'manual', created: S(START + HOUR + 30 * MIN) }), START + 2 * DAY);
+  await note(pay({ id: 'k2', amount: 5000, created: S(START + HOUR + 40 * MIN) }), START + 2 * DAY);
+  assert.deepEqual((await todo()).map((x) => [x.ids, x.why, x.cents]), [['k1 k2', 'check', 505000]], 'the part not said: the check (and the card charge with it)');
+  assert.deepEqual([(await row('c1')).ids, (await row('c1')).state], ['c1', 'skipped'], 'what was said stays as it was');
+  // On the donor's page the gift shows what's still to do
+  const page = await C.personView(env, 'ct_jane', { now: START + 2 * DAY });
+  assert.equal(page.gifts.find((g) => (g.ids || [g.id]).includes('k1'))?.thanks?.state, 'todo');
+});
+
+test('a charge dated between a thanked gift and a To thank one joins all three: the To thank stays, with the new charge', async () => {
+  await note(pay({ id: 'ga', amount: 150000, created: S(START + HOUR) }));
+  await note(pay({ id: 'gb', amount: 200000, created: S(START + HOUR + 100 * MIN) }));
+  await doIt({ act: 'thanks', id: 'ga', state: 'thanked' });
+  await note(pay({ id: 'gm', amount: 5000, method: 'cheque', type: 'manual', created: S(START + HOUR + 50 * MIN) }), START + 4 * HOUR);
+  assert.deepEqual((await todo()).map((x) => [x.id, x.ids.split(' ').sort().join(' '), x.why]), [['gb', 'gb gm', 'check']]);
+  assert.equal((await row('ga')).ids, 'ga');
+});
+
+test('a To thank whose one charge Zeffy no longer lists and whose other was refunded in full: Zeffy is asked, and it closes', async () => {
+  await note(pay({ id: 'za', amount: 500000, created: S(START + HOUR) }));
+  await note(pay({ id: 'zb', amount: 100000, created: S(START + HOUR + 10 * MIN) }));
+  await db.prepare("DELETE FROM donor_payments WHERE id = 'za'").run();
+  await note(pay({ id: 'zb', amount: 100000, created: S(START + HOUR + 10 * MIN), refund: 'full', refunds: [{ status: 'succeeded', amount: 100000 }] }), START + 3 * HOUR);
+  const asked = [];
+  const fetchImpl = async (url) => { asked.push(String(url)); return Response.json({ error: 'not found' }, { status: 404 }); };
+  const zenv = { ...env, ZEFFY_API_KEY: 'z' };
+  await T.syncThanks(zenv, { now: START + 4 * HOUR, fetchImpl });
+  await T.syncThanks(zenv, { now: START + 11 * HOUR, fetchImpl });
+  assert.ok(asked.length === 2 && asked.every((u) => u.includes('/payments/za')), 'asked about the charge it no longer lists');
+  assert.deepEqual([(await row('za')).state, (await row('za')).gone], ['gone', 'deleted']);
+});
+
+test('a thank-you said is never rewritten by later runs; a gift in kind with no value is still To thank; a yearly gift each year', async () => {
+  await note(pay({ id: 'tr', amount: 150000, created: S(START + HOUR) }));
+  await note(pay({ id: 'tr2', amount: 10000, created: S(START + HOUR + 5 * MIN), refund: 'full', refunds: [{ status: 'succeeded', amount: 10000 }] }));
+  await doIt({ act: 'thanks', id: 'tr', state: 'thanked' });
+  const before = await row('tr');
+  for (let i = 0; i < 3; i++) await T.syncThanks(env, { now: START + (5 + i) * HOUR, ask: false });
+  assert.deepEqual(await row('tr'), before);
+  await note(pay({ id: 'k0', amount: 0, method: 'in_kind', items: [{ type: 'donation', amount: 0 }], contact: 'ct_k', first: 'Kay', email: 'kay@example.com' }), START + 8 * HOUR);
+  assert.equal((await row('k0'))?.why, 'kind');
+  await db.prepare("INSERT INTO donor_state (key, value) VALUES ('donors', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify({ filledAt: new Date(START + 9 * HOUR).toISOString() })).run();
+  await T.syncThanks(env, { now: START + 9 * HOUR + MIN, ask: false });
+  await note(pay({ id: 'y1', amount: 500000, every: 'yearly', sub: 'sub_y', contact: 'ct_y', email: 'y@example.com', created: S(START + 10 * HOUR) }), START + 10 * HOUR);
+  await doIt({ act: 'thanks', id: 'y1', state: 'thanked' }, START + 11 * HOUR);
+  await note(pay({ id: 'y2', amount: 500000, every: 'yearly', sub: 'sub_y', contact: 'ct_y', email: 'y@example.com', created: S(START + 366 * DAY) }), START + 366 * DAY);
+  assert.equal((await row('y2'))?.state, 'todo', 'the next year’s gift is thanked too');
+});

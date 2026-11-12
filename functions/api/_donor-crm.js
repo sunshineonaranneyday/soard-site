@@ -546,13 +546,17 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     if (!name) throw bad('A name for the organization');
     if (crm.named(name).length) throw bad(`${crm.org.get(crm.named(name)[0]).name} is already here. Use Link to… to link the name to it.`, 409);
     const key = `o:${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    // The organization and its names in one step
+    // The organization and its names in one step. A name that counts for an organization already (someone linked it
+    // since this page was read, or it's an organization's own name) is never taken from it: nothing is made
     const steps = [DB.prepare('INSERT INTO donor_orgs (key, name, created_at, by) VALUES (?, ?, ?, ?)').bind(key, name, iso(now), by || null)];
     for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
       if (!KINDS.has(l?.kind)) continue;
       const subject = subjectOf(l.kind, l.subject);
       if (!subject) continue;
-      steps.push(DB.prepare('DELETE FROM donor_calls WHERE kind = ? AND subject = ? AND answer = 1').bind(l.kind, subject));
+      const linked = crm.calls.yes.get(`${l.kind}\n${subject}`);
+      const own = l.kind === 'company' ? crm.exact(clean(l.subject)) : null;
+      const has = (linked && crm.live(linked) && linked) || (own && !crm.calls.no.has(`company\n${subject}\n${own}`) && own);
+      if (has) throw bad(`${l.kind === 'company' ? `“${clean(l.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(has)?.name || 'an organization'} already. Nothing was changed.`, 409);
       steps.push(callStmt(DB, { kind: l.kind, subject, target: key, answer: 1 }, by, now));
     }
     await DB.batch(steps);
@@ -614,8 +618,13 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       if (!one && (staff.length || !isStaffEmail(email))) throw bad('Pick someone on the team.');
       name = one?.name || email;
     }
-    // Said on the record that leads a person; any said on their other records goes, so there's only ever one
-    const keys = isOrgKey(key) ? [key] : crm.keysOf(key);
+    // Said on the record that leads a person; any said on their other records goes, so there's only ever one (one said
+    // under an email of theirs from before Zeffy had a contact for them too: it would come back on the next read)
+    const keys = isOrgKey(key) ? [key] : [...crm.keysOf(key)];
+    if (!isOrgKey(key)) {
+      const own = await rowsFor(DB, keys.filter((k) => /^[ce]:/.test(k)));
+      for (const e of new Set(own.map((r) => r.email).filter(Boolean))) if (!keys.includes(`e:${e}`)) keys.push(`e:${e}`);
+    }
     await DB.batch([
       ...keys.map((k) => DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(k)),
       ...(email ? [callStmt(DB, { kind: 'owner', subject: key, answer: 1, note: email }, by, now)] : []),
@@ -744,10 +753,19 @@ export async function mergeOrgCalls(DB, from, into) {
   const all = [...new Set([fromName, ...(await historyNames(DB, from))].filter(Boolean))];
   if (all.length) await DB.batch(all.map((n) => callStmt(DB, { kind: 'kept-name', subject: looseKey(n), target: `p:${from}`, answer: 1, note: n }, 'Partners merge', Date.parse(at))));
   if (fromName) {
-    // Gifts under its name count for the one it went into (the name no longer matches a partner by itself)
+    // Gifts under its name count for the one it went into (the name no longer matches a partner by itself): a company
+    // typed with it, and a Zeffy contact named it
     const k = nameKey(fromName);
-    if (k && k !== nameKey(intoName)) await DB.prepare("INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) SELECT 'company', ?, ?, 1, NULL, 'Partners merge', ? WHERE NOT EXISTS (SELECT 1 FROM donor_calls WHERE kind = 'company' AND subject = ? AND answer = 1)")
-      .bind(k, `p:${from}`, at, k).run();
+    if (k && k !== nameKey(intoName)) {
+      await DB.prepare("INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) SELECT 'company', ?, ?, 1, NULL, 'Partners merge', ? WHERE NOT EXISTS (SELECT 1 FROM donor_calls WHERE kind = 'company' AND subject = ? AND answer = 1)")
+        .bind(k, `p:${from}`, at, k).run();
+      const named = ((await DB.prepare('SELECT DISTINCT contact, first, last FROM donor_payments WHERE contact IS NOT NULL').all()).results || [])
+        .filter((r) => nameKey(givenName({ first_name: r.first, last_name: r.last })) === k).map((r) => String(r.contact));
+      for (const c of [...new Set(named)]) {
+        await DB.prepare("INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) SELECT 'contact', ?, ?, 1, NULL, 'Partners merge', ? WHERE NOT EXISTS (SELECT 1 FROM donor_calls WHERE kind = 'contact' AND subject = ? AND (answer = 1 OR target = ?))")
+          .bind(c, `p:${from}`, at, c, `p:${from}`).run();
+      }
+    }
   }
   await moveCalls(DB, `p:${from}`, `p:${into}`);
 }
@@ -780,7 +798,7 @@ async function writeCrmState(DB, patch) {
  */
 export async function followMerges(DB, { now = Date.now() } = {}) {
   await ensureCrm(DB);
-  const calls = (await DB.prepare('SELECT kind, subject, target FROM donor_calls').all()).results || [];
+  const calls = (await DB.prepare('SELECT kind, subject, target, answer FROM donor_calls').all()).results || [];
   const noteKeys = ((await DB.prepare('SELECT DISTINCT subject FROM donor_notes').all()).results || []).map((r) => String(r.subject));
   const historyKeys = ((await DB.prepare("SELECT DISTINCT entity_slug AS k FROM audit_log WHERE entity_type = 'donor-crm' AND (entity_slug LIKE 'c:%' OR entity_slug LIKE 'e:%')").all().catch(() => ({ results: [] }))).results || []).map((r) => String(r.k));
   const ids = new Set();
@@ -829,17 +847,25 @@ export async function followMerges(DB, { now = Date.now() } = {}) {
     }
     if (!unplaced.some((u) => u.contact === id)) unplaced.push({ contact: id, to: went.slice(0, 5), at: iso(now) });
   }
-  // Known by email, then given a Zeffy contact: everything of theirs that the email held (never Keep anonymous, which
-  // an email keeps for everyone who has it, nor a "same person", which still joins the two keys)
+  // Known by email, then given a Zeffy contact: everything of theirs that the email held, "same person" too (the email
+  // stops being anyone's once a contact has it). Never Keep anonymous: an email keeps everyone who has it
+  for (const c of calls) if (c.kind === 'same' && c.answer) for (const v of [c.subject, c.target]) if (String(v).startsWith('e:')) byEmail.add(String(v));
   for (const k of byEmail) {
     const email = k.slice(2);
     const to = ((await DB.prepare('SELECT DISTINCT contact FROM donor_payments WHERE email = ? AND contact IS NOT NULL LIMIT 2').bind(email).all()).results || []).map((r) => String(r.contact));
     if (to.length !== 1) continue;
     const into = `c:${to[0]}`;
+    const sames = ((await DB.prepare("SELECT subject, target, answer, note, by, at FROM donor_calls WHERE kind = 'same' AND (subject = ? OR target = ?)").bind(k, k).all()).results || []);
     await DB.batch([
       DB.prepare("UPDATE OR IGNORE donor_calls SET subject = ? WHERE kind = 'owner' AND subject = ?").bind(into, k),
       DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(k),
       DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(into, k),
+      ...sames.flatMap((c) => {
+        const [x, y] = [c.subject === k ? into : c.subject, c.target === k ? into : c.target].sort();
+        const del = DB.prepare("DELETE FROM donor_calls WHERE kind = 'same' AND subject = ? AND target = ?").bind(c.subject, c.target);
+        // A "same" with itself is nothing; the contact's own answer about that pair stands
+        return x === y ? [del] : [DB.prepare('INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind('same', x, y, c.answer, c.note, c.by, c.at), del];
+      }),
     ]);
     await moveHistory(DB, k, into);
     moved++;
@@ -1024,6 +1050,7 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
 
 /** Each gift waiting for a thank-you, with whose it is now (an organization or a person) and who looks after them */
 function thanksWhose(items, rows, crm) {
+  if (!items.length) return [];
   const byId = new Map(rows.map((r) => [r.id, r]));
   const place = crm.placer(rows);
   return items.map((t) => {
@@ -1071,16 +1098,18 @@ async function historyOf(DB, keys) {
 /** Each gift with its thank-you: { state: todo | thanked | skipped | gone, why, by, at } */
 async function withThanks(DB, gifts) {
   const t = await thanksFor(DB, gifts.flatMap((g) => g.ids || [g.id]));
-  return gifts.map((g) => { const x = (g.ids || [g.id]).map((id) => t.get(id)).find(Boolean); return x ? { ...g, thanks: { ...x, whyText: THANK_WHY[x.why] || null } } : g; });
+  // A gift some of which was thanked and a later part of which is To thank shows what's still to do
+  return gifts.map((g) => { const all = (g.ids || [g.id]).map((id) => t.get(id)).filter(Boolean); const x = all.find((y) => y.state === 'todo') || all[0]; return x ? { ...g, thanks: { ...x, whyText: THANK_WHY[x.why] || null } } : g; });
 }
 /** The extras a donor's page carries: owner, notes, History, and each gift's thank-you */
 async function pageExtras(env, crm, key, v, { emails = [] } = {}) {
-  // A person known by email before Zeffy had a contact for them: what was said then is theirs at once (the next read
-  // files it under the contact for good, ./followMerges)
+  // A person known by email before Zeffy had a contact for them: the notes and History from then are theirs at once
+  // (the next read files them, and any owner, under the contact for good: followMerges)
   const was = emails.map((e) => `e:${e}`).filter((k) => !crm.keysOf(key).includes(k));
   const keys = isOrgKey(key) ? [key] : [...crm.keysOf(key), ...was];
   const [notes, history, gifts, staff] = await Promise.all([notesOf(env.DB, keys), historyOf(env.DB, keys), withThanks(env.DB, v.gifts), staffList(env.DB)]);
-  const owner = crm.lookedAfterBy(key) || was.map((k) => crm.lookedAfterBy(k)).find(Boolean) || null;
+  // The owner is the one the list shows (an owner said under the old email moves to the contact on the next read)
+  const owner = crm.lookedAfterBy(key);
   return { owner, notes, history, gifts, staff: withOwners(staff, [owner]) };
 }
 
