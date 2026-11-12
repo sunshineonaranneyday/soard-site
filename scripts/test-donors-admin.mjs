@@ -183,6 +183,13 @@ async function axe(page, label) {
 async function phoneChecks(page, label) {
   const sideways = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   ok(sideways <= 1, `${label}: no sideways scroll (${sideways}px)`);
+  // Nothing runs off the right edge, clipped where the page can't scroll (what scrolls inside its own row is fine)
+  const off = await page.evaluate(() => {
+    const vw = document.documentElement.clientWidth;
+    const scrolls = (e) => { for (let a = e.parentElement; a && !a.matches('.main'); a = a.parentElement) if (/auto|scroll/.test(getComputedStyle(a).overflowX)) return true; return false; };
+    return [...document.querySelectorAll('.dn, .dn *')].filter((e) => e.offsetParent && e.getBoundingClientRect().right > vw + 1 && !scrolls(e)).slice(0, 4).map((e) => `${e.tagName}.${String(e.className).split(' ')[0]} to ${Math.round(e.getBoundingClientRect().right)}px`);
+  });
+  ok(off.length === 0, `${label}: everything inside the screen's width${off.length ? `: ${off.join(', ')}` : ''}`);
   // A box inside its label is tapped by the label
   const small = await page.evaluate(() => [...document.querySelectorAll('.dn button, .dn a, .dn input, .dn select, .dn label')].map((e) => (e.matches('label input') ? e.closest('label') : e)).filter((e) => e.offsetParent && e.getBoundingClientRect().height < 40).map((e) => `${e.tagName} ${e.textContent.trim().slice(0, 20)} ${Math.round(e.getBoundingClientRect().height)}`));
   ok(small.length === 0, `${label}: touch targets 40px or more${small.length ? `: ${small.slice(0, 5).join(', ')}` : ''}`);
@@ -542,8 +549,13 @@ try {
   await page.evaluate(() => document.querySelector('.ask-overlay [data-ask="yes"]')?.click());
   await page.waitForFunction(() => !document.querySelector('.dn-note'), { timeout: 8000 }).catch(() => {});
   ok(!(await page.$('.dn-note')), 'Delete, after asking: the note is gone');
-  // The list by owner
+  // Opened from To thank: Back says so and goes there (working down the list), and the list is a pill away
+  ok(/← To thank/.test(await textOf(page, '.dn-back')), `Back says where it goes (${await textOf(page, '.dn-back')})`);
   await page.evaluate(() => document.querySelector('.dn-back')?.click());
+  await page.waitForSelector('.dn-needs[aria-label="To thank"], .dn-done', { timeout: 8000 });
+  ok((await page.evaluate(() => location.hash)) === '#donors/thanks', 'Back from a donor opened from To thank: To thank again');
+  // The list by owner
+  await page.evaluate(() => [...document.querySelectorAll('.ppl-filter')].find((b) => b.textContent.trim().startsWith('Everyone'))?.click());
   await page.waitForSelector('.dn-table', { timeout: 8000 });
   ok(JSON.stringify(await page.$$eval('.dn-owner-filter option', (o) => o.map((x) => x.textContent.trim()))) === JSON.stringify(['Anyone', 'Me', 'No one', 'Jordan Hale']), 'Owner: Anyone, Me, No one, then the team');
   await page.select('.dn-owner-filter select', 'alex@soardcharity.com');
@@ -552,6 +564,58 @@ try {
   ok(/Looked after by you/.test(await textOf(page, '.dn-status')), 'and the line above says so');
   await page.select('.dn-owner-filter select', '');
   await wait(150);
+
+  console.log('Found in review');
+  // The To thank count follows the Owner filter like every other count: Rosa's gift (no one looks after her)
+  await page.select('.dn-owner-filter select', 'alex@soardcharity.com');
+  await wait(250);
+  ok(/To thank 0/.test(await textOf(page, '.ppl-filters')), `To thank counts what the Owner filter shows (${await textOf(page, '.ppl-filters')})`);
+  await page.select('.dn-owner-filter select', 'none');
+  await wait(250);
+  ok(/To thank 1/.test(await textOf(page, '.ppl-filters')), 'No one: Rosa’s gift');
+  await page.select('.dn-owner-filter select', '');
+  await wait(150);
+  // One donor's address, then another's: the second donor's page, nothing of the first left open on it; Back, the first
+  const h2 = (name) => page.waitForFunction((n) => (document.querySelector('.dn-head h2')?.textContent || '').includes(n), { timeout: 8000 }, name).catch(() => {});
+  await page.evaluate(() => { location.hash = '#donors/ct_uma'; });
+  await h2('Uma Small');
+  await page.evaluate(() => [...document.querySelectorAll('.dn button')].find((b) => /Count it for an organization|Add a Zeffy name|Same person as/.test(b.textContent))?.click());
+  await page.waitForSelector('.dn-picker', { timeout: 4000 }).catch(() => {});
+  const pickerWas = !!(await page.$('.dn-picker'));
+  await page.evaluate(() => { location.hash = '#donors/ct_rosa'; });
+  await h2('Rosa Diaz');
+  ok(pickerWas && !(await page.$('.dn-picker')) && /Rosa Diaz/.test(await textOf(page, '.dn-head h2')), 'another donor’s address: their page, with nothing of the one before left open on it');
+  await page.evaluate(() => history.back());
+  await h2('Uma Small');
+  ok((await page.evaluate(() => location.hash)) === '#donors/ct_uma' && /Uma Small/.test(await textOf(page, '.dn-head h2')), 'Back: the first donor again, at their address');
+  // The Owner picker keeps the focus while it saves (a disabled one drops it to the page)
+  await page.evaluate(() => { location.hash = '#donors/ct_rosa'; });
+  await h2('Rosa Diaz');
+  await page.focus('#dn-owner-pick');
+  await page.select('#dn-owner-pick', 'jordan@soardcharity.com');
+  await page.waitForFunction(() => /Looked after by Jordan Hale/.test(document.querySelector('.kd-card--history')?.textContent || ''), { timeout: 8000 }).catch(() => {});
+  ok(await page.evaluate(() => document.activeElement?.id === 'dn-owner-pick'), 'the Owner picker keeps the focus');
+  // Escape leaves a note's change, the focus back on its Change
+  await page.click('#dn-note-text');
+  await page.keyboard.type('Asked for a tour.');
+  await page.evaluate(() => [...document.querySelectorAll('.dn-note-new button')].find((b) => b.textContent.trim() === 'Add note')?.click());
+  await page.waitForSelector('.dn-note .dn-note__change', { timeout: 8000 }).catch(() => {});
+  await page.click('.dn-note .dn-note__change');
+  await page.waitForSelector('.dn-note textarea', { timeout: 4000 }).catch(() => {});
+  await page.keyboard.press('Escape');
+  await wait(200);
+  ok(!(await page.$('.dn-note textarea')) && await page.evaluate(() => document.activeElement?.classList.contains('dn-note__change')), 'Escape leaves a change to a note, the focus back on its Change');
+  // Thanked on To thank, then Undo from somewhere else: every count and list agrees again
+  await page.evaluate(() => { location.hash = '#donors/thanks'; });
+  await page.waitForSelector('.dn-needs[aria-label="To thank"] .dn-need', { timeout: 8000 });
+  await page.evaluate(() => document.querySelector('.dn-needs[aria-label="To thank"] .dn-need .btn-primary')?.click());
+  await page.waitForSelector('.dn-done', { timeout: 8000 }).catch(() => {});
+  ok(await page.evaluate(() => document.activeElement?.matches('.dn-done')), 'the last one said: the focus on the words saying nothing is left');
+  await page.evaluate(() => { location.hash = '#donors'; });
+  await page.waitForSelector('.dn-table', { timeout: 8000 });
+  await page.evaluate(() => [...document.querySelectorAll('.toast')].filter((t) => /Thanked: \$250 from Rosa Diaz/.test(t.textContent)).at(-1)?.querySelectorAll('button').forEach((b) => { if (b.textContent.trim() === 'Undo') b.click(); }));
+  await page.waitForFunction(() => /To thank 1/.test(document.querySelector('.ppl-filters')?.textContent.replace(/\s+/g, ' ') || '') && document.querySelector('.sidebar a[href="#donors"] .nav-count')?.textContent.trim() === '1', { timeout: 8000 }).catch(() => {});
+  ok(/To thank 1/.test(await textOf(page, '.ppl-filters')) && await badge() === '1', `Undo from another page: the list’s count and the sidebar’s agree (${await textOf(page, '.ppl-filters')} | ${await badge()})`);
   ok(!calls.some((c) => /%40|@/.test(c)), 'still no email in any request');
   ok(errors.length === 0, `no console errors on the laptop${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
 

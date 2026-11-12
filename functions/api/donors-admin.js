@@ -6,7 +6,7 @@
  * Zeffy; what only the site knows (which organization a name is, the same person, Keep anonymous: ./_donor-crm.js) is
  * changed here, private, never on the website.
  *
- * GET                       → { success, people, needs, thanks, staff, me, payments, windowAt, filledAt, … }
+ * GET                       → { success, people, needs, thanks, thanksOwners, staff, me, payments, windowAt, filledAt, … }
  *                             people and organizations (each with its owner), how many need a person, how many gifts
  *                             wait for a thank-you, the team to pick an owner from, and who's signed in
  * GET ?donor=<ref>          → { success, donor, gifts, gaveFor, companies, also, keepAnonymous, kit } | { success, org }
@@ -15,7 +15,7 @@
  * GET ?org=<p:slug|o:id>    → { success, donor, gifts, names, people, needs, onSite, level, keepAnonymous, … }
  * GET ?giving=<p:slug>      → { success, gifts, total, cents12, latest, suggest }   a partner's giving, for its card
  * GET ?needs=1              → { success, items }             what needs a person
- * GET ?thanks=1             → { success, items, staff }      gifts waiting for a thank-you (./_donor-thanks.js)
+ * GET ?thanks=1             → { success, items, staff }      every gift waiting for a thank-you (./_donor-thanks.js)
  * GET ?orgs=1               → { success, orgs }              every organization, to link a name to
  * POST { find: <text> }     → { success, names }             Zeffy names to link to an organization (posted: it can be an email)
  * POST { findPeople, except } → { success, people }          people to join with a person ("Same person as…")
@@ -23,7 +23,9 @@
  * GET ?counts=1             → { success, checksWaiting, thanks }   the Checks tab's count, on whichever tab is open, and
  *                             how many gifts wait for a thank-you (the sidebar's badge on Donors & Partners)
  * POST { act, … }           → { success, … }                 a change (./_donor-crm.js act): links, Keep anonymous, the
- *                             same person, owner, notes (note-add, note-edit, note-delete), thank-yous (thanks)
+ *                             same person, owner, notes (note-add, note-edit, note-delete), thank-yous (thanks, with
+ *                             `was`: the state the person saw). `asked`: an answer to a Needs you question, refused (409)
+ *                             if someone answered it since
  * A donor's page (?donor, ?org) also carries { owner, notes, history, staff }, and each gift its thank-you
  */
 import { listView, needsView, thanksView, personView, orgView, orgSummary, orgsList, findNames, findPeople, giftOwner, act } from './_donor-crm.js';
@@ -39,7 +41,8 @@ export async function onRequestGet({ env, request, data }) {
   const q = new URL(request.url).searchParams;
   try {
     if (q.get('counts')) {
-      const [checks, thanks] = await Promise.all([checksFacts(env.DB).catch(() => null), thanksCount(env.DB)]);
+      // Each on its own: one that can't be read never takes the other's count with it
+      const [checks, thanks] = await Promise.all([checksFacts(env.DB).catch(() => null), thanksCount(env.DB).catch(() => null)]);
       return ok({ checksWaiting: checks?.waiting || 0, thanks });
     }
     if (q.get('needs')) return ok(await needsView(env));

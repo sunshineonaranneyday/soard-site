@@ -64,18 +64,26 @@ const writeState = (DB, s) => DB.prepare("INSERT INTO donor_state (key, value) V
 /** Zeffy took it online (and sent its own thank-you) */
 export const online = (r) => r.type !== 'manual' && !OFFLINE.has(String(r.method || '').toLowerCase());
 
-/**
- * Why SOARD thanks a gift itself, or null. `gift`: one gift as giftsFrom joins it (its first charge's method and type,
- * its whole amount); `first`: false for a monthly gift's later times. → 'check' | 'daf' | 'kind' | 'hand' | 'major'
- */
-export function thankWhy(gift, { first = true } = {}) {
-  if (!gift || !(Number(gift.cents) > 0)) return null;
-  if (gift.every && !first) return null;
-  const m = String(gift.method || '').toLowerCase();
-  if (gift.inKind || m === 'in_kind') return 'kind';
+/** How one charge was taken, if Zeffy sent its giver nothing: 'kind' | 'check' | 'daf' | 'hand' | null */
+function offlineWhy(r) {
+  const m = String(r?.method || '').toLowerCase();
+  if (r?.inKind || Number(r?.in_kind) > 0 || m === 'in_kind') return 'kind';
   if (m === 'cheque' || m === 'check') return 'check';
   if (m === 'daf') return 'daf';
-  if (!online(gift)) return 'hand';
+  return online(r || {}) ? null : 'hand';
+}
+/**
+ * Why SOARD thanks a gift itself, or null. `gift`: one gift as giftsFrom joins it (its whole amount); `charges`: the
+ * donor list's rows of its charges, each looked at as it was taken (a check joined to a card charge, one guest at one
+ * gala, is still a check; without them, the gift's own method); `first`: false for a monthly gift's later times.
+ * → 'kind' | 'check' | 'daf' | 'hand' | 'major'
+ */
+export function thankWhy(gift, { first = true, charges = null } = {}) {
+  if (!gift || !(Number(gift.cents) > 0)) return null;
+  if (gift.every && !first) return null;
+  const whys = (charges?.length ? charges : [gift]).map(offlineWhy);
+  const why = ['kind', 'check', 'daf', 'hand'].find((w) => whys.includes(w));
+  if (why) return why;
   return gift.cents >= THANK_CENTS ? 'major' : null;
 }
 export const WHY = {
@@ -92,99 +100,167 @@ const chargesOf = (row) => String(row.ids || row.id).split(' ').filter(Boolean);
 
 /**
  * Bring donor_thanks up to date with the donor list: new gifts that need a thank-you become To thank, a split gift's
- * later charges join it, and a To thank closes when Zeffy shows it refunded in full or answers twice that it has no
- * such payment. `ask`: false skips asking Zeffy (the gift webhook, which has no time to spare). Never throws
+ * later charges join it, and a To thank closes when Zeffy shows every charge of it refunded in full, or answers twice
+ * that it has no such payment. One run at a time (the webhook's and the 15-minute read's could otherwise both add one
+ * gift): a run that finds another going leaves it to that one, and the next read picks up anything it missed.
+ * `ask`: false skips asking Zeffy (the gift webhook, which has no time to spare). Never throws
  */
 export async function syncThanks(env, { now = Date.now(), fetchImpl = fetch, ask = true } = {}) {
   const { DB } = env;
   if (!DB) return null;
+  let turn = null;
   try {
     await ensureThanks(DB);
-    const st = await readState(DB);
-    let changedState = false;
-    if (!st.startedAt) { st.startedAt = iso(now); changedState = true; }
-    // The first whole read of Zeffy's history after thank-yous began: from then on, anything new to the site is new
-    if (!st.wholeAt) {
-      const ds = await readDonorState(DB);
-      if (ds.filledAt && ds.filledAt >= st.startedAt) { st.wholeAt = ds.filledAt; changedState = true; }
-    }
-    if (changedState) await writeState(DB, st);
-    const startS = Math.floor(Date.parse(st.startedAt) / 1000);
-    const nowS = Math.floor(now / 1000);
-    const known = (await DB.prepare('SELECT id, ids, state, cents, asked_at FROM donor_thanks').all()).results || [];
-    const byCharge = new Map();
-    for (const t of known) for (const c of chargesOf(t)) byCharge.set(c, t);
-    const todoIds = known.filter((t) => t.state === 'todo').flatMap(chargesOf);
-    // Gifts dated since it began (an hour before, so a gift split across the moment joins whole), gifts first seen
-    // lately once the history was whole, and every charge of a gift still To thank
-    const parts = ['(at >= ? AND at >= ?)'];
-    const vals = [startS - 3600, nowS - Math.floor(RECENT_MS / 1000)];
-    // After it, not at it: what the run that finished the read saw, it saw as history
-    if (st.wholeAt) { parts.push('first_seen > ?'); vals.push(st.wholeAt > iso(now - NEW_MS) ? st.wholeAt : iso(now - NEW_MS)); }
-    let rows = (await DB.prepare(`SELECT ${READ_COLS.join(', ')} FROM donor_payments WHERE ${parts.join(' OR ')}`).bind(...vals).all()).results || [];
-    const have = new Set(rows.map((r) => r.id));
-    const missingTodo = todoIds.filter((id) => !have.has(id));
-    for (let i = 0; i < missingTodo.length; i += 80) {
-      const part = missingTodo.slice(i, i + 80);
-      rows = rows.concat((await DB.prepare(`SELECT ${READ_COLS.join(', ')} FROM donor_payments WHERE id IN (${part.map(() => '?').join(', ')})`).bind(...part).all()).results || []);
-    }
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    const kids = await kidNames(DB);
-    const steps = [];
-    let added = 0;
-    for (const g of giftsFrom(rows, kids)) {
-      const charges = g.ids || [g.id];
-      const rs = charges.map((id) => byId.get(id)).filter(Boolean);
-      const t = charges.map((c) => byCharge.get(c)).find(Boolean) || null;
-      const firstSeen = rs.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), rs[0]?.first_seen || iso(now));
-      // An import is new by its date only: old history imported now was thanked when it was given
-      const isNew = g.at >= startS || (g.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
-      if (!t && !isNew) continue;
-      // A monthly gift: its first time only, known once all the history is read
-      let first = true;
-      if (g.every) {
-        if (!st.wholeAt) continue;
-        const r0 = rs[0];
-        const earlier = r0.sub
-          ? await DB.prepare('SELECT 1 FROM donor_payments WHERE sub = ? AND at < ? AND id <> ? LIMIT 1').bind(r0.sub, r0.at, r0.id).first()
-          : await DB.prepare('SELECT 1 FROM donor_payments WHERE every = ? AND campaign IS ? AND at < ? AND id <> ? AND ((contact IS NOT NULL AND contact = ?) OR (email IS NOT NULL AND email = ?)) LIMIT 1')
-            .bind(r0.every, r0.campaign, r0.at, r0.id, r0.contact, r0.email).first();
-        first = !earlier;
-      }
-      const why = thankWhy(g, { first });
-      const r0 = rs[0] || {};
-      const name = givenName({ first_name: r0.first, last_name: r0.last }) || clean(r0.company) || 'No name';
-      const snap = [charges.join(' '), g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, name, r0.company || null, g.campaign || null, howOf(g), r0.contact || null];
-      if (!t) {
-        if (!why) continue;
-        steps.push(DB.prepare(`INSERT OR IGNORE INTO donor_thanks (id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at)
-          VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(g.id, snap[0], why, ...snap.slice(1), iso(now)));
-        added++;
-        continue;
-      }
-      // Known: a later charge of a split gift joins it. A To thank keeps up with the gift; refunded in full, it closes
-      const refunded = rs.length === charges.length && rs.length > 0 && rs.every((r) => Number(r.cents) > 0 && !Number(r.net));
-      if (t.state === 'todo' && refunded) {
-        steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'refunded', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
-      } else if (t.state === 'todo' && why) {
-        steps.push(DB.prepare('UPDATE donor_thanks SET ids = ?, why = ?, at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ?').bind(snap[0], why, ...snap.slice(1), t.id));
-      } else if (chargesOf(t).join(' ') !== snap[0] && rs.length) {
-        steps.push(DB.prepare('UPDATE donor_thanks SET ids = ? WHERE id = ?').bind([...new Set([...chargesOf(t), ...charges])].join(' '), t.id));
-      }
-    }
-    for (let i = 0; i < steps.length; i += 50) await DB.batch(steps.slice(i, i + 50));
-    // To thank, but the donor list has none of its charges: ask Zeffy (a few a run, each at most every few hours)
-    let closed = 0;
-    if (ask && String(env.ZEFFY_API_KEY || '').trim()) {
-      const lost = known.filter((t) => t.state === 'todo' && chargesOf(t).every((c) => !byId.has(c)))
-        .filter((t) => !t.asked_at || now - Date.parse(t.asked_at) >= GONE_ASK_MS).slice(0, GONE_PER_RUN);
-      for (const t of lost) closed += await askZeffy(env, t, { now, fetchImpl });
-    }
-    return { added, closed };
+    turn = await takeTurn(DB, now);
+    if (!turn) return { busy: true };
+    return await syncOnce(env, { now, fetchImpl, ask });
   } catch (e) {
     console.error('[donors] thanks', e.message);
     return null;
+  } finally {
+    if (turn) await DB.prepare("UPDATE donor_state SET value = '0' WHERE key = 'thanks-turn' AND value = ?").bind(turn).run().catch(() => {});
   }
+}
+// A run that died lets go of its turn after this long
+const TURN_MS = 3 * MIN;
+async function takeTurn(DB, now) {
+  const at = iso(now);
+  const r = await DB.prepare("INSERT INTO donor_state (key, value) VALUES ('thanks-turn', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value WHERE donor_state.value < ?")
+    .bind(at, iso(now - TURN_MS)).run();
+  return r.meta?.changes ? at : null;
+}
+
+/** Is each of these monthly gifts its giver's first? One question for all that have Zeffy's plan id → Set of first ones */
+async function firstTimes(DB, gifts) {
+  const first = new Set();
+  const bySub = new Map();
+  for (const { g, r0 } of gifts) if (r0.sub) bySub.set(r0.sub, [...(bySub.get(r0.sub) || []), { g, r0 }]);
+  const subs = [...bySub.keys()];
+  for (let i = 0; i < subs.length; i += 80) {
+    const part = subs.slice(i, i + 80);
+    const r = (await DB.prepare(`SELECT sub, MIN(at) AS at FROM donor_payments WHERE sub IN (${part.map(() => '?').join(', ')}) GROUP BY sub`).bind(...part).all()).results || [];
+    const minOf = new Map(r.map((x) => [x.sub, Number(x.at)]));
+    for (const sub of part) for (const { g, r0 } of bySub.get(sub)) if (!(minOf.get(sub) < Number(r0.at))) first.add(g);
+  }
+  // No plan id (rare): the same giver (their contact, else email, else name) giving the same every-so-often to the same
+  // campaign before. Known by nothing at all: never taken as a first time, so it can't come back every month
+  for (const { g, r0 } of gifts) {
+    if (r0.sub) continue;
+    const name = clean(`${clean(r0.first)} ${clean(r0.last)}`).toLowerCase();
+    const who = r0.contact ? ['contact = ?', r0.contact] : r0.email ? ['email = ?', r0.email] : name ? ["lower(trim(coalesce(first, '') || ' ' || coalesce(last, ''))) = ?", name] : null;
+    if (!who) continue;
+    const earlier = await DB.prepare(`SELECT 1 FROM donor_payments WHERE ${who[0]} AND every = ? AND campaign IS ? AND at < ? AND id <> ? LIMIT 1`).bind(who[1], r0.every, r0.campaign, r0.at, r0.id).first();
+    if (!earlier) first.add(g);
+  }
+  return first;
+}
+
+async function syncOnce(env, { now, fetchImpl, ask }) {
+  const { DB } = env;
+  const st = await readState(DB);
+  let changedState = false;
+  if (!st.startedAt) { st.startedAt = iso(now); changedState = true; }
+  // The first whole read of Zeffy's history after thank-yous began: from then on, anything new to the site is new
+  if (!st.wholeAt) {
+    const ds = await readDonorState(DB);
+    if (ds.filledAt && ds.filledAt >= st.startedAt) { st.wholeAt = ds.filledAt; changedState = true; }
+  }
+  if (changedState) await writeState(DB, st);
+  const startS = Math.floor(Date.parse(st.startedAt) / 1000);
+  const nowS = Math.floor(now / 1000);
+  let known = (await DB.prepare('SELECT id, ids, state, cents, asked_at, created_at FROM donor_thanks').all()).results || [];
+  // One charge, one thank-you. Two that share a charge (runs that overlapped once) are one: the one already said, else
+  // the one with more of the gift, else the first, stays; the other was never said, so it goes
+  const extra = new Set();
+  const holder = new Map();
+  const rank = (t) => [t.state === 'todo' ? 1 : 0, -chargesOf(t).length, t.created_at || '', t.id];
+  const before = (a, b) => { const x = rank(a); const y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i]; return false; };
+  for (const t of [...known].sort((a, b) => (before(a, b) ? -1 : before(b, a) ? 1 : 0))) {
+    const shared = chargesOf(t).some((c) => holder.has(c));
+    if (shared && t.state === 'todo') { extra.add(t.id); continue; }
+    for (const c of chargesOf(t)) if (!holder.has(c)) holder.set(c, t);
+  }
+  if (extra.size) {
+    await DB.batch([...extra].map((id) => DB.prepare("DELETE FROM donor_thanks WHERE id = ? AND state = 'todo'").bind(id)));
+    known = known.filter((t) => !extra.has(t.id));
+  }
+  const byCharge = holder;
+  const todoIds = known.filter((t) => t.state === 'todo').flatMap(chargesOf);
+  // Gifts dated since it began (an hour before, so a gift split across the moment joins whole), gifts first seen
+  // lately once the history was whole, and every charge of a gift still To thank
+  const parts = ['(at >= ? AND at >= ?)'];
+  const vals = [startS - 3600, nowS - Math.floor(RECENT_MS / 1000)];
+  // After it, not at it: what the run that finished the read saw, it saw as history
+  if (st.wholeAt) { parts.push('first_seen > ?'); vals.push(st.wholeAt > iso(now - NEW_MS) ? st.wholeAt : iso(now - NEW_MS)); }
+  let rows = (await DB.prepare(`SELECT ${READ_COLS.join(', ')} FROM donor_payments WHERE ${parts.join(' OR ')}`).bind(...vals).all()).results || [];
+  const have = new Set(rows.map((r) => r.id));
+  const missingTodo = todoIds.filter((id) => !have.has(id));
+  for (let i = 0; i < missingTodo.length; i += 80) {
+    const part = missingTodo.slice(i, i + 80);
+    rows = rows.concat((await DB.prepare(`SELECT ${READ_COLS.join(', ')} FROM donor_payments WHERE id IN (${part.map(() => '?').join(', ')})`).bind(...part).all()).results || []);
+  }
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const kids = await kidNames(DB);
+  // Each gift that gives something, with its charges and the thank-you any of them already has. A charge refunded in
+  // full gives nothing: it never starts, changes or closes a thank-you on its own (the rest of its gift carries on)
+  const gifts = [];
+  for (const g of giftsFrom(rows, kids)) {
+    if (!(Number(g.cents) > 0)) continue;
+    const charges = g.ids || [g.id];
+    const rs = charges.map((id) => byId.get(id)).filter(Boolean);
+    if (!rs.length) continue;
+    const t = charges.map((c) => byCharge.get(c)).find(Boolean) || null;
+    const firstSeen = rs.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), rs[0].first_seen);
+    // An import is new by its date only: old history imported now was thanked when it was given
+    const isNew = g.at >= startS || (g.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
+    if (!t && !isNew) continue;
+    // A monthly gift: its first time only, known once all the history is read
+    if (g.every && !st.wholeAt) continue;
+    gifts.push({ g, charges, rs, r0: rs[0], t });
+  }
+  // Only a gift that has no thank-you yet asks whether it's a first time (its answer never changes after)
+  const first = await firstTimes(DB, gifts.filter((x) => x.g.every && !x.t));
+  const steps = [];
+  let added = 0;
+  for (const { g, charges, rs, r0, t } of gifts) {
+    const why = thankWhy(g, { first: !g.every || !!t || first.has(g), charges: rs });
+    // Named as the donor list names them (./_donor-crm.js): their email when Zeffy has no name
+    const name = givenName({ first_name: r0.first, last_name: r0.last }) || clean(r0.company) || clean(r0.email) || 'No name';
+    const snap = [charges.join(' '), g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, name, r0.company || null, g.campaign || null, howOf(g), r0.contact || null];
+    if (!t) {
+      if (!why) continue;
+      steps.push(DB.prepare(`INSERT OR IGNORE INTO donor_thanks (id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at)
+        VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(g.id, snap[0], why, ...snap.slice(1), iso(now)));
+      added++;
+      continue;
+    }
+    if (t.state === 'todo') {
+      // A To thank keeps up with its gift: a later charge joins it, one refunded in full leaves it. It stays To thank
+      // (with the reason it had) until a person says, or every charge of it is refunded (below)
+      steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = COALESCE(?, why), at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'")
+        .bind(snap[0], why, ...snap.slice(1), t.id));
+    } else if (chargesOf(t).join(' ') !== snap[0]) {
+      // Said already: a later charge of the gift shows as said too
+      steps.push(DB.prepare('UPDATE donor_thanks SET ids = ? WHERE id = ?').bind([...new Set([...chargesOf(t), ...charges])].join(' '), t.id));
+    }
+  }
+  // A To thank whose every charge Zeffy shows refunded in full: nothing was given, so there's no one to thank
+  for (const t of known) {
+    if (t.state !== 'todo') continue;
+    const rs = chargesOf(t).map((c) => byId.get(c));
+    if (rs.length && rs.every((r) => r && Number(r.cents) > 0 && !Number(r.net))) {
+      steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'refunded', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
+    }
+  }
+  for (let i = 0; i < steps.length; i += 50) await DB.batch(steps.slice(i, i + 50));
+  // To thank, but the donor list has none of its charges: ask Zeffy (a few a run, each at most every few hours)
+  let closed = 0;
+  if (ask && String(env.ZEFFY_API_KEY || '').trim()) {
+    const lost = known.filter((t) => t.state === 'todo' && chargesOf(t).every((c) => !byId.has(c)))
+      .filter((t) => !t.asked_at || now - Date.parse(t.asked_at) >= GONE_ASK_MS).slice(0, GONE_PER_RUN);
+    for (const t of lost) closed += await askZeffy(env, t, { now, fetchImpl });
+  }
+  return { added, closed };
 }
 
 /** A To thank the donor list lost: Zeffy says refunded or gone (twice, hours apart) → closed; there → back in the list */
@@ -219,10 +295,10 @@ async function askZeffy(env, t, { now, fetchImpl }) {
 // ─── Reading and saying ─────────────────────────────────────────────
 
 const SHOW = 'id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at, done_by, done_at, gone';
-/** Every gift still To thank, the one waiting longest first */
+/** Every gift still To thank, the one waiting longest first (since it came to the site, not the date on it) */
 export async function thanksToDo(DB) {
   await ensureThanks(DB);
-  return (await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE state = 'todo' ORDER BY at ASC`).all()).results || [];
+  return (await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE state = 'todo' ORDER BY created_at ASC, at ASC`).all()).results || [];
 }
 /** How many are waiting (the Donors list's count) */
 export async function thanksCount(DB) {
@@ -242,17 +318,25 @@ export async function thanksFor(DB, chargeIds) {
   return out;
 }
 
+const SAID = { thanked: 'Thanked', skipped: 'No thank-you needed', todo: 'To thank' };
 /**
- * A person says: thanked, not needed, or (Undo) To thank again. `id`: any charge of the gift. → the row as it was
+ * A person says: thanked, not needed, or (Undo) To thank again. `id`: the thank-you's own id, or any charge of its
+ * gift. `was`: the state the person saw. Someone else said otherwise since (another tab, a teammate): nothing changes,
+ * and they're told who said what (409). → the row as it was
  */
-export async function markThanks(DB, { id, state }, by, { now = Date.now() } = {}) {
+export async function markThanks(DB, { id, state, was = null }, by, { now = Date.now() } = {}) {
   await ensureThanks(DB);
   if (!['thanked', 'skipped', 'todo'].includes(state)) throw Object.assign(new Error('Thanked, not needed, or To thank'), { status: 400 });
   const want = String(id || '');
-  const t = ((await DB.prepare(`SELECT ${SHOW} FROM donor_thanks`).all()).results || []).find((x) => chargesOf(x).includes(want));
+  const t = (await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE id = ?`).bind(want).first())
+    || await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE instr(' ' || ids || ' ', ?) > 0`).bind(` ${want} `).first();
   if (!t) throw Object.assign(new Error('That gift has no thank-you to say. Reload and look again.'), { status: 404 });
   if (t.state === 'gone') throw Object.assign(new Error('That gift was refunded or taken out of Zeffy, so there’s no thank-you to say.'), { status: 409 });
-  await DB.prepare('UPDATE donor_thanks SET state = ?, done_by = ?, done_at = ? WHERE id = ?')
-    .bind(state, state === 'todo' ? null : by || null, state === 'todo' ? null : iso(now), t.id).run();
+  const changed = (x) => Object.assign(new Error(`${SAID[x.state] || 'Changed'}${x.done_by ? `, said by ${x.done_by.split('@')[0]}` : ''} since you looked. Nothing was changed.`), { status: 409, state: x.state });
+  if (was && t.state !== was) throw changed(t);
+  if (t.state === state) return t;
+  const r = await DB.prepare('UPDATE donor_thanks SET state = ?, done_by = ?, done_at = ? WHERE id = ? AND state = ?')
+    .bind(state, state === 'todo' ? null : by || null, state === 'todo' ? null : iso(now), t.id, t.state).run();
+  if (!r.meta?.changes) throw changed(await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE id = ?`).bind(t.id).first() || t);
   return t;
 }

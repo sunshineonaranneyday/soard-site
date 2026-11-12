@@ -709,6 +709,8 @@
     .btn-sm { min-height: 32px; padding: 0.35rem 0.75rem; font-size: var(--fs-xs); border-radius: 7px; }
     .btn svg { flex-shrink: 0; }
     .btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+    /* Busy while it saves, but still holding the focus (a disabled button drops it to the page) */
+    .btn[aria-disabled="true"] { opacity: 0.45; cursor: progress; box-shadow: none; }
     /* Destructive actions in a page header stay quiet until hovered; the confirm dialog carries the solid red */
     .page-header .btn-danger { background: var(--color-bg-card); color: var(--color-danger); border-color: var(--tone-danger-line); box-shadow: var(--shadow-xs); }
     .page-header .btn-danger:hover:not(:disabled) { background: #FDF2F2; border-color: #E9A8A8; color: #B42323; }
@@ -25337,17 +25339,20 @@ ${sections || '<p>No one yet.</p>'}
      *  at once on `on`: an event an area sends when it changes what's counted
      *  (read again), or when it has just read the number itself ({ detail: { value } }) */
     function sharedPoll(url, read, everyMs, { on = null } = {}) {
-      const s = { v: read(null), at: 0, subs: new Set(), timer: null };
+      const s = { v: read(null), at: 0, subs: new Set(), timer: null, n: 0 };
       const put = (v) => { if (v !== s.v) { s.v = v; s.subs.forEach((f) => f(v)); } };
+      // Only the newest answer counts: a slow one from before a change never lands over the number after it
       const refresh = async () => {
         s.at = Date.now();
+        const mine = ++s.n;
         try {
           const r = await fetch(url, { cache: 'no-store' });
           if (!r.ok) return;
-          put(read(await r.json()));
+          const j = await r.json();
+          if (mine === s.n) put(read(j));
         } catch { /* keeps what it had until the next look */ }
       };
-      const heard = (e) => { if (e?.detail && 'value' in e.detail) { s.at = Date.now(); put(e.detail.value); } else refresh(); };
+      const heard = (e) => { if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } else refresh(); };
       const back = () => { if (!document.hidden && Date.now() - s.at > everyMs / 2) refresh(); };
       function use() {
         const [v, setV] = useState(s.v);
@@ -25379,7 +25384,7 @@ ${sections || '<p>No one yet.</p>'}
     // Families at Applied, waiting for a first look: Applications' badge
     const applicantsNew = sharedPoll('/api/applicants-count', (j) => (j?.success ? j.applied || 0 : 0), 300e3);
     // Gifts waiting for a thank-you (Donors & Partners → To thank): its badge. Donors says when one is marked
-    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j?.success ? j.thanks || 0 : 0), 300e3, { on: 'soard-thanks-changed' });
+    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j?.success && Number.isFinite(j.thanks) ? j.thanks : 0), 300e3, { on: 'soard-thanks-changed' });
     // One of the Board area's admins (Board → Members): the menu and ⌘K show Board only to them
     const boardAdminGate = sharedPoll('/api/board-admin?me=1', (j) => j?.admin === true, 30 * 60e3);
     const navShown = (it, boardAdmin) => it.gate !== 'board' || boardAdmin;

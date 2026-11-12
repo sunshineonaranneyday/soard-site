@@ -76,6 +76,9 @@ const SCHEMA = [
   'CREATE INDEX IF NOT EXISTS donor_payments_contact ON donor_payments(contact)',
   'CREATE INDEX IF NOT EXISTS donor_payments_at ON donor_payments(at)',
   'CREATE INDEX IF NOT EXISTS donor_payments_checked ON donor_payments(checked_at)',
+  // A monthly gift's first time (./_donor-thanks.js), and gifts first seen since a time (the thank-you run's question)
+  'CREATE INDEX IF NOT EXISTS donor_payments_sub ON donor_payments(sub)',
+  'CREATE INDEX IF NOT EXISTS donor_payments_seen ON donor_payments(first_seen)',
   'CREATE TABLE IF NOT EXISTS donor_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
 ];
 const ready = new WeakSet();

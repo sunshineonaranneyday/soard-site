@@ -902,3 +902,118 @@ test('which names read as an organization’s', () => {
   for (const n of ['Lark Foundation', 'Smith & Co.', 'Smith & Co', 'Acme Co. Builders', 'Peachtree Rotary Club', 'Vale Homes', 'River LLC', 'North Group']) assert.ok(C.ORG_WORDS.test(n), n);
   for (const n of ['Coco Smith', 'Corey Coleman', 'Jane Doe', 'Fundy Clark', 'Trusty Lee', 'Cole Homeson']) assert.ok(!C.ORG_WORDS.test(n), n);
 });
+
+// ─── Found in review, Nov 12: Needs you, merges, History, the To thank pill ───
+
+const withTeam = async () => {
+  for (const sql of [
+    'CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, action TEXT, entity_type TEXT, entity_slug TEXT, entity_name TEXT, changes TEXT, path TEXT, git_status TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)',
+    'CREATE TABLE IF NOT EXISTS staff_state (key TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT)',
+    `INSERT OR REPLACE INTO staff_state (key, data) VALUES ('directory', '${JSON.stringify({ ok: true, accounts: [{ email: 'alex@soardcharity.com', aliases: [], name: 'Alex Rivera', active: true }, { email: 'jordan@soardcharity.com', aliases: [], name: 'Jordan Hale', active: true }] })}')`,
+  ]) await db.prepare(sql).run();
+};
+
+test('a contact whose gifts count for a partner already (its company is linked) is never asked “is it an organization?”', async () => {
+  await add(pay({ id: 'sc1', contact: 'ct_smith', first: 'Smith', last: 'Construction', email: 'ap@smithc.example', company: 'Smith Construction Co LLC', amount: 50000 }));
+  await doIt({ act: 'link', kind: 'company', subject: 'Smith Construction Co LLC', org: 'p:acme' });
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 50000);
+  assert.ok(!(await needs()).some((i) => i.kind === 'named' || i.kind === 'big'), 'keeping it as another organization would take Acme’s gifts');
+});
+
+test('one question about a contact at a time: “is it that partner?” before “is it an organization?”', async () => {
+  await db.prepare(partner('rotary', 'Peachtree Rotary Club')).run();
+  await add(pay({ id: 'rc1', contact: 'ct_rc', first: 'Rotary', last: 'Club', email: 'treasurer@rc.example', amount: 30000 }));
+  assert.deepEqual((await needs()).filter((i) => i.subject === 'ct_rc' || i.linkSubject === 'ct_rc').map((i) => i.kind), ['near']);
+  await doIt({ act: 'not', kind: 'contact', subject: 'ct_rc', org: 'p:rotary' });
+  assert.deepEqual((await needs()).filter((i) => i.linkSubject === 'ct_rc').map((i) => i.kind), ['named'], 'answered: the next question');
+});
+
+test('“It’s a person” is the contact’s alone: a $10,000 company of that name typed on others’ gifts is still asked about', async () => {
+  await add(pay({ id: 'sf1', contact: 'ct_sff', first: 'Smith Family', last: 'Foundation', email: 'sff@example.com', amount: 50000 }));
+  const it = (await needs()).find((i) => i.kind === 'named');
+  await doIt({ act: 'big', subject: it.subject, also: it.also, person: true });
+  await add(pay({ id: 'sf2', contact: 'ct_tr', first: 'Tina', last: 'Trustee', email: 'tina@example.com', company: 'Smith Family Foundation', amount: 1500000 }));
+  const big = (await needs()).find((i) => i.kind === 'big');
+  assert.match(big?.subject || '', /^company:/);
+  assert.deepEqual(big.also, [], 'the contact said to be a person isn’t part of it');
+});
+
+test('a contact with no name is never asked about by its email (billing@peach-construction…)', async () => {
+  await add(pay({ id: 'ne1', contact: 'ct_ne', first: '', last: '', email: 'billing@peach-construction.example', amount: 50000 }));
+  assert.ok(!(await needs()).some((i) => i.kind === 'named'));
+});
+
+test('a Needs you answer someone gave first stands: a second tab’s answer changes nothing and says so', async () => {
+  await withTeam();
+  await add(pay({ id: 'q1', contact: 'ct_q1', first: 'Rae', last: 'Quinn', email: 'rae1@example.com' }), pay({ id: 'q2', contact: 'ct_q2', first: 'Rae', last: 'Quinn', email: 'rae2@example.com' }));
+  const same = (await needs()).find((i) => i.kind === 'same');
+  await doIt({ act: 'same', a: same.a.key, b: same.b.key, same: true, asked: true });
+  await assert.rejects(C.act(env, { act: 'same', a: same.a.key, b: same.b.key, same: false, asked: true }, 'jordan@soardcharity.com', { now: NOW }), (e) => e.status === 409 && /Staff answered this already/.test(e.message));
+  assert.equal((await C.loadCrm(db, { now: NOW })).canon('c:ct_q1'), (await C.loadCrm(db, { now: NOW })).canon('c:ct_q2'), 'still one person');
+  // Not now holds a year: asked again after it, an answer counts
+  await add(pay({ id: 'bg', contact: 'ct_bg', first: 'Birch', last: 'Holdings', email: 'birch@example.com', amount: 1500000 }));
+  const big = (await needs()).find((i) => i.kind === 'big');
+  await doIt({ act: 'big', subject: big.subject, asked: true });
+  await assert.rejects(doIt({ act: 'big', subject: big.subject, asked: true }), (e) => e.status === 409);
+  await C.act(env, { act: 'big', subject: big.subject, asked: true }, by, { now: NOW + 400 * DAY });
+});
+
+test('Zeffy merges a contact known only for its owner, notes and History: all of it follows its gifts', async () => {
+  await withTeam();
+  await add(pay({ id: 'm1', contact: 'ct_old', first: 'Pat', last: 'Lee', email: 'pat@example.com', amount: 5000 }));
+  await doIt({ act: 'owner', key: 'c:ct_old', email: 'alex@soardcharity.com' });
+  await doIt({ act: 'note-add', key: 'c:ct_old', body: 'Prefers a call' });
+  await add(pay({ id: 'm1', contact: 'ct_new', first: 'Pat', last: 'Lee', email: 'pat@example.com', amount: 5000 }));
+  assert.equal((await C.followMerges(db, { now: NOW })).moved, 1);
+  const page = await C.personView(env, 'ct_new', { now: NOW });
+  assert.equal(page.owner, 'alex@soardcharity.com');
+  assert.deepEqual(page.notes.map((n) => n.body), ['Prefers a call']);
+  assert.ok(page.history.some((h) => /Looked after by Alex Rivera/.test(h.what)) && page.history.some((h) => /Note added/.test(h.what)));
+});
+
+test('History stays with the donor: a record split off, an organization put on the website', async () => {
+  await withTeam();
+  await add(pay({ id: 's1', amount: 5000 }), pay({ id: 's2', amount: 5000, contact: 'ct_other', first: 'Jane', last: 'Doe', email: 'other@example.com' }));
+  await doIt({ act: 'same', a: 'c:ct_jane', b: 'c:ct_other', same: true });
+  const lead = (await C.loadCrm(db, { now: NOW })).canon('c:ct_other');
+  await doIt({ act: 'note-add', key: lead, body: 'Keep' });
+  const r = await doIt({ act: 'split', key: lead });
+  const person = await C.personView(env, r.ref, { now: NOW });
+  assert.ok(person.history.some((h) => /Note added/.test(h.what)), 'with the person, like the note');
+  assert.ok(!(await C.personView(env, lead.slice(2), { now: NOW })).history.some((h) => /Note added/.test(h.what)), 'not the record split off');
+  await add(pay({ id: 'o1', amount: 5000, company: 'Bright Futures LLC', contact: 'ct_bf', first: 'Kim', last: 'Ng', email: 'kim@example.com' }));
+  const { key } = await doIt({ act: 'org-new', name: 'Bright Futures', links: [{ kind: 'company', subject: 'Bright Futures LLC' }] });
+  await doIt({ act: 'note-add', key, body: 'Board member’s company' });
+  await db.prepare(partner('bright-futures', 'Bright Futures')).run();
+  await doIt({ act: 'website', key, slug: 'bright-futures' });
+  assert.ok((await C.orgView(env, 'p:bright-futures', { now: NOW })).history.some((h) => /Note added/.test(h.what)));
+});
+
+test('a giver known by email, then given a Zeffy contact: their notes and owner show at once, and are filed under it', async () => {
+  await withTeam();
+  await add(pay({ id: 'nc1', contact: null, first: 'Lou', last: 'Park', email: 'lou@example.com', amount: 5000 }));
+  const ref = (await list()).find((p) => p.name === 'Lou Park').ref;
+  const key = (await C.personView(env, ref, { now: NOW })).key;
+  assert.match(key, /^e:/);
+  await doIt({ act: 'note-add', key, body: 'Met at the gala' });
+  await doIt({ act: 'owner', key, email: 'jordan@soardcharity.com' });
+  await add(pay({ id: 'nc2', contact: 'ct_lou', first: 'Lou', last: 'Park', email: 'lou@example.com', amount: 5000 }));
+  let page = await C.personView(env, 'ct_lou', { now: NOW });
+  assert.deepEqual([page.notes.length, page.owner], [1, 'jordan@soardcharity.com'], 'at once');
+  await C.followMerges(db, { now: NOW });
+  page = await C.personView(env, 'ct_lou', { now: NOW });
+  assert.equal(await db.prepare("SELECT subject FROM donor_notes").first('subject'), 'c:ct_lou');
+  assert.deepEqual([page.notes.length, page.owner, (await list()).find((p) => p.key === 'c:ct_lou')?.owner], [1, 'jordan@soardcharity.com', 'jordan@soardcharity.com'], 'for good, on the list too');
+});
+
+test('the list says who looks after each gift to thank, so the To thank pill can follow the Owner filter', async () => {
+  await withTeam();
+  const { syncThanks } = await import('../functions/api/_donor-thanks.js');
+  await syncThanks(env, { now: NOW - 2 * DAY });
+  await add(pay({ id: 'ck1', method: 'cheque', type: 'manual', amount: 50000 }), pay({ id: 'ck2', method: 'cheque', type: 'manual', amount: 50000, contact: 'ct_b', first: 'Bo', last: 'Banks', email: 'bo@example.com' }));
+  await doIt({ act: 'owner', key: 'c:ct_jane', email: 'alex@soardcharity.com' });
+  const v = await C.listView(env, { now: NOW });
+  assert.equal(v.thanks, 2);
+  assert.deepEqual(v.thanksOwners.slice().sort(), ['', 'alex@soardcharity.com']);
+  assert.deepEqual((await C.thanksView(env, { now: NOW })).items.map((t) => t.owner || '').sort(), ['', 'alex@soardcharity.com']);
+});
