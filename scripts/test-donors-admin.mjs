@@ -506,6 +506,7 @@ try {
   await page.waitForSelector('.dn-thank', { timeout: 8000 });
   await page.waitForFunction(() => location.hash === '#donors/ct_tom', { timeout: 6000 }).catch(() => {});
   ok((await page.evaluate(() => location.hash)) === '#donors/ct_tom', 'Open goes to his page, at his own address');
+  ok(await page.evaluate(() => window.scrollY < 80 && document.querySelector('.dn-thank').getBoundingClientRect().top < window.innerHeight), 'opened from To thank: his page from the top, the To thank box in sight (not scrolled to the gift)');
   ok(/To thank 1/.test(await textOf(page, '.dn-thank')) && /\$2,000/.test(await textOf(page, '.dn-thank')), 'his page says what to thank him for, at the top');
   ok(/To thank/.test(await textOf(page, '.dn-gifts')), 'and the gift says so too');
   // Owner
@@ -554,6 +555,8 @@ try {
   await page.evaluate(() => document.querySelector('.dn-back')?.click());
   await page.waitForSelector('.dn-needs[aria-label="To thank"], .dn-done', { timeout: 8000 });
   ok((await page.evaluate(() => location.hash)) === '#donors/thanks', 'Back from a donor opened from To thank: To thank again');
+  await page.waitForFunction(() => document.activeElement?.matches('.ppl-filter[aria-pressed="true"]'), { timeout: 4000 }).catch(() => {});
+  ok(await page.evaluate(() => /To thank/.test(document.activeElement?.textContent || '') && document.activeElement.matches('.ppl-filter')), 'and the focus on its pill, never lost to the page');
   // The list by owner
   await page.evaluate(() => [...document.querySelectorAll('.ppl-filter')].find((b) => b.textContent.trim().startsWith('Everyone'))?.click());
   await page.waitForSelector('.dn-table', { timeout: 8000 });
@@ -623,6 +626,16 @@ try {
   const ph = await open(browser, origin, { width: 390, height: 844, isMobile: true, hasTouch: true });
   await ph.page.waitForSelector('.dn-table', { timeout: 15000 });
   await phoneChecks(ph.page, 'People, phone');
+  // A message with a long unbroken name wraps, its button in reach
+  await ph.page.evaluate(() => { location.hash = '#donors/ct_uma'; });
+  await ph.page.waitForSelector('#dn-owner-pick', { timeout: 8000 });
+  await ph.page.evaluate(() => { const s = document.querySelector('#dn-owner-pick'); s.value = 'jordan@soardcharity.com'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+  await ph.page.waitForSelector('.toast', { timeout: 6000 }).catch(() => {});
+  await ph.page.evaluate(() => { const t = document.querySelector('.toast-container'); t.insertAdjacentHTML('beforeend', '<div class="toast toast-success" role="alert" id="walk-long"><span class="toast-action"><span>Thanked: $250 from ' + 'Averyveryveryveryverylongunbrokenname'.repeat(3) + '</span><button class="toast-undo">Undo</button></span></div>'); });
+  const longToast = await ph.page.evaluate(() => { const b = document.querySelector('#walk-long .toast-undo').getBoundingClientRect(); const r = document.querySelector('#walk-long').getBoundingClientRect(); document.querySelector('#walk-long').remove(); return { right: Math.round(b.right), toast: Math.round(r.right), vw: document.documentElement.clientWidth }; });
+  ok(longToast.right <= longToast.vw && longToast.toast <= longToast.vw, `a message with a long unbroken name keeps Undo on the screen (${JSON.stringify(longToast)})`);
+  await ph.page.goto(`${origin}/admin/#donors`, { waitUntil: 'networkidle2' });
+  await ph.page.waitForSelector('.dn-table', { timeout: 15000 });
   await ph.page.goto(`${origin}/admin/#donors/ct_jane`, { waitUntil: 'networkidle2' });
   await ph.page.waitForSelector('.dn-gifts', { timeout: 8000 });
   await phoneChecks(ph.page, 'A donor, phone');

@@ -989,7 +989,7 @@ test('History stays with the donor: a record split off, an organization put on t
   assert.ok((await C.orgView(env, 'p:bright-futures', { now: NOW })).history.some((h) => /Note added/.test(h.what)));
 });
 
-test('a giver known by email, then given a Zeffy contact: their notes show at once; notes, owner and "same person" are filed under it on the next read', async () => {
+test('a giver known by email, then given a Zeffy contact: their notes and owner go to it the moment the gift arrives', async () => {
   await withTeam();
   await add(pay({ id: 'nc1', contact: null, first: 'Lou', last: 'Park', email: 'lou@example.com', amount: 5000 }));
   const ref = (await list()).find((p) => p.name === 'Lou Park').ref;
@@ -999,7 +999,7 @@ test('a giver known by email, then given a Zeffy contact: their notes show at on
   await doIt({ act: 'owner', key, email: 'jordan@soardcharity.com' });
   await add(pay({ id: 'nc2', contact: 'ct_lou', first: 'Lou', last: 'Park', email: 'lou@example.com', amount: 5000 }));
   let page = await C.personView(env, 'ct_lou', { now: NOW });
-  assert.deepEqual([page.notes.length, page.owner], [1, null], 'the notes at once; the owner as the list has it (no one, until the next read)');
+  assert.deepEqual([page.notes.length, page.owner, (await list()).find((p) => p.key === 'c:ct_lou')?.owner], [1, 'jordan@soardcharity.com', 'jordan@soardcharity.com'], 'at once, on the page and the list');
   await C.followMerges(db, { now: NOW });
   page = await C.personView(env, 'ct_lou', { now: NOW });
   assert.equal(await db.prepare("SELECT subject FROM donor_notes").first('subject'), 'c:ct_lou');

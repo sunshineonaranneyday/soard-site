@@ -108,7 +108,7 @@ const STYLE = `
 .dn-need__q, .dn-need__sub, .dn-need__do a { overflow-wrap: anywhere; min-width: 0; }
 .dn-need__do .btn { display: inline-flex; align-items: center; gap: .35rem; }
 .dn-same { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
-.dn-same__one { display: grid; gap: .15rem; padding: .6rem .75rem; border: 1px solid var(--color-border); border-radius: 10px; min-width: 0; }
+.dn-same__one { display: grid; gap: .15rem; padding: .6rem .75rem; border: 1px solid var(--color-border); border-radius: 10px; min-width: 0; overflow-wrap: anywhere; }
 .dn-done { padding: 1rem 0; }
 .dn-picker { width: min(32rem, 100%); }
 .dn-picker .form-input { width: 100%; margin-bottom: .6rem; }
@@ -132,7 +132,7 @@ const STYLE = `
 .dn-maybe { padding: .6rem .75rem; border-radius: 10px; background: var(--tone-warn-surface, #FFF9DB); }
 .dn-rename .form-input { width: 100%; margin-bottom: 1rem; }
 /* Search, Owner and Sort on one line; the filters on their own below */
-.dn-toolbar .ppl-filters { order: 5; flex-basis: 100%; }
+.dn-toolbar .ppl-filters { flex-basis: 100%; }
 .dn-card--owner { order: 1; }
 /* A person's Zeffy details after what to thank them for and their giving, on a phone */
 .kd-card.dn-card--zeffy { order: 3; }
@@ -218,7 +218,7 @@ async function call(params = '', body = null) {
   try {
     const r = await fetch(`${API}${params}`, body ? { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify(body) } : { headers: { Accept: 'application/json' } });
     const j = await r.json().catch(() => null);
-    return j || { success: false, error: 'The site didn’t answer.' };
+    return j ? (j.success ? j : { ...j, status: r.status }) : { success: false, error: 'The site didn’t answer.', status: r.status };
   } catch {
     return { success: false, error: 'The site didn’t answer.' };
   }
@@ -236,7 +236,7 @@ function placeOf(hash = location.hash) {
   if (parts[0] === 'needs') return { tab: 'people', needs: true };
   if (parts[0] === 'thanks') return { tab: 'people', thanks: true };
   if (parts[0] === 'gift' && parts[1]) return { tab: 'people', gift: parts[1] };
-  if (parts[0] === 'org' && parts[1]) return { tab: 'people', org: parts[1] };
+  if (parts[0] === 'org') return parts[1] ? { tab: 'people', org: parts[1] } : { tab: 'people' };
   return { tab: 'people', donor: parts[0] };
 }
 const addressOf = (place) => (place.tab === 'checks' ? '#donors/checks' : place.needs ? '#donors/needs' : place.thanks ? '#donors/thanks' : place.org ? `#donors/org/${encodeURIComponent(place.org)}`
@@ -270,7 +270,7 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   const open = (p) => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); };
   // Back from a donor's page: where it was opened from (To thank, Needs you), else the list
   const backLabel = backTo === 'thanks' ? 'To thank' : backTo === 'needs' ? 'Needs you' : 'Donors';
-  const goBack = () => { const to = backTo; backTo = null; open({ tab: 'people', thanks: to === 'thanks', needs: to === 'needs' }); };
+  const goBack = () => { const to = backTo; backTo = null; focusPill = !!to; open({ tab: 'people', thanks: to === 'thanks', needs: to === 'needs' }); };
   // What's done here is in effect at once (private D1, Zeffy, Mercury), so no message offers Publish unless it says it
   // waits for it ({ publish: true }: a partner's level, a partner card made)
   const toast = (msg, type, action = null, o = {}) => addToast(msg, type, action, { publish: false, ...o });
@@ -312,6 +312,8 @@ let lastPlace = null;
 let lastOwner = '';
 // Where a donor's page was opened from, when not the list ('thanks' | 'needs'): its Back goes there
 let backTo = null;
+// Back there: the focus on its pill (the donor's row has it when Back is to the list)
+let focusPill = false;
 /** Read the list again when it next shows (a change on a donor's page moves gifts between donors) */
 const listChanged = () => { if (lastList) lastList = { ...lastList, stale: true }; };
 // A thank-you was said (or undone): the sidebar's count, the list, To thank and a donor's page all read again. With a
@@ -350,7 +352,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
   const [q, setQ] = useState(back.current?.q || '');
   const [stage, setStage] = useState(back.current?.stage || 'all');
   const [sort, setSort] = useState(back.current?.sort || 'latest');
-  const [owner, setOwner] = useState(back.current?.owner ?? lastOwner);
+  const [owner, setOwner] = useState(lastOwner);
   const [shown, setShown] = useState(back.current?.shown || PAGE);
   const search = useRef(null);
   // Back from a donor: the same rows, scrolled where they were, the focus on the donor just opened
@@ -366,10 +368,13 @@ function DonorList({ ctx, view, onView, onOpen }) {
   }, [!!v]);
   const openDonor = (p) => { lastPlace = { q, stage, sort, owner, shown, scroll: window.scrollY, key: p.key }; backTo = null; onOpen(p); };
   const latest = useLatest();
+  // Left (a donor opened): a read still out lands nowhere, and its count never reaches the sidebar
+  const gone = useRef(false);
+  useEffect(() => () => { gone.current = true; }, []);
   const load = async () => {
     const current = latest();
     const j = await get('');
-    if (!current()) return;
+    if (!current() || gone.current) return;
     if (!j.success) { setErr(j.error); return; }
     setErr(null);
     lastList = j;
@@ -380,6 +385,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
   useEffect(() => { load(); }, []);
   useThanksSaid(load);
   usePressedInView([view, stage, !!v]);
+  useEffect(() => { if (v && focusPill) { focusPill = false; document.querySelector('.dn .ppl-filters [aria-pressed="true"]')?.focus({ preventScroll: true }); } }, [!!v]);
   useEffect(() => {
     const onKey = (e) => {
       if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input, textarea, select, [contenteditable="true"]') || document.querySelector('.modal-overlay, .ask-overlay')) return;
@@ -421,6 +427,8 @@ function DonorList({ ctx, view, onView, onOpen }) {
   };
   const pickOwner = (o) => { setOwner(o); lastOwner = o; };
   const yearEnd = stage === 'yearend';
+  // A count from before a change made since (Back to the list after a thank-you): being read again, never shown as now
+  const n = (x, tone = '') => (v.stale ? html`<span class=${`count ${tone}`} aria-label="being read again">…</span>` : html`<span class=${`count ${tone}`}>${x.toLocaleString()}</span>`);
   const ownerName = owner === 'none' ? 'no one' : owner === me ? 'you' : fullName(owner, staff);
   return html`
     <div class="page-header">
@@ -439,12 +447,6 @@ function DonorList({ ctx, view, onView, onOpen }) {
         <input type="search" ref=${search} placeholder="Name, email or company" aria-label="Search donors" aria-keyshortcuts="/" value=${q} onInput=${(e) => { setQ(e.target.value); if (view) onView(null); }} />
         ${!q ? html`<kbd class="kd-kbd" aria-hidden="true">/</kbd>` : null}
       </div>
-      <div class="ppl-filters" role="group" aria-label="Show">
-        ${filters.map(([k, label]) => html`
-          <button type="button" key=${k} class="pill ppl-filter" aria-pressed=${!view && stage === k} onClick=${() => pickStage(k)}>${label} <span class="count">${count(k).toLocaleString()}</span></button>`)}
-        ${v.thanks || view === 'thanks' ? html`<button type="button" class="pill ppl-filter dn-needs-pill" aria-pressed=${view === 'thanks'} onClick=${() => onView(view === 'thanks' ? null : 'thanks')}>To thank <span class="count is-warn">${thanksShown.toLocaleString()}</span></button>` : null}
-        ${v.needs || view === 'needs' ? html`<button type="button" class="pill ppl-filter dn-needs-pill" aria-pressed=${view === 'needs'} onClick=${() => onView(view === 'needs' ? null : 'needs')}>Needs you <span class="count is-warn">${(v.needs || 0).toLocaleString()}</span></button>` : null}
-      </div>
       ${html`<label class="dn-sort dn-owner-filter">Owner <select class="form-select" value=${owner} onChange=${(e) => pickOwner(e.target.value)}>
         <option value="">Anyone</option>
         ${me ? html`<option value=${me}>Me</option>` : null}
@@ -452,6 +454,12 @@ function DonorList({ ctx, view, onView, onOpen }) {
         ${staff.filter((s) => s.email !== me).map((s) => html`<option key=${s.email} value=${s.email}>${s.name}${s.left ? ' (left the team)' : ''}</option>`)}
       </select></label>`}
       ${view ? null : html`<label class="dn-sort dn-sort-by">Sort <select class="form-select" value=${sort} onChange=${(e) => setSort(e.target.value)}>${SORTS.map(([k, label]) => html`<option key=${k} value=${k}>${label}</option>`)}</select></label>`}
+      <div class="ppl-filters" role="group" aria-label="Show">
+        ${filters.map(([k, label]) => html`
+          <button type="button" key=${k} class="pill ppl-filter" aria-pressed=${!view && stage === k} onClick=${() => pickStage(k)}>${label} ${n(count(k))}</button>`)}
+        ${v.thanks || view === 'thanks' ? html`<button type="button" class="pill ppl-filter dn-needs-pill" aria-pressed=${view === 'thanks'} onClick=${() => onView(view === 'thanks' ? null : 'thanks')}>To thank ${n(thanksShown, 'is-warn')}</button>` : null}
+        ${v.needs || view === 'needs' ? html`<button type="button" class="pill ppl-filter dn-needs-pill" aria-pressed=${view === 'needs'} onClick=${() => onView(view === 'needs' ? null : 'needs')}>Needs you ${n(v.needs || 0, 'is-warn')}</button>` : null}
+      </div>
     </div>
     ${view === 'needs' ? html`<${NeedsList} ctx=${ctx} onChanged=${load} />`
     : view === 'thanks' ? html`<${ThanksList} ctx=${ctx} owner=${owner} ownerName=${ownerName} />` : html`
@@ -543,6 +551,7 @@ function ThanksList({ ctx, owner = '', ownerName = '' }) {
     refocus(e.currentTarget);
     setBusy(`${t.id}:${state}`);
     await sayThanks(ctx, t, state);
+    await load();
     setBusy(null);
   };
   if (!items.length) return html`<p class="dn-status dn-done">${owner ? `Nothing to thank for donors looked after by ${ownerName}.` : 'Nothing to thank.'} A gift shows here when Zeffy sends the giver no thank-you (a check, a donor-advised fund, a gift in kind, anything entered by hand) or it’s $1,000 or more.</p>`;
@@ -555,7 +564,7 @@ function ThanksList({ ctx, owner = '', ownerName = '' }) {
       <div class="dn-need__do">
         <button type="button" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'thanked', e); }}>${busy === `${t.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
         <button type="button" class="btn btn-ghost btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'skipped', e); }}>${busy === `${t.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
-        <a class="link" href=${`#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${() => { backTo = 'thanks'; }}>${t.org ? `Open ${t.org.name}` : `Open ${t.name}`}</a>
+        <a class="link" href=${t.org ? `#donors/org/${encodeURIComponent(t.org.key)}` : t.ref && !t.ref.startsWith('g:') ? `#donors/${encodeURIComponent(t.ref)}` : `#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${() => { backTo = 'thanks'; }}>${t.org ? `Open ${t.org.name}` : `Open ${t.name}`}</a>
         <a class="link" href=${zeffyPaymentUrl(t.ids?.[0] || t.id)} target="_blank" rel="noopener">Open in Zeffy</a>
       </div></li>`)}</ul>
     ${v.more ? html`<p class="dn-status">And ${plural(v.more, 'more gift')} after these.</p>` : null}`;
@@ -571,21 +580,28 @@ async function makeChampion(item, ctx) {
     yes: 'Move to Champion', careful: true,
   });
   if (!yes) return false;
+  // The answer first: someone who said Not now (or moved them) since this was read stands, and nothing changes
+  const said = await change({ act: 'level', org: item.org, done: true, was: item.levelLabel, asked: true });
+  if (!said.success) { ctx.addToast(said.error, 'error'); return false; }
   try {
     const r = await (await fetch('/api/partners-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates: [{ slug: item.slug, set: { level: 'champion' } }] }) })).json();
     if (!r.success) throw new Error(r.error || 'it didn’t save');
-    if (!r.changed?.includes(item.slug)) throw new Error('someone changed them at the same moment. Look again and try once more');
-  } catch (e) { ctx.addToast(`Couldn’t move ${item.name}: ${e.message}`, 'error'); return false; }
+    // Not changed and not in conflict: Champion already (moved on the Partners page, or in another tab)
+    if (!r.changed?.includes(item.slug) && (r.conflicts || []).some((c) => (c?.slug || c) === item.slug)) throw new Error('someone changed them at the same moment. Look again and try once more');
+  } catch (e) {
+    await change({ act: 'level', org: item.org, undo: true });
+    ctx.addToast(`Couldn’t move ${item.name}: ${e.message}`, 'error');
+    return false;
+  }
   // A partner's level is the website's: the Publish bar counts it at once
   window.dispatchEvent(new CustomEvent('soard-content-changed'));
-  await change({ act: 'level', org: item.org, done: true, was: item.levelLabel });
   ctx.addToast(`${item.name} moves to Champion when you publish`, 'success', null, { publish: true });
   return true;
 }
 
 /** Making an organization here (not on the website) from a name, with that name linked */
-async function keepAsOrg(name, link, ctx) {
-  const r = await change({ act: 'org-new', name, links: link ? [link] : [] });
+async function keepAsOrg(name, link, ctx, question = null) {
+  const r = await change({ act: 'org-new', name, links: link ? [link] : [], ...(question ? { asked: true, subject: question.subject, also: question.also || [] } : {}) });
   if (!r.success) { ctx.addToast(r.error, 'error'); return null; }
   listChanged();
   ctx.addToast(`${name} is an organization here now. Only staff see it.`, 'success', { label: 'Open', fn: () => goTo({ tab: 'people', org: r.key }) });
@@ -636,7 +652,7 @@ function NeedsList({ ctx, onChanged, only = null }) {
         <a class="link" href=${`#donors/org/${encodeURIComponent(it.org)}`} onClick=${() => { backTo = 'needs'; }}>See their giving</a></div></li>`;
     // A name that reads as an organization's: a contact can be said to be a person, for good
     const isPerson = (label = 'It’s a person') => (it.person ? btn(`${id}:person`, label, () => said({ act: 'big', subject: it.subject, also: it.also || [], person: true }, `${it.name} stays a person, and it won’t ask again`)) : null);
-    const keep = btn(id, 'Keep it as an organization', async () => { const k = await keepAsOrg(it.name, { kind: it.link, subject: it.linkSubject }, ctx); return k ? true : false; }, true);
+    const keep = btn(id, 'Keep it as an organization', async () => { const k = await keepAsOrg(it.name, { kind: it.link, subject: it.linkSubject }, ctx, it); return k ? true : false; }, true);
     if (it.kind === 'big') return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">${it.name} gave ${usd(it.cents12)} in the last 12 months and isn’t an organization here.</p>
       <p class="dn-need__sub">${it.people?.length ? `Given by ${it.people.join(', ')}. ` : ''}Keep it as an organization to see all its giving together. Only staff see it; putting it on the website is a separate step.</p>
@@ -945,7 +961,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     if (!ref && gift) {
       const g = await get(`?gift=${encodeURIComponent(gift)}`);
       if (!fresh()) return;
-      if (!g.success) { setErr(g.error); return; }
+      if (!g.success) { setErr({ text: g.error, final: g.status === 404 }); return; }
       // A gift that counts for an organization opens the organization
       if (g.org) { onOrg(g.org); return; }
       ref = g.ref;
@@ -954,7 +970,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     }
     const j = await get(`?donor=${encodeURIComponent(ref)}`);
     if (!fresh()) return;
-    if (!j.success) { setErr(j.error); return; }
+    if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     if (j.org) { onOrg(j.org); return; }
     setV(j);
   };
@@ -968,7 +984,8 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   // it). Opened from the list, the page starts at the top
   const flashed = useRef(null);
   useEffect(() => {
-    if (!v || !gift || fromList || flashed.current === gift) return;
+    // (opened from To thank or Needs you: the page from the top, its To thank box first)
+    if (!v || !gift || fromList || backTo || flashed.current === gift) return;
     const el = document.querySelector(`[data-gifts~="${CSS.escape(gift)}"]`);
     if (!el) return;
     flashed.current = gift;
@@ -978,7 +995,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     setTimeout(() => el.classList.remove('is-flash'), 2400);
   }, [v, gift]);
   const back = html`<button type="button" class="dn-back" onClick=${onBack}>← ${backLabel}</button>`;
-  if (err) return html`${back}<div class="notice notice--danger"><div class="notice__body">${err}</div><div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div></div>`;
+  if (err) return html`${back}<div class="notice notice--danger"><div class="notice__body">${err.text}</div>${err.final ? null : html`<div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div>`}</div>`;
   if (!v) return html`${back}<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
   const d = v.donor;
   const linkTo = async (link, orgKey, orgName) => {
@@ -1094,7 +1111,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     setErr(null);
     const j = await get(`?org=${encodeURIComponent(orgKey)}`);
     if (mine !== seq.current) return;
-    if (!j.success) { setErr(j.error); return; }
+    if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // Kept here before, on the website now: its partner's page, at its address
     if (j.org && !j.donor) { history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
     setV(j);
@@ -1104,7 +1121,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
   const heading = useRef(null);
   useEffect(() => { if (v) heading.current?.focus({ preventScroll: true }); }, [!!v]);
   const back = html`<button type="button" class="dn-back" onClick=${onBack}>← ${backLabel}</button>`;
-  if (err) return html`${back}<div class="notice notice--danger"><div class="notice__body">${err}</div><div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div></div>`;
+  if (err) return html`${back}<div class="notice notice--danger"><div class="notice__body">${err.text}</div>${err.final ? null : html`<div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div>`}</div>`;
   if (!v) return html`${back}<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
   const d = v.donor;
   const level = v.needs.find((n) => n.kind === 'level');

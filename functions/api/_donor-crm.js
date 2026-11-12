@@ -524,6 +524,12 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
   }
   if (a === 'level') {
     const key = orgOk(body.org);
+    // Moving it to Champion on the website didn't go through: as if never answered
+    if (body.undo === true) {
+      await DB.prepare("DELETE FROM donor_calls WHERE kind = 'level' AND subject = ? AND answer = 1 AND by IS ?").bind(key, by || null).run();
+      await audit(DB, by, 'Not moved to Champion after all (the Partners page didn’t take the change)', { org: key }, key);
+      return { ok: true };
+    }
     await putCall(DB, { kind: 'level', subject: key, answer: !!body.done, note: body.done ? clean(body.was) || null : null }, by, now);
     await audit(DB, by, body.done ? `${crm.org.get(key).name} made Champion by giving (was ${clean(body.was) || 'unknown'})` : 'Not moved to Champion for now (asked again in a year)', { org: key, was: clean(body.was) || null, done: !!body.done }, key);
     return { ok: true };
@@ -560,6 +566,12 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       steps.push(callStmt(DB, { kind: l.kind, subject, target: key, answer: 1 }, by, now));
     }
     await DB.batch(steps);
+    // A Zeffy contact that was this organization all along (not joined to anyone): its owner, notes, Keep anonymous and
+    // History are the organization's now
+    for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
+      const c = l?.kind === 'contact' ? `c:${subjectOf('contact', l.subject)}` : null;
+      if (c && crm.keysOf(crm.canon(c)).length === 1) await moveCalls(DB, crm.canon(c), key);
+    }
     await audit(DB, by, `New organization (not on the website): ${name}`, { key, name }, key);
     return { ok: true, key };
   }
@@ -690,6 +702,16 @@ async function stillAsked(DB, crm, body, now) {
   else if (a === 'big') q = [String(body.subject || ''), ...(Array.isArray(body.also) ? body.also : [])].filter(Boolean).map((sub) => ({ sql: "kind = 'big' AND subject = ?", args: [String(sub)], live: (c) => c.note === 'person' || !yearOn(c.at) }));
   else if (a === 'level') q = [{ sql: "kind = 'level' AND subject = ?", args: [String(body.org || '')], live: (c) => c.answer || !yearOn(c.at) }];
   else if (a === 'moved-done') q = [{ sql: "kind = 'moved' AND subject = ?", args: [String(body.contact || '')] }];
+  else if (a === 'org-new') {
+    // Keep it as an organization: the card's own question (big, named) not answered since, and its names linked to no one
+    q = [String(body.subject || ''), ...(Array.isArray(body.also) ? body.also : [])].filter(Boolean)
+      .map((sub) => ({ sql: "kind = 'big' AND subject = ?", args: [String(sub)], live: (c) => c.note === 'person' || !yearOn(c.at) }));
+    for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
+      if (!KINDS.has(l?.kind)) continue;
+      q.push({ sql: 'kind = ? AND subject = ? AND answer = 1', args: [l.kind, subjectOf(l.kind, l.subject)], live: (c) => !!c });
+    }
+    if (crm.named(clean(body.name)).length) throw bad(`${crm.org.get(crm.named(clean(body.name))[0]).name} is an organization here already: someone kept it since this list was read. Nothing was changed.`, 409);
+  }
   for (const { sql, args, live } of q) {
     const c = await DB.prepare(`SELECT kind, answer, note, by, at FROM donor_calls WHERE ${sql} ORDER BY at DESC LIMIT 1`).bind(...args).first();
     if (c && (!live || live(c))) throw bad(`${c.by && c.by.includes('@') ? `${c.by.split('@')[0][0].toUpperCase()}${c.by.split('@')[0].slice(1)}` : 'Someone'} answered this already. Nothing was changed; the list is read again.`, 409);
@@ -850,31 +872,44 @@ export async function followMerges(DB, { now = Date.now() } = {}) {
   // Known by email, then given a Zeffy contact: everything of theirs that the email held, "same person" too (the email
   // stops being anyone's once a contact has it). Never Keep anonymous: an email keeps everyone who has it
   for (const c of calls) if (c.kind === 'same' && c.answer) for (const v of [c.subject, c.target]) if (String(v).startsWith('e:')) byEmail.add(String(v));
-  for (const k of byEmail) {
-    const email = k.slice(2);
-    const to = ((await DB.prepare('SELECT DISTINCT contact FROM donor_payments WHERE email = ? AND contact IS NOT NULL LIMIT 2').bind(email).all()).results || []).map((r) => String(r.contact));
-    if (to.length !== 1) continue;
-    const into = `c:${to[0]}`;
-    const sames = ((await DB.prepare("SELECT subject, target, answer, note, by, at FROM donor_calls WHERE kind = 'same' AND (subject = ? OR target = ?)").bind(k, k).all()).results || []);
-    await DB.batch([
-      DB.prepare("UPDATE OR IGNORE donor_calls SET subject = ? WHERE kind = 'owner' AND subject = ?").bind(into, k),
-      DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(k),
-      DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(into, k),
-      ...sames.flatMap((c) => {
-        const [x, y] = [c.subject === k ? into : c.subject, c.target === k ? into : c.target].sort();
-        const del = DB.prepare("DELETE FROM donor_calls WHERE kind = 'same' AND subject = ? AND target = ?").bind(c.subject, c.target);
-        // A "same" with itself is nothing; the contact's own answer about that pair stands
-        return x === y ? [del] : [DB.prepare('INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind('same', x, y, c.answer, c.note, c.by, c.at), del];
-      }),
-    ]);
-    await moveHistory(DB, k, into);
-    moved++;
-  }
+  for (const k of byEmail) if (await followEmail(DB, k.slice(2))) moved++;
   if (moved || unplaced.length !== (st.unplaced || []).length || JSON.stringify(unplaced) !== JSON.stringify(st.unplaced || [])) {
     await writeCrmState(DB, { unplaced });
     if (moved) await audit(DB, 'Zeffy merge', `What was known about ${moved === 1 ? 'a donor' : `${moved} donors`} now goes with their gifts (Zeffy merged their contacts, or gave them one)`, { moved });
   }
   return { moved, unplaced: unplaced.length };
+}
+
+/**
+ * A giver known by email who has a Zeffy contact now (one: an email on several is no one's to give it to): what was
+ * said under the email goes to the contact, their owner (unless the contact has one), notes, "same person" and History.
+ * Run after each whole read, and by the gift webhook when a gift brings a contact. → true when something moved
+ */
+export async function followEmail(DB, email) {
+  const k = `e:${String(email || '').trim().toLowerCase()}`;
+  if (k === 'e:') return false;
+  await ensureCrm(DB);
+  const said = await DB.prepare("SELECT 1 FROM donor_calls WHERE (kind = 'owner' AND subject = ?) OR (kind = 'same' AND (subject = ? OR target = ?)) LIMIT 1").bind(k, k, k).first()
+    || await DB.prepare('SELECT 1 FROM donor_notes WHERE subject = ? LIMIT 1').bind(k).first()
+    || await DB.prepare("SELECT 1 FROM audit_log WHERE entity_type = 'donor-crm' AND entity_slug = ? LIMIT 1").bind(k).first().catch(() => null);
+  if (!said) return false;
+  const to = ((await DB.prepare('SELECT DISTINCT contact FROM donor_payments WHERE email = ? AND contact IS NOT NULL LIMIT 2').bind(k.slice(2)).all()).results || []).map((r) => String(r.contact));
+  if (to.length !== 1) return false;
+  const into = `c:${to[0]}`;
+  const sames = ((await DB.prepare("SELECT subject, target, answer, note, by, at FROM donor_calls WHERE kind = 'same' AND (subject = ? OR target = ?)").bind(k, k).all()).results || []);
+  await DB.batch([
+    DB.prepare("UPDATE OR IGNORE donor_calls SET subject = ? WHERE kind = 'owner' AND subject = ?").bind(into, k),
+    DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(k),
+    DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(into, k),
+    ...sames.flatMap((c) => {
+      const [x, y] = [c.subject === k ? into : c.subject, c.target === k ? into : c.target].sort();
+      const del = DB.prepare("DELETE FROM donor_calls WHERE kind = 'same' AND subject = ? AND target = ?").bind(c.subject, c.target);
+      // A "same" with itself is nothing; the contact's own answer about that pair stands
+      return x === y ? [del] : [DB.prepare('INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind('same', x, y, c.answer, c.note, c.by, c.at), del];
+    }),
+  ]);
+  await moveHistory(DB, k, into);
+  return true;
 }
 
 // ─── Views ──────────────────────────────────────────────────────────

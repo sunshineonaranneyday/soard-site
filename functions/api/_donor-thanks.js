@@ -249,8 +249,15 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
       added++;
       continue;
     }
-    // A To thank keeps up with its part of the gift: a later charge joins it, one refunded in full leaves it. It stays
-    // To thank (with the reason it had) until a person says, or every charge of it is refunded (below)
+    // A To thank keeps up with its part of the gift: a later charge joins it, one refunded in full leaves it. If what's
+    // left needs no thank-you and only refunds took the rest (never a charge the list just doesn't have), it closes;
+    // otherwise it stays To thank (with the reason it had) until a person says, or every charge is refunded (below)
+    const dropped = idsOf.get(t.id).filter((c) => !charges.includes(c));
+    if (!why && dropped.length && dropped.every((c) => { const r = byId.get(c); return r && Number(r.cents) > 0 && !gives(r); })) {
+      steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'refunded', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
+      idsOf.delete(t.id);
+      continue;
+    }
     steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = COALESCE(?, why), at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'")
       .bind(snap[0], why, ...snap.slice(1), t.id));
     idsOf.set(t.id, charges);
@@ -341,9 +348,11 @@ export async function markThanks(DB, { id, state, was = null }, by, { now = Date
     || await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE instr(' ' || ids || ' ', ?) > 0`).bind(` ${want} `).first();
   if (!t) throw Object.assign(new Error('That gift has no thank-you to say. Reload and look again.'), { status: 404 });
   if (t.state === 'gone') throw Object.assign(new Error('That gift was refunded or taken out of Zeffy, so there’s no thank-you to say.'), { status: 409 });
-  const changed = (x) => Object.assign(new Error(`${SAID[x.state] || 'Changed'}${x.done_by ? `, said by ${x.done_by.split('@')[0]}` : ''} since you looked. Nothing was changed.`), { status: 409, state: x.state });
-  if (was && t.state !== was) throw changed(t);
+  const who = (e) => { const n = String(e || '').split('@')[0]; return n ? `${n[0].toUpperCase()}${n.slice(1)}` : ''; };
+  const changed = (x) => Object.assign(new Error(`${x.done_by ? `${who(x.done_by)} said ` : 'Someone said '}“${SAID[x.state] || x.state}” since you looked. Nothing was changed.`), { status: 409, state: x.state });
+  // Already what was asked (a second click, a teammate who said the same): done, nothing to tell
   if (t.state === state) return t;
+  if (was && t.state !== was) throw changed(t);
   const r = await DB.prepare('UPDATE donor_thanks SET state = ?, done_by = ?, done_at = ? WHERE id = ? AND state = ?')
     .bind(state, state === 'todo' ? null : by || null, state === 'todo' ? null : iso(now), t.id, t.state).run();
   if (!r.meta?.changes) throw changed(await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE id = ?`).bind(t.id).first() || t);

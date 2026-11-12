@@ -402,7 +402,9 @@ test('two thank-yous for one gift (runs that overlapped) become one; one run at 
 test('said in another tab since: Thanked or Undo changes nothing and says who', async () => {
   await note(pay({ id: 'tt', amount: 30000, method: 'cheque', type: 'manual' }));
   await doIt({ act: 'thanks', id: 'tt', state: 'thanked', was: 'todo' });
-  await assert.rejects(doIt({ act: 'thanks', id: 'tt', state: 'skipped', was: 'todo' }), (e) => e.status === 409 && /Thanked, said by alex/.test(e.message));
+  await assert.rejects(doIt({ act: 'thanks', id: 'tt', state: 'skipped', was: 'todo' }), (e) => e.status === 409 && /Alex said “Thanked” since you looked/.test(e.message));
+  // A second click on Thanked (or a teammate who said the same): already so, no error
+  await doIt({ act: 'thanks', id: 'tt', state: 'thanked', was: 'todo' });
   assert.equal((await row('tt')).state, 'thanked');
   // B says Not needed after reloading; A's Undo of "Thanked" no longer undoes anything
   await C.act(env, { act: 'thanks', id: 'tt', state: 'skipped', was: 'thanked' }, 'jordan@soardcharity.com', { now: START + 4 * HOUR });

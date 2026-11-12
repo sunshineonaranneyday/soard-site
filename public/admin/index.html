@@ -1709,8 +1709,11 @@
 
     /* ─── Toast with Undo ──────────── */
     .toast-action {
-      display: inline-flex; align-items: center; gap: 0.5rem;
+      display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; min-width: 0;
     }
+    /* A long unbroken name wraps: the words never push the button out of reach */
+    .toast, .toast-action > span { overflow-wrap: anywhere; min-width: 0; }
+    .toast-undo { flex-shrink: 0; }
     .toast-undo {
       background: none; border: 1px solid rgba(255,255,255,0.4);
       color: #fff; border-radius: 5px; padding: 2px 10px;
@@ -2848,6 +2851,9 @@
     .modal.kd-dialog--lg { max-width: 820px; }
     .modal.kd-dialog--xl { max-width: 1120px; }
     .kd-dialog__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.1rem 1.25rem 0.9rem; border-bottom: 1px solid var(--color-border); }
+    .kd-dialog__titles { min-width: 0; overflow-wrap: anywhere; }
+    /* A dialog's title with a long unbroken name in it wraps, never runs off a phone */
+    .modal :is(h2, h3) { overflow-wrap: anywhere; }
     .modal .kd-dialog__head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 700; letter-spacing: -0.02em; line-height: 1.3; }
     .modal .kd-dialog__sub { margin: 0.25rem 0 0; font-size: var(--fs-xs); }
     .kd-dialog__body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 1.1rem 1.25rem; }
@@ -7891,6 +7897,16 @@
     // on its own). Using a toast's action (Undo, Publish) closes it, so what
     // follows replaces it instead of stacking on top
     const TOAST_SHOWN = 3;
+    /** After a toast's button: the toast goes, so the focus (on that button) goes to the page's heading, not to nothing */
+    function toastFocusBack(done) {
+      Promise.resolve(done).catch(() => {}).finally(() => requestAnimationFrame(() => {
+        if (document.activeElement && document.activeElement !== document.body) return;
+        const h = document.querySelector('.main h2, .main h1');
+        if (!h) return;
+        if (!h.hasAttribute('tabindex')) h.setAttribute('tabindex', '-1');
+        h.focus({ preventScroll: true });
+      }));
+    }
     function ToastContainer({ toasts, onDismiss, pinned = null }) {
       const [all, setAll] = useState(false);
       useEffect(() => { if (toasts.length <= TOAST_SHOWN) setAll(false); }, [toasts.length]);
@@ -7901,7 +7917,7 @@
         ${toasts.slice(folded).map(t => html`<div key=${t.id} class="toast toast-${t.type}" role="alert">
           ${t.action ? html`<span class="toast-action">
             <span>${t.msg}</span>
-            <button class="toast-undo" onClick=${() => { onDismiss?.(t.id); t.action.fn(); }}>${t.action.label}</button>
+            <button class="toast-undo" onClick=${() => { onDismiss?.(t.id); toastFocusBack(t.action.fn()); }}>${t.action.label}</button>
           </span>` : t.msg}
         </div>`)}
       </div>`;

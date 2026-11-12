@@ -180,6 +180,8 @@ export async function noteDonorPayment(env, p, { now = Date.now(), thanks = true
   const row = rowFromPayment(p, new Date(now).toISOString());
   if (!row) return false;
   await putRows(env.DB, [row]);
+  // A giver known by email whose gift brings a Zeffy contact: what was said about them goes to it now, not in 15 minutes
+  if (row.contact && row.email) { try { await (await import('./_donor-crm.js')).followEmail(env.DB, row.email); } catch (e) { console.error('[donors] email', e.message); } }
   if (thanks) await (await import('./_donor-thanks.js')).syncThanks(env, { now, ask: false });
   return true;
 }
