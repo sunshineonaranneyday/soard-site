@@ -281,7 +281,8 @@ test('notes: added, changed (who and when kept), deleted; an empty note isn’t 
   assert.ok(!page.history.some((h) => /reveal/i.test(h.what)), 'a note’s words stay on the page, not in History');
   await doIt({ act: 'note-delete', id });
   assert.equal((await C.personView(env, 'ct_jane', { now: START + 7 * HOUR })).notes.length, 0);
-  await assert.rejects(doIt({ act: 'note-delete', id }), /isn’t here any more/);
+  assert.equal((await doIt({ act: 'note-delete', id })).same, true, 'deleted already: done, nothing more to do');
+  await assert.rejects(doIt({ act: 'note-edit', id, body: 'x' }), /isn’t here any more/);
 });
 
 test('an organization’s notes and owner go with it to the website, and go when it’s taken out', async () => {

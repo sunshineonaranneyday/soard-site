@@ -1714,6 +1714,9 @@
     /* A long unbroken name wraps: the words never push the button out of reach */
     .toast, .toast-action > span { overflow-wrap: anywhere; min-width: 0; }
     .toast-undo { flex-shrink: 0; }
+    /* The key that does it, on a keyboard's screen (never a phone's) */
+    .toast-key { flex-shrink: 0; font-size: var(--fs-xs); opacity: .7; }
+    @media (pointer: coarse) { .toast-key { display: none; } }
     .toast-undo {
       background: none; border: 1px solid rgba(255,255,255,0.4);
       color: #fff; border-radius: 5px; padding: 2px 10px;
@@ -7893,6 +7896,25 @@
 
     // ─── Toast System ───────────────────────
     let toastId = 0;
+    // Each message's clock. It waits while the pointer is on the messages or the focus is in them (time to read one,
+    // and to reach its Undo by keyboard); then it runs on from where it was
+    const toastClocks = new Map();
+    let toastsHeld = false;
+    function toastClock(id, ms, end) {
+      const c = { left: ms, at: Date.now(), timer: null, end };
+      toastClocks.set(id, c);
+      if (!toastsHeld) c.timer = setTimeout(() => { toastClocks.delete(id); end(); }, ms);
+    }
+    function holdToasts(hold) {
+      if (hold === toastsHeld) return;
+      toastsHeld = hold;
+      for (const [id, c] of toastClocks) {
+        if (hold) { clearTimeout(c.timer); c.left = Math.max(1500, c.left - (Date.now() - c.at)); }
+        else { c.at = Date.now(); c.timer = setTimeout(() => { toastClocks.delete(id); c.end(); }, c.left); }
+      }
+    }
+    // ⌘Z / Ctrl+Z (not while typing, nor in a dialog): the newest message's Undo, wherever the focus is
+    const UNDO_KEY = /Mac|iPhone|iPad/.test(navigator.platform || '') ? { show: '⌘Z', aria: 'Meta+Z' } : { show: 'Ctrl+Z', aria: 'Control+Z' };
     // The newest three show; older ones fold into "N more" (each still times out
     // on its own). Using a toast's action (Undo, Publish) closes it, so what
     // follows replaces it instead of stacking on top
@@ -7911,14 +7933,35 @@
     function ToastContainer({ toasts, onDismiss, pinned = null }) {
       const [all, setAll] = useState(false);
       useEffect(() => { if (toasts.length <= TOAST_SHOWN) setAll(false); }, [toasts.length]);
+      const box = useRef(null);
+      const latest = useRef(toasts);
+      latest.current = toasts;
+      const use = (t) => { onDismiss?.(t.id); toastClocks.delete(t.id); toastFocusBack(t.action.fn()); };
+      // A message gone from under the focus or the pointer: the others' clocks run again
+      useEffect(() => { if (toastsHeld && !box.current?.matches(':hover') && !box.current?.contains(document.activeElement)) holdToasts(false); }, [toasts]);
+      useEffect(() => {
+        const key = (e) => {
+          if (e.key.toLowerCase() !== 'z' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented) return;
+          const el = e.target;
+          if (el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]') || document.querySelector('[aria-modal="true"]')) return;
+          const t = [...latest.current].reverse().find((x) => x.action?.label === 'Undo');
+          if (!t) return;
+          e.preventDefault();
+          use(t);
+        };
+        window.addEventListener('keydown', key);
+        return () => window.removeEventListener('keydown', key);
+      }, []);
       const folded = all ? 0 : Math.max(0, toasts.length - TOAST_SHOWN);
-      return html`<div class="toast-container" role="status" aria-live="polite" aria-atomic="true">
+      return html`<div class="toast-container" role="status" aria-live="polite" aria-atomic="true" ref=${box}
+        onPointerOver=${() => holdToasts(true)} onPointerOut=${(e) => { if (!e.currentTarget.contains(e.relatedTarget) && !e.currentTarget.contains(document.activeElement)) holdToasts(false); }}
+        onFocusIn=${() => holdToasts(true)} onFocusOut=${(e) => { if (!e.currentTarget.contains(e.relatedTarget) && !e.currentTarget.matches(':hover')) holdToasts(false); }}>
         ${pinned ? html`<div class="toast toast-info toast-pinned"><span class="toast-action"><span>${pinned.msg}</span><button class="toast-undo" onClick=${pinned.fn}>${pinned.label}</button></span></div>` : null}
         ${folded ? html`<button type="button" class="toast-more" onClick=${() => setAll(true)} aria-label=${`Show ${folded} earlier ${folded === 1 ? 'message' : 'messages'}`}>${folded} more</button>` : null}
         ${toasts.slice(folded).map(t => html`<div key=${t.id} class="toast toast-${t.type}" role="alert">
           ${t.action ? html`<span class="toast-action">
             <span>${t.msg}</span>
-            <button class="toast-undo" onClick=${() => { onDismiss?.(t.id); toastFocusBack(t.action.fn()); }}>${t.action.label}</button>
+            <button class="toast-undo" onClick=${() => use(t)} aria-keyshortcuts=${t.action.label === 'Undo' ? UNDO_KEY.aria : null}>${t.action.label}</button>${t.action.label === 'Undo' ? html`<span class="toast-key" aria-hidden="true">${UNDO_KEY.show}</span>` : null}
           </span>` : t.msg}
         </div>`)}
       </div>`;
@@ -25744,7 +25787,7 @@ ${sections || '<p>No one yet.</p>'}
         }
         const id = ++toastId;
         setToasts(t => [...t, { id, msg, type, action }]);
-        setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), action ? 8000 : 4000);
+        toastClock(id, action ? 8000 : 4000, () => setToasts(t => t.filter(x => x.id !== id)));
       };
 
       // Which collections failed to load — lists render an error card (with

@@ -687,6 +687,19 @@ try {
   await page.waitForFunction((id) => document.activeElement?.closest?.(`[data-thank="${id}"]`), { timeout: 8000 }, undoId).catch(() => {});
   const undoAt = await page.evaluate(() => ({ at: document.activeElement?.outerHTML.slice(0, 80), items: [...document.querySelectorAll('[data-thank]')].map((li) => li.dataset.thank), toasts: [...document.querySelectorAll('.toast')].map((t) => t.textContent.trim().slice(0, 50)) }));
   ok(!!undoId && await page.evaluate((id) => !!document.activeElement?.closest?.(`[data-thank="${id}"]`), undoId), `Undo from a toast by keyboard: the focus on the thank-you put back (${undoId} ${JSON.stringify(undoAt)})`);
+  // Thanked whose answer is lost on the way back: it's sent once more and says what happened (Thanked, with Undo);
+  // then ⌘Z / Ctrl+Z is its Undo, the focus on the thank-you put back
+  lose = (b) => b.act === 'thanks' && b.state === 'thanked';
+  const lostId = await page.evaluate(() => document.querySelector('.dn-needs[aria-label="To thank"] [data-thank]')?.dataset.thank || '');
+  await page.evaluate(() => document.querySelector('.dn-needs[aria-label="To thank"] [data-thank] .btn-primary')?.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /^Thanked:/.test(t.textContent.trim())), { timeout: 8000 }).catch(() => {});
+  ok(!!lostId && lose === null && await page.evaluate(() => { const ts = [...document.querySelectorAll('.toast')]; return ts.some((t) => /^Thanked:/.test(t.textContent.trim()) && t.querySelector('.toast-undo')) && !ts.some((t) => /didn’t answer/.test(t.textContent)); }), 'Thanked whose answer was lost: “Thanked” with its Undo, never “didn’t answer” for one that saved');
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
+  await page.keyboard.press('z');
+  await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
+  await page.waitForFunction((id) => document.activeElement?.closest?.(`[data-thank="${id}"]`), { timeout: 8000 }, lostId).catch(() => {});
+  ok(await page.evaluate((id) => !!document.activeElement?.closest?.(`[data-thank="${id}"]`), lostId), '⌘Z / Ctrl+Z undoes it: back on the list, the focus on it');
   // Put on the website from a page read before a teammate took the organization out: nothing is made
   const { key: walkOrg } = await C.act(env, { act: 'org-new', name: 'Walkthrough Works', links: [] }, 'alex@soardcharity.com');
   await page.evaluate((k) => { location.hash = `#donors/org/${encodeURIComponent(k)}`; }, walkOrg);
