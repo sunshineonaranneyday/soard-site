@@ -42,6 +42,9 @@ test('phone numbers and website domains as Quo and Gmail need them', () => {
   assert.equal(T.nameIn('jane@example.com'), 'jane@example.com');
   assert.deepEqual(T.addressesIn('"jane@example.com via Forms" <noreply@forms.example>'), ['noreply@forms.example'], 'never an address in the display name');
   assert.deepEqual(T.addressesIn('jane@example.com via Forms <noreply@forms.example>, "Lee, Pat" <pat@x.org>, bare@y.org'), ['noreply@forms.example', 'pat@x.org', 'bare@y.org']);
+  assert.deepEqual(T.addressesIn('"Jane <jane@x.com>" <noreply@forms.example>'), ['noreply@forms.example'], 'brackets inside a quoted name are the name');
+  assert.deepEqual(T.addressesIn('Jane <jane@x.com>; Pat <pat@y.com>'), ['jane@x.com', 'pat@y.com'], 'a list split by semicolons');
+  assert.deepEqual(T.addressesIn('"Jane \\"JD\\" Doe" <jd@x.com>, pat@soardcharity.com'), ['jd@x.com', 'pat@soardcharity.com'], 'escaped quotes in a name');
 });
 
 test('the team is never searched: their addresses and aliases, SOARD’s domains, and a donor with a teammate’s name', () => {
@@ -63,16 +66,19 @@ test('an organization: a teammate among its givers is never searched; its websit
   assert.deepEqual(s.domains, ['acme.com'], 'Lee writes from acme.com');
   assert.deepEqual(T.searchable({ ...org, domains: ['facebook.com'] }, team).domains, [], 'a social page is never a domain');
   assert.deepEqual(T.searchable({ ...org, emails: ['pat.lee@gmail.com'], domains: ['homedepot.com'] }, team).domains, [], 'no one of theirs writes from it');
-  const isTheirs = T.matcher({ emails: ['lee@acme.com'], domains: ['acme.com'] });
+  const isTheirs = T.matcher({ emails: ['lee@acme.com'], domains: ['acme.com'], dropped: ['holly@acme.com'] }, team);
   assert.equal(isTheirs('sam@acme.com'), true);
   assert.equal(isTheirs('noreply@orders.acme.com'), false, 'its subdomains are its systems');
+  assert.equal(isTheirs('holly@acme.com'), false, 'a teammate who gives for it from work is never theirs, even at its domain');
+  assert.equal(T.matcher({ emails: [], domains: ['acme.com'] }, T.teamOf([{ email: 'kim@acme.com', name: 'Kim Staff', aliases: [], active: true }]))('kim@acme.com'), false, 'a staff account at the domain');
   const look = { mailbox: 'holly@soardcharity.com', isTheirs, team, exact: new Set(['lee@acme.com']) };
   assert.equal(T.mailLine(msg('c1', 't7', 1, [H('From', 'Acme <no-reply@acme.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Your order')]), look), null, 'a no-reply at their domain is a system');
   assert.equal(T.mailLine(msg('c2', 't8', 1, [H('From', 'Sam <sam@acme.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Hello')]), look)?.dir, 'in', 'a person at their domain is theirs');
+  assert.equal(T.mailLine(msg('c3', 't9', 1, [H('From', 'Acme Billing <billing@acme.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Sponsorship invoice')]), look)?.dir, 'in', 'billing@ writing about the sponsorship is a conversation');
 });
 
 test('Gmail’s search words find any message from, to or copied to the donor', () => {
-  assert.equal(T.mailQuery({ emails: ['jane@example.com'], domains: ['acme.com'] }), '{from:jane@example.com to:jane@example.com cc:jane@example.com bcc:jane@example.com from:acme.com to:acme.com cc:acme.com} -in:chats');
+  assert.equal(T.mailQuery({ emails: ['jane@example.com'], domains: ['acme.com'] }), '{from:jane@example.com to:jane@example.com cc:jane@example.com bcc:jane@example.com from:acme.com to:acme.com cc:acme.com} -in:chats -from:noreply -from:no-reply -from:donotreply -from:mailer-daemon', 'and never a no-reply sender’s mail');
   assert.equal(T.mailQuery({ emails: [], domains: [] }), '');
 });
 
@@ -203,6 +209,9 @@ test('a call and a day’s texts in words', () => {
 let env;
 let seen;
 let zeffyPhone = '(404) 555-0123';
+let kitState = 'active';
+// A mailbox's second page of conversations (its first page answers with a pageToken for it)
+let pagedOnce = {};
 const realFetch = globalThis.fetch;
 const JANE_THREADS = {
   'holly@soardcharity.com': { t1aaaaaa: [msg('g1aaaaaa', 't1aaaaaa', NOW - 3 * DAY, [H('From', 'Jane Doe <jane@example.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Our gift'), H('Message-ID', '<one@x>')]),
@@ -229,12 +238,13 @@ function fakeWorld({ gmailDown = null, quo = true } = {}) {
       if (gmailDown === who) return Response.json({ error: { message: 'Backend Error' } }, { status: 500 });
       const q = new URL(url).searchParams.get('q');
       assert.match(q, /from:jane@example\.com/);
-      return Response.json({ threads: Object.keys(JANE_THREADS[who] || {}).map((id) => ({ id })) });
+      if (new URL(url).searchParams.get('pageToken') === 'PAGE2') return Response.json({ threads: Object.keys(pagedOnce[who] || {}).map((id) => ({ id })) });
+      return Response.json({ threads: Object.keys(JANE_THREADS[who] || {}).map((id) => ({ id })), ...(pagedOnce[who] ? { nextPageToken: 'PAGE2' } : {}) });
     }
     if (url === 'https://gmail.googleapis.com/batch/gmail/v1') {
       const boundary = 'resp_b';
       const ids = [...String(init.body).matchAll(/GET \/gmail\/v1\/users\/me\/threads\/(\w+)\?/g)].map((m) => m[1]);
-      const body = `${ids.map((id, i) => `--${boundary}\r\nContent-Type: application/http\r\nContent-ID: <response-i${i}>\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ id, messages: JANE_THREADS[who][id] })}\r\n`).join('')}--${boundary}--`;
+      const body = `${ids.map((id, i) => `--${boundary}\r\nContent-Type: application/http\r\nContent-ID: <response-i${i}>\r\n\r\nHTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n${JSON.stringify({ id, messages: JANE_THREADS[who]?.[id] || pagedOnce[who]?.[id] })}\r\n`).join('')}--${boundary}--`;
       return new Response(body, { headers: { 'Content-Type': `multipart/mixed; boundary=${boundary}` } });
     }
     const thread = /^https:\/\/gmail\.googleapis\.com\/gmail\/v1\/users\/me\/threads\/(\w+)\?format=full$/.exec(url);
@@ -254,7 +264,7 @@ function fakeWorld({ gmailDown = null, quo = true } = {}) {
     }
     if (url.startsWith('https://api.kit.com/v4/')) {
       const u = new URL(url);
-      if (u.pathname === '/v4/subscribers' && u.searchParams.get('status') === 'all') return Response.json({ subscribers: [{ id: 55, email_address: 'jane@example.com', state: 'active', created_at: new Date(NOW - 200 * DAY).toISOString() }] });
+      if (u.pathname === '/v4/subscribers' && u.searchParams.get('status') === 'all') return Response.json({ subscribers: [{ id: 55, email_address: 'jane@example.com', state: kitState, created_at: new Date(NOW - 200 * DAY).toISOString() }] });
       if (u.pathname === '/v4/subscribers') return Response.json({ subscribers: [] });
       if (u.pathname === '/v4/subscribers/55/tags') return Response.json({ tags: [{ id: 7, name: 'Donors', tagged_at: new Date(NOW - 100 * DAY).toISOString() }] });
       if (u.pathname === '/v4/subscribers/55/stats') return Response.json({ subscriber: { id: 55, stats: { sent: 4, opened: 3, clicked: 1, last_opened: new Date(NOW - 5 * DAY).toISOString() } } });
@@ -272,11 +282,12 @@ function fakeWorld({ gmailDown = null, quo = true } = {}) {
       if (u.pathname === '/users') return Response.json({ data: [{ id: 'US1', email: 'pat@soardcharity.com', firstName: 'Pat', lastName: 'Lee' }], nextCursor: null });
       if (u.pathname === '/phone-numbers') return Response.json({ data: [{ id: 'PN1', name: 'Main line', number: '+14045550100' }], nextCursor: null });
       if (u.pathname === '/calls') {
-        assert.equal(u.searchParams.get('participant[in]'), '+14045550123');
+        if (u.searchParams.get('participant[in]') !== '+14045550123') return Response.json({ data: [], nextCursor: null });
         return Response.json({ data: [{ id: 'AC1234567', direction: 'outgoing', status: 'completed', answeredAt: new Date(NOW - 4 * DAY).toISOString(), initiatedBy: 'US1', phoneNumberId: 'PN1', createdAt: new Date(NOW - 4 * DAY).toISOString(), duration: 180,
           participants: [{ phoneNumber: '+14045550100' }, { phoneNumber: '+14045550123' }] }], nextCursor: null });
       }
       if (u.pathname === '/calls/AC1234567') return Response.json({ data: { id: 'AC1234567', participants: [{ phoneNumber: '+14045550100' }, { phoneNumber: '+14045550123' }] } });
+      if (u.pathname === '/calls/AC0404040') return Response.json({ message: 'Not found' }, { status: 404 });
       if (u.pathname === '/calls/AC7654321') return Response.json({ data: { id: 'AC7654321', participants: [{ phoneNumber: '+14045550100' }, { phoneNumber: '+17705550199' }] } });
       if (u.pathname === '/calls/AC1234567/transcripts') return Response.json({ data: [{ status: 'completed', dialogue: [{ content: 'Hi Jane', actorId: 'US1', identifier: '+14045550100', start: 0, end: 1 }, { content: 'Hi!', actorId: null, identifier: '+14045550123', start: 1, end: 2 }] }], nextCursor: null });
       if (u.pathname === '/messages') return Response.json({ data: u.searchParams.get('from') ? [{ id: 'MS1', conversationId: 'CN1', direction: 'incoming', text: 'Thank you!', createdAt: new Date(NOW - 6 * DAY).toISOString() }] : [], nextCursor: null });
@@ -347,6 +358,42 @@ test('after a change on the page, the site’s own lines are read again without 
   assert.deepEqual([...new Set(v.items.map((x) => x.kind))].sort(), ['site', 'team']);
   assert.deepEqual(v.sources.map((s) => s.key), ['site', 'team']);
   assert.deepEqual(seen, [], seen.join('\n'));
+});
+
+test('a partner with no gifts in Zeffy: its own people from Partners are searched, by email, domain and phone', async () => {
+  fakeWorld();
+  await env.DB.prepare('INSERT INTO partners VALUES (?, ?)').bind('tilecraft', JSON.stringify({ name: 'Tilecraft', level: 'friend', category: ['build'], website: 'https://tilecraft.example' })).run();
+  await env.DB.exec('CREATE TABLE IF NOT EXISTS partner_contacts (partner TEXT PRIMARY KEY, people TEXT NOT NULL, source TEXT, updated_at TEXT, by TEXT)');
+  await env.DB.prepare('INSERT INTO partner_contacts (partner, people) VALUES (?, ?)').bind('tilecraft', JSON.stringify([{ name: 'Rob Tile', email: 'rob@tilecraft.example', phone: '770-555-0199', title: 'Owner' }, { name: 'Holly Sample', email: 'holly.tc@tilecraft.example', phone: '404-555-0111' }])).run();
+  const s = await T.subjectOf(env, 'p:tilecraft', { now: NOW });
+  assert.ok(s.emails.includes('rob@tilecraft.example'));
+  const v = await T.timelineView(env, 'p:tilecraft', { now: NOW });
+  assert.deepEqual(v.subject.searched.emails, ['rob@tilecraft.example'], 'a teammate listed as one of its people isn’t searched');
+  assert.deepEqual(v.subject.searched.domains, ['tilecraft.example'], 'its people write from its website’s domain');
+  assert.deepEqual(v.subject.searched.phones, ['+17705550199']);
+});
+
+test('Kit that can’t reach them is said once, as it is now; Quo’s missing call is said as such', async () => {
+  fakeWorld();
+  kitState = 'bounced';
+  const v = await T.timelineView(env, 'ct_jane', { now: NOW });
+  assert.ok(!v.items.some((x) => /bounced/.test(x.title || '')), 'no line with no day');
+  assert.deepEqual(v.kit.cant, [{ email: 'jane@example.com', state: 'bounced' }]);
+  kitState = 'active';
+  await assert.rejects(T.callTranscript(env, 'ct_jane', { call: 'AC0404040', now: NOW }), (e) => e.status === 404 && /doesn’t have that call/.test(e.message));
+});
+
+test('a mailbox whose first page is all list mail reads on to find their conversations', async () => {
+  fakeWorld();
+  JANE_THREADS['alex@soardcharity.com'] = { tLIST001: [msg('l1aaaaaa', 'tLIST001', NOW - DAY, [H('From', 'jane@example.com'), H('To', 'alex@soardcharity.com'), H('List-Id', 'News <news.example>'), H('Subject', 'Her newsletter')])] };
+  pagedOnce = { 'alex@soardcharity.com': { tREAL001: [msg('r1aaaaaa', 'tREAL001', NOW - 9 * DAY, [H('From', 'jane@example.com'), H('To', 'alex@soardcharity.com'), H('Subject', 'Lunch?')])] } };
+  ACCOUNTS.push({ email: 'alex@soardcharity.com', aliases: [], name: 'Alex Rivera', active: true });
+  await env.DB.prepare("UPDATE staff_state SET data = ? WHERE key = 'directory'").bind(JSON.stringify({ ok: true, accounts: ACCOUNTS })).run();
+  try {
+    const v = await T.timelineView(env, 'ct_jane', { now: NOW });
+    assert.ok(v.items.some((x) => x.title === 'Lunch?'), 'the second page’s conversation');
+    assert.ok(!v.items.some((x) => x.title === 'Her newsletter'));
+  } finally { ACCOUNTS.pop(); delete JANE_THREADS['alex@soardcharity.com']; pagedOnce = {}; }
 });
 
 test('one mailbox that can’t be read is said, and the rest are still there; Quo not set up says so', async () => {

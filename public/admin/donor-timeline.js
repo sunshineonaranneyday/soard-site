@@ -257,7 +257,14 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
     cache.set(refOf, { at: Date.now(), data: next });
     setData(next);
   };
-  useEffect(() => { quick.current = { at: 0, data: null, n: quick.current.n + 1 }; setData(cache.get(refOf)?.data || null); setFilter('all'); setShown(STEP); read(); }, [refOf]);
+  // Another donor in the same place (a page's address settling): from the top. The first time, as drawn
+  const mounted = useRef(false);
+  useEffect(() => {
+    quick.current = { at: 0, data: null, n: quick.current.n + 1 };
+    if (mounted.current) { setData(cache.get(refOf)?.data || null); setFilter('all'); setShown(STEP); }
+    mounted.current = true;
+    read();
+  }, [refOf]);
   // The page read again (a note, an owner, a thank-you said): the site's own lines again at once
   const drawn = useRef(false);
   useEffect(() => {
@@ -287,8 +294,11 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
     // Added to the timeline as it is now (a quick read or Read again may have landed meanwhile)
     setData((d) => {
       if (!d) return d;
+      const byId = new Map(j.items.map((x) => [x.id, x]));
+      // An email already here, found in another mailbox's older pages: that mailbox's copy too (its Open in Gmail)
+      const merged = d.items.map((x) => (byId.has(x.id) && x.copies ? { ...x, copies: { ...byId.get(x.id).copies, ...x.copies }, mailboxes: [...new Set([...(x.mailboxes || []), ...Object.keys(byId.get(x.id).copies || {})])] } : x));
       const have = new Set(d.items.map((x) => x.id));
-      const next = { ...d, items: [...d.items, ...j.items.filter((x) => !have.has(x.id))], more: j.more };
+      const next = { ...d, items: [...merged, ...j.items.filter((x) => !have.has(x.id))], more: j.more };
       cache.set(refOf, { at: cache.get(refOf)?.at ?? Date.now(), data: next });
       return next;
     });
@@ -296,6 +306,14 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
   };
   const now = Date.now();
   const all = useMemo(() => linesOf({ gifts, notes, items: data?.items || [] }), [gifts, notes, data]);
+  // The gift a link opened at: drawn however far down the timeline's other lines push it, until the person moves on
+  // (a filter, Show more), so the page's mark on it never lands on nothing
+  const keepGift = useRef(focusGift);
+  useEffect(() => {
+    if (!keepGift.current) return;
+    const i = all.filter((x) => !(x.kind === 'meeting' && x.at > Date.now())).findIndex((x) => x.gift && (x.gift.ids || [x.gift.id]).includes(keepGift.current));
+    if (i >= 0) setShown((n) => Math.max(n, i + 10));
+  }, [all]);
   const past = all.filter((x) => !(x.kind === 'meeting' && x.at > now));
   const soon = all.filter((x) => x.kind === 'meeting' && x.at > now).sort((a, b) => a.at - b.at);
   const counts = new Map();
@@ -323,11 +341,11 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
         ${data || err ? html`<button type="button" class="link dn-linkbtn dn-tl__again" aria-disabled=${busy ? 'true' : null} onClick=${() => { if (!busy) read(true); }}>Read again</button>` : null}</span></header>
     <${NoteBox} subject=${subject} name=${name} zeffy=${zeffy} ctx=${ctx} onDone=${onChanged} />
     ${past.length ? html`<${Glance} lines=${past} kit=${data?.kit} onDay=${showDay} />` : null}
-    <${Notices} sources=${sources} err=${err} retry=${() => { document.querySelector('.dn-tl__again')?.focus(); read(true); }} searched=${data?.subject?.searched} staff=${staff} />
+    <${Notices} sources=${sources} err=${err} retry=${() => { document.querySelector('.dn-tl__again')?.focus(); read(true); }} searched=${data?.subject?.searched} staff=${staff} kit=${data?.kit} />
     ${soon.length ? html`<div class="dn-tl__soon"><h4>Coming up</h4><ul>${soon.map((x) => html`<li key=${x.id}><strong>${x.title}</strong> · ${longDate(x.at)}${x.allDay ? '' : `, ${clock(x.at)}`} · ${whoLine(x, { staff })}</li>`)}</ul></div>` : null}
     ${past.length ? html`<div class="dn-tl__filters" role="group" aria-label="Show">
-      <button type="button" class="pill pill--sm" aria-pressed=${String(filter === 'all')} onClick=${() => { setFilter('all'); setShown(STEP); }}>Everything <span class="count">${past.length}</span></button>
-      ${GROUPS.filter(([k]) => counts.get(k)).map(([k, words]) => html`<button key=${k} type="button" class="pill pill--sm" aria-pressed=${String(filter === k)} onClick=${() => { setFilter(k); setShown(STEP); }}>${words} <span class="count">${counts.get(k)}</span></button>`)}
+      <button type="button" class="pill pill--sm" aria-pressed=${String(filter === 'all')} onClick=${() => { keepGift.current = null; setFilter('all'); setShown(STEP); }}>Everything <span class="count">${past.length}</span></button>
+      ${GROUPS.filter(([k]) => counts.get(k)).map(([k, words]) => html`<button key=${k} type="button" class="pill pill--sm" aria-pressed=${String(filter === k)} onClick=${() => { keepGift.current = null; setFilter(k); setShown(STEP); }}>${words} <span class="count">${counts.get(k)}</span></button>`)}
     </div>` : null}
     ${!past.length ? (busy || (!data && !err) ? html`<div class="dn-tl__skel" aria-hidden="true">${[90, 70, 80].map((w) => html`<span class="skel" style=${`--w:${w}%`}></span>`)}</div>`
       : html`<p class="dn-tl__empty">Nothing yet. Gifts, notes, email with the team, calls, meetings and newsletters show here as they happen.</p>`)
@@ -341,7 +359,7 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
 }
 
 /** What couldn't be read, or isn't connected, said once above the list */
-function Notices({ sources, err, retry, searched, staff }) {
+function Notices({ sources, err, retry, searched, staff, kit = null }) {
   const failed = sources.filter((s) => s.state === 'error');
   const partly = sources.filter((s) => s.state === 'ok' && s.errors?.length);
   const off = sources.filter((s) => s.state === 'off');
@@ -357,6 +375,7 @@ function Notices({ sources, err, retry, searched, staff }) {
     ${partly.map((s) => html`<p key=${s.key} class="dn-tl__quiet">${s.label}: ${mailboxes(s)}’s ${s.errors.length === 1 ? 'account' : 'accounts'} couldn’t be read (${s.errors[0].error}).</p>`)}
     ${sources.filter((s) => s.missed).map((s) => html`<p key=${`${s.key}-missed`} class="dn-tl__quiet">Gmail was busy: ${plural(s.missed, 'conversation')} couldn’t be read this time. Read again to try.</p>`)}
     ${skipped ? html`<p class="dn-tl__quiet">${skipped.note}.</p>` : null}
+    ${kit?.cant?.length ? html`<div class="notice notice--warn"><div class="notice__body">Kit can’t reach ${kit.cant.map((c) => c.email).join(', ')}: ${kit.cant.some((c) => c.state === 'bounced') ? 'their email bounced' : 'they marked a newsletter as spam'}, so they get no newsletters.</div></div>` : null}
     ${off.length ? html`<p class="dn-tl__quiet">${off.map((s) => offWords[s.key] || s.label).join(', ')} ${off.length === 1 ? 'isn’t' : 'aren’t'} connected yet: ${off.some((s) => s.key === 'quo') ? 'calls and texts' : 'what it knows'} will show here once ${off.length === 1 ? 'it is' : 'they are'}.</p>` : null}
     ${none.length ? html`<p class="dn-tl__quiet">${none.map((s) => `${s.label}: ${s.note}`).join('. ')}.</p>` : null}
     ${searched && (searched.emails.length || searched.domains.length || searched.phones.length || searched.skipped.length) ? html`<p class="dn-tl__quiet">Searched for ${[
@@ -372,7 +391,11 @@ function Lines({ lines, staff, me, org, name, now, ctx, onOpen, onChanged }) {
     if (!months.length || months[months.length - 1].m !== m) months.push({ m, lines: [] });
     months[months.length - 1].lines.push(x);
   }
-  return html`<ol class="dn-tl__list" aria-label="Timeline, newest first">${months.map((g, i) => html`<li key=${`${i}:${g.m}`} class="dn-tl__month"><h4>${g.m}</h4>
+  // Keyed by the month and which time that month comes (never by position: a month read in above would redraw every
+  // group under it, and a note being changed in one with it)
+  const seen = new Map();
+  for (const g of months) { const n = (seen.get(g.m) || 0) + 1; seen.set(g.m, n); g.key = `${g.m}#${n}`; }
+  return html`<ol class="dn-tl__list" aria-label="Timeline, newest first">${months.map((g) => html`<li key=${g.key} class="dn-tl__month"><h4>${g.m}</h4>
     <ol>${g.lines.map((x) => html`<${Line} key=${x.id} x=${x} staff=${staff} me=${me} org=${org} name=${name} now=${now} ctx=${ctx} onOpen=${onOpen} onChanged=${onChanged} />`)}</ol></li>`)}</ol>`;
 }
 
@@ -663,7 +686,7 @@ function MailSheet({ x, refOf, staff, name, onClose }) {
           <div class="dn-tl-msg__head"><strong>${m.from || (m.theirs ? name : 'SOARD')}</strong><span>${shortDate(m.at)}, ${clock(m.at)}</span></div>
           <p class="dn-tl-msg__text">${m.text || '(No words: an email of pictures or files)'}</p>
           ${m.files.length ? html`<p class="dn-tl-msg__files">With ${m.files.map((f) => f.name).join(', ')}</p>` : null}</div>`)}
-        ${v.hidden ? html`<p class="dn-sub">${plural(v.hidden, 'more email')} in this conversation ${v.hidden === 1 ? 'is' : 'are'} between the team only, so ${v.hidden === 1 ? 'it isn’t' : 'they aren’t'} shown here.</p>` : null}`}
+        ${v.hidden ? html`<p class="dn-sub">${plural(v.hidden, 'more email')} in this conversation ${v.hidden === 1 ? 'doesn’t' : 'don’t'} include ${name}, so ${v.hidden === 1 ? 'it isn’t' : 'they aren’t'} shown here.</p>` : null}`}
   <//>`;
 }
 

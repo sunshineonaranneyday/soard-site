@@ -36,6 +36,7 @@ import { changedFields } from './_content-history.js';
 import { FREE_MAIL } from './_kid-partners.js';
 import { logAudit } from './_audit.js';
 import { normEmail } from './_board-roles.js';
+import { readContacts } from './_sponsors.js';
 
 const MIN = 60e3;
 const DAY = 864e5;
@@ -47,6 +48,9 @@ const QUO_VERSION = '2026-03-30';
 export const MAIL_PAGE = 20;
 // Conversations asked of Gmail in one batch
 const BATCH = 10;
+// Pages a mailbox reads on to when the first brings fewer than MAIL_ENOUGH of their emails
+const MAIL_PAGES = 3;
+const MAIL_ENOUGH = 3;
 // Addresses a search asks for at once (a person has a few; an organization's givers can be many)
 const MAX_ADDRESSES = 12;
 // Calendar searches are by one address each: the first few of them
@@ -80,25 +84,33 @@ const BARE = /[^\s<>"',;:()]+@[^\s<>"',;:()]+\.[a-z]{2,}/i;
  * one, never an address in the display name ("jane@x.com via Forms" <noreply@forms.example> is noreply@forms.example)
  */
 export function addressesIn(value) {
-  const entries = [];
-  let cur = '';
-  let quoted = false;
-  let angle = false;
-  for (const ch of String(value || '')) {
-    if (ch === '"' && !angle) quoted = !quoted;
-    else if (ch === '<' && !quoted) angle = true;
-    else if (ch === '>' && !quoted) angle = false;
-    if (ch === ',' && !quoted && !angle) { entries.push(cur); cur = ''; } else cur += ch;
-  }
-  entries.push(cur);
   const out = [];
-  for (const e of entries) {
-    const inAngle = /<([^<>]+)>/.exec(e)?.[1];
-    const a = inAngle ? BARE.exec(inAngle)?.[0] : BARE.exec(e.replace(/"[^"]*"/g, ' '))?.[0];
+  let angle = '';
+  let rest = '';
+  let quoted = false;
+  let inAngle = false;
+  let escaped = false;
+  const take = () => {
+    const a = (angle && BARE.exec(angle)?.[0]) || BARE.exec(rest)?.[0];
     if (a) out.push(a.toLowerCase());
+    angle = '';
+    rest = '';
+  };
+  for (const ch of String(value || '')) {
+    if (escaped) { escaped = false; continue; }
+    if (ch === '\\' && quoted) { escaped = true; continue; }
+    if (ch === '"' && !inAngle) { quoted = !quoted; continue; }
+    if (quoted) continue; // a display name: never an address
+    if (ch === '<') { inAngle = true; continue; }
+    if (ch === '>') { inAngle = false; continue; }
+    if (inAngle) { angle += ch; continue; }
+    if (ch === ',' || ch === ';') { take(); continue; }
+    rest += ch;
   }
+  take();
   return out;
 }
+
 /** The name in a From header ("Jane Doe <jane@x.com>" → Jane Doe), else its address */
 export const nameIn = (value) => { const v = String(value || ''); const n = clean(v.replace(/<[^>]*>/, '').replace(/^"|"$/g, '').replace(/"/g, '')); return n && !n.includes('@') ? n : addressesIn(v)[0] || ''; };
 const domainOf = (email) => normEmail(email).split('@')[1] || '';
@@ -155,14 +167,15 @@ export function teamOf(accounts) {
  * What the timeline searches for: a person's addresses, or an organization's (its givers' and its website's domain),
  * less the team's. → { emails, domains, skipped: [{ address, why }], team: true when the donor is on the team }
  */
-export function searchable({ emails = [], domains = [], name = '', people = [], contacts = [] }, team) {
+export function searchable({ emails = [], domains = [], name = '', people = [], contacts = [], phones = [] }, team) {
   const skipped = [];
   const isTeamName = (n) => !!n && team.names.has(clean(n).toLowerCase());
-  if (isTeamName(name)) return { emails: [], domains: [], contacts: [], skipped, team: true };
+  if (isTeamName(name)) return { emails: [], domains: [], contacts: [], phones: [], skipped, dropped: [], team: true };
   // An organization's givers: a teammate among them (giving for it from home) is never searched, by email or phone
   const theirs = people.filter((p) => isTeamName(p.name));
   const dropEmails = new Set(theirs.flatMap((p) => p.emails || []).map(normEmail));
   const dropContacts = new Set(theirs.flatMap((p) => p.contacts || []).map(String));
+  const dropPhones = new Set(theirs.flatMap((p) => p.phones || []));
   const ok = [];
   for (const raw of new Set(emails.map(normEmail).filter(Boolean))) {
     if (!EMAIL.test(raw)) continue;
@@ -174,13 +187,17 @@ export function searchable({ emails = [], domains = [], name = '', people = [], 
   // page or a big store's site never brings in everyone at that domain), and never a mail service's or SOARD's
   const doms = [...new Set(domains.map((d) => String(d || '').toLowerCase()))]
     .filter((d) => DOMAIN.test(d) && !FREE_MAIL.has(d) && !PLATFORMS.has(d) && !team.domains.has(d) && ok.some((e) => domainOf(e) === d));
-  return { emails: kept, domains: doms.slice(0, 2), contacts: contacts.map(String).filter((c) => !dropContacts.has(c)), skipped, team: false };
+  return {
+    emails: kept, domains: doms.slice(0, 2), contacts: contacts.map(String).filter((c) => !dropContacts.has(c)),
+    phones: [...new Set(phones.filter((x) => x && !dropPhones.has(x)))], skipped, dropped: skipped.map((x) => x.address), team: false,
+  };
 }
 // Websites that are someone else's (a social page, a map, a link shortener, a site builder): never an organization's domain
 const PLATFORMS = new Set(['google.com', 'goo.gl', 'facebook.com', 'fb.com', 'instagram.com', 'linkedin.com', 'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 'yelp.com',
   'bit.ly', 'linktr.ee', 'wix.com', 'wixsite.com', 'squarespace.com', 'godaddysites.com', 'weebly.com', 'wordpress.com', 'square.site', 'business.site', 'zeffy.com', 'apple.com', 'microsoft.com', 'amazon.com']);
 // An automated sender: matched by the organization's domain alone, its mail is a store's or a service's, not a person's
-const AUTO_SENDER = /^(no-?reply|do-?not-?reply|notifications?|notify|alerts?|mailer(-daemon)?|postmaster|bounces?|billing|receipts?|orders?|order-?updates?|shipping|marketing|news(letter)?|updates?|automated)\b/i;
+// (a person writing from billing@ or orders@ about a sponsorship or a kid's order is a conversation, so those stay)
+const AUTO_SENDER = /^(no-?reply|do-?not-?reply|notifications?|notify|alerts?|mailer-daemon|postmaster|bounces?|automated|receipts?|order-?updates?|shipping-?updates?)\b/i;
 
 const personName = (r) => givenName({ first_name: r.first, last_name: r.last }) || clean(r.company) || r.email || 'No name';
 
@@ -212,8 +229,13 @@ export async function subjectOf(env, ref, { now = Date.now() } = {}) {
       x.cents += Number(r.giving) || 0;
       people.set(p, x);
     }
-    // The biggest givers first: their addresses and numbers are the ones searched when there are many
-    const list = [...people.values()].sort((a, b) => b.cents - a.cents);
+    // A partner's own people first (Partners keeps a sponsor's contacts: name, email, phone), then the biggest givers:
+    // their addresses and numbers are the ones searched when there are many
+    const own = facts.slug ? ((await readContacts(env.DB, [facts.slug]).catch(() => ({})))[facts.slug] || []) : [];
+    const list = [
+      ...own.map((p) => ({ name: clean(p.name), emails: new Set(p.email ? [normEmail(p.email)] : []), contacts: new Set(), phones: [e164(p.phone)].filter(Boolean) })),
+      ...[...people.values()].sort((a, b) => b.cents - a.cents),
+    ];
     let domains = [];
     if (facts.slug) {
       const row = await env.DB.prepare('SELECT data FROM partners WHERE slug = ?').bind(facts.slug).first().catch(() => null);
@@ -221,8 +243,8 @@ export async function subjectOf(env, ref, { now = Date.now() } = {}) {
     }
     return {
       kind: 'org', key, keys: [key], name: facts.name, slug: facts.slug || null, domains,
-      emails: list.flatMap((p) => [...p.emails]), contacts: list.flatMap((p) => [...p.contacts]),
-      people: list.map((p) => ({ name: p.name, emails: [...p.emails], contacts: [...p.contacts] })),
+      emails: list.flatMap((p) => [...p.emails]), contacts: list.flatMap((p) => [...p.contacts]), phones: list.flatMap((p) => p.phones || []),
+      people: list.map((p) => ({ name: p.name, emails: [...p.emails], contacts: [...p.contacts], phones: p.phones || [] })),
     };
   }
   const keys = crm.keysOf(key);
@@ -236,7 +258,7 @@ export async function subjectOf(env, ref, { now = Date.now() } = {}) {
   const all = [...new Set([...keys, ...emails.map((e) => `e:${e}`)])];
   const contacts = [...new Set([...keys.filter((k) => k.startsWith('c:')).map((k) => k.slice(2)), ...mine.map((r) => r.contact).filter(Boolean).map(String)])];
   const newest = [...mine].sort((a, b) => b.at - a.at)[0];
-  return { kind: 'person', key, keys: all, name: newest ? personName(newest) : 'This donor', emails, contacts, domains: [], people: [] };
+  return { kind: 'person', key, keys: all, name: newest ? personName(newest) : 'This donor', emails, contacts, phones: [], domains: [], people: [] };
 }
 
 // ─── Gmail ──────────────────────────────────────────────────────────
@@ -249,7 +271,7 @@ export function mailQuery({ emails, domains }) {
     ...emails.flatMap((e) => [`from:${e}`, `to:${e}`, `cc:${e}`, `bcc:${e}`]),
     ...domains.flatMap((d) => [`from:${d}`, `to:${d}`, `cc:${d}`]),
   ];
-  return terms.length ? `{${terms.join(' ')}} -in:chats` : '';
+  return terms.length ? `{${terms.join(' ')}} -in:chats -from:noreply -from:no-reply -from:donotreply -from:mailer-daemon` : '';
 }
 
 /** Gmail's batch answer (multipart/mixed, one HTTP answer a part, Content-ID response-i<n>) → [JSON | null] by n */
@@ -285,10 +307,12 @@ async function gmailBatch(token, paths, fetchImpl) {
 }
 
 /** Is an address the donor's? (one of their addresses, or on their domain) */
-export const matcher = ({ emails, domains }) => {
+export const matcher = ({ emails, domains, dropped = [] }, team = null) => {
   const set = new Set(emails);
-  // The domain itself, never its subdomains (a store's order.example.com is its systems, not its people)
-  return (a) => set.has(a) || domains.includes(domainOf(a));
+  const never = new Set(dropped);
+  // The domain itself, never its subdomains (a store's order.example.com is its systems, not its people); never the
+  // team's own address, even one at the organization's domain (a teammate who gives for it from work)
+  return (a) => !never.has(a) && !(team && (team.addresses.has(a) || team.domains.has(domainOf(a)))) && (set.has(a) || domains.includes(domainOf(a)));
 };
 
 /**
@@ -344,23 +368,29 @@ export function mailLine(msg, { mailbox, isTheirs, team, exact = null }) {
 async function mailboxLines(env, box, look, { fetchImpl, now, run, page = '' }) {
   try {
     const token = await run(() => accessToken(env, box.email, { fetchImpl, now, scope: GMAIL_READ_SCOPE }));
-    const pageToken = /^[A-Za-z0-9_-]{1,200}$/.test(String(page || '')) ? `&pageToken=${page}` : '';
-    const list = await run(() => gmail(token, `/threads?maxResults=${MAIL_PAGE}&q=${encodeURIComponent(look.q)}${pageToken}`, fetchImpl));
-    const ids = (list.threads || []).map((t) => t.id).filter((id) => /^[A-Za-z0-9_-]{6,64}$/.test(id));
     const meta = MAIL_HEADERS.map((x) => `&metadataHeaders=${encodeURIComponent(x)}`).join('');
-    // A few at a time (Gmail turns away many reads at once for one mailbox), and the ones it turned away asked once more
     const path = (id) => `/threads/${id}?format=metadata${meta}`;
-    const threads = [];
-    for (let i = 0; i < ids.length; i += BATCH) threads.push(...(await run(() => gmailBatch(token, ids.slice(i, i + BATCH).map(path), fetchImpl))));
-    const again = ids.filter((_, i) => !threads[i]);
-    if (again.length) {
-      const got = await run(() => gmailBatch(token, again.map(path), fetchImpl)).catch(() => []);
-      again.forEach((id, j) => { if (got[j]) threads[ids.indexOf(id)] = got[j]; });
-    }
     const lines = [];
-    for (const t of threads) for (const m of t?.messages || []) { const l = mailLine(m, { mailbox: box.email, isTheirs: look.isTheirs, team: look.people, exact: look.exact }); if (l) lines.push(l); }
-    const missed = threads.filter((t) => !t).length;
-    return { lines, next: list.nextPageToken || null, missed };
+    let missed = 0;
+    let next = /^[A-Za-z0-9_-]{1,200}$/.test(String(page || '')) ? page : '';
+    // A page Gmail found whose conversations all turn out not to be theirs (list mail, a store's systems): the next
+    // page too, a few at most, so a mailbox never shows nothing while it holds their conversations
+    for (let pages = 0; pages < MAIL_PAGES && (pages === 0 || (next && lines.length < MAIL_ENOUGH)); pages++) {
+      const list = await run(() => gmail(token, `/threads?maxResults=${MAIL_PAGE}&q=${encodeURIComponent(look.q)}${next ? `&pageToken=${next}` : ''}`, fetchImpl));
+      next = list.nextPageToken || null;
+      const ids = (list.threads || []).map((t) => t.id).filter((id) => /^[A-Za-z0-9_-]{6,64}$/.test(id));
+      // A few at a time (Gmail turns away many reads at once for one mailbox), and the ones it turned away asked once more
+      const threads = [];
+      for (let i = 0; i < ids.length; i += BATCH) threads.push(...(await run(() => gmailBatch(token, ids.slice(i, i + BATCH).map(path), fetchImpl))));
+      const again = ids.filter((_, i) => !threads[i]);
+      if (again.length) {
+        const got = await run(() => gmailBatch(token, again.map(path), fetchImpl)).catch(() => []);
+        again.forEach((id, j) => { if (got[j]) threads[ids.indexOf(id)] = got[j]; });
+      }
+      for (const t of threads) for (const m of t?.messages || []) { const l = mailLine(m, { mailbox: box.email, isTheirs: look.isTheirs, team: look.people, exact: look.exact }); if (l) lines.push(l); }
+      missed += threads.filter((t) => !t).length;
+    }
+    return { lines, next, missed };
   } catch (e) {
     return { lines: [], next: null, error: /unauthorized_client/.test(e.message) ? 'Google hasn’t given the site Gmail read access' : e.message };
   }
@@ -530,12 +560,13 @@ export function textLines(messages, { users }) {
 
 /** The donor's phone numbers, from their Zeffy contacts (an organization's first few givers') */
 async function phonesOf(env, subject, { fetchImpl, run }) {
-  if (!env.ZEFFY_API_KEY) return { phones: [], note: 'Zeffy isn’t connected, so their phone number isn’t known' };
-  const ids = subject.contacts.slice(0, MAX_PHONE_CONTACTS);
-  if (!ids.length) return { phones: [], note: 'Zeffy has no contact for them, so no phone number' };
-  if (zeffyQuota.remaining != null && zeffyQuota.remaining < ZEFFY_KEEP && Date.now() - zeffyQuota.at < MIN) return { phones: [], busy: true, note: 'Zeffy is busy this minute: their phone number is read next time' };
+  // Numbers kept with the record itself (a partner's people), then their Zeffy contacts'
+  const own = [...new Set((subject.phones || []).filter(Boolean))];
+  const ids = (subject.contacts || []).slice(0, MAX_PHONE_CONTACTS);
+  if (!ids.length || !env.ZEFFY_API_KEY) return { phones: own, note: own.length ? null : !env.ZEFFY_API_KEY ? 'Zeffy isn’t connected, so their phone number isn’t known' : 'Zeffy has no contact for them, so no phone number' };
+  if (zeffyQuota.remaining != null && zeffyQuota.remaining < ZEFFY_KEEP && Date.now() - zeffyQuota.at < MIN) return { phones: own, busy: !own.length, note: 'Zeffy is busy this minute: their phone number is read next time' };
   const got = await Promise.all(ids.map((id) => run(() => zeffyGet(env, `/contacts/${encodeURIComponent(id)}`, {}, fetchImpl)).catch(() => null)));
-  const phones = [...new Set(got.map((c) => e164(c?.phone_number)).filter(Boolean))];
+  const phones = [...new Set([...own, ...got.map((c) => e164(c?.phone_number)).filter(Boolean)])];
   return { phones, note: phones.length ? null : 'Zeffy has no phone number for them' };
 }
 
@@ -660,8 +691,7 @@ async function readKit(env, subject, { now, run, kids }) {
       const tags = new Map((t?.tags || []).map((x) => [Number(x.id), { name: x.name, at: Date.parse(x.tagged_at) || 0 }]));
       if (joined) lines.push({ id: `kit:join:${s.id}`, kind: 'kit', at: joined, title: 'Joined the newsletter in Kit', detail: subs.length > 1 ? email : null });
       if (leftAt) lines.push({ id: `kit:left:${s.id}`, kind: 'kit', at: leftAt, title: 'Unsubscribed from the newsletter', detail: subs.length > 1 ? email : null, tone: 'warn' });
-      else if (s.state === 'bounced') lines.push({ id: `kit:bounced:${s.id}`, kind: 'kit', at: Date.parse(s.updated_at || '') || 0, title: 'Kit can’t deliver to their email (it bounced)', detail: email, tone: 'warn', undated: !s.updated_at });
-      else if (s.state === 'complained') lines.push({ id: `kit:spam:${s.id}`, kind: 'kit', at: Date.parse(s.updated_at || '') || 0, title: 'Marked a Kit email as spam', detail: email, tone: 'warn', undated: !s.updated_at });
+
       for (const [id, tag] of tags) if (tag.at) lines.push({ id: `kit:tag:${s.id}:${id}`, kind: 'kit', at: tag.at, title: tagWords(tag.name, kids) });
       // Kit sends only to people on the list: from joining until leaving (a bounced or never-confirmed address got none)
       if (joined && (s.state === 'active' || s.state === 'cancelled')) {
@@ -683,7 +713,8 @@ async function readKit(env, subject, { now, run, kids }) {
       list.sort((a, b) => a.at - b.at);
       lines.push({ id: `kit:sends:${m}`, kind: 'kit', at: list[list.length - 1].at, title: list.length === 1 ? `Newsletter: “${list[0].subject}”` : `${list.length} newsletters`, sends: list.map((b) => ({ id: b.id, subject: b.subject, at: b.at, url: b.url })), month: m });
     }
-    return { state: 'ok', lines, summary: { ...stats, states: subs.map((s) => s.state) } };
+    // Kit can't reach them (a bounce, a spam report): a state now, said above the timeline (Kit gives no day for it)
+    return { state: 'ok', lines, summary: { ...stats, states: subs.map((s) => s.state), cant: subs.filter((s) => s.state === 'bounced' || s.state === 'complained').map((s) => ({ email: normEmail(s.email_address), state: s.state })) } };
   } catch (e) {
     return { state: 'error', note: e.message, lines: [] };
   }
@@ -884,7 +915,7 @@ export async function timelineView(env, ref, { now = Date.now(), fetchImpl = fet
 /** What a request searches with: the donor's addresses (less the team's), the team, and Gmail's words for it */
 function lookOf(subject, people) {
   const found = searchable(subject, people);
-  return { ...found, people, exact: new Set(found.emails), isTheirs: matcher(found), q: mailQuery(found), subject: { ...subject, contacts: found.contacts } };
+  return { ...found, people, exact: new Set(found.emails), isTheirs: matcher(found, people), q: mailQuery(found), subject: { ...subject, contacts: found.contacts, phones: found.phones } };
 }
 
 const cursorOf = (pages) => btoa(JSON.stringify(pages)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -959,13 +990,20 @@ export async function callTranscript(env, ref, { call, me = null, now = Date.now
   // Their own numbers, never SOARD's (a number of SOARD's typed on their record would open every call)
   const { phones, dir, busy } = await theirPhones(env, look.subject, { fetchImpl, now, run });
   if (busy) throw fail(503, 'Zeffy is busy this minute, so their phone number can’t be checked. Try again in a minute.');
-  const c = await quoGet(env, `/calls/${call}`, fetchImpl);
+  const c = await quoGet(env, `/calls/${call}`, fetchImpl).catch((e) => { throw /answered 404/.test(e.message) ? fail(404, 'Quo doesn’t have that call any more') : e; });
   const parts = (c?.data?.participants || []).map((p) => p?.phoneNumber || p);
   if (!phones.length || !parts.some((p) => phones.includes(p))) throw fail(403, `That call isn’t with ${subject.name}`);
-  const t = await quoGet(env, `/calls/${call}/transcripts?limit=10`, fetchImpl);
   // A call paused and picked up again has a transcript for each recording: all of them, in order
-  const done = (t?.data || []).filter((x) => x.status === 'completed');
-  const status = done.length ? 'completed' : (t?.data || [])[0]?.status || 'absent';
+  const all = [];
+  let after = '';
+  for (let page = 0; page < 5; page++) {
+    const t = await quoGet(env, `/calls/${call}/transcripts?${new URLSearchParams({ limit: '50', ...(after ? { after } : {}) })}`, fetchImpl);
+    all.push(...(t?.data || []));
+    after = t?.nextCursor || '';
+    if (!after) break;
+  }
+  const done = all.filter((x) => x.status === 'completed');
+  const status = done.length ? 'completed' : all[0]?.status || 'absent';
   const ours = new Set([...dir.numbers.values()].map((n) => n.number));
   const dialogue = done.flatMap((x) => x.dialogue || []).slice(0, 600).map((d) => {
     const theirs = !d.actorId && phones.includes(d.identifier);
