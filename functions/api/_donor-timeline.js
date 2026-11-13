@@ -120,7 +120,8 @@ export function siteDomain(url) {
 }
 /** A phone number as Quo spells it (+15555550123), or null */
 export function e164(raw) {
-  const s = String(raw || '').trim();
+  // An extension ("x123", "ext. 4") is dialled after the call connects: the number is what comes before it
+  const s = String(raw || '').trim().replace(/\s*(?:x|ext\.?|extension)\s*\d+\s*$/i, '');
   if (!s) return null;
   const d = s.replace(/\D/g, '');
   if (s.startsWith('+')) return d.length >= 8 && d.length <= 15 ? `+${d}` : null;
@@ -564,7 +565,8 @@ async function phonesOf(env, subject, { fetchImpl, run }) {
   const own = [...new Set((subject.phones || []).filter(Boolean))];
   const ids = (subject.contacts || []).slice(0, MAX_PHONE_CONTACTS);
   if (!ids.length || !env.ZEFFY_API_KEY) return { phones: own, note: own.length ? null : !env.ZEFFY_API_KEY ? 'Zeffy isn’t connected, so their phone number isn’t known' : 'Zeffy has no contact for them, so no phone number' };
-  if (zeffyQuota.remaining != null && zeffyQuota.remaining < ZEFFY_KEEP && Date.now() - zeffyQuota.at < MIN) return { phones: own, busy: !own.length, note: 'Zeffy is busy this minute: their phone number is read next time' };
+  // Busy: the numbers kept with the record now, and said, so calls from their Zeffy numbers aren't missed in silence
+  if (zeffyQuota.remaining != null && zeffyQuota.remaining < ZEFFY_KEEP && Date.now() - zeffyQuota.at < MIN) return { phones: own, busy: true, note: 'Zeffy is busy this minute: the phone numbers it has for them are read next time' };
   const got = await Promise.all(ids.map((id) => run(() => zeffyGet(env, `/contacts/${encodeURIComponent(id)}`, {}, fetchImpl)).catch(() => null)));
   const phones = [...new Set([...own, ...got.map((c) => e164(c?.phone_number)).filter(Boolean)])];
   return { phones, note: phones.length ? null : 'Zeffy has no phone number for them' };
@@ -577,7 +579,7 @@ async function theirPhones(env, subject, { fetchImpl, now, run }) {
   const dir = await quoDirectory(env, fetchImpl, now, run);
   const ours = new Set([...dir.numbers.values()].map((n) => n.number));
   const phones = got.phones.filter((p) => !ours.has(p));
-  return { phones, dir, busy: false, note: phones.length ? null : 'Their number in Zeffy is one of SOARD’s' };
+  return { phones, dir, busy: !!got.busy, note: got.busy ? got.note : phones.length ? null : 'Their number in Zeffy is one of SOARD’s' };
 }
 
 async function readQuo(env, subject, { fetchImpl, now, run, after = null }) {
@@ -585,6 +587,8 @@ async function readQuo(env, subject, { fetchImpl, now, run, after = null }) {
   try {
     const { phones, dir, note, busy } = await theirPhones(env, subject, { fetchImpl, now, run });
     if (!phones.length) return { state: busy ? 'error' : 'none', note, lines: [] };
+    // Some of their numbers read (a partner's own people), Zeffy's not this minute: what there is, and said
+    const partly = busy ? note : null;
     const calls = new URLSearchParams({ 'participant[in]': phones.join(','), include: 'summary,voicemail', limit: '50' });
     if (after) calls.set('after', after);
     const reads = [run(() => quoGet(env, `/calls?${calls}`, fetchImpl))];
@@ -597,7 +601,7 @@ async function readQuo(env, subject, { fetchImpl, now, run, after = null }) {
       ...(c?.data || []).map((x) => callLine(x, { users: dir.users, numbers: dir.numbers, phones })),
       ...textLines(m.flatMap((x) => x?.data || []), { users: dir.users }),
     ];
-    return { state: 'ok', phones, lines, next: c?.nextCursor || null };
+    return { state: 'ok', phones, lines, next: c?.nextCursor || null, ...(partly ? { note: partly } : {}) };
   } catch (e) {
     return { state: 'error', note: e.message, lines: [] };
   }
@@ -989,10 +993,13 @@ export async function callTranscript(env, ref, { call, me = null, now = Date.now
   const run = queue();
   // Their own numbers, never SOARD's (a number of SOARD's typed on their record would open every call)
   const { phones, dir, busy } = await theirPhones(env, look.subject, { fetchImpl, now, run });
-  if (busy) throw fail(503, 'Zeffy is busy this minute, so their phone number can’t be checked. Try again in a minute.');
   const c = await quoGet(env, `/calls/${call}`, fetchImpl).catch((e) => { throw /answered 404/.test(e.message) ? fail(404, 'Quo doesn’t have that call any more') : e; });
   const parts = (c?.data?.participants || []).map((p) => p?.phoneNumber || p);
-  if (!phones.length || !parts.some((p) => phones.includes(p))) throw fail(403, `That call isn’t with ${subject.name}`);
+  if (!phones.length || !parts.some((p) => phones.includes(p))) {
+    // Zeffy too busy to say all their numbers: it may be theirs, so try again, never "not theirs"
+    if (busy) throw fail(503, 'Zeffy is busy this minute, so their phone numbers can’t all be checked. Try again in a minute.');
+    throw fail(403, `That call isn’t with ${subject.name}`);
+  }
   // A call paused and picked up again has a transcript for each recording: all of them, in order
   const all = [];
   let after = '';

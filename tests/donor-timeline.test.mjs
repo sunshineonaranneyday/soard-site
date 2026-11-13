@@ -34,6 +34,8 @@ test('phone numbers and website domains as Quo and Gmail need them', () => {
   assert.equal(T.e164('1-404-555-0123'), '+14045550123');
   assert.equal(T.e164('+44 20 7946 0958'), '+442079460958');
   assert.equal(T.e164('555-0123'), null, 'seven digits is no number to search');
+  assert.equal(T.e164('770-555-0199 x123'), '+17705550199', 'an extension is dialled after');
+  assert.equal(T.e164('(770) 555-0199 ext. 4'), '+17705550199');
   assert.equal(T.siteDomain('https://www.acme-builders.com/about'), 'acme-builders.com');
   assert.equal(T.siteDomain('acme.org'), 'acme.org');
   assert.equal(T.siteDomain('not a site'), '');

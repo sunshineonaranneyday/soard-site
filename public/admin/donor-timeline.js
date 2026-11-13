@@ -309,16 +309,14 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
   // The gift a link opened at: drawn however far down the timeline's other lines push it, until the person moves on
   // (a filter, Show more), so the page's mark on it never lands on nothing
   const keepGift = useRef(focusGift);
-  useEffect(() => {
-    if (!keepGift.current) return;
-    const i = all.filter((x) => !(x.kind === 'meeting' && x.at > Date.now())).findIndex((x) => x.gift && (x.gift.ids || [x.gift.id]).includes(keepGift.current));
-    if (i >= 0) setShown((n) => Math.max(n, i + 10));
-  }, [all]);
   const past = all.filter((x) => !(x.kind === 'meeting' && x.at > now));
   const soon = all.filter((x) => x.kind === 'meeting' && x.at > now).sort((a, b) => a.at - b.at);
   const counts = new Map();
   for (const x of past) counts.set(GROUP_OF[x.kind], (counts.get(GROUP_OF[x.kind]) || 0) + 1);
   const list = filter === 'all' ? past : past.filter((x) => GROUP_OF[x.kind] === filter);
+  // Worked out as it draws (never a paint later): the gift a link opened at is always among the lines drawn
+  const giftAt = keepGift.current ? list.findIndex((x) => x.gift && (x.gift.ids || [x.gift.id]).includes(keepGift.current)) : -1;
+  const upTo = Math.max(shown, giftAt + 10);
   const flash = (id) => requestAnimationFrame(() => {
     const el = document.querySelector(`.dn-tl__item[data-line="${CSS.escape(id)}"]`);
     if (!el) return;
@@ -349,10 +347,10 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
     </div>` : null}
     ${!past.length ? (busy || (!data && !err) ? html`<div class="dn-tl__skel" aria-hidden="true">${[90, 70, 80].map((w) => html`<span class="skel" style=${`--w:${w}%`}></span>`)}</div>`
       : html`<p class="dn-tl__empty">Nothing yet. Gifts, notes, email with the team, calls, meetings and newsletters show here as they happen.</p>`)
-      : html`<${Lines} lines=${list.slice(0, shown)} staff=${staff} me=${me || data?.me || null} org=${org} name=${name} now=${now} ctx=${ctx} onOpen=${setOpen} onChanged=${onChanged} />`}
-    ${list.length > shown || data?.more?.mail || data?.more?.quo ? html`<div class="dn-tl__more">
-      ${list.length > shown ? html`<button type="button" class="btn btn-ghost btn-sm" onClick=${() => setShown(shown + STEP)}>Show ${Math.min(STEP, list.length - shown)} more</button>` : null}
-      ${list.length <= shown && (data?.more?.mail || data?.more?.quo) && (filter === 'all' || filter === 'email' || filter === 'phone') ? html`<button type="button" class="btn btn-ghost btn-sm" aria-busy=${older ? 'true' : null} onClick=${showOlder}>${older ? html`<span class="spinner spinner-14" />` : null}Show older email and calls</button>` : null}
+      : html`<${Lines} lines=${list.slice(0, upTo)} staff=${staff} me=${me || data?.me || null} org=${org} name=${name} now=${now} ctx=${ctx} onOpen=${setOpen} onChanged=${onChanged} />`}
+    ${list.length > upTo || data?.more?.mail || data?.more?.quo ? html`<div class="dn-tl__more">
+      ${list.length > upTo ? html`<button type="button" class="btn btn-ghost btn-sm" onClick=${() => setShown(upTo + STEP)}>Show ${Math.min(STEP, list.length - upTo)} more</button>` : null}
+      ${list.length <= upTo && (data?.more?.mail || data?.more?.quo) && (filter === 'all' || filter === 'email' || filter === 'phone') ? html`<button type="button" class="btn btn-ghost btn-sm" aria-busy=${older ? 'true' : null} onClick=${showOlder}>${older ? html`<span class="spinner spinner-14" />` : null}Show older email and calls</button>` : null}
     </div>` : null}
     ${open ? html`<${OpenSheet} x=${open} refOf=${refOf} staff=${staff} name=${name} onClose=${() => setOpen(null)} />` : null}
   </section>`;
@@ -375,6 +373,7 @@ function Notices({ sources, err, retry, searched, staff, kit = null }) {
     ${partly.map((s) => html`<p key=${s.key} class="dn-tl__quiet">${s.label}: ${mailboxes(s)}’s ${s.errors.length === 1 ? 'account' : 'accounts'} couldn’t be read (${s.errors[0].error}).</p>`)}
     ${sources.filter((s) => s.missed).map((s) => html`<p key=${`${s.key}-missed`} class="dn-tl__quiet">Gmail was busy: ${plural(s.missed, 'conversation')} couldn’t be read this time. Read again to try.</p>`)}
     ${skipped ? html`<p class="dn-tl__quiet">${skipped.note}.</p>` : null}
+    ${sources.filter((x) => x.state === 'ok' && x.note).map((x) => html`<p key=${`${x.key}-note`} class="dn-tl__quiet">${x.label}: ${x.note}.</p>`)}
     ${kit?.cant?.length ? html`<div class="notice notice--warn"><div class="notice__body">Kit can’t reach ${kit.cant.map((c) => c.email).join(', ')}: ${kit.cant.some((c) => c.state === 'bounced') ? 'their email bounced' : 'they marked a newsletter as spam'}, so they get no newsletters.</div></div>` : null}
     ${off.length ? html`<p class="dn-tl__quiet">${off.map((s) => offWords[s.key] || s.label).join(', ')} ${off.length === 1 ? 'isn’t' : 'aren’t'} connected yet: ${off.some((s) => s.key === 'quo') ? 'calls and texts' : 'what it knows'} will show here once ${off.length === 1 ? 'it is' : 'they are'}.</p>` : null}
     ${none.length ? html`<p class="dn-tl__quiet">${none.map((s) => `${s.label}: ${s.note}`).join('. ')}.</p>` : null}
