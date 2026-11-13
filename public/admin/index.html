@@ -7941,13 +7941,14 @@
       useEffect(() => {
         const key = (e) => {
           if (String(e.key || '').toLowerCase() !== 'z' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented) return;
-          if (e.repeat) { e.preventDefault(); return; }
           const el = e.target;
           const typing = el?.closest?.('textarea, [contenteditable=""], [contenteditable="true"]') || (el?.matches?.('input') && !/^(checkbox|radio|button|submit|reset|range|color|file)$/i.test(el.type || ''));
           if (typing || document.querySelector('[aria-modal="true"]')) return;
           const t = [...latest.current].reverse().find((x) => x.action?.label === 'Undo');
           if (!t) return;
           e.preventDefault();
+          // (a held key's repeats undo nothing more: one press, one Undo)
+          if (e.repeat) return;
           use(t);
         };
         window.addEventListener('keydown', key);

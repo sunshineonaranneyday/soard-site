@@ -239,7 +239,12 @@ const get = (params) => call(params);
 const lostAnswer = (r) => !r.success && (!r.status || r.status >= 500);
 const change = async (body) => {
   let r = await call('', body);
-  if (lostAnswer(r)) r = { ...(await call('', body)), retried: true };
+  // (twice more, a moment apart: a short outage, or two answers lost in a row, still ends in what really happened)
+  for (const ms of [0, 800]) {
+    if (!lostAnswer(r)) break;
+    if (ms) await new Promise((ok) => setTimeout(ok, ms));
+    r = { ...(await call('', body)), retried: true };
+  }
   if (!r.success) {
     listChanged();
     thanksChanged();
@@ -502,7 +507,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
         <input type="search" ref=${search} placeholder="Name, email or company" aria-label="Search donors" aria-keyshortcuts="/" value=${q} onInput=${(e) => { setQ(e.target.value); if (view) onView(null); }} />
         ${!q ? html`<kbd class="kd-kbd" aria-hidden="true">/</kbd>` : null}
       </div>
-      ${html`<label class="dn-sort dn-owner-filter">Owner <select class="form-select" value=${owner} onChange=${(e) => pickOwner(e.target.value)}>
+      ${view === 'needs' ? null : html`<label class="dn-sort dn-owner-filter">Owner <select class="form-select" value=${owner} onChange=${(e) => pickOwner(e.target.value)}>
         <option value="">Anyone</option>
         ${me ? html`<option value=${me}>Me</option>` : null}
         <option value="none">No one</option>
@@ -617,9 +622,13 @@ function useRefocus(selector, ready, otherwise = '.dn-done, .dn-status') {
   });
   return (el) => { const li = el?.closest?.('li'); at.current = { li, i: li ? [...li.parentElement.children].indexOf(li) : 0, t: Date.now() }; };
 }
+// (by the calendar, as people say it: last night's is yesterday's)
 const waiting = (since) => {
-  const d = Math.floor((Date.now() - Date.parse(since)) / 864e5);
-  return !Number.isFinite(d) ? '' : d < 1 ? 'Came in today' : `Waiting ${plural(d, 'day')}`;
+  const t = Date.parse(since);
+  if (!Number.isFinite(t)) return '';
+  const dayOf = (x) => { const d = new Date(x); return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) / 864e5; };
+  const d = dayOf(Date.now()) - dayOf(t);
+  return d < 1 ? 'Came in today' : d === 1 ? 'Came in yesterday' : `Waiting ${plural(d, 'day')}`;
 };
 
 function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
@@ -658,10 +667,10 @@ function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
       <p class="dn-need__sub">${[t.how, t.campaign, day(t.at)].filter(Boolean).join(' · ')}. ${t.whyText}.</p>
       <p class="dn-need__sub">${t.owner ? `Looked after by ${fullName(t.owner, v.staff)}` : 'No one looks after them yet'} · ${waiting(t.since)}</p>
       <div class="dn-need__do">
-        <button type="button" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'thanked', e); }}>${busy === `${t.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
-        <button type="button" class="btn btn-ghost btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'skipped', e); }}>${busy === `${t.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
+        <button type="button" class="btn btn-primary btn-sm" aria-label=${`Thanked: ${amountOf(t)} from ${t.name}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'thanked', e); }}>${busy === `${t.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
+        <button type="button" class="btn btn-ghost btn-sm" aria-label=${`Not needed: ${amountOf(t)} from ${t.name}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'skipped', e); }}>${busy === `${t.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
         <a class="link" href=${t.org ? `#donors/org/${encodeURIComponent(t.org.key)}` : t.ref && !t.ref.startsWith('g:') ? `#donors/${encodeURIComponent(t.ref)}` : `#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${cameFrom('thanks')}>${t.org ? `Open ${t.org.name}` : t.name === 'No name' ? 'Open their gift' : `Open ${t.name}`}</a>
-        <a class="link" href=${zeffyPaymentUrl(t.ids?.[0] || t.id)} target="_blank" rel="noopener">Open in Zeffy</a>
+        <a class="link" href=${zeffyPaymentUrl(t.ids?.[0] || t.id)} target="_blank" rel="noopener" aria-label=${`Open in Zeffy: ${amountOf(t)} from ${t.name}`}>Open in Zeffy</a>
       </div></li>`)}</ul>
     ${v.more ? html`<p class="dn-status">And ${plural(v.more, 'more gift')} after these.</p>` : null}`;
 }
@@ -704,7 +713,7 @@ async function keepAsOrg(name, link, ctx, question = null) {
   const r = await change({ act: 'org-new', key, name, links: link ? [link] : [], ...(question ? { asked: true, subject: question.subject, also: question.also || [] } : {}) });
   if (!r.success) { ctx.addToast(r.error, 'error'); return null; }
   listChanged();
-  ctx.addToast(`${name} is an organization here now. Only staff see it.`, 'success', { label: 'Open', fn: () => goTo({ tab: 'people', org: r.key }) });
+  ctx.addToast(r.same && !r.retried ? `${name} is an organization here already: someone kept it a moment ago.` : `${name} is an organization here now. Only staff see it.`, 'success', { label: 'Open', fn: () => goTo({ tab: 'people', org: r.key }) });
   return r.key;
 }
 
@@ -787,16 +796,23 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
     if (it.kind === 'moved') {
       // The team's notes and owner, left on the old record: they go to the contact picked, never left where no one sees them
       const kept = [it.notes === 1 ? 'note' : it.notes ? `${it.notes} notes` : null, it.owner ? `owner (${firstName(it.owner, staff)})` : null].filter(Boolean);
-      const keptWords = kept.length ? `Its ${kept.join(' and its ')} ${kept.length > 1 || it.notes > 1 ? 'go' : 'goes'} to the one you pick.` : '';
+      const keptWords = kept.length ? `Its ${kept.join(' and its ')} ${kept.length > 1 || it.notes > 1 ? 'go' : 'goes'} to the one you pick${it.owner && it.who?.some((w) => w.owner) ? ' (its owner only to one with no owner of its own)' : ''}.` : '';
       // Each told apart (two of one name, as a duplicate Zeffy split is): its email and its gifts
       const who = (i) => it.names?.[i] || `Contact ${i + 1}`;
-      const whoFull = (i) => [who(i), it.who?.[i]?.email, it.who?.[i]?.gifts ? plural(it.who[i].gifts, 'gift') : null].filter(Boolean).join(', ');
+      const whoFull = (i) => [who(i), it.who?.[i]?.email, it.who?.[i]?.gifts ? plural(it.who[i].gifts, 'gift') : null, it.who?.[i]?.owner ? `looked after by ${firstName(it.who[i].owner, staff)}` : null].filter(Boolean).join(', ');
+      // What goes to each: the old owner only to one with no owner of its own (one that has one keeps theirs, and says so)
+      const goes = (i) => {
+        const own = it.who?.[i]?.owner;
+        const parts = [it.notes === 1 ? 'note' : it.notes ? `${it.notes} notes` : null, it.owner && !own ? `owner (${firstName(it.owner, staff)})` : null].filter(Boolean);
+        const said = parts.length ? `Its ${parts.join(' and its ')} went to ${who(i)}` : `Done`;
+        return it.owner && own ? `${said}. ${who(i)} is still looked after by ${firstName(own, staff)}, not ${firstName(it.owner, staff)}` : said;
+      };
       return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">Zeffy split a contact’s gifts between ${plural(it.to.length, 'contact')}${it.names?.some(Boolean) ? `: ${it.to.map((c, i) => who(i)).join(' and ')}` : ''}.</p>
       <p class="dn-need__sub">What was said about it here (an organization, the same person) stayed with the old record. Look at them in Zeffy and say it again on the right one.${it.anon ? ' It was kept anonymous, so each of them is kept anonymous too.' : ''} ${keptWords}</p>
       ${it.to.length ? html`<ul class="dn-plain">${it.to.map((c, i) => html`<li key=${c}>${whoFull(i)} · <a class="link" href=${zeffyContactUrl(c)} target="_blank" rel="noopener" aria-label=${`${whoFull(i)}, in Zeffy`}>In Zeffy</a></li>`)}</ul>` : null}
       <div class="dn-need__do">
-        ${kept.length ? it.to.map((c, i) => btn(`${id}:${c}`, `Give them to ${whoFull(i)}`, () => said({ act: 'moved-done', contact: it.contact, to: c }, `Its ${kept.join(' and its ')} went to ${who(i)}`)))
+        ${kept.length ? it.to.map((c, i) => btn(`${id}:${c}`, `Give them to ${whoFull(i)}`, () => said({ act: 'moved-done', contact: it.contact, to: c }, goes(i))))
           : btn(id, 'Done', () => said({ act: 'moved-done', contact: it.contact }, 'Done'))}</div></li>`;
     }
     return null;
@@ -891,6 +907,7 @@ async function thankAgain(ctx, t) {
     if (!r.success) { ctx.addToast(r.error, 'error'); return; }
     if (r.same && !(r.retried && r.you)) { ctx.addToast(`To thank already${r.you ? ', by you' : r.by ? `, said by ${r.by.split('@')[0].replace(/^./, (c) => c.toUpperCase())}` : ''}`, 'info'); return; }
     ctx.addToast(`To thank again: ${amountOf(t)}`, 'success');
+    await focusWhenBack(t.id);
   } finally { againNow.delete(t.id); }
 }
 function GiftList({ gifts, byWho = false, staff = [], ctx = null }) {
@@ -939,7 +956,7 @@ function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
     if (!r.success) ctx.addToast(r.error, 'error');
     else {
       listChanged();
-      if (!r.same) ctx.addToast(email ? `${fullName(email, staff)} looks after ${name} now` : `No one looks after ${name} now`, 'success');
+      if (!r.same || r.retried) ctx.addToast(email ? `${fullName(email, staff)} looks after ${name} now` : `No one looks after ${name} now`, 'success');
     }
     // Refused, or the answer lost on the way back (it may have saved): the page reads again, so it shows who it is now
     await onDone();
@@ -986,8 +1003,8 @@ function ThankBox({ gifts, name, ctx }) {
       <span><strong>${amountOf({ cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind, thanks: g.thanks })}</strong> · ${[g.campaign || 'A gift', g.thanks.how || g.how, day(g.at), g.by ? `from ${g.by}` : null, g.thanks.ids && g.ids?.length > 1 && !g.thanks.ids.includes(g.ids[0]) ? 'the part given later' : null].filter(Boolean).join(' · ')}</span>
       <span class="dn-sub">${g.thanks.whyText}.</span>
       <span class="dn-row-do">
-        <button type="button" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(g, 'thanked', e); }}>${busy === `${g.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
-        <button type="button" class="btn btn-ghost btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(g, 'skipped', e); }}>${busy === `${g.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
+        <button type="button" class="btn btn-primary btn-sm" aria-label=${`Thanked: ${amountOf({ cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind, thanks: g.thanks })}, ${day(g.at)}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(g, 'thanked', e); }}>${busy === `${g.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
+        <button type="button" class="btn btn-ghost btn-sm" aria-label=${`Not needed: ${amountOf({ cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind, thanks: g.thanks })}, ${day(g.at)}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(g, 'skipped', e); }}>${busy === `${g.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
       </span></li>`)}</ul>
     <p class="kd-card__note">Zeffy thanks online givers by email. These it doesn’t, or they’re big enough for a call or a note from the team.</p>
   </section>`;
@@ -1164,7 +1181,21 @@ function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone 
   </section>`;
 }
 
+/** Whether a page's layout is two columns (its shell 1000px or wider, as the shared layout's container query) */
+function useWide(el, at = 1000) {
+  const [wide, setWide] = useState(() => (typeof window !== 'undefined' ? window.innerWidth - 300 >= at : true));
+  useEffect(() => {
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([e]) => setWide(e.contentRect.width >= at));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el]);
+  return wide;
+}
+
 function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Donors', onDonor, onOrg }) {
+  const [shell, setShell] = useState(null);
+  const wide = useWide(shell);
   const [v, setV] = useState(null);
   const [rowBusy, setRowBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -1247,21 +1278,16 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     await load({ follow: true });
     return true;
   };
-  return html`
-    ${back}
-    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone.text}</strong> This page shows it as it was: copy anything you typed here${gone.org ? ', then open where it is now.' : ', then go back.'}</div>${gone.org ? html`<div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => goTo({ tab: 'people', org: gone.org })}>Open it</button></div>` : null}</div>` : null}
-    <div class="dn-head">
-      <h2 tabindex="-1" ref=${heading}>${d.name} ${stageTag(d.stage)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : d.anonymous ? html`<span class="tag">Asked to be anonymous</span>` : null}</h2>
-      <p class="dn-head__sub">${[d.funds.length ? `Through ${d.funds.join(', ')}` : null, d.email].filter(Boolean).join(' · ')}</p>
-    </div>
-    <div class="kd-shell"><div class="kd-layout">
-      <aside class="kd-rail" aria-label="Donor at a glance">
+  // Read in the order it shows: two columns, the page then the side; one column, the first cards, the page, then the rest
+  const early = html`
         <section class="kd-card kd-card--status" aria-labelledby="dn-stage-h">
           <h3 id="dn-stage-h">Stage</h3>
           <p>${stageTag(d.stage)}</p>
           <p class="kd-card__note">${STAGES[d.stage]?.what}</p>
         </section>
         <${OwnerCard} subject=${v.key} owner=${v.owner} staff=${v.staff} name=${d.name === 'No name' ? 'this giver' : d.name} ctx=${ctx} onDone=${load} />
+  `;
+  const late = html`
         <section class="kd-card kd-card--health dn-card--zeffy" aria-labelledby="dn-zeffy-h">
           <h3 id="dn-zeffy-h">In Zeffy</h3>
           <dl class="dn-facts">
@@ -1299,8 +1325,9 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           ${d.contact ? html`<p class="kd-card__note">Is this an organization’s own record in Zeffy? <button type="button" class="link dn-linkbtn" onClick=${() => setPicking({ kind: 'contact', subject: d.contact, label: d.name })}>Count it for an organization…</button></p>` : null}
         </section>
         <${HistoryCard} history=${v.history} staff=${v.staff} />
-      </aside>
-      <div class="kd-main" style="display:grid;gap:1rem">
+  `;
+  const main = html`
+      <div class="kd-main" key="main" style="display:grid;gap:1rem">
         <${ThankBox} gifts=${v.gifts} name=${d.name} ctx=${ctx} />
         <section class="card kd-sec" aria-labelledby="dn-giving-h">
           <header class="kd-sec__head"><h3 id="dn-giving-h">Giving</h3></header>
@@ -1312,6 +1339,17 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           <${GiftList} gifts=${v.gifts} staff=${v.staff} ctx=${ctx} />
         </section>
       </div>
+  `;
+  return html`
+    ${back}
+    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone.text}</strong> This page shows it as it was: copy anything you typed here${gone.org ? ', then open where it is now.' : ', then go back.'}</div>${gone.org ? html`<div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => goTo({ tab: 'people', org: gone.org })}>Open it</button></div>` : null}</div>` : null}
+    <div class="dn-head">
+      <h2 tabindex="-1" ref=${heading}>${d.name} ${stageTag(d.stage)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : d.anonymous ? html`<span class="tag">Asked to be anonymous</span>` : null}</h2>
+      <p class="dn-head__sub">${[d.funds.length ? `Through ${d.funds.join(', ')}` : null, d.email].filter(Boolean).join(' · ')}</p>
+    </div>
+    <div class="kd-shell" ref=${setShell}><div class="kd-layout">
+      ${wide ? [main, html`<aside class="kd-rail" key="rail" aria-label="Donor at a glance">${early}${late}</aside>`]
+        : [html`<aside class="kd-rail" key="rail" aria-label="Donor at a glance">${early}</aside>`, main, html`<aside class="kd-rail" key="more" aria-label="More about this donor">${late}</aside>`]}
     </div></div>
     ${picking ? html`<${Picker} title=${picking.kind === 'company' ? `Which organization is “${picking.label}”?` : `Which organization is ${picking.label}?`}
       sub=${picking.kind === 'company' ? 'Every gift given for that name counts for it, from anyone.' : 'Every gift from this Zeffy contact counts for it.'}
@@ -1340,6 +1378,8 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
 // (one Put it on the website at a time: a double click asks once)
 let puttingOnSite = false;
 function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
+  const [shell, setShell] = useState(null);
+  const wide = useWide(shell);
   const [v, setV] = useState(null);
   const [err, setErr] = useState(null);
   const [gone, setGone] = useState(null);
@@ -1409,6 +1449,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     if (!ctx.createPartner) { location.hash = '#partners'; return; }
     // As it is now, not as this page read it: taken out, renamed or put on the website by a teammate since
     const now = await get(`?org=${encodeURIComponent(v.key)}`);
+    if (left.current) return;
     if (now.success && (now.org || now.onSite)) { ctx.addToast(`${v.name} is on the website already: someone put it there since this page was read`, 'info'); goTo({ tab: 'people', org: now.org || v.key }); return; }
     if (!now.success && now.status === 404) { ctx.addToast(`${v.name} was taken out since this page was read, so there’s nothing to put on the website. Nothing was made.`, 'error'); if (!left.current) await load(); return; }
     if (!now.success) { ctx.addToast(`Couldn’t check ${v.name} just now: ${now.error} Nothing was made.`, 'error', { label: 'Try again', fn: putOnSite }); return; }
@@ -1423,13 +1464,14 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
       if (await ask({ title: `Use the partner card “${made.name}”?`, text: `There’s a partner card with this name already. ${o.name}’s gifts, notes and owner go to it, and it’s on the website after you publish. To make another card instead, rename this organization first.`, yes: 'Use it' })) await finishOnSite(made.slug, o.name, false, o.keepAnonymous);
       return;
     }
+    if (left.current) return;
     const got = await ctx.createPartner({ name: o.name });
     if (!got) return;
     const card = typeof got === 'string' ? { slug: got, name: o.name } : got;
     await finishOnSite(card.slug, card.name || o.name, true, o.keepAnonymous);
   };
   // Its partner card is made: everything said about it moves to the partner (tried again from the toast if it failed)
-  const finishOnSite = async (slug, name = v.name, madeNow = false, kept = null) => {
+  const finishOnSite = async (slug, name = v.name, madeNow = false, kept = null, fromToast = false) => {
     const r = await change({ act: 'website', key: v.key, slug, ...(typeof kept === 'boolean' ? { was: { kept } } : {}) });
     // Refused (taken out, or on the website as another card, since): the card just made says so, never left unmentioned
     if (!r.success && r.status === 409) {
@@ -1440,12 +1482,13 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     // Both answers lost: it may have gone through all the same (then it's done, and says so)
     const now = r.success ? null : await get(`?org=${encodeURIComponent(v.key)}`);
     const went = now?.success && now.org && !now.donor ? now.org : null;
-    if (!r.success && !went) { ctx.addToast(`${name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug, name, madeNow, kept) }); return; }
+    if (!r.success && !went) { ctx.addToast(`${name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug, name, madeNow, kept, true) }); return; }
     if (went) r.key = went;
     listChanged();
     ctx.addToast(`${name} is on the Partners page after you publish`, 'success', null, { publish: true });
-    // By address: this can finish from a toast after the page was left
-    goTo({ tab: 'people', org: r.key });
+    // By address: pressed from its toast after the page was left, it goes there; finished on its own after the person
+    // left, it never pulls them back
+    if (!left.current || fromToast) goTo({ tab: 'people', org: r.key });
   };
   const takeOut = async () => {
     if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it.'}` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
@@ -1463,15 +1506,8 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     return (j.names || []).map((x) => ({ id: `${x.kind}:${x.subject}`, ...x, label: x.name, disabled: x.org === v.key,
       sub: [x.kind === 'company' ? 'A company name on gifts' : x.email || 'A Zeffy contact', `${usd(x.cents)} given`, x.org === v.key ? 'already counts here' : x.orgName ? `counts for ${x.orgName} now` : null].filter(Boolean).join(' · ') }));
   };
-  return html`
-    ${back}
-    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone.text}</strong> This page shows it as it was: copy anything you typed here${gone.org ? ', then open where it is now.' : ', then go back.'}</div>${gone.org ? html`<div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => goTo({ tab: 'people', org: gone.org })}>Open it</button></div>` : null}</div>` : null}
-    <div class="dn-head">
-      <h2 tabindex="-1" ref=${heading}>${v.name} ${stageTag(d.stage)} ${orgTag(v)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : null}</h2>
-      <p class="dn-head__sub">An organization: every gift from the names below counts for it.</p>
-    </div>
-    <div class="kd-shell"><div class="kd-layout">
-      <aside class="kd-rail" aria-label="Organization at a glance">
+  // Read in the order it shows: two columns, the page then the side; one column, the first cards, the page, then the rest
+  const early = html`
         <section class="kd-card kd-card--status" aria-labelledby="dn-stage-h">
           <h3 id="dn-stage-h">Stage</h3>
           <p>${stageTag(d.stage)}</p>
@@ -1491,10 +1527,13 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
               <button type="button" class="btn btn-ghost btn-sm" onClick=${takeOut}>Take it out</button></div>`}
           <p class="kd-card__note">Giving in the last 12 months: ${usd(v.cents12)}.</p>
         </section>
+  `;
+  const late = html`
         <${KeepAnonymous} subject=${v.key} on=${!!v.keepAnonymous} names=${v.keptNames || []} name=${v.name} ctx=${ctx} onDone=${load} />
         <${HistoryCard} history=${v.history} staff=${v.staff} />
-      </aside>
-      <div class="kd-main" style="display:grid;gap:1rem">
+  `;
+  const main = html`
+      <div class="kd-main" key="main" style="display:grid;gap:1rem">
         <${ThankBox} gifts=${v.gifts} name=${v.name} ctx=${ctx} />
         <section class="card kd-sec" aria-labelledby="dn-giving-h">
           <header class="kd-sec__head"><h3 id="dn-giving-h">Giving</h3></header>
@@ -1522,8 +1561,19 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
           <${GiftList} gifts=${v.gifts} byWho=${true} staff=${v.staff} ctx=${ctx} />
         </section>
       </div>
+  `;
+  return html`
+    ${back}
+    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone.text}</strong> This page shows it as it was: copy anything you typed here${gone.org ? ', then open where it is now.' : ', then go back.'}</div>${gone.org ? html`<div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => goTo({ tab: 'people', org: gone.org })}>Open it</button></div>` : null}</div>` : null}
+    <div class="dn-head">
+      <h2 tabindex="-1" ref=${heading}>${v.name} ${stageTag(d.stage)} ${orgTag(v)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : null}</h2>
+      <p class="dn-head__sub">An organization: every gift from the names below counts for it.</p>
+    </div>
+    <div class="kd-shell" ref=${setShell}><div class="kd-layout">
+      ${wide ? [main, html`<aside class="kd-rail" key="rail" aria-label="Organization at a glance">${early}${late}</aside>`]
+        : [html`<aside class="kd-rail" key="rail" aria-label="Organization at a glance">${early}</aside>`, main, html`<aside class="kd-rail" key="more" aria-label="More about this organization">${late}</aside>`]}
     </div></div>
-    ${adding ? html`<${Picker} title=${`Add a Zeffy name to ${v.name}`} sub="A company name its gifts carry, or the Zeffy contact it gives as. Every gift under it counts here." placeholder="Name or email in Zeffy"
+    ${adding && !gone ? html`<${Picker} title=${`Add a Zeffy name to ${v.name}`} sub="A company name its gifts carry, or the Zeffy contact it gives as. Every gift under it counts here." placeholder="Name or email in Zeffy"
       search=${findNames} onClose=${() => setAdding(false)}
       onPick=${async (x) => { const ok = await say({ act: 'link', kind: x.kind, subject: x.subject, org: v.key, from: x.org || '' }, `“${x.name}” counts for ${v.name} now`); return ok; }} />` : null}
     ${renaming && !gone ? html`<${RenameDialog} name=${v.name} onClose=${() => setRenaming(false)} onSave=${(name, was) => say({ act: 'org-rename', key: v.key, name, was }, 'Renamed')} />` : null}`;

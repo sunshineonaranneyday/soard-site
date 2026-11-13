@@ -481,6 +481,12 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       return { ok: true, key: had.key, same: true };
     }
   }
+  // Keep it as an organization, kept the same way by a teammate first (that name, its names linked to it): done already
+  if (a === 'org-new' && body?.asked === true) {
+    const [had, more] = crm.named(clean(body.name).slice(0, 120));
+    const links = (Array.isArray(body.links) ? body.links : []).filter((l) => KINDS.has(l?.kind));
+    if (had && !more && links.length && links.every((l) => crm.calls.yes.get(`${l.kind}\n${subjectOf(l.kind, l.subject)}`) === had)) return { ok: true, same: true, key: had };
+  }
   // An answer to a Needs you question (`asked`): someone may have answered it since this page read it (another tab, a
   // teammate). Then nothing changes and they're told, never a quiet second answer over the first; the same answer
   // already given (this one sent again, a teammate who said the same) is done already
@@ -1640,7 +1646,8 @@ export async function needsView(env, { now = Date.now() } = {}) {
     it.owner = crm.ownerRows([old]).find(([, ans, note]) => ans && note)?.[2] || null;
     it.names = it.to.map((c) => { const r = rows.find((x) => x.contact === c); return r ? personName(r) : null; });
     // (told apart: two of one name, as a duplicate split is) and whether it was kept anonymous
-    it.who = it.to.map((c) => { const rs = rows.filter((x) => x.contact === c); return { email: rs.find((x) => x.email)?.email || null, gifts: rs.filter((x) => Number(x.giving) > 0).length }; });
+    // (and each one's own owner: the old record's goes only to one with none)
+    it.who = it.to.map((c) => { const rs = rows.filter((x) => x.contact === c); return { email: rs.find((x) => x.email)?.email || null, gifts: rs.filter((x) => Number(x.giving) > 0).length, owner: crm.lookedAfterBy(crm.canon(`c:${c}`)) || null }; });
     it.anon = crm.keptKey(old);
   }
   // (the team, to name an owner left behind)
