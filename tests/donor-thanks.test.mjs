@@ -503,3 +503,11 @@ test('the same answer twice (two tabs): one History line, and the second gets no
   const h = (await db.prepare("SELECT entity_name FROM audit_log WHERE entity_type = 'donor-crm'").all()).results;
   assert.equal(h.filter((x) => /^Thanked/.test(x.entity_name)).length, 1);
 });
+
+test('a check that joins a gift already thanked is said to be a check, at its own amount', async () => {
+  await note(pay({ id: 'qc', amount: 150000, created: S(START + HOUR) }));
+  await doIt({ act: 'thanks', id: 'qc', state: 'thanked' });
+  await note(pay({ id: 'qk', amount: 25000, method: 'cheque', type: 'manual', created: S(START + HOUR + 20 * MIN) }), START + 3 * HOUR);
+  const t = (await T.thanksToDo(db))[0];
+  assert.deepEqual([t.ids, t.cents, t.why, t.how], ['qk', 25000, 'check', 'Check']);
+});

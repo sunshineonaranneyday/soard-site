@@ -530,6 +530,9 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       await audit(DB, by, 'Not moved to Champion after all (the Partners page didn’t take the change)', { org: key }, key);
       return { ok: true };
     }
+    // Moving to Champion is an upgrade from Builder or Friend, only: a partner moved meanwhile (to Signature, or to
+    // Champion already) is never moved by a card read before
+    if (body.done && !['builder', 'friend'].includes(crm.org.get(key)?.level)) throw bad(`${crm.org.get(key)?.name || 'They'} ${crm.org.get(key)?.levelLabel ? `is a ${crm.org.get(key).levelLabel} partner` : 'moved'} since this was read. Nothing was changed.`, 409);
     await putCall(DB, { kind: 'level', subject: key, answer: !!body.done, note: body.done ? clean(body.was) || null : null }, by, now);
     await audit(DB, by, body.done ? `${crm.org.get(key).name} made Champion by giving (was ${clean(body.was) || 'unknown'})` : 'Not moved to Champion for now (asked again in a year)', { org: key, was: clean(body.was) || null, done: !!body.done }, key);
     return { ok: true };

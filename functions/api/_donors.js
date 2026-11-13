@@ -492,7 +492,8 @@ export async function donorsView(env, { now = Date.now(), crm = null, rows: give
 const HOW = { cheque: 'Check', check: 'Check', daf: 'Donor-advised fund', in_kind: 'In kind', card: 'Card', ach: 'Bank transfer', manual: 'By hand', cash: 'Cash', other: 'Other' };
 /** How a gift came, in words */
 export function howOf(g) {
-  if (g.type === 'imported') return 'Imported from before Zeffy';
+  // (an earlier system's history, or a gala's gifts from its auction platform)
+  if (g.type === 'imported') return 'Imported into Zeffy';
   const m = String(g.method || '').toLowerCase();
   return HOW[m] || (g.type === 'manual' ? 'Entered by hand' : m ? m[0].toUpperCase() + m.slice(1).replace(/_/g, ' ') : 'Online');
 }

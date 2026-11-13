@@ -1080,3 +1080,11 @@ test('a contact linked to a partner since deleted can be kept as an organization
   assert.equal((await list()).find((p) => p.key === r.key)?.total, 50000);
   assert.ok(!(await needs()).some((i) => i.kind === 'named'));
 });
+
+test('Move to Champion is an upgrade only: a card read before the partner moved to Signature (or Champion) changes nothing', async () => {
+  await add(pay({ id: 'lv', company: 'Acme Builders', amount: 1100000 }));
+  const lv = (await needs()).find((i) => i.kind === 'level');
+  assert.ok(lv);
+  await db.prepare("UPDATE partners SET data = json_set(data, '$.level', 'signature') WHERE slug = 'acme'").run();
+  await assert.rejects(doIt({ act: 'level', org: 'p:acme', done: true, was: 'Friend', asked: true }), (e) => e.status === 409 && /Signature partner/.test(e.message));
+});

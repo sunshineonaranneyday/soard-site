@@ -26339,7 +26339,7 @@ ${sections || '<p>No one yet.</p>'}
 
           // ─── Donors: ./donors.js (#donors, #donors/checks, #donors/<contact id>, #donors/gift/<payment id>) ───
           case 'donors':
-            return html`<${DonorsLazy} addToast=${addToast} partners=${partners} partnersCount=${partners.length} communityCount=${communityPartners.length}
+            return html`<${DonorsLazy} addToast=${addToast} partners=${partners} partnersCount=${partners.length} communityCount=${communityPartners.length} onPartnersChanged=${loadData}
                 createPartner=${(prefill) => new Promise((resolve) => setDonorPartner({ prefill, resolve }))} />
               ${donorPartner ? html`<${PartnerCreateDialog} partners=${partners} addToast=${addToast}
                 prefill=${{ ...donorPartner.prefill, category: 'funding', note: 'They go on the Partners page under Funding, as a Friend, when you publish. Their gifts in Donors & Partners go with them.' }}

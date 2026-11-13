@@ -252,7 +252,7 @@ const placeOfDonor = (d, extra = {}) => (d.type === 'org' ? { tab: 'people', org
 
 // Each move to a place (a link, Back, Forward, a click) is a new page there: nothing of the page before carries over
 let moves = 0;
-export function Donors({ addToast = () => {}, partners = [], partnersCount = null, communityCount = null, createPartner = null }) {
+export function Donors({ addToast = () => {}, partners = [], partnersCount = null, communityCount = null, createPartner = null, onPartnersChanged = () => {} }) {
   useJobCostsStyles();
   useStyles();
   const [place, setPlace] = useState(() => ({ ...placeOf(), n: ++moves }));
@@ -260,21 +260,26 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
     // An old Job Costs link to Checks settles on this area's own address, opened fresh or followed from here
     const settle = () => { if (/^#job-costs\/checks\b/.test(location.hash)) history.replaceState(null, '', '#donors/checks'); };
     settle();
-    const on = () => { settle(); if (/^#(donors|job-costs\/checks)\b/.test(location.hash)) { const next = placeOf(); setPlace((p) => (addressOf(p) === addressOf(next) ? p : { ...next, n: ++moves })); } };
+    const on = () => {
+      settle();
+      // Anywhere but the page To thank or Needs you opened: Back is to the list again
+      if (backFor && location.hash !== backFor) { backTo = null; backFor = null; }
+      if (/^#(donors|job-costs\/checks)\b/.test(location.hash)) { const next = placeOf(); setPlace((p) => (addressOf(p) === addressOf(next) ? p : { ...next, n: ++moves })); }
+    };
     window.addEventListener('popstate', on);
     window.addEventListener('hashchange', on);
     // An address changed between the first draw and now (a link followed at once) isn't missed
     on();
-    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); };
+    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); backTo = null; backFor = null; };
   }, []);
   const open = (p) => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); };
   // Back from a donor's page: where it was opened from (To thank, Needs you), else the list
   const backLabel = backTo === 'thanks' ? 'To thank' : backTo === 'needs' ? 'Needs you' : 'Donors';
-  const goBack = () => { const to = backTo; backTo = null; focusPill = !!to; open({ tab: 'people', thanks: to === 'thanks', needs: to === 'needs' }); };
+  const goBack = () => { const to = backTo; backTo = null; backFor = null; focusPill = !!to; open({ tab: 'people', thanks: to === 'thanks', needs: to === 'needs' }); };
   // What's done here is in effect at once (private D1, Zeffy, Mercury), so no message offers Publish unless it says it
   // waits for it ({ publish: true }: a partner's level, a partner card made)
   const toast = (msg, type, action = null, o = {}) => addToast(msg, type, action, { publish: false, ...o });
-  const ctx = { addToast: toast, open, partners, createPartner };
+  const ctx = { addToast: toast, open, partners, createPartner, partnersChanged: onPartnersChanged };
   const pick = (id) => {
     if (id === 'partners') location.hash = '#partners';
     else if (id === 'community') location.hash = '#partners/community-partners';
@@ -310,8 +315,11 @@ let lastList = null; // the list as last read, so coming back from a donor shows
 let lastPlace = null;
 // The Owner filter, kept while the admin is open (a donor's page and back, To thank and back)
 let lastOwner = '';
-// Where a donor's page was opened from, when not the list ('thanks' | 'needs'): its Back goes there
+// Where a donor's page was opened from, when not the list ('thanks' | 'needs'): its Back goes there. Kept with the
+// address that list opened, so any other way to a page (a Slack link, after leaving the area) is the list's
 let backTo = null;
+let backFor = null;
+const cameFrom = (view) => (e) => { backTo = view; backFor = e.currentTarget.getAttribute('href'); };
 // Back there: the focus on its pill (the donor's row has it when Back is to the list)
 let focusPill = false;
 /** Read the list again when it next shows (a change on a donor's page moves gifts between donors) */
@@ -366,7 +374,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
       document.querySelector(`.dn-row[data-key="${CSS.escape(b.key)}"] .dn-name`)?.focus({ preventScroll: true });
     });
   }, [!!v]);
-  const openDonor = (p) => { lastPlace = { q, stage, sort, owner, shown, scroll: window.scrollY, key: p.key }; backTo = null; onOpen(p); };
+  const openDonor = (p) => { lastPlace = { q, stage, sort, owner, shown, scroll: window.scrollY, key: p.key }; backTo = null; backFor = null; onOpen(p); };
   const latest = useLatest();
   // Left (a donor opened): a read still out lands nowhere, and its count never reaches the sidebar
   const gone = useRef(false);
@@ -401,6 +409,8 @@ function DonorList({ ctx, view, onView, onOpen }) {
   const people = v?.people || [];
   const staff = v?.staff || [];
   const me = v?.me && staff.some((s) => s.email === v.me) ? v.me : null;
+  // The Owner filter on someone the list no longer offers (left the team, and looks after no one now): Anyone again
+  useEffect(() => { if (v && owner && owner !== 'none' && owner !== me && !staff.some((s) => s.email === owner)) { setOwner(''); lastOwner = ''; } }, [v, owner]);
   const words = q.trim().toLowerCase();
   const inStage = (p, s) => (s === 'all' ? true : s === 'org' ? p.type === 'org' : s === 'yearend' ? p.lastYear > 0 && !p.thisYear : p.stage === s);
   const matches = useMemo(() => people.filter((p) => inStage(p, stage) && ownerOk(owner, p.owner)
@@ -428,7 +438,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
   const pickOwner = (o) => { setOwner(o); lastOwner = o; };
   const yearEnd = stage === 'yearend';
   // A count from before a change made since (Back to the list after a thank-you): being read again, never shown as now
-  const n = (x, tone = '') => (v.stale ? html`<span class=${`count ${tone}`} aria-label="being read again">…</span>` : html`<span class=${`count ${tone}`}>${x.toLocaleString()}</span>`);
+  const n = (x, tone = '') => (v.stale && !err ? html`<span class=${`count ${tone}`} aria-label="being read again">…</span>` : html`<span class=${`count ${tone}`}>${x.toLocaleString()}</span>`);
   const ownerName = owner === 'none' ? 'no one' : owner === me ? 'you' : fullName(owner, staff);
   return html`
     <div class="page-header">
@@ -566,7 +576,7 @@ function ThanksList({ ctx, owner = '', ownerName = '' }) {
       <div class="dn-need__do">
         <button type="button" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'thanked', e); }}>${busy === `${t.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
         <button type="button" class="btn btn-ghost btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'skipped', e); }}>${busy === `${t.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
-        <a class="link" href=${t.org ? `#donors/org/${encodeURIComponent(t.org.key)}` : t.ref && !t.ref.startsWith('g:') ? `#donors/${encodeURIComponent(t.ref)}` : `#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${() => { backTo = 'thanks'; }}>${t.org ? `Open ${t.org.name}` : `Open ${t.name}`}</a>
+        <a class="link" href=${t.org ? `#donors/org/${encodeURIComponent(t.org.key)}` : t.ref && !t.ref.startsWith('g:') ? `#donors/${encodeURIComponent(t.ref)}` : `#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${cameFrom('thanks')}>${t.org ? `Open ${t.org.name}` : `Open ${t.name}`}</a>
         <a class="link" href=${zeffyPaymentUrl(t.ids?.[0] || t.id)} target="_blank" rel="noopener">Open in Zeffy</a>
       </div></li>`)}</ul>
     ${v.more ? html`<p class="dn-status">And ${plural(v.more, 'more gift')} after these.</p>` : null}`;
@@ -595,8 +605,9 @@ async function makeChampion(item, ctx) {
     ctx.addToast(`Couldn’t move ${item.name}: ${e.message}`, 'error');
     return false;
   }
-  // A partner's level is the website's: the Publish bar counts it at once
+  // A partner's level is the website's: the Publish bar counts it at once, and Partners shows it there
   window.dispatchEvent(new CustomEvent('soard-content-changed'));
+  ctx.partnersChanged?.();
   ctx.addToast(`${item.name} moves to Champion when you publish`, 'success', null, { publish: true });
   return true;
 }
@@ -644,14 +655,14 @@ function NeedsList({ ctx, onChanged, only = null }) {
   if (!items.length) return html`<p class="dn-status dn-done">Nothing needs you. The site asks here when a name might be a partner or reads as an organization’s, two records might be one person, a gift could count for two organizations, or someone’s giving says Champion.</p>`;
   const btn = (id, label, fn, primary = false) => html`<button type="button" class=${`btn btn-sm ${primary ? 'btn-primary' : 'btn-ghost'}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(id, fn, e); }}>${busy === id ? html`<span class="spinner spinner-14" />` : null}${label}</button>`;
   // A donor's page from here: its Back comes back here
-  const who = (s, label = s.name) => html`<a class="link" href=${`#donors/${encodeURIComponent(s.ref)}`} onClick=${() => { backTo = 'needs'; }}>${label}</a>`;
+  const who = (s, label = s.name) => html`<a class="link" href=${`#donors/${encodeURIComponent(s.ref)}`} onClick=${cameFrom('needs')}>${label}</a>`;
   return html`<ul class="dn-needs" aria-label="Needs you">${items.map((it) => {
     const id = it.id;
     if (it.kind === 'level') return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">${it.name} gave ${usd(it.cents12)} in the last 12 months. Make them a Champion?</p>
       <p class="dn-need__sub">A Funding partner, ${it.levelLabel} on the Partners page now. Champion is for major sponsors: $10,000 or more.</p>
       <div class="dn-need__do">${btn(id, 'Move to Champion…', () => makeChampion(it, ctx), true)}${btn(`${id}:no`, 'Not now', () => said({ act: 'level', org: it.org, done: false }, 'It won’t ask about them again for a year'))}
-        <a class="link" href=${`#donors/org/${encodeURIComponent(it.org)}`} onClick=${() => { backTo = 'needs'; }}>See their giving</a></div></li>`;
+        <a class="link" href=${`#donors/org/${encodeURIComponent(it.org)}`} onClick=${cameFrom('needs')}>See their giving</a></div></li>`;
     // A name that reads as an organization's: a contact can be said to be a person, for good
     const isPerson = (label = 'It’s a person') => (it.person ? btn(`${id}:person`, label, () => said({ act: 'big', subject: it.subject, also: it.also || [], person: true }, `${it.name} stays a person, and it won’t ask again`)) : null);
     const keep = btn(id, 'Keep it as an organization', async () => { const k = await keepAsOrg(it.name, { kind: it.link, subject: it.linkSubject }, ctx, it); return k ? true : false; }, true);
@@ -1151,7 +1162,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     const r = await change({ act: 'website', key: v.key, slug });
     if (!r.success) { ctx.addToast(`${v.name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug) }); return; }
     listChanged();
-    ctx.addToast(`${v.name} is on the Partners page after you publish`, 'success', { label: 'Open its partner card', fn: () => { location.hash = `#partners/${encodeURIComponent(slug)}`; } }, { publish: true });
+    ctx.addToast(`${v.name} is on the Partners page after you publish`, 'success', null, { publish: true });
     // By address: this can finish from a toast after the page was left
     goTo({ tab: 'people', org: r.key });
   };
@@ -1220,7 +1231,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
         </section>
         ${v.people.length ? html`<section class="card kd-sec" aria-labelledby="dn-people-h">
           <header class="kd-sec__head"><h3 id="dn-people-h">Who gave for it</h3></header>
-          <ul class="dn-plain">${v.people.map((p) => html`<li key=${p.key}><a class="link" href=${`#donors/${p.ref.startsWith('g:') ? `gift/${encodeURIComponent(p.ref.slice(2))}` : encodeURIComponent(p.ref)}`}>${p.name}</a> <span class="dn-sub">${usd(p.cents)}, ${plural(p.gifts, 'gift')}</span></li>`)}</ul>
+          <ul class="dn-plain">${v.people.map((p) => html`<li key=${p.key}><a class="link" href=${`#donors/${encodeURIComponent(p.ref)}`}>${p.name}</a> <span class="dn-sub">${usd(p.cents)}, ${plural(p.gifts, 'gift')}</span></li>`)}</ul>
         </section>` : null}
         <section class="card kd-sec" aria-labelledby="dn-gifts-h">
           <header class="kd-sec__head"><h3 id="dn-gifts-h">Gifts <span class="count">${v.gifts.length}</span></h3></header>

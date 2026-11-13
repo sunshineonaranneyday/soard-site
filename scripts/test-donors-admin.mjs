@@ -619,6 +619,16 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('.toast')].filter((t) => /Thanked: \$250 from Rosa Diaz/.test(t.textContent)).at(-1)?.querySelectorAll('button').forEach((b) => { if (b.textContent.trim() === 'Undo') b.click(); }));
   await page.waitForFunction(() => /To thank 1/.test(document.querySelector('.ppl-filters')?.textContent.replace(/\s+/g, ' ') || '') && document.querySelector('.sidebar a[href="#donors"] .nav-count')?.textContent.trim() === '1', { timeout: 8000 }).catch(() => {});
   ok(/To thank 1/.test(await textOf(page, '.ppl-filters')) && await badge() === '1', `Undo from another page: the list’s count and the sidebar’s agree (${await textOf(page, '.ppl-filters')} | ${await badge()})`);
+  // Opened from To thank, then a link elsewhere (a Slack gift link in the same tab): Back is to the list, the gift marked
+  await page.evaluate(() => { location.hash = '#donors/thanks'; });
+  await page.waitForSelector('.dn-needs[aria-label="To thank"] .dn-need a', { timeout: 8000 });
+  await page.evaluate(() => [...document.querySelectorAll('.dn-needs[aria-label="To thank"] .dn-need a')].find((a) => /^Open /.test(a.textContent.trim()))?.click());
+  await page.waitForSelector('.dn-head h2', { timeout: 8000 });
+  ok(/← To thank/.test(await textOf(page, '.dn-back')), 'opened from To thank: Back says To thank');
+  await page.evaluate(() => { location.hash = '#donors/gift/jane_acme'; });
+  await page.waitForFunction(() => /← Donors|← /.test(document.querySelector('.dn-back')?.textContent || '') && !!document.querySelector('.dn-gifts, .dn-head'), { timeout: 8000 }).catch(() => {});
+  await wait(600);
+  ok(/← Donors/.test(await textOf(page, '.dn-back')), `a link followed after that: Back is to the list again (${await textOf(page, '.dn-back')})`);
   ok(!calls.some((c) => /%40|@/.test(c)), 'still no email in any request');
   ok(errors.length === 0, `no console errors on the laptop${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
 

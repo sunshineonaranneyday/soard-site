@@ -224,7 +224,9 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     const part = said ? [...(t ? idsOf.get(t.id).filter((c) => charges.includes(c)) : []), ...charges.filter((c) => !byCharge.has(c))] : charges;
     const rs = part.map((id) => byId.get(id)).filter((r) => r && gives(r));
     if (!rs.length) continue;
-    const gift = said ? { ...g, id: rs[0].id, ids: rs.map((r) => r.id), at: Math.max(...rs.map((r) => Number(r.at))), cents: rs.reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0) } : g;
+    // The part a said thank-you didn't cover, as its own charges have it (a check that joined a card gift is a check)
+    const lead = rs.find((r) => offlineWhy(r)) || rs[0];
+    const gift = said ? { ...g, id: rs[0].id, ids: rs.map((r) => r.id), at: Math.max(...rs.map((r) => Number(r.at))), cents: rs.reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0), method: lead.method, type: lead.type, inKind: lead.method === 'in_kind', parts: rs.length } : g;
     const firstSeen = rs.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), rs[0].first_seen);
     // An import is new by its date only: old history imported now was thanked when it was given
     const isNew = gift.at >= startS || (gift.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
