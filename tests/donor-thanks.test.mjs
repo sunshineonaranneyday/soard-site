@@ -600,3 +600,23 @@ test('a To thank partly refunded shows once on the donor’s page, on the gift s
   assert.equal(withIt.length, 1);
   assert.ok(!withIt[0].refunded);
 });
+
+// ─── Found in the sixth review ──────────────────────────────────────
+
+test('a To thank that let a charge go (moved to another giver) never takes it back; refunded in part after, it stays "partly"', async () => {
+  await note(pay({ id: 'A6', amount: 30000, created: S(START + HOUR) }));
+  await note(pay({ id: 'B6', amount: 50000, created: S(START + HOUR + 10 * MIN) }));
+  await note(pay({ id: 'C6', amount: 50000, created: S(START + HOUR + 20 * MIN) }));
+  await note(pay({ id: 'A6', amount: 30000, created: S(START + HOUR), contact: 'ct_bob6', first: 'Bob', email: 'bob6@example.com' }), START + 3 * HOUR);
+  assert.deepEqual([(await row('A6')).ids, (await row('A6')).cents], ['B6 C6', 100000]);
+  await note(pay({ id: 'B6', amount: 50000, created: S(START + HOUR + 10 * MIN), refund: 'partial', refunds: [{ status: 'succeeded', amount: 10000 }] }), START + 4 * HOUR);
+  assert.deepEqual([(await row('A6')).state, (await row('A6')).why, (await row('A6')).cents], ['todo', 'partly', 90000]);
+});
+
+test('a thank-you the site closed by itself holds nothing: a gift with none said is one thank-you again', async () => {
+  await note(pay({ id: 'K6', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR) }));
+  await note(pay({ id: 'K6', amount: 30000, created: S(START + HOUR) }), START + 3 * HOUR);
+  assert.equal((await row('K6')).gone, 'changed');
+  await note(pay({ id: 'L6', amount: 80000, created: S(START + HOUR + 10 * MIN) }), START + 4 * HOUR);
+  assert.deepEqual((await T.thanksToDo(db)).map((t) => [t.ids, t.cents, t.why]), [['K6 L6', 110000, 'major']]);
+});

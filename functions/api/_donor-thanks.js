@@ -182,6 +182,7 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
   const rank = (t) => [t.state === 'todo' ? 1 : 0, -chargesOf(t).length, t.created_at || '', t.id];
   const before = (a, b) => { const x = rank(a); const y = rank(b); for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] < y[i]; return false; };
   for (const t of [...known].sort((a, b) => (before(a, b) ? -1 : before(b, a) ? 1 : 0))) {
+    if (t.state === 'gone') continue;
     const all = chargesOf(t);
     const own = t.state === 'todo' ? all.filter((c) => !byCharge.has(c)) : all;
     if (!own.length) { steps.push(DB.prepare("DELETE FROM donor_thanks WHERE id = ? AND state = 'todo'").bind(t.id)); continue; }
@@ -189,8 +190,6 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     idsOf.set(t.id, own);
     for (const c of own) if (!byCharge.has(c)) byCharge.set(c, t);
   }
-  // A thank-you's own id is its first charge's: that charge is never another's new thank-you
-  for (const t of known) if (idsOf.has(t.id) && !byCharge.has(t.id)) byCharge.set(t.id, t);
   const live = known.filter((t) => idsOf.has(t.id));
   const todoIds = live.filter((t) => t.state === 'todo').flatMap((t) => idsOf.get(t.id));
   // Gifts dated since it began (an hour before, so a gift split across the moment joins whole), gifts first seen
@@ -241,7 +240,7 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
   const primaryOf = new Map();
   for (const [id, xs] of touching) {
     const own = idsOf.get(id) || [];
-    const score = (x) => { const rs = x.charges.filter((c) => own.includes(c)).map((c) => byId.get(c)); return [rs.length && thankWhy(asGift(x.g, rs), { charges: rs }) ? 1 : 0, x.charges.includes(id) ? 1 : 0, rs.length]; };
+    const score = (x) => { const rs = x.charges.filter((c) => own.includes(c)).map((c) => byId.get(c)); return [rs.length && thankWhy(asGift(x.g, rs), { charges: rs }) ? 1 : 0, x.charges.includes(own[0]) ? 1 : 0, rs.length]; };
     primaryOf.set(id, [...xs].sort((a, b) => cmp(score(b), score(a)))[0]);
   }
   const assigned = new Map();
@@ -305,7 +304,7 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     if (t.state !== 'todo' || !idsOf.has(t.id)) continue;
     // In the order it had them, any joining after
     const was = idsOf.get(t.id) || [];
-    const next = new Set(assigned.get(t.id) || was);
+    const next = new Set(assigned.has(t.id) ? assigned.get(t.id) : was);
     const ids = [...was.filter((c) => next.has(c)), ...[...next].filter((c) => !was.includes(c))];
     const changedIds = ids.join(' ') !== was.join(' ');
     const present = ids.filter((c) => byId.has(c)).map((c) => byId.get(c));
@@ -425,6 +424,10 @@ export async function markThanks(DB, { id, state, was = null }, by, { now = Date
   // Who put it back To thank (Undo) is kept too, so a later "since you looked" can say who
   const r = await DB.prepare('UPDATE donor_thanks SET state = ?, done_by = ?, done_at = ? WHERE id = ? AND state = ?')
     .bind(state, by || null, state === 'todo' ? null : iso(now), t.id, t.state).run();
-  if (!r.meta?.changes) throw changed(await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE id = ?`).bind(t.id).first() || t);
+  if (!r.meta?.changes) {
+    const now2 = await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE id = ?`).bind(t.id).first() || t;
+    if (now2.state === state) return { ...now2, same: true };
+    throw changed(now2);
+  }
   return t;
 }

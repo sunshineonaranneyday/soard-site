@@ -1244,3 +1244,27 @@ test('put on the website twice (another tab): the second is told where it is, ne
   await db.prepare(partner('the-lark-wren', 'The Lark & Wren Foundation')).run();
   await assert.rejects(doIt({ act: 'website', key, slug: 'the-lark-wren' }), (e) => e.status === 409 && /on the website already as Lark & Wren Foundation/.test(e.message));
 });
+
+// ─── Found in the sixth review ──────────────────────────────────────
+
+test('a contact that is an organization by its exact name: its owner and notes are the organization’s to show; "No one" there is said', async () => {
+  await withTeam();
+  await add(pay({ id: 'rh', contact: 'ct_rho', first: 'Rho', last: 'Trust', email: 'rho@example.com', amount: 5000 }));
+  await doIt({ act: 'owner', key: 'c:ct_rho', email: 'jordan@soardcharity.com' });
+  await doIt({ act: 'note-add', key: 'c:ct_rho', body: 'A friend of the board chair' });
+  await add(pay({ id: 'rt', contact: 'ct_ann6', first: 'Ann', last: 'Six', email: 'ann6@example.com', company: 'Rho Trust', amount: 1200000 }));
+  const big = (await needs()).find((i) => i.kind === 'big');
+  const { key } = await doIt({ act: 'org-new', name: big.name, links: [{ kind: big.link, subject: big.linkSubject }] });
+  const org = await C.orgView(env, key, { now: NOW });
+  assert.deepEqual([org.owner, org.notes.map((n) => n.body)], ['jordan@soardcharity.com', ['A friend of the board chair']]);
+  await doIt({ act: 'owner', key, email: '' });
+  assert.equal((await C.orgView(env, key, { now: NOW })).owner, null, '"No one" holds');
+  assert.equal((await list()).find((p) => p.key === key)?.owner, null);
+});
+
+test('one question about one giver at a time: two gifts that could each count for two organizations, one asked first', async () => {
+  await db.prepare(partner('zed', 'Zed Works')).run();
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_jane', org: 'p:beta' });
+  await add(pay({ id: 'cl1', company: 'Acme Builders', amount: 5000 }), pay({ id: 'cl2', company: 'Acme Builders', amount: 6000, created: S(NOW - 3 * DAY) }));
+  assert.equal((await needs()).filter((i) => i.kind === 'clash').length, 1);
+});

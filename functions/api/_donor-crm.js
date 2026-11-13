@@ -154,6 +154,8 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   const keptNameCalls = [];
   // Who on the team looks after a donor: key → { email, at }
   const owners = new Map();
+  // Organizations said to have no owner ("No one"): never one taken from a contact counted for them
+  const ownerNone = new Set();
   // A person's key over another's: a Zeffy contact first (its address works in a link), then the earlier
   const better = (a, b) => ((a.startsWith('c:') ? 0 : 1) - (b.startsWith('c:') ? 0 : 1) || (a < b ? -1 : 1)) < 0;
   const find = (k) => { let r = k; while (parent.has(r)) r = parent.get(r); return r; };
@@ -168,7 +170,7 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
     else if (c.kind === 'big') big.set(s, { at: c.at, person: c.note === 'person' });
     else if (c.kind === 'forward') forward.set(s, t);
     else if (c.kind === 'moved') movedDone.add(s);
-    else if (c.kind === 'owner') { if (c.answer && c.note) owners.set(s, { email: String(c.note), at: c.at }); else owners.delete(s); }
+    else if (c.kind === 'owner') { if (c.answer && c.note) { owners.set(s, { email: String(c.note), at: c.at }); ownerNone.delete(s); } else { owners.delete(s); ownerNone.add(s); } }
     else if (c.kind === 'kept-name' && c.answer) keptNameCalls.push([s, t, c.note || null]);
     else if (c.kind === 'same') {
       if (!c.answer) { notSame.add(`${s}\n${t}`); continue; }
@@ -216,13 +218,17 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   };
 
   /** The organization a payment's contact is: a person's link, else an organization with exactly its name */
+  // (contacts that are an organization by name, as the rows read so far show: linkedTo counts them with linked ones)
+  const byNameOf = new Map();
   const contactOrgOf = (r) => {
     if (!r.contact) return null;
     const t = yes.get(`contact\n${r.contact}`);
     if (t) return live(t) ? t : null;
     const name = givenName({ first_name: r.first, last_name: r.last });
     const e = name ? exact(name) : null;
-    return e && !no.has(`contact\n${r.contact}\n${e}`) ? e : null;
+    const out = e && !no.has(`contact\n${r.contact}\n${e}`) ? e : null;
+    if (out) byNameOf.set(out, new Set([...(byNameOf.get(out) || []), `c:${r.contact}`]));
+    return out;
   };
   /** The organization the company a payment was given for is (a donor-advised fund's name never) */
   const companyOrgOf = (r) => {
@@ -243,10 +249,10 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   const keepAnonymous = (k) => (isOrgKey(k) ? !!anon.get(k) : keysOf(k).some((x) => anon.get(x)));
   /** Who looks after a donor (any record of a person: the latest said) → email or null */
   // A Zeffy contact counted for an organization (linked to it): what was said about the contact is the organization's
-  const linkedTo = (k) => [...yes].filter(([s2, t]) => t === String(k) && s2.startsWith('contact\n')).map(([s2]) => `c:${s2.slice(8)}`);
+  const linkedTo = (k) => [...new Set([...[...yes].filter(([s2, t]) => t === String(k) && s2.startsWith('contact\n')).map(([s2]) => `c:${s2.slice(8)}`), ...(byNameOf.get(String(k)) || [])])];
   const lookedAfterBy = (k) => {
     const own = (isOrgKey(k) ? [String(k)] : keysOf(k)).map((x) => owners.get(x)).filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : -1));
-    if (own[0] || !isOrgKey(k)) return own[0]?.email || null;
+    if (own[0] || !isOrgKey(k) || ownerNone.has(String(k))) return own[0]?.email || null;
     // An organization with no owner of its own: the one said on a contact counted for it, the latest
     return linkedTo(k).map((x) => owners.get(x)).filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : -1))[0]?.email || null;
   };
@@ -684,7 +690,8 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     }
     await DB.batch([
       ...keys.map((k) => DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(k)),
-      ...(email ? [callStmt(DB, { kind: 'owner', subject: key, answer: 1, note: email }, by, now)] : []),
+      // An organization's "No one" is said, so it doesn't take the owner of a contact counted for it
+      ...(email ? [callStmt(DB, { kind: 'owner', subject: key, answer: 1, note: email }, by, now)] : isOrgKey(key) ? [callStmt(DB, { kind: 'owner', subject: key, answer: 0 }, by, now)] : []),
     ]);
     await audit(DB, by, email ? `Looked after by ${name}` : 'No one looks after them now', { key, owner: email || null }, key);
     return { ok: true };
@@ -1071,11 +1078,13 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
   // Zeffy contacts asked something already: not asked another thing about them at the same time (one at a time)
   // (by the person, every record of theirs: a person joined from two contacts is one person asked one thing)
   const askedPeople = new Set();
-  for (const c of companies.values()) {
+  // The biggest first; a company typed by someone already asked about waits (and isn't asked about another way meanwhile)
+  for (const c of [...companies.values()].sort((a, b) => b.cents - a.cents)) {
     if (!(c.cents > 0)) continue;
     const near = nearPartners(c.name, orgList, { min: 0.6, max: 3 }).find((m) => !crm.calls.no.has(`company\n${c.key}\n${m.partner.slug}`));
     if (!near) continue;
     asked.add(c.key);
+    if ([...c.people.keys()].some((p) => askedPeople.has(crm.canon(p)))) continue;
     for (const person of c.people.keys()) askedPeople.add(crm.canon(person));
     items.push({ id: `near-company:${c.key}:${near.partner.slug}`, kind: 'near', link: 'company', subject: c.name, org: near.partner.slug, orgName: near.partner.name, why: near.why, cents: c.cents, people: [...c.people.values()].slice(0, 3) });
   }
@@ -1107,9 +1116,12 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
     }
   }
   // A gift whose contact is one organization and whose company is another
-  for (const { r, cid } of placed) {
+  for (const { r, cid, person } of placed) {
     const cl = crm.clashOf(r, cid);
     if (!cl || !(Number(r.giving) > 0)) continue;
+    // One at a time for one giver: the next of theirs comes once this one is answered
+    if (askedPeople.has(crm.canon(person))) continue;
+    askedPeople.add(crm.canon(person));
     items.push({ id: `clash:${r.id}`, kind: 'clash', payment: r.id, name: personName(r), company: clean(r.company), cents: Number(r.giving) || 0, at: r.at, counted: cl.contact, countedName: crm.org.get(cl.contact).name, other: cl.company, otherName: crm.org.get(cl.company).name });
   }
   // Two donors that may be one person: the same name (no middle initial), or one email on two Zeffy contacts
