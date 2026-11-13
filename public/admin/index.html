@@ -25355,7 +25355,7 @@ ${sections || '<p>No one yet.</p>'}
      *  at a time, refreshed while someone's looking and the tab is visible, and
      *  at once on `on`: an event an area sends when it changes what's counted
      *  (read again), or when it has just read the number itself ({ detail: { value } }) */
-    function sharedPoll(url, read, everyMs, { on = null } = {}) {
+    function sharedPoll(url, read, everyMs, { on = null, moved = null } = {}) {
       const s = { v: read(null), at: 0, subs: new Set(), timer: null, n: 0 };
       const put = (v) => { if (v !== s.v) { s.v = v; s.subs.forEach((f) => f(v)); } };
       // Only the newest answer counts: a slow one from before a change never lands over the number after it
@@ -25368,7 +25368,8 @@ ${sections || '<p>No one yet.</p>'}
           const j = await r.json();
           // (read says undefined when the answer has no number: the last one stays, never a 0 that hides the badge)
           const v = read(j);
-          if (mine === s.n && v !== undefined) put(v);
+          // Changed by someone else (a teammate in another tab): whoever shows the same thing reads again (`moved`)
+          if (mine === s.n && v !== undefined) { const was = s.v; put(v); if (moved && s.at && v !== was) window.dispatchEvent(new Event(moved)); }
         } catch { /* keeps what it had until the next look */ }
       };
       const heard = (e) => { if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } else refresh(); };
@@ -25403,7 +25404,7 @@ ${sections || '<p>No one yet.</p>'}
     // Families at Applied, waiting for a first look: Applications' badge
     const applicantsNew = sharedPoll('/api/applicants-count', (j) => (j?.success ? j.applied || 0 : 0), 300e3);
     // Gifts waiting for a thank-you (Donors & Partners → To thank): its badge. Donors says when one is marked
-    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j === null ? 0 : j?.success && Number.isFinite(j.thanks) ? j.thanks : undefined), 300e3, { on: 'soard-thanks-changed' });
+    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j === null ? 0 : j?.success && Number.isFinite(j.thanks) ? j.thanks : undefined), 300e3, { on: 'soard-thanks-changed', moved: 'soard-thanks-moved' });
     // One of the Board area's admins (Board → Members): the menu and ⌘K show Board only to them
     const boardAdminGate = sharedPoll('/api/board-admin?me=1', (j) => j?.admin === true, 30 * 60e3);
     const navShown = (it, boardAdmin) => it.gate !== 'board' || boardAdmin;

@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import { createD1 } from '../tests/lib/d1-shim.mjs';
 import { onRequestGet as donorsGet, onRequestPost as donorsPost } from '../functions/api/donors-admin.js';
 import * as D from '../functions/api/_donors.js';
+import { updatePartners } from '../functions/api/partners-batch.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const OUT = join(ROOT, 'test-results/donors/');
@@ -76,10 +77,11 @@ globalThis.fetch = async (input, init = {}) => {
   return Response.json({ object: 'list', data, has_more: more, next_cursor: more ? data.at(-1).id : null });
 };
 
-const partnerRow = (slug, d) => `INSERT INTO partners VALUES ('${slug}', '${JSON.stringify(d).replace(/'/g, "''")}')`;
+const partnerRow = (slug, d) => `INSERT INTO partners (slug, name, level, data) VALUES ('${slug}', '${String(d.name).replace(/'/g, "''")}', '${d.level || 'friend'}', '${JSON.stringify(d).replace(/'/g, "''")}')`;
 const DB = await createD1({ schemaSql: ['CREATE TABLE kids (slug TEXT, name TEXT, data TEXT)', "INSERT INTO kids VALUES ('kyle', 'Kyle', '{\"name\":\"Kyle\"}')",
   'CREATE TABLE audit_log (id INTEGER PRIMARY KEY, user_email TEXT, action TEXT, entity_type TEXT, entity_slug TEXT, entity_name TEXT, changes TEXT, path TEXT, git_status TEXT, created_at TEXT)',
-  'CREATE TABLE partners (slug TEXT PRIMARY KEY, data TEXT)', partnerRow('acme', { name: 'Acme Builders', level: 'friend', category: ['funding'], logo: '' }), partnerRow('pella', { name: 'Pella', level: 'friend', category: ['build'], logo: '' }),
+  // As the site has it (scripts/schema.sql): the real partner changes write its columns too
+  'CREATE TABLE partners (slug TEXT PRIMARY KEY, name TEXT NOT NULL, level TEXT, category TEXT, featured INTEGER DEFAULT 0, data TEXT NOT NULL, updated_at TEXT)', partnerRow('acme', { name: 'Acme Builders', level: 'friend', category: ['funding'], logo: '' }), partnerRow('pella', { name: 'Pella', level: 'friend', category: ['build'], logo: '' }),
   // The team, as Google's list has it: who can be an owner (the site's own account never)
   'CREATE TABLE staff_state (key TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT)',
   `INSERT INTO staff_state (key, data) VALUES ('directory', '${JSON.stringify({ ok: true, accounts: [{ email: 'alex@soardcharity.com', aliases: [], name: 'Alex Rivera', active: true }, { email: 'jordan@soardcharity.com', aliases: [], name: 'Jordan Hale', active: true }, { email: 'automation@soardcharity.com', aliases: [], name: 'Agent Gracie', active: true }] })}')`,
@@ -119,20 +121,15 @@ function serve() {
       const b = await readBody(req);
       const m = /^src\/content\/partners\/([a-z0-9-]+)\.json$/.exec(b.path || '');
       if (!m) return send(res, Response.json({ success: false, error: 'Path not allowed in this walk' }, { status: 403 }));
-      await DB.prepare('INSERT OR REPLACE INTO partners (slug, data) VALUES (?, ?)').bind(m[1], b.content).run();
+      await DB.prepare('INSERT OR REPLACE INTO partners (slug, name, level, data) VALUES (?, ?, ?, ?)').bind(m[1], JSON.parse(b.content).name || m[1], JSON.parse(b.content).level || 'friend', b.content).run();
       saved.push(m[1]);
       return send(res, Response.json({ success: true, sha: 'y' }));
     }
+    // The real partner changes (functions/api/partners-batch.js), as the admin's Partners page makes them
     if (u.pathname === '/api/partners-batch' && req.method === 'POST') {
       const b = await readBody(req);
-      const changed = [];
-      for (const up of b.updates || []) {
-        const row = await DB.prepare('SELECT data FROM partners WHERE slug = ?').bind(up.slug).first();
-        if (!row) continue;
-        await DB.prepare('UPDATE partners SET data = ? WHERE slug = ?').bind(JSON.stringify({ ...JSON.parse(row.data), ...up.set }), up.slug).run();
-        changed.push(up.slug);
-      }
-      return send(res, Response.json({ success: true, changed, conflicts: [] }));
+      const r = await updatePartners(env, b.updates, 'alex@soardcharity.com');
+      return send(res, Response.json(r.body, { status: r.status }));
     }
     if (u.pathname === '/api/checks-admin') return send(res, Response.json({ success: true, list: [], waiting: 0, sending: true, joinOk: true, dontReasons: {}, writeTest: { ok: true }, limited: false, shown: 0, all: 0, configured: { mercury: true, zeffy: true, ai: true } }));
     if (u.pathname.startsWith('/api/list-content')) return send(res, Response.json({ success: true, items: [], total: 0, hasMore: false }));

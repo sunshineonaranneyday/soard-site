@@ -1268,3 +1268,41 @@ test('one question about one giver at a time: two gifts that could each count fo
   await add(pay({ id: 'cl1', company: 'Acme Builders', amount: 5000 }), pay({ id: 'cl2', company: 'Acme Builders', amount: 6000, created: S(NOW - 3 * DAY) }));
   assert.equal((await needs()).filter((i) => i.kind === 'clash').length, 1);
 });
+
+// ─── Found in the sixth QA round ────────────────────────────────────
+
+test('Move to Champion is one step on the site: done, or nothing said (refused when moved meanwhile)', async () => {
+  const real = await createD1({ schemaFiles: ['scripts/schema.sql'] });
+  await real.exec('CREATE TABLE IF NOT EXISTS kids (slug TEXT, name TEXT, data TEXT)').catch(() => {});
+  const putP = (slug, name, level) => real.prepare('INSERT INTO partners (slug, name, level, category, data) VALUES (?, ?, ?, ?, ?)').bind(slug, name, level, 'funding', JSON.stringify({ name, slug, level, category: ['funding'] })).run();
+  await putP('acme', 'Acme Builders', 'friend');
+  await putP('sigco', 'Sig Co', 'signature');
+  const renv = { DB: real };
+  const act = (body) => C.act(renv, body, by, { now: NOW });
+  await act({ act: 'level', org: 'p:acme', done: true, was: 'Friend', asked: true, move: true });
+  assert.equal(JSON.parse((await real.prepare("SELECT data FROM partners WHERE slug = 'acme'").first()).data).level, 'champion');
+  await assert.rejects(act({ act: 'level', org: 'p:sigco', done: true, was: 'Friend', asked: true, move: true }), (e) => e.status === 409);
+  assert.equal(await real.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'level' AND subject = 'p:sigco'").first(), null, 'nothing said');
+  assert.equal(JSON.parse((await real.prepare("SELECT data FROM partners WHERE slug = 'sigco'").first()).data).level, 'signature');
+});
+
+test('edits say what they saw: an owner, a note and a name changed by someone since are refused, never written over; a note saved twice is one', async () => {
+  await withTeam();
+  await add(pay({ id: 'ed', contact: 'ct_ed', first: 'Ed', last: 'Ito', email: 'ed@example.com' }));
+  await C.act(env, { act: 'owner', key: 'c:ct_ed', email: 'jordan@soardcharity.com', was: '' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(doIt({ act: 'owner', key: 'c:ct_ed', email: 'alex@soardcharity.com', was: '' }), (e) => e.status === 409);
+  const { id } = await doIt({ act: 'note-add', key: 'c:ct_ed', body: 'First words', id: 'note-ed-1' });
+  await doIt({ act: 'note-add', key: 'c:ct_ed', body: 'First words', id: 'note-ed-1' });
+  assert.equal((await C.personView(env, 'ct_ed', { now: NOW })).notes.length, 1, 'a save tried again is the same note');
+  await C.act(env, { act: 'note-edit', id, body: 'Jordan’s words', was: 'First words' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(doIt({ act: 'note-edit', id, body: 'Alex’s words', was: 'First words' }), (e) => e.status === 409 && /Jordan changed this note/.test(e.message));
+  assert.equal((await C.personView(env, 'ct_ed', { now: NOW })).notes[0].body, 'Jordan’s words');
+  const { key } = await doIt({ act: 'org-new', name: 'Ed Co', links: [] });
+  await C.act(env, { act: 'org-rename', key, name: 'Ed Company', was: 'Ed Co' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(doIt({ act: 'org-rename', key, name: 'Ed & Co', was: 'Ed Co' }), (e) => e.status === 409);
+});
+
+test('a gift in kind Zeffy has no value for: its giver is in the list', async () => {
+  await add(pay({ id: 'zk', contact: 'ct_zane', first: 'Zane', last: 'Nought', email: 'zane@example.com', method: 'in_kind', amount: 0, items: [{ type: 'donation', amount: 0 }] }));
+  assert.ok((await list()).some((p) => p.key === 'c:ct_zane'));
+});

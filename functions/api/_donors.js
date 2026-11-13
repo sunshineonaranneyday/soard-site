@@ -378,7 +378,9 @@ export function donorOf(key, rows, { now = Date.now(), kids = [] } = {}) {
   const latest = given[0] || null;
   const largest = given.length ? given.reduce((a, g) => (g.cents > a.cents ? g : a)) : null;
   const total = given.reduce((t, g) => t + g.cents, 0);
-  const stage = !latest ? (inKind ? 'inkind' : 'none') : nowS - first.at < NEW_MS / 1000 ? 'new' : nowS - latest.at <= LAPSED_MS / 1000 ? 'active' : 'lapsed';
+  // (a gift in kind Zeffy has no value for is a gift all the same)
+  const gaveInKind = inKind > 0 || rows.some((r) => r.method === 'in_kind' && String(r.refund || '') !== 'full');
+  const stage = !latest ? (gaveInKind ? 'inkind' : 'none') : nowS - first.at < NEW_MS / 1000 ? 'new' : nowS - latest.at <= LAPSED_MS / 1000 ? 'active' : 'lapsed';
   return {
     key,
     contact: rows.find((r) => r.contact)?.contact || null,
@@ -559,7 +561,7 @@ export async function giftsView(env, d, mine, kids = [], { by = false } = {}) {
       const r = byId.get(g.id) || {};
       const refunded = charges.every((id) => { const x = byId.get(id); return x && x.cents > 0 && !x.net; });
       return {
-        id: g.id, ids: charges, at: g.at, cents: g.inKind ? 0 : g.cents, inKind: g.inKind ? g.cents : 0,
+        id: g.id, ids: charges, at: g.at, cents: g.inKind ? 0 : g.cents, inKind: g.inKind ? g.cents : 0, kind: !!g.inKind,
         campaign: g.campaign || '', how: howOf(g), every: g.every || '', parts: g.parts || 1, anonymous: g.anonymous,
         forCompany: r.corporate && r.company && r.method !== 'daf' ? r.company : null, through: r.method === 'daf' ? r.company || null : null,
         refunded: refunded || undefined,

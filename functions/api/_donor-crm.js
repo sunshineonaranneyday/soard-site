@@ -548,6 +548,16 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     // Moving to Champion is an upgrade from Builder or Friend, only: a partner moved meanwhile (to Signature, or to
     // Champion already) is never moved by a card read before
     if (body.done && !['builder', 'friend'].includes(crm.org.get(key)?.level)) throw bad(`${crm.org.get(key)?.name || 'They'} ${crm.org.get(key)?.levelLabel ? `is a ${crm.org.get(key).levelLabel} partner` : 'moved'} since this was read. Nothing was changed.`, 409);
+    // Move: the partner card changes here, as Partners changes it, and the answer is said only once it has (one step:
+    // a failure part way leaves nothing said, so it can simply be tried again)
+    if (body.done && body.move === true) {
+      if (!key.startsWith('p:')) throw bad('Only a partner on the website has a level');
+      const { updatePartners } = await import('./partners-batch.js');
+      const r = await updatePartners(env, [{ slug: key.slice(2), set: { level: 'champion' }, from: { level: ['builder', 'friend'] } }], by || 'unknown');
+      if (r.status !== 200) throw bad(r.body?.error || 'The Partners page didn’t take the change', r.status >= 400 && r.status < 500 ? r.status : 500);
+      if (r.body.refused?.length) throw bad(`${crm.org.get(key).name}’s level changed since this was read (Champion or above already). Nothing was changed.`, 409);
+      if (!r.body.changed?.includes(key.slice(2))) throw bad('Someone changed them at the same moment. Look again and try once more.', 409);
+    }
     await putCall(DB, { kind: 'level', subject: key, answer: !!body.done, note: body.done ? clean(body.was) || null : null }, by, now);
     await audit(DB, by, body.done ? `${crm.org.get(key).name} made Champion by giving (was ${clean(body.was) || 'unknown'})` : 'Not moved to Champion for now (asked again in a year)', { org: key, was: clean(body.was) || null, done: !!body.done }, key);
     return { ok: true };
@@ -611,6 +621,7 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     const key = orgOk(body.key);
     const name = clean(body.name).slice(0, 120);
     if (!key.startsWith('o:') || !name) throw bad('A new name for an organization not on the website (a partner’s name is changed in its partner card)');
+    if (typeof body.was === 'string' && body.was !== crm.org.get(key).name && name !== crm.org.get(key).name) throw bad(`Someone renamed it ${crm.org.get(key).name} since you looked. Nothing was changed.`, 409);
     // Two organizations with one name would each lose the gifts that name links by itself
     if (crm.named(name, key).length) throw bad(`${crm.org.get(crm.named(name, key)[0]).name} already has that name.`, 409);
     await DB.batch([
@@ -673,6 +684,8 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
   if (a === 'owner') {
     const key = whose(crm, body.key, orgOk);
     const email = clean(body.email).toLowerCase();
+    // The owner the person saw (another tab, a teammate since): never a quiet second answer over the first
+    if (typeof body.was === 'string' && (crm.lookedAfterBy(key) || '') !== body.was.toLowerCase()) throw bad(`Someone changed who looks after them since you looked${crm.lookedAfterBy(key) ? ` (${crm.lookedAfterBy(key).split('@')[0]})` : ' (no one)'}. Nothing was changed.`, 409);
     let name = null;
     if (email) {
       const staff = await staffList(DB);
@@ -701,9 +714,10 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     const key = whose(crm, body.key, orgOk);
     const text = String(body.body ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 4000);
     if (!text) throw bad('Write the note first.');
-    const id = crypto.randomUUID();
-    await DB.prepare('INSERT INTO donor_notes (id, subject, body, by, at) VALUES (?, ?, ?, ?, ?)').bind(id, key, text, by || null, iso(now)).run();
-    await audit(DB, by, 'Note added', { key, note: id }, key);
+    // The page names the note: a save tried again after its answer was lost is that note, never a second one
+    const id = /^[a-z0-9-]{8,40}$/i.test(String(body.id || '')) ? String(body.id) : crypto.randomUUID();
+    const r = await DB.prepare('INSERT OR IGNORE INTO donor_notes (id, subject, body, by, at) VALUES (?, ?, ?, ?, ?)').bind(id, key, text, by || null, iso(now)).run();
+    if (r.meta?.changes) await audit(DB, by, 'Note added', { key, note: id }, key);
     return { ok: true, id };
   }
   if (a === 'note-edit' || a === 'note-delete') {
@@ -716,6 +730,8 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     }
     const text = String(body.body ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 4000);
     if (!text) throw bad('A note can’t be empty. Delete it instead.');
+    const cur = await DB.prepare('SELECT body, edited_by, by FROM donor_notes WHERE id = ?').bind(n.id).first();
+    if (typeof body.was === 'string' && cur && cur.body !== body.was && cur.body !== text) throw bad(`${(cur.edited_by || cur.by || 'Someone').split('@')[0].replace(/^./, (c) => c.toUpperCase())} changed this note since you looked. Nothing was changed; it shows as it is now.`, 409);
     await DB.prepare('UPDATE donor_notes SET body = ?, edited_by = ?, edited_at = ? WHERE id = ?').bind(text, by || null, iso(now), n.id).run();
     await audit(DB, by, 'Note changed', { key: n.subject, note: n.id }, n.subject);
     return { ok: true };
@@ -724,10 +740,10 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
   if (a === 'thanks') {
     const t = await markThanks(DB, { id: body.id, state: body.state, was: ['todo', 'thanked', 'skipped'].includes(body.was) ? body.was : null }, by, { now });
     // Already so (a second click, a teammate who said the same): nothing happened, so nothing in History
-    if (t.same) return { ok: true, was: t.state, same: true, by: t.done_by || null };
+    if (t.same) return { ok: true, was: t.state, same: true, by: t.done_by || null, you: !!by && t.done_by === by };
     const owner = await donorOfPayment(env, String(t.ids).split(' ')[0], { crm }).catch(() => null);
     const words = { thanked: 'Thanked', skipped: 'No thank-you needed', todo: 'To thank again' }[body.state];
-    await audit(DB, by, `${words}: ${t.in_kind ? `${usd(t.in_kind)} in kind` : usd(t.cents)} from ${t.name || 'a donor'}${t.at ? `, ${new Date(t.at * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })}` : ''}`, { gift: t.id, state: body.state, was: t.state }, owner || 'donors');
+    await audit(DB, by, `${words}: ${t.in_kind ? `${usd(t.in_kind)} in kind` : !Number(t.cents) && t.why === 'kind' ? 'a gift in kind' : usd(t.cents)} from ${t.name || 'a donor'}${t.at ? `, ${new Date(t.at * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })}` : ''}`, { gift: t.id, state: body.state, was: t.state }, owner || 'donors');
     return { ok: true, was: t.state };
   }
   if (a === 'moved-done') {
