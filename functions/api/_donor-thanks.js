@@ -287,7 +287,9 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     const why = thankWhy(g, { first: !g.every || first.has(g), charges: rs });
     if (!why) continue;
     // Named as the donor list names them (./_donor-crm.js): their email when Zeffy has no name
-    const id = rowIds.has(g.id) ? `${g.id}~${rs.length}${rs.at(-1).id}` : g.id;
+    // Its own id: the gift's, else one no thank-you here has had (the same gift can need a new one more than once)
+    let id = rowIds.has(g.id) ? `${g.id}~${rs.length}${rs.at(-1).id}` : g.id;
+    for (let k = 2; rowIds.has(id); k++) id = `${g.id}~${rs.length}${rs.at(-1).id}~${k}`;
     steps.push(DB.prepare(`INSERT OR IGNORE INTO donor_thanks (id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at)
       VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, rs.map((r) => r.id).join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOf(g), r0.contact || null, iso(now)));
     rowIds.add(id);
@@ -325,15 +327,21 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     const why = thankWhy(g, { first: true, charges: giving });
     const r0 = giving[0];
     if (why) {
-      steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = ?, at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'")
-        .bind(ids.join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOf(g), r0.contact || null, t.id));
+      // (written only when something differs: what changed is counted, and open tabs read again)
+      const vals = [ids.join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOf(g), r0.contact || null];
+      steps.push(DB.prepare(`UPDATE donor_thanks SET ids = ?, why = ?, at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'
+        AND NOT (ids IS ? AND why IS ? AND at IS ? AND cents IS ? AND in_kind IS ? AND name IS ? AND company IS ? AND campaign IS ? AND how IS ? AND contact IS ? AND missing_at IS NULL)`)
+        .bind(...vals, t.id, ...vals));
     } else if (present.some((r) => Number(r.net) < Number(r.cents))) {
-      steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = 'partly', cents = ?, missing_at = NULL WHERE id = ? AND state = 'todo'").bind(ids.join(' '), amountOf(giving), t.id));
+      steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = 'partly', cents = ?, missing_at = NULL WHERE id = ? AND state = 'todo' AND NOT (ids IS ? AND why IS 'partly' AND cents IS ? AND missing_at IS NULL)")
+        .bind(ids.join(' '), amountOf(giving), t.id, ids.join(' '), amountOf(giving)));
     } else {
       steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'changed', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
     }
   }
-  for (let i = 0; i < steps.length; i += 50) await DB.batch(steps.slice(i, i + 50));
+  let changes = 0;
+  for (let i = 0; i < steps.length; i += 50) for (const r of await DB.batch(steps.slice(i, i + 50))) changes += Number(r?.meta?.changes) || 0;
+  if (changes) await markChanged(DB);
   let closed = 0;
   // What the list has of a charge: given, or there and giving nothing (refunded)
   const givesNow = Object.assign((c) => byId.has(c) && gives(byId.get(c)), { present: (c) => byId.has(c) });
@@ -350,6 +358,7 @@ async function askZeffy(env, t, id, ids, { now, fetchImpl, gives = Object.assign
   const { DB } = env;
   const at = iso(now);
   const settle = async (gone) => {
+    await markChanged(DB);
     const rest = ids.filter((c) => c !== id);
     // Nothing else of it, or only charges the list has that give nothing (refunded): closed
     if (rest.every((c) => gives.present(c) && !gives(c))) {
@@ -392,17 +401,20 @@ export async function thanksCount(DB) {
   return Number((await DB.prepare("SELECT COUNT(*) AS n FROM donor_thanks WHERE state = 'todo'").first())?.n) || 0;
 }
 /**
- * What To thank is, in a few characters: changes when one is added, said, closed or its gift changed, or when any
- * answer in Donors & Partners is (an owner, a link: whose a thank-you is and who looks after them). An open tab
- * reads its lists again when it changes, whoever changed it
+ * Something in Donors & Partners changed (a person's answer, a thank-you said or kept up by the sync, a merge): the
+ * count every open tab compares, so each reads its lists again, whoever changed it
  */
+export async function markChanged(DB) {
+  await DB.prepare("INSERT INTO donor_state (key, value) VALUES ('rev', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)").run();
+}
+/** What To thank is, as a mark that changes with every change (markChanged) */
 export async function thanksMark(DB) {
   await ensureThanks(DB);
-  const [t, c] = await Promise.all([
-    DB.prepare("SELECT COUNT(*) AS n, MAX(created_at) AS c, MAX(done_at) AS d, MAX(asked_at) AS a, SUM(length(ids)) AS l FROM donor_thanks").first(),
-    DB.prepare('SELECT COUNT(*) AS n, MAX(at) AS a FROM donor_calls').first().catch(() => null),
+  const [rev, n] = await Promise.all([
+    DB.prepare("SELECT value FROM donor_state WHERE key = 'rev'").first().catch(() => null),
+    thanksCount(DB),
   ]);
-  return [t?.n, t?.c, t?.d, t?.a, t?.l, c?.n, c?.a].map((x) => x ?? '').join('|');
+  return `${rev?.value || 0}|${n}`;
 }
 /** The thank-you of each charge given: Map charge id → { id, state, why, by, at, gone } */
 export async function thanksFor(DB, chargeIds) {

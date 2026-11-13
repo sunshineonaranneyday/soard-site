@@ -225,7 +225,15 @@ async function call(params = '', body = null) {
   }
 }
 const get = (params) => call(params);
-const change = (body) => call('', body);
+/**
+ * A change. Refused, or its answer lost on the way back (it may have saved all the same): every view of Donors &
+ * Partners open reads again (the list, Needs you, To thank, the page, the sidebar), so none shows what was before
+ */
+const change = async (body) => {
+  const r = await call('', body);
+  if (!r.success) { listChanged(); thanksChanged(); }
+  return r;
+};
 
 function placeOf(hash = location.hash) {
   const raw = String(hash).replace(/^#/, '');
@@ -676,6 +684,7 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
     if (!only) onCount(j.items.length);
   };
   useEffect(() => { load(); }, []);
+  useThanksSaid(load);
   const refocus = useRefocus('.dn-needs[aria-label="Needs you"]', !!v);
   const doIt = async (id, fn, e) => {
     refocus(e?.currentTarget);
@@ -905,6 +914,8 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   const box = useRef(null);
   // The note being added: named here, so pressing Add again after an answer that was lost saves it once
   const pending = useRef(null);
+  // Saved after all (its answer lost, the page read again): it's in the list, so the box empties
+  useEffect(() => { if (pending.current && notes.some((n) => n.id === pending.current.id)) { pending.current = null; setText(''); } }, [notes]);
   const add = async (e) => {
     e?.preventDefault();
     const t = text.trim();

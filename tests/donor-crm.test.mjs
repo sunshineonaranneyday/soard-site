@@ -1444,3 +1444,60 @@ test('someone whose every gift counts for an organization is found in the list b
   const acme = people.find((p) => p.key === 'p:acme');
   assert.deepEqual(acme.givers, [{ name: 'Dana Whitfield', emails: ['dana@example.com'] }]);
 });
+
+// ─── Found in the eighth round ──────────────────────────────────────
+
+test('a person who once typed a partner’s name: that gift is the partner’s, the rest theirs, and they keep a page of their own', async () => {
+  await add(pay({ id: 'mx1', contact: 'ct_bob', first: 'Acme', last: 'Builders', email: 'bob@example.com', amount: 50000, created: S(NOW - 30 * DAY) }));
+  await add(pay({ id: 'mx2', contact: 'ct_bob', first: 'Bob', last: 'Smith', email: 'bob@example.com', amount: 50000, created: S(NOW - 10 * DAY) }));
+  const totals = async () => Object.fromEntries((await list()).filter((p) => ['c:ct_bob', 'p:acme'].includes(p.key)).map((p) => [p.key, p.total]));
+  assert.deepEqual(await totals(), { 'c:ct_bob': 50000, 'p:acme': 50000 });
+  const page = await C.personView(env, 'ct_bob', { now: NOW });
+  assert.ok(!page.org, 'his page is his, not Acme’s');
+  assert.equal(page.donor.total, 50000);
+  assert.deepEqual((await C.orgView(env, 'p:acme', { now: NOW })).people.map((p) => p.name), ['Bob Smith'], 'named as himself on Acme’s page');
+});
+
+test('renaming or merging a partner keeps only the gifts its name counted: a person’s own gifts stay theirs', async () => {
+  const real = await createD1({ schemaFiles: ['scripts/schema.sql'] });
+  await real.exec('CREATE TABLE IF NOT EXISTS kids (slug TEXT, name TEXT, data TEXT)').catch(() => {});
+  const putP = (slug, name) => real.prepare('INSERT INTO partners (slug, name, level, category, data) VALUES (?, ?, ?, ?, ?)').bind(slug, name, 'friend', 'funding', JSON.stringify({ name, slug, level: 'friend', category: ['funding'] })).run();
+  await putP('acme', 'Acme Builders');
+  await putP('acme-homes', 'Acme Homes');
+  const renv = { DB: real };
+  for (const p of [pay({ id: 'rm1', contact: 'ct_bob', first: 'Acme', last: 'Builders', email: 'bob@example.com', amount: 50000 }), pay({ id: 'rm2', contact: 'ct_bob', first: 'Bob', last: 'Smith', email: 'bob@example.com', amount: 30000, created: S(NOW - 2 * DAY) }),
+    pay({ id: 'rm3', contact: 'ct_acmeco', first: 'Acme', last: 'Builders', email: 'office@acme.example', amount: 20000 })]) await D.noteDonorPayment(renv, p, { now: NOW });
+  const totals = async () => Object.fromEntries((await C.listView(renv, { now: NOW })).people.filter((p) => ['c:ct_bob', 'p:acme', 'p:acme-homes'].includes(p.key)).map((p) => [p.key, p.total]));
+  assert.deepEqual(await totals(), { 'c:ct_bob': 30000, 'p:acme': 70000 });
+  await C.keepGiftsForPartnerName(real, { slug: 'acme', name: 'Acme Group', by, now: NOW });
+  await real.prepare("UPDATE partners SET name = 'Acme Group', data = ? WHERE slug = 'acme'").bind(JSON.stringify({ name: 'Acme Group', slug: 'acme', level: 'friend', category: ['funding'] })).run();
+  assert.deepEqual(await totals(), { 'c:ct_bob': 30000, 'p:acme': 70000 }, 'renamed: the same split');
+  const link = await real.prepare("SELECT target FROM donor_calls WHERE kind = 'contact' AND subject = 'ct_acmeco' AND answer = 1").first();
+  assert.equal(link?.target, 'p:acme', 'the company’s own Zeffy record (every name of it Acme’s) is linked whole');
+  assert.equal(await real.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'contact' AND subject = 'ct_bob' AND answer = 1").first(), null, 'Bob is never linked whole');
+  await C.mergeOrgCalls(real, 'acme', 'acme-homes');
+  await real.prepare("DELETE FROM partners WHERE slug = 'acme'").run();
+  assert.deepEqual(await totals(), { 'c:ct_bob': 30000, 'p:acme-homes': 70000 }, 'merged: the same split');
+});
+
+test('two “Keep as an organization” of one name at the same moment: one is made, the other refused', async () => {
+  await add(pay({ id: 'hf', contact: 'ct_hope', first: 'Hope', last: 'Fund', email: 'grants@hope.example', amount: 40000 }));
+  const both = await Promise.allSettled([doIt({ act: 'org-new', name: 'Hope Fund', links: [] }), doIt({ act: 'org-new', name: 'Hope Fund', links: [] })]);
+  assert.deepEqual(both.map((x) => x.status).sort(), ['fulfilled', 'rejected']);
+  assert.equal(both.find((x) => x.status === 'rejected').reason.status, 409);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM donor_orgs WHERE name = 'Hope Fund'").first()).n, 1);
+  const key = both.find((x) => x.status === 'fulfilled').value.key;
+  assert.equal((await list()).find((p) => p.key === key)?.total, 40000, 'its gift counts for the one made');
+  // A rename onto a name another organization took meanwhile is refused too
+  const { key: other } = await doIt({ act: 'org-new', name: 'Birch Society', links: [] });
+  const { nameKey } = await import('../public/admin/partners-shared.js');
+  const renv = { DB: racing(db, () => db.prepare("INSERT INTO donor_orgs (key, name, created_at, name_key) VALUES ('o:late', 'Maple Society', ?, ?)").bind(new Date(NOW).toISOString(), nameKey('Maple Society')).run()) };
+  await assert.rejects(C.act(renv, { act: 'org-rename', key: other, name: 'Maple Society', was: 'Birch Society' }, by, { now: NOW }), (e) => e.status === 409 && /took the name/.test(e.message));
+});
+
+test('an organization with more than 100 Zeffy contacts counted for it: its page reads (notes and History 80 at a time)', async () => {
+  for (let i = 0; i < 105; i++) await add(pay({ id: `big_${i}`, contact: `ct_m${i}`, first: `Member`, last: `No ${i}`, email: `m${i}@example.com`, company: 'Acme Builders', amount: 1000 }));
+  for (let i = 0; i < 105; i++) await db.prepare("INSERT INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES ('contact', ?, 'p:acme', 1, NULL, ?, ?)").bind(`ct_m${i}`, by, new Date(NOW).toISOString()).run();
+  const page = await C.orgView(env, 'p:acme', { now: NOW });
+  assert.equal(page.gifts.length, 105);
+});

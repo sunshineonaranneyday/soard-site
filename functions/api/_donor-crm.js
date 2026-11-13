@@ -31,7 +31,7 @@ import { nameKey, nearPartners, categoriesOf, levelOf } from '../../public/admin
 import { logAudit } from './_audit.js';
 import { staffDirectory } from './_staff-access.js';
 import { isStaffEmail, NOT_STAFF } from './_board-roles.js';
-import { thanksToDo, thanksFor, markThanks, WHY as THANK_WHY } from './_donor-thanks.js';
+import { thanksToDo, thanksFor, markThanks, markChanged, WHY as THANK_WHY } from './_donor-thanks.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 const YEAR_MS = 365 * DAY;
@@ -77,7 +77,8 @@ looseKey.words = looseWords;
 const iso = (ms) => new Date(ms).toISOString();
 
 const SCHEMA = [
-  'CREATE TABLE IF NOT EXISTS donor_orgs (key TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, by TEXT)',
+  // (name_key: its name in plain letters, as names are matched: two can't be saved with one, at the same moment either)
+  'CREATE TABLE IF NOT EXISTS donor_orgs (key TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT NOT NULL, by TEXT, name_key TEXT)',
   `CREATE TABLE IF NOT EXISTS donor_calls (kind TEXT NOT NULL, subject TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', answer INTEGER NOT NULL,
     note TEXT, by TEXT, at TEXT NOT NULL, PRIMARY KEY (kind, subject, target))`,
   // The team's notes about a donor (a person's or an organization's key), newest shown first
@@ -89,6 +90,11 @@ export async function ensureCrm(DB) {
   if (ready.has(DB)) return;
   await ensureDonors(DB);
   for (const sql of SCHEMA) await DB.prepare(sql).run();
+  // Organizations kept before name_key: given it (once), so a new one or a rename is checked against every name
+  try { await DB.prepare('ALTER TABLE donor_orgs ADD COLUMN name_key TEXT').run(); } catch (e) { if (!/duplicate column/i.test(String(e?.message || e))) throw e; }
+  const unkeyed = (await DB.prepare('SELECT key, name FROM donor_orgs WHERE name_key IS NULL').all()).results || [];
+  for (let i = 0; i < unkeyed.length; i += 50) await DB.batch(unkeyed.slice(i, i + 50).map((o) => DB.prepare('UPDATE donor_orgs SET name_key = ? WHERE key = ?').bind(nameKey(o.name), o.key)));
+  await DB.prepare('CREATE INDEX IF NOT EXISTS donor_orgs_name_key ON donor_orgs(name_key)').run();
   ready.add(DB);
 }
 
@@ -233,12 +239,23 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
     const e = name ? exact(name) : null;
     return e && !no.has(`contact\n${r.contact}\n${e}`) ? e : null;
   };
+  // What each Zeffy contact's own names make it (as its own gifts give them): an organization only when every name it
+  // has is that one's. A person who once typed a company's name has that one gift counted for it, and stays a person
+  const namesOf = new Map();
+  for (const r of contactNames) namesOf.set(String(r.contact), (namesOf.get(String(r.contact)) || new Set()).add(contactOrgOf(r)));
+  /** The organization a Zeffy contact is, as a whole (its link, or every name of it an organization's exact name) */
+  const contactIsOrg = (c) => {
+    const t = yes.get(`contact\n${c}`);
+    if (t) return live(t) ? t : null;
+    const s = namesOf.get(String(c));
+    return s && s.size === 1 ? [...s][0] || null : null;
+  };
   // Contacts that are an organization by their own name (not linked anywhere): the same everywhere it's asked
   const byNameOf = new Map();
-  for (const r of contactNames) {
-    if (yes.has(`contact\n${r.contact}`)) continue;
-    const o = contactOrgOf(r);
-    if (o) byNameOf.set(o, new Set([...(byNameOf.get(o) || []), `c:${r.contact}`]));
+  for (const c of namesOf.keys()) {
+    if (yes.has(`contact\n${c}`)) continue;
+    const o = contactIsOrg(c);
+    if (o) byNameOf.set(o, new Set([...(byNameOf.get(o) || []), `c:${c}`]));
   }
   /** The organization the company a payment was given for is (a donor-advised fund's name never) */
   const companyOrgOf = (r) => {
@@ -268,7 +285,7 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   };
 
   return {
-    org, live, exact, canon, keysOf, contactOrgOf, companyOrgOf, ownerOf, keepAnonymous, lookedAfterBy, linkedTo, now,
+    org, live, exact, canon, keysOf, contactOrgOf, contactIsOrg, companyOrgOf, ownerOf, keepAnonymous, lookedAfterBy, linkedTo, now,
     calls: { yes, no, pay, level, big, notSame: notSameNow, notSameRaw: notSame, forward, movedDone },
     /** A linked company's name as typed when it was linked (its key, plain letters, is no name to show) */
     companyName: (k) => companyNames.get(String(k)) || null,
@@ -307,7 +324,7 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
       const raw = new Map();
       const emailsOf = new Map();
       const holders = new Map();
-      // Each person's Zeffy contacts and the organization each is (as contactOrgOf says: a link, or the same name)
+      // Each person's Zeffy contacts and the organization each is as a whole (its link, or every name of it one's)
       const orgsOf = new Map();
       // The organizations a person's contacts are linked to, as a person said, even ones deleted since
       const linksOf = new Map();
@@ -317,7 +334,7 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
         const p = canon(k);
         if (r.contact) {
           if (!orgsOf.has(p)) orgsOf.set(p, new Map());
-          if (!orgsOf.get(p).has(r.contact)) orgsOf.get(p).set(r.contact, contactOrgOf(r));
+          if (!orgsOf.get(p).has(r.contact)) orgsOf.get(p).set(r.contact, contactIsOrg(r.contact));
           const t = yes.get(`contact\n${r.contact}`);
           if (t) { if (!linksOf.has(p)) linksOf.set(p, new Set()); linksOf.get(p).add(t); }
         }
@@ -439,7 +456,11 @@ const subjectOf = (kind, v) => (kind === 'company' ? nameKey(v) : clean(v));
  * One change a person makes (Admin → Donors & Partners). Each is an answer kept in donor_calls and an entry in
  * History (its own type: nothing here waits for Publish). → whatever the change returns
  */
-export async function act(env, body, by, { now = Date.now() } = {}) {
+export async function act(env, body, by, opts = {}) {
+  // Whatever it changed, every open tab reads its lists again (a refusal that changed nothing costs them one read)
+  try { return await actNow(env, body, by, opts); } finally { await markChanged(env.DB).catch(() => {}); }
+}
+async function actNow(env, body, by, { now = Date.now() } = {}) {
   const { DB } = env;
   await ensureCrm(DB);
   const crm = await loadCrm(DB, { now });
@@ -604,7 +625,11 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     const key = `o:${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
     // The organization and its names in one step. A name that counts for an organization already (someone linked it
     // since this page was read, or it's an organization's own name) is never taken from it: nothing is made
-    const steps = [DB.prepare('INSERT INTO donor_orgs (key, name, created_at, by) VALUES (?, ?, ?, ?)').bind(key, name, iso(now), by || null)];
+    // Only while no organization here has that name (two kept at the same moment, by two people or two tabs: one is)
+    const steps = [
+      stillSo(DB, 'NOT EXISTS (SELECT 1 FROM donor_orgs WHERE name_key = ?)', nameKey(name)),
+      DB.prepare('INSERT INTO donor_orgs (key, name, created_at, by, name_key) VALUES (?, ?, ?, ?, ?)').bind(key, name, iso(now), by || null, nameKey(name)),
+    ];
     for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
       if (!KINDS.has(l?.kind)) continue;
       const subject = subjectOf(l.kind, l.subject);
@@ -625,7 +650,10 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     }
     const linking = (Array.isArray(body.links) ? body.links : []).filter((l) => l?.kind === 'contact').map((l) => subjectOf('contact', l.subject));
     steps.push(...await keepOthersGifts(DB, crm, name, key, by, now, { linking }));
-    await DB.batch(steps);
+    try { await DB.batch(steps); } catch (e) {
+      if (!notSo(e)) throw e;
+      throw bad(`${name} is an organization here already: someone kept it a moment ago. Nothing was changed.`, 409);
+    }
     // A Zeffy contact that was this organization all along (not joined to anyone): its owner, notes, Keep anonymous and
     // History are the organization's now
     for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
@@ -650,10 +678,11 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     // In one step, and only while it has the name read above (a teammate's rename in between is never written over)
     try {
       await DB.batch([
-        stillSo(DB, 'EXISTS (SELECT 1 FROM donor_orgs WHERE key = ? AND name = ?)', key, crm.org.get(key).name),
+        // (and no other organization here took the new name meanwhile)
+        stillSo(DB, 'EXISTS (SELECT 1 FROM donor_orgs WHERE key = ? AND name = ?) AND NOT EXISTS (SELECT 1 FROM donor_orgs WHERE name_key = ? AND key <> ?)', key, crm.org.get(key).name, nameKey(name), key),
         ...await pinOldName(DB, crm, key, by, now),
         ...await keepOthersGifts(DB, crm, name, key, by, now),
-        DB.prepare('UPDATE donor_orgs SET name = ? WHERE key = ?').bind(name, key),
+        DB.prepare('UPDATE donor_orgs SET name = ?, name_key = ? WHERE key = ?').bind(name, nameKey(name), key),
         // Both names written down, kept or not (they count only while it's kept)
         callStmt(DB, { kind: 'kept-name', subject: looseKey(crm.org.get(key).name), target: key, answer: 1, note: crm.org.get(key).name }, by, now),
         callStmt(DB, { kind: 'kept-name', subject: looseKey(name), target: key, answer: 1, note: name }, by, now),
@@ -663,7 +692,8 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       const now2 = (await loadCrm(DB, { now })).org.get(key);
       if (!now2) throw bad('That organization isn’t here any more. Reload and look again.', 404);
       if (now2.name === name) return { ok: true, same: true };
-      throw bad(`Someone renamed it ${now2.name} since you looked. Nothing was changed.`, 409);
+      if (now2.name !== crm.org.get(key).name) throw bad(`Someone renamed it ${now2.name} since you looked. Nothing was changed.`, 409);
+      throw bad(`Another organization here took the name ${name} a moment ago. Nothing was changed.`, 409);
     }
     await audit(DB, by, `Organization renamed: ${name}`, { key, was: crm.org.get(key).name, name }, key);
     return { ok: true };
@@ -854,12 +884,17 @@ async function pinOldName(DB, crm, key, by, now) {
   for (const r of rows) {
     if (place(r).owner !== key) continue;
     const byName = nameKey(givenName({ first_name: r.first, last_name: r.last })) === k;
-    if (byName && r.contact && !seen.has(`c${r.contact}`) && !crm.calls.yes.has(`contact\n${r.contact}`)) {
+    // A Zeffy contact that is the organization as a whole (every name of it this one's): linked, so it stays whole
+    const whole = byName && r.contact && !crm.calls.yes.has(`contact\n${r.contact}`) && crm.contactIsOrg(r.contact) === key;
+    if (whole && !seen.has(`c${r.contact}`)) {
       seen.add(`c${r.contact}`);
       steps.push(callStmt(DB, { kind: 'contact', subject: r.contact, target: key, answer: 1 }, by, now));
     }
-    // A gift with no Zeffy contact its name matched: told, itself, that it's this one's
-    if (byName && !r.contact && !crm.calls.pay.has(String(r.id))) steps.push(callStmt(DB, { kind: 'payment', subject: r.id, answer: 1, note: key }, by, now));
+    // A gift given under its name by a person (their other gifts are theirs), or with no Zeffy contact: told, itself,
+    // that it's this one's, and nothing more of theirs moves
+    if (byName && !whole && !(r.contact && crm.calls.yes.get(`contact\n${r.contact}`) === key) && !crm.calls.pay.has(String(r.id))) {
+      steps.push(callStmt(DB, { kind: 'payment', subject: r.id, answer: 1, note: key }, by, now));
+    }
     const ck = r.corporate && clean(r.company) ? nameKey(r.company) : '';
     if (ck === k && !seen.has(`k${ck}`) && !crm.calls.yes.has(`company\n${ck}`)) {
       seen.add(`k${ck}`);
@@ -887,6 +922,8 @@ export async function keepGiftsForPartnerName(DB, { slug, name, by = null, now =
   for (const o of crm.named(to, key)) steps.push(...await pinOldName(DB, crm, o, by, now));
   steps.push(...await keepOthersGifts(DB, crm, to, key, by, now));
   if (steps.length) await DB.batch(steps);
+  // Its name shows on To thank and the list: open tabs read again
+  await markChanged(DB);
   return steps.length;
 }
 
@@ -990,15 +1027,14 @@ export async function mergeOrgCalls(DB, from, into) {
     if (k && k !== nameKey(intoName)) {
       await DB.prepare("INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) SELECT 'company', ?, ?, 1, NULL, 'Partners merge', ? WHERE NOT EXISTS (SELECT 1 FROM donor_calls WHERE kind = 'company' AND subject = ? AND answer = 1)")
         .bind(k, `p:${from}`, at, k).run();
-      const named = ((await DB.prepare('SELECT DISTINCT contact, first, last FROM donor_payments WHERE contact IS NOT NULL').all()).results || [])
-        .filter((r) => nameKey(givenName({ first_name: r.first, last_name: r.last })) === k).map((r) => String(r.contact));
-      for (const c of [...new Set(named)]) {
-        await DB.prepare("INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) SELECT 'contact', ?, ?, 1, NULL, 'Partners merge', ? WHERE NOT EXISTS (SELECT 1 FROM donor_calls WHERE kind = 'contact' AND subject = ? AND (answer = 1 OR target = ?))")
-          .bind(c, `p:${from}`, at, c, `p:${from}`).run();
-      }
+      // A Zeffy contact that is it (every name of it this one's) is linked; a person's gift given under its name is
+      // pinned by itself (their other gifts stay theirs), as a rename does it
+      const pins = await pinOldName(DB, await loadCrm(DB), `p:${from}`, 'Partners merge', Date.parse(at));
+      if (pins.length) await DB.batch(pins);
     }
   }
   await moveCalls(DB, `p:${from}`, `p:${into}`);
+  await markChanged(DB);
 }
 
 /** Kept organizations' current names, written down when the site sees them (a rename in the Partners editor) */
@@ -1084,6 +1120,7 @@ export async function followMerges(DB, { now = Date.now() } = {}) {
   for (const k of byEmail) if (await followEmail(DB, k.slice(2))) moved++;
   if (moved || unplaced.length !== (st.unplaced || []).length || JSON.stringify(unplaced) !== JSON.stringify(st.unplaced || [])) {
     await writeCrmState(DB, { unplaced });
+    if (moved) await markChanged(DB);
     if (moved) await audit(DB, 'Zeffy merge', `What was known about ${moved === 1 ? 'a donor' : `${moved} donors`} now goes with their gifts (Zeffy merged their contacts, or gave them one)`, { moved });
   }
   return { moved, unplaced: unplaced.length };
@@ -1349,16 +1386,19 @@ const withOwners = (staff, owners) => {
 // ─── Notes, history and thank-yous on a donor's page ────────────────
 
 /** A donor's notes (every record of a person), newest first */
+// (keys read 80 at a time: an organization's are its own and every contact counted for it, past D1's 100 a statement)
+const inChunks = async (keys, read) => { const out = []; for (let i = 0; i < keys.length; i += 80) out.push(...await read(keys.slice(i, i + 80))); return out; };
 async function notesOf(DB, keys) {
   if (!keys.length) return [];
-  const r = (await DB.prepare(`SELECT id, body, by, at, edited_by, edited_at FROM donor_notes WHERE subject IN (${keys.map(() => '?').join(', ')}) ORDER BY at DESC`).bind(...keys).all()).results || [];
-  return r.map((n) => ({ id: n.id, body: n.body, by: n.by || null, at: n.at, editedBy: n.edited_by || null, editedAt: n.edited_at || null }));
+  const r = await inChunks([...new Set(keys)], async (ks) => (await DB.prepare(`SELECT id, body, by, at, edited_by, edited_at FROM donor_notes WHERE subject IN (${ks.map(() => '?').join(', ')})`).bind(...ks).all()).results || []);
+  return r.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).map((n) => ({ id: n.id, body: n.body, by: n.by || null, at: n.at, editedBy: n.edited_by || null, editedAt: n.edited_at || null }));
 }
 /** What the team did about a donor, newest first (their History) */
 async function historyOf(DB, keys) {
   if (!keys.length) return [];
   try {
-    const r = (await DB.prepare(`SELECT user_email, entity_name, created_at FROM audit_log WHERE entity_type = 'donor-crm' AND entity_slug IN (${keys.map(() => '?').join(', ')}) ORDER BY id DESC LIMIT 25`).bind(...keys).all()).results || [];
+    const r = (await inChunks([...new Set(keys)], async (ks) => (await DB.prepare(`SELECT id, user_email, entity_name, created_at FROM audit_log WHERE entity_type = 'donor-crm' AND entity_slug IN (${ks.map(() => '?').join(', ')}) ORDER BY id DESC LIMIT 25`).bind(...ks).all()).results || []))
+      .sort((a, b) => b.id - a.id).slice(0, 25);
     return r.map((h) => ({ by: h.user_email && h.user_email !== 'unknown' ? h.user_email : null, at: `${String(h.created_at).replace(' ', 'T')}Z`, what: h.entity_name || '' }));
   } catch (e) { if (missingTable(e)) return []; throw e; }
 }
@@ -1432,8 +1472,7 @@ export async function personView(env, ref, { now = Date.now() } = {}) {
   // A Zeffy contact that is an organization (linked to it, or named exactly as one), and no one else's record: its page
   // is the organization's (a person who only gave for one, their company linked, keeps a page of their own)
   if (key.startsWith('c:') && crm.keysOf(key).length === 1) {
-    const own = rows.find((r) => r.contact === key.slice(2));
-    const org = own ? crm.contactOrgOf(own) : null;
+    const org = crm.contactIsOrg(key.slice(2));
     if (org) return { org };
   }
   const mine = rows.filter((r) => place(r).person === key);
@@ -1501,6 +1540,15 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
     }
     if (!viaContact && !viaCompany && crm.calls.pay.get(String(r.id)) === key) contacts.set(`pay:${r.id}`, { kind: 'payment', subject: r.id, name: `One gift from ${personName(r)}`, how: 'this gift' });
   }
+  // Who gave for it, by their own name (a person who typed the organization's name on its gift is named as themselves:
+  // their newest gift of their own, else the name on the gift)
+  const ownRow = new Map();
+  for (const r of rows) {
+    const pl = place(r);
+    if (!people.has(pl.person) || crm.isOrg(pl.owner) || !givenName({ first_name: r.first, last_name: r.last })) continue;
+    if (!ownRow.has(pl.person) || r.at > ownRow.get(pl.person).at) ownRow.set(pl.person, r);
+  }
+  for (const pe of people.values()) if (ownRow.has(pe.key)) pe.name = personName(ownRow.get(pe.key));
   // Links made with no gifts yet (a contact or a name a person linked before it gave)
   for (const [k, t] of crm.calls.yes) {
     if (t !== key) continue;

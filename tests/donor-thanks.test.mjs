@@ -653,3 +653,26 @@ test('the To thank mark changes when a teammate changes an owner, so other tabs 
   await doIt({ act: 'owner', key: 'c:ct_jane', email: 'jordan@soardcharity.com', was: '' });
   assert.notEqual(await T.thanksMark(db), before);
 });
+
+// ─── Found in the eighth round ──────────────────────────────────────
+
+test('To thank again on one thank-you of several: the mark changes, so other tabs read their lists again', async () => {
+  await note(pay({ id: 'u1', amount: 50000, method: 'cheque', type: 'manual', created: S(START + HOUR) }));
+  await note(pay({ id: 'u2', amount: 60000, method: 'cheque', type: 'manual', created: S(START + 2 * HOUR), contact: 'ct_ann', first: 'Ann', last: 'Lee', email: 'ann@example.com' }));
+  await doIt({ act: 'thanks', id: 'u1', state: 'thanked', was: 'todo' });
+  await doIt({ act: 'thanks', id: 'u2', state: 'thanked', was: 'todo' });
+  const before = await T.thanksMark(db);
+  await doIt({ act: 'thanks', id: 'u1', state: 'todo', was: 'thanked' });
+  assert.notEqual(await T.thanksMark(db), before);
+  // A sync that changes nothing leaves it as it is (tabs don't read again for nothing)
+  const steady = await T.thanksMark(db);
+  await T.syncThanks(env, { now: START + 5 * HOUR });
+  assert.equal(await T.thanksMark(db), steady);
+});
+
+test('the same gift needing a thank-you again and again (its method changed back and forth): each time it shows', async () => {
+  const chk = (method) => pay({ id: 'flip', amount: 50000, method, type: method === 'cheque' ? 'manual' : 'online' });
+  let t = START + 2 * HOUR;
+  for (const m of ['cheque', 'card', 'cheque', 'card', 'cheque']) await note(chk(m), (t += HOUR));
+  assert.equal((await todo()).length, 1, 'To thank again, the last time too');
+});
