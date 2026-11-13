@@ -118,14 +118,17 @@ export async function loadCrm(DB, { now = Date.now() } = {}) {
       for (const v of r) { let d = {}; try { d = JSON.parse(v.data || '{}'); } catch { /* unreadable: skipped */ } if (d.name) history.set(`p:${v.slug}`, [...(history.get(`p:${v.slug}`) || []), String(d.name)]); }
     }
   } catch (e) { if (!missingTable(e)) throw e; }
-  return makeCrm({ partners, orgs, calls, now, history });
+  // Each Zeffy contact's own names (as its own gifts give them): an organization of exactly that name is theirs
+  const contactNames = await DB.prepare('SELECT DISTINCT contact, first, last FROM donor_payments WHERE contact IS NOT NULL').all()
+    .then((r) => r.results || []).catch((e) => { if (missingTable(e)) return []; throw e; });
+  return makeCrm({ partners, orgs, calls, now, history, contactNames });
 }
 
 /**
  * The rules over what's known (pure, so the tests and the board use the same): organizations, links, the same person,
  * keep anonymous, and who each payment counts for
  */
-export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now(), history = new Map() } = {}) {
+export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now(), history = new Map(), contactNames = [] } = {}) {
   const org = new Map();
   for (const p of partners) {
     const lv = levelOf(p.level).id;
@@ -154,6 +157,10 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   const keptNameCalls = [];
   // Who on the team looks after a donor: key → { email, at }
   const owners = new Map();
+  // A linked company's name as it was typed (the answer is under its plain-letters key)
+  const companyNames = new Map();
+  // Each owner answer as stored (subject → { answer, note, at }): a change checks none moved under it meanwhile
+  const ownerCalls = new Map();
   // Organizations said to have no owner ("No one"): never one taken from a contact counted for them
   const ownerNone = new Set();
   // A person's key over another's: a Zeffy contact first (its address works in a link), then the earlier
@@ -163,14 +170,14 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
     const s = String(c.subject);
     const t = String(c.target || '');
     if (c.kind === 'contact' || c.kind === 'company') {
-      if (c.answer) { yes.set(`${c.kind}\n${s}`, t); no.delete(`${c.kind}\n${s}\n${t}`); } else { no.add(`${c.kind}\n${s}\n${t}`); if (yes.get(`${c.kind}\n${s}`) === t) yes.delete(`${c.kind}\n${s}`); }
+      if (c.answer) { yes.set(`${c.kind}\n${s}`, t); no.delete(`${c.kind}\n${s}\n${t}`); if (c.kind === 'company' && c.note) companyNames.set(s, String(c.note)); } else { no.add(`${c.kind}\n${s}\n${t}`); if (yes.get(`${c.kind}\n${s}`) === t) yes.delete(`${c.kind}\n${s}`); }
     } else if (c.kind === 'anon') anon.set(s, !!c.answer);
     else if (c.kind === 'payment') pay.set(s, String(c.note || ''));
     else if (c.kind === 'level') level.set(s, { answer: !!c.answer, at: c.at, note: c.note || null });
     else if (c.kind === 'big') big.set(s, { at: c.at, person: c.note === 'person' });
     else if (c.kind === 'forward') forward.set(s, t);
     else if (c.kind === 'moved') movedDone.add(s);
-    else if (c.kind === 'owner') { if (c.answer && c.note) { owners.set(s, { email: String(c.note), at: c.at }); ownerNone.delete(s); } else { owners.delete(s); ownerNone.add(s); } }
+    else if (c.kind === 'owner') { ownerCalls.set(s, { answer: c.answer ? 1 : 0, note: c.note ?? null, at: c.at }); if (c.answer && c.note) { owners.set(s, { email: String(c.note), at: c.at }); ownerNone.delete(s); } else { owners.delete(s); ownerNone.add(s); } }
     else if (c.kind === 'kept-name' && c.answer) keptNameCalls.push([s, t, c.note || null]);
     else if (c.kind === 'same') {
       if (!c.answer) { notSame.add(`${s}\n${t}`); continue; }
@@ -218,18 +225,21 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   };
 
   /** The organization a payment's contact is: a person's link, else an organization with exactly its name */
-  // (contacts that are an organization by name, as the rows read so far show: linkedTo counts them with linked ones)
-  const byNameOf = new Map();
   const contactOrgOf = (r) => {
     if (!r.contact) return null;
     const t = yes.get(`contact\n${r.contact}`);
     if (t) return live(t) ? t : null;
     const name = givenName({ first_name: r.first, last_name: r.last });
     const e = name ? exact(name) : null;
-    const out = e && !no.has(`contact\n${r.contact}\n${e}`) ? e : null;
-    if (out) byNameOf.set(out, new Set([...(byNameOf.get(out) || []), `c:${r.contact}`]));
-    return out;
+    return e && !no.has(`contact\n${r.contact}\n${e}`) ? e : null;
   };
+  // Contacts that are an organization by their own name (not linked anywhere): the same everywhere it's asked
+  const byNameOf = new Map();
+  for (const r of contactNames) {
+    if (yes.has(`contact\n${r.contact}`)) continue;
+    const o = contactOrgOf(r);
+    if (o) byNameOf.set(o, new Set([...(byNameOf.get(o) || []), `c:${r.contact}`]));
+  }
   /** The organization the company a payment was given for is (a donor-advised fund's name never) */
   const companyOrgOf = (r) => {
     if (!r.corporate || !clean(r.company) || r.method === 'daf') return null;
@@ -260,6 +270,10 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   return {
     org, live, exact, canon, keysOf, contactOrgOf, companyOrgOf, ownerOf, keepAnonymous, lookedAfterBy, linkedTo, now,
     calls: { yes, no, pay, level, big, notSame: notSameNow, notSameRaw: notSame, forward, movedDone },
+    /** A linked company's name as typed when it was linked (its key, plain letters, is no name to show) */
+    companyName: (k) => companyNames.get(String(k)) || null,
+    /** The owner answers stored under these keys, as read: [[subject, answer, note, at]] */
+    ownerRows: (keys) => keys.filter((k) => ownerCalls.has(k)).map((k) => { const o = ownerCalls.get(k); return [k, o.answer, o.note, o.at]; }),
     /** The organizations with this name (any but `except`) */
     named: (name, except = null) => (byName.get(nameKey(name)) || []).filter((k) => k !== except),
     /** Is Keep anonymous on for exactly this key (not the person it leads to) */
@@ -387,6 +401,13 @@ const callStmt = (DB, { kind, subject, target = '', answer, note = null }, by, n
     ON CONFLICT(kind, subject, target) DO UPDATE SET answer = excluded.answer, note = excluded.note, by = excluded.by, at = excluded.at`)
   .bind(kind, String(subject), String(target), answer ? 1 : 0, note, by || null, iso(now));
 const putCall = (DB, call, by, now) => callStmt(DB, call, by, now).run();
+/**
+ * First in a batch: stops it, every statement undone, unless `cond` (SQL) holds, so what was read is still so when it's
+ * written (a teammate's change in between is never written over). It writes nothing when it holds; when it doesn't,
+ * its row can't be stored (no value), and notSo(error) says that was why.
+ */
+const stillSo = (DB, cond, ...args) => DB.prepare(`INSERT INTO donor_state (key, value) SELECT 'still-so', NULL WHERE NOT (${cond})`).bind(...args);
+const notSo = (e) => /donor_state\.value/.test(String(e?.message || e));
 // Under the donor it's about (their key), so their page shows it; 'donors' when it's about no one donor
 const audit = (DB, by, name, changes, slug = 'donors') => logAudit(DB, { userEmail: by || 'unknown', action: 'updated', entityType: 'donor-crm', entitySlug: slug, entityName: name, changes }).catch(() => {});
 const usd = (cents) => { const c = Math.round(Number(cents) || 0); return `$${(c / 100).toLocaleString('en-US', { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 })}`; };
@@ -436,7 +457,8 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       // One organization per contact or company name: a link elsewhere goes, in the same step
       await DB.batch([
         DB.prepare("DELETE FROM donor_calls WHERE kind = ? AND subject = ? AND answer = 1 AND target <> ?").bind(body.kind, subject, target),
-        callStmt(DB, { kind: body.kind, subject, target, answer: 1 }, by, now),
+        // (a company's name as it was typed, to show: the answer is under its plain-letters key)
+        callStmt(DB, { kind: body.kind, subject, target, answer: 1, note: body.kind === 'company' ? clean(body.subject).slice(0, 200) : null }, by, now),
       ]);
     } else await putCall(DB, { kind: body.kind, subject, target, answer: 0 }, by, now);
     await audit(DB, by, `${a === 'link' ? 'Linked' : 'Not'} ${body.kind === 'company' ? clean(body.subject) : 'a Zeffy contact'} ${a === 'link' ? 'to' : 'for'} ${crm.org.get(target).name}`, { kind: body.kind, subject, org: target, answer: a === 'link' }, target);
@@ -599,7 +621,7 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       if (has) throw bad(`${l.kind === 'company' ? `“${clean(l.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(has)?.name || 'an organization'} already. Nothing was changed.`, 409);
       // A link to an organization that's gone (a partner deleted) counts for nothing: this one replaces it
       steps.push(DB.prepare('DELETE FROM donor_calls WHERE kind = ? AND subject = ? AND answer = 1').bind(l.kind, subject));
-      steps.push(callStmt(DB, { kind: l.kind, subject, target: key, answer: 1 }, by, now));
+      steps.push(callStmt(DB, { kind: l.kind, subject, target: key, answer: 1, note: l.kind === 'company' ? clean(l.subject).slice(0, 200) : null }, by, now));
     }
     const linking = (Array.isArray(body.links) ? body.links : []).filter((l) => l?.kind === 'contact').map((l) => subjectOf('contact', l.subject));
     steps.push(...await keepOthersGifts(DB, crm, name, key, by, now, { linking }));
@@ -624,14 +646,25 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     if (typeof body.was === 'string' && body.was !== crm.org.get(key).name && name !== crm.org.get(key).name) throw bad(`Someone renamed it ${crm.org.get(key).name} since you looked. Nothing was changed.`, 409);
     // Two organizations with one name would each lose the gifts that name links by itself
     if (crm.named(name, key).length) throw bad(`${crm.org.get(crm.named(name, key)[0]).name} already has that name.`, 409);
-    await DB.batch([
-      ...await pinOldName(DB, crm, key, by, now),
-      ...await keepOthersGifts(DB, crm, name, key, by, now),
-      DB.prepare('UPDATE donor_orgs SET name = ? WHERE key = ?').bind(name, key),
-      // Both names written down, kept or not (they count only while it's kept)
-      callStmt(DB, { kind: 'kept-name', subject: looseKey(crm.org.get(key).name), target: key, answer: 1, note: crm.org.get(key).name }, by, now),
-      callStmt(DB, { kind: 'kept-name', subject: looseKey(name), target: key, answer: 1, note: name }, by, now),
-    ]);
+    if (name === crm.org.get(key).name) return { ok: true, same: true };
+    // In one step, and only while it has the name read above (a teammate's rename in between is never written over)
+    try {
+      await DB.batch([
+        stillSo(DB, 'EXISTS (SELECT 1 FROM donor_orgs WHERE key = ? AND name = ?)', key, crm.org.get(key).name),
+        ...await pinOldName(DB, crm, key, by, now),
+        ...await keepOthersGifts(DB, crm, name, key, by, now),
+        DB.prepare('UPDATE donor_orgs SET name = ? WHERE key = ?').bind(name, key),
+        // Both names written down, kept or not (they count only while it's kept)
+        callStmt(DB, { kind: 'kept-name', subject: looseKey(crm.org.get(key).name), target: key, answer: 1, note: crm.org.get(key).name }, by, now),
+        callStmt(DB, { kind: 'kept-name', subject: looseKey(name), target: key, answer: 1, note: name }, by, now),
+      ]);
+    } catch (e) {
+      if (!notSo(e)) throw e;
+      const now2 = (await loadCrm(DB, { now })).org.get(key);
+      if (!now2) throw bad('That organization isn’t here any more. Reload and look again.', 404);
+      if (now2.name === name) return { ok: true, same: true };
+      throw bad(`Someone renamed it ${now2.name} since you looked. Nothing was changed.`, 409);
+    }
     await audit(DB, by, `Organization renamed: ${name}`, { key, was: crm.org.get(key).name, name }, key);
     return { ok: true };
   }
@@ -684,8 +717,11 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
   if (a === 'owner') {
     const key = whose(crm, body.key, orgOk);
     const email = clean(body.email).toLowerCase();
+    // Already them (tried again after an answer was lost, a teammate who picked the same): nothing to change
+    if ((crm.lookedAfterBy(key) || '') === email) return { ok: true, same: true };
     // The owner the person saw (another tab, a teammate since): never a quiet second answer over the first
-    if (typeof body.was === 'string' && (crm.lookedAfterBy(key) || '') !== body.was.toLowerCase()) throw bad(`Someone changed who looks after them since you looked${crm.lookedAfterBy(key) ? ` (${crm.lookedAfterBy(key).split('@')[0]})` : ' (no one)'}. Nothing was changed.`, 409);
+    const changed = (now2) => bad(`Someone changed who looks after them since you looked${now2 ? ` (${now2.split('@')[0]})` : ' (no one)'}. Nothing was changed.`, 409);
+    if (typeof body.was === 'string' && (crm.lookedAfterBy(key) || '') !== body.was.toLowerCase()) throw changed(crm.lookedAfterBy(key));
     let name = null;
     if (email) {
       const staff = await staffList(DB);
@@ -701,11 +737,24 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       const own = await rowsFor(DB, keys.filter((k) => /^[ce]:/.test(k)));
       for (const e of new Set(own.map((r) => r.email).filter(Boolean))) if (!keys.includes(`e:${e}`)) keys.push(`e:${e}`);
     }
-    await DB.batch([
-      ...keys.map((k) => DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(k)),
-      // An organization's "No one" is said, so it doesn't take the owner of a contact counted for it
-      ...(email ? [callStmt(DB, { kind: 'owner', subject: key, answer: 1, note: email }, by, now)] : isOrgKey(key) ? [callStmt(DB, { kind: 'owner', subject: key, answer: 0 }, by, now)] : []),
-    ]);
+    // In one step, and only while the owner answers under these keys are the ones read above
+    const read = crm.ownerRows(keys);
+    try {
+      await DB.batch([
+        stillSo(DB, `(SELECT COUNT(*) FROM donor_calls WHERE kind = 'owner' AND subject IN (SELECT value FROM json_each(?))) = ?
+          AND (SELECT COUNT(*) FROM donor_calls d, json_each(?) j WHERE d.kind = 'owner' AND d.subject = json_extract(j.value, '$[0]')
+            AND d.answer = json_extract(j.value, '$[1]') AND d.note IS json_extract(j.value, '$[2]') AND d.at = json_extract(j.value, '$[3]')) = ?`,
+        JSON.stringify(keys), read.length, JSON.stringify(read), read.length),
+        ...keys.map((k) => DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(k)),
+        // An organization's "No one" is said, so it doesn't take the owner of a contact counted for it
+        ...(email ? [callStmt(DB, { kind: 'owner', subject: key, answer: 1, note: email }, by, now)] : isOrgKey(key) ? [callStmt(DB, { kind: 'owner', subject: key, answer: 0 }, by, now)] : []),
+      ]);
+    } catch (e) {
+      if (!notSo(e)) throw e;
+      const fresh = (await loadCrm(DB, { now })).lookedAfterBy(key) || '';
+      if (fresh === email) return { ok: true, same: true };
+      throw changed(fresh);
+    }
     await audit(DB, by, email ? `Looked after by ${name}` : 'No one looks after them now', { key, owner: email || null }, key);
     return { ok: true };
   }
@@ -730,9 +779,15 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     }
     const text = String(body.body ?? '').replace(/\r\n?/g, '\n').trim().slice(0, 4000);
     if (!text) throw bad('A note can’t be empty. Delete it instead.');
-    const cur = await DB.prepare('SELECT body, edited_by, by FROM donor_notes WHERE id = ?').bind(n.id).first();
-    if (typeof body.was === 'string' && cur && cur.body !== body.was && cur.body !== text) throw bad(`${(cur.edited_by || cur.by || 'Someone').split('@')[0].replace(/^./, (c) => c.toUpperCase())} changed this note since you looked. Nothing was changed; it shows as it is now.`, 409);
-    await DB.prepare('UPDATE donor_notes SET body = ?, edited_by = ?, edited_at = ? WHERE id = ?').bind(text, by || null, iso(now), n.id).run();
+    // Written only while it's the note the person changed (or already reads as they wrote it): in the one statement
+    const was = typeof body.was === 'string' ? body.was.replace(/\r\n?/g, '\n') : null;
+    const r = await DB.prepare(`UPDATE donor_notes SET body = ?, edited_by = ?, edited_at = ? WHERE id = ?${was === null ? '' : ' AND (body = ? OR body = ?)'}`)
+      .bind(text, by || null, iso(now), n.id, ...(was === null ? [] : [was, text])).run();
+    if (!r.meta?.changes) {
+      const cur = await DB.prepare('SELECT body, edited_by, by FROM donor_notes WHERE id = ?').bind(n.id).first();
+      if (!cur) throw bad('That note isn’t here any more. Reload and look again.', 404);
+      throw bad(`${(cur.edited_by || cur.by || 'Someone').split('@')[0].replace(/^./, (c) => c.toUpperCase())} changed this note since you looked. Nothing was changed; it shows as it is now.`, 409);
+    }
     await audit(DB, by, 'Note changed', { key: n.subject, note: n.id }, n.subject);
     return { ok: true };
   }
@@ -808,10 +863,31 @@ async function pinOldName(DB, crm, key, by, now) {
     const ck = r.corporate && clean(r.company) ? nameKey(r.company) : '';
     if (ck === k && !seen.has(`k${ck}`) && !crm.calls.yes.has(`company\n${ck}`)) {
       seen.add(`k${ck}`);
-      steps.push(callStmt(DB, { kind: 'company', subject: ck, target: key, answer: 1 }, by, now));
+      steps.push(callStmt(DB, { kind: 'company', subject: ck, target: key, answer: 1, note: clean(r.company).slice(0, 200) }, by, now));
     }
   }
   return steps;
+}
+
+/**
+ * Before a partner card is saved under a name it didn't have (added, or renamed in the Partners editor): the gifts its
+ * old name counted by itself stay with it, an organization already called the new name keeps the gifts that name
+ * counted for it (two of one name would each lose them), and a contact of that name whose gifts count for another
+ * organization keeps them there, as Keep as an organization and Rename do here. Nothing to keep → nothing written.
+ */
+export async function keepGiftsForPartnerName(DB, { slug, name, by = null, now = Date.now() } = {}) {
+  const key = `p:${slug}`;
+  const to = clean(name) || String(slug || '');
+  if (!slug || !nameKey(to)) return 0;
+  const crm = await loadCrm(DB, { now });
+  const was = crm.org.get(key)?.name;
+  if (was && nameKey(was) === nameKey(to)) return 0;
+  const steps = [];
+  if (was) steps.push(...await pinOldName(DB, crm, key, by, now));
+  for (const o of crm.named(to, key)) steps.push(...await pinOldName(DB, crm, o, by, now));
+  steps.push(...await keepOthersGifts(DB, crm, to, key, by, now));
+  if (steps.length) await DB.batch(steps);
+  return steps.length;
 }
 
 /** A Needs you question still open, or 409 saying who answered it (an answer that has run out, a year on, is open) */
@@ -1202,12 +1278,12 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
   // (big), and a contact whose name reads as an organization's, whatever it gave (named: a foundation giving under its
   // own Zeffy record would otherwise show as a person). One a person said is the same as another isn't asked about
   const bigOnes = [
-    ...[...companies.values()].filter((c) => !asked.has(c.key)).map((c) => ({ subject: `company:${c.key}`, link: 'company', linkSubject: c.name, name: c.name, cents: c.cents, cents12: c.cents12, anonymous: c.anonymous, people: [...c.people.values()].slice(0, 3) })),
+    ...[...companies.values()].filter((c) => !asked.has(c.key)).map((c) => ({ subject: `company:${c.key}`, link: 'company', linkSubject: c.name, name: c.name, cents: c.cents, cents12: c.cents12, anonymous: c.anonymous, people: [...c.people.values()].slice(0, 3), askKeys: [...c.people.keys()].map((p) => crm.canon(p)) })),
     // A contact: by its own name (never its email), not joined to anyone, none of its gifts an organization's already,
     // not asked about an organization of that name, and not said to be a person (that answer is the contact's alone)
     ...[...contacts.values()].filter((c) => ORG_WORDS.test(c.own || '') && c.cents > 0 && crm.keysOf(c.person).length === 1 && !c.forOrg
-      && !askedPeople.has(crm.canon(c.person)) && !crm.calls.big.get(`contact:${c.id}`)?.person)
-      .map((c) => ({ subject: `contact:${c.id}`, link: 'contact', linkSubject: c.id, name: c.name, ref: c.person.startsWith('c:') ? c.person.slice(2) : null, cents: c.cents, cents12: c.cents12, anonymous: c.anonymous, named: true, people: [] })),
+      && !crm.calls.big.get(`contact:${c.id}`)?.person)
+      .map((c) => ({ subject: `contact:${c.id}`, link: 'contact', linkSubject: c.id, name: c.name, ref: c.person.startsWith('c:') ? c.person.slice(2) : null, cents: c.cents, cents12: c.cents12, anonymous: c.anonymous, named: true, people: [], askKeys: [crm.canon(c.person)] })),
   ];
   // One name asked about once: a company typed on gifts and a Zeffy contact of the same name are one giver (the
   // company's name is linked; the contact's then matches by itself)
@@ -1216,7 +1292,7 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
     if (b.anonymous || (b.cents12 < CHAMPION_CENTS && !b.named)) continue;
     const nk = nameKey(b.name) || b.subject;
     const had = bigByName.get(nk);
-    if (had) { had.also.push(b.subject); had.cents12 = Math.max(had.cents12, b.cents12); had.cents = Math.max(had.cents, b.cents); had.named ||= b.named; had.ref ||= b.ref; continue; }
+    if (had) { had.also.push(b.subject); had.cents12 = Math.max(had.cents12, b.cents12); had.cents = Math.max(had.cents, b.cents); had.named ||= b.named; had.ref ||= b.ref; had.askKeys.push(...b.askKeys); continue; }
     bigByName.set(nk, { ...b, also: [] });
   }
   for (const b of bigByName.values()) {
@@ -1226,6 +1302,9 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
     if (said.some((c) => c.person)) continue;
     const big = b.cents12 >= CHAMPION_CENTS;
     if (big ? said.some((c) => !yearAgo(c.at)) : said.length) continue;
+    // One question about a person at a time: a giver of this name asked about already (near, same, …) waits for it
+    if (b.askKeys.some((p) => askedPeople.has(p))) continue;
+    for (const p of b.askKeys) askedPeople.add(p);
     items.push({ id: `big:${b.subject}`, kind: big ? 'big' : 'named', subject: b.subject, also: b.also, link: b.link, linkSubject: b.linkSubject, name: b.name, ref: b.ref || null, cents12: b.cents12, cents: b.cents, person: b.link === 'contact', people: b.people });
   }
   for (const u of unplaced) if (!crm.calls.movedDone.has(u.contact)) items.push({ id: `moved:${u.contact}`, kind: 'moved', contact: u.contact, to: u.to, at: u.at });
@@ -1408,21 +1487,30 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
     pe.cents += Number(r.giving) || 0;
     if (Number(r.giving) > 0) pe.gifts++;
     people.set(p, pe);
-    if (r.contact && crm.contactOrgOf(r) === key) {
+    // Each name it counts under, however many: a gift given by a linked contact for a linked company shows both
+    const viaContact = !!r.contact && crm.contactOrgOf(r) === key;
+    const viaCompany = crm.companyOrgOf(r) === key;
+    if (viaContact) {
       const how = crm.calls.yes.get(`contact\n${r.contact}`) === key ? 'linked' : 'same name';
       contacts.set(r.contact, { kind: 'contact', subject: r.contact, name: personName(r), how });
-    } else if (crm.companyOrgOf(r) === key) {
+    }
+    if (viaCompany) {
       const k = nameKey(r.company);
       const how = crm.calls.yes.get(`company\n${k}`) === key ? 'linked' : 'same name';
       companies.set(k, { kind: 'company', subject: clean(r.company), name: clean(r.company), how });
-    } else if (crm.calls.pay.get(String(r.id)) === key) contacts.set(`pay:${r.id}`, { kind: 'payment', subject: r.id, name: `One gift from ${personName(r)}`, how: 'this gift' });
+    }
+    if (!viaContact && !viaCompany && crm.calls.pay.get(String(r.id)) === key) contacts.set(`pay:${r.id}`, { kind: 'payment', subject: r.id, name: `One gift from ${personName(r)}`, how: 'this gift' });
   }
   // Links made with no gifts yet (a contact or a name a person linked before it gave)
   for (const [k, t] of crm.calls.yes) {
     if (t !== key) continue;
     const [kind, subject] = k.split('\n');
     if (kind === 'contact' && !contacts.has(subject)) contacts.set(subject, { kind, subject, name: 'A Zeffy contact (no gifts yet)', how: 'linked' });
-    if (kind === 'company' && !companies.has(subject)) companies.set(subject, { kind, subject, name: subject, how: 'linked', noGifts: true });
+    if (kind === 'company' && !companies.has(subject)) {
+      // As it was typed: on a gift (one given for it that counts here another way), else as it was linked
+      const typed = clean(rows.find((r) => r.company && nameKey(r.company) === subject)?.company) || crm.companyName(subject) || subject;
+      companies.set(subject, { kind, subject: typed, name: typed, how: 'linked', noGifts: !rows.some((r) => r.company && nameKey(r.company) === subject && Number(r.giving) > 0) });
+    }
   }
   const needs = needsOf(rows, crm, { now, unplaced: st.unplaced || [] }).filter((n) => n.org === key || n.counted === key || n.other === key);
   return {

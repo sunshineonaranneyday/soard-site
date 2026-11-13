@@ -620,3 +620,36 @@ test('a thank-you the site closed by itself holds nothing: a gift with none said
   await note(pay({ id: 'L6', amount: 80000, created: S(START + HOUR + 10 * MIN) }), START + 4 * HOUR);
   assert.deepEqual((await T.thanksToDo(db)).map((t) => [t.ids, t.cents, t.why]), [['K6 L6', 110000, 'major']]);
 });
+
+// ─── Found in the seventh round ─────────────────────────────────────
+
+test('a To thank with one charge the list lost and another still given: Zeffy is asked, and the lost one comes off it (never frozen)', async () => {
+  await note(pay({ id: 'mj1', amount: 150000, created: S(START + HOUR) }));
+  await note(pay({ id: 'mj2', amount: 60000, created: S(START + HOUR + 5 * MIN) }));
+  assert.deepEqual((await todo()).map((x) => [x.ids, x.cents]), [['mj1 mj2', 210000]]);
+  await db.prepare("DELETE FROM donor_payments WHERE id = 'mj2'").run();
+  const zenv = { ...env, ZEFFY_API_KEY: 'z' };
+  const asked = [];
+  const fetchImpl = async (url) => { asked.push(String(url).match(/payments\/(\w+)/)[1]); return Response.json({ error: 'gone' }, { status: 404 }); };
+  await T.syncThanks(zenv, { now: START + 3 * HOUR, fetchImpl });
+  assert.deepEqual(asked, ['mj2'], 'asked about the lost charge while the other still gives');
+  await T.syncThanks(zenv, { now: START + 10 * HOUR, fetchImpl });
+  await T.syncThanks(zenv, { now: START + 11 * HOUR, fetchImpl });
+  assert.deepEqual((await todo()).map((x) => [x.ids, x.cents]), [['mj1', 150000]], 'what is still given, kept up');
+});
+
+test('a thank-you that closed by itself says why when someone tries to mark it', async () => {
+  await note(pay({ id: 'gz', amount: 50000, method: 'cheque', type: 'manual' }));
+  await db.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'changed' WHERE id = 'gz'").run();
+  await assert.rejects(doIt({ act: 'thanks', id: 'gz', state: 'thanked', was: 'todo' }), (e) => e.status === 409 && /changed since/.test(e.message));
+  await db.prepare("UPDATE donor_thanks SET gone = 'refunded' WHERE id = 'gz'").run();
+  await assert.rejects(doIt({ act: 'thanks', id: 'gz', state: 'thanked', was: 'todo' }), (e) => /refunded in Zeffy/.test(e.message));
+});
+
+test('the To thank mark changes when a teammate changes an owner, so other tabs read their lists again', async () => {
+  await note(pay({ id: 'mk', amount: 50000, method: 'cheque', type: 'manual' }));
+  const before = await T.thanksMark(db);
+  assert.equal(await T.thanksMark(db), before, 'steady while nothing changes');
+  await doIt({ act: 'owner', key: 'c:ct_jane', email: 'jordan@soardcharity.com', was: '' });
+  assert.notEqual(await T.thanksMark(db), before);
+});

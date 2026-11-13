@@ -17,6 +17,7 @@ import { createRequire } from 'node:module';
 import { createD1 } from '../tests/lib/d1-shim.mjs';
 import { onRequestGet as donorsGet, onRequestPost as donorsPost } from '../functions/api/donors-admin.js';
 import * as D from '../functions/api/_donors.js';
+import * as C from '../functions/api/_donor-crm.js';
 import { updatePartners } from '../functions/api/partners-batch.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -104,12 +105,18 @@ async function send(res, response) {
 }
 const calls = [];
 const saved = [];
+// An answer lost on the way back (a 524): the change is made, and the page is told the site didn't answer
+let lose = null;
 function serve() {
   const server = createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/api/donors-admin') {
       calls.push(u.search);
       const request = await toRequest(req);
+      if (req.method === 'POST' && lose) {
+        const b = await request.clone().json().catch(() => ({}));
+        if (lose(b)) { lose = null; await donorsPost({ env, request, data: { userEmail: 'alex@soardcharity.com' } }); res.writeHead(524, { 'Content-Type': 'text/html' }); return res.end('<html>A timeout occurred</html>'); }
+      }
       return send(res, req.method === 'POST' ? await donorsPost({ env, request, data: { userEmail: 'alex@soardcharity.com' } }) : await donorsGet({ env, request, data: { userEmail: 'alex@soardcharity.com' } }));
     }
     // Partners as the admin reads and saves them, over the same D1
@@ -311,9 +318,12 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('.dn-suggest button')].find((b) => /Move to Champion/.test(b.textContent))?.click());
   await page.waitForSelector('.ask-overlay', { timeout: 4000 }).catch(() => {});
   ok(/JobTread/.test(await textOf(page, '.ask-overlay')) && await page.evaluate(() => document.activeElement?.getAttribute('data-ask') === 'no'), 'Move to Champion asks first (JobTread changes too), the focus on Cancel');
+  // Its answer lost on the way back: it went through, and the page says so (never "couldn't" for a move that worked)
+  lose = (b) => b.act === 'level' && b.move === true;
   await page.evaluate(() => document.querySelector('.ask-overlay [data-ask="yes"]')?.click());
   await page.waitForFunction(() => !document.querySelector('.dn-suggest'), { timeout: 8000 }).catch(() => {});
   ok((await partnersNow()).find((x) => x.slug === 'acme')?.level === 'champion', 'Acme is Champion (on the next publish)');
+  ok(lose === null && !(await page.evaluate(() => [...document.querySelectorAll('.toast')].some((t) => /Couldn’t move/.test(t.textContent)))), 'its answer lost on the way back: no “Couldn’t move” for a move that worked');
   ok(await page.evaluate(() => [...document.querySelectorAll('.toast')].some((t) => /Acme Builders moves to Champion when you publish/.test(t.textContent) && [...t.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Publish'))), 'a partner’s level waits for Publish: its message offers Publish');
   ok(/Champion partner/.test(await textOf(page, '.dn-head h2')) && !(await page.$('.dn-suggest')), 'the page says Champion, and the suggestion is gone');
   await page.click('.kd-rail .dn-check input');
@@ -626,6 +636,66 @@ try {
   await page.waitForFunction(() => /← Donors|← /.test(document.querySelector('.dn-back')?.textContent || '') && !!document.querySelector('.dn-gifts, .dn-head'), { timeout: 8000 }).catch(() => {});
   await wait(600);
   ok(/← Donors/.test(await textOf(page, '.dn-back')), `a link followed after that: Back is to the list again (${await textOf(page, '.dn-back')})`);
+  // ─── Found in the seventh round ───
+  // An owner and Keep anonymous whose answers are lost on the way back: the page reads again and shows what was saved
+  await page.evaluate(() => { location.hash = '#donors/ct_fill_7'; });
+  await page.waitForSelector('#dn-owner-pick', { timeout: 8000 });
+  lose = (b) => b.act === 'owner';
+  await page.evaluate(() => { const s = document.querySelector('#dn-owner-pick'); s.value = 'jordan@soardcharity.com'; s.dispatchEvent(new Event('change', { bubbles: true })); });
+  await page.waitForFunction(() => document.querySelector('#dn-owner-pick')?.value === 'jordan@soardcharity.com' && !document.querySelector('#dn-owner-pick[aria-busy="true"]'), { timeout: 8000 }).catch(() => {});
+  await wait(400);
+  ok(await page.$eval('#dn-owner-pick', (s) => s.value) === 'jordan@soardcharity.com', 'an owner saved whose answer was lost: the page shows Jordan, as saved');
+  lose = (b) => b.act === 'anon';
+  await page.click('.kd-rail .dn-check input');
+  await page.waitForFunction(() => document.querySelector('.kd-rail .dn-check input')?.checked && /Kept anonymous/.test(document.querySelector('.dn-head h2')?.textContent || ''), { timeout: 8000 }).catch(() => {});
+  ok(await page.$eval('.kd-rail .dn-check input', (i) => i.checked) && /Kept anonymous/.test(await textOf(page, '.dn-head h2')), 'Keep anonymous saved whose answer was lost: the box shows it on, as saved');
+  // A note a teammate changed while it was being changed: the person's words stay, the note as it is now above them
+  await page.click('#dn-note-text');
+  await page.keyboard.type('Likes the gala.');
+  await page.evaluate(() => [...document.querySelectorAll('.dn-note-new button')].find((b) => b.textContent.trim() === 'Add note')?.click());
+  await page.waitForSelector('.dn-note .dn-note__change', { timeout: 8000 });
+  await page.click('.dn-note .dn-note__change');
+  await page.waitForSelector('.dn-note textarea', { timeout: 4000 });
+  await DB.prepare("UPDATE donor_notes SET body = 'Likes the gala; bring a guest.', edited_by = 'jordan@soardcharity.com' WHERE body = 'Likes the gala.'").run();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' Call in May.');
+  await page.evaluate(() => [...document.querySelectorAll('.dn-note button')].find((b) => b.textContent.trim() === 'Save')?.click());
+  await page.waitForFunction(() => /It reads now/.test(document.querySelector('.dn-notes')?.textContent || ''), { timeout: 8000 }).catch(() => {});
+  ok(/Call in May/.test(await page.$eval('.dn-note textarea', (t) => t.value).catch(() => '')) && /bring a guest/.test(await textOf(page, '.dn-notes')), 'a note changed by a teammate meanwhile: the person’s words stay in the box, the note as it is now above them');
+  await DB.prepare("DELETE FROM donor_notes WHERE body = 'Likes the gala; bring a guest.'").run();
+  await page.evaluate(() => [...document.querySelectorAll('.dn-note button')].find((b) => b.textContent.trim() === 'Save')?.click());
+  await page.waitForFunction(() => /Call in May/.test(document.querySelector('#dn-note-text')?.value || ''), { timeout: 8000 }).catch(() => {});
+  ok(/Call in May/.test(await page.$eval('#dn-note-text', (t) => t.value)), 'deleted meanwhile: the person’s words go to the new note box');
+  // Someone whose every gift counts for an organization is found by their own name, at the organization's row
+  await C.act(env, { act: 'link', kind: 'contact', subject: 'ct_fill_5', org: 'p:pella' }, 'alex@soardcharity.com');
+  await page.goto(`${origin}/admin/#donors`, { waitUntil: 'networkidle2' });
+  await page.waitForSelector('.dn-table', { timeout: 15000 });
+  await page.click('input[aria-label="Search donors"]', { clickCount: 3 });
+  await page.keyboard.type('Donor 005');
+  await wait(400);
+  ok((await rowNames(page)).includes('Pella') && /given by Filler Donor 005/.test(await textOf(page, '.dn-table tbody')), `a giver whose gifts all count for an organization is found at its row (${(await rowNames(page)).join(', ')})`);
+  await page.click('input[aria-label="Search donors"]', { clickCount: 3 });
+  await page.keyboard.press('Backspace');
+  // Undo from a toast by keyboard: the focus on the thank-you put back, never on a heading no one sees
+  await page.evaluate(() => { location.hash = '#donors/thanks'; });
+  await page.waitForSelector('.dn-needs[aria-label="To thank"] [data-thank] .btn-primary', { timeout: 8000 }).catch(() => {});
+  const undoId = await page.evaluate(() => document.querySelector('.dn-needs[aria-label="To thank"] [data-thank]')?.dataset.thank || '');
+  await page.evaluate(() => document.querySelector('.dn-needs[aria-label="To thank"] [data-thank] .btn-primary')?.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast .toast-undo')].length, { timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => [...document.querySelectorAll('.toast .toast-undo')].at(-1)?.focus());
+  await page.keyboard.press('Enter');
+  await page.waitForFunction((id) => document.activeElement?.closest?.(`[data-thank="${id}"]`), { timeout: 8000 }, undoId).catch(() => {});
+  const undoAt = await page.evaluate(() => ({ at: document.activeElement?.outerHTML.slice(0, 80), items: [...document.querySelectorAll('[data-thank]')].map((li) => li.dataset.thank), toasts: [...document.querySelectorAll('.toast')].map((t) => t.textContent.trim().slice(0, 50)) }));
+  ok(!!undoId && await page.evaluate((id) => !!document.activeElement?.closest?.(`[data-thank="${id}"]`), undoId), `Undo from a toast by keyboard: the focus on the thank-you put back (${undoId} ${JSON.stringify(undoAt)})`);
+  // Put on the website from a page read before a teammate took the organization out: nothing is made
+  const { key: walkOrg } = await C.act(env, { act: 'org-new', name: 'Walkthrough Works', links: [] }, 'alex@soardcharity.com');
+  await page.evaluate((k) => { location.hash = `#donors/org/${encodeURIComponent(k)}`; }, walkOrg);
+  await page.waitForFunction(() => /Walkthrough Works/.test(document.querySelector('.dn-head h2')?.textContent || ''), { timeout: 8000 });
+  await C.act(env, { act: 'org-delete', key: walkOrg }, 'jordan@soardcharity.com');
+  const savedBefore = saved.length;
+  await page.evaluate(() => [...document.querySelectorAll('.kd-rail button')].find((b) => /Put it on the website/.test(b.textContent))?.click());
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /taken out since this page was read/.test(t.textContent)), { timeout: 8000 }).catch(() => {});
+  ok(saved.length === savedBefore && !(await page.$('.kd-dialog')) && await page.evaluate(() => [...document.querySelectorAll('.toast')].some((t) => /taken out since this page was read/.test(t.textContent))), 'taken out by a teammate meanwhile: Put it on the website says so and makes no partner card');
   ok(!calls.some((c) => /%40|@/.test(c)), 'still no email in any request');
   ok(errors.length === 0, `no console errors on the laptop${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
 

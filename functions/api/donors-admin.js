@@ -20,8 +20,9 @@
  * POST { find: <text> }     → { success, names }             Zeffy names to link to an organization (posted: it can be an email)
  * POST { findPeople, except } → { success, people }          people to join with a person ("Same person as…")
  * GET ?gift=<payment id>    → { success, ref } | { success, org }   which donor a gift is (the MAJOR GIFT Slack link)
- * GET ?counts=1             → { success, checksWaiting, thanks }   the Checks tab's count, on whichever tab is open, and
- *                             how many gifts wait for a thank-you (the sidebar's badge on Donors & Partners)
+ * GET ?counts=1             → { success, checksWaiting, thanks, thanksMark }   the Checks tab's count, on whichever tab
+ *                             is open, how many gifts wait for a thank-you (the sidebar's badge on Donors & Partners),
+ *                             and a mark that changes whenever To thank or an answer does (open tabs read again)
  * POST { act, … }           → { success, … }                 a change (./_donor-crm.js act): links, Keep anonymous, the
  *                             same person, owner, notes (note-add, note-edit, note-delete), thank-yous (thanks, with
  *                             `was`: the state the person saw). `asked`: an answer to a Needs you question, refused (409)
@@ -31,7 +32,7 @@
 import { listView, needsView, thanksView, personView, orgView, orgSummary, orgsList, findNames, findPeople, giftOwner, act } from './_donor-crm.js';
 import { kitFindSubscribers, kitConfigured } from './_kit.js';
 import { checksFacts } from './_check-gifts.js';
-import { thanksCount } from './_donor-thanks.js';
+import { thanksCount, thanksMark } from './_donor-thanks.js';
 
 const ok = (body = {}) => Response.json({ success: true, ...body });
 const fail = (error, status = 400) => Response.json({ success: false, error }, { status });
@@ -42,8 +43,8 @@ export async function onRequestGet({ env, request, data }) {
   try {
     if (q.get('counts')) {
       // Each on its own: one that can't be read never takes the other's count with it
-      const [checks, thanks] = await Promise.all([checksFacts(env.DB).catch(() => null), thanksCount(env.DB).catch(() => null)]);
-      return ok({ checksWaiting: checks?.waiting || 0, thanks });
+      const [checks, thanks, thanksMarkNow] = await Promise.all([checksFacts(env.DB).catch(() => null), thanksCount(env.DB).catch(() => null), thanksMark(env.DB).catch(() => null)]);
+      return ok({ checksWaiting: checks?.waiting || 0, thanks, thanksMark: thanksMarkNow });
     }
     if (q.get('needs')) return ok(await needsView(env));
     if (q.get('thanks')) return ok(await thanksView(env));
@@ -86,7 +87,8 @@ export async function onRequestPost({ env, request, data }) {
     if (typeof body?.findPeople === 'string') return ok(await findPeople(env, body.findPeople, { except: body.except || null }));
     return ok(await act(env, body, data?.userEmail || null));
   } catch (e) {
-    if (e.status && e.status < 500) return fail(e.message, e.status);
+    // (`went`: put on the website as another partner card meanwhile, so the page names the card that isn't needed)
+    if (e.status && e.status < 500) return Response.json({ success: false, error: e.message, ...(e.went ? { went: e.went } : {}) }, { status: e.status });
     console.error('[donors-admin] post', e.message);
     return fail('The site didn’t save that. Try again in a minute.', 500);
   }

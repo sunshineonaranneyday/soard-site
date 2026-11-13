@@ -1306,3 +1306,141 @@ test('a gift in kind Zeffy has no value for: its giver is in the list', async ()
   await add(pay({ id: 'zk', contact: 'ct_zane', first: 'Zane', last: 'Nought', email: 'zane@example.com', method: 'in_kind', amount: 0, items: [{ type: 'donation', amount: 0 }] }));
   assert.ok((await list()).some((p) => p.key === 'c:ct_zane'));
 });
+
+// ─── Found in the seventh round ─────────────────────────────────────
+
+/** env.DB with `hook` run once, just before the first batch (or the first statement matching `match`): a teammate's change landing in between */
+const racing = (DB, hook, match = null) => {
+  let done = false;
+  return new Proxy(DB, {
+    get(t, k) {
+      if (k === 'batch' && !match) return async (stmts) => { if (!done) { done = true; await hook(); } return t.batch(stmts); };
+      if (k === 'prepare' && match) {
+        return (sql) => {
+          const st = t.prepare(sql);
+          if (!match.test(sql)) return st;
+          return { ...st, bind: (...a) => { const b = st.bind(...a); return { ...b, run: async () => { if (!done) { done = true; await hook(); } return b.run(); } }; } };
+        };
+      }
+      const v = t[k];
+      return typeof v === 'function' ? v.bind(t) : v;
+    },
+  });
+};
+
+test('an organization’s owner, taken from a contact that is it by name, is the same in a change as on its page (no false “someone changed”)', async () => {
+  await withTeam();
+  await add(pay({ id: 'bn1', contact: 'ct_acmeco', first: 'Acme', last: 'Builders', email: 'office@acme.example', amount: 20000 }));
+  await db.prepare("INSERT INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES ('owner', 'c:ct_acmeco', '', 1, 'jordan@soardcharity.com', ?, ?)").bind(by, new Date(NOW - DAY).toISOString()).run();
+  assert.equal((await C.orgView(env, 'p:acme', { now: NOW })).owner, 'jordan@soardcharity.com', 'its page shows Jordan');
+  await doIt({ act: 'owner', key: 'p:acme', email: 'alex@soardcharity.com', was: 'jordan@soardcharity.com' });
+  assert.equal((await C.orgView(env, 'p:acme', { now: NOW })).owner, 'alex@soardcharity.com');
+});
+
+test('a gift with no contact that borrows one by email never lends that person’s owner to an organization of its name', async () => {
+  await withTeam();
+  await add(pay({ id: 'lo1', contact: 'ct_lee', first: 'Lee', last: 'Sample', email: 'lee@example.com', amount: 5000 }));
+  await add(pay({ id: 'lo2', contact: null, first: 'Acme', last: 'Builders', email: 'lee@example.com', amount: 7000 }));
+  await doIt({ act: 'owner', key: 'c:ct_lee', email: 'jordan@soardcharity.com', was: '' });
+  assert.equal((await C.orgView(env, 'p:acme', { now: NOW })).owner || null, null, 'Lee’s owner is Lee’s, not Acme’s');
+});
+
+test('the same owner picked twice (an answer lost, then picked again; two teammates picking the same) is no conflict', async () => {
+  await withTeam();
+  await add(pay({ id: 'tb', contact: 'ct_tom', first: 'Tom', last: 'Banks', email: 'tom@example.com' }));
+  await doIt({ act: 'owner', key: 'c:ct_tom', email: 'jordan@soardcharity.com', was: '' });
+  const again = await doIt({ act: 'owner', key: 'c:ct_tom', email: 'jordan@soardcharity.com', was: '' });
+  assert.equal(again.same, true);
+  assert.equal((await C.personView(env, 'ct_tom', { now: NOW })).owner, 'jordan@soardcharity.com');
+});
+
+test('an owner changed by a teammate between the read and the write is never written over', async () => {
+  await withTeam();
+  await add(pay({ id: 'rc', contact: 'ct_rae', first: 'Rae', last: 'Cole', email: 'rae@example.com' }));
+  const teammate = () => db.prepare("INSERT INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES ('owner', 'c:ct_rae', '', 1, 'jordan@soardcharity.com', 'jordan@soardcharity.com', ?)").bind(new Date(NOW).toISOString()).run();
+  const renv = { DB: racing(db, teammate) };
+  await assert.rejects(C.act(renv, { act: 'owner', key: 'c:ct_rae', email: 'alex@soardcharity.com', was: '' }, by, { now: NOW }), (e) => e.status === 409 && /jordan/.test(e.message));
+  assert.equal((await C.personView(env, 'ct_rae', { now: NOW })).owner, 'jordan@soardcharity.com', 'Jordan’s answer stands');
+});
+
+test('a note or a name changed by a teammate between the read and the write is never written over', async () => {
+  await withTeam();
+  await add(pay({ id: 'nr', contact: 'ct_nia', first: 'Nia', last: 'Ross', email: 'nia@example.com' }));
+  const { id } = await doIt({ act: 'note-add', key: 'c:ct_nia', body: 'Called in May', id: 'note-nia-1' });
+  const theirs = () => db.prepare("UPDATE donor_notes SET body = 'Called in May; sends a check each June', edited_by = 'jordan@soardcharity.com' WHERE id = ?").bind(id).run();
+  const nenv = { DB: racing(db, theirs, /^UPDATE donor_notes SET body/) };
+  await assert.rejects(C.act(nenv, { act: 'note-edit', id, body: 'Called in May and June', was: 'Called in May' }, by, { now: NOW }), (e) => e.status === 409 && /Jordan changed this note/.test(e.message));
+  assert.equal((await C.personView(env, 'ct_nia', { now: NOW })).notes[0].body, 'Called in May; sends a check each June');
+  // Deleted meanwhile: said so (404), not "changed"
+  await db.prepare('DELETE FROM donor_notes WHERE id = ?').bind(id).run();
+  await assert.rejects(doIt({ act: 'note-edit', id, body: 'x', was: 'Called in May' }), (e) => e.status === 404);
+  const { key } = await doIt({ act: 'org-new', name: 'Ross Family Fund', links: [] });
+  const renamed = () => db.prepare("UPDATE donor_orgs SET name = 'The Ross Family Fund' WHERE key = ?").bind(key).run();
+  const oenv = { DB: racing(db, renamed) };
+  await assert.rejects(C.act(oenv, { act: 'org-rename', key, name: 'Ross Fund', was: 'Ross Family Fund' }, by, { now: NOW }), (e) => e.status === 409 && /The Ross Family Fund/.test(e.message));
+  const names = (await db.prepare("SELECT note FROM donor_calls WHERE kind = 'kept-name' AND target = ?").bind(key).all()).results.map((r) => r.note);
+  assert.ok(!names.includes('Ross Fund'), 'nothing of the refused rename was written');
+  assert.equal((await db.prepare('SELECT name FROM donor_orgs WHERE key = ?').bind(key).first()).name, 'The Ross Family Fund');
+});
+
+test('a partner card renamed (or added under an organization’s name) in the Partners editor keeps the gifts names counted by themselves', async () => {
+  await add(pay({ id: 'pr1', contact: 'ct_acmeco', first: 'Acme', last: 'Builders', email: 'office@acme.example', amount: 20000 }));
+  await add(pay({ id: 'pr2', company: 'Acme Builders', amount: 30000 }));
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 50000);
+  // Renamed: both gifts stay with it
+  await C.keepGiftsForPartnerName(db, { slug: 'acme', name: 'Acme Builders Group', by, now: NOW });
+  await db.prepare("UPDATE partners SET data = ? WHERE slug = 'acme'").bind(JSON.stringify({ name: 'Acme Builders Group', level: 'friend', category: ['funding'] })).run();
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 50000, 'still Acme’s after the rename');
+  // A new card named as an organization kept here: that organization keeps what its name counted
+  await add(pay({ id: 'pr3', contact: 'ct_ivers', first: 'Ivers', last: 'Foundation', email: 'grants@ivers.example', amount: 40000 }));
+  const { key } = await doIt({ act: 'org-new', name: 'Ivers Foundation', links: [] });
+  assert.equal((await list()).find((p) => p.key === key)?.total, 40000);
+  await C.keepGiftsForPartnerName(db, { slug: 'ivers', name: 'Ivers Foundation', by, now: NOW });
+  await db.prepare(partner('ivers', 'Ivers Foundation')).run();
+  assert.equal((await list()).find((p) => p.key === key)?.total, 40000, 'the kept one still has its gift');
+  // Nothing changed (the same name): nothing written
+  assert.equal(await C.keepGiftsForPartnerName(db, { slug: 'pella', name: 'Pella', by, now: NOW }), 0);
+});
+
+test('save-content: renaming a partner card keeps the gifts its old name counted', async () => {
+  const real = await createD1({ schemaFiles: ['scripts/schema.sql'] });
+  await real.exec('CREATE TABLE IF NOT EXISTS kids (slug TEXT, name TEXT, data TEXT)').catch(() => {});
+  const { onRequestPost: saveContent } = await import('../functions/api/save-content.js');
+  const save = (content, sha = null) => saveContent({ env: { DB: real }, data: { userEmail: by }, waitUntil: () => {},
+    request: new Request('https://admin.test/api/save-content', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'src/content/partners/zeta.json', content: JSON.stringify(content), message: 'Partner', ...(sha ? { sha } : {}) }) }) });
+  assert.equal((await save({ name: 'Zeta Works', slug: 'zeta', level: 'friend', category: ['funding'] })).status, 200);
+  await D.noteDonorPayment({ DB: real }, pay({ id: 'zw', contact: 'ct_zeta', first: 'Zeta', last: 'Works', email: 'hello@zeta.example', amount: 25000 }), { now: NOW });
+  const total = async () => (await C.listView({ DB: real }, { now: NOW })).people.find((p) => p.key === 'p:zeta')?.total;
+  assert.equal(await total(), 25000);
+  assert.equal((await save({ name: 'Zeta Works Studio', slug: 'zeta', level: 'friend', category: ['funding'] })).status, 200);
+  assert.equal(await total(), 25000, 'the gift stays with the renamed card');
+});
+
+test('Needs you asks about a person once at a time: a big company gift waits while its giver is asked “same person?”', async () => {
+  await add(pay({ id: 'bg1', contact: 'ct_lee1', first: 'Lee', last: 'Sample', email: 'lee@example.com', company: 'Sample Holdings', amount: 1500000 }));
+  await add(pay({ id: 'bg2', contact: 'ct_lee2', first: 'Lee', last: 'Sample', email: 'lee@example.com', amount: 5000, created: S(NOW - 3 * DAY) }));
+  let items = await needs();
+  assert.ok(items.some((i) => i.kind === 'same'), 'asked: the same person?');
+  assert.ok(!items.some((i) => i.kind === 'big'), 'the company waits');
+  await doIt({ act: 'same', a: 'c:ct_lee1', b: 'c:ct_lee2', same: true });
+  items = await needs();
+  assert.ok(items.some((i) => i.kind === 'big' && /Sample Holdings/.test(i.name)), 'then asked about the company');
+});
+
+test('a company linked to an organization shows by the name it was typed, never its key', async () => {
+  await add(pay({ id: 'cn1', contact: 'ct_lee', first: 'Lee', last: 'Sample', email: 'lee@example.com', company: 'Pella Window & Door of Georgia', amount: 30000 }));
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_lee', org: 'p:pella' });
+  await doIt({ act: 'link', kind: 'company', subject: 'Pella Window & Door of Georgia', org: 'p:pella' });
+  const names = (await C.orgView(env, 'p:pella', { now: NOW })).names.map((x) => x.name);
+  assert.ok(names.includes('Pella Window & Door of Georgia'), names.join(', '));
+  assert.ok(!names.includes('pellawindowdoorofgeorgia'));
+});
+
+test('someone whose every gift counts for an organization is found in the list by their own name and email', async () => {
+  await add(pay({ id: 'gv1', contact: 'ct_dana', first: 'Dana', last: 'Whitfield', email: 'dana@example.com', amount: 30000 }));
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_dana', org: 'p:acme' });
+  const people = await list();
+  assert.ok(!people.some((p) => p.key === 'c:ct_dana'), 'no row of her own');
+  const acme = people.find((p) => p.key === 'p:acme');
+  assert.deepEqual(acme.givers, [{ name: 'Dana Whitfield', emails: ['dana@example.com'] }]);
+});

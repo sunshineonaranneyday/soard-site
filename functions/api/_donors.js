@@ -480,8 +480,17 @@ export async function donorsView(env, { now = Date.now(), crm = null, rows: give
     if (d.stage === 'none' && !(crm && String(key).startsWith('o:') && crm.isOrg(key))) continue;
     const { years, ...rest } = d;
     if (crm && crm.isOrg(key)) {
-      // An organization: its name as the site has it, and where it is on the website
-      people.push({ ...rest, ...crm.orgFacts(key), key, ref: key, type: 'org', owner: crm.lookedAfterBy(key) });
+      // An organization: its name as the site has it, and where it is on the website. Who gave for it (their names and
+      // emails) is searched too: a person whose every gift counts for it is found by their own name, at its row
+      const givers = new Map();
+      for (const r of list) {
+        const p = place(r).person;
+        const g = givers.get(p) || { name: givenName({ first_name: r.first, last_name: r.last }) || '', emails: new Set() };
+        if (r.email) g.emails.add(String(r.email).toLowerCase());
+        givers.set(p, g);
+      }
+      people.push({ ...rest, ...crm.orgFacts(key), key, ref: key, type: 'org', owner: crm.lookedAfterBy(key),
+        givers: [...givers.values()].slice(0, 40).map((g) => ({ name: g.name, emails: [...g.emails].slice(0, 3) })) });
       continue;
     }
     // Its address in admin: the Zeffy contact, or one of its gifts (never an email or a name in a link)

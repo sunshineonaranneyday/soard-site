@@ -295,7 +295,8 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
   }
   // Every To thank, judged by its own charges:
   //   none gives anything any more: all refunded in full closes it; any the list doesn't have, Zeffy is asked (below);
-  //   one the list doesn't have, the rest still given: nothing changes (a read may have missed it), a charge joining aside;
+  //   one the list doesn't have, the rest still given: it waits as it is (a read may have missed it), a charge joining
+  //   aside, and Zeffy is asked about that one too, so it's settled (back in the list, or off this To thank) in hours;
   //   still needing a thank-you: it keeps up (amount, how, name);
   //   not, with some refunded (in full or in part): it stays (part is still given: a person says), saying so;
   //   not, otherwise: Zeffy shows the gift changed (a charge moved to another giver, a check re-entered as a card): closed
@@ -317,6 +318,7 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     }
     if (missing.length) {
       if (changedIds) steps.push(DB.prepare("UPDATE donor_thanks SET ids = ? WHERE id = ? AND state = 'todo'").bind(ids.join(' '), t.id));
+      if (!t.asked_at || now - Date.parse(t.asked_at) >= GONE_ASK_MS) lost.push({ t, id: missing[0], ids });
       continue;
     }
     const g = asGift(giftOfCharge.get(giving[0].id) || {}, giving);
@@ -389,6 +391,19 @@ export async function thanksCount(DB) {
   await ensureThanks(DB);
   return Number((await DB.prepare("SELECT COUNT(*) AS n FROM donor_thanks WHERE state = 'todo'").first())?.n) || 0;
 }
+/**
+ * What To thank is, in a few characters: changes when one is added, said, closed or its gift changed, or when any
+ * answer in Donors & Partners is (an owner, a link: whose a thank-you is and who looks after them). An open tab
+ * reads its lists again when it changes, whoever changed it
+ */
+export async function thanksMark(DB) {
+  await ensureThanks(DB);
+  const [t, c] = await Promise.all([
+    DB.prepare("SELECT COUNT(*) AS n, MAX(created_at) AS c, MAX(done_at) AS d, MAX(asked_at) AS a, SUM(length(ids)) AS l FROM donor_thanks").first(),
+    DB.prepare('SELECT COUNT(*) AS n, MAX(at) AS a FROM donor_calls').first().catch(() => null),
+  ]);
+  return [t?.n, t?.c, t?.d, t?.a, t?.l, c?.n, c?.a].map((x) => x ?? '').join('|');
+}
 /** The thank-you of each charge given: Map charge id → { id, state, why, by, at, gone } */
 export async function thanksFor(DB, chargeIds) {
   await ensureThanks(DB);
@@ -408,6 +423,14 @@ const SAID = { thanked: 'Thanked', skipped: 'No thank-you needed', todo: 'To tha
  * gift. `was`: the state the person saw. Someone else said otherwise since (another tab, a teammate): nothing changes,
  * and they're told who said what (409). → the row as it was
  */
+// Why a thank-you closed by itself, as a person trying to mark it is told
+const GONE_SAID = {
+  refunded: 'That gift was refunded in Zeffy, so there’s no thank-you to say.',
+  failed: 'That payment didn’t go through in Zeffy, so there’s no thank-you to say.',
+  deleted: 'That gift was taken out of Zeffy, so there’s no thank-you to say.',
+  changed: 'Zeffy shows that gift changed since (moved to another giver, or entered again another way), so this thank-you closed. Reload to see it as it is now.',
+};
+
 export async function markThanks(DB, { id, state, was = null }, by, { now = Date.now() } = {}) {
   await ensureThanks(DB);
   if (!['thanked', 'skipped', 'todo'].includes(state)) throw Object.assign(new Error('Thanked, not needed, or To thank'), { status: 400 });
@@ -415,7 +438,7 @@ export async function markThanks(DB, { id, state, was = null }, by, { now = Date
   const t = (await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE id = ?`).bind(want).first())
     || await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE instr(' ' || ids || ' ', ?) > 0`).bind(` ${want} `).first();
   if (!t) throw Object.assign(new Error('That gift has no thank-you to say. Reload and look again.'), { status: 404 });
-  if (t.state === 'gone') throw Object.assign(new Error('That gift was refunded or taken out of Zeffy, so there’s no thank-you to say.'), { status: 409 });
+  if (t.state === 'gone') throw Object.assign(new Error(GONE_SAID[t.gone] || GONE_SAID.deleted), { status: 409 });
   const who = (e) => { const n = String(e || '').split('@')[0]; return n ? `${n[0].toUpperCase()}${n.slice(1)}` : ''; };
   const changed = (x) => Object.assign(new Error(`${x.done_by && by && x.done_by === by ? 'You said ' : x.done_by ? `${who(x.done_by)} said ` : 'Someone said '}“${SAID[x.state] || x.state}”${x.done_by && x.done_by === by ? ' in another tab' : ''} since you looked. Nothing was changed.`), { status: 409, state: x.state });
   // Already what was asked (a second click, a teammate who said the same): nothing changes, and nothing to log or undo

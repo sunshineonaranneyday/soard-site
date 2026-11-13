@@ -27,6 +27,7 @@ import { HISTORY_TABLES, SITE_COLLECTION, recordVersion as recordContentVersion 
 import { coverOf } from './_job-covers.js';
 import { syncCoverForKid } from './_kid-status.js';
 import { recheckWaiting } from './_kid-partners.js';
+import { keepGiftsForPartnerName } from './_donor-crm.js';
 
 export async function onRequestPost(context) {
   try {
@@ -127,6 +128,12 @@ export async function onRequestPost(context) {
       }
     }
 
+    // A partner card added or renamed: the gifts Donors & Partners counted for a name by itself stay where they count
+    // (written first: if the save is then refused, they're only linked where they counted already)
+    if (parsed.table === 'partners' && (data?.name || parsed.slug) !== (oldData?.name || (oldData ? parsed.slug : null))) {
+      await keepGiftsForPartnerName(DB, { slug: parsed.slug, name: data?.name, by: userEmail, now: Date.parse(now) });
+    }
+
     // 1. Write to D1 FIRST (source of truth — prebuild reads from D1, not GitHub)
     if (parsed.type === 'site') {
       await DB.prepare(
@@ -139,7 +146,7 @@ export async function onRequestPost(context) {
       // A create (create: true) is a plain INSERT: two at one address at the same moment, the second is refused by the
       // database itself, never written over the first
       const verb = create === true ? 'INSERT' : 'INSERT OR REPLACE';
-      const taken = (e) => { if (create === true && /UNIQUE|constraint/i.test(String(e?.message || e))) throw Object.assign(new Error('There’s one at that address already: someone added it a moment ago. Nothing was changed.'), { status: 409 }); throw e; };
+      const taken = (e) => { if (create === true && /UNIQUE constraint/i.test(String(e?.message || e))) throw Object.assign(new Error('There’s one at that address already: someone added it a moment ago. Nothing was changed.'), { status: 409 }); throw e; };
       if (extractor && !isCreate) {
         // Written only if the stored record is still the one read above: a sync or a credit card landing between
         // that read and this write isn't overwritten (the editor is told to reload instead)

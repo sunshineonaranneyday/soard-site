@@ -7901,7 +7901,8 @@
     function toastFocusBack(done) {
       Promise.resolve(done).catch(() => {}).finally(() => requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return;
-        const h = document.querySelector('.main h2, .main h1');
+        // The page's own heading, one that shows (never the screen-reader-only "SOARD Admin")
+        const h = [...document.querySelectorAll('.main h1, .main h2')].find((x) => !x.closest('.sr-only') && x.getClientRects().length);
         if (!h) return;
         if (!h.hasAttribute('tabindex')) h.setAttribute('tabindex', '-1');
         h.focus({ preventScroll: true });
@@ -25355,8 +25356,10 @@ ${sections || '<p>No one yet.</p>'}
      *  at a time, refreshed while someone's looking and the tab is visible, and
      *  at once on `on`: an event an area sends when it changes what's counted
      *  (read again), or when it has just read the number itself ({ detail: { value } }) */
-    function sharedPoll(url, read, everyMs, { on = null, moved = null } = {}) {
-      const s = { v: read(null), at: 0, subs: new Set(), timer: null, n: 0 };
+    // `moved` (an event name) is sent when what `mark` reads changes between two looks (a teammate's change in another
+    // tab): never on the first look
+    function sharedPoll(url, read, everyMs, { on = null, moved = null, mark = null } = {}) {
+      const s = { v: read(null), at: 0, subs: new Set(), timer: null, n: 0, mark: undefined, had: false };
       const put = (v) => { if (v !== s.v) { s.v = v; s.subs.forEach((f) => f(v)); } };
       // Only the newest answer counts: a slow one from before a change never lands over the number after it
       const refresh = async () => {
@@ -25369,7 +25372,14 @@ ${sections || '<p>No one yet.</p>'}
           // (read says undefined when the answer has no number: the last one stays, never a 0 that hides the badge)
           const v = read(j);
           // Changed by someone else (a teammate in another tab): whoever shows the same thing reads again (`moved`)
-          if (mine === s.n && v !== undefined) { const was = s.v; put(v); if (moved && s.at && v !== was) window.dispatchEvent(new Event(moved)); }
+          if (mine !== s.n || v === undefined) return;
+          put(v);
+          const m = mark ? mark(j) : v;
+          if (m === undefined || m === null) return;
+          const was = s.mark;
+          s.mark = m;
+          if (moved && s.had && m !== was) window.dispatchEvent(new Event(moved));
+          s.had = true;
         } catch { /* keeps what it had until the next look */ }
       };
       const heard = (e) => { if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } else refresh(); };
@@ -25404,7 +25414,7 @@ ${sections || '<p>No one yet.</p>'}
     // Families at Applied, waiting for a first look: Applications' badge
     const applicantsNew = sharedPoll('/api/applicants-count', (j) => (j?.success ? j.applied || 0 : 0), 300e3);
     // Gifts waiting for a thank-you (Donors & Partners → To thank): its badge. Donors says when one is marked
-    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j === null ? 0 : j?.success && Number.isFinite(j.thanks) ? j.thanks : undefined), 300e3, { on: 'soard-thanks-changed', moved: 'soard-thanks-moved' });
+    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j === null ? 0 : j?.success && Number.isFinite(j.thanks) ? j.thanks : undefined), 300e3, { on: 'soard-thanks-changed', moved: 'soard-thanks-moved', mark: (j) => (j?.success && typeof j.thanksMark === 'string' ? j.thanksMark : undefined) });
     // One of the Board area's admins (Board → Members): the menu and ⌘K show Board only to them
     const boardAdminGate = sharedPoll('/api/board-admin?me=1', (j) => j?.admin === true, 30 * 60e3);
     const navShown = (it, boardAdmin) => it.gate !== 'board' || boardAdmin;

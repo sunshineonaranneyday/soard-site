@@ -126,7 +126,7 @@ const STYLE = `
 .dn-plain { display: grid; gap: .6rem; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
 .dn-plain li { display: grid; gap: .15rem; min-width: 0; overflow-wrap: anywhere; }
 .dn-row-do { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; margin-top: .15rem; }
-.dn-linkbtn { padding: 0; border: none; background: none; font: inherit; font-size: inherit; cursor: pointer; }
+.dn-linkbtn { padding: 0; border: none; background: none; font: inherit; font-size: inherit; cursor: pointer; justify-self: start; text-align: left; }
 .dn-suggest { margin-top: .75rem; padding: .7rem .8rem; border-radius: 10px; background: var(--tone-warn-surface, #FFF9DB); font-size: var(--fs-sm); }
 .dn-suggest p { margin: 0 0 .4rem; }
 .dn-maybe { padding: .6rem .75rem; border-radius: 10px; background: var(--tone-warn-surface, #FFF9DB); }
@@ -417,8 +417,11 @@ function DonorList({ ctx, view, onView, onOpen }) {
   useEffect(() => { if (v && owner && owner !== 'none' && owner !== me && !staff.some((s) => s.email === owner)) { setOwner(''); lastOwner = ''; } }, [v, owner]);
   const words = q.trim().toLowerCase();
   const inStage = (p, s) => (s === 'all' ? true : s === 'org' ? p.type === 'org' : s === 'yearend' ? p.lastYear > 0 && !p.thisYear : p.stage === s);
+  const has = (x) => String(x || '').toLowerCase().includes(words);
+  // An organization is found by who gave for it too (a person whose every gift counts for it has no row of their own)
+  const giverOf = (p) => (words && p.type === 'org' && ![p.name, ...(p.companies || []), ...(p.funds || [])].some(has) ? (p.givers || []).find((g) => [g.name, ...(g.emails || [])].some(has)) : null);
   const matches = useMemo(() => people.filter((p) => inStage(p, stage) && ownerOk(owner, p.owner)
-    && (!words || [p.name, p.email, ...(p.companies || []), ...(p.funds || [])].some((x) => String(x || '').toLowerCase().includes(words))))
+    && (!words || [p.name, p.email, ...(p.companies || []), ...(p.funds || [])].some(has) || !!giverOf(p)))
     .sort(SORTS.find(([k]) => k === sort)[2]), [people, words, stage, sort, owner]);
   const count = (s) => people.filter((p) => inStage(p, s) && ownerOk(owner, p.owner)).length;
   // Gifts to thank, under the Owner filter like every other count (and like the To thank list)
@@ -486,7 +489,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
         <thead><tr><th scope="col">Donor</th><th scope="col">Stage</th><th scope="col" class="num dn-hide-sm">${yearEnd ? 'Last year' : 'This year'}</th><th scope="col" class="num">All time</th><th scope="col" class="num dn-hide-sm">Latest gift</th><th scope="col" class="dn-hide-sm">Owner</th></tr></thead>
         <tbody>${matches.slice(0, shown).map((p) => html`<tr key=${p.key} class="dn-row" data-key=${p.key} onClick=${(e) => { if (!e.target.closest('button')) openDonor(p); }}>
           <td><button type="button" class="dn-name" onClick=${() => openDonor(p)}>${p.name}</button>
-            <span class="dn-sub">${p.type === 'org' ? html`${orgTag(p)} ` : null}${[p.type !== 'org' && p.companies?.length ? `for ${p.companies.join(', ')}` : null, p.funds?.length ? `through ${p.funds.join(', ')}` : null, p.keepAnonymous ? 'kept anonymous' : p.anonymous ? 'asked to be anonymous' : null, `${plural(p.gifts, 'gift')}${p.streak > 1 ? `, ${p.streak} years in a row` : ''}`].filter(Boolean).join(' · ')}</span></td>
+            <span class="dn-sub">${p.type === 'org' ? html`${orgTag(p)} ` : null}${[giverOf(p) ? `given by ${giverOf(p).name || giverOf(p).emails[0]}` : null, p.type !== 'org' && p.companies?.length ? `for ${p.companies.join(', ')}` : null, p.funds?.length ? `through ${p.funds.join(', ')}` : null, p.keepAnonymous ? 'kept anonymous' : p.anonymous ? 'asked to be anonymous' : null, `${plural(p.gifts, 'gift')}${p.streak > 1 ? `, ${p.streak} years in a row` : ''}`].filter(Boolean).join(' · ')}</span></td>
           <td>${stageTag(p.stage)}</td>
           <td class="num dn-hide-sm">${(yearEnd ? p.lastYear : p.thisYear) ? usd(yearEnd ? p.lastYear : p.thisYear) : '–'}</td>
           <td class="num">${usd(p.total)}</td>
@@ -515,13 +518,40 @@ async function sayThanks(ctx, g, state) {
   if (r.same) { ctx.addToast(`${state === 'thanked' ? 'Thanked' : 'No thank-you needed'} already${r.you ? ' (you said so in another tab)' : r.by ? `, said by ${r.by.split('@')[0].replace(/^./, (c) => c.toUpperCase())}` : ''}`, 'info'); return true; }
   const undo = async () => {
     const u = await change({ act: 'thanks', id: g.id, state: 'todo', was: state });
+    // Back in its list: the focus on it (pressed from the toast, the focus had nowhere to be), once a read shows it
+    const back = u.success ? focusWhenBack(g.id) : null;
     listChanged();
     thanksChanged();
-    if (!u.success) ctx.addToast(u.error, 'error');
+    if (!u.success) { ctx.addToast(u.error, 'error'); return; }
+    await back;
   };
-  const from = g.name ? ` from ${g.name}` : '';
+  // (Zeffy with no name for them: the gift alone, never "from No name")
+  const from = g.name && g.name !== 'No name' ? ` from ${g.name}` : '';
   ctx.addToast(state === 'thanked' ? `Thanked: ${amountOf(g)}${from}` : `No thank-you needed: ${amountOf(g)}${from}`, 'success', { label: 'Undo', fn: undo });
   return true;
+}
+/** A list of thank-yous (To thank, a donor's page) shows a fresh read: whoever waits for one looks again */
+const thanksRead = () => window.dispatchEvent(new Event('soard-thanks-read'));
+/**
+ * A thank-you said To thank again (Undo): its Thanked button, once a read made after the Undo shows it again (one read
+ * before it may still show it as it was, then not at all), and only while the focus is nowhere a person put it
+ */
+function focusWhenBack(id) {
+  return new Promise((done) => {
+    let t = null;
+    const finish = () => { window.removeEventListener('soard-thanks-read', look); clearTimeout(t); done(); };
+    function look() {
+      requestAnimationFrame(() => {
+        const el = document.querySelector(`[data-thank="${CSS.escape(String(id))}"] .btn-primary`);
+        if (!el) return;
+        const a = document.activeElement;
+        if (!a || a === document.body || a.matches('h1, h2, .toast-undo, [tabindex="-1"]')) el.focus();
+        finish();
+      });
+    }
+    window.addEventListener('soard-thanks-read', look);
+    t = setTimeout(finish, 6000);
+  });
 }
 /** After an item of a list is answered and goes: the focus on the one that took its place, else the list's words */
 function useRefocus(selector, ready, otherwise = '.dn-done, .dn-status') {
@@ -559,6 +589,7 @@ function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
     setErr(null);
     setV(j);
     onCount(j.items);
+    thanksRead();
   };
   useEffect(() => { load(); }, []);
   useThanksSaid(load);
@@ -576,7 +607,7 @@ function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
   if (!items.length) return html`<p class="dn-status dn-done">${owner ? `Nothing to thank for donors looked after by ${ownerName}.` : 'Nothing to thank.'} A gift shows here when Zeffy sends the giver no thank-you (a check, a donor-advised fund, a gift in kind, anything entered by hand) or it’s $1,000 or more.</p>`;
   return html`
     <p class="dn-status">Zeffy thanks online givers by email. These it doesn’t, or they’re big enough for a call or a note from the team. The one waiting longest is first${owner ? `; looked after by ${ownerName}` : ''}.</p>
-    <ul class="dn-needs" aria-label="To thank">${items.map((t) => html`<li key=${t.id} class="card dn-need">
+    <ul class="dn-needs" aria-label="To thank">${items.map((t) => html`<li key=${t.id} class="card dn-need" data-thank=${t.id}>
       <p class="dn-need__q">Thank ${t.name}${t.org && t.org.name !== t.name ? ` (for ${t.org.name})` : !t.org && t.company && t.company !== t.name && t.how !== 'Donor-advised fund' ? ` (for ${t.company})` : ''}: ${amountOf(t)}</p>
       <p class="dn-need__sub">${[t.how, t.campaign, day(t.at)].filter(Boolean).join(' · ')}. ${t.whyText}.</p>
       <p class="dn-need__sub">${t.owner ? `Looked after by ${fullName(t.owner, v.staff)}` : 'No one looks after them yet'} · ${waiting(t.since)}</p>
@@ -602,7 +633,18 @@ async function makeChampion(item, ctx) {
   // One step on the site: the partner moved (an upgrade only, as it is at that moment) and the answer said, together;
   // refused (someone answered, or moved them, since), nothing changes and it says why
   const r = await change({ act: 'level', org: item.org, done: true, was: item.levelLabel, asked: true, move: true });
-  if (!r.success) { ctx.addToast(`Couldn’t move ${item.name}: ${r.error}`, 'error'); return false; }
+  if (!r.success) {
+    // The answer lost on the way back (the move may have gone through): as it is now, never a failure that worked
+    const now = r.status && r.status < 500 ? null : await get(`?org=${encodeURIComponent(item.org)}`);
+    if (now?.success && now.level === 'champion') {
+      window.dispatchEvent(new CustomEvent('soard-content-changed'));
+      ctx.partnersChanged?.();
+      ctx.addToast(`${item.name} moves to Champion when you publish`, 'success', null, { publish: true });
+      return true;
+    }
+    ctx.addToast(`Couldn’t move ${item.name}: ${r.error}`, 'error');
+    return false;
+  }
   // A partner's level is the website's: the Publish bar counts it at once, and Partners shows it there
   window.dispatchEvent(new CustomEvent('soard-content-changed'));
   ctx.partnersChanged?.();
@@ -807,7 +849,8 @@ function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
     const r = await change({ act: 'owner', key: subject, email, was: owner || '' });
     saving.current = null;
     setBusy(false);
-    if (!r.success) { ctx.addToast(r.error, 'error'); e.target.value = owner || ''; if (r.status === 409) await onDone(); return; }
+    // Refused, or the answer lost on the way back (it may have saved): the page reads again, so it shows who it is now
+    if (!r.success) { ctx.addToast(r.error, 'error'); e.target.value = owner || ''; await onDone(); return; }
     listChanged();
     ctx.addToast(email ? `${fullName(email, staff)} looks after ${name} now` : `No one looks after ${name} now`, 'success');
     await onDone();
@@ -840,7 +883,7 @@ function ThankBox({ gifts, name, ctx }) {
   };
   return html`<section class="card kd-sec dn-thank" aria-labelledby="dn-thank-h">
     <header class="kd-sec__head"><h3 id="dn-thank-h">To thank <span class="count">${todo.length}</span></h3></header>
-    <ul class="dn-thank__list">${todo.map((g) => html`<li key=${g.id} class="dn-thank__one">
+    <ul class="dn-thank__list">${todo.map((g) => html`<li key=${g.id} class="dn-thank__one" data-thank=${g.thanks.id}>
       <span><strong>${amountOf({ cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind, thanks: g.thanks })}</strong> · ${[g.campaign || 'A gift', g.thanks.how || g.how, day(g.at), g.by ? `from ${g.by}` : null, g.thanks.ids && g.ids?.length > 1 && !g.thanks.ids.includes(g.ids[0]) ? 'the part given later' : null].filter(Boolean).join(' · ')}</span>
       <span class="dn-sub">${g.thanks.whyText}.</span>
       <span class="dn-row-do">
@@ -857,6 +900,8 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState('');
+  // The note's words when Change was pressed: changed by a teammate since, it shows above the person's own
+  const [from, setFrom] = useState(null);
   const box = useRef(null);
   // The note being added: named here, so pressing Add again after an answer that was lost saves it once
   const pending = useRef(null);
@@ -876,7 +921,7 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   };
   // The focus back on a note's Change (after saving or leaving a change), or the next note's (after a delete), else the box
   const focusNote = (id) => requestAnimationFrame(() => (document.querySelector(`.dn-note[data-note="${CSS.escape(id || '')}"] .dn-note__change`) || box.current)?.focus());
-  const stop = (n) => { setEditing(null); focusNote(n.id); };
+  const stop = (n) => { setEditing(null); setFrom(null); focusNote(n.id); };
   const save = async (n) => {
     const t = draft.trim();
     if (!t || busy) return;
@@ -884,8 +929,24 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
     setBusy(true);
     const r = await change({ act: 'note-edit', id: n.id, body: t, was: n.body });
     setBusy(false);
-    if (!r.success) { ctx.addToast(r.error, 'error'); if (r.status === 404 || r.status === 409) { setEditing(null); await onDone(); } return; }
+    if (!r.success) {
+      // Never the person's words lost: deleted since, they go to the new note box; changed since, they stay in the
+      // editor with the note as it is now above them (Save then puts theirs in its place)
+      if (r.status === 404) {
+        setEditing(null);
+        setFrom(null);
+        setText((x) => (x.trim() ? `${x.trimEnd()}\n\n${t}` : t));
+        ctx.addToast('That note was deleted since you looked. Your words are in the new note box: Add note saves them.', 'error');
+        await onDone();
+        box.current?.focus();
+        return;
+      }
+      ctx.addToast(r.status === 409 ? `${r.error} Your words are still in the box.` : r.error, 'error');
+      if (r.status === 409) await onDone();
+      return;
+    }
     setEditing(null);
+    setFrom(null);
     await onDone();
     focusNote(n.id);
   };
@@ -912,6 +973,7 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
         <button type="submit" class="btn btn-primary btn-sm" disabled=${!text.trim()} aria-disabled=${busy ? 'true' : null}>Add note</button></div>
     </form>
     ${notes.length ? html`<ul class="dn-notes">${notes.map((n) => html`<li key=${n.id} class="dn-note" data-note=${n.id}>
+      ${editing === n.id && from !== null && n.body !== from ? html`<p class="dn-sub" id=${`dn-note-now-${n.id}`}>Changed since you began. It reads now:</p><p class="dn-note__body">${n.body}</p>` : null}
       ${editing === n.id ? html`<textarea id=${`dn-note-${n.id}`} aria-label="Change the note" class="form-input" rows="3" maxlength="4000" value=${draft} readOnly=${busy} aria-busy=${busy ? 'true' : null} data-escape="local"
           onInput=${(e) => setDraft(e.target.value)} onKeyDown=${(e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); stop(n); return; } keys(() => save(n))(e); }}
           ref=${(el) => { if (el && !el.dataset.focused) { el.dataset.focused = '1'; el.focus(); } }}></textarea>
@@ -919,7 +981,7 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
           <button type="button" class="btn btn-ghost btn-sm" onClick=${() => { if (!busy) stop(n); }}>Cancel</button></span>`
       : html`<p class="dn-note__body">${n.body}</p>`}
       <span class="dn-note__meta"><span>${n.by ? fullName(n.by, staff) : 'Someone'} · ${when(n.at)}${n.editedAt ? ` · changed${n.editedBy && n.editedBy !== n.by ? ` by ${firstName(n.editedBy, staff)}` : ''} ${when(n.editedAt)}` : ''}</span>
-        ${editing === n.id ? null : html`<button type="button" class="link dn-linkbtn dn-note__change" onClick=${() => { if (!busy) { setDraft(n.body); setEditing(n.id); } }}>Change</button>
+        ${editing === n.id ? null : html`<button type="button" class="link dn-linkbtn dn-note__change" onClick=${() => { if (!busy) { setDraft(n.body); setFrom(n.body); setEditing(n.id); } }}>Change</button>
         <button type="button" class="link dn-linkbtn" onClick=${() => del(n)}>Delete</button>`}</span>
     </li>`)}</ul>` : null}
   </section>`;
@@ -959,7 +1021,8 @@ function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone 
     setBusy(true);
     const r = await change({ act: 'anon', key: subject, on: next });
     setBusy(false);
-    if (!r.success) { ctx.addToast(r.error, 'error'); e.target.checked = !next; return; }
+    // Refused, or the answer lost on the way back (it may have saved): the page reads again, so the box shows what's so
+    if (!r.success) { ctx.addToast(r.error, 'error'); e.target.checked = !next; onDone(); return; }
     listChanged();
     ctx.addToast(next ? `${name} is kept anonymous` : `${name} is no longer kept anonymous`, 'success');
     onDone();
@@ -1006,6 +1069,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     if (j.org) { onOrg(j.org); return; }
     setV(j);
+    thanksRead();
   };
   useEffect(() => { setV(null); load(); }, [donor, gift]);
   // A thank-you said elsewhere (a toast's Undo from another page): this page as it is now
@@ -1156,6 +1220,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     // Kept here before, on the website now: its partner's page, at its address
     if (j.org && !j.donor) { history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
     setV(j);
+    thanksRead();
   };
   useEffect(() => { setV(null); load(); }, [orgKey]);
   useThanksSaid(() => { if (v) load(); });
@@ -1191,30 +1256,39 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   // Refused (answered by someone since): the page as it is now, so the question it showed goes
   const say = async (body, done) => { setBusy(true); const r = await change(body); setBusy(false); if (!r.success) { ctx.addToast(r.error, 'error'); await load(); return false; } listChanged(); if (done) ctx.addToast(done, 'success'); await load(); return true; };
   const putOnSite = async () => {
-    if (v.keepAnonymous || v.anonymousGifts) {
-      if (!(await ask({ title: `Put ${v.name} on the website?`, text: v.keepAnonymous ? `${v.name} is kept anonymous. Its name and logo would be on the Partners page for anyone to see.` : `Some of ${v.name}’s gifts were given anonymously. Its name and logo would be on the Partners page for anyone to see.`, yes: 'Put it on the website', careful: true }))) return;
-    }
     if (!ctx.createPartner) { location.hash = '#partners'; return; }
+    // As it is now, not as this page read it: taken out, renamed or put on the website by a teammate since
     const now = await get(`?org=${encodeURIComponent(v.key)}`);
     if (now.success && (now.org || now.onSite)) { ctx.addToast(`${v.name} is on the website already: someone put it there since this page was read`, 'info'); goTo({ tab: 'people', org: now.org || v.key }); return; }
+    if (!now.success && now.status === 404) { ctx.addToast(`${v.name} was taken out since this page was read, so there’s nothing to put on the website. Nothing was made.`, 'error'); if (!left.current) await load(); return; }
+    if (!now.success) { ctx.addToast(`Couldn’t check ${v.name} just now: ${now.error} Nothing was made.`, 'error', { label: 'Try again', fn: putOnSite }); return; }
+    const o = { name: now.name || v.name, keepAnonymous: !!now.keepAnonymous, anonymousGifts: !!now.anonymousGifts };
+    if (o.keepAnonymous || o.anonymousGifts) {
+      if (!(await ask({ title: `Put ${o.name} on the website?`, text: o.keepAnonymous ? `${o.name} is kept anonymous. Its name and logo would be on the Partners page for anyone to see.` : `Some of ${o.name}’s gifts were given anonymously. Its name and logo would be on the Partners page for anyone to see.`, yes: 'Put it on the website', careful: true }))) return;
+    }
     // A partner card of its exact name already (made here a moment ago, before a step that failed): that one, never a second
     const nk = (x) => String(x || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '');
-    const made = (ctx.partners || []).find((p) => nk(p.name) === nk(v.name));
+    const made = (ctx.partners || []).find((p) => nk(p.name) === nk(o.name));
     if (made) {
-      if (await ask({ title: `Use the partner card “${made.name}”?`, text: `There’s a partner card with this name already. ${v.name}’s gifts, notes and owner go to it, and it’s on the website after you publish. To make another card instead, rename this organization first.`, yes: 'Use it' })) await finishOnSite(made.slug);
+      if (await ask({ title: `Use the partner card “${made.name}”?`, text: `There’s a partner card with this name already. ${o.name}’s gifts, notes and owner go to it, and it’s on the website after you publish. To make another card instead, rename this organization first.`, yes: 'Use it' })) await finishOnSite(made.slug, o.name);
       return;
     }
-    const slug = await ctx.createPartner({ name: v.name });
+    const slug = await ctx.createPartner({ name: o.name });
     if (!slug) return;
-    await finishOnSite(slug);
+    await finishOnSite(slug, o.name, true);
   };
   // Its partner card is made: everything said about it moves to the partner (tried again from the toast if it failed)
-  const finishOnSite = async (slug) => {
+  const finishOnSite = async (slug, name = v.name, madeNow = false) => {
     const r = await change({ act: 'website', key: v.key, slug });
-    if (!r.success && r.status === 409) { ctx.addToast(r.error, 'error'); await load(); return; }
-    if (!r.success) { ctx.addToast(`${v.name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug) }); return; }
+    // Refused (taken out, or on the website as another card, since): the card just made says so, never left unmentioned
+    if (!r.success && r.status === 409) {
+      ctx.addToast(`${r.error}${madeNow && !r.went ? ` The partner card “${name}” was made just before: delete it in Partners if it isn’t wanted.` : ''}`, 'error');
+      if (!left.current) await load();
+      return;
+    }
+    if (!r.success) { ctx.addToast(`${name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug, name, madeNow) }); return; }
     listChanged();
-    ctx.addToast(`${v.name} is on the Partners page after you publish`, 'success', null, { publish: true });
+    ctx.addToast(`${name} is on the Partners page after you publish`, 'success', null, { publish: true });
     // By address: this can finish from a toast after the page was left
     goTo({ tab: 'people', org: r.key });
   };
@@ -1253,7 +1327,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
             <p style="margin:.5rem 0 0"><a class="btn btn-ghost btn-sm" href=${`#partners/${encodeURIComponent(v.slug)}`}>Open its partner card</a></p>
             ${level ? html`<div class="dn-suggest"><p>Gave ${usd(level.cents12)} in the last 12 months: Champion is $10,000 or more.</p>
               <div class="dn-need__do"><button type="button" class="btn btn-primary btn-sm" disabled=${busy} onClick=${async () => { if (await makeChampion(level, ctx)) listChanged(); await load(); }}>Move to Champion…</button>
-              <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => say({ act: 'level', org: v.key, done: false, asked: true })}>Not now</button></div></div>` : null}`
+              <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => say({ act: 'level', org: v.key, done: false, asked: true }, 'It won’t ask about them again for a year')}>Not now</button></div></div>` : null}`
           : html`<p>Not on the website. Only staff see it here.</p>
             <div class="dn-need__do"><button type="button" class="btn btn-ghost btn-sm" onClick=${putOnSite}>Put it on the website…</button>
               <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setRenaming(true)}>Rename</button>
