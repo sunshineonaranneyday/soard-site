@@ -30,6 +30,7 @@
  * GET ?timeline=<ref>       → { success, subject, items, kit, sources, more }   everything else that happened with them:
  *                             the team's email and meetings (Google), calls and texts (Quo), newsletters (Kit), what the
  *                             website emailed them, the team's changes, a partner's page (./_donor-timeline.js)
+ * GET ?timeline=<ref>&local=1              → the same, from what the site holds only (after a change on the page)
  * GET ?timeline=<ref>&older=1&mail=&quo=   → { success, items, more }   older email and calls
  * GET ?timeline=<ref>&mailbox=&thread=     → { success, mailbox, thread, messages }   a conversation they're on (logged)
  * GET ?timeline=<ref>&call=<id>            → { success, status, dialogue }   a call's transcript (Quo)
@@ -73,7 +74,7 @@ export async function onRequestGet({ env, request, data }) {
       if (q.get('thread')) return ok(await mailThread(env, ref, { mailbox: q.get('mailbox'), thread: q.get('thread'), me }));
       if (q.get('call')) return ok(await callTranscript(env, ref, { call: q.get('call') }));
       if (q.get('sent')) return ok(await sentEmail(env, ref, { id: q.get('sent') }));
-      const v = q.get('older') ? await olderView(env, ref, { mail: q.get('mail'), quo: q.get('quo') }) : await timelineView(env, ref);
+      const v = q.get('older') ? await olderView(env, ref, { mail: q.get('mail'), quo: q.get('quo') }) : await timelineView(env, ref, { local: !!q.get('local') });
       return v ? ok({ ...v, me }) : fail('No donor by that link. Their gifts may have moved to another donor in Zeffy.', 404);
     }
     if (q.get('donor')) {

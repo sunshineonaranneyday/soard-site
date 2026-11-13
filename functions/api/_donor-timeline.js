@@ -709,7 +709,10 @@ export function partnerLines(versions, slug) {
   return lines;
 }
 
-/** The makeovers that credit an organization (designed by, monetary sponsor), by year: Kids holds no reveal date */
+/**
+ * The makeovers that credit an organization (designed by, monetary sponsor), each on the day the page first credited
+ * it (its saved versions); one credited before the page's history began has only its year (Kids holds no reveal date)
+ */
 async function readMakeovers(DB, slug) {
   const lines = [];
   for (const [table, kind] of [['kids', 'kid'], ['community', 'community']]) {
@@ -718,13 +721,23 @@ async function readMakeovers(DB, slug) {
     for (const r of rows) {
       let d = {};
       try { d = JSON.parse(r.data || '{}'); } catch { continue; }
-      const roles = [(d.designers || []).includes(slug) ? 'Designed' : null, (d.sponsors || []).includes(slug) ? 'Paid for' : null].filter(Boolean);
+      const roles = [['designers', 'Designed'], ['sponsors', 'Paid for']].filter(([f]) => (d[f] || []).includes(slug));
       if (!roles.length) continue;
-      const year = Number(d.year) || Number(String(d.revealDate || '').slice(0, 4)) || null;
+      // The first saved version that credits it: the day it was credited
+      let since = null;
+      try {
+        const versions = (await DB.prepare('SELECT data, created_at FROM content_versions WHERE collection = ? AND slug = ? ORDER BY id').bind(table, r.slug).all()).results || [];
+        for (const v of versions) {
+          let x = {};
+          try { x = JSON.parse(v.data || '{}'); } catch { continue; }
+          if (roles.some(([f]) => (x[f] || []).includes(slug))) { since = Date.parse(v.created_at) || null; break; }
+        }
+      } catch { /* no history: its year */ }
+      const year = Number(d.year) || null;
       const name = clean(d.name) || r.slug;
       lines.push({
-        id: `makeover:${kind}:${r.slug}`, kind: 'makeover', at: year ? Date.UTC(year, 11, 31, 12) : 0, year, undated: !year,
-        title: `${roles.join(' and ')} ${kind === 'kid' ? `${name}’s makeover` : name}`,
+        id: `makeover:${kind}:${r.slug}`, kind: 'makeover', at: since || (year ? Date.UTC(year, 0, 1, 12) : 0), year: since ? null : year, undated: !since && !year,
+        title: `${roles.map(([, w]) => w).join(' and ')} ${kind === 'kid' ? `${name}’s makeover` : name}`,
         record: kind === 'kid' ? r.slug : `community/${r.slug}`, draft: d.publishStatus === 'draft',
       });
     }
@@ -746,9 +759,10 @@ const SOURCES = { mail: 'Email with the team', calendar: 'Meetings', quo: 'Calls
 /**
  * A donor's timeline from everything outside their page → { subject: { name, kind, searched }, items, sources:
  * [{ key, label, state: ok | error | off | none | skipped, note, errors }], more: { mail, quo } }. The page adds its
- * gifts and notes.
+ * gifts and notes. `local`: only what the site itself holds (the team's changes, its emails, the partner page), read
+ * again at once after a change on the page, without asking Google, Quo or Kit again.
  */
-export async function timelineView(env, ref, { now = Date.now(), fetchImpl = fetch } = {}) {
+export async function timelineView(env, ref, { now = Date.now(), fetchImpl = fetch, local = false } = {}) {
   const subject = await subjectOf(env, ref, { now });
   if (!subject) return null;
   const look = lookOf(subject, teamOf(await directory(env.DB)));
@@ -756,32 +770,34 @@ export async function timelineView(env, ref, { now = Date.now(), fetchImpl = fet
   const google = Boolean(env.GOOGLE_CALENDAR_KEY);
   const asked = look.emails.length + look.domains.length > 0;
   const onTeam = { state: 'skipped', note: `${subject.name} is on the team: their email, meetings and calls aren’t shown here`, lines: [] };
-  const kids = await kidFirstNames(env.DB);
+  const kids = local ? new Map() : await kidFirstNames(env.DB);
+  const outside = (fn) => (local ? null : fn());
   const [mail, calendar, quo, kit, site, teamRows, partner, makeovers] = await Promise.all([
-    look.team ? onTeam : !asked ? { state: 'none', note: 'No email to search for', lines: [] } : !google ? { state: 'off', lines: [] }
+    local ? null : look.team ? onTeam : !asked ? { state: 'none', note: 'No email to search for', lines: [] } : !google ? { state: 'off', lines: [] }
       : readMail(env, look, { fetchImpl, now, run }).then((r) => ({ state: r.errors.length && r.errors.length >= r.boxes ? 'error' : 'ok', ...r })),
-    look.team ? onTeam : !asked ? { state: 'none', lines: [] } : !google ? { state: 'off', lines: [] }
+    local ? null : look.team ? onTeam : !asked ? { state: 'none', lines: [] } : !google ? { state: 'off', lines: [] }
       : readCalendars(env, look, { fetchImpl, now, run }).then((r) => ({ state: r.errors.length && r.errors.length >= r.boxes ? 'error' : 'ok', ...r })),
-    look.team ? onTeam : readQuo(env, subject, { fetchImpl, now, run }),
-    readKit(env, { ...subject, emails: look.emails }, { now, run, kids }),
+    outside(() => (look.team ? onTeam : readQuo(env, subject, { fetchImpl, now, run }))),
+    outside(() => readKit(env, { ...subject, emails: look.emails }, { now, run, kids })),
     readSite(env.DB, look.emails),
     readTeam(env.DB, subject.keys),
     subject.slug ? env.DB.prepare("SELECT id, data, action, user_email, created_at FROM content_versions WHERE collection = 'partners' AND slug = ? ORDER BY id").bind(subject.slug).all()
       .then((r) => ({ state: 'ok', lines: partnerLines(r.results || [], subject.slug) })).catch((e) => (/no such table/i.test(String(e.message)) ? { state: 'ok', lines: [] } : { state: 'error', note: e.message, lines: [] })) : null,
     subject.slug ? readMakeovers(env.DB, subject.slug) : null,
   ]);
-  const parts = { mail, calendar, quo, kit, site, team: teamRows, ...(subject.slug ? { partner: { ...partner, lines: [...(partner?.lines || []), ...(makeovers?.lines || [])] } } : {}) };
+  const parts = Object.fromEntries(Object.entries({ mail, calendar, quo, kit, site, team: teamRows, partner: subject.slug ? { ...partner, lines: [...(partner?.lines || []), ...(makeovers?.lines || [])] } : null }).filter(([, p]) => p));
   const sources = Object.entries(parts).map(([key, p]) => ({
     key, label: SOURCES[key], state: p.state, note: p.note || null,
     errors: (p.errors || []).map((x) => ({ mailbox: x.mailbox, error: String(x.error).slice(0, 200) })),
     ...(key === 'mail' && p.missed ? { missed: p.missed } : {}),
   }));
   return {
-    subject: { name: subject.name, kind: subject.kind, searched: { emails: look.emails, domains: look.domains, skipped: look.skipped, phones: quo.phones || [] } },
+    subject: { name: subject.name, kind: subject.kind, searched: { emails: look.emails, domains: look.domains, skipped: look.skipped, phones: quo?.phones || [] } },
     items: Object.values(parts).flatMap((p) => p.lines || []),
-    kit: kit.summary || null,
+    kit: kit?.summary || null,
     sources,
-    more: { mail: Object.keys(mail.next || {}).length ? cursorOf(mail.next) : null, quo: quo.next || null },
+    more: { mail: Object.keys(mail?.next || {}).length ? cursorOf(mail.next) : null, quo: quo?.next || null },
+    local,
     checkedAt: iso(now),
   };
 }

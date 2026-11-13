@@ -45,6 +45,7 @@ const STYLE = `
 .dn-tl__month li:first-child.dn-tl__item { border-top: none; }
 .dn-tl__item.is-flash { background: var(--tone-warn-surface, #FFF9DB); }
 .dn-tl__when { font-size: var(--fs-xs); color: var(--color-text-muted); padding-top: .15rem; font-variant-numeric: tabular-nums; }
+.dn-tl__clock { display: block; }
 .dn-tl__dot { width: 9px; height: 9px; margin-top: .4rem; border-radius: 50%; background: var(--tone-neutral-dot); justify-self: center; }
 .dn-tl__dot--gift { background: var(--tone-success-dot); }
 .dn-tl__dot--talk { background: var(--tone-info-dot); }
@@ -98,6 +99,7 @@ const STYLE = `
 @media (max-width: 720px) {
   .dn-tl__item { grid-template-columns: 14px minmax(0, 1fr) auto; }
   .dn-tl__when { grid-column: 2 / -1; grid-row: 1; padding-top: 0; }
+  .dn-tl__clock { display: inline; margin-left: .4rem; }
   .dn-tl__dot { grid-row: 2; grid-column: 1; margin-top: .3rem; }
   .dn-tl__body { grid-row: 2; grid-column: 2; }
   .dn-tl__amt { grid-row: 2; grid-column: 3; }
@@ -213,6 +215,10 @@ const dotOf = (x, now) => (x.kind === 'meeting' && x.at > now ? 'soon' : x.tone 
 // ─── The timeline ───────────────────────────────────────────────────
 
 const cache = new Map(); // ref → { at, data }
+// What the site holds itself: read again after a change on the page (Google, Quo and Kit aren't asked again)
+const LOCAL = new Set(['team', 'thanks', 'site', 'partner', 'makeover']);
+/** A whole read with the site's own lines of a later quick read in place of its own */
+const withLocal = (full, quick) => (!quick ? full : { ...full, items: [...full.items.filter((x) => !LOCAL.has(x.kind)), ...quick.items], sources: full.sources.map((s) => quick.sources.find((q) => q.key === s.key) || s) });
 
 /**
  * subject: the page's key (notes are said against it); ref: its address for the read (a contact id, g:<payment>, or
@@ -228,21 +234,42 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
   const [open, setOpen] = useState(null);
   const [older, setOlder] = useState(false);
   const seq = useRef(0);
-  useEffect(() => () => { seq.current++; }, []);
+  // The latest quick read of the site's own lines, and when it was asked: a whole read asked before it takes its lines
+  const quick = useRef({ at: 0, data: null, n: 0 });
+  useEffect(() => () => { seq.current++; quick.current.n++; }, []);
   const read = async (force = false) => {
     const had = cache.get(refOf);
     if (!force && had && Date.now() - had.at < FRESH_MS) { setData(had.data); return; }
     const mine = ++seq.current;
+    const asked = Date.now();
     setBusy(true);
     setErr(null);
     const j = await call(`?timeline=${encodeURIComponent(refOf)}`);
     if (mine !== seq.current) return;
     setBusy(false);
     if (!j.success) { setErr(j.error); return; }
-    cache.set(refOf, { at: Date.now(), data: j });
-    setData(j);
+    const next = quick.current.at > asked ? withLocal(j, quick.current.data) : j;
+    cache.set(refOf, { at: Date.now(), data: next });
+    setData(next);
   };
-  useEffect(() => { setData(cache.get(refOf)?.data || null); setFilter('all'); setShown(STEP); read(); }, [refOf]);
+  useEffect(() => { quick.current = { at: 0, data: null, n: quick.current.n + 1 }; setData(cache.get(refOf)?.data || null); setFilter('all'); setShown(STEP); read(); }, [refOf]);
+  // The page read again (a note, an owner, a thank-you said): the site's own lines again at once
+  const drawn = useRef(false);
+  useEffect(() => {
+    if (!drawn.current) { drawn.current = true; return; }
+    const n = ++quick.current.n;
+    const asked = Date.now();
+    call(`?timeline=${encodeURIComponent(refOf)}&local=1`).then((j) => {
+      if (n !== quick.current.n || !j.success) return;
+      quick.current = { at: asked, data: j, n };
+      setData((d) => {
+        if (!d) return d;
+        const next = withLocal(d, j);
+        cache.set(refOf, { at: cache.get(refOf)?.at ?? Date.now(), data: next });
+        return next;
+      });
+    });
+  }, [gifts, notes]);
   const showOlder = async () => {
     if (!data?.more || older) return;
     setOlder(true);
@@ -328,7 +355,7 @@ function Notices({ sources, err, retry, searched, staff }) {
 function Lines({ lines, staff, me, org, name, now, ctx, onOpen, onChanged }) {
   const months = [];
   for (const x of lines) {
-    const m = x.undated ? 'Date unknown' : x.year && x.kind === 'makeover' ? String(x.year) : monthOf(x.at);
+    const m = x.undated ? 'Date unknown' : x.year ? String(x.year) : monthOf(x.at);
     if (!months.length || months[months.length - 1].m !== m) months.push({ m, lines: [] });
     months[months.length - 1].lines.push(x);
   }
@@ -336,7 +363,7 @@ function Lines({ lines, staff, me, org, name, now, ctx, onOpen, onChanged }) {
     <ol>${g.lines.map((x) => html`<${Line} key=${x.id} x=${x} staff=${staff} me=${me} org=${org} name=${name} now=${now} ctx=${ctx} onOpen=${onOpen} onChanged=${onChanged} />`)}</ol></li>`)}</ol>`;
 }
 
-const whenOf = (x) => (x.undated ? '' : x.kind === 'makeover' ? String(x.year || '') : x.kind === 'gift' || x.allDay ? shortDate(x.at) : html`${shortDate(x.at)}<br />${clock(x.at)}`);
+const whenOf = (x) => (x.undated ? '' : x.year ? String(x.year) : x.kind === 'gift' || x.allDay ? shortDate(x.at) : html`${shortDate(x.at)}<span class="dn-tl__clock">${clock(x.at)}</span>`);
 
 function Line({ x, staff, me, org, name, now, ctx, onOpen, onChanged }) {
   const dot = dotOf(x, now);
@@ -441,7 +468,7 @@ function NoteLine({ x, base, dot, staff, name, ctx, onChanged }) {
   };
   const by = n.by ? nameOf(n.by, staff) : 'Someone';
   return html`<li ...${base}>
-    <span class="dn-tl__when">${shortDate(x.at)}<br />${clock(x.at)}</span><span class=${`dn-tl__dot dn-tl__dot--${dot}`} aria-hidden="true"></span>
+    <span class="dn-tl__when">${shortDate(x.at)}<span class="dn-tl__clock">${clock(x.at)}</span></span><span class=${`dn-tl__dot dn-tl__dot--${dot}`} aria-hidden="true"></span>
     <div class="dn-tl__body" data-note=${n.id}>
       <span class="dn-tl__who">${by} wrote a note</span>
       ${editing ? html`<textarea aria-label="Change the note" class="form-input" rows="3" maxlength="4000" value=${draft} readOnly=${busy} aria-busy=${busy ? 'true' : null} data-escape="local"

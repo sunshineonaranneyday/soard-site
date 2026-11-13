@@ -306,6 +306,14 @@ test('a person’s timeline: email with the team (once each), meetings, calls an
   assert.equal(v.items.filter((x) => x.kind === 'gift').length, 0, 'gifts come with the page, not here');
 });
 
+test('after a change on the page, the site’s own lines are read again without asking Google, Quo or Kit', async () => {
+  fakeWorld();
+  const v = await T.timelineView(env, 'ct_jane', { now: NOW, local: true });
+  assert.deepEqual([...new Set(v.items.map((x) => x.kind))].sort(), ['site', 'team']);
+  assert.deepEqual(v.sources.map((s) => s.key), ['site', 'team']);
+  assert.deepEqual(seen, [], seen.join('\n'));
+});
+
 test('one mailbox that can’t be read is said, and the rest are still there; Quo not set up says so', async () => {
   fakeWorld({ gmailDown: 'holly@soardcharity.com', quo: false });
   const v = await T.timelineView(env, 'ct_jane', { now: NOW });
@@ -340,7 +348,14 @@ test('an organization’s timeline searches its givers and its website’s domai
   assert.deepEqual(partner.sort(), ['On the website as a Builder partner', 'Partner page: Builder → Champion partner']);
   const mk = v.items.find((x) => x.kind === 'makeover');
   assert.equal(mk.title, 'Designed Ava’s makeover');
-  assert.equal(mk.year, 2025);
+  assert.equal(mk.year, 2025, 'credited before the page kept versions: its year only');
+  assert.equal(mk.at, Date.UTC(2025, 0, 1, 12));
+  // Credited in a saved version: on that day
+  await env.DB.prepare("INSERT INTO content_versions (collection, slug, data, action, user_email, created_at) VALUES ('kids', 'ava-sample', ?, 'save', null, '2025-03-01T00:00:00Z')").bind(JSON.stringify({ name: 'Ava', designers: [] })).run();
+  await env.DB.prepare("INSERT INTO content_versions (collection, slug, data, action, user_email, created_at) VALUES ('kids', 'ava-sample', ?, 'save', 'pat@soardcharity.com', '2025-04-02T00:00:00Z')").bind(JSON.stringify({ name: 'Ava', designers: ['acme'] })).run();
+  const again = (await T.timelineView(env, 'p:acme', { now: NOW, local: true })).items.find((x) => x.kind === 'makeover');
+  assert.equal(again.at, Date.parse('2025-04-02T00:00:00Z'));
+  assert.equal(again.year, null);
 });
 
 test('only a conversation the donor is on opens, and opening one is logged', async () => {
