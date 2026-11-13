@@ -571,7 +571,8 @@ export async function giftsView(env, d, mine, kids = [], { by = false } = {}) {
       const refunded = charges.every((id) => { const x = byId.get(id); return x && x.cents > 0 && !x.net; });
       return {
         id: g.id, ids: charges, at: g.at, cents: g.inKind ? 0 : g.cents, inKind: g.inKind ? g.cents : 0, kind: !!g.inKind,
-        campaign: g.campaign || '', how: howOf(g), every: g.every || '', parts: g.parts || 1, anonymous: g.anonymous,
+        // (a gift in charges that came different ways says each: "Card and Check")
+        campaign: g.campaign || '', how: [...new Set(charges.map((id) => byId.get(id)).filter(Boolean).map((x) => howOf(x)))].join(' and ') || howOf(g), every: g.every || '', parts: g.parts || 1, anonymous: g.anonymous,
         forCompany: r.corporate && r.company && r.method !== 'daf' ? r.company : null, through: r.method === 'daf' ? r.company || null : null,
         refunded: refunded || undefined,
         sold: !refunded && !g.inKind && !g.cents ? true : undefined,
