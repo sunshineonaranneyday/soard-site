@@ -7899,7 +7899,6 @@
     // and to reach its Undo by keyboard); then it runs on from where it was
     const toastClocks = new Map();
     let toastsHeld = false;
-    let toastUsedAt = 0;
     function toastClock(id, ms, end) {
       const c = { left: ms, at: Date.now(), timer: null, end };
       toastClocks.set(id, c);
@@ -7936,13 +7935,7 @@
       const box = useRef(null);
       const latest = useRef(toasts);
       latest.current = toasts;
-      // One gesture, one action: the message above slides under the pointer as this one goes, and a held key repeats,
-      // so a second press within a moment does nothing
-      const use = (t) => {
-        if (Date.now() - toastUsedAt < 600) return;
-        toastUsedAt = Date.now();
-        onDismiss?.(t.id); toastClocks.delete(t.id); toastFocusBack(t.action.fn());
-      };
+      const use = (t) => { onDismiss?.(t.id); toastClocks.delete(t.id); toastFocusBack(t.action.fn()); };
       // A message gone from under the focus or the pointer: the others' clocks run again
       useEffect(() => { if (toastsHeld && !box.current?.matches(':hover') && !box.current?.contains(document.activeElement)) holdToasts(false); }, [toasts]);
       useEffect(() => {
@@ -7969,7 +7962,7 @@
         ${toasts.slice(folded).map(t => html`<div key=${t.id} class=${`toast toast-${t.type}`}>
           ${t.action ? html`<span class="toast-action">
             <span>${t.msg}</span>
-            <button class="toast-undo" onClick=${() => use(t)} aria-keyshortcuts=${t.action.label === 'Undo' ? UNDO_KEY.aria : null}>${t.action.label}</button>${t.action.label === 'Undo' ? html`<span class="toast-key" aria-hidden="true">${UNDO_KEY.show}</span>` : null}
+            <button class="toast-undo" onClick=${(e) => { if (e.detail > 1) return; use(t); }} aria-keyshortcuts=${t.action.label === 'Undo' ? UNDO_KEY.aria : null}>${t.action.label}</button>${t.action.label === 'Undo' ? html`<span class="toast-key" aria-hidden="true">${UNDO_KEY.show}</span>` : null}
           </span>` : t.msg}
         </div>`)}
       </div>`;
