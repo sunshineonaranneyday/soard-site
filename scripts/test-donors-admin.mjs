@@ -740,6 +740,33 @@ try {
   await page.keyboard.press('z');
   await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
   await wait(800);
+  // A held Enter is one press: its repeats never answer the item that takes the focus next
+  await page.waitForSelector('.dn-needs[aria-label="To thank"] [data-thank] .btn-primary', { timeout: 8000 }).catch(() => {});
+  const heldBefore = posts.filter((b) => b.act === 'thanks' && b.state === 'thanked').length;
+  await page.focus('.dn-needs[aria-label="To thank"] [data-thank] .btn-primary').catch(() => {});
+  await page.keyboard.down('Enter');
+  for (let i = 0; i < 12; i++) { await wait(60); await page.keyboard.down('Enter'); }
+  await page.keyboard.up('Enter');
+  await wait(1200);
+  ok(posts.filter((b) => b.act === 'thanks' && b.state === 'thanked').length - heldBefore === 1, `a held Enter on Thanked thanks one gift (${posts.filter((b) => b.act === 'thanks' && b.state === 'thanked').length - heldBefore})`);
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
+  await page.keyboard.press('z');
+  await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
+  await wait(800);
+  // The page changing columns (the window made narrower) keeps the focus where it was: typing goes on
+  await page.evaluate(() => { location.hash = '#donors/ct_fill_9'; });
+  await page.waitForSelector('#dn-note-text', { timeout: 8000 });
+  await page.click('#dn-note-text');
+  await page.keyboard.type('Met at the');
+  await page.setViewport({ width: 900, height: 900 });
+  await wait(500);
+  await page.keyboard.type(' gala');
+  ok(await page.$eval('#dn-note-text', (t) => t.value) === 'Met at the gala' && await page.evaluate(() => document.activeElement?.id === 'dn-note-text'), `the window made narrower: the note box keeps the focus, and the typing (${await page.$eval('#dn-note-text', (t) => t.value)})`);
+  await page.setViewport({ width: 1440, height: 1000 });
+  await wait(300);
+  await page.click('#dn-note-text', { clickCount: 3 });
+  await page.keyboard.press('Backspace');
   // Put on the website from a page read before a teammate took the organization out: nothing is made
   const { key: walkOrg } = await C.act(env, { act: 'org-new', name: 'Walkthrough Works', links: [] }, 'alex@soardcharity.com');
   await page.evaluate((k) => { location.hash = `#donors/org/${encodeURIComponent(k)}`; }, walkOrg);

@@ -280,7 +280,8 @@ const placeOfDonor = (d, extra = {}) => (d.type === 'org' ? { tab: 'people', org
 
 // Each move to a place (a link, Back, Forward, a click) is a new page there: nothing of the page before carries over
 let moves = 0;
-export function Donors({ addToast = () => {}, partners = [], partnersCount = null, communityCount = null, createPartner = null, onPartnersChanged = () => {} }) {
+export function Donors({ addToast = () => {}, partners = [], partnersCount = null, communityCount = null, createPartner = null, onPartnersChanged = () => {}, setGlobalDirty = null }) {
+  markDirty = setGlobalDirty || (() => {});
   useJobCostsStyles();
   useStyles();
   const [place, setPlace] = useState(() => ({ ...placeOf(), n: ++moves }));
@@ -288,8 +289,21 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   // Thanked, a card's answer, the To thank box where a row was)
   useEffect(() => {
     const once = (e) => { if (e.detail > 1 && e.target?.closest?.('.dn button, .dn a, .dn .dn-row, .dn-picker button, .dn input[type="checkbox"], .dn label')) { e.preventDefault(); e.stopPropagation(); } };
+    // A link to another page here while a note is being written: asked first (the words are never dropped unasked)
+    const away = (e) => {
+      const a = e.target?.closest?.('.dn a[href^="#"]');
+      if (!a || !typingNote || a.closest('.dn-notes, .dn-note-new') || e.defaultPrevented) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const to = a.getAttribute('href');
+      leaving(() => { location.hash = to; });
+    };
+    document.addEventListener('click', away, true);
+    // …and a held Enter or Space is one press: its repeats never answer the next item, which takes the focus
+    const held = (e) => { if (e.repeat && (e.key === 'Enter' || e.key === ' ') && e.target?.closest?.('.dn button, .dn a, .dn-picker button, .dn input[type="checkbox"]')) { e.preventDefault(); e.stopPropagation(); } };
     document.addEventListener('click', once, true);
-    return () => document.removeEventListener('click', once, true);
+    document.addEventListener('keydown', held, true);
+    return () => { document.removeEventListener('click', once, true); document.removeEventListener('keydown', held, true); document.removeEventListener('click', away, true); };
   }, []);
   useEffect(() => {
     // An old Job Costs link to Checks settles on this area's own address, opened fresh or followed from here
@@ -307,7 +321,8 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
     on();
     return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); backTo = null; backFor = null; lastPlace = null; };
   }, []);
-  const open = (p) => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); };
+  // (a note being written: asked first, never dropped by a move inside the area)
+  const open = (p) => leaving(() => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); });
   // A move that took away what had the focus (Take it out, then the list): the page's heading has it
   useEffect(() => { const t = setTimeout(() => { if (!document.activeElement || document.activeElement === document.body) { const h = document.querySelector('.dn h2'); if (h) { if (!h.hasAttribute('tabindex')) h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } } }, 400); return () => clearTimeout(t); }, [place.n]);
   // Back from a donor's page: where it was opened from (To thank, Needs you), else the list
@@ -356,7 +371,29 @@ let lastOwner = '';
 // address that list opened, so any other way to a page (a Slack link, after leaving the area) is the list's
 let backTo = null;
 let backFor = null;
-const cameFrom = (view) => (e) => { backTo = view; backFor = e.currentTarget.getAttribute('href'); };
+const cameFrom = (view) => (e) => { backTo = view; backFor = e.currentTarget.getAttribute('href'); viewPlace = { view, scroll: window.scrollY, href: backFor }; };
+// A note being written (words in the box, or a change not saved): leaving asks first, here and from the sidebar
+let typingNote = false;
+let markDirty = () => {};
+const leaving = (go) => {
+  if (!typingNote) { go(); return; }
+  ask({ title: 'Leave your note unsaved?', text: 'What you typed in the note isn’t saved yet.', yes: 'Leave', no: 'Stay', careful: true }).then((ok) => { if (ok) { typingNote = false; markDirty(false); go(); } });
+};
+// Where To thank or Needs you was when a giver was opened from it: back there, the same place and the same item
+let viewPlace = null;
+/** Back on To thank or Needs you from a giver: scrolled where it was, the focus on the link that opened them */
+function useViewPlace(view, ready) {
+  useEffect(() => {
+    if (!ready || viewPlace?.view !== view) return;
+    const at = viewPlace;
+    viewPlace = null;
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: at.scroll, behavior: 'instant' });
+      const a = [...document.querySelectorAll('.dn-needs a[href]')].find((x) => x.getAttribute('href') === at.href);
+      if (a) { focusPill = false; a.focus({ preventScroll: true }); }
+    });
+  }, [ready]);
+}
 // Back there: the focus on its pill (the donor's row has it when Back is to the list)
 let focusPill = false;
 /** Read the list again when it next shows (a change on a donor's page moves gifts between donors) */
@@ -539,7 +576,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
         </tr>`)}</tbody>
       </table>
       ${matches.length > shown ? html`<div class="dn-more"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => { const at = shown; setShown((n) => n + PAGE); requestAnimationFrame(() => document.querySelectorAll('.dn-table tbody .dn-name')[at]?.focus()); }}>Show ${Math.min(PAGE, matches.length - shown)} more of ${matches.length.toLocaleString()}</button></div>` : null}`
-      : html`<p class="dn-empty">${people.length ? `No donors match${words ? ` “${q.trim()}”` : ''}${stage !== 'all' ? ` among ${Object.fromEntries(filters)[stage] || stage}` : ''}${owner ? `, looked after by ${ownerName}` : ''}.${stage !== 'all' || owner ? ' Try Everyone and Anyone.' : ''}` : 'No gifts read from Zeffy yet. They come in within 15 minutes.'}</p>`}
+      : html`<p class="dn-empty">${people.length ? `No donors match${words ? ` “${q.trim()}”` : ''}${stage !== 'all' ? ` among ${Object.fromEntries(filters)[stage] || stage}` : ''}${owner ? `, looked after by ${ownerName}` : ''}.${stage !== 'all' && owner ? ' Try Everyone and Anyone.' : stage !== 'all' ? ' Try Everyone.' : owner ? ' Try Anyone.' : ''}` : 'No gifts read from Zeffy yet. They come in within 15 minutes.'}</p>`}
     </div>`}`;
 }
 
@@ -564,6 +601,7 @@ async function sayThanks(ctx, g, state) {
     listChanged();
     thanksChanged();
     if (!u.success) { ctx.addToast(u.error, 'error'); return; }
+    ctx.addToast(`To thank again: ${amountOf(g)}${from}`, 'info');
     await back;
   };
   // (Zeffy with no name for them: the gift alone, never "from No name")
@@ -600,7 +638,13 @@ function clearOfToasts(el) {
   if (!t.length) return;
   const top = Math.min(...t.map((r) => r.top));
   const r = el.getBoundingClientRect();
-  if (r.bottom > top - 8 && r.top < window.innerHeight) window.scrollBy({ top: r.bottom - top + 16 });
+  if (!(r.bottom > top - 8 && r.top < window.innerHeight)) return;
+  const need = r.bottom - top + 16;
+  // Not enough page left below to move it clear (the last items, several messages up): room is made under the list
+  const room = document.documentElement.scrollHeight - window.innerHeight - window.scrollY;
+  const list = el.closest('ul, ol');
+  if (room < need && list) list.style.paddingBottom = `${(parseFloat(getComputedStyle(list).paddingBottom) || 0) + need - room + 16}px`;
+  window.scrollBy({ top: need });
 }
 /** After an item of a list is answered and goes: the focus on the one that took its place, else the list's words */
 function useRefocus(selector, ready, otherwise = '.dn-done, .dn-status') {
@@ -649,6 +693,7 @@ function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
   useEffect(() => { load(); }, []);
   useThanksSaid(load);
   const refocus = useRefocus('.dn-needs[aria-label="To thank"]', !!v);
+  useViewPlace('thanks', !!v);
   if (err) return html`<div class="notice notice--danger"><div class="notice__body">${err}</div><div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div></div>`;
   if (!v) return html`<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
   const items = v.items.filter((t) => ownerOk(owner, t.owner));
@@ -667,10 +712,10 @@ function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
       <p class="dn-need__sub">${[t.how, t.campaign, day(t.at)].filter(Boolean).join(' · ')}. ${t.whyText}.</p>
       <p class="dn-need__sub">${t.owner ? `Looked after by ${fullName(t.owner, v.staff)}` : 'No one looks after them yet'} · ${waiting(t.since)}</p>
       <div class="dn-need__do">
-        <button type="button" class="btn btn-primary btn-sm" aria-label=${`Thanked: ${amountOf(t)} from ${t.name}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'thanked', e); }}>${busy === `${t.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
-        <button type="button" class="btn btn-ghost btn-sm" aria-label=${`Not needed: ${amountOf(t)} from ${t.name}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'skipped', e); }}>${busy === `${t.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
+        <button type="button" class="btn btn-primary btn-sm" aria-label=${`Thanked: ${amountOf(t)} from ${t.name === 'No name' ? 'a giver Zeffy has no name for' : t.name}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'thanked', e); }}>${busy === `${t.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
+        <button type="button" class="btn btn-ghost btn-sm" aria-label=${`Not needed: ${amountOf(t)} from ${t.name === 'No name' ? 'a giver Zeffy has no name for' : t.name}`} aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'skipped', e); }}>${busy === `${t.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
         <a class="link" href=${t.org ? `#donors/org/${encodeURIComponent(t.org.key)}` : t.ref && !t.ref.startsWith('g:') ? `#donors/${encodeURIComponent(t.ref)}` : `#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${cameFrom('thanks')}>${t.org ? `Open ${t.org.name}` : t.name === 'No name' ? 'Open their gift' : `Open ${t.name}`}</a>
-        <a class="link" href=${zeffyPaymentUrl(t.ids?.[0] || t.id)} target="_blank" rel="noopener" aria-label=${`Open in Zeffy: ${amountOf(t)} from ${t.name}`}>Open in Zeffy</a>
+        <a class="link" href=${zeffyPaymentUrl(t.ids?.[0] || t.id)} target="_blank" rel="noopener" aria-label=${`Open in Zeffy: ${amountOf(t)} from ${t.name === 'No name' ? 'a giver Zeffy has no name for' : t.name}`}>Open in Zeffy</a>
       </div></li>`)}</ul>
     ${v.more ? html`<p class="dn-status">And ${plural(v.more, 'more gift')} after these.</p>` : null}`;
 }
@@ -736,6 +781,7 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
   useEffect(() => { load(); }, []);
   useThanksSaid(load);
   const refocus = useRefocus('.dn-needs[aria-label="Needs you"]', !!v);
+  useViewPlace('needs', !!v);
   const doIt = async (id, fn, e) => {
     refocus(e?.currentTarget);
     setBusy(id);
@@ -1021,6 +1067,10 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   const box = useRef(null);
   // The note being added: named here, so pressing Add again after an answer that was lost saves it once
   const pending = useRef(null);
+  // Words typed and not saved: leaving asks first (Donors' own moves, and the admin's sidebar)
+  const unsaved = !!text.trim() || (editing !== null && from !== null && draft.trim() !== String(from).trim());
+  useEffect(() => { typingNote = unsaved; markDirty(unsaved, 'a note you were writing'); }, [unsaved]);
+  useEffect(() => () => { typingNote = false; markDirty(false); }, []);
   // Saved after all (its answer lost, the page read again): it's in the list, so the box empties
   // (only when the box still holds those words: typed on since, the box keeps it all, and says the first part saved)
   useEffect(() => {
@@ -1147,6 +1197,10 @@ function HistoryCard({ history = [], staff = [] }) {
 /** Keep anonymous: on a person or an organization */
 function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone }) {
   const [busy, setBusy] = useState(false);
+  // Saved: shown so at once, until the page's own read says it (never snapping back while it reads)
+  const [saved, setSaved] = useState(null);
+  useEffect(() => { setSaved(null); }, [on]);
+  const isOn = saved ?? on;
   // Kept because someone kept shares their email (a Zeffy duplicate, or a spouse): said so, and freed by "not the same"
   const shared = why?.kind === 'shared' || why?.kind === 'name';
   const notSame = async () => {
@@ -1166,18 +1220,19 @@ function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone 
     const r = await change({ act: 'anon', key: subject, on: next });
     setBusy(false);
     // Refused, or the answer lost on the way back (it may have saved): the page reads again, so the box shows what's so
-    if (!r.success) { ctx.addToast(r.error, 'error'); e.target.checked = !next; onDone(); return; }
+    if (!r.success) { ctx.addToast(r.error, 'error'); e.target.checked = !next; setSaved(null); onDone(); return; }
+    setSaved(next);
     listChanged();
     ctx.addToast(next ? `${name} is kept anonymous` : `${name} is no longer kept anonymous`, 'success');
     onDone();
   };
   return html`<section class="kd-card dn-card--late" aria-labelledby="dn-anon-h">
     <h3 id="dn-anon-h">Anonymous</h3>
-    <label class="dn-check"><input type="checkbox" checked=${on} disabled=${shared} aria-busy=${busy ? 'true' : null} onChange=${flip} /> Keep anonymous</label>
+    <label class="dn-check"><input type="checkbox" checked=${isOn} disabled=${shared} aria-busy=${busy ? 'true' : null} onChange=${flip} /> Keep anonymous</label>
     ${shared ? html`<p class="kd-card__note">Because they share ${why.kind === 'name' ? 'a name' : 'an email'} in Zeffy with ${why.otherName}, who is kept anonymous. <button type="button" class="link dn-linkbtn" disabled=${busy} onClick=${notSame}>Not the same person</button></p>`
       : why?.kind === 'email' ? html`<p class="kd-card__note">Kept by their email from before Zeffy had a contact for them.</p>` : null}
     <p class="kd-card__note">Their name stays off the board’s list of gifts, and the site never suggests them for the Partners page.</p>
-    ${on && names.length > 1 ? html`<p class="kd-card__note">Gifts under any name it has had are hidden too: ${names.join(', ')}.</p>` : null}
+    ${isOn && names.length > 1 ? html`<p class="kd-card__note">Gifts under any name it has had are hidden too: ${names.join(', ')}.</p>` : null}
   </section>`;
 }
 
@@ -1186,7 +1241,17 @@ function useWide(el, at = 1000) {
   const [wide, setWide] = useState(() => (typeof window !== 'undefined' ? window.innerWidth - 300 >= at : true));
   useEffect(() => {
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(([e]) => setWide(e.contentRect.width >= at));
+    const ro = new ResizeObserver(([e]) => {
+      const next = e.contentRect.width >= at;
+      setWide((was) => {
+        if (was === next) return was;
+        // The cards move between columns: what had the focus (a note being typed) keeps it, and its place in the words
+        const a = document.activeElement;
+        const sel = a && 'selectionStart' in a ? [a.selectionStart, a.selectionEnd] : null;
+        if (a && a !== document.body) requestAnimationFrame(() => { if (a.isConnected && document.activeElement !== a) { a.focus({ preventScroll: true }); if (sel) try { a.setSelectionRange(...sel); } catch { /* not a text box */ } } });
+        return next;
+      });
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, [el]);
@@ -1272,7 +1337,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     const subjects = link.kind === 'contact' ? [...new Set([v.key, ...(v.also || []).map((a) => a.key)].filter((k) => k.startsWith('c:')).map((k) => k.slice(2)))] : [link.subject];
     // (all of them in one step: never some linked and some not)
     const r = await change({ act: 'link', kind: link.kind, subject: subjects[0], subjects, org: orgKey, ...(asked ? { asked: true } : {}) });
-    if (!r.success) { ctx.addToast(r.error, 'error'); await load(); return false; }
+    if (!r.success) { ctx.addToast(r.error, 'error'); await load(r.status && r.status < 500 ? {} : { follow: true }); return false; }
     listChanged();
     ctx.addToast(`${link.kind === 'company' ? `Gifts for ${link.subject}` : `${d.name}’s gifts`} count for ${orgName} now`, 'success', { label: 'Open', fn: () => goTo({ tab: 'people', org: orgKey }) });
     await load({ follow: true });
@@ -1491,7 +1556,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     if (!left.current || fromToast) goTo({ tab: 'people', org: r.key });
   };
   const takeOut = async () => {
-    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it.'}` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
+    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it.'}` : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
     // (what the question said goes with it: a teammate's note or owner since is never lost unseen)
     const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '', kept: !!v.keepAnonymous } });
     if (!r.success) { ctx.addToast(r.error, 'error'); if (!left.current) await load(); return; }

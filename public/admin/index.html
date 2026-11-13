@@ -7946,10 +7946,11 @@
           if (typing || document.querySelector('[aria-modal="true"]')) return;
           const t = [...latest.current].reverse().find((x) => x.action?.label === 'Undo');
           if (!t) return;
-          e.preventDefault();
           // (a held key's repeats undo nothing more: one press, one Undo)
           if (e.repeat) return;
-          use(t);
+          // A screen with its own Cmd/Ctrl+Z (the application form's editor steps its draft) has it first: the message's
+          // Undo only when nothing else took the key
+          setTimeout(() => { if (!e.defaultPrevented) use(t); }, 0);
         };
         window.addEventListener('keydown', key);
         return () => window.removeEventListener('keydown', key);
@@ -26408,7 +26409,7 @@ ${sections || '<p>No one yet.</p>'}
 
           // ─── Donors: ./donors.js (#donors, #donors/checks, #donors/<contact id>, #donors/gift/<payment id>) ───
           case 'donors':
-            return html`<${DonorsLazy} addToast=${addToast} partners=${partners} partnersCount=${partners.length} communityCount=${communityPartners.length} onPartnersChanged=${loadData}
+            return html`<${DonorsLazy} addToast=${addToast} setGlobalDirty=${setGlobalDirty} partners=${partners} partnersCount=${partners.length} communityCount=${communityPartners.length} onPartnersChanged=${loadData}
                 createPartner=${(prefill) => new Promise((resolve) => setDonorPartner({ prefill, resolve }))} />
               ${donorPartner ? html`<${PartnerCreateDialog} partners=${partners} addToast=${addToast}
                 prefill=${{ ...donorPartner.prefill, category: 'funding', note: 'They go on the Partners page under Funding, as a Friend, when you publish. Their gifts in Donors & Partners go with them.' }}

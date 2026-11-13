@@ -1783,3 +1783,39 @@ test('Keep as an organization, then Take it out: a year on, the question can be 
   await doIt({ act: 'org-delete', key, was: { notes: [], owner: '', kept: false } });
   assert.equal(await db.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'big' AND note = 'org'").first(), null, 'its answer went with it');
 });
+
+// ─── Found in the fourteenth round ──────────────────────────────────
+
+test('a contact kept as an organization and taken out: its question can be answered again', async () => {
+  await add(pay({ id: 'kx', contact: 'ct_x', first: 'Ivers Family', last: 'Foundation', email: 'ivers@example.org', amount: 1500000, created: S(NOW - 30 * DAY) }));
+  const q = (await needs()).find((i) => i.kind === 'big' || i.kind === 'named');
+  const { key } = await doIt({ act: 'org-new', name: 'Ivers Family Foundation', links: [{ kind: 'contact', subject: 'ct_x' }], asked: true, subject: q.subject, also: q.also || [] });
+  await doIt({ act: 'org-delete', key, was: { notes: [], owner: '', kept: false } });
+  assert.equal(await db.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'big' AND note = 'org'").first(), null, 'its answer went with it, never moved to the contact');
+  const again = (await needs()).find((i) => i.subject === q.subject);
+  assert.ok(again, 'asked again');
+  assert.equal((await doIt({ act: 'big', subject: again.subject, also: again.also || [], asked: true })).ok, true, 'and it can be answered');
+});
+
+test('two staff answering at the same moment: the first stands, the second is told, never a quiet replacement', async () => {
+  await add(pay({ id: 'cc', company: 'Sample Builders', amount: 300000 }));
+  const jordan = () => C.act(env, { act: 'link', kind: 'company', subject: 'Sample Builders', org: 'p:pella' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act({ DB: racing(db, jordan) }, { act: 'link', kind: 'company', subject: 'Sample Builders', org: 'p:acme' }, by, { now: NOW }), (e) => e.status === 409);
+  assert.equal((await list()).find((p) => p.key === 'p:pella')?.total, 300000, 'Jordan’s answer stands');
+  await add(pay({ id: 'sm1', contact: 'ct_m1', first: 'Maria', last: 'Lopez', email: 'maria@example.com' }), pay({ id: 'sm2', contact: 'ct_m2', first: 'Maria', last: 'Lopez', email: 'mlopez@example.org', created: S(NOW - 3 * DAY) }));
+  const notSame = () => C.act(env, { act: 'same', a: 'c:ct_m1', b: 'c:ct_m2', same: false }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act({ DB: racing(db, notSame) }, { act: 'same', a: 'c:ct_m1', b: 'c:ct_m2', same: true }, by, { now: NOW }), (e) => e.status === 409);
+  const crm = await C.loadCrm(db, { now: NOW });
+  assert.notEqual(crm.canon('c:ct_m1'), crm.canon('c:ct_m2'), 'still two donors, as Jordan said');
+});
+
+test('Put it on the website at the same moment a teammate adds a Zeffy name to it: refused, and the name is never left behind', async () => {
+  await add(pay({ id: 'wb', contact: 'ct_bob', first: 'Bob', last: 'Ivers', email: 'bob@example.com', amount: 500000 }));
+  const { key } = await doIt({ act: 'org-new', name: 'Ivers Fund', links: [] });
+  await db.prepare(partner('ivers-fund', 'Ivers Fund')).run();
+  const jordan = () => C.act(env, { act: 'link', kind: 'contact', subject: 'ct_bob', org: key }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act({ DB: racing(db, jordan) }, { act: 'website', key, slug: 'ivers-fund', was: { kept: false } }, by, { now: NOW }), (e) => e.status === 409);
+  assert.ok(await db.prepare('SELECT 1 AS y FROM donor_orgs WHERE key = ?').bind(key).first(), 'still kept here, with Bob linked to it');
+  await doIt({ act: 'website', key, slug: 'ivers-fund', was: { kept: false } });
+  assert.equal((await list()).find((p) => p.key === 'p:ivers-fund')?.total, 500000, 'Bob’s gift goes with it');
+});
