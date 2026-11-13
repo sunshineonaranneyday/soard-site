@@ -496,9 +496,22 @@ export async function act(env, body, by, opts = {}) {
 async function actNow(env, body, by, { now = Date.now() } = {}) {
   const { DB } = env;
   await ensureCrm(DB);
-  const crm = await loadCrm(DB, { now });
+  let crm = await loadCrm(DB, { now });
   const a = body?.act;
-  const orgOk = (k) => { if (!crm.live(String(k || ''))) throw bad('That organization isn’t here any more. Reload and try again.', 409); return String(k); };
+  const orgOk = (k) => { if (!crm.live(String(k || ''))) throw bad('That organization isn’t here any more: someone took it out or put it on the website since. Nothing was changed.', 409); return String(k); };
+  // A person's record whose gifts Zeffy moved since the page was read (the 15-minute read has them, the move of what
+  // was said about it hasn't run): what was said follows them now, so this change lands where they are
+  if (/^c:/.test(String(body?.key || ''))) {
+    const c = String(body.key).slice(2);
+    const own = await DB.prepare('SELECT 1 AS y FROM donor_payments WHERE contact = ? LIMIT 1').bind(c).first();
+    const went = own ? [] : ((await DB.prepare('SELECT DISTINCT contact FROM donor_payments WHERE was_contact = ? AND contact IS NOT NULL LIMIT 6').bind(c).all()).results || []).map((r) => String(r.contact));
+    if (went.length > 1) throw bad('Zeffy split this donor’s gifts between records since this page was read. Nothing was changed; Needs you asks where what was said about them goes.', 409);
+    if (went.length === 1) {
+      await followMerges(DB, { now });
+      crm = await loadCrm(DB, { now });
+      body = { ...body, key: crm.canon(`c:${went[0]}`) };
+    }
+  }
   // Keep as an organization sent again (its answer lost on the way back): the one it made, by the key the page chose
   const orgKeyOf = (k) => (/^o:[0-9a-f]{16}$/.test(String(k || '')) ? String(k) : null);
   if (a === 'org-new' && orgKeyOf(body.key)) {
@@ -593,7 +606,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       ...[...new Set(others)].filter((k) => !off.has(k)).map((k) => callStmt(DB, { kind: 'anon', subject: k, answer: true }, by, now)),
       ...named,
     ]);
-    await audit(DB, by, `${body.on ? 'Keep anonymous' : 'No longer kept anonymous'}: ${isOrgKey(key) ? crm.org.get(key).name : 'a donor'}`, { key, on: !!body.on }, key);
+    await audit(DB, by, `${body.on ? 'Keep anonymous' : 'No longer kept anonymous'}: ${isOrgKey(key) ? crm.org.get(key).name : clean(body.name).slice(0, 80) || 'a donor'}`, { key, on: !!body.on }, key);
     // Their own setting off, and still kept (they share a name or an email with someone kept): said so, never "off"
     if (!body.on && !isOrgKey(key)) {
       const crm2 = await loadCrm(DB, { now });
@@ -1768,7 +1781,9 @@ export async function personView(env, ref, { now = Date.now() } = {}) {
   const orgList = [...crm.org.values()].map((o) => ({ slug: o.key, name: o.name }));
   for (const [k, c] of loose) c.near = nearPartners(c.name, orgList, { min: 0.6, max: 1 }).filter((m) => !crm.calls.no.has(`company\n${k}\n${m.partner.slug}`)).map((m) => ({ key: m.partner.slug, name: m.partner.name }))[0] || null;
   // The other records a person said are them (each with its address)
-  const also = crm.keysOf(key).filter((k) => k !== key).map((k) => ({ key: k, ref: k.startsWith('c:') ? k.slice(2) : null }));
+  // (every one but the record shown as theirs, the one Open in Zeffy opens: their own gifts' contact, else the lead)
+  const shownAs = v.donor?.contact && crm.keysOf(key).includes(`c:${v.donor.contact}`) ? `c:${v.donor.contact}` : key;
+  const also = crm.keysOf(key).filter((k) => k !== shownAs).map((k) => ({ key: k, ref: k.startsWith('c:') ? k.slice(2) : null }));
   // Kept anonymous, as the board has it: with everyone (someone kept may share their email or name)
   const allPlaced = crm.anyKeptAnonymous ? await allRows(env.DB) : rows;
   const pa = allPlaced === rows ? place : crm.placer(allPlaced);

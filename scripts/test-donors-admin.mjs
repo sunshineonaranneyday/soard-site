@@ -771,15 +771,17 @@ try {
   ok(await page.$eval('#dn-note-text', (t) => t.value) === 'Met at the gala' && await page.evaluate(() => document.activeElement?.id === 'dn-note-text'), `the window made narrower: the note box keeps the focus, and the typing (${await page.$eval('#dn-note-text', (t) => t.value)})`);
   await page.setViewport({ width: 1440, height: 1000 });
   await wait(300);
-  // Browser Back with the note typed: the page stays with the words while it asks; Stay keeps them
+  // Browser Back with the note typed: the page goes (nothing asks), and coming back the words are in the box
   const hereNow = await page.evaluate(() => location.hash);
   await page.evaluate(() => history.back());
-  await page.waitForSelector('.ask-overlay', { timeout: 4000 }).catch(() => {});
-  const backSeen = await page.evaluate(() => ({ asked: !!document.querySelector('.ask-overlay'), hash: location.hash, words: document.querySelector('#dn-note-text')?.value }));
-  ok(backSeen.asked && backSeen.hash === hereNow && backSeen.words === 'Met at the gala', `Back with a note typed: it asks first, the page and the words still there (${JSON.stringify(backSeen)} at ${hereNow})`);
-  await page.evaluate(() => document.querySelector('.ask-overlay [data-ask="no"]')?.click());
-  await wait(300);
-  ok(await page.evaluate(() => location.hash) === hereNow && await page.$eval('#dn-note-text', (t) => t.value) === 'Met at the gala', 'Stay: the words are still there');
+  await page.waitForFunction((h) => location.hash !== h, { timeout: 6000 }, hereNow).catch(() => {});
+  ok(!(await page.$('.ask-overlay')) && await page.evaluate((h) => location.hash !== h, hereNow), 'Back with a note typed: the page goes, nothing asks');
+  await page.evaluate(() => history.forward());
+  await page.waitForFunction(() => /Met at the gala/.test(document.querySelector('#dn-note-text')?.value || ''), { timeout: 8000 }).catch(() => {});
+  ok(await page.evaluate((h) => location.hash === h, hereNow) && await page.$eval('#dn-note-text', (t) => t.value).catch(() => '') === 'Met at the gala', 'back on the page: the words typed are in the box again');
+  await page.reload({ waitUntil: 'networkidle2' });
+  await page.waitForSelector('#dn-note-text', { timeout: 8000 });
+  ok(await page.$eval('#dn-note-text', (t) => t.value) === 'Met at the gala', 'and after a reload too');
   await page.click('#dn-note-text', { clickCount: 3 });
   await page.keyboard.press('Backspace');
   // Put on the website from a page read before a teammate took the organization out: nothing is made

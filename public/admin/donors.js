@@ -272,8 +272,6 @@ const addressOf = (place) => (place.tab === 'checks' ? '#donors/checks' : place.
 function go(place) {
   const next = addressOf(place);
   if (location.hash !== next) history.pushState(null, '', next);
-  // (the admin keeps the exact address, so leaving with unsaved words comes back here, not to the list)
-  window.dispatchEvent(new Event('soard-address'));
 }
 /** A donor in the list → their place */
 /** From a toast, which can be pressed after leaving: by address, which the admin follows from anywhere */
@@ -282,8 +280,7 @@ const placeOfDonor = (d, extra = {}) => (d.type === 'org' ? { tab: 'people', org
 
 // Each move to a place (a link, Back, Forward, a click) is a new page there: nothing of the page before carries over
 let moves = 0;
-export function Donors({ addToast = () => {}, partners = [], partnersCount = null, communityCount = null, createPartner = null, onPartnersChanged = () => {}, setGlobalDirty = null }) {
-  markDirty = setGlobalDirty || (() => {});
+export function Donors({ addToast = () => {}, partners = [], partnersCount = null, communityCount = null, createPartner = null, onPartnersChanged = () => {} }) {
   useJobCostsStyles();
   useStyles();
   const [place, setPlace] = useState(() => ({ ...placeOf(), n: ++moves }));
@@ -293,21 +290,11 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   // Thanked, a card's answer, the To thank box where a row was)
   useEffect(() => {
     const once = (e) => { if (e.detail > 1 && e.target?.closest?.('.dn button, .dn a, .dn .dn-row, .dn-picker button, .dn input[type="checkbox"], .dn label')) { e.preventDefault(); e.stopPropagation(); } };
-    // A link to another page here while a note is being written: asked first (the words are never dropped unasked)
-    const away = (e) => {
-      const a = e.target?.closest?.('.dn a[href^="#"]');
-      if (!a || !typingNote || a.closest('.dn-notes, .dn-note-new') || e.defaultPrevented) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const to = a.getAttribute('href');
-      leaving(() => { location.hash = to; });
-    };
-    document.addEventListener('click', away, true);
     // …and a held Enter or Space is one press: its repeats never answer the next item, which takes the focus
     const held = (e) => { if (e.repeat && (e.key === 'Enter' || e.key === ' ') && e.target?.closest?.('.dn button, .dn a, .dn-picker button, .dn input[type="checkbox"]')) { e.preventDefault(); e.stopPropagation(); } };
     document.addEventListener('click', once, true);
     document.addEventListener('keydown', held, true);
-    return () => { document.removeEventListener('click', once, true); document.removeEventListener('keydown', held, true); document.removeEventListener('click', away, true); };
+    return () => { document.removeEventListener('click', once, true); document.removeEventListener('keydown', held, true); };
   }, []);
   useEffect(() => {
     // An old Job Costs link to Checks settles on this area's own address, opened fresh or followed from here
@@ -320,29 +307,16 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
       if (!/^#(donors|job-costs\/checks)\b/.test(location.hash)) return;
       const next = placeOf();
       const cur = placeRef.current;
-      if (cur && addressOf(cur) === addressOf(next)) { window.dispatchEvent(new Event('soard-address')); return; }
-      // A note being written (Back, Forward, a link or a message's Open): the address goes back to the words while it
-      // asks, and on to where it was headed if they leave
-      if (typingNote && cur) {
-        const target = location.hash;
-        history.pushState(null, '', addressOf(cur));
-        // (asked once Back's own events have passed: the hashchange after its popstate would close the question at once)
-        setTimeout(() => leaving(() => { location.hash = target; }), 0);
-        return;
-      }
+      if (cur && addressOf(cur) === addressOf(next)) return;
       setPlace({ ...next, n: ++moves });
-      window.dispatchEvent(new Event('soard-address'));
     };
-    const answered = () => { typingNote = false; };
-    window.addEventListener('soard-leave-ok', answered);
     window.addEventListener('popstate', on);
     window.addEventListener('hashchange', on);
     // An address changed between the first draw and now (a link followed at once) isn't missed
     on();
-    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); window.removeEventListener('soard-leave-ok', answered); backTo = null; backFor = null; lastPlace = null; };
+    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); backTo = null; backFor = null; };
   }, []);
-  // (a note being written: asked first, never dropped by a move inside the area)
-  const open = (p) => leaving(() => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); });
+  const open = (p) => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); };
   // A move that took away what had the focus (Take it out, then the list): the page's heading has it
   useEffect(() => { const t = setTimeout(() => { if (!document.activeElement || document.activeElement === document.body) { const h = document.querySelector('.dn h2'); if (h) { if (!h.hasAttribute('tabindex')) h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } } }, 400); return () => clearTimeout(t); }, [place.n]);
   // Back from a donor's page: where it was opened from (To thank, Needs you), else the list
@@ -361,8 +335,8 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   if (place.donor || place.gift) {
     // A gift's link settling on its donor's own address is the same page (n stays): it isn't read twice
     return html`<div class="dn"><${DonorPage} key=${place.n} donor=${place.donor} gift=${place.gift} fromList=${!!place.fromList} ctx=${ctx} onBack=${goBack} backLabel=${backLabel}
-      onDonor=${(ref) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/${encodeURIComponent(ref)}`); window.dispatchEvent(new Event('soard-address')); setPlace({ tab: 'people', donor: ref, gift: place.gift, fromList: place.fromList, n: place.n }); }}
-      onOrg=${(key) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/org/${encodeURIComponent(key)}`); window.dispatchEvent(new Event('soard-address')); setPlace({ tab: 'people', org: key, gift: place.gift, n: place.n }); }} /></div>`;
+      onDonor=${(ref) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/${encodeURIComponent(ref)}`); setPlace({ tab: 'people', donor: ref, gift: place.gift, fromList: place.fromList, n: place.n }); }}
+      onOrg=${(key) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/org/${encodeURIComponent(key)}`); setPlace({ tab: 'people', org: key, gift: place.gift, n: place.n }); }} /></div>`;
   }
   return html`<div class="dn">
     <${AreaTabs} current=${place.tab === 'checks' ? 'checks' : 'donors'} partners=${partnersCount} community=${communityCount} onPick=${pick} />
@@ -385,6 +359,9 @@ const SORTS = [
 let lastList = null; // the list as last read, so coming back from a donor shows it at once
 // Where the list was (search, filter, sort, how many shown, scroll, the donor opened), so Back returns there
 let lastPlace = null;
+// The admin's sidebar (or anything that opens an area by name) brings Donors fresh: its list as it first shows.
+// Back and Forward through the areas find it as it was
+if (typeof window !== 'undefined') window.addEventListener('soard-nav', () => { lastPlace = null; });
 // The Owner filter, kept while the admin is open (a donor's page and back, To thank and back)
 let lastOwner = '';
 // Where a donor's page was opened from, when not the list ('thanks' | 'needs'): its Back goes there. Kept with the
@@ -392,13 +369,12 @@ let lastOwner = '';
 let backTo = null;
 let backFor = null;
 const cameFrom = (view) => (e) => { const li = e.currentTarget.closest('li'); backTo = view; backFor = e.currentTarget.getAttribute('href'); viewPlace = { view, scroll: window.scrollY, href: backFor, i: li ? [...li.parentElement.children].indexOf(li) : 0 }; };
-// A note being written (words in the box, or a change not saved): leaving asks first, here and from the sidebar
-let typingNote = false;
-let markDirty = () => {};
-const leaving = (go = () => {}) => {
-  if (!typingNote) { go(); return Promise.resolve(true); }
-  return ask({ title: 'Leave your note unsaved?', text: 'What you typed in the note isn’t saved yet.', yes: 'Leave', no: 'Stay', careful: true }).then((ok) => { if (ok) { typingNote = false; markDirty(false); go(); } return ok; });
-};
+// A note being written and not saved: kept in this browser (a move, Back, a reload, closing it), and back in its box
+// when the donor's page shows again, for a week. Nothing ever asks before leaving, and nothing typed is lost
+const DRAFT_DAYS = 7;
+const draftKey = (subject, part) => `soard-note-draft:${subject}:${part}`;
+const keepDraft = (k, v) => { try { if (v) localStorage.setItem(k, JSON.stringify({ ...v, at: Date.now() })); else localStorage.removeItem(k); } catch { /* storage off: nothing kept */ } };
+const draftOf = (k) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v && Date.now() - v.at < DRAFT_DAYS * 864e5 ? v : null; } catch { return null; } };
 // Where To thank or Needs you was when a giver was opened from it: back there, the same place and the same item
 let viewPlace = null;
 /** Back on To thank or Needs you from a giver: scrolled where it was, the focus on the link that opened them */
@@ -682,7 +658,8 @@ function useRefocus(selector, ready, otherwise = '.dn-done, .dn-status') {
     // The person moved on meanwhile (typing a note, the Owner filter): the focus stays where they put it
     if (document.activeElement && document.activeElement !== document.body) return;
     const items = [...document.querySelectorAll(`${selector} > li`)];
-    const next = items[Math.min(i, items.length - 1)]?.querySelector('button:not([disabled]), a[href]');
+    const item = items[Math.min(i, items.length - 1)];
+    const next = item?.querySelector('.dn-need__do button:not([disabled]), .dn-row-do button:not([disabled])') || item?.querySelector('button:not([disabled]), a[href]');
     const fallback = document.querySelector(otherwise);
     if (next) { next.focus(); requestAnimationFrame(() => clearOfToasts(next.closest('li') || next)); }
     else if (fallback) { fallback.setAttribute('tabindex', '-1'); fallback.focus(); }
@@ -893,6 +870,7 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
 /** A small dialog: a search box and a list to pick from */
 function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null }) {
   const box = useRef(null);
+  const [openedAt] = useState(() => Date.now());
   const input = useRef(null);
   const [q, setQ] = useState('');
   const [list, setList] = useState([]);
@@ -913,7 +891,7 @@ function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null
   }, [q, tries]);
   // Refused (gone since, someone answered first): the choices are read again, as they are now
   const pick = async (x) => { setBusy(true); const done = await onPick(x); setBusy(false); if (done !== false) onClose(); else { search.reset?.(); setTries((n) => n + 1); input.current?.focus(); } };
-  return html`<div class="modal-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+  return html`<div class="modal-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy && Date.now() - openedAt > 400) onClose(); }}>
     <div class="modal dn-picker" role="dialog" aria-modal="true" aria-labelledby="dn-pick-h" tabindex="-1" ref=${box}>
       <h3 id="dn-pick-h">${title}</h3>
       ${sub ? html`<p>${sub}</p>` : null}
@@ -1081,27 +1059,22 @@ function ThankBox({ gifts, name, ctx }) {
 
 /** The team's notes: newest first, anyone on the team can add, change or delete one */
 function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDone }) {
-  const [text, setText] = useState('');
+  // Words typed here before and not saved (left, reloaded): back in their box
+  const [had] = useState(() => ({ text: draftOf(draftKey(subject, 'new'))?.text || '', edit: draftOf(draftKey(subject, 'edit')) }));
+  const [text, setText] = useState(had.text);
   const [busy, setBusy] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [draft, setDraft] = useState('');
+  const [editing, setEditing] = useState(had.edit?.id ?? null);
+  const [draft, setDraft] = useState(had.edit?.draft || '');
   // The note's words when Change was pressed: changed by a teammate since, it shows above the person's own
-  const [from, setFrom] = useState(null);
+  const [from, setFrom] = useState(had.edit?.from ?? null);
   const box = useRef(null);
   // The note being added: named here, so pressing Add again after an answer that was lost saves it once
   const pending = useRef(null);
-  // Words typed and not saved: leaving asks first (Donors' own moves, and the admin's sidebar)
-  const unsaved = !!text.trim() || (editing !== null && from !== null && draft.trim() !== String(from).trim());
-  // (known the moment the words change: a move a moment after the box is emptied never asks about it)
-  typingNote = unsaved;
-  useEffect(() => { typingNote = unsaved; markDirty(unsaved, 'a note you were writing'); }, [unsaved, text, draft]);
-  useEffect(() => {
-    if (!unsaved) return undefined;
-    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
-    window.addEventListener('beforeunload', warn);
-    return () => window.removeEventListener('beforeunload', warn);
-  }, [unsaved]);
-  useEffect(() => () => { typingNote = false; markDirty(false); }, []);
+  // Words typed and not saved: kept as they're typed (a move, Back, a reload never loses them), gone once saved
+  useEffect(() => { keepDraft(draftKey(subject, 'new'), text.trim() ? { text } : null); }, [text]);
+  useEffect(() => { keepDraft(draftKey(subject, 'edit'), editing !== null && from !== null && draft.trim() !== String(from).trim() ? { id: editing, from, draft } : null); }, [editing, draft, from]);
+  // (back in the box: said so, once)
+  useEffect(() => { if (had.text.trim() || had.edit) ctx.addToast('Your note from before, not saved yet, is back in its box.', 'info'); }, []);
   // Saved after all (its answer lost, the page read again): it's in the list, so the box empties
   // (only when the box still holds those words: typed on since, the box keeps it all, and says the first part saved)
   useEffect(() => {
@@ -1226,7 +1199,7 @@ function HistoryCard({ history = [], staff = [] }) {
 }
 
 /** Keep anonymous: on a person or an organization */
-function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone }) {
+function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone, onSite = false }) {
   const [busy, setBusy] = useState(false);
   // Saved: shown so at once, until the page's own read says it (never snapping back while it reads)
   const [saved, setSaved] = useState(null);
@@ -1248,7 +1221,7 @@ function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone 
     const next = e.target.checked;
     if (busy) { e.target.checked = !next; return; }
     setBusy(true);
-    const r = await change({ act: 'anon', key: subject, on: next });
+    const r = await change({ act: 'anon', key: subject, on: next, name });
     setBusy(false);
     // Refused, or the answer lost on the way back (it may have saved): the page reads again, so the box shows what's so
     if (!r.success) { ctx.addToast(r.error, 'error'); e.target.checked = !next; setSaved(null); onDone(); return; }
@@ -1264,7 +1237,7 @@ function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone 
     <label class="dn-check"><input type="checkbox" checked=${isOn} disabled=${shared} aria-busy=${busy ? 'true' : null} onChange=${flip} /> Keep anonymous</label>
     ${shared ? html`<p class="kd-card__note">Because they share ${why.kind === 'name' ? 'a name' : 'an email'} in Zeffy with ${why.otherName}, who is kept anonymous. <button type="button" class="link dn-linkbtn" disabled=${busy} onClick=${notSame}>Not the same person</button></p>`
       : why?.kind === 'email' ? html`<p class="kd-card__note">Kept by their email from before Zeffy had a contact for them.</p>` : null}
-    <p class="kd-card__note">Their name stays off the board’s list of gifts, and the site never suggests them for the Partners page.</p>
+    <p class="kd-card__note">${onSite ? 'Its name stays off the board’s list of gifts. It’s on the Partners page already: Keep anonymous doesn’t take it off.' : 'Their name stays off the board’s list of gifts, and the site never suggests them for the Partners page.'}</p>
     ${isOn && names.length > 1 ? html`<p class="kd-card__note">Gifts under any name it has had are hidden too: ${names.join(', ')}.</p>` : null}
   </section>`;
 }
@@ -1377,7 +1350,6 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   const once = async (fn) => { if (rowBusy) return; setRowBusy(true); try { await fn(); } finally { setRowBusy(false); } };
   const linkTo = async (link, orgKey, orgName, asked = false) => {
     // (a contact counted for an organization: this page goes to it, so a note being written asks first)
-    if (link.kind === 'contact' && !(await leaving())) return false;
     // A Zeffy contact: every record of theirs (a person joined from several counts whole)
     const subjects = link.kind === 'contact' ? [...new Set([v.key, ...(v.also || []).map((a) => a.key)].filter((k) => k.startsWith('c:')).map((k) => k.slice(2)))] : [link.subject];
     // (all of them in one step: never some linked and some not)
@@ -1411,7 +1383,6 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
             ${a.ref ? html`<a class="link" href=${zeffyContactUrl(a.ref)} target="_blank" rel="noopener">Record ${i + 2} in Zeffy</a>` : html`<span>Record ${i + 2}, with no Zeffy contact</span>`}
             <button type="button" class="link dn-linkbtn" onClick=${async () => {
               if (!(await ask({ title: 'Not the same person?', text: `Record ${i + 2} becomes a donor of its own, with its own gifts, and won’t be asked about again. ${d.name}’s other records stay together.`, yes: 'Not the same' }))) return;
-              if (!(await leaving())) return;
               const r = await change({ act: 'split', key: a.key });
               if (!r.success) { ctx.addToast(r.error, 'error'); return; }
               listChanged();
@@ -1455,7 +1426,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     ${back}
     ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone.text}</strong> This page shows it as it was: copy anything you typed here${gone.org ? ', then open where it is now.' : ', then go back.'}</div>${gone.org ? html`<div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => goTo({ tab: 'people', org: gone.org })}>Open it</button></div>` : null}</div>` : null}
     <div class="dn-head">
-      <h2 tabindex="-1" ref=${heading}>${d.name} ${stageTag(d.stage)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : d.anonymous ? html`<span class="tag">Asked to be anonymous</span>` : null}</h2>
+      <h2 tabindex="-1" ref=${heading}>${d.name === 'No name' ? 'A giver Zeffy has no name for' : d.name} ${stageTag(d.stage)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : d.anonymous ? html`<span class="tag">Asked to be anonymous</span>` : null}</h2>
       <p class="dn-head__sub">${[d.funds.length ? `Through ${d.funds.join(', ')}` : null, d.email].filter(Boolean).join(' · ')}</p>
     </div>
     <div class="kd-shell" ref=${setShell}><div class="kd-layout">
@@ -1476,7 +1447,8 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
       }}
       onPick=${async (p) => {
         const r = await change({ act: 'same', a: v.key, b: p.id, same: true });
-        if (!r.success) { ctx.addToast(r.error, 'error'); return false; }
+        const joined = !r.success && lostAnswer(r) && ((await get(`?donor=${encodeURIComponent(donor || v.ref || '')}`)).also || []).some((a) => a.key === p.id);
+        if (!r.success && !joined) { ctx.addToast(r.error, 'error'); return false; }
         listChanged();
         ctx.addToast(`${d.name} and ${p.label} are one donor now`, 'success');
         await load();
@@ -1599,13 +1571,15 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     ctx.addToast(`${name} is on the Partners page after you publish`, 'success', null, { publish: true });
     // By address: pressed from its toast after the page was left, it goes there; finished on its own after the person
     // left, it never pulls them back
-    if (!left.current || fromToast) goTo({ tab: 'people', org: r.key });
+    if (!left.current || fromToast) location.replace(addressOf({ tab: 'people', org: r.key }));
   };
   const takeOut = async () => {
     if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it: they’re deleted.'}` : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
     // (what the question said goes with it: a teammate's note or owner since is never lost unseen)
     const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '', kept: !!v.keepAnonymous } });
-    if (!r.success) { ctx.addToast(r.error, 'error'); if (!left.current) await load(); return; }
+    // (its answers lost every time: taken out after all, it's done)
+    const gone = !r.success && lostAnswer(r) && (await get(`?org=${encodeURIComponent(v.key)}`)).status === 404;
+    if (!r.success && !gone) { ctx.addToast(r.error, 'error'); if (!left.current) await load(); return; }
     listChanged();
     ctx.addToast(`${v.name} taken out`, 'success');
     if (!left.current) onBack();
@@ -1640,7 +1614,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
         </section>
   `;
   const late = html`
-        <${KeepAnonymous} subject=${v.key} on=${!!v.keepAnonymous} names=${v.keptNames || []} name=${v.name} ctx=${ctx} onDone=${load} />
+        <${KeepAnonymous} subject=${v.key} on=${!!v.keepAnonymous} names=${v.keptNames || []} name=${v.name} onSite=${!!v.onSite} ctx=${ctx} onDone=${load} />
         <${HistoryCard} history=${v.history} staff=${v.staff} />
   `;
   const main = html`
@@ -1686,7 +1660,13 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     </div></div>
     ${adding && !gone ? html`<${Picker} title=${`Add a Zeffy name to ${v.name}`} sub="A company name its gifts carry, or the Zeffy contact it gives as. Every gift under it counts here." placeholder="Name or email in Zeffy"
       search=${findNames} onClose=${() => setAdding(false)}
-      onPick=${async (x) => { const ok = await say({ act: 'link', kind: x.kind, subject: x.subject, org: v.key, from: x.org || '' }, `“${x.name}” counts for ${v.name} now`); return ok; }} />` : null}
+      onPick=${async (x) => {
+        const ok = await say({ act: 'link', kind: x.kind, subject: x.subject, org: v.key, from: x.org || '' }, `“${x.name}” counts for ${v.name} now`);
+        if (ok) return true;
+        // (its answers lost every time: on this organization after all, it's done)
+        const now = await get(`?org=${encodeURIComponent(v.key)}`);
+        return (now.names || []).some((n) => n.kind === x.kind && String(n.subject).toLowerCase() === String(x.subject).toLowerCase()) ? true : false;
+      }} />` : null}
     ${renaming && !gone ? html`<${RenameDialog} name=${v.name} onClose=${() => setRenaming(false)} onSave=${(name, was) => say({ act: 'org-rename', key: v.key, name, was }, 'Renamed')} />` : null}`;
 }
 
@@ -1697,6 +1677,7 @@ function RenameDialog({ name: shownName, onSave, onClose }) {
   // The name it opened on: what the person saw, and is renaming (sent as such, whatever a re-read shows since). Told
   // of a teammate's rename (refused), it's that one they've seen: Save then renames it
   const [name, setName] = useState(shownName);
+  const [openedAt] = useState(() => Date.now());
   const latestShown = useRef(shownName);
   latestShown.current = shownName;
   const [val, setVal] = useState(name);
@@ -1715,7 +1696,7 @@ function RenameDialog({ name: shownName, onSave, onClose }) {
     if (ok === false) setName(latestShown.current);
     if (ok !== false) onClose();
   };
-  return html`<div class="modal-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+  return html`<div class="modal-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy && Date.now() - openedAt > 400) onClose(); }}>
     <div class="modal dn-rename" role="dialog" aria-modal="true" aria-labelledby="dn-rename-h" tabindex="-1" ref=${box}><form onSubmit=${save}>
       <h3 id="dn-rename-h">Rename ${name}</h3>
       <p>Only staff see this name. It isn’t on the website.</p>
