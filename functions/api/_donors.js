@@ -115,7 +115,8 @@ const SPONSOR = /sponsor|underwrit|presenting/i;
 const GIFT_ITEMS = new Set(['donation', 'additional_donation']);
 const NOT_GIVING = new Set(['shop', 'auction', 'raffle', 'sweepstakes']);
 /** Money received, after refunds that went through */
-export const netOf = (p) => (String(p?.dispute?.status || '').toLowerCase() === 'lost' ? 0
+// Refunded in full is nothing given, whether or not Zeffy listed the refund itself
+export const netOf = (p) => (String(p?.dispute?.status || '').toLowerCase() === 'lost' || String(p?.refund_status || '').toLowerCase() === 'full' ? 0
   : Math.max(0, Number(p?.amount || 0) - (p?.refunds || []).filter((r) => r?.status === 'succeeded').reduce((t, r) => t + (Number(r.amount) || 0), 0)));
 /**
  * How much of a payment is giving: its donation items and sponsorship tickets, after refunds. Zeffy doesn't say what

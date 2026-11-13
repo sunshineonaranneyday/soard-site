@@ -161,7 +161,7 @@ test('Thanked records who and when; Undo puts it back; Not needed is said too; t
   await doIt({ act: 'thanks', id: 'chk_9', state: 'todo' });
   r = await row('chk_9');
   assert.equal(r.state, 'todo');
-  assert.equal(r.done_by, null);
+  assert.deepEqual([r.done_by, r.done_at], [by, null], 'who put it back, so a later "since you looked" can say');
   await doIt({ act: 'thanks', id: 'chk_9', state: 'skipped' });
   assert.equal((await row('chk_9')).state, 'skipped');
   const page = await C.personView(env, 'ct_jane', { now: START + 4 * HOUR });
@@ -471,4 +471,35 @@ test('a thank-you said is never rewritten by later runs; a gift in kind with no 
   await doIt({ act: 'thanks', id: 'y1', state: 'thanked' }, START + 11 * HOUR);
   await note(pay({ id: 'y2', amount: 500000, every: 'yearly', sub: 'sub_y', contact: 'ct_y', email: 'y@example.com', created: S(START + 366 * DAY) }), START + 366 * DAY);
   assert.equal((await row('y2'))?.state, 'todo', 'the next year’s gift is thanked too');
+});
+
+// ─── Found in the third review ──────────────────────────────────────
+
+test('part of a To thank refunded and the rest under the line: it stays (part is still given), saying so', async () => {
+  await note(pay({ id: 'p1', amount: 60000, created: S(START + HOUR) }));
+  await note(pay({ id: 'p2', amount: 60000, created: S(START + HOUR + 10 * MIN) }));
+  assert.deepEqual((await todo()).map((x) => [x.why, x.cents]), [['major', 120000]]);
+  await note(pay({ id: 'p2', amount: 60000, created: S(START + HOUR + 10 * MIN), refund: 'full', refunds: [{ status: 'succeeded', amount: 60000 }] }), START + 3 * HOUR);
+  assert.deepEqual((await todo()).map((x) => [x.why, x.cents]), [['partly', 60000]]);
+  assert.match(T.WHY.partly, /refunded/);
+});
+
+test('a To thank whose gift splits in two stays with the part that needs a thank-you; the rest is never written over it', async () => {
+  await note(pay({ id: 'sc', amount: 50000, created: S(START + HOUR) }));
+  await note(pay({ id: 'sk', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR + 5 * MIN) }));
+  assert.deepEqual((await todo()).map((x) => [x.ids, x.why]), [['sc sk', 'check']]);
+  // Zeffy moves the card charge to another giver
+  await note(pay({ id: 'sc', amount: 50000, created: S(START + HOUR), contact: 'ct_owen', first: 'Owen', last: 'Other', email: 'owen@example.com' }), START + 3 * HOUR);
+  await T.syncThanks(env, { now: START + 4 * HOUR, ask: false });
+  assert.deepEqual((await T.thanksToDo(db)).map((x) => [x.ids, x.why, x.cents, x.name]), [['sk', 'check', 30000, 'Jane Doe']]);
+});
+
+test('the same answer twice (two tabs): one History line, and the second gets no Undo to take back the first', async () => {
+  await db.prepare("INSERT INTO donor_state (key, value) VALUES ('x', 'y')").run().catch(() => {});
+  await note(pay({ id: 'c9', method: 'cheque', type: 'manual', amount: 50000 }));
+  await C.act(env, { act: 'thanks', id: 'c9', state: 'thanked', was: 'todo' }, 'jordan@soardcharity.com', { now: START + 3 * HOUR });
+  const r = await doIt({ act: 'thanks', id: 'c9', state: 'thanked', was: 'todo' });
+  assert.deepEqual([r.same, r.by], [true, 'jordan@soardcharity.com']);
+  const h = (await db.prepare("SELECT entity_name FROM audit_log WHERE entity_type = 'donor-crm'").all()).results;
+  assert.equal(h.filter((x) => /^Thanked/.test(x.entity_name)).length, 1);
 });

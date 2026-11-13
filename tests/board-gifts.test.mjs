@@ -209,3 +209,7 @@ test('Keep anonymous in Donors & Partners hides the giver on the board, the pers
   assert.equal(by.pay_p2.company, '');
   assert.equal(by.pay_p3.name, 'Kim Park', 'everyone else as they were');
 });
+
+test('an imported gift refunded in full, failed or of nothing is never on the board', () => {
+  for (const p of [payment({ type: 'imported', refund_status: 'full' }), payment({ type: 'imported', status: 'failed' }), payment({ type: 'imported', amount: 0 })]) assert.equal(giftOf(p), null);
+});

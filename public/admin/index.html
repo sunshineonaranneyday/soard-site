@@ -25365,7 +25365,9 @@ ${sections || '<p>No one yet.</p>'}
           const r = await fetch(url, { cache: 'no-store' });
           if (!r.ok) return;
           const j = await r.json();
-          if (mine === s.n) put(read(j));
+          // (read says undefined when the answer has no number: the last one stays, never a 0 that hides the badge)
+          const v = read(j);
+          if (mine === s.n && v !== undefined) put(v);
         } catch { /* keeps what it had until the next look */ }
       };
       const heard = (e) => { if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } else refresh(); };
@@ -25400,7 +25402,7 @@ ${sections || '<p>No one yet.</p>'}
     // Families at Applied, waiting for a first look: Applications' badge
     const applicantsNew = sharedPoll('/api/applicants-count', (j) => (j?.success ? j.applied || 0 : 0), 300e3);
     // Gifts waiting for a thank-you (Donors & Partners → To thank): its badge. Donors says when one is marked
-    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j?.success && Number.isFinite(j.thanks) ? j.thanks : 0), 300e3, { on: 'soard-thanks-changed' });
+    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j === null ? 0 : j?.success && Number.isFinite(j.thanks) ? j.thanks : undefined), 300e3, { on: 'soard-thanks-changed' });
     // One of the Board area's admins (Board → Members): the menu and ⌘K show Board only to them
     const boardAdminGate = sharedPoll('/api/board-admin?me=1', (j) => j?.admin === true, 30 * 60e3);
     const navShown = (it, boardAdmin) => it.gate !== 'board' || boardAdmin;

@@ -1047,3 +1047,36 @@ test('“Keep it as an organization” never takes a name someone linked since t
   assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 1500000, 'Acme keeps it');
   assert.ok(!(await list()).some((p) => p.key.startsWith('o:')), 'and nothing was made');
 });
+
+// ─── Found in the third review ──────────────────────────────────────
+
+test('an organization kept here by a name never takes, by that name alone, a gift that counts for a partner', async () => {
+  await add(pay({ id: 'sf1', contact: 'ct_sff', first: 'Smith Family', last: 'Foundation', email: 'sff@example.com', company: 'Acme Builders', amount: 50000 }));
+  await add(pay({ id: 'sf2', contact: 'ct_tt', first: 'Tia', last: 'Trust', email: 'tia@example.com', company: 'Smith Family Foundation', amount: 1500000 }));
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 50000);
+  const big = (await needs()).find((i) => i.kind === 'big');
+  const r = await doIt({ act: 'org-new', name: big.name, links: [{ kind: big.link, subject: big.linkSubject }] });
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 50000, 'Acme keeps its $500');
+  assert.equal((await list()).find((p) => p.key === r.key)?.total, 1500000);
+});
+
+test('one question about a record at a time, whatever the kind: same person before “is it an organization?”, a partner before same person', async () => {
+  await add(pay({ id: 'h1', contact: 'ct_h1', first: 'Harbor', last: 'Holdings', email: 'h1@example.com', amount: 50000 }), pay({ id: 'h2', contact: 'ct_h2', first: 'Harbor', last: 'Holdings', email: 'h2@example.com', amount: 60000 }));
+  let items = await needs();
+  assert.deepEqual(items.filter((i) => /ct_h/.test(JSON.stringify(i))).map((i) => i.kind), ['same']);
+  await add(pay({ id: 'cm1', contact: 'ct_cm1', first: 'Chris', last: 'Moreno', email: 'cm1@example.com', amount: 5000 }), pay({ id: 'cm2', contact: 'ct_cm2', first: 'Chris', last: 'Moreno', email: 'cm2@example.com', amount: 6000 }));
+  items = await needs();
+  assert.deepEqual(items.filter((i) => /ct_cm/.test(JSON.stringify(i))).map((i) => i.kind).sort(), ['near', 'near'], 'each asked about the partner first; same person waits');
+});
+
+test('a contact linked to a partner since deleted can be kept as an organization', async () => {
+  await db.prepare(partner('smithff', 'Smith FF')).run();
+  await add(pay({ id: 'dl', contact: 'ct_dl', first: 'Delta Lake', last: 'Foundation', email: 'dl@example.com', amount: 50000 }));
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_dl', org: 'p:smithff' });
+  await db.prepare("DELETE FROM partners WHERE slug = 'smithff'").run();
+  const it = (await needs()).find((i) => i.kind === 'named');
+  assert.ok(it, 'asked: its link counts for nothing now');
+  const r = await doIt({ act: 'org-new', name: it.name, links: [{ kind: it.link, subject: it.linkSubject }], asked: true, subject: it.subject });
+  assert.equal((await list()).find((p) => p.key === r.key)?.total, 50000);
+  assert.ok(!(await needs()).some((i) => i.kind === 'named'));
+});

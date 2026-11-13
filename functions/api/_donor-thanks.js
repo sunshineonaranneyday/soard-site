@@ -95,6 +95,7 @@ export const WHY = {
   kind: 'A gift in kind: Zeffy sends no thank-you',
   hand: 'Entered by hand: Zeffy sends no thank-you',
   major: '$1,000 or more',
+  partly: 'Part of it was refunded since; Zeffy thanked them by email for what’s left',
 };
 
 // ─── Keeping the list ───────────────────────────────────────────────
@@ -236,27 +237,51 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
   }
   // Only a gift that has no thank-you yet asks whether it's a first time (its answer never changes after)
   const first = await firstTimes(DB, gifts.filter((x) => x.g.every && !x.t));
+  for (const x of gifts) x.why = thankWhy(x.g, { first: !x.g.every || !!x.t || first.has(x.g), charges: x.rs });
+  // A To thank whose charges are in two gifts now (one moved to another giver, a middle one deleted): it stays with the
+  // gift that still needs a thank-you (else the one with its first charge, else the most of them); the other part is a
+  // question of its own, never a second gift written over the first
+  const claims = new Map();
+  for (const x of gifts) if (x.t) claims.set(x.t.id, [...(claims.get(x.t.id) || []), x]);
+  for (const [id, xs] of claims) {
+    if (xs.length < 2) continue;
+    const mine = (x) => x.charges.filter((c) => idsOf.get(id)?.includes(c)).length;
+    xs.sort((a, b) => (b.why ? 1 : 0) - (a.why ? 1 : 0) || (b.charges.includes(id) ? 1 : 0) - (a.charges.includes(id) ? 1 : 0) || mine(b) - mine(a));
+    for (const x of xs.slice(1)) { x.t = null; x.split = true; }
+  }
+  const rowIds = new Set(known.map((t) => t.id));
   let added = 0;
-  for (const { g, charges, rs, r0, t } of gifts) {
-    const why = thankWhy(g, { first: !g.every || !!t || first.has(g), charges: rs });
+  for (const x of gifts) {
+    const { g, charges, r0, t } = x;
+    let { why } = x;
     // Named as the donor list names them (./_donor-crm.js): their email when Zeffy has no name
     const name = givenName({ first_name: r0.first, last_name: r0.last }) || clean(r0.company) || clean(r0.email) || 'No name';
     const snap = [charges.join(' '), g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, name, r0.company || null, g.campaign || null, howOf(g), r0.contact || null];
     if (!t) {
       if (!why) continue;
+      // (a part split off a To thank may hold its first charge, whose id that thank-you keeps)
+      const id = rowIds.has(g.id) ? `${g.id}~${charges.length}${charges.at(-1)}` : g.id;
       steps.push(DB.prepare(`INSERT OR IGNORE INTO donor_thanks (id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at)
-        VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(g.id, snap[0], why, ...snap.slice(1), iso(now)));
+        VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, snap[0], why, ...snap.slice(1), iso(now)));
+      rowIds.add(id);
       added++;
       continue;
     }
-    // A To thank keeps up with its part of the gift: a later charge joins it, one refunded in full leaves it. If what's
-    // left needs no thank-you and only refunds took the rest (never a charge the list just doesn't have), it closes;
-    // otherwise it stays To thank (with the reason it had) until a person says, or every charge is refunded (below)
-    const dropped = idsOf.get(t.id).filter((c) => !charges.includes(c));
-    if (!why && dropped.length && dropped.every((c) => { const r = byId.get(c); return r && Number(r.cents) > 0 && !gives(r); })) {
-      steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'refunded', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
-      idsOf.delete(t.id);
-      continue;
+    // A To thank keeps up with its part of the gift: a later charge joins it, one refunded in full leaves it. When what
+    // it covers needs no thank-you any more: with a charge the list doesn't have, nothing changes (it may be a glitch);
+    // with one refunded, it stays (part is still given: a person says), saying so; with the gift otherwise changed in
+    // Zeffy (a charge moved to another giver, a check re-entered as a card gift), it closes
+    if (!why) {
+      const dropped = idsOf.get(t.id).filter((c) => !charges.includes(c));
+      const missing = dropped.some((c) => !byId.has(c));
+      const refunded = dropped.some((c) => { const r = byId.get(c); return r && Number(r.cents) > 0 && !gives(r); });
+      if (missing) why = null;
+      else if (refunded) why = 'partly';
+      else {
+        steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'changed', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
+        idsOf.delete(t.id);
+        continue;
+      }
     }
     steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = COALESCE(?, why), at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'")
       .bind(snap[0], why, ...snap.slice(1), t.id));
@@ -329,7 +354,7 @@ export async function thanksFor(DB, chargeIds) {
   if (!want.size) return out;
   // Few rows: read whole (a gift's charges are in one row's ids, which a lookup by id can't find)
   for (const t of (await DB.prepare(`SELECT ${SHOW} FROM donor_thanks`).all()).results || []) {
-    for (const c of chargesOf(t)) if (want.has(c)) out.set(c, { id: t.id, state: t.state, why: t.why, by: t.done_by || null, at: t.done_at || null, gone: t.gone || null });
+    for (const c of chargesOf(t)) if (want.has(c)) out.set(c, { id: t.id, state: t.state, why: t.why, by: t.state === 'todo' ? null : t.done_by || null, at: t.done_at || null, gone: t.gone || null, cents: t.cents, inKind: t.in_kind, how: t.how || null, ids: chargesOf(t) });
   }
   return out;
 }
@@ -350,11 +375,12 @@ export async function markThanks(DB, { id, state, was = null }, by, { now = Date
   if (t.state === 'gone') throw Object.assign(new Error('That gift was refunded or taken out of Zeffy, so there’s no thank-you to say.'), { status: 409 });
   const who = (e) => { const n = String(e || '').split('@')[0]; return n ? `${n[0].toUpperCase()}${n.slice(1)}` : ''; };
   const changed = (x) => Object.assign(new Error(`${x.done_by ? `${who(x.done_by)} said ` : 'Someone said '}“${SAID[x.state] || x.state}” since you looked. Nothing was changed.`), { status: 409, state: x.state });
-  // Already what was asked (a second click, a teammate who said the same): done, nothing to tell
-  if (t.state === state) return t;
+  // Already what was asked (a second click, a teammate who said the same): nothing changes, and nothing to log or undo
+  if (t.state === state) return { ...t, same: true };
   if (was && t.state !== was) throw changed(t);
+  // Who put it back To thank (Undo) is kept too, so a later "since you looked" can say who
   const r = await DB.prepare('UPDATE donor_thanks SET state = ?, done_by = ?, done_at = ? WHERE id = ? AND state = ?')
-    .bind(state, state === 'todo' ? null : by || null, state === 'todo' ? null : iso(now), t.id, t.state).run();
+    .bind(state, by || null, state === 'todo' ? null : iso(now), t.id, t.state).run();
   if (!r.meta?.changes) throw changed(await DB.prepare(`SELECT ${SHOW} FROM donor_thanks WHERE id = ?`).bind(t.id).first() || t);
   return t;
 }

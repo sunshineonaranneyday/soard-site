@@ -70,8 +70,8 @@ export function giftOf(p, kids = []) {
 function rowOf(p, kids = []) {
   // As Slack screens a payment, except a gift imported into Zeffy counts here (a gala's, brought in from its auction
   // platform, is this year's giving; Slack leaves imports out because they aren't new arrivals). Peter, Nov 12 2026
-  const skip = screenPayment(p);
-  if ((skip && skip !== 'imported') || p?.metadata?.soardSelfTest === true) return null;
+  // (screened as if taken in Zeffy: an import refunded in full, failed or of nothing still never shows)
+  if (screenPayment(p?.type === 'imported' ? { ...p, type: 'online' } : p) || p?.metadata?.soardSelfTest === true) return null;
   const refunded = (p.refunds || []).filter((r) => r?.status === 'succeeded').reduce((t, r) => t + (Number(r.amount) || 0), 0);
   const cents = Number(p.amount) - refunded;
   if (!(cents > 0)) return null;

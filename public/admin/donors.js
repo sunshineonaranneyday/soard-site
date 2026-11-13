@@ -495,6 +495,8 @@ async function sayThanks(ctx, g, state) {
   listChanged();
   thanksChanged();
   if (!r.success) { ctx.addToast(r.error, 'error'); return false; }
+  // Already so (a second click, or a teammate said the same): nothing changed, so nothing to undo
+  if (r.same) { ctx.addToast(`${state === 'thanked' ? 'Thanked' : 'No thank-you needed'} already${r.by ? `, said by ${r.by.split('@')[0].replace(/^./, (c) => c.toUpperCase())}` : ''}`, 'info'); return true; }
   const undo = async () => {
     const u = await change({ act: 'thanks', id: g.id, state: 'todo', was: state });
     listChanged();
@@ -808,13 +810,13 @@ function ThankBox({ gifts, name, ctx }) {
   const doIt = async (g, state, e) => {
     refocus(e.currentTarget);
     setBusy(`${g.id}:${state}`);
-    await sayThanks(ctx, { id: g.thanks.id, cents: g.cents, inKind: g.inKind, name: g.by || name }, state);
+    await sayThanks(ctx, { id: g.thanks.id, cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind, name: g.by || name }, state);
     setBusy(null);
   };
   return html`<section class="card kd-sec dn-thank" aria-labelledby="dn-thank-h">
     <header class="kd-sec__head"><h3 id="dn-thank-h">To thank <span class="count">${todo.length}</span></h3></header>
     <ul class="dn-thank__list">${todo.map((g) => html`<li key=${g.id} class="dn-thank__one">
-      <span><strong>${amountOf(g)}</strong> · ${[g.campaign || 'A gift', g.how, day(g.at), g.by ? `from ${g.by}` : null].filter(Boolean).join(' · ')}</span>
+      <span><strong>${amountOf({ cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind })}</strong> · ${[g.campaign || 'A gift', g.thanks.how || g.how, day(g.at), g.by ? `from ${g.by}` : null, g.thanks.ids && g.ids && g.thanks.ids.length < g.ids.length ? 'the part given later' : null].filter(Boolean).join(' · ')}</span>
       <span class="dn-sub">${g.thanks.whyText}.</span>
       <span class="dn-row-do">
         <button type="button" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(g, 'thanked', e); }}>${busy === `${g.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
@@ -998,11 +1000,11 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   if (err) return html`${back}<div class="notice notice--danger"><div class="notice__body">${err.text}</div>${err.final ? null : html`<div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div>`}</div>`;
   if (!v) return html`${back}<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
   const d = v.donor;
-  const linkTo = async (link, orgKey, orgName) => {
+  const linkTo = async (link, orgKey, orgName, asked = false) => {
     // A Zeffy contact: every record of theirs (a person joined from several counts whole)
     const subjects = link.kind === 'contact' ? [...new Set([v.key, ...(v.also || []).map((a) => a.key)].filter((k) => k.startsWith('c:')).map((k) => k.slice(2)))] : [link.subject];
     for (const subject of subjects) {
-      const r = await change({ act: 'link', kind: link.kind, subject, org: orgKey });
+      const r = await change({ act: 'link', kind: link.kind, subject, org: orgKey, ...(asked ? { asked: true } : {}) });
       if (!r.success) { ctx.addToast(r.error, 'error'); await load(); return false; }
     }
     listChanged();
@@ -1052,7 +1054,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           ${v.companies?.length ? html`<ul class="dn-plain">${v.companies.map((c) => html`<li key=${c.name}>Gave ${usd(c.cents)} for ${c.name}
             <span class="dn-sub">Counted as ${d.name}’s until it’s linked</span>
             <span class="dn-row-do">
-              ${c.near ? html`<button type="button" class="btn btn-ghost btn-sm" onClick=${() => linkTo({ kind: 'company', subject: c.name }, c.near.key, c.near.name)}>It’s ${c.near.name}</button>` : null}
+              ${c.near ? html`<button type="button" class="btn btn-ghost btn-sm" onClick=${() => linkTo({ kind: 'company', subject: c.name }, c.near.key, c.near.name, true)}>It’s ${c.near.name}</button>` : null}
               <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setPicking({ kind: 'company', subject: c.name, label: c.name })}>Link to…</button>
               <button type="button" class="btn btn-ghost btn-sm" onClick=${async () => { const k = await keepAsOrg(c.name, { kind: 'company', subject: c.name }, ctx); if (k) await load(); }}>Keep as an organization</button>
             </span></li>`)}</ul>` : null}
@@ -1133,7 +1135,8 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     listChanged();
     await load();
   };
-  const say = async (body, done) => { setBusy(true); const r = await change(body); setBusy(false); if (!r.success) { ctx.addToast(r.error, 'error'); return false; } listChanged(); if (done) ctx.addToast(done, 'success'); await load(); return true; };
+  // Refused (answered by someone since): the page as it is now, so the question it showed goes
+  const say = async (body, done) => { setBusy(true); const r = await change(body); setBusy(false); if (!r.success) { ctx.addToast(r.error, 'error'); await load(); return false; } listChanged(); if (done) ctx.addToast(done, 'success'); await load(); return true; };
   const putOnSite = async () => {
     if (v.keepAnonymous || v.anonymousGifts) {
       if (!(await ask({ title: `Put ${v.name} on the website?`, text: v.keepAnonymous ? `${v.name} is kept anonymous. Its name and logo would be on the Partners page for anyone to see.` : `Some of ${v.name}’s gifts were given anonymously. Its name and logo would be on the Partners page for anyone to see.`, yes: 'Put it on the website', careful: true }))) return;
@@ -1186,7 +1189,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
             <p style="margin:.5rem 0 0"><a class="btn btn-ghost btn-sm" href=${`#partners/${encodeURIComponent(v.slug)}`}>Open its partner card</a></p>
             ${level ? html`<div class="dn-suggest"><p>Gave ${usd(level.cents12)} in the last 12 months: Champion is $10,000 or more.</p>
               <div class="dn-need__do"><button type="button" class="btn btn-primary btn-sm" disabled=${busy} onClick=${async () => { if (await makeChampion(level, ctx)) { listChanged(); await load(); } }}>Move to Champion…</button>
-              <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => say({ act: 'level', org: v.key, done: false })}>Not now</button></div></div>` : null}`
+              <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => say({ act: 'level', org: v.key, done: false, asked: true })}>Not now</button></div></div>` : null}`
           : html`<p>Not on the website. Only staff see it here.</p>
             <div class="dn-need__do"><button type="button" class="btn btn-ghost btn-sm" onClick=${putOnSite}>Put it on the website…</button>
               <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setRenaming(true)}>Rename</button>
@@ -1207,8 +1210,8 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
           <header class="kd-sec__head"><h3 id="dn-names-h">Names it gives under</h3>
             <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setAdding(true)}>Add a Zeffy name</button></header>
           ${near.length ? html`<ul class="dn-plain">${near.map((n) => html`<li key=${n.id} class="dn-maybe">Maybe ${n.link === 'company' ? html`“${n.subject}”` : n.name}? <span class="dn-sub">${n.why}, ${usd(n.cents)} given</span>
-            <span class="dn-row-do"><button type="button" class="btn btn-primary btn-sm" disabled=${busy} onClick=${() => say({ act: 'link', kind: n.link, subject: n.subject, org: v.key }, `Its gifts count for ${v.name} now`)}>Yes, it’s ${v.name}</button>
-            <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => say({ act: 'not', kind: n.link, subject: n.subject, org: v.key })}>No</button></span></li>`)}</ul>` : null}
+            <span class="dn-row-do"><button type="button" class="btn btn-primary btn-sm" disabled=${busy} onClick=${() => say({ act: 'link', kind: n.link, subject: n.subject, org: v.key, asked: true }, `Its gifts count for ${v.name} now`)}>Yes, it’s ${v.name}</button>
+            <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => say({ act: 'not', kind: n.link, subject: n.subject, org: v.key, asked: true })}>No</button></span></li>`)}</ul>` : null}
           ${v.names.length ? html`<ul class="dn-plain">${v.names.map((n) => html`<li key=${`${n.kind}:${n.subject}`}><strong>${n.name}</strong>
             <span class="dn-sub">${n.kind === 'company' ? 'A company name on gifts' : n.kind === 'payment' ? 'One gift, counted here by hand' : 'A Zeffy contact'} · ${n.how === 'same name' ? 'the same name, linked by itself' : n.how === 'linked' ? 'linked by a person' : n.how}</span>
             <span class="dn-row-do">${n.kind === 'contact' ? html`<a class="link" href=${zeffyContactUrl(n.subject)} target="_blank" rel="noopener">Open in Zeffy</a>` : null}

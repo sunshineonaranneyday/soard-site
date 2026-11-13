@@ -563,8 +563,11 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       const own = l.kind === 'company' ? crm.exact(clean(l.subject)) : null;
       const has = (linked && crm.live(linked) && linked) || (own && !crm.calls.no.has(`company\n${subject}\n${own}`) && own);
       if (has) throw bad(`${l.kind === 'company' ? `“${clean(l.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(has)?.name || 'an organization'} already. Nothing was changed.`, 409);
+      // A link to an organization that's gone (a partner deleted) counts for nothing: this one replaces it
+      steps.push(DB.prepare('DELETE FROM donor_calls WHERE kind = ? AND subject = ? AND answer = 1').bind(l.kind, subject));
       steps.push(callStmt(DB, { kind: l.kind, subject, target: key, answer: 1 }, by, now));
     }
+    steps.push(...await keepOthersGifts(DB, crm, name, key, by, now));
     await DB.batch(steps);
     // A Zeffy contact that was this organization all along (not joined to anyone): its owner, notes, Keep anonymous and
     // History are the organization's now
@@ -582,6 +585,7 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     // Two organizations with one name would each lose the gifts that name links by itself
     if (crm.named(name, key).length) throw bad(`${crm.org.get(crm.named(name, key)[0]).name} already has that name.`, 409);
     await DB.batch([
+      ...await keepOthersGifts(DB, crm, name, key, by, now),
       DB.prepare('UPDATE donor_orgs SET name = ? WHERE key = ?').bind(name, key),
       // Both names written down, kept or not (they count only while it's kept)
       callStmt(DB, { kind: 'kept-name', subject: looseKey(crm.org.get(key).name), target: key, answer: 1, note: crm.org.get(key).name }, by, now),
@@ -671,6 +675,8 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
   // A thank-you said: thanked, not needed, or (Undo) To thank again
   if (a === 'thanks') {
     const t = await markThanks(DB, { id: body.id, state: body.state, was: ['todo', 'thanked', 'skipped'].includes(body.was) ? body.was : null }, by, { now });
+    // Already so (a second click, a teammate who said the same): nothing happened, so nothing in History
+    if (t.same) return { ok: true, was: t.state, same: true, by: t.done_by || null };
     const owner = await donorOfPayment(env, String(t.ids).split(' ')[0], { crm }).catch(() => null);
     const words = { thanked: 'Thanked', skipped: 'No thank-you needed', todo: 'To thank again' }[body.state];
     await audit(DB, by, `${words}: ${t.in_kind ? `${usd(t.in_kind)} in kind` : usd(t.cents)} from ${t.name || 'a donor'}${t.at ? `, ${new Date(t.at * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })}` : ''}`, { gift: t.id, state: body.state, was: t.state }, owner || 'donors');
@@ -685,6 +691,25 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     return { ok: true };
   }
   throw bad('Unknown change');
+}
+
+/**
+ * An organization here named `name` (new, or renamed) matches Zeffy contacts of exactly that name by itself. A contact
+ * whose gifts count for another organization now (its company is linked there) keeps them: it's told "not this one" for
+ * the named organization, in the same step. → the statements
+ */
+async function keepOthersGifts(DB, crm, name, key, by, now) {
+  const k = nameKey(name);
+  if (!k) return [];
+  const rows = await allRows(DB);
+  const place = crm.placer(rows);
+  const keep = new Set();
+  for (const r of rows) {
+    if (!r.contact || keep.has(r.contact) || crm.calls.yes.has(`contact\n${r.contact}`)) continue;
+    if (nameKey(givenName({ first_name: r.first, last_name: r.last })) !== k) continue;
+    if (crm.isOrg(place(r).owner)) keep.add(r.contact);
+  }
+  return [...keep].map((c) => callStmt(DB, { kind: 'contact', subject: c, target: key, answer: 0 }, by, now));
 }
 
 /** A Needs you question still open, or 409 saying who answered it (an answer that has run out, a year on, is open) */
@@ -708,12 +733,12 @@ async function stillAsked(DB, crm, body, now) {
       .map((sub) => ({ sql: "kind = 'big' AND subject = ?", args: [String(sub)], live: (c) => c.note === 'person' || !yearOn(c.at) }));
     for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
       if (!KINDS.has(l?.kind)) continue;
-      q.push({ sql: 'kind = ? AND subject = ? AND answer = 1', args: [l.kind, subjectOf(l.kind, l.subject)], live: (c) => !!c });
+      q.push({ sql: 'kind = ? AND subject = ? AND answer = 1', args: [l.kind, subjectOf(l.kind, l.subject)], live: (c) => crm.live(c.target) });
     }
     if (crm.named(clean(body.name)).length) throw bad(`${crm.org.get(crm.named(clean(body.name))[0]).name} is an organization here already: someone kept it since this list was read. Nothing was changed.`, 409);
   }
   for (const { sql, args, live } of q) {
-    const c = await DB.prepare(`SELECT kind, answer, note, by, at FROM donor_calls WHERE ${sql} ORDER BY at DESC LIMIT 1`).bind(...args).first();
+    const c = await DB.prepare(`SELECT kind, target, answer, note, by, at FROM donor_calls WHERE ${sql} ORDER BY at DESC LIMIT 1`).bind(...args).first();
     if (c && (!live || live(c))) throw bad(`${c.by && c.by.includes('@') ? `${c.by.split('@')[0][0].toUpperCase()}${c.by.split('@')[0].slice(1)}` : 'Someone'} answered this already. Nothing was changed; the list is read again.`, 409);
   }
 }
@@ -1004,15 +1029,18 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
   // Several records with one name or email: one question at a time (the next comes once that one is answered), so
   // three of one name are never three questions about the same people at once
   const asked3 = new Set();
+  // A Zeffy contact asked something already (is it that partner?) isn't asked another thing about it at the same time
+  const contactOfKey = (k) => (String(k).startsWith('c:') ? String(k).slice(2) : null);
   const group = (k, list, why) => {
     const l = list.filter((p) => p.cents > 0).slice(0, 4);
     for (let i = 0; i < l.length; i++) for (let j = i + 1; j < l.length; j++) {
       const [a, b] = [l[i].key, l[j].key].sort();
       if (crm.calls.notSame.has(`${a}\n${b}`) || pairs.has(`${a}\n${b}`)) continue;
-      if (asked3.has(a) || asked3.has(b)) continue;
+      if (asked3.has(a) || asked3.has(b) || [a, b].some((x) => askedContacts.has(contactOfKey(x)))) continue;
       pairs.set(`${a}\n${b}`, { a, b, why });
       asked3.add(a);
       asked3.add(b);
+      for (const x of [a, b]) if (contactOfKey(x)) askedContacts.add(contactOfKey(x));
     }
   };
   const byName = new Map();
