@@ -224,16 +224,22 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     const part = said ? [...(t ? idsOf.get(t.id).filter((c) => charges.includes(c)) : []), ...charges.filter((c) => !byCharge.has(c))] : charges;
     const rs = part.map((id) => byId.get(id)).filter((r) => r && gives(r));
     if (!rs.length) continue;
-    // The part a said thank-you didn't cover, as its own charges have it (a check that joined a card gift is a check)
-    const lead = rs.find((r) => offlineWhy(r)) || rs[0];
-    const gift = said ? { ...g, id: rs[0].id, ids: rs.map((r) => r.id), at: Math.max(...rs.map((r) => Number(r.at))), cents: rs.reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0), method: lead.method, type: lead.type, inKind: lead.method === 'in_kind', parts: rs.length } : g;
-    const firstSeen = rs.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), rs[0].first_seen);
-    // An import is new by its date only: old history imported now was thanked when it was given
-    const isNew = gift.at >= startS || (gift.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
-    if (!t && !isNew) continue;
-    // A monthly gift: its first time only, known once all the history is read
-    if (gift.every && !st.wholeAt) continue;
-    gifts.push({ g: gift, charges: said ? rs.map((r) => r.id) : charges, rs, r0: rs[0], t });
+    // The part a said thank-you didn't cover, as its own charges have it: each one Zeffy sent nothing for (a check, a
+    // donor-advised fund, in kind) a question of its own at its own amount; online ones together (a later $1,200 in
+    // two charges is still $1,000 or more). A To thank already holding some of them stays with that part
+    const groups = !said ? [rs] : [...rs.filter((r) => offlineWhy(r)).map((r) => [r]), rs.filter((r) => !offlineWhy(r))].filter((x) => x.length);
+    for (const part of groups) {
+      const pt = !said ? t : (t && part.some((r) => idsOf.get(t.id)?.includes(r.id)) ? t : null);
+      const lead = part.find((r) => offlineWhy(r)) || part[0];
+      const gift = said ? { ...g, id: part[0].id, ids: part.map((r) => r.id), at: Math.max(...part.map((r) => Number(r.at))), cents: part.reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0), method: lead.method, type: lead.type, inKind: lead.method === 'in_kind', parts: part.length } : g;
+      const firstSeen = part.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), part[0].first_seen);
+      // An import is new by its date only: old history imported now was thanked when it was given
+      const isNew = gift.at >= startS || (gift.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
+      if (!pt && !isNew) continue;
+      // A monthly gift: its first time only, known once all the history is read
+      if (gift.every && !st.wholeAt) continue;
+      gifts.push({ g: gift, charges: said ? part.map((r) => r.id) : charges, rs: part, r0: part[0], t: pt });
+    }
     // Two To thanks a new charge joined into one gift (a check dated between them): one thank-you, the first's
     if (!said) for (const x of held) if (x !== t) { steps.push(DB.prepare("DELETE FROM donor_thanks WHERE id = ? AND state = 'todo'").bind(x.id)); idsOf.delete(x.id); }
   }
@@ -388,7 +394,7 @@ export async function markThanks(DB, { id, state, was = null }, by, { now = Date
   if (!t) throw Object.assign(new Error('That gift has no thank-you to say. Reload and look again.'), { status: 404 });
   if (t.state === 'gone') throw Object.assign(new Error('That gift was refunded or taken out of Zeffy, so there’s no thank-you to say.'), { status: 409 });
   const who = (e) => { const n = String(e || '').split('@')[0]; return n ? `${n[0].toUpperCase()}${n.slice(1)}` : ''; };
-  const changed = (x) => Object.assign(new Error(`${x.done_by ? `${who(x.done_by)} said ` : 'Someone said '}“${SAID[x.state] || x.state}” since you looked. Nothing was changed.`), { status: 409, state: x.state });
+  const changed = (x) => Object.assign(new Error(`${x.done_by && by && x.done_by === by ? 'You said ' : x.done_by ? `${who(x.done_by)} said ` : 'Someone said '}“${SAID[x.state] || x.state}”${x.done_by && x.done_by === by ? ' in another tab' : ''} since you looked. Nothing was changed.`), { status: 409, state: x.state });
   // Already what was asked (a second click, a teammate who said the same): nothing changes, and nothing to log or undo
   if (t.state === state) return { ...t, same: true };
   if (was && t.state !== was) throw changed(t);

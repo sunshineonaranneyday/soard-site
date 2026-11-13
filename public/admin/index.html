@@ -4888,11 +4888,11 @@
         const r = await fetch(`/api/read-content?path=${encodeURIComponent(path)}`);
         return apiJson(r, '/api/read-content');
       },
-      async saveContent(path, content, message, sha) {
+      async saveContent(path, content, message, sha, { create = false } = {}) {
         const r = await fetch('/api/save-content', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path, content, message, sha }),
+          body: JSON.stringify({ path, content, message, sha, ...(create ? { create: true } : {}) }),
         });
         const data = await apiJson(r, '/api/save-content');
         if (data.success) window.dispatchEvent(new CustomEvent('soard-content-changed'));
@@ -16254,7 +16254,8 @@
         const level = f.level;
         const record = PS.partnerRecord({ name: f.name, slug, logo: f.logo, website: f.website, level, category: f.category, featured: false,
           order: PS.levelOf(level).sortable ? PS.nextOrder(partners, level) : 0 });
-        const res = await api.saveContent(PT_PATH(slug), JSON.stringify(record, null, 2), `Add partner: ${record.name}`).catch((e) => ({ success: false, error: e.message }));
+        // A new card: never over one added since this list was read (another tab putting the same name on the website)
+        const res = await api.saveContent(PT_PATH(slug), JSON.stringify(record, null, 2), `Add partner: ${record.name}`, undefined, { create: true }).catch((e) => ({ success: false, error: e.message }));
         setSaving(false);
         if (!res.success) { addToast(`Couldn’t add ${record.name}: ${res.error}`, 'error'); return; }
         logActivity('created', 'partner', record.name);
@@ -25718,7 +25719,8 @@ ${sections || '<p>No one yet.</p>'}
         setDeploying(false);
       };
 
-      const addToast = (msg, type = 'info', action = null, { publish } = {}) => {
+      const addToast = (msg, type = 'info', action = null, opts = null) => {
+        const publish = opts?.publish;
         // A save only reaches the admin's database: a change that waits for
         // Publish says when the site changes, and offers Publish. The caller
         // says whether its change waits (publish: true or false); one that

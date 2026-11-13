@@ -245,7 +245,10 @@ test('an owner who left the team still shows, so their donors can be given to so
   await db.prepare("UPDATE staff_state SET data = ? WHERE key = 'directory'").bind(JSON.stringify({ ok: true, accounts: [{ email: 'jordan@soardcharity.com', aliases: [], name: 'Jordan Hale', active: true }] })).run();
   const page = await C.personView(env, 'ct_jane', { now: START + 4 * HOUR });
   assert.equal(page.owner, 'alex@soardcharity.com');
-  assert.deepEqual(page.staff.find((s) => s.email === 'alex@soardcharity.com'), { email: 'alex@soardcharity.com', name: 'alex', left: true });
+  assert.deepEqual(page.staff.find((s) => s.email === 'alex@soardcharity.com'), { email: 'alex@soardcharity.com', name: 'Alex', left: true }, 'gone from Google: their address, as a name');
+  // Suspended in Google (still listed, not active): their name
+  await db.prepare("UPDATE staff_state SET data = ? WHERE key = 'directory'").bind(JSON.stringify({ ok: true, accounts: [{ email: 'jordan@soardcharity.com', aliases: [], name: 'Jordan Hale', active: true }, { email: 'alex@soardcharity.com', aliases: [], name: 'Alex Rivera', active: false }] })).run();
+  assert.deepEqual((await C.personView(env, 'ct_jane', { now: START + 4 * HOUR })).staff.find((s) => s.email === 'alex@soardcharity.com'), { email: 'alex@soardcharity.com', name: 'Alex Rivera', left: true });
 });
 
 test('one person, one owner: joined records keep the latest said; their notes are all on the person’s page', async () => {
@@ -402,7 +405,8 @@ test('two thank-yous for one gift (runs that overlapped) become one; one run at 
 test('said in another tab since: Thanked or Undo changes nothing and says who', async () => {
   await note(pay({ id: 'tt', amount: 30000, method: 'cheque', type: 'manual' }));
   await doIt({ act: 'thanks', id: 'tt', state: 'thanked', was: 'todo' });
-  await assert.rejects(doIt({ act: 'thanks', id: 'tt', state: 'skipped', was: 'todo' }), (e) => e.status === 409 && /Alex said “Thanked” since you looked/.test(e.message));
+  await assert.rejects(doIt({ act: 'thanks', id: 'tt', state: 'skipped', was: 'todo' }), (e) => e.status === 409 && /You said “Thanked” in another tab since you looked/.test(e.message));
+  await assert.rejects(C.act(env, { act: 'thanks', id: 'tt', state: 'skipped', was: 'todo' }, 'jordan@soardcharity.com', { now: START + 4 * HOUR }), (e) => e.status === 409 && /Alex said “Thanked” since you looked/.test(e.message), 'a teammate is named');
   // A second click on Thanked (or a teammate who said the same): already so, no error
   await doIt({ act: 'thanks', id: 'tt', state: 'thanked', was: 'todo' });
   assert.equal((await row('tt')).state, 'thanked');
@@ -421,24 +425,24 @@ test('To thank: the one waiting longest first (since it came in), named as the l
 
 // ─── Found in the second review: a thank-you covers the charges it was said for ───
 
-test('a check that joins a gift already said Not needed is To thank on its own; a $50 card charge that joins isn’t', async () => {
+test('a check that joins a gift already said Not needed is To thank on its own, at its own amount; a $50 card charge that joins isn’t', async () => {
   await note(pay({ id: 'c1', amount: 150000, created: S(START + HOUR) }));
   await doIt({ act: 'thanks', id: 'c1', state: 'skipped' });
   await note(pay({ id: 'k1', amount: 500000, method: 'cheque', type: 'manual', created: S(START + HOUR + 30 * MIN) }), START + 2 * DAY);
   await note(pay({ id: 'k2', amount: 5000, created: S(START + HOUR + 40 * MIN) }), START + 2 * DAY);
-  assert.deepEqual((await todo()).map((x) => [x.ids, x.why, x.cents]), [['k1 k2', 'check', 505000]], 'the part not said: the check (and the card charge with it)');
+  assert.deepEqual((await todo()).map((x) => [x.ids, x.why, x.cents]), [['k1', 'check', 500000]], 'the part not said: the check, on its own');
   assert.deepEqual([(await row('c1')).ids, (await row('c1')).state], ['c1', 'skipped'], 'what was said stays as it was');
   // On the donor's page the gift shows what's still to do
   const page = await C.personView(env, 'ct_jane', { now: START + 2 * DAY });
   assert.equal(page.gifts.find((g) => (g.ids || [g.id]).includes('k1'))?.thanks?.state, 'todo');
 });
 
-test('a charge dated between a thanked gift and a To thank one joins all three: the To thank stays, with the new charge', async () => {
+test('a check dated between a thanked gift and a To thank one joins all three: the To thank stays; the check is a question of its own', async () => {
   await note(pay({ id: 'ga', amount: 150000, created: S(START + HOUR) }));
   await note(pay({ id: 'gb', amount: 200000, created: S(START + HOUR + 100 * MIN) }));
   await doIt({ act: 'thanks', id: 'ga', state: 'thanked' });
   await note(pay({ id: 'gm', amount: 5000, method: 'cheque', type: 'manual', created: S(START + HOUR + 50 * MIN) }), START + 4 * HOUR);
-  assert.deepEqual((await todo()).map((x) => [x.id, x.ids.split(' ').sort().join(' '), x.why]), [['gb', 'gb gm', 'check']]);
+  assert.deepEqual((await todo()).map((x) => [x.id, x.ids, x.why]).sort(), [['gb', 'gb', 'major'], ['gm', 'gm', 'check']]);
   assert.equal((await row('ga')).ids, 'ga');
 });
 
@@ -541,4 +545,12 @@ test('two charges the list lost: each is asked of Zeffy; the To thank closes onl
   const r = await row('l1');
   assert.equal(r.state, 'todo', 'l2 is still given');
   assert.equal(r.ids, 'l2', 'l1, confirmed gone, is off it');
+});
+
+test('a check and a small card charge joining a gift already thanked: the check is asked about at its own amount; the card charge isn’t', async () => {
+  await note(pay({ id: 'q0', amount: 150000, created: S(START + HOUR) }));
+  await doIt({ act: 'thanks', id: 'q0', state: 'thanked' });
+  await note(pay({ id: 'qk2', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR + 20 * MIN) }), START + 3 * HOUR);
+  await note(pay({ id: 'qc2', amount: 5000, created: S(START + HOUR + 25 * MIN) }), START + 3 * HOUR);
+  assert.deepEqual((await T.thanksToDo(db)).map((t) => [t.ids, t.cents, t.how]), [['qk2', 30000, 'Check']]);
 });

@@ -1149,3 +1149,17 @@ test('a contact that is an organization opens as it; a person split off a joined
   assert.equal((await C.personView(env, r.ref, { now: NOW })).owner, 'alex@soardcharity.com', 'the person keeps the owner they showed');
   assert.equal((await C.personView(env, 'ct_a', { now: NOW })).owner, null, 'the record split off starts with none');
 });
+
+test('Take it out on an organization kept from a Zeffy contact gives its owner, notes and History back to that contact', async () => {
+  await withTeam();
+  await add(pay({ id: 'gt', contact: 'ct_gt', first: 'Grace Tower', last: 'Foundation', email: 'grace@example.com', amount: 50000 }));
+  await doIt({ act: 'owner', key: 'c:ct_gt', email: 'alex@soardcharity.com' });
+  await doIt({ act: 'note-add', key: 'c:ct_gt', body: 'Board member’s family' });
+  const it = (await needs()).find((i) => i.kind === 'named');
+  const { key } = await doIt({ act: 'org-new', name: it.name, links: [{ kind: it.link, subject: it.linkSubject }] });
+  assert.equal((await C.orgView(env, key, { now: NOW })).owner, 'alex@soardcharity.com');
+  await doIt({ act: 'org-delete', key });
+  const page = await C.personView(env, 'ct_gt', { now: NOW });
+  assert.deepEqual([page.owner, page.notes.map((n) => n.body)], ['alex@soardcharity.com', ['Board member’s family']]);
+  assert.ok(page.history.some((h) => /Note added/.test(h.what)));
+});

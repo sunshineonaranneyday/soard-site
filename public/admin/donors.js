@@ -235,7 +235,7 @@ function placeOf(hash = location.hash) {
   if (parts[0] === 'checks') return { tab: 'checks' };
   if (parts[0] === 'needs') return { tab: 'people', needs: true };
   if (parts[0] === 'thanks') return { tab: 'people', thanks: true };
-  if (parts[0] === 'gift' && parts[1]) return { tab: 'people', gift: parts[1] };
+  if (parts[0] === 'gift') return parts[1] ? { tab: 'people', gift: parts[1] } : { tab: 'people' };
   if (parts[0] === 'org') return parts[1] ? { tab: 'people', org: parts[1] } : { tab: 'people' };
   return { tab: 'people', donor: parts[0] };
 }
@@ -273,6 +273,8 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
     return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); backTo = null; backFor = null; };
   }, []);
   const open = (p) => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); };
+  // A move that took away what had the focus (Take it out, then the list): the page's heading has it
+  useEffect(() => { const t = setTimeout(() => { if (!document.activeElement || document.activeElement === document.body) { const h = document.querySelector('.dn h2'); if (h) { if (!h.hasAttribute('tabindex')) h.setAttribute('tabindex', '-1'); h.focus({ preventScroll: true }); } } }, 400); return () => clearTimeout(t); }, [place.n]);
   // Back from a donor's page: where it was opened from (To thank, Needs you), else the list
   const backLabel = backTo === 'thanks' ? 'To thank' : backTo === 'needs' ? 'Needs you' : 'Donors';
   const goBack = () => { const to = backTo; backTo = null; backFor = null; focusPill = !!to; open({ tab: 'people', thanks: to === 'thanks', needs: to === 'needs' }); };
@@ -436,6 +438,8 @@ function DonorList({ ctx, view, onView, onOpen }) {
     if (view) onView(null);
   };
   const pickOwner = (o) => { setOwner(o); lastOwner = o; };
+  // To thank or Needs you just read: the counts above them say what they show (a teammate's answers since included)
+  const counts = (c) => { setV((x) => (x ? { ...x, ...c } : x)); if (lastList) lastList = { ...lastList, ...c }; if ('thanks' in c) thanksChanged(c.thanks); };
   const yearEnd = stage === 'yearend';
   // A count from before a change made since (Back to the list after a thank-you): being read again, never shown as now
   const n = (x, tone = '') => (v.stale && !err ? html`<span class=${`count ${tone}`} aria-label="being read again">…</span>` : html`<span class=${`count ${tone}`}>${x.toLocaleString()}</span>`);
@@ -471,8 +475,8 @@ function DonorList({ ctx, view, onView, onOpen }) {
         ${v.needs || view === 'needs' ? html`<button type="button" class="pill ppl-filter dn-needs-pill" aria-pressed=${view === 'needs'} onClick=${() => onView(view === 'needs' ? null : 'needs')}>Needs you ${n(v.needs || 0, 'is-warn')}</button>` : null}
       </div>
     </div>
-    ${view === 'needs' ? html`<${NeedsList} ctx=${ctx} onChanged=${load} />`
-    : view === 'thanks' ? html`<${ThanksList} ctx=${ctx} owner=${owner} ownerName=${ownerName} />` : html`
+    ${view === 'needs' ? html`<${NeedsList} ctx=${ctx} onChanged=${load} onCount=${(n) => counts({ needs: n })} />`
+    : view === 'thanks' ? html`<${ThanksList} ctx=${ctx} owner=${owner} ownerName=${ownerName} onCount=${(items) => counts({ thanks: items.length, thanksOwners: items.map((t) => t.owner || '') })} />` : html`
     <p class="dn-status">${stage === 'org' ? 'Partners and the other organizations that give, with their gifts from every name they give under.' : yearEnd ? `The year-end list: gave in ${year - 1}, nothing yet in ${year}.` : STAGES[stage]?.what || 'Everyone who has given.'}${owner ? ` Looked after by ${ownerName}.` : ''} From Zeffy${fresh ? `, read ${fresh}` : ''}.</p>
     <div class="card dn-list">
       ${matches.length ? html`<table class="dn-table">
@@ -540,7 +544,7 @@ const waiting = (since) => {
   return !Number.isFinite(d) ? '' : d < 1 ? 'Came in today' : `Waiting ${plural(d, 'day')}`;
 };
 
-function ThanksList({ ctx, owner = '', ownerName = '' }) {
+function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
   const [v, setV] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -552,6 +556,7 @@ function ThanksList({ ctx, owner = '', ownerName = '' }) {
     if (!j.success) { setErr(j.error); return; }
     setErr(null);
     setV(j);
+    onCount(j.items);
   };
   useEffect(() => { load(); }, []);
   useThanksSaid(load);
@@ -621,7 +626,7 @@ async function keepAsOrg(name, link, ctx, question = null) {
   return r.key;
 }
 
-function NeedsList({ ctx, onChanged, only = null }) {
+function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
   const [v, setV] = useState(null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(null);
@@ -633,6 +638,7 @@ function NeedsList({ ctx, onChanged, only = null }) {
     if (!j.success) { setErr(j.error); return; }
     setErr(null);
     setV(j.items);
+    if (!only) onCount(j.items.length);
   };
   useEffect(() => { load(); }, []);
   const refocus = useRefocus('.dn-needs[aria-label="Needs you"]', !!v);
@@ -709,16 +715,20 @@ function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null
   const input = useRef(null);
   const [q, setQ] = useState('');
   const [list, setList] = useState([]);
+  const [failed, setFailed] = useState(null);
+  const [tries, setTries] = useState(0);
   const [busy, setBusy] = useState(false);
   useDialog(box, onClose, busy);
   // Opened: the focus in the search box (the dialog itself takes it first)
   useEffect(() => { input.current?.focus(); }, []);
-  // Asked a moment after typing stops, and only the latest answer shows
+  // Asked a moment after typing stops, and only the latest answer shows; one that failed says so
   useEffect(() => {
     let live = true;
-    const t = setTimeout(() => { Promise.resolve(search(q)).then((l) => { if (live) setList(l || []); }); }, q ? 250 : 0);
+    const t = setTimeout(() => {
+      Promise.resolve().then(() => search(q)).then((l) => { if (live) { setFailed(null); setList(l || []); } }, (e) => { if (live) { setFailed(e?.message || 'The site didn’t answer'); setList([]); } });
+    }, q ? 250 : 0);
     return () => { live = false; clearTimeout(t); };
-  }, [q]);
+  }, [q, tries]);
   const pick = async (x) => { setBusy(true); const done = await onPick(x); setBusy(false); if (done !== false) onClose(); };
   return html`<div class="modal-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
     <div class="modal dn-picker" role="dialog" aria-modal="true" aria-labelledby="dn-pick-h" tabindex="-1" ref=${box}>
@@ -726,7 +736,7 @@ function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null
       ${sub ? html`<p>${sub}</p>` : null}
       <input class="form-input" type="search" ref=${input} placeholder=${placeholder} aria-label=${placeholder} value=${q} onInput=${(e) => setQ(e.target.value)} />
       <ul class="dn-picker__list" aria-label="Choices">${list.length ? list.map((x) => html`<li key=${x.id}><button type="button" class="dn-picker__item" disabled=${busy || x.disabled} onClick=${() => pick(x)}>
-        <strong>${x.label}</strong>${x.sub ? html`<span class="dn-sub">${x.sub}</span>` : null}</button></li>`) : html`<li class="dn-sub dn-picker__none">${q.trim().length < 2 ? 'Type a couple of letters' : 'Nothing by that name'}</li>`}</ul>
+        <strong>${x.label}</strong>${x.sub ? html`<span class="dn-sub">${x.sub}</span>` : null}</button></li>`) : failed ? html`<li class="dn-sub dn-picker__none">Couldn’t search just now: ${failed}. <button type="button" class="link dn-linkbtn" onClick=${() => setTries((n) => n + 1)}>Try again</button></li>` : html`<li class="dn-sub dn-picker__none">${q.trim().length < 2 ? 'Type a couple of letters' : 'Nothing by that name'}</li>`}</ul>
       ${extra}
       <div class="modal-buttons"><button type="button" class="btn btn-ghost" onClick=${onClose} disabled=${busy}>Cancel</button></div>
     </div></div>`;
@@ -736,9 +746,11 @@ function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null
 function orgChooser(except = null) {
   let all = null;
   return async (q) => {
-    all ||= get('?orgs=1').then((j) => j.orgs || []);
+    all ||= get('?orgs=1').then((j) => { if (!j.success) throw new Error(j.error); return j.orgs || []; });
     const t = q.trim().toLowerCase();
-    return (await all).filter((o) => o.key !== except && (!t || o.name.toLowerCase().includes(t)))
+    let orgs;
+    try { orgs = await all; } catch (e) { all = null; throw e; }
+    return orgs.filter((o) => o.key !== except && (!t || o.name.toLowerCase().includes(t)))
       .map((o) => ({ id: o.key, label: o.name, sub: o.onSite ? `${o.levelLabel || 'Friend'} partner` : 'Not on the website' })).slice(0, t ? 12 : 8);
   };
 }
@@ -768,12 +780,19 @@ const thankWords = (t, staff) => (!t ? null : t.state === 'todo' ? html`<span cl
   : t.state === 'thanked' ? `thanked${t.at ? ` ${shortDay(t.at)}` : ''}${t.by ? ` by ${firstName(t.by, staff)}` : ''}`
   : t.state === 'skipped' ? `no thank-you needed${t.by ? ` (${firstName(t.by, staff)})` : ''}` : null);
 
-function GiftList({ gifts, byWho = false, staff = [] }) {
+/** Thanked or Not needed by mistake, found later: To thank again, from the gift (the toast's Undo lasts seconds) */
+async function thankAgain(ctx, t) {
+  const r = await change({ act: 'thanks', id: t.id, state: 'todo', was: t.state });
+  listChanged();
+  thanksChanged();
+  if (!r.success) ctx.addToast(r.error, 'error');
+}
+function GiftList({ gifts, byWho = false, staff = [], ctx = null }) {
   if (!gifts.length) return html`<p class="dn-sub">No gifts of their own.</p>`;
   return html`<ul class="dn-gifts">${gifts.map((g) => html`<li key=${g.id} class="dn-gift" data-gift=${g.id} data-gifts=${g.ids.join(' ')}>
     <span class="dn-gift__day">${day(g.at)}</span>
     <span class="dn-gift__what"><strong>${g.campaign || 'A gift'}</strong>
-      <span class="dn-gift__meta">${[byWho && g.by ? `from ${g.by}` : null, g.how, g.every ? (g.every[0].toUpperCase() + g.every.slice(1)) : null, g.parts > 1 ? `in ${g.parts} charges` : null, !byWho && g.forCompany ? `for ${g.forCompany}` : null, g.through ? `through ${g.through}` : null, g.anonymous ? 'anonymous' : null, g.refunded ? 'refunded in full' : null, g.sold ? 'a ticket or purchase, not counted as giving' : null].filter(Boolean).join(' · ')}${(() => { const t = thankWords(g.thanks, staff); return !t ? null : typeof t === 'string' ? ` · ${t}` : html` ${t}`; })()}</span></span>
+      <span class="dn-gift__meta">${[byWho && g.by ? `from ${g.by}` : null, g.how, g.every ? (g.every[0].toUpperCase() + g.every.slice(1)) : null, g.parts > 1 ? `in ${g.parts} charges` : null, !byWho && g.forCompany ? `for ${g.forCompany}` : null, g.through ? `through ${g.through}` : null, g.anonymous ? 'anonymous' : null, g.refunded ? 'refunded in full' : null, g.sold ? 'a ticket or purchase, not counted as giving' : null].filter(Boolean).join(' · ')}${(() => { const t = thankWords(g.thanks, staff); return !t ? null : typeof t === 'string' ? ` · ${t}` : html` ${t}`; })()}${ctx && ['thanked', 'skipped'].includes(g.thanks?.state) ? html` <button type="button" class="link dn-linkbtn" onClick=${() => thankAgain(ctx, g.thanks)}>To thank again</button>` : null}</span></span>
     <span class="dn-gift__amt">${g.inKind ? html`${usd(g.inKind)}<span class="dn-sub">in kind</span>` : g.sold || g.refunded ? '–' : usd(g.cents)}</span>
     <span class="dn-gift__links">
       <a class="link" href=${zeffyPaymentUrl(g.id)} target="_blank" rel="noopener" aria-label=${`Open in Zeffy: ${g.campaign || 'gift'}, ${day(g.at)}`}>Open in Zeffy</a>
@@ -866,7 +885,7 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
     setBusy(true);
     const r = await change({ act: 'note-edit', id: n.id, body: t });
     setBusy(false);
-    if (!r.success) { ctx.addToast(r.error, 'error'); return; }
+    if (!r.success) { ctx.addToast(r.error, 'error'); if (r.status === 404) { setEditing(null); await onDone(); } return; }
     setEditing(null);
     await onDone();
     focusNote(n.id);
@@ -983,6 +1002,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     }
     const j = await get(`?donor=${encodeURIComponent(ref)}`);
     if (!fresh()) return;
+    if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`Saved. The page couldn’t be read again just now: ${j.error}`, 'error', { label: 'Try again', fn: () => load() }); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     if (j.org) { onOrg(j.org); return; }
     setV(j);
@@ -990,9 +1010,13 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   useEffect(() => { setV(null); load(); }, [donor, gift]);
   // A thank-you said elsewhere (a toast's Undo from another page): this page as it is now
   useThanksSaid(() => { if (v) load(); });
-  // Opened: the focus on the donor's name, so a screen reader says whose page this is
+  const shown = useRef(false);
+  shown.current = !!v;
+  // Opened: the focus on the donor's name, so a screen reader says whose page this is; after a change re-draws the
+  // page and takes away what had the focus (a record split off, a name taken off), there again
   const heading = useRef(null);
   useEffect(() => { if (v) heading.current?.focus({ preventScroll: true }); }, [!!v]);
+  useEffect(() => { if (v && (!document.activeElement || document.activeElement === document.body)) heading.current?.focus({ preventScroll: true }); }, [v]);
   // A gift opened from a link (Slack): in view, marked a moment, once (a change on the page later never jumps back to
   // it). Opened from the list, the page starts at the top
   const flashed = useRef(null);
@@ -1083,7 +1107,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
         <${Notes} subject=${v.key} notes=${v.notes} staff=${v.staff} name=${d.name} zeffy=${!!d.contact} ctx=${ctx} onDone=${load} />
         <section class="card kd-sec" aria-labelledby="dn-gifts-h">
           <header class="kd-sec__head"><h3 id="dn-gifts-h">Gifts <span class="count">${v.gifts.length}</span></h3></header>
-          <${GiftList} gifts=${v.gifts} staff=${v.staff} />
+          <${GiftList} gifts=${v.gifts} staff=${v.staff} ctx=${ctx} />
         </section>
       </div>
     </div></div>
@@ -1096,6 +1120,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
       search=${async (q) => {
         if (q.trim().length < 2) return [];
         const j = await call('', { findPeople: q.trim(), except: v.key });
+        if (!j.success) throw new Error(j.error);
         return (j.people || []).map((p) => ({ id: p.key, label: p.name, sub: [p.email, `${plural(p.gifts, 'gift')}, ${usd(p.cents)}`].filter(Boolean).join(' · ') }));
       }}
       onPick=${async (p) => {
@@ -1124,6 +1149,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     setErr(null);
     const j = await get(`?org=${encodeURIComponent(orgKey)}`);
     if (mine !== seq.current) return;
+    if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`Saved. The page couldn’t be read again just now: ${j.error}`, 'error', { label: 'Try again', fn: () => load() }); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // Kept here before, on the website now: its partner's page, at its address
     if (j.org && !j.donor) { history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
@@ -1131,8 +1157,11 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
   };
   useEffect(() => { setV(null); load(); }, [orgKey]);
   useThanksSaid(() => { if (v) load(); });
+  const shown = useRef(false);
+  shown.current = !!v;
   const heading = useRef(null);
   useEffect(() => { if (v) heading.current?.focus({ preventScroll: true }); }, [!!v]);
+  useEffect(() => { if (v && (!document.activeElement || document.activeElement === document.body)) heading.current?.focus({ preventScroll: true }); }, [v]);
   const back = html`<button type="button" class="dn-back" onClick=${onBack}>← ${backLabel}</button>`;
   if (err) return html`${back}<div class="notice notice--danger"><div class="notice__body">${err.text}</div>${err.final ? null : html`<div class="notice__actions"><button class="btn btn-ghost" onClick=${load}>Try again</button></div>`}</div>`;
   if (!v) return html`${back}<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
@@ -1153,6 +1182,8 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
       if (!(await ask({ title: `Put ${v.name} on the website?`, text: v.keepAnonymous ? `${v.name} is kept anonymous. Its name and logo would be on the Partners page for anyone to see.` : `Some of ${v.name}’s gifts were given anonymously. Its name and logo would be on the Partners page for anyone to see.`, yes: 'Put it on the website', careful: true }))) return;
     }
     if (!ctx.createPartner) { location.hash = '#partners'; return; }
+    const now = await get(`?org=${encodeURIComponent(v.key)}`);
+    if (now.success && (now.org || now.onSite)) { ctx.addToast(`${v.name} is on the website already: someone put it there since this page was read`, 'info'); goTo({ tab: 'people', org: now.org || v.key }); return; }
     const slug = await ctx.createPartner({ name: v.name });
     if (!slug) return;
     await finishOnSite(slug);
@@ -1167,7 +1198,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     goTo({ tab: 'people', org: r.key });
   };
   const takeOut = async () => {
-    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length ? ` Its ${plural(v.notes.length, 'note')} go${v.notes.length === 1 ? 'es' : ''} with it.` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
+    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length ? plural(v.notes.length, 'note') : null].filter(Boolean).join(' and ')} go back to the Zeffy record it was made from, if it was made from one; otherwise they go with it.` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
     const r = await change({ act: 'org-delete', key: v.key });
     if (!r.success) { ctx.addToast(r.error, 'error'); return; }
     listChanged();
@@ -1177,6 +1208,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
   const findNames = async (q) => {
     if (q.trim().length < 2) return [];
     const j = await call('', { find: q.trim() });
+    if (!j.success) throw new Error(j.error);
     return (j.names || []).map((x) => ({ id: `${x.kind}:${x.subject}`, ...x, label: x.name, disabled: x.org === v.key,
       sub: [x.kind === 'company' ? 'A company name on gifts' : x.email || 'A Zeffy contact', `${usd(x.cents)} given`, x.org === v.key ? 'already counts here' : x.orgName ? `counts for ${x.orgName} now` : null].filter(Boolean).join(' · ') }));
   };
@@ -1199,7 +1231,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
           ${v.onSite ? html`<p>${v.levelLabel} on the Partners page</p>
             <p style="margin:.5rem 0 0"><a class="btn btn-ghost btn-sm" href=${`#partners/${encodeURIComponent(v.slug)}`}>Open its partner card</a></p>
             ${level ? html`<div class="dn-suggest"><p>Gave ${usd(level.cents12)} in the last 12 months: Champion is $10,000 or more.</p>
-              <div class="dn-need__do"><button type="button" class="btn btn-primary btn-sm" disabled=${busy} onClick=${async () => { if (await makeChampion(level, ctx)) { listChanged(); await load(); } }}>Move to Champion…</button>
+              <div class="dn-need__do"><button type="button" class="btn btn-primary btn-sm" disabled=${busy} onClick=${async () => { if (await makeChampion(level, ctx)) listChanged(); await load(); }}>Move to Champion…</button>
               <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => say({ act: 'level', org: v.key, done: false, asked: true })}>Not now</button></div></div>` : null}`
           : html`<p>Not on the website. Only staff see it here.</p>
             <div class="dn-need__do"><button type="button" class="btn btn-ghost btn-sm" onClick=${putOnSite}>Put it on the website…</button>
@@ -1235,7 +1267,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
         </section>` : null}
         <section class="card kd-sec" aria-labelledby="dn-gifts-h">
           <header class="kd-sec__head"><h3 id="dn-gifts-h">Gifts <span class="count">${v.gifts.length}</span></h3></header>
-          <${GiftList} gifts=${v.gifts} byWho=${true} staff=${v.staff} />
+          <${GiftList} gifts=${v.gifts} byWho=${true} staff=${v.staff} ctx=${ctx} />
         </section>
       </div>
     </div></div>

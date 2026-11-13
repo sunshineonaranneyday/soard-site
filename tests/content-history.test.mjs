@@ -96,3 +96,14 @@ test('save-content keeps a version of each site document, and history serves it'
   assert.equal(old.data.categories[0].label, 'About');
   assert.equal((await get('collection=nope&slug=faq')).success, false);
 });
+
+test('save-content with create: a new record where one is already (added since the list was read) is refused, never overwritten', async () => {
+  const DB = await createD1({ schemaFiles: ['scripts/schema.sql'] });
+  const save = (content, create) => saveContent({ env: { DB }, data: { userEmail: 'staff@soardcharity.com' }, waitUntil: () => {},
+    request: new Request('https://admin.test/api/save-content', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'src/content/partners/bright-futures.json', content: JSON.stringify(content), message: 'Add partner', ...(create ? { create: true } : {}) }) }) });
+  assert.equal((await save({ name: 'Bright Futures', slug: 'bright-futures', level: 'champion', category: ['funding'] }, true)).status, 200, 'new: saved');
+  const again = await save({ name: 'Bright Futures', slug: 'bright-futures', level: 'friend', category: ['funding'] }, true);
+  assert.equal(again.status, 409, 'there already: refused');
+  assert.equal(JSON.parse((await DB.prepare("SELECT data FROM partners WHERE slug = 'bright-futures'").first()).data).level, 'champion', 'the first one stands');
+  assert.equal((await save({ name: 'Bright Futures', slug: 'bright-futures', level: 'builder', category: ['funding'] }, false)).status, 200, 'an ordinary save still updates');
+});

@@ -386,15 +386,19 @@ export async function staffList(DB) {
   let dir = [];
   try { dir = await staffDirectory(DB); } catch { /* not read yet */ }
   const out = new Map();
+  // Everyone Google has, who left too: a former teammate still named an owner shows by their name
+  const names = new Map();
   for (const a of dir) {
-    if (!a.active || !a.email) continue;
+    if (!a.email) continue;
     const all = [a.email, ...(a.aliases || [])].map((x) => String(x).toLowerCase());
     // The SOARD address they sign in here with (a main account on the store's domain has a soardcharity.com alias)
     const email = all.find((x) => isStaffEmail(x)) || all[0];
     if (all.some((x) => NOT_STAFF.has(x))) continue;
+    for (const x of all) if (clean(a.name)) names.set(x, clean(a.name));
+    if (!a.active) continue;
     out.set(email, { email, name: clean(a.name) || email.split('@')[0] });
   }
-  return [...out.values()].sort((x, y) => x.name.localeCompare(y.name));
+  return Object.assign([...out.values()].sort((x, y) => x.name.localeCompare(y.name)), { names });
 }
 const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
 const KINDS = new Set(['contact', 'company']);
@@ -609,6 +613,16 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
   if (a === 'org-delete') {
     const key = orgOk(body.key);
     if (!key.startsWith('o:')) throw bad('A partner is deleted in its partner card');
+    // Made from one Zeffy contact (kept as an organization): its owner, notes, Keep anonymous and History go back to it
+    const from = (await DB.prepare("SELECT subject FROM donor_calls WHERE kind = 'contact' AND target = ? AND answer = 1").bind(key).all()).results || [];
+    if (from.length === 1) {
+      const back = `c:${from[0].subject}`;
+      await DB.batch([
+        DB.prepare("UPDATE OR IGNORE donor_calls SET subject = ? WHERE kind IN ('owner', 'anon') AND subject = ?").bind(back, key),
+        DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(back, key),
+      ]);
+      await moveHistory(DB, key, back);
+    }
     await DB.batch([
       DB.prepare('DELETE FROM donor_orgs WHERE key = ?').bind(key),
       DB.prepare('DELETE FROM donor_calls WHERE target = ? OR subject = ?').bind(key, key),
@@ -1194,7 +1208,8 @@ export async function listView(env, { now = Date.now() } = {}) {
 /** The team, and anyone still named an owner who has left it (shown, so their donors can be given to someone else) */
 const withOwners = (staff, owners) => {
   const have = new Set(staff.map((s) => s.email));
-  const gone = [...new Set(owners.filter((o) => o && !have.has(o)))].map((email) => ({ email, name: email.split('@')[0], left: true }));
+  const local = (e) => { const n = e.split('@')[0]; return `${n[0]?.toUpperCase() || ''}${n.slice(1)}`; };
+  const gone = [...new Set(owners.filter((o) => o && !have.has(o)))].map((email) => ({ email, name: staff.names?.get(email) || local(email), left: true }));
   return [...staff, ...gone];
 };
 

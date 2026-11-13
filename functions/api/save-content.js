@@ -9,7 +9,8 @@
  *     path: "src/content/kids/amari.json",
  *     content: "{ ... }",        // file content as JSON string
  *     message: "Update amari",   // used as git commit message
- *     sha: "..."                 // ignored — D1 uses upsert
+ *     sha: "..."                 // the version it was read at: changed since → 409
+ *     create: true               // a new record: one already at that path (added meanwhile) → 409, never overwritten
  *   }
  *
  * Env bindings: DB (D1)
@@ -31,7 +32,7 @@ export async function onRequestPost(context) {
   try {
     const { DB } = context.env;
     const userEmail = context.data?.userEmail || 'unknown';
-    const { path, content, message, sha: clientSha } = await context.request.json();
+    const { path, content, message, sha: clientSha, create = false } = await context.request.json();
 
     if (!path || content === undefined || !message) {
       return Response.json(
@@ -81,6 +82,11 @@ export async function onRequestPost(context) {
     // sha comes from read-content, which hashes the stored JSON string with
     // generateSha() — so compare against generateSha(oldRaw). No sha, or no
     // existing row (a create) → proceed as before.
+    // Adding a new record where one is already (another tab, a teammate, a list read before it was added): never
+    // overwrites it
+    if (create === true && oldRaw !== null) {
+      return Response.json({ success: false, error: 'There’s one at that address already: someone added it since this list was read. Nothing was changed.' }, { status: 409 });
+    }
     // A person loaded with a sha whose row is gone was renamed or deleted
     // meanwhile: saving would bring the old record back as a duplicate
     if (clientSha && oldRaw === null && parsed.table === 'team') {
