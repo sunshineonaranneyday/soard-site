@@ -525,6 +525,29 @@ try {
   await page.select('#dn-owner-pick', 'alex@soardcharity.com');
   await page.waitForFunction(() => /Looked after by Alex Rivera/.test(document.querySelector('.kd-card--history')?.textContent || ''), { timeout: 8000 }).catch(() => {});
   ok(await page.$eval('#dn-owner-pick', (s) => s.value) === 'alex@soardcharity.com', 'Owner: Alex looks after him');
+  // Read in the order it shows: from Owner, the next stop is what shows right after it (just below, in its column),
+  // never a card far down the page with the page's own column skipped
+  const nextAfterOwner = await page.evaluate(() => {
+    const all = [...document.querySelectorAll('.kd-layout a[href], .kd-layout button, .kd-layout select, .kd-layout textarea, .kd-layout input')].filter((e) => !e.disabled && e.getClientRects().length);
+    const o = document.querySelector('#dn-owner-pick');
+    const n = all[all.indexOf(o) + 1];
+    const a = o.getBoundingClientRect();
+    const b = n?.getBoundingClientRect() || { top: 0, left: 0 };
+    return { dy: Math.round(b.top - a.top), dx: Math.round(b.left - a.left), inMain: !!n?.closest('.kd-main') };
+  });
+  ok(nextAfterOwner.dy > 0 && nextAfterOwner.dy < 700 && Math.abs(nextAfterOwner.dx) < 80, `Tab from Owner goes to what shows right after it (${JSON.stringify(nextAfterOwner)})`);
+  // And on a narrow screen (one column), the page's own column comes right after Owner
+  await page.setViewport({ width: 900, height: 900 });
+  await wait(400);
+  const narrowNext = await page.evaluate(() => {
+    const all = [...document.querySelectorAll('.kd-layout a[href], .kd-layout button, .kd-layout select, .kd-layout textarea, .kd-layout input')].filter((e) => !e.disabled && e.getClientRects().length);
+    const o = document.querySelector('#dn-owner-pick');
+    const n = all[all.indexOf(o) + 1];
+    return { inMain: !!n?.closest('.kd-main'), dy: Math.round((n?.getBoundingClientRect().top || 0) - o.getBoundingClientRect().top) };
+  });
+  ok(narrowNext.inMain && narrowNext.dy > 0 && narrowNext.dy < 700, `one column: Tab from Owner goes to the page’s own column, right below (${JSON.stringify(narrowNext)})`);
+  await page.setViewport({ width: 1440, height: 1000 });
+  await wait(300);
   ok(/Looked after by Alex Rivera/.test(await textOf(page, '.kd-card--history')), 'History says who did what, and when');
   // Notes
   await page.click('#dn-note-text');
