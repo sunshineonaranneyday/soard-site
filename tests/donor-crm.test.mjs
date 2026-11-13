@@ -1755,8 +1755,9 @@ test('a Needs you Yes about one of a joined person’s records never takes their
   await add(pay({ id: 'cw', contact: 'ct_work', first: 'Chris', last: 'Moreno', email: 'chris@work.example', amount: 90000 }), pay({ id: 'chm', contact: 'ct_home', first: 'Chris', last: 'Moreno', email: 'chris@home.example', amount: 5000, created: S(NOW - 3 * DAY) }));
   await doIt({ act: 'link', kind: 'contact', subject: 'ct_work', org: 'p:acme' });
   await doIt({ act: 'same', a: 'c:ct_work', b: 'c:ct_home', same: true });
-  await assert.rejects(doIt({ act: 'link', kind: 'contact', subject: 'ct_home', org: 'p:moreno', asked: true }), (e) => e.status === 409 && /Acme Builders already/.test(e.message));
-  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 90000, 'Acme keeps it');
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_home', org: 'p:moreno', asked: true });
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 90000, 'Acme keeps the record counted for it');
+  assert.equal((await list()).find((p) => p.key === 'p:moreno')?.total, 5000, 'the one asked about counts for the Morenos');
 });
 
 test('“Not the same person” on a record that led before another joined: the person keeps what was said about them', async () => {
@@ -1818,4 +1819,50 @@ test('Put it on the website at the same moment a teammate adds a Zeffy name to i
   assert.ok(await db.prepare('SELECT 1 AS y FROM donor_orgs WHERE key = ?').bind(key).first(), 'still kept here, with Bob linked to it');
   await doIt({ act: 'website', key, slug: 'ivers-fund', was: { kept: false } });
   assert.equal((await list()).find((p) => p.key === 'p:ivers-fund')?.total, 500000, 'Bob’s gift goes with it');
+});
+
+// ─── Found in the fifteenth round ───────────────────────────────────
+
+test('Keep as an organization on a company named after its giver (“Jane Doe LLC”): the gifts for the company only', async () => {
+  await add(pay({ id: 'jl1', contact: 'ct_jd', first: 'Jane', last: 'Doe', email: 'jd@example.com', company: 'Jane Doe LLC', amount: 25000 }),
+    pay({ id: 'jl2', contact: 'ct_jd', first: 'Jane', last: 'Doe', email: 'jd@example.com', amount: 5000, created: S(NOW - 2 * DAY) }));
+  const { key } = await doIt({ act: 'org-new', name: 'Jane Doe LLC', links: [{ kind: 'company', subject: 'Jane Doe LLC' }] });
+  assert.equal((await list()).find((p) => p.key === key)?.total, 25000);
+  const page = await C.personView(env, 'ct_jd', { now: NOW });
+  assert.ok(!page.org, 'she keeps her page');
+  assert.equal(page.donor.total, 5000, 'and her own gift');
+});
+
+test('at the same moment as a teammate: Keep as an organization, Not the same person and a split card’s pick are each refused, never written over theirs', async () => {
+  await add(pay({ id: 'rc1', contact: 'ct_chris', first: 'Chris', last: 'Hale', email: 'chris@example.com', amount: 50000 }));
+  const linkIt = () => C.act(env, { act: 'link', kind: 'contact', subject: 'ct_chris', org: 'p:pella' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act({ DB: racing(db, linkIt) }, { act: 'org-new', name: 'Chris Hale Fund', links: [{ kind: 'contact', subject: 'ct_chris' }] }, by, { now: NOW }), (e) => e.status === 409);
+  assert.equal((await list()).find((p) => p.key === 'p:pella')?.total, 50000, 'Jordan’s link stands');
+  await add(pay({ id: 'ra', contact: 'ct_ra', first: 'Rae', last: 'Joy', email: 'r1@example.com' }), pay({ id: 'rb2', contact: 'ct_rb', first: 'Rae', last: 'Joy', email: 'r2@example.com', created: S(NOW - 2 * DAY) }), pay({ id: 'rcc', contact: 'ct_rc', first: 'Rae', last: 'Joy', email: 'r3@example.com', created: S(NOW - 3 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_ra', b: 'c:ct_rb', same: true });
+  await doIt({ act: 'same', a: 'c:ct_ra', b: 'c:ct_rc', same: true });
+  const splitB = () => C.act(env, { act: 'split', key: 'c:ct_rb' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act({ DB: racing(db, splitB) }, { act: 'split', key: 'c:ct_ra' }, by, { now: NOW }), (e) => e.status === 409);
+  const crm = await C.loadCrm(db, { now: NOW });
+  assert.equal(crm.keysOf(crm.canon('c:ct_rb')).length, 1, 'the record Jordan took out stays its own');
+});
+
+test('a contact Zeffy split, picked by two staff at once: the first stands', async () => {
+  await withTeam();
+  await add(pay({ id: 'my1', contact: 'ct_x', first: 'Mo', last: 'Ray', email: 'mo@example.com' }), pay({ id: 'my2', contact: 'ct_y', first: 'Mo', last: 'Ray', email: 'mo2@example.com' }));
+  await db.prepare("INSERT OR REPLACE INTO donor_state (key, value) VALUES ('crm', ?)").bind(JSON.stringify({ unplaced: [{ contact: 'ct_old', to: ['ct_x', 'ct_y'], at: new Date(NOW).toISOString() }] })).run();
+  await db.prepare("INSERT INTO donor_notes (id, subject, body, by, at) VALUES ('note-mo', 'c:ct_old', 'Prefers email', ?, ?)").bind(by, new Date(NOW).toISOString()).run();
+  const jordan = () => C.act(env, { act: 'moved-done', contact: 'ct_old', to: 'ct_y' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act({ DB: racing(db, jordan) }, { act: 'moved-done', contact: 'ct_old', to: 'ct_x' }, by, { now: NOW }), (e) => e.status === 409);
+  assert.equal((await db.prepare("SELECT subject FROM donor_notes WHERE id = 'note-mo'").first()).subject, 'c:ct_y');
+  assert.equal((await db.prepare("SELECT note FROM donor_calls WHERE kind = 'moved' AND subject = 'ct_old'").first()).note, 'ct_y');
+});
+
+test('a joined person’s page counts their own records for an organization; one already counted for another stays there', async () => {
+  await add(pay({ id: 'pj1', contact: 'ct_p1', first: 'Pat', last: 'Lane', email: 'pat@example.com', amount: 5000 }), pay({ id: 'pj2', contact: 'ct_p2', first: 'Pat', last: 'Lane', email: 'pat@example.org', amount: 7000, created: S(NOW - 3 * DAY) }));
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_p2', org: 'p:acme' });
+  await doIt({ act: 'same', a: 'c:ct_p1', b: 'c:ct_p2', same: true });
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_p1', subjects: ['ct_p1', 'ct_p2'], org: 'p:pella' });
+  const people = await list();
+  assert.deepEqual([people.find((p) => p.key === 'p:pella')?.total, people.find((p) => p.key === 'p:acme')?.total], [5000, 7000]);
 });

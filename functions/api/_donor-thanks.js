@@ -53,6 +53,8 @@ export async function ensureThanks(DB) {
   if (ready.has(DB)) return;
   await ensureDonors(DB);
   for (const sql of SCHEMA) await DB.prepare(sql).run();
+  // (missing_id: the charge Zeffy last said it doesn't have, so its two answers hours apart are about one charge)
+  try { await DB.prepare('ALTER TABLE donor_thanks ADD COLUMN missing_id TEXT').run(); } catch (e) { if (!/duplicate column/i.test(String(e?.message || e))) throw e; }
   ready.add(DB);
 }
 async function readState(DB) {
@@ -369,7 +371,7 @@ async function askZeffy(env, t, id, ids, { now, fetchImpl, gives = Object.assign
       return 1;
     }
     // Others of it still given, or still to ask about: this one is off it, and the next lost one is asked about afresh
-    await DB.prepare("UPDATE donor_thanks SET ids = ?, missing_at = NULL, asked_at = ? WHERE id = ? AND state = 'todo'").bind(rest.join(' '), at, t.id).run();
+    await DB.prepare("UPDATE donor_thanks SET ids = ?, missing_at = NULL, missing_id = NULL, asked_at = ? WHERE id = ? AND state = 'todo'").bind(rest.join(' '), at, t.id).run();
     return 0;
   };
   try {
@@ -378,14 +380,16 @@ async function askZeffy(env, t, id, ids, { now, fetchImpl, gives = Object.assign
     if (p?.refund_status === 'full' || (status && status !== 'succeeded')) return await settle(p?.refund_status === 'full' ? 'refunded' : 'failed');
     // Zeffy has it: back in the list (a read that missed it), and it stays To thank
     await noteDonorPayment(env, p, { now, thanks: false });
-    await DB.prepare('UPDATE donor_thanks SET missing_at = NULL, asked_at = ? WHERE id = ?').bind(at, t.id).run();
+    await DB.prepare('UPDATE donor_thanks SET missing_at = NULL, missing_id = NULL, asked_at = ? WHERE id = ?').bind(at, t.id).run();
     return 0;
   } catch (e) {
     if (e.status !== 404) { await DB.prepare('UPDATE donor_thanks SET asked_at = ? WHERE id = ?').bind(at, t.id).run(); return 0; }
     // Gone: only the second answer, hours after the first, settles it
-    const row = await DB.prepare('SELECT missing_at FROM donor_thanks WHERE id = ?').bind(t.id).first();
-    if (row?.missing_at && now - Date.parse(row.missing_at) >= GONE_ASK_MS) return await settle('deleted');
-    await DB.prepare('UPDATE donor_thanks SET missing_at = COALESCE(missing_at, ?), asked_at = ? WHERE id = ?').bind(at, at, t.id).run();
+    // (both answers about this one charge: another charge's earlier answer is never this one's first)
+    const row = await DB.prepare('SELECT missing_at, missing_id FROM donor_thanks WHERE id = ?').bind(t.id).first();
+    if (row?.missing_at && row.missing_id === id && now - Date.parse(row.missing_at) >= GONE_ASK_MS) return await settle('deleted');
+    const first = row?.missing_id === id && row?.missing_at ? row.missing_at : at;
+    await DB.prepare('UPDATE donor_thanks SET missing_at = ?, missing_id = ?, asked_at = ? WHERE id = ?').bind(first, id, at, t.id).run();
     return 0;
   }
 }

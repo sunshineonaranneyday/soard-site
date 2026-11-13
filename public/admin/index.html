@@ -25655,6 +25655,8 @@ ${sections || '<p>No one yet.</p>'}
       const toggleRail = () => setRail((r) => { try { localStorage.setItem('soard-admin-rail', r ? '0' : '1'); } catch { /* still toggles */ } return !r; });
       const [subTab, setSubTab] = useState(() => placeOfHash(viewOfHash())?.subTab ?? null);
       const placeNow = useRef(null);
+      // The exact address Donors is at (its own pages: a donor, an organization), for Back to come back to with unsaved words
+      const donorsAddr = useRef(null);
       placeNow.current = { subTab, editSlug };
       const [cmdPaletteOpen, setCmdPaletteOpen] = useState(false);
       const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -25931,6 +25933,8 @@ ${sections || '<p>No one yet.</p>'}
         // (#broadcast/invites, #site/newsletter) stays as it is. A Site Config page asked for by name goes in it too.
         const to = v === 'site-hub' && tab ? `#site/${tab}` : addressOf(v);
         if (to !== null && viewOfHash() !== navIdOf(v)) history.pushState(null, '', to);
+        // Donors from its own sidebar link, on one of its pages: to its list (as other areas close their open item)
+        else if (v === 'donors' && to && location.hash !== to) { window.dispatchEvent(new Event('soard-leave-ok')); location.hash = to; }
         setView(v);
         setEditSlug(slug);
         setSubTab(tab);
@@ -25952,7 +25956,8 @@ ${sections || '<p>No one yet.</p>'}
           const guarded = (go) => {
             if (!isGlobalDirty()) { go(); return; }
             const target = location.pathname + location.search + location.hash;
-            history.pushState(null, '', addressOfPlace(cur, was.subTab, was.editSlug));
+            // (Donors keeps its own pages: back to the exact one, with the words, never its list)
+            history.pushState(null, '', cur === 'donors' && donorsAddr.current ? donorsAddr.current : addressOfPlace(cur, was.subTab, was.editSlug));
             leaveThen(() => { history.pushState(null, '', target); go(); });
           };
           if (v === cur) {
@@ -25969,9 +25974,12 @@ ${sections || '<p>No one yet.</p>'}
             setSidebarOpen(false);
           });
         };
+        // Donors says where it is as it moves inside itself (its addresses are its own)
+        const donorsAt = () => { if (/^#(donors|job-costs\/checks)\b/.test(location.hash)) donorsAddr.current = location.pathname + location.search + location.hash; };
+        window.addEventListener('soard-address', donorsAt);
         window.addEventListener('popstate', onAddress);
         window.addEventListener('hashchange', onAddress);
-        return () => { window.removeEventListener('popstate', onAddress); window.removeEventListener('hashchange', onAddress); };
+        return () => { window.removeEventListener('popstate', onAddress); window.removeEventListener('hashchange', onAddress); window.removeEventListener('soard-address', donorsAt); };
       }, []);
       // The address follows the tab and the open item in the areas the admin keeps. Opening
       // an item is a step Back can undo; a tab, or closing the item, just updates the address.

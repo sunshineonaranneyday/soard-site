@@ -272,6 +272,8 @@ const addressOf = (place) => (place.tab === 'checks' ? '#donors/checks' : place.
 function go(place) {
   const next = addressOf(place);
   if (location.hash !== next) history.pushState(null, '', next);
+  // (the admin keeps the exact address, so leaving with unsaved words comes back here, not to the list)
+  window.dispatchEvent(new Event('soard-address'));
 }
 /** A donor in the list → their place */
 /** From a toast, which can be pressed after leaving: by address, which the admin follows from anywhere */
@@ -285,6 +287,8 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   useJobCostsStyles();
   useStyles();
   const [place, setPlace] = useState(() => ({ ...placeOf(), n: ++moves }));
+  const placeRef = useRef(place);
+  placeRef.current = place;
   // A double click is one press: its second half never lands on what moved under the pointer (the next item's
   // Thanked, a card's answer, the To thank box where a row was)
   useEffect(() => {
@@ -313,13 +317,29 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
       settle();
       // Anywhere but the page To thank or Needs you opened: Back is to the list again
       if (backFor && location.hash !== backFor) { backTo = null; backFor = null; }
-      if (/^#(donors|job-costs\/checks)\b/.test(location.hash)) { const next = placeOf(); setPlace((p) => (addressOf(p) === addressOf(next) ? p : { ...next, n: ++moves })); }
+      if (!/^#(donors|job-costs\/checks)\b/.test(location.hash)) return;
+      const next = placeOf();
+      const cur = placeRef.current;
+      if (cur && addressOf(cur) === addressOf(next)) { window.dispatchEvent(new Event('soard-address')); return; }
+      // A note being written (Back, Forward, a link or a message's Open): the address goes back to the words while it
+      // asks, and on to where it was headed if they leave
+      if (typingNote && cur) {
+        const target = location.hash;
+        history.pushState(null, '', addressOf(cur));
+        // (asked once Back's own events have passed: the hashchange after its popstate would close the question at once)
+        setTimeout(() => leaving(() => { location.hash = target; }), 0);
+        return;
+      }
+      setPlace({ ...next, n: ++moves });
+      window.dispatchEvent(new Event('soard-address'));
     };
+    const answered = () => { typingNote = false; };
+    window.addEventListener('soard-leave-ok', answered);
     window.addEventListener('popstate', on);
     window.addEventListener('hashchange', on);
     // An address changed between the first draw and now (a link followed at once) isn't missed
     on();
-    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); backTo = null; backFor = null; lastPlace = null; };
+    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); window.removeEventListener('soard-leave-ok', answered); backTo = null; backFor = null; lastPlace = null; };
   }, []);
   // (a note being written: asked first, never dropped by a move inside the area)
   const open = (p) => leaving(() => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); });
@@ -341,8 +361,8 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   if (place.donor || place.gift) {
     // A gift's link settling on its donor's own address is the same page (n stays): it isn't read twice
     return html`<div class="dn"><${DonorPage} key=${place.n} donor=${place.donor} gift=${place.gift} fromList=${!!place.fromList} ctx=${ctx} onBack=${goBack} backLabel=${backLabel}
-      onDonor=${(ref) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/${encodeURIComponent(ref)}`); setPlace({ tab: 'people', donor: ref, gift: place.gift, fromList: place.fromList, n: place.n }); }}
-      onOrg=${(key) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/org/${encodeURIComponent(key)}`); setPlace({ tab: 'people', org: key, gift: place.gift, n: place.n }); }} /></div>`;
+      onDonor=${(ref) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/${encodeURIComponent(ref)}`); window.dispatchEvent(new Event('soard-address')); setPlace({ tab: 'people', donor: ref, gift: place.gift, fromList: place.fromList, n: place.n }); }}
+      onOrg=${(key) => { if (location.hash !== addressOf(place)) return; history.replaceState(null, '', `#donors/org/${encodeURIComponent(key)}`); window.dispatchEvent(new Event('soard-address')); setPlace({ tab: 'people', org: key, gift: place.gift, n: place.n }); }} /></div>`;
   }
   return html`<div class="dn">
     <${AreaTabs} current=${place.tab === 'checks' ? 'checks' : 'donors'} partners=${partnersCount} community=${communityCount} onPick=${pick} />
@@ -371,13 +391,13 @@ let lastOwner = '';
 // address that list opened, so any other way to a page (a Slack link, after leaving the area) is the list's
 let backTo = null;
 let backFor = null;
-const cameFrom = (view) => (e) => { backTo = view; backFor = e.currentTarget.getAttribute('href'); viewPlace = { view, scroll: window.scrollY, href: backFor }; };
+const cameFrom = (view) => (e) => { const li = e.currentTarget.closest('li'); backTo = view; backFor = e.currentTarget.getAttribute('href'); viewPlace = { view, scroll: window.scrollY, href: backFor, i: li ? [...li.parentElement.children].indexOf(li) : 0 }; };
 // A note being written (words in the box, or a change not saved): leaving asks first, here and from the sidebar
 let typingNote = false;
 let markDirty = () => {};
-const leaving = (go) => {
-  if (!typingNote) { go(); return; }
-  ask({ title: 'Leave your note unsaved?', text: 'What you typed in the note isn’t saved yet.', yes: 'Leave', no: 'Stay', careful: true }).then((ok) => { if (ok) { typingNote = false; markDirty(false); go(); } });
+const leaving = (go = () => {}) => {
+  if (!typingNote) { go(); return Promise.resolve(true); }
+  return ask({ title: 'Leave your note unsaved?', text: 'What you typed in the note isn’t saved yet.', yes: 'Leave', no: 'Stay', careful: true }).then((ok) => { if (ok) { typingNote = false; markDirty(false); go(); } return ok; });
 };
 // Where To thank or Needs you was when a giver was opened from it: back there, the same place and the same item
 let viewPlace = null;
@@ -389,7 +409,10 @@ function useViewPlace(view, ready) {
     viewPlace = null;
     requestAnimationFrame(() => {
       window.scrollTo({ top: at.scroll, behavior: 'instant' });
-      const a = [...document.querySelectorAll('.dn-needs a[href]')].find((x) => x.getAttribute('href') === at.href);
+      // (gone since, thanked on their page: the item that took its place)
+      const items = [...document.querySelectorAll('.dn-needs > li')];
+      const a = [...document.querySelectorAll('.dn-needs a[href]')].find((x) => x.getAttribute('href') === at.href)
+        || items[Math.min(at.i, items.length - 1)]?.querySelector('button:not([disabled]), a[href]');
       if (a) { focusPill = false; a.focus({ preventScroll: true }); }
     });
   }, [ready]);
@@ -896,7 +919,7 @@ function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null
       ${sub ? html`<p>${sub}</p>` : null}
       <input class="form-input" type="search" ref=${input} placeholder=${placeholder} aria-label=${placeholder} value=${q} onInput=${(e) => setQ(e.target.value)} />
       <ul class="dn-picker__list" aria-label="Choices">${list.length ? list.map((x) => html`<li key=${x.id}><button type="button" class="dn-picker__item" disabled=${x.disabled} aria-disabled=${busy ? 'true' : null} onClick=${() => { if (!busy) pick(x); }}>
-        <strong>${x.label}</strong>${x.sub ? html`<span class="dn-sub">${x.sub}</span>` : null}</button></li>`) : failed ? html`<li class="dn-sub dn-picker__none">Couldn’t search just now: ${String(failed).replace(/[.\s]+$/, '').replace(/ Try again.*$/, '')}. <button type="button" class="link dn-linkbtn" onClick=${() => setTries((n) => n + 1)}>Try again</button></li>` : html`<li class="dn-sub dn-picker__none">${q.trim().length < 2 ? 'Type a couple of letters' : 'Nothing by that name'}</li>`}</ul>
+        <strong>${x.label}</strong>${x.sub ? html`<span class="dn-sub">${x.sub}</span>` : null}</button></li>`) : failed ? html`<li class="dn-sub dn-picker__none">Couldn’t search just now: ${String(failed).replace(/[.\s]+$/, '').replace(/ Try again.*$/, '')}. <button type="button" class="link dn-linkbtn" onClick=${() => setTries((n) => n + 1)}>Try again</button></li>` : html`<li class="dn-sub dn-picker__none">${!q.trim() ? 'Type a couple of letters' : q.trim().length < 2 ? 'Nothing yet: type another letter' : 'Nothing by that name'}</li>`}</ul>
       ${extra}
       <div class="modal-buttons"><button type="button" class="btn btn-ghost" onClick=${onClose} disabled=${busy}>Cancel</button></div>
     </div></div>`;
@@ -1069,7 +1092,15 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   const pending = useRef(null);
   // Words typed and not saved: leaving asks first (Donors' own moves, and the admin's sidebar)
   const unsaved = !!text.trim() || (editing !== null && from !== null && draft.trim() !== String(from).trim());
-  useEffect(() => { typingNote = unsaved; markDirty(unsaved, 'a note you were writing'); }, [unsaved]);
+  // (known the moment the words change: a move a moment after the box is emptied never asks about it)
+  typingNote = unsaved;
+  useEffect(() => { typingNote = unsaved; markDirty(unsaved, 'a note you were writing'); }, [unsaved, text, draft]);
+  useEffect(() => {
+    if (!unsaved) return undefined;
+    const warn = (e) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [unsaved]);
   useEffect(() => () => { typingNote = false; markDirty(false); }, []);
   // Saved after all (its answer lost, the page read again): it's in the list, so the box empties
   // (only when the box still holds those words: typed on since, the box keeps it all, and says the first part saved)
@@ -1248,7 +1279,17 @@ function useWide(el, at = 1000) {
         // The cards move between columns: what had the focus (a note being typed) keeps it, and its place in the words
         const a = document.activeElement;
         const sel = a && 'selectionStart' in a ? [a.selectionStart, a.selectionEnd] : null;
-        if (a && a !== document.body) requestAnimationFrame(() => { if (a.isConnected && document.activeElement !== a) { a.focus({ preventScroll: true }); if (sel) try { a.setSelectionRange(...sel); } catch { /* not a text box */ } } });
+        // (a side card is drawn again in its new column: found again by its id, or its card and its place in it)
+        const card = a?.closest?.('section[aria-labelledby]');
+        const where = a && a !== document.body ? { id: a.id || null, card: card?.getAttribute('aria-labelledby') || null, i: card ? [...card.querySelectorAll('button, a[href], select, input, textarea')].indexOf(a) : -1 } : null;
+        if (where) requestAnimationFrame(() => {
+          if (a.isConnected && document.activeElement === a) return;
+          const el = a.isConnected ? a : (where.id && document.getElementById(where.id))
+            || (where.card && where.i >= 0 && document.querySelector(`section[aria-labelledby="${CSS.escape(where.card)}"]`)?.querySelectorAll('button, a[href], select, input, textarea')[where.i]);
+          if (!el) return;
+          el.focus({ preventScroll: true });
+          if (sel) try { el.setSelectionRange(...sel); } catch { /* not a text box */ }
+        });
         return next;
       });
     });
@@ -1333,6 +1374,8 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   // One of the company row's answers at a time (a second press while the first saves does nothing)
   const once = async (fn) => { if (rowBusy) return; setRowBusy(true); try { await fn(); } finally { setRowBusy(false); } };
   const linkTo = async (link, orgKey, orgName, asked = false) => {
+    // (a contact counted for an organization: this page goes to it, so a note being written asks first)
+    if (link.kind === 'contact' && !(await leaving())) return false;
     // A Zeffy contact: every record of theirs (a person joined from several counts whole)
     const subjects = link.kind === 'contact' ? [...new Set([v.key, ...(v.also || []).map((a) => a.key)].filter((k) => k.startsWith('c:')).map((k) => k.slice(2)))] : [link.subject];
     // (all of them in one step: never some linked and some not)
@@ -1366,6 +1409,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
             ${a.ref ? html`<a class="link" href=${zeffyContactUrl(a.ref)} target="_blank" rel="noopener">Record ${i + 2} in Zeffy</a>` : html`<span>Record ${i + 2}, with no Zeffy contact</span>`}
             <button type="button" class="link dn-linkbtn" onClick=${async () => {
               if (!(await ask({ title: 'Not the same person?', text: `Record ${i + 2} becomes a donor of its own, with its own gifts, and won’t be asked about again. ${d.name}’s other records stay together.`, yes: 'Not the same' }))) return;
+              if (!(await leaving())) return;
               const r = await change({ act: 'split', key: a.key });
               if (!r.success) { ctx.addToast(r.error, 'error'); return; }
               listChanged();
@@ -1556,7 +1600,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     if (!left.current || fromToast) goTo({ tab: 'people', org: r.key });
   };
   const takeOut = async () => {
-    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it.'}` : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
+    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it: they’re deleted.'}` : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
     // (what the question said goes with it: a teammate's note or owner since is never lost unseen)
     const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '', kept: !!v.keepAnonymous } });
     if (!r.success) { ctx.addToast(r.error, 'error'); if (!left.current) await load(); return; }

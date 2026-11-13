@@ -162,6 +162,8 @@ async function open(browser, origin, viewport, hash = '#donors') {
   const errors = [];
   page.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) errors.push(m.text()); });
   page.on('pageerror', (e) => errors.push(e.message));
+  // (the browser's own "leave with a note unsaved?" on a reload with words typed: answered, so a step never stalls)
+  page.on('dialog', (d) => { d.accept().catch(() => {}); });
   await page.setRequestInterception(true);
   page.on('request', (req) => (new URL(req.url()).origin === origin ? req.continue() : req.abort()));
   await page.goto(`${origin}/admin/${hash}`, { waitUntil: 'networkidle2' });
@@ -692,6 +694,10 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('.dn-note button')].find((b) => b.textContent.trim() === 'Save')?.click());
   await page.waitForFunction(() => /Call in May/.test(document.querySelector('#dn-note-text')?.value || ''), { timeout: 8000 }).catch(() => {});
   ok(/Call in May/.test(await page.$eval('#dn-note-text', (t) => t.value)), 'deleted meanwhile: the person’s words go to the new note box');
+  // (the words cleared from the box, so the moves that follow don't ask about a note)
+  await page.click('#dn-note-text', { clickCount: 3 });
+  await page.keyboard.press('Backspace');
+  await wait(200);
   // Someone whose every gift counts for an organization is found by their own name, at the organization's row
   await C.act(env, { act: 'link', kind: 'contact', subject: 'ct_fill_5', org: 'p:pella' }, 'alex@soardcharity.com');
   await page.goto(`${origin}/admin/#donors`, { waitUntil: 'networkidle2' });
@@ -765,6 +771,15 @@ try {
   ok(await page.$eval('#dn-note-text', (t) => t.value) === 'Met at the gala' && await page.evaluate(() => document.activeElement?.id === 'dn-note-text'), `the window made narrower: the note box keeps the focus, and the typing (${await page.$eval('#dn-note-text', (t) => t.value)})`);
   await page.setViewport({ width: 1440, height: 1000 });
   await wait(300);
+  // Browser Back with the note typed: the page stays with the words while it asks; Stay keeps them
+  const hereNow = await page.evaluate(() => location.hash);
+  await page.evaluate(() => history.back());
+  await page.waitForSelector('.ask-overlay', { timeout: 4000 }).catch(() => {});
+  const backSeen = await page.evaluate(() => ({ asked: !!document.querySelector('.ask-overlay'), hash: location.hash, words: document.querySelector('#dn-note-text')?.value }));
+  ok(backSeen.asked && backSeen.hash === hereNow && backSeen.words === 'Met at the gala', `Back with a note typed: it asks first, the page and the words still there (${JSON.stringify(backSeen)} at ${hereNow})`);
+  await page.evaluate(() => document.querySelector('.ask-overlay [data-ask="no"]')?.click());
+  await wait(300);
+  ok(await page.evaluate(() => location.hash) === hereNow && await page.$eval('#dn-note-text', (t) => t.value) === 'Met at the gala', 'Stay: the words are still there');
   await page.click('#dn-note-text', { clickCount: 3 });
   await page.keyboard.press('Backspace');
   // Put on the website from a page read before a teammate took the organization out: nothing is made

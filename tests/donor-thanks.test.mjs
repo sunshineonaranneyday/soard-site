@@ -698,3 +698,18 @@ test('a new To thank says how its own charges came (a card and a check the same 
   const t = (await db.prepare("SELECT how FROM donor_thanks WHERE ids LIKE '%hw2%' AND state = 'todo'").first());
   assert.equal(t?.how, 'Card and Check');
 });
+
+test('Zeffy’s “no such payment” twice, hours apart, is about one charge: another charge’s earlier answer never counts for it', async () => {
+  await note(pay({ id: 'ca', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR) }));
+  await note(pay({ id: 'cb', amount: 20000, method: 'cheque', type: 'manual', created: S(START + HOUR + 10 * MIN) }));
+  const row0 = (await todo()).find((t) => t.ids.includes('ca'));
+  assert.equal(row0.ids, 'ca cb');
+  const zenv = { ...env, ZEFFY_API_KEY: 'z' };
+  const gone = async () => Response.json({ error: 'gone' }, { status: 404 });
+  await db.prepare("DELETE FROM donor_payments WHERE id = 'cb'").run();
+  await T.syncThanks(zenv, { now: START + 3 * HOUR, fetchImpl: gone });
+  await db.prepare("DELETE FROM donor_payments WHERE id = 'ca'").run();
+  await db.prepare("INSERT INTO donor_payments (id, contact, at, cents, net, giving, in_kind, type, method, first_seen, checked_at) VALUES ('cb', 'ct_jane', ?, 20000, 20000, 20000, 0, 'manual', 'cheque', ?, ?)").bind(S(START + HOUR + 10 * MIN), new Date(START).toISOString(), new Date(START + 9 * HOUR).toISOString()).run();
+  await T.syncThanks(zenv, { now: START + 10 * HOUR, fetchImpl: gone });
+  assert.ok((await row(row0.id)).ids.includes('ca'), 'ca had only one answer: still on it');
+});

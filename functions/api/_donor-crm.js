@@ -522,7 +522,11 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // A person joined from several Zeffy contacts: every one of them, in one step (never some linked and some not)
     // (a contact picked anywhere, an organization's Add a Zeffy name too: every contact of the person it is)
     const said = [body.subject, ...(body.kind === 'contact' && Array.isArray(body.subjects) ? body.subjects : [])].map((x) => subjectOf(body.kind, x)).filter(Boolean);
-    const subjects = [...new Set(body.kind === 'contact' ? said.flatMap((c) => [c, ...crm.keysOf(crm.canon(`c:${c}`)).filter((k) => k.startsWith('c:')).map((k) => k.slice(2))]) : said)].slice(0, 20);
+    // (one of theirs counted for another organization already stays there: Take it off there first, to move it)
+    const elsewhere = (c) => { const t = crm.calls.yes.get(`contact\n${c}`); return !!t && t !== target && crm.live(t); };
+    const first = subjectOf(body.kind, body.subject);
+    const subjects = [...new Set(body.kind === 'contact' ? said.flatMap((c) => [c, ...crm.keysOf(crm.canon(`c:${c}`)).filter((k) => k.startsWith('c:')).map((k) => k.slice(2))]) : said)]
+      .filter((x) => x === first || body.kind !== 'contact' || !elsewhere(x)).slice(0, 20);
     // So already (sent again after its answer was lost, a teammate first): done, nothing more in History
     if (subjects.every((sub) => (a === 'link' ? crm.calls.yes.get(`${body.kind}\n${sub}`) === target : crm.calls.no.has(`${body.kind}\n${sub}\n${target}`)))) return { ok: true, same: true };
     // Linked to another organization since the page was read (a teammate): never taken from it unseen. Take it off
@@ -531,7 +535,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // (a Needs you answer is checked for its own name by stillAsked; the person's other records it brings along, here)
     const asked = body.asked === true ? subjectOf(body.kind, body.subject) : null;
     const taken = a === 'link' && subjects.filter((sub) => sub !== asked).map((sub) => crm.calls.yes.get(`${body.kind}\n${sub}`)).find((t) => t && t !== target && crm.live(t) && t !== String(body.from ?? ''));
-    if (taken) throw bad(`${body.kind === 'company' ? `“${clean(body.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(taken).name} already: someone linked it since this page was read. Nothing was changed.`, 409);
+    if (taken) throw bad(`${body.kind === 'company' ? `“${clean(body.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(taken).name} already, so nothing was changed. To move it, take it off ${crm.org.get(taken).name} first.`, 409);
     if (a === 'link') {
       // One organization per contact or company name: a link elsewhere goes, in the same step
       await asAnswered(DB, asRead(DB, crm, body.kind, subjects), subjects.flatMap((sub) => [
@@ -629,8 +633,9 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     const rest = group.filter((k) => k !== key);
     // The one the others hang on now: a Zeffy contact first (its address works in a link), then the earliest
     const lead = [...rest].sort((x, y) => (x.startsWith('c:') ? 0 : 1) - (y.startsWith('c:') ? 0 : 1) || (x < y ? -1 : 1))[0];
-    // One batch: all of it or none, so a failure part way never breaks the person up
-    const steps = [DB.prepare("UPDATE donor_calls SET answer = 0 WHERE kind = 'same' AND answer = 1 AND (subject = ? OR target = ?)").bind(key, key)];
+    // One batch: all of it or none, so a failure part way never breaks the person up; and only while who is the same
+    // as whom is as read (a teammate's split in between is never undone)
+    const steps = [asRead(DB, crm, 'same', group), DB.prepare("UPDATE donor_calls SET answer = 0 WHERE kind = 'same' AND answer = 1 AND (subject = ? OR target = ?)").bind(key, key)];
     // The person's notes and owner were said on the record that led them: they stay with the person
     const led = crm.canon(key) === key;
     if (led) steps.push(DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(lead, key));
@@ -662,7 +667,10 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     }
     // …and its History (what was done to the person, filed under the record that led them), in the same step
     if (led) steps.push(...await historySteps(DB, key, lead));
-    await DB.batch(steps);
+    try { await DB.batch(steps); } catch (e) {
+      if (!notSo(e)) throw e;
+      throw bad('Someone changed who this person is a moment ago. Nothing was changed; it shows as it is now.', 409);
+    }
     await audit(DB, by, 'A record is not the same person after all', { key, from: rest }, lead);
     return { ok: true, ...await refOf(await loadCrm(DB, { now }), lead) };
   }
@@ -734,12 +742,14 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
         has = rs.filter((r) => r.contact === subject).map((r) => place(r).owner).find((o) => crm.isOrg(o)) || null;
       }
       if (has) throw bad(`${l.kind === 'company' ? `“${clean(l.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(has)?.name || 'an organization'} already. Nothing was changed.`, 409);
-      // A link to an organization that's gone (a partner deleted) counts for nothing: this one replaces it
+      // A link to an organization that's gone (a partner deleted) counts for nothing: this one replaces it (and only
+      // while the name's links are as read: a teammate's link in between is never deleted unseen)
+      steps.push(asRead(DB, crm, l.kind, [subject]));
       steps.push(DB.prepare('DELETE FROM donor_calls WHERE kind = ? AND subject = ? AND answer = 1').bind(l.kind, subject));
       steps.push(callStmt(DB, { kind: l.kind, subject, target: key, answer: 1, note: l.kind === 'company' ? clean(l.subject).slice(0, 200) : null }, by, now));
     }
     const linking = (Array.isArray(body.links) ? body.links : []).filter((l) => l?.kind === 'contact').map((l) => subjectOf('contact', l.subject));
-    steps.push(...await keepOthersGifts(DB, crm, name, key, by, now, { linking }));
+    steps.push(...await keepOthersGifts(DB, crm, name, key, by, now, { linking, people: (Array.isArray(body.links) ? body.links : []).some((l) => l?.kind === 'company') }));
     // The Needs you question it answers (is it an organization?): answered, in the same step
     for (const sub of [String(body.subject || ''), ...(Array.isArray(body.also) ? body.also : [])].map(String).filter((x) => /^(company|contact):/.test(x)).slice(0, 6)) {
       steps.push(callStmt(DB, { kind: 'big', subject: sub, target: key, answer: 1, note: 'org' }, by, now));
@@ -1010,16 +1020,17 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       const u = (st0.unplaced || []).find((x) => x.contact === old);
       if (!u || !u.to.includes(to)) throw bad('That isn’t one of the contacts Zeffy moved its gifts to. Reload and look again.', 409);
       const into = crm.canon(`c:${to}`);
-      await DB.batch([
+      // One step, while it's unanswered as read (two staff picking at the same moment: the second is told)
+      await asAnswered(DB, asRead(DB, crm, 'moved', [old]), [
         DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(into, `c:${old}`),
         // Its owner, unless the one picked has one of its own
         DB.prepare("INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) SELECT 'owner', ?, '', answer, note, by, at FROM donor_calls WHERE kind = 'owner' AND subject = ? AND NOT EXISTS (SELECT 1 FROM donor_calls WHERE kind = 'owner' AND subject = ?)").bind(into, `c:${old}`, into),
         DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(`c:${old}`),
+        ...await historySteps(DB, `c:${old}`, into),
+        // Remembered (and where its notes went), so the next whole read doesn't ask again
+        callStmt(DB, { kind: 'moved', subject: old, answer: 1, note: to }, by, now),
       ]);
-      await moveHistory(DB, `c:${old}`, into);
-    }
-    // Remembered (and where its notes went), so the next whole read doesn't ask again
-    await putCall(DB, { kind: 'moved', subject: old, answer: 1, note: to || null }, by, now);
+    } else await asAnswered(DB, asRead(DB, crm, 'moved', [old]), [callStmt(DB, { kind: 'moved', subject: old, answer: 1, note: null }, by, now)]);
     const st = await readCrmState(DB);
     await writeCrmState(DB, { unplaced: (st.unplaced || []).filter((u) => u.contact !== String(body.contact)) });
     await audit(DB, by, 'A contact Zeffy split was looked at, and what was known said again where it belongs', { contact: String(body.contact || '') });
@@ -1033,7 +1044,8 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
  * whose gifts count for another organization now (its company is linked there) keeps them: it's told "not this one" for
  * the named organization, in the same step. → the statements
  */
-async function keepOthersGifts(DB, crm, name, key, by, now, { linking = [] } = {}) {
+// (`people`: made from a name typed on gifts, so a person whose own name reads the same keeps their gifts)
+async function keepOthersGifts(DB, crm, name, key, by, now, { linking = [], people = false } = {}) {
   const k = nameKey(name);
   if (!k) return [];
   const rows = await allRows(DB);
@@ -1044,7 +1056,10 @@ async function keepOthersGifts(DB, crm, name, key, by, now, { linking = [] } = {
     if (nameKey(givenName({ first_name: r.first, last_name: r.last })) !== k) continue;
     const owner = place(r).owner;
     // (counting for this one already: its own, never told "not this one")
-    if (!crm.isOrg(owner) || owner === key) continue;
+    if (owner === key) continue;
+    // A person of that name (a company named after its giver: "Jane Doe LLC" is Jane Doe in plain letters) keeps their
+    // own gifts; a contact whose own name reads as an organization's ("Ivers Foundation") is the organization's
+    if (!crm.isOrg(owner) && (!people || !r.contact || ORG_WORDS.test(givenName({ first_name: r.first, last_name: r.last })))) continue;
     if (r.contact) {
       if (!keep.has(r.contact) && !linking.includes(r.contact) && !crm.calls.yes.has(`contact\n${r.contact}`)) keep.add(r.contact);
     } else if (!crm.calls.pay.has(String(r.id))) {
