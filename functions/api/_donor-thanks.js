@@ -269,21 +269,22 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
       added++;
       continue;
     }
-    // A To thank keeps up with its part of the gift: a later charge joins it, one refunded in full leaves it. When what
-    // it covers needs no thank-you any more: with a charge the list doesn't have, nothing changes (it may be a glitch);
-    // with one refunded, it stays (part is still given: a person says), saying so; with the gift otherwise changed in
-    // Zeffy (a charge moved to another giver, a check re-entered as a card gift), it closes
+    // A To thank keeps up with its gift while it still needs a thank-you: a later charge joins it, one refunded in full
+    // leaves it. When it doesn't any more, the charges it was asked about say why, and it's never rewritten:
+    //   one the list doesn't have: nothing changes (a read may have missed it; Zeffy is asked, below);
+    //   one refunded, in full or in part: it stays (part is still given: a person says), saying so;
+    //   otherwise Zeffy shows the gift changed (a charge moved to another giver, a check re-entered as a card gift): closed
     if (!why) {
-      const dropped = idsOf.get(t.id).filter((c) => !charges.includes(c));
-      const missing = dropped.some((c) => !byId.has(c));
-      const refunded = dropped.some((c) => { const r = byId.get(c); return r && Number(r.cents) > 0 && !gives(r); });
-      if (missing) why = null;
-      else if (refunded) why = 'partly';
-      else {
-        steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'changed', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
-        idsOf.delete(t.id);
+      const own = idsOf.get(t.id);
+      if (own.some((c) => !byId.has(c))) continue;
+      if (own.some((c) => { const r = byId.get(c); return Number(r.net) < Number(r.cents); })) {
+        const left = own.map((c) => byId.get(c)).reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0);
+        steps.push(DB.prepare("UPDATE donor_thanks SET why = 'partly', cents = ?, missing_at = NULL WHERE id = ? AND state = 'todo'").bind(left, t.id));
         continue;
       }
+      steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'changed', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
+      idsOf.delete(t.id);
+      continue;
     }
     steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = COALESCE(?, why), at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'")
       .bind(snap[0], why, ...snap.slice(1), t.id));
@@ -299,37 +300,48 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     if (present.some(gives)) continue;
     const missing = ids.filter((c) => !byId.has(c));
     if (!missing.length) steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'refunded', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
-    else if (!t.asked_at || now - Date.parse(t.asked_at) >= GONE_ASK_MS) lost.push({ t, id: missing[0] });
+    else if (!t.asked_at || now - Date.parse(t.asked_at) >= GONE_ASK_MS) lost.push({ t, id: missing[0], ids });
   }
   for (let i = 0; i < steps.length; i += 50) await DB.batch(steps.slice(i, i + 50));
   let closed = 0;
-  if (ask && String(env.ZEFFY_API_KEY || '').trim()) for (const { t, id } of lost.slice(0, GONE_PER_RUN)) closed += await askZeffy(env, t, id, { now, fetchImpl });
+  // What the list has of a charge: given, or there and giving nothing (refunded)
+  const givesNow = Object.assign((c) => byId.has(c) && gives(byId.get(c)), { present: (c) => byId.has(c) });
+  if (ask && String(env.ZEFFY_API_KEY || '').trim()) for (const { t, id, ids } of lost.slice(0, GONE_PER_RUN)) closed += await askZeffy(env, t, id, ids, { now, fetchImpl, gives: givesNow });
   return { added, closed };
 }
 
-/** A charge of a To thank the donor list lost: Zeffy says refunded or gone (twice, hours apart) → closed; there → back in the list */
-async function askZeffy(env, t, id, { now, fetchImpl }) {
+/**
+ * A charge of a To thank the donor list lost, asked of Zeffy. Refunded or failed there, or gone (twice, hours apart):
+ * that charge is settled, off the To thank; when nothing of it is given any more (`gives`: what the list has), it
+ * closes. Zeffy has it: back in the list (a read that missed it), and it stays. → 1 when it closed
+ */
+async function askZeffy(env, t, id, ids, { now, fetchImpl, gives = Object.assign(() => false, { present: () => false }) }) {
   const { DB } = env;
   const at = iso(now);
+  const settle = async (gone) => {
+    const rest = ids.filter((c) => c !== id);
+    // Nothing else of it, or only charges the list has that give nothing (refunded): closed
+    if (rest.every((c) => gives.present(c) && !gives(c))) {
+      await DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = ?, done_at = ?, asked_at = ? WHERE id = ? AND state = 'todo'").bind(gone, at, at, t.id).run();
+      return 1;
+    }
+    // Others of it still given, or still to ask about: this one is off it, and the next lost one is asked about afresh
+    await DB.prepare("UPDATE donor_thanks SET ids = ?, missing_at = NULL, asked_at = ? WHERE id = ? AND state = 'todo'").bind(rest.join(' '), at, t.id).run();
+    return 0;
+  };
   try {
     const p = await zeffyGet(env, `/payments/${encodeURIComponent(id)}`, {}, fetchImpl);
     const status = String(p?.status || '').toLowerCase();
-    if (p?.refund_status === 'full' || (status && status !== 'succeeded')) {
-      await DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = ?, done_at = ?, asked_at = ? WHERE id = ? AND state = 'todo'").bind(p?.refund_status === 'full' ? 'refunded' : 'failed', at, at, t.id).run();
-      return 1;
-    }
+    if (p?.refund_status === 'full' || (status && status !== 'succeeded')) return await settle(p?.refund_status === 'full' ? 'refunded' : 'failed');
     // Zeffy has it: back in the list (a read that missed it), and it stays To thank
     await noteDonorPayment(env, p, { now, thanks: false });
     await DB.prepare('UPDATE donor_thanks SET missing_at = NULL, asked_at = ? WHERE id = ?').bind(at, t.id).run();
     return 0;
   } catch (e) {
     if (e.status !== 404) { await DB.prepare('UPDATE donor_thanks SET asked_at = ? WHERE id = ?').bind(at, t.id).run(); return 0; }
-    // Gone: only the second answer, hours after the first, closes it
+    // Gone: only the second answer, hours after the first, settles it
     const row = await DB.prepare('SELECT missing_at FROM donor_thanks WHERE id = ?').bind(t.id).first();
-    if (row?.missing_at && now - Date.parse(row.missing_at) >= GONE_ASK_MS) {
-      await DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'deleted', done_at = ?, asked_at = ? WHERE id = ? AND state = 'todo'").bind(at, at, t.id).run();
-      return 1;
-    }
+    if (row?.missing_at && now - Date.parse(row.missing_at) >= GONE_ASK_MS) return await settle('deleted');
     await DB.prepare('UPDATE donor_thanks SET missing_at = COALESCE(missing_at, ?), asked_at = ? WHERE id = ?').bind(at, at, t.id).run();
     return 0;
   }

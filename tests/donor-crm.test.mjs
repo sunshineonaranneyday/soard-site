@@ -1088,3 +1088,64 @@ test('Move to Champion is an upgrade only: a card read before the partner moved 
   await db.prepare("UPDATE partners SET data = json_set(data, '$.level', 'signature') WHERE slug = 'acme'").run();
   await assert.rejects(doIt({ act: 'level', org: 'p:acme', done: true, was: 'Friend', asked: true }), (e) => e.status === 409 && /Signature partner/.test(e.message));
 });
+
+// ─── Found in the fourth review ─────────────────────────────────────
+
+test('an owner said under an email that reaches two Zeffy contacts in one read looks after both; one at a time, the first, and a join shares it', async () => {
+  await withTeam();
+  await add(pay({ id: 'pe', contact: null, first: 'Pat', last: 'Lane', email: 'pat@example.com' }));
+  await doIt({ act: 'owner', key: 'e:pat@example.com', email: 'alex@soardcharity.com' });
+  // One read brings both (no webhook between them)
+  const rows = [pay({ id: 'pp1', contact: 'ct_p1', first: 'Pat', last: 'Lane', email: 'pat@example.com' }), pay({ id: 'pp2', contact: 'ct_p2', first: 'Sam', last: 'Lane', email: 'pat@example.com' })].map((p) => D.rowFromPayment(p, new Date(NOW).toISOString()));
+  for (const r of rows) { const k = Object.keys(r); await db.prepare(`INSERT INTO donor_payments (${k.join(', ')}) VALUES (${k.map(() => '?').join(', ')})`).bind(...k.map((x) => r[x])).run(); }
+  await C.followMerges(db, { now: NOW });
+  assert.deepEqual((await list()).filter((p) => ['c:ct_p1', 'c:ct_p2'].includes(p.key)).map((p) => p.owner), ['alex@soardcharity.com', 'alex@soardcharity.com']);
+  // One at a time (gift webhooks): the first contact takes it; the second, same email, is asked "Same person?", and joined shares it
+  await add(pay({ id: 'qe', contact: null, first: 'Quin', last: 'Lee', email: 'quin@example.com' }));
+  await doIt({ act: 'owner', key: 'e:quin@example.com', email: 'jordan@soardcharity.com' });
+  await add(pay({ id: 'qq1', contact: 'ct_q1', first: 'Quin', last: 'Lee', email: 'quin@example.com' }));
+  await add(pay({ id: 'qq2', contact: 'ct_q2', first: 'Quinn', last: 'Lee', email: 'quin@example.com' }));
+  const same = (await needs()).find((i) => i.kind === 'same' && [i.a.key, i.b.key].includes('c:ct_q2'));
+  assert.ok(same, 'asked');
+  await doIt({ act: 'same', a: same.a.key, b: same.b.key, same: true });
+  assert.equal((await C.personView(env, 'ct_q2', { now: NOW })).owner, 'jordan@soardcharity.com');
+});
+
+test('renaming an organization kept here keeps the gifts its old name counted by itself', async () => {
+  await add(pay({ id: 'rb', contact: 'ct_rb', first: 'Bright', last: 'Futures', email: 'bf@example.com', amount: 500000 }));
+  const { key } = await doIt({ act: 'org-new', name: 'Bright Futures', links: [] });
+  assert.equal((await list()).find((p) => p.key === key)?.total, 500000, 'by its name');
+  await doIt({ act: 'org-rename', key, name: 'Bright Futures Foundation' });
+  assert.equal((await list()).find((p) => p.key === key)?.total, 500000, 'still, renamed');
+});
+
+test('Keep it as an organization for a contact whose gifts count for a partner now: refused, nothing made', async () => {
+  await add(pay({ id: 'kz', contact: 'ct_kz', first: 'Kite', last: 'Foundation', email: 'kite@example.com', company: 'Zed Corp', amount: 50000 }));
+  const it = (await needs()).find((i) => i.kind === 'named');
+  await doIt({ act: 'link', kind: 'company', subject: 'Zed Corp', org: 'p:acme' });
+  await assert.rejects(doIt({ act: 'org-new', name: it.name, links: [{ kind: it.link, subject: it.linkSubject }], asked: true, subject: it.subject }), (e) => e.status === 409);
+  assert.ok(!(await list()).some((p) => p.key.startsWith('o:')));
+});
+
+test('“It’s X” for a company once linked to a partner since deleted is an answer, not a 409', async () => {
+  await db.prepare(partner('zeta', 'Zeta Old')).run();
+  await add(pay({ id: 'zt', company: 'Zeta Builders Atlanta', amount: 50000 }));
+  await doIt({ act: 'link', kind: 'company', subject: 'Zeta Builders Atlanta', org: 'p:zeta' });
+  await db.prepare("DELETE FROM partners WHERE slug = 'zeta'").run();
+  await db.prepare(partner('zb', 'Zeta Builders')).run();
+  await doIt({ act: 'link', kind: 'company', subject: 'Zeta Builders Atlanta', org: 'p:zb', asked: true });
+  assert.equal((await list()).find((p) => p.key === 'p:zb')?.total, 50000);
+});
+
+test('a contact that is an organization opens as it; a person split off a joined donor leaves the owner with the person', async () => {
+  await withTeam();
+  await add(pay({ id: 'co', contact: 'ct_co', first: 'Acme', last: 'Builders', email: 'ap@acme.example', amount: 10000 }));
+  assert.deepEqual(await C.personView(env, 'ct_co', { now: NOW }), { org: 'p:acme' });
+  await add(pay({ id: 'sa', contact: 'ct_a', first: 'Ann', last: 'Ash', email: 'a1@example.com' }), pay({ id: 'sb', contact: 'ct_b', first: 'Ann', last: 'Ash', email: 'a2@example.com' }));
+  await doIt({ act: 'owner', key: 'c:ct_b', email: 'jordan@soardcharity.com' });
+  await doIt({ act: 'same', a: 'c:ct_a', b: 'c:ct_b', same: true });
+  await doIt({ act: 'owner', key: 'c:ct_a', email: 'alex@soardcharity.com' });
+  const r = await doIt({ act: 'split', key: 'c:ct_a' });
+  assert.equal((await C.personView(env, r.ref, { now: NOW })).owner, 'alex@soardcharity.com', 'the person keeps the owner they showed');
+  assert.equal((await C.personView(env, 'ct_a', { now: NOW })).owner, null, 'the record split off starts with none');
+});

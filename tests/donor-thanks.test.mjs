@@ -511,3 +511,34 @@ test('a check that joins a gift already thanked is said to be a check, at its ow
   const t = (await T.thanksToDo(db))[0];
   assert.deepEqual([t.ids, t.cents, t.why, t.how], ['qk', 25000, 'check', 'Check']);
 });
+
+// ─── Found in the fourth review ─────────────────────────────────────
+
+test('a To thank is never closed by a partial refund, a run later, or a charge a read missed', async () => {
+  // Part of one charge refunded: it stays, saying so, run after run
+  await note(pay({ id: 'pr', amount: 120000, created: S(START + HOUR) }));
+  await note(pay({ id: 'pr', amount: 120000, created: S(START + HOUR), refund: 'partial', refunds: [{ status: 'succeeded', amount: 30000 }] }), START + 2 * HOUR);
+  for (let i = 3; i < 6; i++) await T.syncThanks(env, { now: START + i * HOUR, ask: false });
+  assert.deepEqual([(await row('pr')).state, (await row('pr')).why, (await row('pr')).cents], ['todo', 'partly', 90000]);
+  // One of two charges missing from a read: nothing changes, run after run
+  await note(pay({ id: 'g1', amount: 60000, created: S(START + 6 * HOUR), contact: 'ct_g', first: 'Gil', email: 'gil@example.com' }), START + 6 * HOUR);
+  await note(pay({ id: 'g2', amount: 60000, created: S(START + 6 * HOUR + 5 * MIN), contact: 'ct_g', first: 'Gil', email: 'gil@example.com' }), START + 6 * HOUR + 10 * MIN);
+  await db.prepare("DELETE FROM donor_payments WHERE id = 'g1'").run();
+  for (let i = 7; i < 10; i++) await T.syncThanks(env, { now: START + i * HOUR, ask: false });
+  assert.deepEqual([(await row('g1')).state, (await row('g1')).ids, (await row('g1')).cents], ['todo', 'g1 g2', 120000]);
+});
+
+test('two charges the list lost: each is asked of Zeffy; the To thank closes only when neither is given', async () => {
+  await note(pay({ id: 'l1', amount: 60000, created: S(START + HOUR) }));
+  await note(pay({ id: 'l2', amount: 60000, created: S(START + HOUR + 5 * MIN) }));
+  await db.prepare("DELETE FROM donor_payments WHERE id IN ('l1', 'l2')").run();
+  const zenv = { ...env, ZEFFY_API_KEY: 'z' };
+  const asked = [];
+  // l1 is gone in Zeffy; l2 is still there
+  const fetchImpl = async (url) => { asked.push(String(url).match(/payments\/(\w+)/)[1]); return /l1/.test(String(url)) ? Response.json({ error: 'gone' }, { status: 404 }) : Response.json({ id: 'l2', object: 'payment', created: S(START + HOUR + 5 * MIN), amount: 60000, status: 'succeeded', type: 'online', refund_status: 'none', refunds: [], description: 'Help Build a Brighter Home', contact: 'ct_jane', payment_method: { type: 'card' }, buyer: { email: 'jane@example.com', first_name: 'Jane', last_name: 'Doe' }, items: [{ type: 'donation', amount: 60000 }] }); };
+  await T.syncThanks(zenv, { now: START + 3 * HOUR, fetchImpl });
+  await T.syncThanks(zenv, { now: START + 10 * HOUR, fetchImpl });
+  const r = await row('l1');
+  assert.equal(r.state, 'todo', 'l2 is still given');
+  assert.equal(r.ids, 'l2', 'l1, confirmed gone, is off it');
+});
