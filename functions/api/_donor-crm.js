@@ -499,7 +499,9 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // Linked to another organization since the page was read (a teammate): never taken from it unseen. Take it off
     // there first; a link to an organization that's gone counts for nothing and is replaced
     // (`from`: the organization the person saw it count for, as Add a Zeffy name shows it: moving it from there is theirs)
-    const taken = a === 'link' && body.asked !== true && subjects.map((sub) => crm.calls.yes.get(`${body.kind}\n${sub}`)).find((t) => t && t !== target && crm.live(t) && t !== String(body.from ?? ''));
+    // (a Needs you answer is checked for its own name by stillAsked; the person's other records it brings along, here)
+    const asked = body.asked === true ? subjectOf(body.kind, body.subject) : null;
+    const taken = a === 'link' && subjects.filter((sub) => sub !== asked).map((sub) => crm.calls.yes.get(`${body.kind}\n${sub}`)).find((t) => t && t !== target && crm.live(t) && t !== String(body.from ?? ''));
     if (taken) throw bad(`${body.kind === 'company' ? `“${clean(body.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(taken).name} already: someone linked it since this page was read. Nothing was changed.`, 409);
     if (a === 'link') {
       // One organization per contact or company name: a link elsewhere goes, in the same step
@@ -603,11 +605,22 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // The person's notes and owner were said on the record that led them: they stay with the person
     const led = crm.canon(key) === key;
     if (led) steps.push(DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(lead, key));
+    // Not leading now, it may have led before another record joined: what was said on it since it joined the person
+    // (notes, an owner, History) was the person's, and stays with them; what it had before, its own, goes with it
+    const joinedAt = led ? null : (await DB.prepare("SELECT MIN(at) AS at FROM donor_calls WHERE kind = 'same' AND answer = 1 AND (subject = ? OR target = ?)").bind(key, key).first())?.at || null;
+    if (joinedAt) {
+      steps.push(DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ? AND at >= ?').bind(lead, key, joinedAt));
+      const logAt = String(joinedAt).slice(0, 19).replace('T', ' ');
+      if (await DB.prepare("SELECT 1 AS y FROM sqlite_master WHERE type = 'table' AND name = 'audit_log'").first().catch(() => null)) {
+        steps.push(DB.prepare("UPDATE audit_log SET entity_slug = ? WHERE entity_type = 'donor-crm' AND entity_slug = ? AND created_at >= ?").bind(lead, key, logAt));
+      }
+    }
     // Owners: each record keeps the one said on it (a join undone gives each back its own). One said on the record
-    // split off, when it led and none of the others has one, was the person's: it stays with the person
+    // split off for the person (when it led, or since it joined), with none newer on the others, stays with the person
     const own = crm.ownerRows(group);
     const mine = own.find(([k, ans, note]) => k === key && ans && note);
-    if (led && mine && !own.some(([k, ans, note]) => k !== key && ans && note)) {
+    const theirs = (at) => own.some(([k, ans, note, at2]) => k !== key && ans && note && (!at || at2 >= at));
+    if (mine && ((led && !theirs()) || (joinedAt && mine[3] >= joinedAt && !theirs(mine[3])))) {
       steps.push(DB.prepare("DELETE FROM donor_calls WHERE kind = 'owner' AND subject = ?").bind(key));
       steps.push(callStmt(DB, { kind: 'owner', subject: lead, answer: 1, note: mine[2] }, by, now));
     }
@@ -700,7 +713,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     steps.push(...await keepOthersGifts(DB, crm, name, key, by, now, { linking }));
     // The Needs you question it answers (is it an organization?): answered, in the same step
     for (const sub of [String(body.subject || ''), ...(Array.isArray(body.also) ? body.also : [])].map(String).filter((x) => /^(company|contact):/.test(x)).slice(0, 6)) {
-      steps.push(callStmt(DB, { kind: 'big', subject: sub, answer: 1, note: 'org' }, by, now));
+      steps.push(callStmt(DB, { kind: 'big', subject: sub, target: key, answer: 1, note: 'org' }, by, now));
     }
     // A Zeffy contact that was this organization all along (not joined to anyone): its owner, notes, Keep anonymous and
     // History are the organization's now, in the same step, with which contact it was made from (Take it out gives

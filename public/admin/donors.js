@@ -1420,7 +1420,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     const nk = (x) => String(x || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '');
     const made = (ctx.partners || []).find((p) => nk(p.name) === nk(o.name));
     if (made) {
-      if (await ask({ title: `Use the partner card “${made.name}”?`, text: `There’s a partner card with this name already. ${o.name}’s gifts, notes and owner go to it, and it’s on the website after you publish. To make another card instead, rename this organization first.`, yes: 'Use it' })) await finishOnSite(made.slug, o.name);
+      if (await ask({ title: `Use the partner card “${made.name}”?`, text: `There’s a partner card with this name already. ${o.name}’s gifts, notes and owner go to it, and it’s on the website after you publish. To make another card instead, rename this organization first.`, yes: 'Use it' })) await finishOnSite(made.slug, o.name, false, o.keepAnonymous);
       return;
     }
     const got = await ctx.createPartner({ name: o.name });

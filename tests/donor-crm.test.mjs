@@ -1748,3 +1748,38 @@ test('a rename keeps the organization’s own Zeffy contact its own (never told 
   await add(pay({ id: 'oc2', contact: 'ct_bw', first: 'Birchwood', last: 'Homes', email: 'office@birchwood.example', amount: 70000, created: S(NOW - 2 * DAY) }));
   assert.equal((await list()).find((p) => p.key === key)?.total, 120000, 'its later gift counts for it too');
 });
+
+// ─── Found in the thirteenth round ──────────────────────────────────
+
+test('a Needs you Yes about one of a joined person’s records never takes their other record from another organization', async () => {
+  await add(pay({ id: 'cw', contact: 'ct_work', first: 'Chris', last: 'Moreno', email: 'chris@work.example', amount: 90000 }), pay({ id: 'chm', contact: 'ct_home', first: 'Chris', last: 'Moreno', email: 'chris@home.example', amount: 5000, created: S(NOW - 3 * DAY) }));
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_work', org: 'p:acme' });
+  await doIt({ act: 'same', a: 'c:ct_work', b: 'c:ct_home', same: true });
+  await assert.rejects(doIt({ act: 'link', kind: 'contact', subject: 'ct_home', org: 'p:moreno', asked: true }), (e) => e.status === 409 && /Acme Builders already/.test(e.message));
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 90000, 'Acme keeps it');
+});
+
+test('“Not the same person” on a record that led before another joined: the person keeps what was said about them', async () => {
+  await withTeam();
+  await add(pay({ id: 'mm', contact: 'ct_m', first: 'Maria', last: 'Lopez', email: 'maria@example.com', created: S(NOW - 10 * DAY) }), pay({ id: 'mz', contact: 'ct_z', first: 'Maria', last: 'Lopez', email: 'maria.l@example.org', created: S(NOW - 9 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_m', b: 'c:ct_z', same: true });
+  const lead1 = (await C.loadCrm(db, { now: NOW })).canon('c:ct_m');
+  await doIt({ act: 'owner', key: lead1, email: 'alex@soardcharity.com', was: '' });
+  await doIt({ act: 'note-add', key: lead1, body: 'Wants to sponsor a room', id: 'note-maria' });
+  await add(pay({ id: 'ma', contact: 'ct_a', first: 'Maria', last: 'Lopez', email: 'm.lopez@example.net', created: S(NOW - 8 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_a', b: lead1, same: true });
+  const crm = await C.loadCrm(db, { now: NOW });
+  const lead2 = crm.canon(lead1);
+  assert.notEqual(lead2, lead1, 'another record leads now');
+  await doIt({ act: 'split', key: lead1 });
+  const page = await C.personView(env, lead2.slice(2), { now: NOW });
+  assert.deepEqual([page.owner, page.notes.map((n) => n.id)], ['alex@soardcharity.com', ['note-maria']]);
+});
+
+test('Keep as an organization, then Take it out: a year on, the question can be answered again', async () => {
+  await add(pay({ id: 'bk', contact: 'ct_bk', first: 'Ann', last: 'Ivers', email: 'ann@example.com', company: 'Ivers Foundation', amount: 1500000, created: S(NOW - 30 * DAY) }));
+  const q = (await needs()).find((i) => i.kind === 'big');
+  const { key } = await doIt({ act: 'org-new', name: 'Ivers Foundation', links: [{ kind: 'company', subject: 'Ivers Foundation' }], asked: true, subject: q.subject, also: q.also || [] });
+  await doIt({ act: 'org-delete', key, was: { notes: [], owner: '', kept: false } });
+  assert.equal(await db.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'big' AND note = 'org'").first(), null, 'its answer went with it');
+});

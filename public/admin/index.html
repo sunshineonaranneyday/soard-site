@@ -7899,6 +7899,7 @@
     // and to reach its Undo by keyboard); then it runs on from where it was
     const toastClocks = new Map();
     let toastsHeld = false;
+    let toastUsedAt = 0;
     function toastClock(id, ms, end) {
       const c = { left: ms, at: Date.now(), timer: null, end };
       toastClocks.set(id, c);
@@ -7935,12 +7936,19 @@
       const box = useRef(null);
       const latest = useRef(toasts);
       latest.current = toasts;
-      const use = (t) => { onDismiss?.(t.id); toastClocks.delete(t.id); toastFocusBack(t.action.fn()); };
+      // One gesture, one action: the message above slides under the pointer as this one goes, and a held key repeats,
+      // so a second press within a moment does nothing
+      const use = (t) => {
+        if (Date.now() - toastUsedAt < 600) return;
+        toastUsedAt = Date.now();
+        onDismiss?.(t.id); toastClocks.delete(t.id); toastFocusBack(t.action.fn());
+      };
       // A message gone from under the focus or the pointer: the others' clocks run again
       useEffect(() => { if (toastsHeld && !box.current?.matches(':hover') && !box.current?.contains(document.activeElement)) holdToasts(false); }, [toasts]);
       useEffect(() => {
         const key = (e) => {
           if (String(e.key || '').toLowerCase() !== 'z' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented) return;
+          if (e.repeat) { e.preventDefault(); return; }
           const el = e.target;
           const typing = el?.closest?.('textarea, [contenteditable=""], [contenteditable="true"]') || (el?.matches?.('input') && !/^(checkbox|radio|button|submit|reset|range|color|file)$/i.test(el.type || ''));
           if (typing || document.querySelector('[aria-modal="true"]')) return;
