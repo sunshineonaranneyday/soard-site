@@ -590,3 +590,13 @@ test('a gift in kind refunded in full closes; one refunded from the start is nev
   await note(pay({ id: 'k2', amount: 50000, method: 'in_kind', contact: 'ct_k2', first: 'Kit', email: 'kit@example.com', refund: 'full', refunds: [{ status: 'succeeded', amount: 50000 }] }), START + 4 * HOUR);
   assert.equal(await row('k2'), null);
 });
+
+test('a To thank partly refunded shows once on the donor’s page, on the gift still given', async () => {
+  await note(pay({ id: 'v1', amount: 60000, created: S(START + HOUR) }));
+  await note(pay({ id: 'v2', amount: 60000, created: S(START + HOUR + 10 * MIN) }));
+  await note(pay({ id: 'v2', amount: 60000, created: S(START + HOUR + 10 * MIN), refund: 'full', refunds: [{ status: 'succeeded', amount: 60000 }] }), START + 3 * HOUR);
+  const page = await C.personView(env, 'ct_jane', { now: START + 4 * HOUR });
+  const withIt = page.gifts.filter((g) => (g.thanksAll || []).some((t) => t.id === 'v1'));
+  assert.equal(withIt.length, 1);
+  assert.ok(!withIt[0].refunded);
+});

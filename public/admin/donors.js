@@ -120,7 +120,7 @@ const STYLE = `
 /* After Stage and the card under it (and, on a phone, after the giving and gifts) */
 .dn-card--late { order: 3; }
 /* A heading that takes the focus only so a screen reader says whose page this is */
-.dn-head h2:focus, .dn-head h2[tabindex]:focus-visible { outline: none; box-shadow: none; }
+.dn-head h2:focus, .dn-head h2[tabindex]:focus-visible, .dn .page-header h2[tabindex]:focus { outline: none; box-shadow: none; }
 .dn-check { display: inline-flex; align-items: center; gap: .5rem; min-height: 36px; font-size: var(--fs-sm); font-weight: 600; cursor: pointer; }
 .dn-check input { width: 18px; height: 18px; margin: 0; }
 .dn-plain { display: grid; gap: .6rem; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
@@ -208,7 +208,8 @@ const when = (iso) => {
   return `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) })}, ${time}`;
 };
 const shortDay = (iso) => { const t = Date.parse(iso); return t ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(new Date(t).getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) }) : ''; };
-const amountOf = (g) => (g.inKind ? `${usd(g.inKind)} in kind` : usd(g.cents));
+// (a gift in kind Zeffy has no value for is said so, never "$0")
+const amountOf = (g) => (g.inKind ? `${usd(g.inKind)} in kind` : !Number(g.cents) && (g.why === 'kind' || g.thanks?.why === 'kind') ? 'a gift in kind' : usd(g.cents));
 /** Who looks after a donor, as the Owner filter has it: '' anyone, 'none' no one, else their address */
 const ownerOk = (filter, owner) => !filter || (filter === 'none' ? !owner : owner === filter);
 /** Where an organization is: its level on the Partners page, or only here */
@@ -575,7 +576,7 @@ function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
   return html`
     <p class="dn-status">Zeffy thanks online givers by email. These it doesn’t, or they’re big enough for a call or a note from the team. The one waiting longest is first${owner ? `; looked after by ${ownerName}` : ''}.</p>
     <ul class="dn-needs" aria-label="To thank">${items.map((t) => html`<li key=${t.id} class="card dn-need">
-      <p class="dn-need__q">Thank ${t.name}${t.org ? ` (for ${t.org.name})` : t.company && t.how !== 'Donor-advised fund' ? ` (for ${t.company})` : ''}: ${amountOf(t)}</p>
+      <p class="dn-need__q">Thank ${t.name}${t.org && t.org.name !== t.name ? ` (for ${t.org.name})` : !t.org && t.company && t.company !== t.name && t.how !== 'Donor-advised fund' ? ` (for ${t.company})` : ''}: ${amountOf(t)}</p>
       <p class="dn-need__sub">${[t.how, t.campaign, day(t.at)].filter(Boolean).join(' · ')}. ${t.whyText}.</p>
       <p class="dn-need__sub">${t.owner ? `Looked after by ${fullName(t.owner, v.staff)}` : 'No one looks after them yet'} · ${waiting(t.since)}</p>
       <div class="dn-need__do">
@@ -836,7 +837,8 @@ function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
 function ThankBox({ gifts, name, ctx }) {
   const [busy, setBusy] = useState(null);
   // Every thank-you still to do, each its own (a gift can hold a thanked part and a later part to thank)
-  const todo = gifts.flatMap((g) => (g.thanksAll || (g.thanks ? [g.thanks] : [])).filter((t) => t.state === 'todo').map((t) => ({ ...g, id: `${g.id}:${t.id}`, thanks: t })));
+  const seen = new Set();
+  const todo = gifts.flatMap((g) => (g.thanksAll || (g.thanks ? [g.thanks] : [])).filter((t) => t.state === 'todo' && !seen.has(t.id) && seen.add(t.id)).map((t) => ({ ...g, id: `${g.id}:${t.id}`, thanks: t })));
   // The last one said: the box goes, the focus to the donor's name
   const refocus = useRefocus('.dn-thank__list', true, '.dn-head h2');
   if (!todo.length) return null;
@@ -849,7 +851,7 @@ function ThankBox({ gifts, name, ctx }) {
   return html`<section class="card kd-sec dn-thank" aria-labelledby="dn-thank-h">
     <header class="kd-sec__head"><h3 id="dn-thank-h">To thank <span class="count">${todo.length}</span></h3></header>
     <ul class="dn-thank__list">${todo.map((g) => html`<li key=${g.id} class="dn-thank__one">
-      <span><strong>${amountOf({ cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind })}</strong> · ${[g.campaign || 'A gift', g.thanks.how || g.how, day(g.at), g.by ? `from ${g.by}` : null, g.thanks.ids && g.ids && g.thanks.ids.length < g.ids.length ? 'the part given later' : null].filter(Boolean).join(' · ')}</span>
+      <span><strong>${amountOf({ cents: g.thanks.cents ?? g.cents, inKind: g.thanks.inKind ?? g.inKind, thanks: g.thanks })}</strong> · ${[g.campaign || 'A gift', g.thanks.how || g.how, day(g.at), g.by ? `from ${g.by}` : null, g.thanks.ids && g.ids?.length > 1 && !g.thanks.ids.includes(g.ids[0]) ? 'the part given later' : null].filter(Boolean).join(' · ')}</span>
       <span class="dn-sub">${g.thanks.whyText}.</span>
       <span class="dn-row-do">
         <button type="button" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(g, 'thanked', e); }}>${busy === `${g.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
@@ -1072,7 +1074,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           </dl>
           ${d.contact ? html`<p style="margin:.75rem 0 0"><a class="btn btn-ghost btn-sm" href=${zeffyContactUrl(d.contact)} target="_blank" rel="noopener">Open in Zeffy</a></p>
             <p class="kd-card__note">Their name, email and address are changed in Zeffy.</p>` : html`<p class="kd-card__note">Zeffy has no contact for these gifts, only the name on each.</p>`}
-          <p class="kd-card__note">In Zeffy twice? <button type="button" class="link dn-linkbtn" onClick=${() => setJoining(true)}>Same person as another donor…</button></p>
+          ${/^[cen]:/.test(v.key) ? html`<p class="kd-card__note">In Zeffy twice? <button type="button" class="link dn-linkbtn" onClick=${() => setJoining(true)}>Same person as another donor…</button></p>` : null}
           ${v.also?.length ? html`<p class="kd-card__note">Also in Zeffy as:</p><ul class="dn-plain">${v.also.map((a, i) => html`<li key=${a.key}>
             ${a.ref ? html`<a class="link" href=${zeffyContactUrl(a.ref)} target="_blank" rel="noopener">Record ${i + 2} in Zeffy</a>` : html`<span>Record ${i + 2}, with no Zeffy contact</span>`}
             <button type="button" class="link dn-linkbtn" onClick=${async () => {
@@ -1187,6 +1189,10 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     if (!ctx.createPartner) { location.hash = '#partners'; return; }
     const now = await get(`?org=${encodeURIComponent(v.key)}`);
     if (now.success && (now.org || now.onSite)) { ctx.addToast(`${v.name} is on the website already: someone put it there since this page was read`, 'info'); goTo({ tab: 'people', org: now.org || v.key }); return; }
+    // A partner card of its exact name already (made here a moment ago, before a step that failed): that one, never a second
+    const nk = (x) => String(x || '').toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '');
+    const made = (ctx.partners || []).find((p) => nk(p.name) === nk(v.name));
+    if (made && await ask({ title: `Use the partner card “${made.name}”?`, text: `There’s a partner card with this name already. ${v.name}’s gifts, notes and owner go to it, and it’s on the website after you publish.`, yes: 'Use it' })) { await finishOnSite(made.slug); return; }
     const slug = await ctx.createPartner({ name: v.name });
     if (!slug) return;
     await finishOnSite(slug);
@@ -1194,6 +1200,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
   // Its partner card is made: everything said about it moves to the partner (tried again from the toast if it failed)
   const finishOnSite = async (slug) => {
     const r = await change({ act: 'website', key: v.key, slug });
+    if (!r.success && r.status === 409) { ctx.addToast(r.error, 'error'); await load(); return; }
     if (!r.success) { ctx.addToast(`${v.name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug) }); return; }
     listChanged();
     ctx.addToast(`${v.name} is on the Partners page after you publish`, 'success', null, { publish: true });
@@ -1201,7 +1208,7 @@ function OrgPage({ orgKey, ctx, onBack, backLabel = 'Donors' }) {
     goTo({ tab: 'people', org: r.key });
   };
   const takeOut = async () => {
-    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length ? plural(v.notes.length, 'note') : null].filter(Boolean).join(' and ')} go back to the Zeffy record it was made from, if it was made from one; otherwise they go with it.` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
+    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length ? plural(v.notes.length, 'note') : null].filter(Boolean).join(' and ')} ${v.madeFrom ? `go back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'go with it.'}` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
     const r = await change({ act: 'org-delete', key: v.key });
     if (!r.success) { ctx.addToast(r.error, 'error'); return; }
     listChanged();

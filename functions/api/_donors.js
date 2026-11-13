@@ -366,7 +366,9 @@ export function donorOf(key, rows, { now = Date.now(), kids = [] } = {}) {
   // Years in a row, counting back from this year (or last year, while this year has nothing yet)
   let streak = 0;
   for (let y = byYear.has(thisYear) ? thisYear : thisYear - 1; byYear.has(y); y--) streak++;
-  const newest = [...rows].sort((a, b) => b.at - a.at);
+  // Named as their own Zeffy record names them (never by a gift that only shares their email)
+  const own = String(key).startsWith('c:') ? rows.filter((r) => `c:${r.contact}` === String(key)) : [];
+  const newest = [...(own.length ? own : rows)].sort((a, b) => b.at - a.at);
   const named = newest.find((r) => clean(r.first) || clean(r.last)) || newest[0] || {};
   // As the board and Slack say it: a name typed in both boxes ("Pella" / "Pella") once
   const person = givenName({ first_name: named.first, last_name: named.last });
@@ -427,15 +429,29 @@ export async function rowsFor(DB, keys) {
   return [...own, ...loose, ...others];
 }
 /**
- * Rows by donor. A payment Zeffy has no contact for, under an email a contact has, is that contact's (the newest one
- * with it), so one person isn't two donors
+ * Rows by donor. A payment Zeffy has no contact for, under an email a contact has, is that contact's, so one person
+ * isn't two donors. An email several contacts share (a household): the one whose name it gives, else the newest
  */
+const nameOfRow = (r) => clean(`${clean(r.first)} ${clean(r.last)}`).toLowerCase();
 const contactsByEmail = (rows) => {
   const m = new Map();
-  for (const r of [...rows].sort((a, b) => a.at - b.at)) if (r.contact && r.email) m.set(r.email, `c:${r.contact}`);
+  for (const r of [...rows].sort((a, b) => a.at - b.at)) {
+    if (!r.contact || !r.email) continue;
+    const list = m.get(r.email) || [];
+    const key = `c:${r.contact}`;
+    const had = list.find((x) => x.key === key);
+    if (had) { had.at = r.at; if (nameOfRow(r)) had.names.add(nameOfRow(r)); } else list.push({ key, at: r.at, names: new Set(nameOfRow(r) ? [nameOfRow(r)] : []) });
+    m.set(r.email, list);
+  }
   return m;
 };
-const keyIn = (r, byEmail) => (!r.contact && r.email && byEmail.has(r.email) ? byEmail.get(r.email) : donorKey(r));
+const keyIn = (r, byEmail) => {
+  const list = !r.contact && r.email ? byEmail.get(r.email) : null;
+  if (!list?.length) return donorKey(r);
+  if (list.length === 1) return list[0].key;
+  const named = list.filter((x) => nameOfRow(r) && x.names.has(nameOfRow(r)));
+  return (named.length ? named : list).reduce((a, b) => (b.at > a.at ? b : a)).key;
+};
 /**
  * Who each row counts for: { person: who paid, owner: who it counts for }. Without the site's own knowledge (`crm`,
  * ./_donor-crm.js: organizations and "the same person") both are the person who paid
@@ -578,7 +594,8 @@ export async function donorOfPayment(env, id, { crm = null } = {}) {
   }
   // As groupRows has it: no contact, but an email a contact has, is that contact's
   if (!r.contact && r.email) {
-    const c = await env.DB.prepare('SELECT contact FROM donor_payments WHERE contact IS NOT NULL AND email = ? ORDER BY at DESC LIMIT 1').bind(r.email).first();
+    const cs = (await env.DB.prepare('SELECT contact, first, last, at FROM donor_payments WHERE contact IS NOT NULL AND email = ? ORDER BY at DESC LIMIT 50').bind(r.email).all()).results || [];
+    const c = cs.find((x) => nameOfRow(r) && nameOfRow(x) === nameOfRow(r)) || cs[0];
     if (c?.contact) return `c:${c.contact}`;
   }
   return donorKey(r);

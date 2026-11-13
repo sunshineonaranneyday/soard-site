@@ -1210,3 +1210,37 @@ test('a gift with no Zeffy contact is never taken, nor dropped, by an organizati
   await doIt({ act: 'org-rename', key, name: 'Rho Family Trust' });
   assert.deepEqual(await C.giftOwner(env, 'lh', { now: NOW }), { org: key }, 'still, renamed');
 });
+
+// ─── Found in the fifth QA round ────────────────────────────────────
+
+test('a gift with no Zeffy contact under an email two contacts share is the one whose name it gives, and never renames the other', async () => {
+  await add(pay({ id: 'pc', contact: 'ct_chris', first: 'Chris', last: 'Pair', email: 'family@pair.example', created: S(NOW - 3 * DAY) }));
+  await add(pay({ id: 'pj', contact: 'ct_jamie', first: 'Jamie', last: 'Pair', email: 'family@pair.example', created: S(NOW - 5 * DAY) }));
+  await add(pay({ id: 'pl', contact: null, first: 'Jamie', last: 'Pair', email: 'family@pair.example', amount: 120000, created: S(NOW - DAY) }));
+  const people = await list();
+  assert.equal(people.find((p) => p.key === 'c:ct_chris')?.name, 'Chris Pair');
+  assert.equal(people.find((p) => p.key === 'c:ct_jamie')?.total, 10000 + 120000);
+});
+
+test('a Zeffy contact counted for an organization: its owner and notes show on the organization’s page, and come back when the link is taken off', async () => {
+  await withTeam();
+  await add(pay({ id: 'ok', contact: 'ct_oak', first: 'Oak', last: 'Stone', email: 'oak@example.com' }));
+  await doIt({ act: 'owner', key: 'c:ct_oak', email: 'jordan@soardcharity.com' });
+  await doIt({ act: 'note-add', key: 'c:ct_oak', body: 'Met at the gala' });
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_oak', org: 'p:pella' });
+  const pella = await C.orgView(env, 'p:pella', { now: NOW });
+  assert.deepEqual([pella.owner, pella.notes.map((n) => n.body)], ['jordan@soardcharity.com', ['Met at the gala']]);
+  assert.equal((await list()).find((p) => p.key === 'p:pella')?.owner, 'jordan@soardcharity.com', 'the list says the same');
+  await doIt({ act: 'not', kind: 'contact', subject: 'ct_oak', org: 'p:pella' });
+  const oak = await C.personView(env, 'ct_oak', { now: NOW });
+  assert.deepEqual([oak.owner, oak.notes.length], ['jordan@soardcharity.com', 1]);
+});
+
+test('put on the website twice (another tab): the second is told where it is, never a second organization', async () => {
+  await add(pay({ id: 'lw', contact: 'ct_lw', first: 'Lark & Wren', last: 'Foundation', email: 'lw@example.com', amount: 50000 }));
+  const { key } = await doIt({ act: 'org-new', name: 'Lark & Wren Foundation', links: [{ kind: 'contact', subject: 'ct_lw' }] });
+  await db.prepare(partner('lark-wren', 'Lark & Wren Foundation')).run();
+  await doIt({ act: 'website', key, slug: 'lark-wren' });
+  await db.prepare(partner('the-lark-wren', 'The Lark & Wren Foundation')).run();
+  await assert.rejects(doIt({ act: 'website', key, slug: 'the-lark-wren' }), (e) => e.status === 409 && /on the website already as Lark & Wren Foundation/.test(e.message));
+});

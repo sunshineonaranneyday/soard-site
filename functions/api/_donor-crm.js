@@ -242,13 +242,17 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
   };
   const keepAnonymous = (k) => (isOrgKey(k) ? !!anon.get(k) : keysOf(k).some((x) => anon.get(x)));
   /** Who looks after a donor (any record of a person: the latest said) → email or null */
+  // A Zeffy contact counted for an organization (linked to it): what was said about the contact is the organization's
+  const linkedTo = (k) => [...yes].filter(([s2, t]) => t === String(k) && s2.startsWith('contact\n')).map(([s2]) => `c:${s2.slice(8)}`);
   const lookedAfterBy = (k) => {
-    const said = (isOrgKey(k) ? [String(k)] : keysOf(k)).map((x) => owners.get(x)).filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : -1));
-    return said[0]?.email || null;
+    const own = (isOrgKey(k) ? [String(k)] : keysOf(k)).map((x) => owners.get(x)).filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : -1));
+    if (own[0] || !isOrgKey(k)) return own[0]?.email || null;
+    // An organization with no owner of its own: the one said on a contact counted for it, the latest
+    return linkedTo(k).map((x) => owners.get(x)).filter(Boolean).sort((a, b) => (a.at < b.at ? 1 : -1))[0]?.email || null;
   };
 
   return {
-    org, live, exact, canon, keysOf, contactOrgOf, companyOrgOf, ownerOf, keepAnonymous, lookedAfterBy, now,
+    org, live, exact, canon, keysOf, contactOrgOf, companyOrgOf, ownerOf, keepAnonymous, lookedAfterBy, linkedTo, now,
     calls: { yes, no, pay, level, big, notSame: notSameNow, notSameRaw: notSame, forward, movedDone },
     /** The organizations with this name (any but `except`) */
     named: (name, except = null) => (byName.get(nameKey(name)) || []).filter((k) => k !== except),
@@ -627,6 +631,7 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       ]);
       await moveCalls(DB, key, String(from.target));
     }
+    const historyAt = from?.target ? String(from.target) : key;
     await DB.batch([
       DB.prepare('DELETE FROM donor_orgs WHERE key = ?').bind(key),
       DB.prepare('DELETE FROM donor_calls WHERE target = ? OR subject = ?').bind(key, key),
@@ -634,7 +639,7 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
       // A gift a person counted for it goes back to counting as the site works it out
       DB.prepare("DELETE FROM donor_calls WHERE kind = 'payment' AND note = ?").bind(key),
     ]);
-    await audit(DB, by, `Organization taken out: ${crm.org.get(key).name} (its gifts count for the people who gave them)`, { key }, key);
+    await audit(DB, by, `Organization taken out: ${crm.org.get(key).name} (its gifts count for the people who gave them)`, { key }, historyAt);
     return { ok: true };
   }
   if (a === 'website') {
@@ -642,6 +647,9 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     const slug = clean(body.slug);
     // Asked again after it went through (Try again, a second tab): done already
     if (!crm.live(String(body.key || '')) && crm.calls.forward.get(String(body.key || '')) === `p:${slug}`) return { ok: true, key: `p:${slug}` };
+    // Put on the website already, under another partner card (another tab): the card just made is the extra one
+    const went = crm.calls.forward.get(String(body.key || ''));
+    if (!crm.live(String(body.key || '')) && went && crm.isOrg(went)) throw Object.assign(bad(`It’s on the website already as ${crm.org.get(went).name}: someone put it there meanwhile. The partner card just made isn’t needed; delete it in Partners.`, 409), { went });
     const key = orgOk(body.key);
     if (!key.startsWith('o:') || !crm.live(`p:${slug}`)) throw bad('That partner card isn’t saved yet. Save it, then try again.', 409);
     const name = crm.org.get(key).name;
@@ -1252,6 +1260,7 @@ async function withThanks(DB, gifts) {
   const t = await thanksFor(DB, gifts.flatMap((g) => g.ids || [g.id]));
   // Every thank-you of the gift (part thanked, a later part To thank): `thanks` the one still to do, else the first
   return gifts.map((g) => {
+    if (g.refunded) return g;
     const all = [...new Map((g.ids || [g.id]).map((id) => t.get(id)).filter(Boolean).map((x) => [x.id, { ...x, whyText: THANK_WHY[x.why] || null }])).values()];
     if (!all.length) return g;
     return { ...g, thanks: all.find((y) => y.state === 'todo') || all[0], thanksAll: all };
@@ -1262,7 +1271,9 @@ async function pageExtras(env, crm, key, v, { emails = [] } = {}) {
   // A person known by email before Zeffy had a contact for them: the notes and History from then are theirs at once
   // (the next read files them, and any owner, under the contact for good: followMerges)
   const was = emails.map((e) => `e:${e}`).filter((k) => !crm.keysOf(key).includes(k));
-  const keys = isOrgKey(key) ? [key] : [...crm.keysOf(key), ...was];
+  // An organization's page carries the notes and History of the Zeffy contacts counted for it too (said about them
+  // before they were linked: they stay theirs, and come back to their page if the link is taken off)
+  const keys = isOrgKey(key) ? [key, ...crm.linkedTo(key)] : [...crm.keysOf(key), ...was];
   const [notes, history, gifts, staff] = await Promise.all([notesOf(env.DB, keys), historyOf(env.DB, keys), withThanks(env.DB, v.gifts), staffList(env.DB)]);
   // The owner is the one the list shows (an owner said under the old email moves to the contact on the next read)
   const owner = crm.lookedAfterBy(key);
@@ -1353,6 +1364,10 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
   const mine = rows.filter((r) => place(r).owner === key);
   const d = donorOf(key, mine, { now, kids });
   const facts = crm.orgFacts(key);
+  // Made from a Zeffy contact (kept as an organization): Take it out gives back to it, and says so
+  const made = await env.DB.prepare("SELECT target FROM donor_calls WHERE kind = 'made-from' AND subject = ? AND answer = 1").bind(key).first().catch(() => null);
+  const madeRow = made?.target ? rows.find((r) => `c:${r.contact}` === made.target) : null;
+  const madeFrom = made?.target ? { ref: String(made.target).slice(2), name: madeRow ? personName(madeRow) : 'the Zeffy record' } : null;
   d.name = facts.name;
   const v = await giftsView(env, d, mine, kids, { by: true });
   // The names it gives under, and why each counts
@@ -1383,7 +1398,7 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
   }
   const needs = needsOf(rows, crm, { now, unplaced: st.unplaced || [] }).filter((n) => n.org === key || n.counted === key || n.other === key);
   return {
-    ...v, ...(await pageExtras(env, crm, key, v)), key, ...facts,
+    ...v, ...(await pageExtras(env, crm, key, v)), key, ...facts, madeFrom,
     keptNames: facts.keepAnonymous ? crm.keptNamesFor(key) : [],
     // Given anonymously, or by someone kept anonymous: Put on the website asks first
     anonymousGifts: mine.some((r) => r.anonymous || place(r).kept),
