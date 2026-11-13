@@ -27,11 +27,19 @@
  *                             `was`: the state the person saw). `asked`: an answer to a Needs you question, refused (409)
  *                             if someone answered it since
  * A donor's page (?donor, ?org) also carries { owner, notes, history, staff }, and each gift its thank-you
+ * GET ?timeline=<ref>       → { success, subject, items, kit, sources, more }   everything else that happened with them:
+ *                             the team's email and meetings (Google), calls and texts (Quo), newsletters (Kit), what the
+ *                             website emailed them, the team's changes, a partner's page (./_donor-timeline.js)
+ * GET ?timeline=<ref>&older=1&mail=&quo=   → { success, items, more }   older email and calls
+ * GET ?timeline=<ref>&mailbox=&thread=     → { success, mailbox, thread, messages }   a conversation they're on (logged)
+ * GET ?timeline=<ref>&call=<id>            → { success, status, dialogue }   a call's transcript (Quo)
+ * GET ?timeline=<ref>&sent=<id>            → { success, subject, at, html } | { success, gone, why }   a website email
  */
 import { listView, needsView, thanksView, personView, orgView, orgSummary, orgsList, findNames, findPeople, giftOwner, act } from './_donor-crm.js';
 import { kitFindSubscribers, kitConfigured } from './_kit.js';
 import { checksFacts } from './_check-gifts.js';
 import { thanksCount } from './_donor-thanks.js';
+import { timelineView, olderView, mailThread, callTranscript, sentEmail } from './_donor-timeline.js';
 
 const ok = (body = {}) => Response.json({ success: true, ...body });
 const fail = (error, status = 400) => Response.json({ success: false, error }, { status });
@@ -58,6 +66,16 @@ export async function onRequestGet({ env, request, data }) {
       if (v?.moved) return ok({ org: v.moved });
       return v ? ok(v) : fail('No organization by that link. It may have been taken out, or merged into another partner.', 404);
     }
+    // A donor's timeline (./_donor-timeline.js): ref is a page's address (a contact id, g:<payment>, p:/o: an organization)
+    if (q.get('timeline')) {
+      const ref = q.get('timeline');
+      const me = String(data?.userEmail || '').toLowerCase() || null;
+      if (q.get('thread')) return ok(await mailThread(env, ref, { mailbox: q.get('mailbox'), thread: q.get('thread'), me }));
+      if (q.get('call')) return ok(await callTranscript(env, ref, { call: q.get('call') }));
+      if (q.get('sent')) return ok(await sentEmail(env, ref, { id: q.get('sent') }));
+      const v = q.get('older') ? await olderView(env, ref, { mail: q.get('mail'), quo: q.get('quo') }) : await timelineView(env, ref);
+      return v ? ok({ ...v, me }) : fail('No donor by that link. Their gifts may have moved to another donor in Zeffy.', 404);
+    }
     if (q.get('donor')) {
       const v = await personView(env, q.get('donor'));
       if (!v) return fail('No donor by that link. Their gifts may have moved to another donor in Zeffy.', 404);
@@ -72,6 +90,8 @@ export async function onRequestGet({ env, request, data }) {
     }
     return ok({ ...(await listView(env)), me: String(data?.userEmail || '').toLowerCase() || null });
   } catch (e) {
+    // A refusal said in words (not the donor's conversation, Quo not connected): said as it is
+    if (e.status && e.status !== 500) return fail(e.message, e.status);
     console.error('[donors-admin]', e.message);
     return fail('The site didn’t answer. Try again in a minute.', 500);
   }
