@@ -45,12 +45,15 @@ const QUO_API = 'https://api.quo.com';
 const QUO_VERSION = '2026-03-30';
 // Conversations read from each mailbox a time (newest first; "Show older" reads the next ones)
 export const MAIL_PAGE = 20;
+// Conversations asked of Gmail in one batch
+const BATCH = 10;
 // Addresses a search asks for at once (a person has a few; an organization's givers can be many)
 const MAX_ADDRESSES = 12;
 // Calendar searches are by one address each: the first few of them
 const MAX_CAL_ADDRESSES = 3;
 const CAL_BACK_MS = 3 * 365 * DAY;
 const CAL_AHEAD_MS = 365 * DAY;
+const CAL_PAGES = 4;
 // Zeffy contacts read for their phone numbers (an organization's first few givers)
 const MAX_PHONE_CONTACTS = 5;
 // Zeffy requests left in the minute below which the phone numbers wait for another time (Checks and the donor list come first)
@@ -71,8 +74,31 @@ const iso = (ms) => new Date(ms).toISOString();
 const EMAIL = /^[^\s@"(){}<>,;:]+@[^\s@"(){}<>,;:]+\.[^\s@"(){}<>,;:]+$/;
 const DOMAIN = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 
-/** Every address in a header (From, To, Cc), lower-cased */
-export const addressesIn = (value) => [...String(value || '').matchAll(/[^\s<>"',;:()]+@[^\s<>"',;:()]+\.[a-z]{2,}/gi)].map((m) => m[0].toLowerCase());
+const BARE = /[^\s<>"',;:()]+@[^\s<>"',;:()]+\.[a-z]{2,}/i;
+/**
+ * Every address in a header (From, To, Cc, Bcc), lower-cased, one an entry: the address in <brackets> when there is
+ * one, never an address in the display name ("jane@x.com via Forms" <noreply@forms.example> is noreply@forms.example)
+ */
+export function addressesIn(value) {
+  const entries = [];
+  let cur = '';
+  let quoted = false;
+  let angle = false;
+  for (const ch of String(value || '')) {
+    if (ch === '"' && !angle) quoted = !quoted;
+    else if (ch === '<' && !quoted) angle = true;
+    else if (ch === '>' && !quoted) angle = false;
+    if (ch === ',' && !quoted && !angle) { entries.push(cur); cur = ''; } else cur += ch;
+  }
+  entries.push(cur);
+  const out = [];
+  for (const e of entries) {
+    const inAngle = /<([^<>]+)>/.exec(e)?.[1];
+    const a = inAngle ? BARE.exec(inAngle)?.[0] : BARE.exec(e.replace(/"[^"]*"/g, ' '))?.[0];
+    if (a) out.push(a.toLowerCase());
+  }
+  return out;
+}
 /** The name in a From header ("Jane Doe <jane@x.com>" → Jane Doe), else its address */
 export const nameIn = (value) => { const v = String(value || ''); const n = clean(v.replace(/<[^>]*>/, '').replace(/^"|"$/g, '').replace(/"/g, '')); return n && !n.includes('@') ? n : addressesIn(v)[0] || ''; };
 const domainOf = (email) => normEmail(email).split('@')[1] || '';
@@ -129,18 +155,32 @@ export function teamOf(accounts) {
  * What the timeline searches for: a person's addresses, or an organization's (its givers' and its website's domain),
  * less the team's. → { emails, domains, skipped: [{ address, why }], team: true when the donor is on the team }
  */
-export function searchable({ emails = [], domains = [], name = '' }, team) {
+export function searchable({ emails = [], domains = [], name = '', people = [], contacts = [] }, team) {
   const skipped = [];
-  if (name && team.names.has(clean(name).toLowerCase())) return { emails: [], domains: [], skipped, team: true };
+  const isTeamName = (n) => !!n && team.names.has(clean(n).toLowerCase());
+  if (isTeamName(name)) return { emails: [], domains: [], contacts: [], skipped, team: true };
+  // An organization's givers: a teammate among them (giving for it from home) is never searched, by email or phone
+  const theirs = people.filter((p) => isTeamName(p.name));
+  const dropEmails = new Set(theirs.flatMap((p) => p.emails || []).map(normEmail));
+  const dropContacts = new Set(theirs.flatMap((p) => p.contacts || []).map(String));
   const ok = [];
   for (const raw of new Set(emails.map(normEmail).filter(Boolean))) {
     if (!EMAIL.test(raw)) continue;
-    if (team.addresses.has(raw) || team.domains.has(domainOf(raw))) { skipped.push({ address: raw, why: 'team' }); continue; }
+    if (dropEmails.has(raw) || team.addresses.has(raw) || team.domains.has(domainOf(raw))) { skipped.push({ address: raw, why: 'team' }); continue; }
     ok.push(raw);
   }
-  const doms = [...new Set(domains.map((d) => String(d || '').toLowerCase()).filter((d) => DOMAIN.test(d) && !FREE_MAIL.has(d) && !team.domains.has(d)))];
-  return { emails: ok.slice(0, MAX_ADDRESSES), domains: doms.slice(0, 2), skipped, team: false };
+  const kept = ok.slice(0, MAX_ADDRESSES);
+  // A website's domain is searched only when the organization's own people write from it (a website set to a Facebook
+  // page or a big store's site never brings in everyone at that domain), and never a mail service's or SOARD's
+  const doms = [...new Set(domains.map((d) => String(d || '').toLowerCase()))]
+    .filter((d) => DOMAIN.test(d) && !FREE_MAIL.has(d) && !PLATFORMS.has(d) && !team.domains.has(d) && ok.some((e) => domainOf(e) === d));
+  return { emails: kept, domains: doms.slice(0, 2), contacts: contacts.map(String).filter((c) => !dropContacts.has(c)), skipped, team: false };
 }
+// Websites that are someone else's (a social page, a map, a link shortener, a site builder): never an organization's domain
+const PLATFORMS = new Set(['google.com', 'goo.gl', 'facebook.com', 'fb.com', 'instagram.com', 'linkedin.com', 'twitter.com', 'x.com', 'youtube.com', 'tiktok.com', 'yelp.com',
+  'bit.ly', 'linktr.ee', 'wix.com', 'wixsite.com', 'squarespace.com', 'godaddysites.com', 'weebly.com', 'wordpress.com', 'square.site', 'business.site', 'zeffy.com', 'apple.com', 'microsoft.com', 'amazon.com']);
+// An automated sender: matched by the organization's domain alone, its mail is a store's or a service's, not a person's
+const AUTO_SENDER = /^(no-?reply|do-?not-?reply|notifications?|notify|alerts?|mailer(-daemon)?|postmaster|bounces?|billing|receipts?|orders?|order-?updates?|shipping|marketing|news(letter)?|updates?|automated)\b/i;
 
 const personName = (r) => givenName({ first_name: r.first, last_name: r.last }) || clean(r.company) || r.email || 'No name';
 
@@ -182,7 +222,7 @@ export async function subjectOf(env, ref, { now = Date.now() } = {}) {
     return {
       kind: 'org', key, keys: [key], name: facts.name, slug: facts.slug || null, domains,
       emails: list.flatMap((p) => [...p.emails]), contacts: list.flatMap((p) => [...p.contacts]),
-      people: list.map((p) => ({ name: p.name, emails: [...p.emails] })),
+      people: list.map((p) => ({ name: p.name, emails: [...p.emails], contacts: [...p.contacts] })),
     };
   }
   const keys = crm.keysOf(key);
@@ -201,7 +241,7 @@ export async function subjectOf(env, ref, { now = Date.now() } = {}) {
 
 // ─── Gmail ──────────────────────────────────────────────────────────
 
-const MAIL_HEADERS = ['From', 'To', 'Cc', 'Subject', 'Date', 'Message-ID', 'List-Id', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted'];
+const MAIL_HEADERS = ['From', 'To', 'Cc', 'Bcc', 'Subject', 'Date', 'Message-ID', 'List-Id', 'List-Unsubscribe', 'Precedence', 'Auto-Submitted'];
 
 /** Gmail's search words for the donor: any message from, to or copied to one of their addresses (or domains) */
 export function mailQuery({ emails, domains }) {
@@ -247,7 +287,8 @@ async function gmailBatch(token, paths, fetchImpl) {
 /** Is an address the donor's? (one of their addresses, or on their domain) */
 export const matcher = ({ emails, domains }) => {
   const set = new Set(emails);
-  return (a) => set.has(a) || domains.some((d) => domainOf(a) === d || domainOf(a).endsWith(`.${d}`));
+  // The domain itself, never its subdomains (a store's order.example.com is its systems, not its people)
+  return (a) => set.has(a) || domains.includes(domainOf(a));
 };
 
 /**
@@ -255,7 +296,7 @@ export const matcher = ({ emails, domains }) => {
  * newsletter or mass mailing, an auto-reply. dir: 'in' (they wrote), 'out' (the team wrote to them), 'cc' (someone
  * else wrote to both)
  */
-export function mailLine(msg, { mailbox, isTheirs, team }) {
+export function mailLine(msg, { mailbox, isTheirs, team, exact = null }) {
   const h = msg.payload?.headers || [];
   const labels = msg.labelIds || [];
   if (labels.includes('DRAFT') || labels.includes('SPAM') || labels.includes('TRASH')) return null;
@@ -263,15 +304,21 @@ export function mailLine(msg, { mailbox, isTheirs, team }) {
   const fromAddr = addressesIn(from)[0] || '';
   const to = addressesIn(header(h, 'To'));
   const cc = addressesIn(header(h, 'Cc'));
-  const theirs = [fromAddr, ...to, ...cc].filter((a) => a && isTheirs(a));
+  // Bcc is on the sender's own copy only: a thank-you blind-copied to them is theirs too
+  const bcc = addressesIn(header(h, 'Bcc'));
+  const theirs = [fromAddr, ...to, ...cc, ...bcc].filter((a) => a && isTheirs(a));
   if (!theirs.length) return null;
-  const dir = isTheirs(fromAddr) ? 'in' : team.addresses.has(fromAddr) || team.domains.has(domainOf(fromAddr)) ? 'out' : 'cc';
-  if (dir === 'in') {
+  const isTeam = (a) => team.addresses.has(a) || team.domains.has(domainOf(a));
+  const dir = isTheirs(fromAddr) ? 'in' : isTeam(fromAddr) ? 'out' : 'cc';
+  if (dir !== 'out') {
+    // Their (or someone else's) newsletter or mass mailing, an auto-reply: not a conversation with the team
     if (header(h, 'List-Id') || header(h, 'List-Unsubscribe') || /^(bulk|list|junk)$/i.test(header(h, 'Precedence'))) return null;
     if (to.length + cc.length > CROWD) return null;
     const auto = header(h, 'Auto-Submitted');
     if (auto && !/^no$/i.test(auto)) return null;
   }
+  // Matched by the organization's domain alone, from a no-reply or an order system: a store's mail, not its people's
+  if (dir === 'in' && exact && !exact.has(fromAddr) && AUTO_SENDER.test(fromAddr.split('@')[0])) return null;
   const staffOf = (a) => team.addresses.get(a)?.email || (team.domains.has(domainOf(a)) ? a : null);
   const staff = dir === 'out' ? [staffOf(fromAddr)].filter(Boolean) : [...new Set([...to, ...cc].map(staffOf).filter(Boolean))];
   return {
@@ -286,7 +333,8 @@ export function mailLine(msg, { mailbox, isTheirs, team }) {
     // The donor-side addresses on it (an organization's: whose it was)
     them: [...new Set(theirs)],
     mailbox,
-    mailboxes: [mailbox],
+    // Each mailbox's own copy (Gmail's conversation ids are each mailbox's own): which to open, and Open in Gmail
+    copies: { [mailbox]: msg.threadId },
     thread: msg.threadId,
     gmailId: msg.id,
   };
@@ -300,9 +348,17 @@ async function mailboxLines(env, box, look, { fetchImpl, now, run, page = '' }) 
     const list = await run(() => gmail(token, `/threads?maxResults=${MAIL_PAGE}&q=${encodeURIComponent(look.q)}${pageToken}`, fetchImpl));
     const ids = (list.threads || []).map((t) => t.id).filter((id) => /^[A-Za-z0-9_-]{6,64}$/.test(id));
     const meta = MAIL_HEADERS.map((x) => `&metadataHeaders=${encodeURIComponent(x)}`).join('');
-    const threads = ids.length ? await run(() => gmailBatch(token, ids.map((id) => `/threads/${id}?format=metadata${meta}`), fetchImpl)) : [];
+    // A few at a time (Gmail turns away many reads at once for one mailbox), and the ones it turned away asked once more
+    const path = (id) => `/threads/${id}?format=metadata${meta}`;
+    const threads = [];
+    for (let i = 0; i < ids.length; i += BATCH) threads.push(...(await run(() => gmailBatch(token, ids.slice(i, i + BATCH).map(path), fetchImpl))));
+    const again = ids.filter((_, i) => !threads[i]);
+    if (again.length) {
+      const got = await run(() => gmailBatch(token, again.map(path), fetchImpl)).catch(() => []);
+      again.forEach((id, j) => { if (got[j]) threads[ids.indexOf(id)] = got[j]; });
+    }
     const lines = [];
-    for (const t of threads) for (const m of t?.messages || []) { const l = mailLine(m, { mailbox: box.email, isTheirs: look.isTheirs, team: look.people }); if (l) lines.push(l); }
+    for (const t of threads) for (const m of t?.messages || []) { const l = mailLine(m, { mailbox: box.email, isTheirs: look.isTheirs, team: look.people, exact: look.exact }); if (l) lines.push(l); }
     const missed = threads.filter((t) => !t).length;
     return { lines, next: list.nextPageToken || null, missed };
   } catch (e) {
@@ -315,12 +371,12 @@ export function oneEach(lines) {
   const by = new Map();
   for (const l of lines) {
     const had = by.get(l.id);
-    if (!had) { by.set(l.id, { ...l }); continue; }
-    had.mailboxes = [...new Set([...had.mailboxes, ...l.mailboxes])];
+    if (!had) { by.set(l.id, { ...l, copies: { ...l.copies } }); continue; }
+    had.copies = { ...had.copies, ...l.copies };
     had.staff = [...new Set([...had.staff, ...l.staff])];
     if (l.dir === 'out' && l.staff.includes(l.mailbox) && !had.staff.includes(had.mailbox)) { had.mailbox = l.mailbox; had.thread = l.thread; had.gmailId = l.gmailId; }
   }
-  return [...by.values()];
+  return [...by.values()].map((l) => ({ ...l, mailboxes: Object.keys(l.copies) }));
 }
 
 /** Every mailbox's conversations with the donor → { lines, next: { mailbox: pageToken }, errors: [{ mailbox, error }], missed } */
@@ -349,7 +405,8 @@ export function meetingLine(ev, { mailbox, isTheirs, team }) {
   const staff = [...new Set([org, ...guests.map((g) => normEmail(g.email))].filter((a) => a && team.addresses.has(a)).map((a) => team.addresses.get(a).email))];
   const said = theirs.map((g) => g.responseStatus).find(Boolean) || null;
   return {
-    id: `cal:${ev.iCalUID || ev.id}:${start}`,
+    // The moment, not the words: one event on calendars in different time zones is one line
+    id: `cal:${ev.iCalUID || ev.id}:${at}`,
     kind: 'meeting',
     at,
     allDay: !ev.start?.dateTime,
@@ -371,12 +428,18 @@ async function calendarLines(env, box, look, { fetchImpl, now, run }) {
     const words = [...look.emails.slice(0, MAX_CAL_ADDRESSES), ...look.domains.slice(0, 1)];
     const lines = [];
     for (const q of words) {
-      const p = new URLSearchParams({ q, singleEvents: 'true', orderBy: 'startTime', timeMin: iso(now - CAL_BACK_MS), timeMax: iso(now + CAL_AHEAD_MS), maxResults: '100' });
-      const res = await run(() => fetchImpl(`${CAL_API}/calendars/primary/events?${p}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) }));
-      if (res.status === 404) return { lines }; // no calendar on this account
-      const body = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(`Calendar answered ${res.status}: ${body?.error?.message || ''}`.trim());
-      for (const ev of body?.items || []) { const l = meetingLine(ev, { mailbox: box.email, isTheirs: look.isTheirs, team: look.people }); if (l) lines.push(l); }
+      // Oldest first is the only order Google gives: every page of it (to CAL_PAGES), so the newest are never cut off
+      let pageToken = '';
+      for (let page = 0; page < CAL_PAGES; page++) {
+        const p = new URLSearchParams({ q, singleEvents: 'true', orderBy: 'startTime', timeMin: iso(now - CAL_BACK_MS), timeMax: iso(now + CAL_AHEAD_MS), maxResults: '250', ...(pageToken ? { pageToken } : {}) });
+        const res = await run(() => fetchImpl(`${CAL_API}/calendars/primary/events?${p}`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(15000) }));
+        if (res.status === 404) { await res.body?.cancel?.(); return { lines }; } // no calendar on this account
+        const body = await res.json().catch(() => null);
+        if (!res.ok) throw new Error(`Calendar answered ${res.status}: ${body?.error?.message || ''}`.trim());
+        for (const ev of body?.items || []) { const l = meetingLine(ev, { mailbox: box.email, isTheirs: look.isTheirs, team: look.people }); if (l) lines.push(l); }
+        pageToken = body?.nextPageToken || '';
+        if (!pageToken) break;
+      }
     }
     return { lines };
   } catch (e) {
@@ -408,9 +471,9 @@ async function quoGet(env, path, fetchImpl) {
 }
 
 let quoPeople = null; // { at, users: Map(id → { name, email }), numbers: Map(id → { name, number }) }
-async function quoDirectory(env, fetchImpl, now) {
+async function quoDirectory(env, fetchImpl, now, run = (fn) => fn()) {
   if (quoPeople && now - quoPeople.at < QUO_PEOPLE_MS) return quoPeople;
-  const [u, n] = await Promise.all([quoGet(env, '/users?limit=50', fetchImpl), quoGet(env, '/phone-numbers?limit=50', fetchImpl)]);
+  const [u, n] = await Promise.all([run(() => quoGet(env, '/users?limit=50', fetchImpl)), run(() => quoGet(env, '/phone-numbers?limit=50', fetchImpl))]);
   quoPeople = {
     at: now,
     users: new Map((u?.data || []).map((x) => [x.id, { name: clean([x.firstName, x.lastName].filter(Boolean).join(' ')) || x.email || 'Someone', email: normEmail(x.email) }])),
@@ -476,16 +539,21 @@ async function phonesOf(env, subject, { fetchImpl, run }) {
   return { phones, note: phones.length ? null : 'Zeffy has no phone number for them' };
 }
 
+/** The donor's numbers in Quo's terms, never one of SOARD's own → { phones, dir, note, busy } */
+async function theirPhones(env, subject, { fetchImpl, now, run }) {
+  const got = await phonesOf(env, subject, { fetchImpl, run });
+  if (!got.phones.length) return { ...got, dir: null };
+  const dir = await quoDirectory(env, fetchImpl, now, run);
+  const ours = new Set([...dir.numbers.values()].map((n) => n.number));
+  const phones = got.phones.filter((p) => !ours.has(p));
+  return { phones, dir, busy: false, note: phones.length ? null : 'Their number in Zeffy is one of SOARD’s' };
+}
+
 async function readQuo(env, subject, { fetchImpl, now, run, after = null }) {
   if (!quoConfigured(env)) return { state: 'off', lines: [] };
-  const { phones: all, note, busy } = await phonesOf(env, subject, { fetchImpl, run });
-  if (!all.length) return { state: busy ? 'error' : 'none', note, lines: [] };
   try {
-    const dir = await run(() => quoDirectory(env, fetchImpl, now));
-    // SOARD's own numbers are never the donor's
-    const ours = new Set([...dir.numbers.values()].map((n) => n.number));
-    const phones = all.filter((p) => !ours.has(p));
-    if (!phones.length) return { state: 'none', note: 'Their number in Zeffy is one of SOARD’s', lines: [] };
+    const { phones, dir, note, busy } = await theirPhones(env, subject, { fetchImpl, now, run });
+    if (!phones.length) return { state: busy ? 'error' : 'none', note, lines: [] };
     const calls = new URLSearchParams({ 'participant[in]': phones.join(','), include: 'summary,voicemail', limit: '50' });
     if (after) calls.set('after', after);
     const reads = [run(() => quoGet(env, `/calls?${calls}`, fetchImpl))];
@@ -539,15 +607,20 @@ async function sentBroadcasts(env, now) {
  * else the site can't tell, counts as not.
  */
 export function sentTo(b, { tags }) {
-  const groups = Array.isArray(b.filter) ? b.filter : [];
-  if (!groups.length) return true;
+  const groups = (Array.isArray(b.filter) ? b.filter : []).filter(Boolean);
   const had = (ids) => [].concat(ids || []).some((id) => { const t = tags.get(Number(id)); return t && t.at <= b.at; });
   const rule = (r) => (r?.type === 'all_subscribers' ? true : r?.type === 'tag' ? had(r.ids) : null);
-  return groups.every((g) => Object.entries(g || {}).every(([op, rules]) => {
-    const got = [].concat(rules || []).map(rule);
-    if (got.some((x) => x === null)) return false;
-    return op === 'none' ? !got.some(Boolean) : op === 'any' ? got.some(Boolean) : got.every(Boolean);
-  }));
+  for (const g of groups) {
+    for (const [op, rules] of Object.entries(g || {})) {
+      // Kit sends each part, empty (null) when it isn't used: an empty part says nothing
+      const list = [].concat(rules || []).filter(Boolean);
+      if (!list.length) continue;
+      const got = list.map(rule);
+      if (got.some((x) => x === null)) return false;
+      if (!(op === 'none' ? !got.some(Boolean) : op === 'any' ? got.some(Boolean) : got.every(Boolean))) return false;
+    }
+  }
+  return true;
 }
 
 /** What a Kit tag means, in words */
@@ -587,8 +660,8 @@ async function readKit(env, subject, { now, run, kids }) {
       const tags = new Map((t?.tags || []).map((x) => [Number(x.id), { name: x.name, at: Date.parse(x.tagged_at) || 0 }]));
       if (joined) lines.push({ id: `kit:join:${s.id}`, kind: 'kit', at: joined, title: 'Joined the newsletter in Kit', detail: subs.length > 1 ? email : null });
       if (leftAt) lines.push({ id: `kit:left:${s.id}`, kind: 'kit', at: leftAt, title: 'Unsubscribed from the newsletter', detail: subs.length > 1 ? email : null, tone: 'warn' });
-      else if (s.state === 'bounced') lines.push({ id: `kit:bounced:${s.id}`, kind: 'kit', at: Date.parse(s.updated_at || '') || now, title: 'Kit can’t deliver to their email (it bounced)', detail: email, tone: 'warn', undated: !s.updated_at });
-      else if (s.state === 'complained') lines.push({ id: `kit:spam:${s.id}`, kind: 'kit', at: Date.parse(s.updated_at || '') || now, title: 'Marked a Kit email as spam', detail: email, tone: 'warn', undated: !s.updated_at });
+      else if (s.state === 'bounced') lines.push({ id: `kit:bounced:${s.id}`, kind: 'kit', at: Date.parse(s.updated_at || '') || 0, title: 'Kit can’t deliver to their email (it bounced)', detail: email, tone: 'warn', undated: !s.updated_at });
+      else if (s.state === 'complained') lines.push({ id: `kit:spam:${s.id}`, kind: 'kit', at: Date.parse(s.updated_at || '') || 0, title: 'Marked a Kit email as spam', detail: email, tone: 'warn', undated: !s.updated_at });
       for (const [id, tag] of tags) if (tag.at) lines.push({ id: `kit:tag:${s.id}:${id}`, kind: 'kit', at: tag.at, title: tagWords(tag.name, kids) });
       // Kit sends only to people on the list: from joining until leaving (a bounced or never-confirmed address got none)
       if (joined && (s.state === 'active' || s.state === 'cancelled')) {
@@ -647,7 +720,8 @@ async function readSite(DB, emails) {
 export function teamLine(r) {
   let ch = {};
   try { ch = JSON.parse(r.changes || '{}') || {}; } catch { /* words only */ }
-  if (ch.note) return null;
+  // A note added or changed is on the timeline as itself; a deleted one leaves who deleted it, and when
+  if (ch.note && !/deleted/i.test(String(r.entity_name || ''))) return null;
   const by = r.user_email && r.user_email !== 'unknown' ? r.user_email : null;
   return {
     id: `team:${r.id}`,
@@ -726,11 +800,16 @@ async function readMakeovers(DB, slug) {
       // The first saved version that credits it: the day it was credited
       let since = null;
       try {
-        const versions = (await DB.prepare('SELECT data, created_at FROM content_versions WHERE collection = ? AND slug = ? ORDER BY id').bind(table, r.slug).all()).results || [];
-        for (const v of versions) {
+        const versions = (await DB.prepare('SELECT data, user_email, created_at FROM content_versions WHERE collection = ? AND slug = ? ORDER BY id').bind(table, r.slug).all()).results || [];
+        for (const [i, v] of versions.entries()) {
           let x = {};
           try { x = JSON.parse(v.data || '{}'); } catch { continue; }
-          if (roles.some(([f]) => (x[f] || []).includes(slug))) { since = Date.parse(v.created_at) || null; break; }
+          if (!roles.some(([f]) => (x[f] || []).includes(slug))) continue;
+          // Credited in the copy kept from before the page's history began (the first, with no one's name): before
+          // history, so its year only
+          if (i === 0 && !v.user_email && versions.length > 1) break;
+          since = Date.parse(v.created_at) || null;
+          break;
         }
       } catch { /* no history: its year */ }
       const year = Number(d.year) || null;
@@ -777,7 +856,7 @@ export async function timelineView(env, ref, { now = Date.now(), fetchImpl = fet
       : readMail(env, look, { fetchImpl, now, run }).then((r) => ({ state: r.errors.length && r.errors.length >= r.boxes ? 'error' : 'ok', ...r })),
     local ? null : look.team ? onTeam : !asked ? { state: 'none', lines: [] } : !google ? { state: 'off', lines: [] }
       : readCalendars(env, look, { fetchImpl, now, run }).then((r) => ({ state: r.errors.length && r.errors.length >= r.boxes ? 'error' : 'ok', ...r })),
-    outside(() => (look.team ? onTeam : readQuo(env, subject, { fetchImpl, now, run }))),
+    outside(() => (look.team ? onTeam : readQuo(env, look.subject, { fetchImpl, now, run }))),
     outside(() => readKit(env, { ...subject, emails: look.emails }, { now, run, kids })),
     readSite(env.DB, look.emails),
     readTeam(env.DB, subject.keys),
@@ -805,7 +884,7 @@ export async function timelineView(env, ref, { now = Date.now(), fetchImpl = fet
 /** What a request searches with: the donor's addresses (less the team's), the team, and Gmail's words for it */
 function lookOf(subject, people) {
   const found = searchable(subject, people);
-  return { ...found, people, isTheirs: matcher(found), q: mailQuery(found) };
+  return { ...found, people, exact: new Set(found.emails), isTheirs: matcher(found), q: mailQuery(found), subject: { ...subject, contacts: found.contacts } };
 }
 
 const cursorOf = (pages) => btoa(JSON.stringify(pages)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -828,7 +907,7 @@ export async function olderView(env, ref, { mail = null, quo = null, now = Date.
   const pages = mail ? pagesOf(mail) : null;
   const [m, q] = await Promise.all([
     pages && Object.keys(pages).length && look.q && env.GOOGLE_CALENDAR_KEY ? readMail(env, look, { fetchImpl, now, run, pages }) : { lines: [], next: {} },
-    quo && /^[A-Za-z0-9_=-]{1,400}$/.test(quo) ? readQuo(env, subject, { fetchImpl, now, run, after: quo }) : { lines: [] },
+    quo && /^[A-Za-z0-9_+/=-]{1,600}$/.test(quo) ? readQuo(env, look.subject, { fetchImpl, now, run, after: quo }) : { lines: [] },
   ]);
   return { items: [...m.lines, ...q.lines], more: { mail: Object.keys(m.next || {}).length ? cursorOf(m.next) : null, quo: q.next || null } };
 }
@@ -855,9 +934,11 @@ export async function mailThread(env, ref, { mailbox, thread, me, now = Date.now
   const token = await accessToken(env, box.email, { fetchImpl, now, scope: GMAIL_READ_SCOPE });
   const t = await gmail(token, `/threads/${thread}?format=full`, fetchImpl);
   const messages = (t.messages || []).filter((m) => !(m.labelIds || []).some((l) => l === 'DRAFT' || l === 'SPAM' || l === 'TRASH'));
-  const theirs = messages.filter((m) => { const h = m.payload?.headers || []; return [...addressesIn(header(h, 'From')), ...addressesIn(header(h, 'To')), ...addressesIn(header(h, 'Cc'))].some(look.isTheirs); });
+  const onIt = (m) => { const h = m.payload?.headers || []; return ['From', 'To', 'Cc', 'Bcc'].flatMap((x) => addressesIn(header(h, x))).some(look.isTheirs); };
+  // Only the emails they're on: a forward between the team in the same conversation ("FYI…") stays the team's
+  const theirs = messages.filter(onIt);
   if (!theirs.length) throw fail(403, `${subject.name} isn’t on that conversation`);
-  const out = messages.map((m) => {
+  const out = theirs.map((m) => {
     const h = m.payload?.headers || [];
     const fromAddr = addressesIn(header(h, 'From'))[0] || '';
     return {
@@ -866,29 +947,35 @@ export async function mailThread(env, ref, { mailbox, thread, me, now = Date.now
     };
   });
   await logAudit(env.DB, { userEmail: me || 'unknown', action: 'viewed', entityType: 'mailbox', entitySlug: box.email, entityName: `opened “${(out[0]?.subject || '').slice(0, 100)}” on ${subject.name}’s timeline`, gitStatus: 'ok' });
-  return { mailbox: { email: box.email, name: box.name }, thread, messages: out };
+  return { mailbox: { email: box.email, name: box.name }, thread, messages: out, hidden: messages.length - theirs.length };
 }
 
 /** A call's words: Quo's transcript, read when someone opens the call (only a call with the donor's number) */
-export async function callTranscript(env, ref, { call, now = Date.now(), fetchImpl = fetch }) {
+export async function callTranscript(env, ref, { call, me = null, now = Date.now(), fetchImpl = fetch }) {
   if (!/^AC[A-Za-z0-9]{6,64}$/.test(String(call || ''))) throw fail(400, 'That isn’t a call');
   if (!quoConfigured(env)) throw fail(503, 'Quo isn’t connected');
-  const { subject } = await lookFor(env, ref, now);
+  const { subject, look } = await lookFor(env, ref, now);
   const run = queue();
-  const { phones } = await phonesOf(env, subject, { fetchImpl, run });
+  // Their own numbers, never SOARD's (a number of SOARD's typed on their record would open every call)
+  const { phones, dir, busy } = await theirPhones(env, look.subject, { fetchImpl, now, run });
+  if (busy) throw fail(503, 'Zeffy is busy this minute, so their phone number can’t be checked. Try again in a minute.');
   const c = await quoGet(env, `/calls/${call}`, fetchImpl);
   const parts = (c?.data?.participants || []).map((p) => p?.phoneNumber || p);
-  if (!parts.some((p) => phones.includes(p))) throw fail(403, `That call isn’t with ${subject.name}`);
-  const dir = await quoDirectory(env, fetchImpl, now);
+  if (!phones.length || !parts.some((p) => phones.includes(p))) throw fail(403, `That call isn’t with ${subject.name}`);
   const t = await quoGet(env, `/calls/${call}/transcripts?limit=10`, fetchImpl);
-  const first = (t?.data || []).find((x) => x.status === 'completed') || (t?.data || [])[0] || null;
-  return {
-    status: first?.status || 'absent',
-    dialogue: (first?.dialogue || []).slice(0, 400).map((d) => ({
-      who: dir.users.get(d.actorId)?.name || (d.actorId ? 'SOARD' : phones.includes(d.identifier) ? subject.name : 'Them'),
-      theirs: !d.actorId, text: clean(d.content).slice(0, 2000), at: Number.isFinite(Number(d.start)) ? Number(d.start) : null,
-    })),
-  };
+  // A call paused and picked up again has a transcript for each recording: all of them, in order
+  const done = (t?.data || []).filter((x) => x.status === 'completed');
+  const status = done.length ? 'completed' : (t?.data || [])[0]?.status || 'absent';
+  const ours = new Set([...dir.numbers.values()].map((n) => n.number));
+  const dialogue = done.flatMap((x) => x.dialogue || []).slice(0, 600).map((d) => {
+    const theirs = !d.actorId && phones.includes(d.identifier);
+    return {
+      who: dir.users.get(d.actorId)?.name || (theirs ? subject.name : d.actorId || ours.has(d.identifier) ? 'SOARD' : 'Someone'),
+      theirs, text: clean(d.content).slice(0, 2000), at: Number.isFinite(Number(d.start)) ? Number(d.start) : null,
+    };
+  });
+  await logAudit(env.DB, { userEmail: me || 'unknown', action: 'viewed', entityType: 'mailbox', entitySlug: 'quo', entityName: `read a call’s words on ${subject.name}’s timeline`, gitStatus: 'ok' });
+  return { status, dialogue };
 }
 
 /** An email the website sent them, as it looked: Resend keeps an email's words 30 days */

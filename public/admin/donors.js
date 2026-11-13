@@ -942,7 +942,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           <header class="kd-sec__head"><h3 id="dn-giving-h">Giving</h3></header>
           <${GivingTiles} d=${d} />
         </section>
-        <${Timeline} subject=${v.key} refOf=${v.ref} name=${d.name} gifts=${v.gifts} notes=${v.notes} staff=${v.staff} zeffy=${!!d.contact} ctx=${ctx} onChanged=${load} />
+        <${Timeline} subject=${v.key} refOf=${v.ref} name=${d.name} gifts=${v.gifts} notes=${v.notes} staff=${v.staff} zeffy=${!!d.contact} ctx=${ctx} onChanged=${load} focusGift=${gift || null} />
       </div>
     </div></div>
     ${picking ? html`<${Picker} title=${picking.kind === 'company' ? `Which organization is “${picking.label}”?` : `Which organization is ${picking.label}?`}

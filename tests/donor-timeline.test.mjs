@@ -40,15 +40,35 @@ test('phone numbers and website domains as Quo and Gmail need them', () => {
   assert.deepEqual(T.addressesIn('"Doe, Jane" <Jane@Example.com>, pat@soardcharity.com'), ['jane@example.com', 'pat@soardcharity.com']);
   assert.equal(T.nameIn('"Jane Doe" <jane@example.com>'), 'Jane Doe');
   assert.equal(T.nameIn('jane@example.com'), 'jane@example.com');
+  assert.deepEqual(T.addressesIn('"jane@example.com via Forms" <noreply@forms.example>'), ['noreply@forms.example'], 'never an address in the display name');
+  assert.deepEqual(T.addressesIn('jane@example.com via Forms <noreply@forms.example>, "Lee, Pat" <pat@x.org>, bare@y.org'), ['noreply@forms.example', 'pat@x.org', 'bare@y.org']);
 });
 
 test('the team is never searched: their addresses and aliases, SOARD’s domains, and a donor with a teammate’s name', () => {
-  const s = T.searchable({ emails: ['jane@example.com', 'INFO@soardcharity.com', 'holly@soardcharity.com', 'x@soardcharity.com'], domains: ['gmail.com', 'acme.com', 'soardcharity.com'] }, team);
-  assert.deepEqual(s.emails, ['jane@example.com']);
+  const s = T.searchable({ emails: ['jane@acme.com', 'INFO@soardcharity.com', 'holly@soardcharity.com', 'x@soardcharity.com'], domains: ['gmail.com', 'acme.com', 'soardcharity.com'] }, team);
+  assert.deepEqual(s.emails, ['jane@acme.com']);
   assert.deepEqual(s.skipped.map((x) => x.address), ['info@soardcharity.com', 'holly@soardcharity.com', 'x@soardcharity.com']);
   assert.deepEqual(s.domains, ['acme.com'], 'a freemail domain is never a domain to search, nor SOARD’s own');
   assert.equal(T.searchable({ name: 'Holly Sample', emails: ['holly.home@example.com'] }, team).team, true, 'a staff member who gives from home');
   assert.equal(T.searchable({ name: 'Holly', emails: ['h@example.com'] }, team).team, false, 'a first name alone isn’t a teammate');
+});
+
+test('an organization: a teammate among its givers is never searched; its website’s domain only when its people write from it', () => {
+  const org = { name: 'Acme Builders', emails: ['lee@acme.com', 'holly.home@example.net', 'pat.lee@gmail.com'], domains: ['acme.com'], contacts: ['ct_lee', 'ct_holly'],
+    people: [{ name: 'Lee Sample', emails: ['lee@acme.com'], contacts: ['ct_lee'] }, { name: 'Holly Sample', emails: ['holly.home@example.net'], contacts: ['ct_holly'] }] };
+  const s = T.searchable(org, team);
+  assert.deepEqual(s.emails, ['lee@acme.com', 'pat.lee@gmail.com']);
+  assert.deepEqual(s.contacts, ['ct_lee'], 'nor her phone');
+  assert.ok(s.skipped.some((x) => x.address === 'holly.home@example.net'));
+  assert.deepEqual(s.domains, ['acme.com'], 'Lee writes from acme.com');
+  assert.deepEqual(T.searchable({ ...org, domains: ['facebook.com'] }, team).domains, [], 'a social page is never a domain');
+  assert.deepEqual(T.searchable({ ...org, emails: ['pat.lee@gmail.com'], domains: ['homedepot.com'] }, team).domains, [], 'no one of theirs writes from it');
+  const isTheirs = T.matcher({ emails: ['lee@acme.com'], domains: ['acme.com'] });
+  assert.equal(isTheirs('sam@acme.com'), true);
+  assert.equal(isTheirs('noreply@orders.acme.com'), false, 'its subdomains are its systems');
+  const look = { mailbox: 'holly@soardcharity.com', isTheirs, team, exact: new Set(['lee@acme.com']) };
+  assert.equal(T.mailLine(msg('c1', 't7', 1, [H('From', 'Acme <no-reply@acme.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Your order')]), look), null, 'a no-reply at their domain is a system');
+  assert.equal(T.mailLine(msg('c2', 't8', 1, [H('From', 'Sam <sam@acme.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Hello')]), look)?.dir, 'in', 'a person at their domain is theirs');
 });
 
 test('Gmail’s search words find any message from, to or copied to the donor', () => {
@@ -82,16 +102,21 @@ test('an email becomes a line: who wrote to whom; the donor’s newsletters, mas
   assert.equal(T.mailLine(msg('a7', 't3', 1, [H('From', 'jane@example.com'), H('To', 'holly@soardcharity.com'), H('Auto-Submitted', 'auto-replied')]), look), null, 'an out-of-office');
   assert.equal(T.mailLine(msg('a8', 't3', 1, [H('From', 'holly@soardcharity.com'), H('To', 'jane@example.com')], { labels: ['DRAFT'] }), look), null, 'a draft never went');
   assert.equal(T.mailLine(msg('a9', 't3', 1, [H('From', 'holly@soardcharity.com'), H('To', 'someone@else.example')]), look), null, 'not about the donor');
+  const bcc = T.mailLine(msg('b1', 't4', 1, [H('From', 'holly@soardcharity.com'), H('To', 'holly@soardcharity.com'), H('Bcc', 'jane@example.com'), H('Subject', 'Thank you all')]), look);
+  assert.equal(bcc?.dir, 'out', 'blind-copied to them: theirs');
+  assert.equal(T.mailLine(msg('b2', 't5', 1, [H('From', '"jane@example.com via Forms" <noreply@forms.example>'), H('To', 'holly@soardcharity.com')]), look), null, 'a form that names them isn’t from them');
+  assert.equal(T.mailLine(msg('b3', 't6', 1, [H('From', 'Vendor <news@vendor.example>'), H('To', 'jane@example.com'), H('Cc', 'holly@soardcharity.com'), H('List-Unsubscribe', '<mailto:u>')]), look), null, 'someone else’s list mail to both');
 });
 
 test('the same email in two mailboxes is one line, opened from the sender’s copy', () => {
-  const a = { id: 'mail:<m@x>', dir: 'out', staff: ['pat@soardcharity.com'], mailbox: 'holly@soardcharity.com', mailboxes: ['holly@soardcharity.com'], thread: 'th', gmailId: 'gh' };
-  const b = { ...a, mailbox: 'pat@soardcharity.com', mailboxes: ['pat@soardcharity.com'], thread: 'tp', gmailId: 'gp' };
+  const a = { id: 'mail:<m@x>', dir: 'out', staff: ['pat@soardcharity.com'], mailbox: 'holly@soardcharity.com', copies: { 'holly@soardcharity.com': 'th' }, thread: 'th', gmailId: 'gh' };
+  const b = { ...a, mailbox: 'pat@soardcharity.com', copies: { 'pat@soardcharity.com': 'tp' }, thread: 'tp', gmailId: 'gp' };
   const [one, ...rest] = T.oneEach([a, b]);
   assert.equal(rest.length, 0);
   assert.equal(one.mailbox, 'pat@soardcharity.com');
   assert.equal(one.thread, 'tp');
   assert.deepEqual(one.mailboxes.sort(), ['holly@soardcharity.com', 'pat@soardcharity.com']);
+  assert.deepEqual(one.copies, { 'holly@soardcharity.com': 'th', 'pat@soardcharity.com': 'tp' }, 'each mailbox’s own conversation, for its own Open in Gmail');
 });
 
 test('a calendar event the donor is a guest on is a meeting; a big invite says so; a cancelled one isn’t', () => {
@@ -117,6 +142,11 @@ test('a Kit broadcast went to them when it went to everyone, or to a tag they ha
   assert.equal(T.sentTo({ at: 500, filter: [{ any: [{ type: 'tag', ids: [7] }] }] }, { tags }), false, 'sent before they had the tag');
   assert.equal(T.sentTo({ at: 2000, filter: [{ none: [{ type: 'tag', ids: [7] }] }] }, { tags }), false);
   assert.equal(T.sentTo({ at: 2000, filter: [{ all: [{ type: 'segment', ids: [3] }] }] }, { tags }), false);
+  // As Kit sends them: every part there, the unused ones null (the site's own leave-out filter is one)
+  assert.equal(T.sentTo({ at: 500, filter: [{ all: [{ type: 'all_subscribers' }], any: null, none: null }] }, { tags }), true, 'null parts say nothing');
+  assert.equal(T.sentTo({ at: 500, filter: [{ all: null, any: null, none: [{ type: 'tag', ids: [99] }] }] }, { tags }), true, 'the leave-out filter: everyone without the tag');
+  assert.equal(T.sentTo({ at: 2000, filter: [{ all: null, any: null, none: [{ type: 'tag', ids: [7] }] }] }, { tags }), false, 'left out by a tag they had');
+  assert.equal(T.sentTo({ at: 500, filter: [{ all: [], any: [], none: [] }] }, { tags }), true);
   const kids = new Map([['ava-sample', 'Ava']]);
   assert.equal(T.tagWords('Reveal sign-ups', kids), 'Signed up to watch every reveal');
   assert.equal(T.tagWords('Reveal sign-ups: ava-sample', kids), 'Signed up to watch Ava’s reveal');
@@ -125,6 +155,7 @@ test('a Kit broadcast went to them when it went to everyone, or to a tag they ha
 
 test('the team’s changes: a note is on the timeline as itself; a thank-you is a gift line', () => {
   assert.equal(T.teamLine({ id: 1, user_email: 'pat@soardcharity.com', entity_name: 'Note added', changes: '{"key":"c:1","note":"n1"}', created_at: '2026-10-01 12:00:00' }), null);
+  assert.equal(T.teamLine({ id: 4, user_email: 'pat@soardcharity.com', entity_name: 'Note deleted', changes: '{"key":"c:1","note":"n1"}', created_at: '2026-10-01 12:00:00' })?.title, 'Note deleted', 'a deleted note leaves who and when');
   const t = T.teamLine({ id: 2, user_email: 'pat@soardcharity.com', entity_name: 'Thanked: $5,000 from Jane Doe', changes: '{"gift":"g1","state":"thanked"}', created_at: '2026-10-01 12:00:00' });
   assert.equal(t.kind, 'thanks');
   assert.equal(t.at, Date.parse('2026-10-01T12:00:00Z'));
@@ -171,9 +202,11 @@ test('a call and a day’s texts in words', () => {
 
 let env;
 let seen;
+let zeffyPhone = '(404) 555-0123';
 const realFetch = globalThis.fetch;
 const JANE_THREADS = {
-  'holly@soardcharity.com': { t1aaaaaa: [msg('g1aaaaaa', 't1aaaaaa', NOW - 3 * DAY, [H('From', 'Jane Doe <jane@example.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Our gift'), H('Message-ID', '<one@x>')])] },
+  'holly@soardcharity.com': { t1aaaaaa: [msg('g1aaaaaa', 't1aaaaaa', NOW - 3 * DAY, [H('From', 'Jane Doe <jane@example.com>'), H('To', 'holly@soardcharity.com'), H('Subject', 'Our gift'), H('Message-ID', '<one@x>')]),
+    msg('g1fwdddd', 't1aaaaaa', NOW - 3 * DAY + 60e3, [H('From', 'Holly Sample <holly@soardcharity.com>'), H('To', 'pat@soardcharity.com'), H('Subject', 'Fwd: Our gift'), H('Message-ID', '<fwd@x>')])] },
   'pat@soardcharity.com': {
     t2bbbbbb: [msg('g2bbbbbb', 't2bbbbbb', NOW - 2 * DAY, [H('From', 'Pat Lee <pat@soardcharity.com>'), H('To', 'jane@example.com'), H('Cc', 'holly@soardcharity.com'), H('Subject', 'Thank you'), H('Message-ID', '<two@x>')])],
     t3cccccc: [msg('g3cccccc', 't3cccccc', NOW - DAY, [H('From', 'Pat Lee <pat@soardcharity.com>'), H('To', 'someone@else.example'), H('Subject', 'Not hers')])],
@@ -212,6 +245,8 @@ function fakeWorld({ gmailDown = null, quo = true } = {}) {
     }
     if (url.startsWith('https://www.googleapis.com/calendar/v3/calendars/primary/events?')) {
       if (who !== 'pat@soardcharity.com') return Response.json({ items: [] });
+      // Google's oldest-first pages: the newest are on the last one
+      if (!new URL(url).searchParams.get('pageToken')) return Response.json({ items: [{ id: 'e0', iCalUID: 'u0', status: 'confirmed', summary: 'Long ago', start: { dateTime: new Date(NOW - 900 * DAY).toISOString() }, attendees: [{ email: 'jane@example.com' }] }], nextPageToken: 'P2' });
       return Response.json({ items: [
         { id: 'e1', iCalUID: 'u1', status: 'confirmed', summary: 'Coffee with Jane', start: { dateTime: new Date(NOW - 10 * DAY).toISOString() }, organizer: { email: 'pat@soardcharity.com' }, attendees: [{ email: 'pat@soardcharity.com' }, { email: 'jane@example.com', responseStatus: 'accepted' }] },
         { id: 'e2', iCalUID: 'u2', status: 'confirmed', summary: 'Site visit', start: { dateTime: new Date(NOW + 5 * DAY).toISOString() }, organizer: { email: 'pat@soardcharity.com' }, attendees: [{ email: 'jane@example.com' }] },
@@ -230,7 +265,7 @@ function fakeWorld({ gmailDown = null, quo = true } = {}) {
         { id: 4, subject: 'Draft', status: 'draft', send_at: null },
       ], pagination: { has_next_page: false } });
     }
-    if (url.startsWith('https://api.zeffy.com/api/v1/contacts/')) return Response.json({ id: 'ct_jane', phone_number: '(404) 555-0123' });
+    if (url.startsWith('https://api.zeffy.com/api/v1/contacts/')) return Response.json({ id: 'ct_jane', phone_number: zeffyPhone });
     if (url.startsWith('https://api.quo.com/')) {
       assert.equal(init.headers['Quo-Api-Version'], '2026-03-30');
       const u = new URL(url);
@@ -289,7 +324,7 @@ test('a person’s timeline: email with the team (once each), meetings, calls an
   const by = (k) => v.items.filter((x) => x.kind === k);
   assert.deepEqual(by('email').map((x) => x.title).sort(), ['Our gift', 'Thank you'], 'Pat’s email in two mailboxes is one line; the email that isn’t hers isn’t there');
   assert.equal(by('email').find((x) => x.title === 'Thank you').mailbox, 'pat@soardcharity.com', 'opened from the sender’s copy');
-  assert.deepEqual(by('meeting').map((x) => x.title).sort(), ['Coffee with Jane', 'Site visit']);
+  assert.deepEqual(by('meeting').map((x) => x.title).sort(), ['Coffee with Jane', 'Long ago', 'Site visit'], 'every page of the calendar');
   assert.equal(by('call').length, 1);
   assert.equal(by('call')[0].by, 'Pat Lee');
   assert.equal(by('text').length, 1);
@@ -356,12 +391,19 @@ test('an organization’s timeline searches its givers and its website’s domai
   const again = (await T.timelineView(env, 'p:acme', { now: NOW, local: true })).items.find((x) => x.kind === 'makeover');
   assert.equal(again.at, Date.parse('2025-04-02T00:00:00Z'));
   assert.equal(again.year, null);
+  // Credited already in the copy kept from before history began: before history, its year only
+  await env.DB.prepare("DELETE FROM content_versions WHERE collection = 'kids'").run();
+  await env.DB.prepare("INSERT INTO content_versions (collection, slug, data, action, user_email, created_at) VALUES ('kids', 'ava-sample', ?, 'save', null, '2026-11-01T00:00:00Z')").bind(JSON.stringify({ name: 'Ava', designers: ['acme'] })).run();
+  await env.DB.prepare("INSERT INTO content_versions (collection, slug, data, action, user_email, created_at) VALUES ('kids', 'ava-sample', ?, 'save', 'pat@soardcharity.com', '2026-11-01T00:00:01Z')").bind(JSON.stringify({ name: 'Ava', designers: ['acme'], bio: 'x' })).run();
+  const old = (await T.timelineView(env, 'p:acme', { now: NOW, local: true })).items.find((x) => x.kind === 'makeover');
+  assert.equal(old.year, 2025);
 });
 
 test('only a conversation the donor is on opens, and opening one is logged', async () => {
   fakeWorld();
   const t = await T.mailThread(env, 'ct_jane', { mailbox: 'holly@soardcharity.com', thread: 't1aaaaaa', me: 'pat@soardcharity.com', now: NOW });
-  assert.equal(t.messages.length, 1);
+  assert.equal(t.messages.length, 1, 'Holly’s forward to Pat in the same conversation isn’t shown');
+  assert.equal(t.hidden, 1);
   assert.equal(t.messages[0].theirs, true);
   assert.equal(t.messages[0].text, 'Thanks so much');
   const log = (await env.DB.prepare("SELECT user_email, entity_slug, entity_name FROM audit_log WHERE entity_type = 'mailbox'").all()).results;
@@ -375,6 +417,11 @@ test('only a call with the donor’s number shows its words; only an email sent 
   const t = await T.callTranscript(env, 'ct_jane', { call: 'AC1234567', now: NOW });
   assert.deepEqual(t.dialogue.map((d) => [d.who, d.text, d.theirs]), [['Pat Lee', 'Hi Jane', false], ['Jane Doe', 'Hi!', true]]);
   await assert.rejects(T.callTranscript(env, 'ct_jane', { call: 'AC7654321', now: NOW }), (e) => e.status === 403);
+  assert.ok((await env.DB.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE entity_slug = 'quo'").first()).n >= 1, 'reading a call’s words is logged');
+  // SOARD's own line typed on their record opens nothing
+  zeffyPhone = '(404) 555-0100';
+  await assert.rejects(T.callTranscript(env, 'ct_jane', { call: 'AC1234567', now: NOW }), (e) => e.status === 403);
+  zeffyPhone = '(404) 555-0123';
   const e = await T.sentEmail(env, 'ct_jane', { id: 're_1234567890', now: NOW });
   assert.equal(e.html, '<p>Save the date</p>');
   await assert.rejects(T.sentEmail(env, 'ct_jane', { id: 're_otherperson', now: NOW }), (x) => x.status === 404);

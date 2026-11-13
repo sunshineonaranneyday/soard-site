@@ -71,11 +71,17 @@ export async function onRequestGet({ env, request, data }) {
     if (q.get('timeline')) {
       const ref = q.get('timeline');
       const me = String(data?.userEmail || '').toLowerCase() || null;
-      if (q.get('thread')) return ok(await mailThread(env, ref, { mailbox: q.get('mailbox'), thread: q.get('thread'), me }));
-      if (q.get('call')) return ok(await callTranscript(env, ref, { call: q.get('call') }));
-      if (q.get('sent')) return ok(await sentEmail(env, ref, { id: q.get('sent') }));
-      const v = q.get('older') ? await olderView(env, ref, { mail: q.get('mail'), quo: q.get('quo') }) : await timelineView(env, ref, { local: !!q.get('local') });
-      return v ? ok({ ...v, me }) : fail('No donor by that link. Their gifts may have moved to another donor in Zeffy.', 404);
+      try {
+        if (q.get('thread')) return ok(await mailThread(env, ref, { mailbox: q.get('mailbox'), thread: q.get('thread'), me }));
+        if (q.get('call')) return ok(await callTranscript(env, ref, { call: q.get('call'), me }));
+        if (q.get('sent')) return ok(await sentEmail(env, ref, { id: q.get('sent') }));
+        const v = q.get('older') ? await olderView(env, ref, { mail: q.get('mail'), quo: q.get('quo') }) : await timelineView(env, ref, { local: !!q.get('local') });
+        return v ? ok({ ...v, me }) : fail('No donor by that link. Their gifts may have moved to another donor in Zeffy.', 404);
+      } catch (e) {
+        // A refusal said in words (not their conversation, Quo not connected): said as it is
+        if (e.status && e.status !== 500) return fail(e.message, e.status);
+        throw e;
+      }
     }
     if (q.get('donor')) {
       const v = await personView(env, q.get('donor'));
@@ -91,8 +97,6 @@ export async function onRequestGet({ env, request, data }) {
     }
     return ok({ ...(await listView(env)), me: String(data?.userEmail || '').toLowerCase() || null });
   } catch (e) {
-    // A refusal said in words (not the donor's conversation, Quo not connected): said as it is
-    if (e.status && e.status !== 500) return fail(e.message, e.status);
     console.error('[donors-admin]', e.message);
     return fail('The site didn’t answer. Try again in a minute.', 500);
   }

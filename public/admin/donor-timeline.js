@@ -224,13 +224,18 @@ const withLocal = (full, quick) => (!quick ? full : { ...full, items: [...full.i
  * subject: the page's key (notes are said against it); ref: its address for the read (a contact id, g:<payment>, or
  * an organization's key); gifts and notes from the page; onChanged reads the page again (a note added)
  */
-export function Timeline({ subject, refOf, org = false, name, gifts = [], notes = [], staff = [], me = null, ctx, onChanged, zeffy = false }) {
+export function Timeline({ subject, refOf, org = false, name, gifts = [], notes = [], staff = [], me = null, ctx, onChanged, zeffy = false, focusGift = null }) {
   useStyles();
   const [data, setData] = useState(() => cache.get(refOf)?.data || null);
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState('all');
-  const [shown, setShown] = useState(STEP);
+  // A gift a link opened the page at (Slack's MAJOR GIFT post) is drawn from the start, however far down it is
+  const [shown, setShown] = useState(() => {
+    if (!focusGift) return STEP;
+    const i = linesOf({ gifts, notes, items: cache.get(refOf)?.data?.items || [] }).findIndex((x) => x.gift && (x.gift.ids || [x.gift.id]).includes(focusGift));
+    return Math.max(STEP, i + 10);
+  });
   const [open, setOpen] = useState(null);
   const [older, setOlder] = useState(false);
   const seq = useRef(0);
@@ -239,8 +244,8 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
   useEffect(() => () => { seq.current++; quick.current.n++; }, []);
   const read = async (force = false) => {
     const had = cache.get(refOf);
-    if (!force && had && Date.now() - had.at < FRESH_MS) { setData(had.data); return; }
     const mine = ++seq.current;
+    if (!force && had && Date.now() - had.at < FRESH_MS) { setBusy(false); setData(had.data); return; }
     const asked = Date.now();
     setBusy(true);
     setErr(null);
@@ -274,12 +279,19 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
     if (!data?.more || older) return;
     setOlder(true);
     const p = new URLSearchParams({ timeline: refOf, older: '1', ...(data.more.mail ? { mail: data.more.mail } : {}), ...(data.more.quo ? { quo: data.more.quo } : {}) });
+    const mine = seq.current;
     const j = await call(`?${p}`);
     setOlder(false);
+    if (mine !== seq.current) return;
     if (!j.success) { ctx.addToast(j.error, 'error'); return; }
-    const next = { ...data, items: [...data.items, ...j.items.filter((x) => !data.items.some((y) => y.id === x.id))], more: j.more };
-    cache.set(refOf, { at: Date.now(), data: next });
-    setData(next);
+    // Added to the timeline as it is now (a quick read or Read again may have landed meanwhile)
+    setData((d) => {
+      if (!d) return d;
+      const have = new Set(d.items.map((x) => x.id));
+      const next = { ...d, items: [...d.items, ...j.items.filter((x) => !have.has(x.id))], more: j.more };
+      cache.set(refOf, { at: cache.get(refOf)?.at ?? Date.now(), data: next });
+      return next;
+    });
     setShown((n) => n + STEP);
   };
   const now = Date.now();
@@ -306,12 +318,12 @@ export function Timeline({ subject, refOf, org = false, name, gifts = [], notes 
   };
   const sources = data?.sources || [];
   return html`<section class="card kd-sec dn-tl" aria-labelledby="dn-tl-h">
-    <header class="dn-tl__head"><h3 id="dn-tl-h">Timeline</h3>
-      <span class="dn-tl__state" role="status">${busy ? html`<span class="spinner" aria-hidden="true" /> Reading email, meetings, calls and newsletters…`
-        : data ? html`Read ${ago(data.checkedAt)}<button type="button" class="link dn-linkbtn" onClick=${() => read(true)}>Read again</button>` : null}</span></header>
+    <header class="dn-tl__head"><h3 id="dn-tl-h" tabindex="-1">Timeline</h3>
+      <span class="dn-tl__state"><span role="status">${busy ? html`<span class="spinner" aria-hidden="true" /> Reading email, meetings, calls and newsletters…` : data ? `Read ${ago(data.checkedAt)}` : ''}</span>
+        ${data || err ? html`<button type="button" class="link dn-linkbtn dn-tl__again" aria-disabled=${busy ? 'true' : null} onClick=${() => { if (!busy) read(true); }}>Read again</button>` : null}</span></header>
     <${NoteBox} subject=${subject} name=${name} zeffy=${zeffy} ctx=${ctx} onDone=${onChanged} />
     ${past.length ? html`<${Glance} lines=${past} kit=${data?.kit} onDay=${showDay} />` : null}
-    <${Notices} sources=${sources} err=${err} retry=${() => read(true)} searched=${data?.subject?.searched} staff=${staff} />
+    <${Notices} sources=${sources} err=${err} retry=${() => { document.querySelector('.dn-tl__again')?.focus(); read(true); }} searched=${data?.subject?.searched} staff=${staff} />
     ${soon.length ? html`<div class="dn-tl__soon"><h4>Coming up</h4><ul>${soon.map((x) => html`<li key=${x.id}><strong>${x.title}</strong> · ${longDate(x.at)}${x.allDay ? '' : `, ${clock(x.at)}`} · ${whoLine(x, { staff })}</li>`)}</ul></div>` : null}
     ${past.length ? html`<div class="dn-tl__filters" role="group" aria-label="Show">
       <button type="button" class="pill pill--sm" aria-pressed=${String(filter === 'all')} onClick=${() => { setFilter('all'); setShown(STEP); }}>Everything <span class="count">${past.length}</span></button>
@@ -343,6 +355,7 @@ function Notices({ sources, err, retry, searched, staff }) {
     ${failed.map((s) => html`<div key=${s.key} class="notice notice--warn"><div class="notice__body">${s.label} couldn’t be read: ${s.note || (s.errors?.[0]?.error) || 'it didn’t answer'}. The rest of the timeline is here.</div>
       <div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${retry}>Try again</button></div></div>`)}
     ${partly.map((s) => html`<p key=${s.key} class="dn-tl__quiet">${s.label}: ${mailboxes(s)}’s ${s.errors.length === 1 ? 'account' : 'accounts'} couldn’t be read (${s.errors[0].error}).</p>`)}
+    ${sources.filter((s) => s.missed).map((s) => html`<p key=${`${s.key}-missed`} class="dn-tl__quiet">Gmail was busy: ${plural(s.missed, 'conversation')} couldn’t be read this time. Read again to try.</p>`)}
     ${skipped ? html`<p class="dn-tl__quiet">${skipped.note}.</p>` : null}
     ${off.length ? html`<p class="dn-tl__quiet">${off.map((s) => offWords[s.key] || s.label).join(', ')} ${off.length === 1 ? 'isn’t' : 'aren’t'} connected yet: ${off.some((s) => s.key === 'quo') ? 'calls and texts' : 'what it knows'} will show here once ${off.length === 1 ? 'it is' : 'they are'}.</p>` : null}
     ${none.length ? html`<p class="dn-tl__quiet">${none.map((s) => `${s.label}: ${s.note}`).join('. ')}.</p>` : null}
@@ -359,7 +372,7 @@ function Lines({ lines, staff, me, org, name, now, ctx, onOpen, onChanged }) {
     if (!months.length || months[months.length - 1].m !== m) months.push({ m, lines: [] });
     months[months.length - 1].lines.push(x);
   }
-  return html`<ol class="dn-tl__list" aria-label="Timeline, newest first">${months.map((g) => html`<li key=${g.m} class="dn-tl__month"><h4>${g.m}</h4>
+  return html`<ol class="dn-tl__list" aria-label="Timeline, newest first">${months.map((g, i) => html`<li key=${`${i}:${g.m}`} class="dn-tl__month"><h4>${g.m}</h4>
     <ol>${g.lines.map((x) => html`<${Line} key=${x.id} x=${x} staff=${staff} me=${me} org=${org} name=${name} now=${now} ctx=${ctx} onOpen=${onOpen} onChanged=${onChanged} />`)}</ol></li>`)}</ol>`;
 }
 
@@ -384,7 +397,9 @@ function Line({ x, staff, me, org, name, now, ctx, onOpen, onChanged }) {
   }
   if (x.kind === 'note') return html`<${NoteLine} x=${x} base=${base} dot=${dot} staff=${staff} name=${name} ctx=${ctx} onChanged=${onChanged} />`;
   const opens = (x.kind === 'email' && x.thread) || x.kind === 'call' || x.kind === 'text' || (x.kind === 'kit' && x.sends?.length) || (x.kind === 'site' && x.emailId);
-  const gmailLink = x.kind === 'email' && me && x.mailboxes?.includes(me) ? `https://mail.google.com/mail/?authuser=${encodeURIComponent(me)}#all/${encodeURIComponent(x.thread)}` : null;
+  // My own copy of it (each mailbox's conversation has its own id in Gmail)
+  const mine = x.kind === 'email' && me ? x.copies?.[me] : null;
+  const gmailLink = mine ? `https://mail.google.com/mail/?authuser=${encodeURIComponent(me)}#all/${encodeURIComponent(mine)}` : null;
   const meta = [];
   if (x.kind === 'call') { if (!x.missed && x.duration) meta.push(minutes(x.duration)); if (x.line) meta.push(x.line); if (x.voicemail) meta.push('voicemail'); if (x.ai) meta.push('answered by Quo’s AI'); }
   if (x.kind === 'text') meta.push(plural(x.count, 'text'));
@@ -392,6 +407,8 @@ function Line({ x, staff, me, org, name, now, ctx, onOpen, onChanged }) {
   if (x.kind === 'site') meta.push(...[x.detail, x.status === 'bounced' ? 'bounced' : x.status === 'complained' ? 'marked as spam' : x.status === 'failed' ? 'didn’t send' : x.clicked ? 'opened and clicked' : x.opened ? 'opened' : x.status === 'delivered' ? 'delivered' : null].filter(Boolean));
   if (x.kind === 'email' && org && x.them?.length && x.dir !== 'in') meta.push(x.them.join(', '));
   if (x.kind === 'makeover' && x.draft) meta.push('page not published');
+  // The words on the button that opens it in place (a screen reader hears them first, then which line)
+  const openWords = x.kind === 'email' ? 'Read the conversation' : x.kind === 'call' ? 'Open the call' : x.kind === 'text' ? 'Read the texts' : x.kind === 'kit' ? (x.sends?.length > 1 ? 'See them' : 'See it') : 'See the email';
   const title = x.kind === 'call' ? (x.summary?.[0] || (x.missed ? 'No answer' : 'A call')) : x.kind === 'text' ? (x.detail || 'Texts') : x.title;
   const detail = x.kind === 'email' ? x.detail : x.kind === 'kit' ? (x.sends?.length > 1 ? x.sends.map((s) => `“${s.subject}”`).join(', ') : x.detail) : null;
   return cell(html`<span class="dn-tl__who">${whoLine(x, { staff, org })}</span>
@@ -399,7 +416,7 @@ function Line({ x, staff, me, org, name, now, ctx, onOpen, onChanged }) {
     ${detail ? html`<p class="dn-tl__detail">${detail}</p>` : null}
     ${meta.length ? html`<span class="dn-tl__meta">${meta.join(' · ')}</span>` : null}
     ${opens || gmailLink || x.kind === 'makeover' ? html`<span class="dn-tl__do">
-      ${opens ? html`<button type="button" class="link dn-linkbtn" onClick=${() => onOpen(x)}>${x.kind === 'email' ? 'Read the conversation' : x.kind === 'call' ? 'Open the call' : x.kind === 'text' ? 'Read the texts' : x.kind === 'kit' ? (x.sends.length > 1 ? 'See them' : 'See it') : 'See the email'}</button>` : null}
+      ${opens ? html`<button type="button" class="link dn-linkbtn" aria-label=${`${openWords}: ${title}, ${shortDate(x.at)}`} onClick=${() => onOpen(x)}>${openWords}</button>` : null}
       ${gmailLink ? html`<a class="link" href=${gmailLink} target="_blank" rel="noopener">Open in Gmail</a>` : null}
       ${x.kind === 'makeover' && x.record ? html`<a class="link" href=${`#kids/${String(x.record).split('/').map(encodeURIComponent).join('/')}`}>Open the page</a>` : null}
     </span>` : null}`);
@@ -510,6 +527,8 @@ export function yearSaid(lines, kit, now = Date.now()) {
 function Glance({ lines, kit, onDay }) {
   const [range, setRange] = useState('year');
   const [at, setAt] = useState(null);
+  // What a screen reader hears: only a day reached by the arrow keys (pointing never speaks)
+  const [spoken, setSpoken] = useState('');
   const [W, setW] = useState(600);
   const wrap = useRef(null);
   // Drawn in the chart's own pixels, so marks stay square and the dates readable at any width
@@ -568,7 +587,7 @@ function Glance({ lines, kit, onDay }) {
   const key = (e) => {
     if (!marked.length) return;
     const i = at ? marked.findIndex((m) => m.day === at.day) : -1;
-    const go = (j) => { e.preventDefault(); setAt(marked[Math.max(0, Math.min(marked.length - 1, j))]); };
+    const go = (j) => { e.preventDefault(); const d = marked[Math.max(0, Math.min(marked.length - 1, j))]; setAt(d); setSpoken(said(d)); };
     if (e.key === 'ArrowRight') go(i < 0 ? marked.length - 1 : i + 1);
     else if (e.key === 'ArrowLeft') go(i < 0 ? marked.length - 1 : i - 1);
     else if (e.key === 'Home') go(0);
@@ -595,7 +614,8 @@ function Glance({ lines, kit, onDay }) {
         </svg>
       </div>
     </div>
-    <p class="dn-gl__day" aria-live="polite">${at ? html`${said(at)}<button type="button" class="link dn-linkbtn" onClick=${() => onDay(at.day)}>Show in the list</button>` : html`<span class="dn-sub">Point at a day, or tap it, to see what happened.</span>`}</p>
+    <span class="sr-only" aria-live="polite">${spoken}</span>
+    <p class="dn-gl__day">${at ? html`${said(at)}<button type="button" class="link dn-linkbtn" onClick=${() => onDay(at.day)}>Show in the list</button>` : html`<span class="dn-sub">Point at a day, or tap it, to see what happened.</span>`}</p>
   </div>`;
 }
 
@@ -639,10 +659,11 @@ function MailSheet({ x, refOf, staff, name, onClose }) {
   return html`<${Sheet} title=${x.title} sub=${`In ${nameOf(x.mailbox, staff)}’s mailbox · only the team sees this`} onClose=${onClose}>
     ${!v ? html`<div class="dn-tl__skel" aria-hidden="true"><span class="skel" style="--w:80%"></span><span class="skel" style="--w:60%"></span></div>`
       : !v.success ? html`<div class="notice notice--warn"><div class="notice__body">${v.error}</div></div>`
-      : v.messages.map((m) => html`<div key=${m.id} class=${`dn-tl-msg ${m.theirs ? 'dn-tl-msg--theirs' : 'dn-tl-msg--ours'}`}>
+      : html`${v.messages.map((m) => html`<div key=${m.id} class=${`dn-tl-msg ${m.theirs ? 'dn-tl-msg--theirs' : 'dn-tl-msg--ours'}`}>
           <div class="dn-tl-msg__head"><strong>${m.from || (m.theirs ? name : 'SOARD')}</strong><span>${shortDate(m.at)}, ${clock(m.at)}</span></div>
           <p class="dn-tl-msg__text">${m.text || '(No words: an email of pictures or files)'}</p>
           ${m.files.length ? html`<p class="dn-tl-msg__files">With ${m.files.map((f) => f.name).join(', ')}</p>` : null}</div>`)}
+        ${v.hidden ? html`<p class="dn-sub">${plural(v.hidden, 'more email')} in this conversation ${v.hidden === 1 ? 'is' : 'are'} between the team only, so ${v.hidden === 1 ? 'it isn’t' : 'they aren’t'} shown here.</p>` : null}`}
   <//>`;
 }
 
