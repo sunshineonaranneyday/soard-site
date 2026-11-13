@@ -357,13 +357,13 @@ test('one charge of a joined gift refunded: the rest is still To thank, and Than
   await note(pay({ id: 'sb', amount: 100000, created: S(START + HOUR + 10 * MIN) }));
   assert.deepEqual((await todo()).map((x) => [x.id, x.cents]), [['sa', 600000]]);
   await note(pay({ id: 'sb', amount: 100000, created: S(START + HOUR + 10 * MIN), refund: 'full', refunds: [{ status: 'succeeded', amount: 100000 }] }), START + 5 * HOUR);
-  assert.deepEqual((await todo()).map((x) => [x.ids, x.cents]), [['sa', 500000]], 'the $5,000 given');
+  assert.deepEqual((await todo()).map((x) => [x.ids, x.cents]), [['sa sb', 500000]], 'the $5,000 given (the refunded charge stays on it: it says what changed)');
   // Paid twice by mistake, the first charge refunded: its row is the gift's first charge, and still says
   await note(pay({ id: 'd1', amount: 150000, created: S(START + 6 * HOUR), contact: 'ct_d', email: 'd@example.com', first: 'Dee' }), START + 6 * HOUR);
   await note(pay({ id: 'd2', amount: 150000, created: S(START + 6 * HOUR + 3 * MIN), contact: 'ct_d', email: 'd@example.com', first: 'Dee' }), START + 6 * HOUR + 5 * MIN);
   await note(pay({ id: 'd1', amount: 150000, created: S(START + 6 * HOUR), contact: 'ct_d', email: 'd@example.com', first: 'Dee', refund: 'full', refunds: [{ status: 'succeeded', amount: 150000 }] }), START + 7 * HOUR);
   const d = (await todo()).find((x) => x.id === 'd1');
-  assert.deepEqual([d.ids, d.cents], ['d2', 150000]);
+  assert.deepEqual([d.ids, d.cents], ['d1 d2', 150000]);
   await doIt({ act: 'thanks', id: 'd1', state: 'thanked' }, START + 8 * HOUR);
   assert.equal((await row('d1')).state, 'thanked', 'by its own id, though that charge was refunded');
   // Every charge refunded: nothing was given, it closes
@@ -553,4 +553,40 @@ test('a check and a small card charge joining a gift already thanked: the check 
   await note(pay({ id: 'qk2', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR + 20 * MIN) }), START + 3 * HOUR);
   await note(pay({ id: 'qc2', amount: 5000, created: S(START + HOUR + 25 * MIN) }), START + 3 * HOUR);
   assert.deepEqual((await T.thanksToDo(db)).map((t) => [t.ids, t.cents, t.how]), [['qk2', 30000, 'Check']]);
+});
+
+// ─── Found in the fifth review: each thank-you judged by its own charges ───
+
+test('a gift with a thanked check, a To thank check and a To thank card gift: each kept up on its own; later card charges join the card one', async () => {
+  await note(pay({ id: 'a', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR) }));
+  await doIt({ act: 'thanks', id: 'a', state: 'thanked' });
+  await note(pay({ id: 'b', amount: 40000, method: 'cheque', type: 'manual', created: S(START + HOUR + 20 * MIN) }), START + 3 * HOUR);
+  await note(pay({ id: 'c', amount: 150000, created: S(START + HOUR + 30 * MIN) }), START + 3 * HOUR);
+  assert.deepEqual((await todo()).map((x) => [x.ids, x.why, x.cents]).sort(), [['b', 'check', 40000], ['c', 'major', 150000]]);
+  await note(pay({ id: 'c', amount: 150000, created: S(START + HOUR + 30 * MIN), refund: 'partial', refunds: [{ status: 'succeeded', amount: 100000 }] }), START + 4 * HOUR);
+  assert.deepEqual((await row('c')).why, 'partly');
+  await note(pay({ id: 'd', amount: 120000, created: S(START + HOUR + 40 * MIN) }), START + 5 * HOUR);
+  assert.deepEqual([(await row('c')).ids, (await row('c')).why, (await row('c')).cents], ['c d', 'major', 170000]);
+  // The donor's page shows each of them, and each said one can be put back
+  const page = await C.personView(env, 'ct_jane', { now: START + 6 * HOUR });
+  const all = page.gifts.flatMap((g) => g.thanksAll || []).map((t) => [t.id, t.state]).sort();
+  assert.deepEqual(all, [['a', 'thanked'], ['b', 'todo'], ['c', 'todo']]);
+});
+
+test('a charge a read missed changes nothing, even for a To thank that still needs one', async () => {
+  await note(pay({ id: 'm1', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR) }));
+  await note(pay({ id: 'm2', amount: 80000, method: 'cheque', type: 'manual', created: S(START + HOUR + 10 * MIN) }));
+  assert.deepEqual([(await row('m1')).ids, (await row('m1')).cents], ['m1 m2', 110000]);
+  await db.prepare("DELETE FROM donor_payments WHERE id = 'm2'").run();
+  await T.syncThanks(env, { now: START + 3 * HOUR, ask: false });
+  assert.deepEqual([(await row('m1')).ids, (await row('m1')).cents], ['m1 m2', 110000]);
+});
+
+test('a gift in kind refunded in full closes; one refunded from the start is never To thank', async () => {
+  await note(pay({ id: 'k1', amount: 50000, method: 'in_kind', contact: 'ct_k', first: 'Kay', email: 'kay@example.com' }));
+  assert.equal((await row('k1')).state, 'todo');
+  await note(pay({ id: 'k1', amount: 50000, method: 'in_kind', contact: 'ct_k', first: 'Kay', email: 'kay@example.com', refund: 'full', refunds: [{ status: 'succeeded', amount: 50000 }] }), START + 3 * HOUR);
+  assert.equal((await row('k1')).state, 'gone');
+  await note(pay({ id: 'k2', amount: 50000, method: 'in_kind', contact: 'ct_k2', first: 'Kit', email: 'kit@example.com', refund: 'full', refunds: [{ status: 'succeeded', amount: 50000 }] }), START + 4 * HOUR);
+  assert.equal(await row('k2'), null);
 });

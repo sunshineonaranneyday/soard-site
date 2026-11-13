@@ -601,8 +601,10 @@ async function makeChampion(item, ctx) {
   const said = await change({ act: 'level', org: item.org, done: true, was: item.levelLabel, asked: true });
   if (!said.success) { ctx.addToast(said.error, 'error'); return false; }
   try {
-    const r = await (await fetch('/api/partners-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates: [{ slug: item.slug, set: { level: 'champion' } }] }) })).json();
+    // An upgrade only, as the partner is at the moment it's written (moved to Signature meanwhile: left as it is)
+    const r = await (await fetch('/api/partners-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ updates: [{ slug: item.slug, set: { level: 'champion' }, from: { level: ['builder', 'friend'] } }] }) })).json();
     if (!r.success) throw new Error(r.error || 'it didn’t save');
+    if (r.refused?.includes(item.slug)) throw new Error('their level changed since this was read (Champion or above already). Nothing was changed');
     // Not changed and not in conflict: Champion already (moved on the Partners page, or in another tab)
     if (!r.changed?.includes(item.slug) && (r.conflicts || []).some((c) => (c?.slug || c) === item.slug)) throw new Error('someone changed them at the same moment. Look again and try once more');
   } catch (e) {
@@ -792,7 +794,7 @@ function GiftList({ gifts, byWho = false, staff = [], ctx = null }) {
   return html`<ul class="dn-gifts">${gifts.map((g) => html`<li key=${g.id} class="dn-gift" data-gift=${g.id} data-gifts=${g.ids.join(' ')}>
     <span class="dn-gift__day">${day(g.at)}</span>
     <span class="dn-gift__what"><strong>${g.campaign || 'A gift'}</strong>
-      <span class="dn-gift__meta">${[byWho && g.by ? `from ${g.by}` : null, g.how, g.every ? (g.every[0].toUpperCase() + g.every.slice(1)) : null, g.parts > 1 ? `in ${g.parts} charges` : null, !byWho && g.forCompany ? `for ${g.forCompany}` : null, g.through ? `through ${g.through}` : null, g.anonymous ? 'anonymous' : null, g.refunded ? 'refunded in full' : null, g.sold ? 'a ticket or purchase, not counted as giving' : null].filter(Boolean).join(' · ')}${(() => { const t = thankWords(g.thanks, staff); return !t ? null : typeof t === 'string' ? ` · ${t}` : html` ${t}`; })()}${ctx && ['thanked', 'skipped'].includes(g.thanks?.state) ? html` <button type="button" class="link dn-linkbtn" onClick=${() => thankAgain(ctx, g.thanks)}>To thank again</button>` : null}</span></span>
+      <span class="dn-gift__meta">${[byWho && g.by ? `from ${g.by}` : null, g.how, g.every ? (g.every[0].toUpperCase() + g.every.slice(1)) : null, g.parts > 1 ? `in ${g.parts} charges` : null, !byWho && g.forCompany ? `for ${g.forCompany}` : null, g.through ? `through ${g.through}` : null, g.anonymous ? 'anonymous' : null, g.refunded ? 'refunded in full' : null, g.sold ? 'a ticket or purchase, not counted as giving' : null].filter(Boolean).join(' · ')}${(g.thanksAll || (g.thanks ? [g.thanks] : [])).map((th) => { const t = thankWords(th, staff); const part = (g.thanksAll || []).length > 1 && th.cents != null ? ` (${amountOf({ cents: th.cents, inKind: th.inKind })})` : ''; return html`${!t ? null : typeof t === 'string' ? ` · ${t}${part}` : html` ${t}${part}`}${ctx && ['thanked', 'skipped'].includes(th.state) ? html` <button type="button" class="link dn-linkbtn" onClick=${() => thankAgain(ctx, th)}>To thank again</button>` : null}`; })}</span></span>
     <span class="dn-gift__amt">${g.inKind ? html`${usd(g.inKind)}<span class="dn-sub">in kind</span>` : g.sold || g.refunded ? '–' : usd(g.cents)}</span>
     <span class="dn-gift__links">
       <a class="link" href=${zeffyPaymentUrl(g.id)} target="_blank" rel="noopener" aria-label=${`Open in Zeffy: ${g.campaign || 'gift'}, ${day(g.at)}`}>Open in Zeffy</a>
@@ -833,7 +835,8 @@ function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
 /** The gifts on this page still to thank, at the top where they can't be missed */
 function ThankBox({ gifts, name, ctx }) {
   const [busy, setBusy] = useState(null);
-  const todo = gifts.filter((g) => g.thanks?.state === 'todo');
+  // Every thank-you still to do, each its own (a gift can hold a thanked part and a later part to thank)
+  const todo = gifts.flatMap((g) => (g.thanksAll || (g.thanks ? [g.thanks] : [])).filter((t) => t.state === 'todo').map((t) => ({ ...g, id: `${g.id}:${t.id}`, thanks: t })));
   // The last one said: the box goes, the focus to the donor's name
   const refocus = useRefocus('.dn-thank__list', true, '.dn-head h2');
   if (!todo.length) return null;

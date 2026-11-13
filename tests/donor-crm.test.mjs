@@ -1163,3 +1163,50 @@ test('Take it out on an organization kept from a Zeffy contact gives its owner, 
   assert.deepEqual([page.owner, page.notes.map((n) => n.body)], ['alex@soardcharity.com', ['Board member’s family']]);
   assert.ok(page.history.some((h) => /Note added/.test(h.what)));
 });
+
+// ─── Found in the fifth review ──────────────────────────────────────
+
+test('Take it out gives back only to the contact the organization was made from, and all of it (not the same person too)', async () => {
+  await withTeam();
+  // Kept from a company name: nothing to give back to; Bob's contact linked later gets nothing of it
+  await add(pay({ id: 'tk', company: 'Tilt Holdings', amount: 50000 }));
+  const { key } = await doIt({ act: 'org-new', name: 'Tilt Holdings', links: [{ kind: 'company', subject: 'Tilt Holdings' }] });
+  await doIt({ act: 'note-add', key, body: 'Org note' });
+  await doIt({ act: 'anon', key, on: true });
+  await add(pay({ id: 'bb', contact: 'ct_bob', first: 'Bob', last: 'Bee', email: 'bob@example.com' }));
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_bob', org: key });
+  await doIt({ act: 'org-delete', key });
+  const bob = await C.personView(env, 'ct_bob', { now: NOW });
+  assert.deepEqual([bob.notes.length, bob.keepAnonymous], [0, false]);
+  // Made from a contact that was "not the same" as another: that answer comes back with it
+  await add(pay({ id: 'x1', contact: 'ct_x', first: 'Xeno', last: 'Fund', email: 'x@example.com', amount: 50000 }), pay({ id: 'y1', contact: 'ct_y', first: 'Xeno', last: 'Fund', email: 'y@example.com', amount: 60000 }));
+  await doIt({ act: 'same', a: 'c:ct_x', b: 'c:ct_y', same: false });
+  const { key: k2 } = await doIt({ act: 'org-new', name: 'Xeno Fund', links: [{ kind: 'contact', subject: 'ct_x' }] });
+  await doIt({ act: 'org-delete', key: k2 });
+  assert.ok(!(await needs()).some((i) => i.kind === 'same'), 'not asked again');
+});
+
+test('a Zeffy merge of two joined records keeps the owner the person showed', async () => {
+  await withTeam();
+  await add(pay({ id: 'ma', contact: 'ct_ma', first: 'Mo', last: 'Ash', email: 'mo1@example.com' }), pay({ id: 'mb', contact: 'ct_mb', first: 'Mo', last: 'Ash', email: 'mo2@example.com' }));
+  await C.act(env, { act: 'owner', key: 'c:ct_ma', email: 'alex@soardcharity.com' }, by, { now: NOW });
+  await C.act(env, { act: 'owner', key: 'c:ct_mb', email: 'jordan@soardcharity.com' }, by, { now: NOW + 1000 });
+  await doIt({ act: 'same', a: 'c:ct_ma', b: 'c:ct_mb', same: true });
+  await add(pay({ id: 'mb', contact: 'ct_ma', first: 'Mo', last: 'Ash', email: 'mo2@example.com' }));
+  await C.followMerges(db, { now: NOW });
+  assert.equal((await C.personView(env, 'ct_ma', { now: NOW })).owner, 'jordan@soardcharity.com');
+});
+
+test('a gift with no Zeffy contact is never taken, nor dropped, by an organization’s name alone', async () => {
+  await add(pay({ id: 'lc', contact: 'ct_lx', first: 'Lia', last: 'Ex', email: 'lia@example.com' }));
+  await add(pay({ id: 'lg', contact: null, first: 'Smith Family', last: 'Foundation', email: 'lia@example.com', company: 'Acme Builders', amount: 70000 }));
+  const before = await C.giftOwner(env, 'lg', { now: NOW });
+  assert.deepEqual(before, { org: 'p:acme' });
+  await doIt({ act: 'org-new', name: 'Smith Family Foundation', links: [] });
+  assert.deepEqual(await C.giftOwner(env, 'lg', { now: NOW }), { org: 'p:acme' }, 'kept');
+  await add(pay({ id: 'lh', contact: null, first: 'Rho', last: 'Trust', email: 'lia@example.com', amount: 40000 }));
+  const { key } = await doIt({ act: 'org-new', name: 'Rho Trust', links: [] });
+  assert.deepEqual(await C.giftOwner(env, 'lh', { now: NOW }), { org: key }, 'by its name');
+  await doIt({ act: 'org-rename', key, name: 'Rho Family Trust' });
+  assert.deepEqual(await C.giftOwner(env, 'lh', { now: NOW }), { org: key }, 'still, renamed');
+});

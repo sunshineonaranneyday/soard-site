@@ -208,105 +208,129 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
   }
   const byId = new Map(rows.map((r) => [r.id, r]));
   const kids = await kidNames(DB);
-  const gives = (r) => Number(r.giving) > 0 || Number(r.in_kind) > 0 || r.method === 'in_kind';
-  // Each gift as it stands, and the part of it this run decides about: all of it when none of it was said; when some
-  // was (Thanked, Not needed), only the charges that thank-you didn't cover (a check typed in later that joins the gift
-  // is asked about on its own; a card charge of $50 isn't). A charge refunded in full gives nothing: it never starts
-  // a thank-you on its own (the rest of its gift carries on)
-  const gifts = [];
+  // A charge gives something: money kept (not refunded), or a gift in kind not refunded (in kind may carry no value)
+  const gives = (r) => Number(r.giving) > 0 || Number(r.in_kind) > 0 || (r.method === 'in_kind' && String(r.refund || '') !== 'full');
+  const amountOf = (rs) => rs.reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0);
+  // A gift as some of its charges make it: their amount, and how it came as the one Zeffy sent nothing for says
+  const asGift = (g, rs) => {
+    const lead = rs.find((r) => offlineWhy(r)) || rs[0];
+    return { ...g, id: rs[0].id, ids: rs.map((r) => r.id), at: Math.max(...rs.map((r) => Number(r.at))), cents: amountOf(rs), method: lead.method, type: lead.type, inKind: lead.method === 'in_kind', parts: rs.length };
+  };
+  const cmp = (a, b) => { for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1; return 0; };
+
+  // The rule: a thank-you covers its own charges and is judged by them alone. Each gift (charges joined as one: same
+  // giver, same campaign, an hour apart) is shared out like this:
+  //   none of it said: one thank-you for the whole gift (two To thanks a new charge joined become one);
+  //   some of it said (Thanked, Not needed): what's said stays as it was; each charge Zeffy sent nothing for that no
+  //   thank-you holds is its own (a check is a check, at its own amount); online charges no thank-you holds join a To
+  //   thank of online charges in the gift, else are one of their own (a later $1,200 in two charges is still $1,000).
+  const giftList = [];
+  const giftOfCharge = new Map();
   for (const g of giftsFrom(rows, kids)) {
-    if (!(Number(g.cents) > 0) && !g.inKind) continue;
-    const charges = g.ids || [g.id];
-    if (!charges.some((id) => byId.has(id))) continue;
-    const held = [...new Set(charges.map((c) => byCharge.get(c)).filter(Boolean))];
-    const t = held.find((x) => x.state === 'todo') || null;
-    const said = held.some((x) => x.state !== 'todo');
-    const part = said ? [...(t ? idsOf.get(t.id).filter((c) => charges.includes(c)) : []), ...charges.filter((c) => !byCharge.has(c))] : charges;
-    const rs = part.map((id) => byId.get(id)).filter((r) => r && gives(r));
-    if (!rs.length) continue;
-    // The part a said thank-you didn't cover, as its own charges have it: each one Zeffy sent nothing for (a check, a
-    // donor-advised fund, in kind) a question of its own at its own amount; online ones together (a later $1,200 in
-    // two charges is still $1,000 or more). A To thank already holding some of them stays with that part
-    const groups = !said ? [rs] : [...rs.filter((r) => offlineWhy(r)).map((r) => [r]), rs.filter((r) => !offlineWhy(r))].filter((x) => x.length);
-    for (const part of groups) {
-      const pt = !said ? t : (t && part.some((r) => idsOf.get(t.id)?.includes(r.id)) ? t : null);
-      const lead = part.find((r) => offlineWhy(r)) || part[0];
-      const gift = said ? { ...g, id: part[0].id, ids: part.map((r) => r.id), at: Math.max(...part.map((r) => Number(r.at))), cents: part.reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0), method: lead.method, type: lead.type, inKind: lead.method === 'in_kind', parts: part.length } : g;
-      const firstSeen = part.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), part[0].first_seen);
-      // An import is new by its date only: old history imported now was thanked when it was given
-      const isNew = gift.at >= startS || (gift.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
-      if (!pt && !isNew) continue;
-      // A monthly gift: its first time only, known once all the history is read
-      if (gift.every && !st.wholeAt) continue;
-      gifts.push({ g: gift, charges: said ? part.map((r) => r.id) : charges, rs: part, r0: part[0], t: pt });
+    const charges = (g.ids || [g.id]).filter((c) => byId.has(c) && gives(byId.get(c)));
+    if (!charges.length) continue;
+    const x = { g, charges };
+    giftList.push(x);
+    for (const c of g.ids || [g.id]) giftOfCharge.set(c, g);
+  }
+  // A To thank whose charges are in two gifts now (one moved to another giver, a middle one deleted) stays with the
+  // part that still needs a thank-you (else the one with its first charge, else the most of them); the rest is let go,
+  // to be a question of its own, whatever its date (it was waiting already)
+  const touching = new Map();
+  for (const x of giftList) for (const h of new Set(x.charges.map((c) => byCharge.get(c)).filter((h) => h?.state === 'todo'))) touching.set(h.id, [...(touching.get(h.id) || []), x]);
+  const primaryOf = new Map();
+  for (const [id, xs] of touching) {
+    const own = idsOf.get(id) || [];
+    const score = (x) => { const rs = x.charges.filter((c) => own.includes(c)).map((c) => byId.get(c)); return [rs.length && thankWhy(asGift(x.g, rs), { charges: rs }) ? 1 : 0, x.charges.includes(id) ? 1 : 0, rs.length]; };
+    primaryOf.set(id, [...xs].sort((a, b) => cmp(score(b), score(a)))[0]);
+  }
+  const assigned = new Map();
+  const forced = new Set();
+  const candidates = [];
+  const byRank = (a, b) => cmp([a.created_at || '', a.id], [b.created_at || '', b.id]);
+  for (const x of giftList) {
+    const held = [...new Set(x.charges.map((c) => byCharge.get(c)).filter(Boolean))];
+    const said = held.some((h) => h.state !== 'todo');
+    const todos = held.filter((h) => h.state === 'todo' && primaryOf.get(h.id) === x).sort(byRank);
+    const free = x.charges.filter((c) => { const h = byCharge.get(c); if (!h) return true; if (h.state === 'todo' && primaryOf.get(h.id) !== x) { forced.add(c); return true; } return false; });
+    // What a To thank keeps whatever the gift is now: charges a read missed, and ones refunded (they say why it changed)
+    const missingOf = (t) => (idsOf.get(t.id) || []).filter((c) => !byId.has(c) || !gives(byId.get(c)));
+    if (!said) {
+      if (todos.length) {
+        const [keep, ...rest] = todos;
+        for (const r of rest) { steps.push(DB.prepare("DELETE FROM donor_thanks WHERE id = ? AND state = 'todo'").bind(r.id)); idsOf.delete(r.id); }
+        assigned.set(keep.id, [...x.charges.filter((c) => !byCharge.get(c) || todos.includes(byCharge.get(c)) || forced.has(c)), ...missingOf(keep), ...rest.flatMap(missingOf)]);
+      } else candidates.push({ g: x.g, rs: x.charges.map((c) => byId.get(c)), forced: x.charges.some((c) => forced.has(c)) });
+      continue;
     }
-    // Two To thanks a new charge joined into one gift (a check dated between them): one thank-you, the first's
-    if (!said) for (const x of held) if (x !== t) { steps.push(DB.prepare("DELETE FROM donor_thanks WHERE id = ? AND state = 'todo'").bind(x.id)); idsOf.delete(x.id); }
+    for (const t of todos) assigned.set(t.id, [...(idsOf.get(t.id) || []).filter((c) => x.charges.includes(c)), ...missingOf(t)]);
+    const offline = free.filter((c) => offlineWhy(byId.get(c)));
+    const online = free.filter((c) => !offlineWhy(byId.get(c)));
+    for (const c of offline) candidates.push({ g: asGift(x.g, [byId.get(c)]), rs: [byId.get(c)], forced: forced.has(c) });
+    if (online.length) {
+      const home = todos.find((t) => assigned.get(t.id).filter((c) => byId.has(c)).every((c) => !offlineWhy(byId.get(c))));
+      if (home) assigned.set(home.id, [...assigned.get(home.id), ...online]);
+      else candidates.push({ g: asGift(x.g, online.map((c) => byId.get(c))), rs: online.map((c) => byId.get(c)), forced: online.some((c) => forced.has(c)) });
+    }
   }
-  // Only a gift that has no thank-you yet asks whether it's a first time (its answer never changes after)
-  const first = await firstTimes(DB, gifts.filter((x) => x.g.every && !x.t));
-  for (const x of gifts) x.why = thankWhy(x.g, { first: !x.g.every || !!x.t || first.has(x.g), charges: x.rs });
-  // A To thank whose charges are in two gifts now (one moved to another giver, a middle one deleted): it stays with the
-  // gift that still needs a thank-you (else the one with its first charge, else the most of them); the other part is a
-  // question of its own, never a second gift written over the first
-  const claims = new Map();
-  for (const x of gifts) if (x.t) claims.set(x.t.id, [...(claims.get(x.t.id) || []), x]);
-  for (const [id, xs] of claims) {
-    if (xs.length < 2) continue;
-    const mine = (x) => x.charges.filter((c) => idsOf.get(id)?.includes(c)).length;
-    xs.sort((a, b) => (b.why ? 1 : 0) - (a.why ? 1 : 0) || (b.charges.includes(id) ? 1 : 0) - (a.charges.includes(id) ? 1 : 0) || mine(b) - mine(a));
-    for (const x of xs.slice(1)) { x.t = null; x.split = true; }
-  }
+  // New ones: new since thank-yous began (an import by its date only: old history imported now was thanked when it
+  // was given), or let go from a To thank; a monthly gift's first time only, known once all the history is read
+  const fresh = candidates.filter(({ g, rs, forced: f }) => {
+    const firstSeen = rs.reduce((m, r) => (r.first_seen < m ? r.first_seen : m), rs[0].first_seen);
+    const isNew = g.at >= startS || (g.type !== 'imported' && !!st.wholeAt && firstSeen > st.wholeAt);
+    return (isNew || f) && !(g.every && !st.wholeAt);
+  }).map((c) => ({ ...c, r0: c.rs[0] }));
+  const first = await firstTimes(DB, fresh.filter((x) => x.g.every));
   const rowIds = new Set(known.map((t) => t.id));
+  const named = (r0) => givenName({ first_name: r0.first, last_name: r0.last }) || clean(r0.company) || clean(r0.email) || 'No name';
   let added = 0;
-  for (const x of gifts) {
-    const { g, charges, r0, t } = x;
-    let { why } = x;
+  for (const { g, rs, r0 } of fresh) {
+    const why = thankWhy(g, { first: !g.every || first.has(g), charges: rs });
+    if (!why) continue;
     // Named as the donor list names them (./_donor-crm.js): their email when Zeffy has no name
-    const name = givenName({ first_name: r0.first, last_name: r0.last }) || clean(r0.company) || clean(r0.email) || 'No name';
-    const snap = [charges.join(' '), g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, name, r0.company || null, g.campaign || null, howOf(g), r0.contact || null];
-    if (!t) {
-      if (!why) continue;
-      // (a part split off a To thank may hold its first charge, whose id that thank-you keeps)
-      const id = rowIds.has(g.id) ? `${g.id}~${charges.length}${charges.at(-1)}` : g.id;
-      steps.push(DB.prepare(`INSERT OR IGNORE INTO donor_thanks (id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at)
-        VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, snap[0], why, ...snap.slice(1), iso(now)));
-      rowIds.add(id);
-      added++;
-      continue;
-    }
-    // A To thank keeps up with its gift while it still needs a thank-you: a later charge joins it, one refunded in full
-    // leaves it. When it doesn't any more, the charges it was asked about say why, and it's never rewritten:
-    //   one the list doesn't have: nothing changes (a read may have missed it; Zeffy is asked, below);
-    //   one refunded, in full or in part: it stays (part is still given: a person says), saying so;
-    //   otherwise Zeffy shows the gift changed (a charge moved to another giver, a check re-entered as a card gift): closed
-    if (!why) {
-      const own = idsOf.get(t.id);
-      if (own.some((c) => !byId.has(c))) continue;
-      if (own.some((c) => { const r = byId.get(c); return Number(r.net) < Number(r.cents); })) {
-        const left = own.map((c) => byId.get(c)).reduce((n, r) => n + (Number(r.method === 'in_kind' ? r.in_kind : r.giving) || 0), 0);
-        steps.push(DB.prepare("UPDATE donor_thanks SET why = 'partly', cents = ?, missing_at = NULL WHERE id = ? AND state = 'todo'").bind(left, t.id));
-        continue;
-      }
-      steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'changed', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
-      idsOf.delete(t.id);
-      continue;
-    }
-    steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = COALESCE(?, why), at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'")
-      .bind(snap[0], why, ...snap.slice(1), t.id));
-    idsOf.set(t.id, charges);
+    const id = rowIds.has(g.id) ? `${g.id}~${rs.length}${rs.at(-1).id}` : g.id;
+    steps.push(DB.prepare(`INSERT OR IGNORE INTO donor_thanks (id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at)
+      VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, rs.map((r) => r.id).join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOf(g), r0.contact || null, iso(now)));
+    rowIds.add(id);
+    added++;
   }
-  // A To thank none of whose charges gives anything any more: every one refunded in full closes it; any the list no
-  // longer has, Zeffy is asked about (a few a run, each at most every few hours)
+  // Every To thank, judged by its own charges:
+  //   none gives anything any more: all refunded in full closes it; any the list doesn't have, Zeffy is asked (below);
+  //   one the list doesn't have, the rest still given: nothing changes (a read may have missed it), a charge joining aside;
+  //   still needing a thank-you: it keeps up (amount, how, name);
+  //   not, with some refunded (in full or in part): it stays (part is still given: a person says), saying so;
+  //   not, otherwise: Zeffy shows the gift changed (a charge moved to another giver, a check re-entered as a card): closed
   const lost = [];
   for (const t of live) {
     if (t.state !== 'todo' || !idsOf.has(t.id)) continue;
-    const ids = idsOf.get(t.id);
-    const present = ids.map((c) => byId.get(c)).filter(Boolean);
-    if (present.some(gives)) continue;
+    // In the order it had them, any joining after
+    const was = idsOf.get(t.id) || [];
+    const next = new Set(assigned.get(t.id) || was);
+    const ids = [...was.filter((c) => next.has(c)), ...[...next].filter((c) => !was.includes(c))];
+    const changedIds = ids.join(' ') !== was.join(' ');
+    const present = ids.filter((c) => byId.has(c)).map((c) => byId.get(c));
     const missing = ids.filter((c) => !byId.has(c));
-    if (!missing.length) steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'refunded', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
-    else if (!t.asked_at || now - Date.parse(t.asked_at) >= GONE_ASK_MS) lost.push({ t, id: missing[0], ids });
+    const giving = present.filter(gives);
+    if (!giving.length) {
+      if (!missing.length) steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'refunded', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
+      else if (!t.asked_at || now - Date.parse(t.asked_at) >= GONE_ASK_MS) lost.push({ t, id: missing[0], ids });
+      continue;
+    }
+    if (missing.length) {
+      if (changedIds) steps.push(DB.prepare("UPDATE donor_thanks SET ids = ? WHERE id = ? AND state = 'todo'").bind(ids.join(' '), t.id));
+      continue;
+    }
+    const g = asGift(giftOfCharge.get(giving[0].id) || {}, giving);
+    const why = thankWhy(g, { first: true, charges: giving });
+    const r0 = giving[0];
+    if (why) {
+      steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = ?, at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'")
+        .bind(ids.join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOf(g), r0.contact || null, t.id));
+    } else if (present.some((r) => Number(r.net) < Number(r.cents))) {
+      steps.push(DB.prepare("UPDATE donor_thanks SET ids = ?, why = 'partly', cents = ?, missing_at = NULL WHERE id = ? AND state = 'todo'").bind(ids.join(' '), amountOf(giving), t.id));
+    } else {
+      steps.push(DB.prepare("UPDATE donor_thanks SET state = 'gone', gone = 'changed', done_at = ? WHERE id = ? AND state = 'todo'").bind(iso(now), t.id));
+    }
   }
   for (let i = 0; i < steps.length; i += 50) await DB.batch(steps.slice(i, i + 50));
   let closed = 0;

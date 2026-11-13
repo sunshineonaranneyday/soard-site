@@ -588,7 +588,11 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
     // History are the organization's now
     for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
       const c = l?.kind === 'contact' ? `c:${subjectOf('contact', l.subject)}` : null;
-      if (c && crm.keysOf(crm.canon(c)).length === 1) await moveCalls(DB, crm.canon(c), key);
+      if (c && crm.keysOf(crm.canon(c)).length === 1) {
+        await moveCalls(DB, crm.canon(c), key);
+        // Which contact it was made from: Take it out gives back to it, and to no other
+        await putCall(DB, { kind: 'made-from', subject: key, target: crm.canon(c), answer: 1 }, by, now);
+      }
     }
     await audit(DB, by, `New organization (not on the website): ${name}`, { key, name }, key);
     return { ok: true, key };
@@ -613,15 +617,15 @@ export async function act(env, body, by, { now = Date.now() } = {}) {
   if (a === 'org-delete') {
     const key = orgOk(body.key);
     if (!key.startsWith('o:')) throw bad('A partner is deleted in its partner card');
-    // Made from one Zeffy contact (kept as an organization): its owner, notes, Keep anonymous and History go back to it
-    const from = (await DB.prepare("SELECT subject FROM donor_calls WHERE kind = 'contact' AND target = ? AND answer = 1").bind(key).all()).results || [];
-    if (from.length === 1) {
-      const back = `c:${from[0].subject}`;
+    // Made from a Zeffy contact (kept as an organization): everything said about it goes back to that contact (owner,
+    // notes, Keep anonymous, "not the same person", History); its links and names, which were the organization's, go
+    const from = await DB.prepare("SELECT target FROM donor_calls WHERE kind = 'made-from' AND subject = ? AND answer = 1").bind(key).first();
+    if (from?.target) {
       await DB.batch([
-        DB.prepare("UPDATE OR IGNORE donor_calls SET subject = ? WHERE kind IN ('owner', 'anon') AND subject = ?").bind(back, key),
-        DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(back, key),
+        DB.prepare("DELETE FROM donor_calls WHERE (target = ? AND kind IN ('contact', 'company', 'kept-name', 'forward')) OR (subject = ? AND kind IN ('made-from', 'level'))").bind(key, key),
+        DB.prepare("DELETE FROM donor_calls WHERE kind = 'payment' AND note = ?").bind(key),
       ]);
-      await moveHistory(DB, key, back);
+      await moveCalls(DB, key, String(from.target));
     }
     await DB.batch([
       DB.prepare('DELETE FROM donor_orgs WHERE key = ?').bind(key),
@@ -733,12 +737,19 @@ async function keepOthersGifts(DB, crm, name, key, by, now, { linking = [] } = {
   const rows = await allRows(DB);
   const place = crm.placer(rows);
   const keep = new Set();
+  const pinned = [];
   for (const r of rows) {
-    if (!r.contact || keep.has(r.contact) || linking.includes(r.contact) || crm.calls.yes.has(`contact\n${r.contact}`)) continue;
     if (nameKey(givenName({ first_name: r.first, last_name: r.last })) !== k) continue;
-    if (crm.isOrg(place(r).owner)) keep.add(r.contact);
+    const owner = place(r).owner;
+    if (!crm.isOrg(owner)) continue;
+    if (r.contact) {
+      if (!keep.has(r.contact) && !linking.includes(r.contact) && !crm.calls.yes.has(`contact\n${r.contact}`)) keep.add(r.contact);
+    } else if (!crm.calls.pay.has(String(r.id))) {
+      // A gift with no Zeffy contact matches by its own name too: it's told, itself, whose it is
+      pinned.push(callStmt(DB, { kind: 'payment', subject: r.id, answer: 1, note: owner }, by, now));
+    }
   }
-  return [...keep].map((c) => callStmt(DB, { kind: 'contact', subject: c, target: key, answer: 0 }, by, now));
+  return [...[...keep].map((c) => callStmt(DB, { kind: 'contact', subject: c, target: key, answer: 0 }, by, now)), ...pinned];
 }
 
 /**
@@ -756,10 +767,13 @@ async function pinOldName(DB, crm, key, by, now) {
   const seen = new Set();
   for (const r of rows) {
     if (place(r).owner !== key) continue;
-    if (r.contact && !seen.has(`c${r.contact}`) && !crm.calls.yes.has(`contact\n${r.contact}`) && nameKey(givenName({ first_name: r.first, last_name: r.last })) === k) {
+    const byName = nameKey(givenName({ first_name: r.first, last_name: r.last })) === k;
+    if (byName && r.contact && !seen.has(`c${r.contact}`) && !crm.calls.yes.has(`contact\n${r.contact}`)) {
       seen.add(`c${r.contact}`);
       steps.push(callStmt(DB, { kind: 'contact', subject: r.contact, target: key, answer: 1 }, by, now));
     }
+    // A gift with no Zeffy contact its name matched: told, itself, that it's this one's
+    if (byName && !r.contact && !crm.calls.pay.has(String(r.id))) steps.push(callStmt(DB, { kind: 'payment', subject: r.id, answer: 1, note: key }, by, now));
     const ck = r.corporate && clean(r.company) ? nameKey(r.company) : '';
     if (ck === k && !seen.has(`k${ck}`) && !crm.calls.yes.has(`company\n${ck}`)) {
       seen.add(`k${ck}`);
@@ -831,7 +845,11 @@ async function moveCalls(DB, from, into) {
     const put = wins
       ? DB.prepare(`INSERT INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(kind, subject, target) DO UPDATE SET answer = MAX(donor_calls.answer, excluded.answer)`).bind(c.kind, s2, t2, c.answer, c.note, c.by, c.at)
-      : DB.prepare('INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(c.kind, s2, t2, c.answer, c.note, c.by, c.at);
+      // An owner: the one said later (the one a joined person showed) stands
+      : c.kind === 'owner'
+        ? DB.prepare(`INSERT INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(kind, subject, target) DO UPDATE SET answer = excluded.answer, note = excluded.note, by = excluded.by, at = excluded.at WHERE excluded.at > donor_calls.at`).bind(c.kind, s2, t2, c.answer, c.note, c.by, c.at)
+        : DB.prepare('INSERT OR IGNORE INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(c.kind, s2, t2, c.answer, c.note, c.by, c.at);
     steps.push(put, DB.prepare('DELETE FROM donor_calls WHERE kind = ? AND subject = ? AND target = ?').bind(c.kind, c.subject, c.target));
   }
   // A gift a person counted for the old one counts for the new one; its notes are the new one's
@@ -1043,14 +1061,14 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
   }
   const asked = new Set();
   // Zeffy contacts asked something already: not asked another thing about them at the same time (one at a time)
-  const askedContacts = new Set();
-  const contactOfKey = (k) => (String(k).startsWith('c:') ? String(k).slice(2) : null);
+  // (by the person, every record of theirs: a person joined from two contacts is one person asked one thing)
+  const askedPeople = new Set();
   for (const c of companies.values()) {
     if (!(c.cents > 0)) continue;
     const near = nearPartners(c.name, orgList, { min: 0.6, max: 3 }).find((m) => !crm.calls.no.has(`company\n${c.key}\n${m.partner.slug}`));
     if (!near) continue;
     asked.add(c.key);
-    for (const person of c.people.keys()) if (contactOfKey(person)) askedContacts.add(contactOfKey(person));
+    for (const person of c.people.keys()) askedPeople.add(crm.canon(person));
     items.push({ id: `near-company:${c.key}:${near.partner.slug}`, kind: 'near', link: 'company', subject: c.name, org: near.partner.slug, orgName: near.partner.name, why: near.why, cents: c.cents, people: [...c.people.values()].slice(0, 3) });
   }
   // A contact whose whole name is inside an organization's ("Chris Moreno" and Chris & Dana Moreno)
@@ -1071,12 +1089,12 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
   }
   const orgWords = [...crm.org.values()].map((o) => ({ o, w: new Set(words(o.name)) })).filter((x) => x.w.size >= 2);
   for (const c of contacts.values()) {
-    if (!(c.cents > 0) || crm.calls.yes.has(`contact\n${c.id}`) || askedContacts.has(c.id)) continue;
+    if (!(c.cents > 0) || crm.calls.yes.has(`contact\n${c.id}`) || askedPeople.has(crm.canon(c.person))) continue;
     const w = [...new Set(words(c.name))];
     if (w.length < 2) continue;
     const hit = orgWords.find(({ o, w: ow }) => ow.size > w.length && w.every((t) => ow.has(t)) && !crm.calls.no.has(`contact\n${c.id}\n${o.key}`));
     if (hit) {
-      askedContacts.add(c.id);
+      askedPeople.add(crm.canon(c.person));
       items.push({ id: `near-contact:${c.id}:${hit.o.key}`, kind: 'near', link: 'contact', subject: c.id, name: c.name, ref: crm.canon(c.person).startsWith('c:') ? crm.canon(c.person).slice(2) : null, org: hit.o.key, orgName: hit.o.name, why: 'Their name is in it', cents: c.cents });
     }
   }
@@ -1106,11 +1124,11 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
     for (let i = 0; i < l.length; i++) for (let j = i + 1; j < l.length; j++) {
       const [a, b] = [l[i].key, l[j].key].sort();
       if (crm.calls.notSame.has(`${a}\n${b}`) || pairs.has(`${a}\n${b}`)) continue;
-      if (asked3.has(a) || asked3.has(b) || [a, b].some((x) => askedContacts.has(contactOfKey(x)))) continue;
+      if (asked3.has(a) || asked3.has(b) || [a, b].some((x) => askedPeople.has(crm.canon(x)))) continue;
       pairs.set(`${a}\n${b}`, { a, b, why });
       asked3.add(a);
       asked3.add(b);
-      for (const x of [a, b]) if (contactOfKey(x)) askedContacts.add(contactOfKey(x));
+      for (const x of [a, b]) askedPeople.add(crm.canon(x));
     }
   };
   const byName = new Map();
@@ -1152,7 +1170,7 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
     // A contact: by its own name (never its email), not joined to anyone, none of its gifts an organization's already,
     // not asked about an organization of that name, and not said to be a person (that answer is the contact's alone)
     ...[...contacts.values()].filter((c) => ORG_WORDS.test(c.own || '') && c.cents > 0 && crm.keysOf(c.person).length === 1 && !c.forOrg
-      && !askedContacts.has(c.id) && !crm.calls.big.get(`contact:${c.id}`)?.person)
+      && !askedPeople.has(crm.canon(c.person)) && !crm.calls.big.get(`contact:${c.id}`)?.person)
       .map((c) => ({ subject: `contact:${c.id}`, link: 'contact', linkSubject: c.id, name: c.name, ref: c.person.startsWith('c:') ? c.person.slice(2) : null, cents: c.cents, cents12: c.cents12, anonymous: c.anonymous, named: true, people: [] })),
   ];
   // One name asked about once: a company typed on gifts and a Zeffy contact of the same name are one giver (the
@@ -1232,8 +1250,12 @@ async function historyOf(DB, keys) {
 /** Each gift with its thank-you: { state: todo | thanked | skipped | gone, why, by, at } */
 async function withThanks(DB, gifts) {
   const t = await thanksFor(DB, gifts.flatMap((g) => g.ids || [g.id]));
-  // A gift some of which was thanked and a later part of which is To thank shows what's still to do
-  return gifts.map((g) => { const all = (g.ids || [g.id]).map((id) => t.get(id)).filter(Boolean); const x = all.find((y) => y.state === 'todo') || all[0]; return x ? { ...g, thanks: { ...x, whyText: THANK_WHY[x.why] || null } } : g; });
+  // Every thank-you of the gift (part thanked, a later part To thank): `thanks` the one still to do, else the first
+  return gifts.map((g) => {
+    const all = [...new Map((g.ids || [g.id]).map((id) => t.get(id)).filter(Boolean).map((x) => [x.id, { ...x, whyText: THANK_WHY[x.why] || null }])).values()];
+    if (!all.length) return g;
+    return { ...g, thanks: all.find((y) => y.state === 'todo') || all[0], thanksAll: all };
+  });
 }
 /** The extras a donor's page carries: owner, notes, History, and each gift's thank-you */
 async function pageExtras(env, crm, key, v, { emails = [] } = {}) {

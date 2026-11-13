@@ -136,6 +136,10 @@ export async function onRequestPost(context) {
       const { table, slug } = parsed;
       const extractor = EXTRACTORS[table];
 
+      // A create (create: true) is a plain INSERT: two at one address at the same moment, the second is refused by the
+      // database itself, never written over the first
+      const verb = create === true ? 'INSERT' : 'INSERT OR REPLACE';
+      const taken = (e) => { if (create === true && /UNIQUE|constraint/i.test(String(e?.message || e))) throw Object.assign(new Error('There’s one at that address already: someone added it a moment ago. Nothing was changed.'), { status: 409 }); throw e; };
       if (extractor && !isCreate) {
         // Written only if the stored record is still the one read above: a sync or a credit card landing between
         // that read and this write isn't overwritten (the editor is told to reload instead)
@@ -152,12 +156,12 @@ export async function onRequestPost(context) {
         const allValues = [slug, jsonStr, now, ...colValues];
 
         await DB.prepare(
-          `INSERT OR REPLACE INTO ${table} (${allCols.join(', ')}) VALUES (${placeholders})`
-        ).bind(...allValues).run();
+          `${verb} INTO ${table} (${allCols.join(', ')}) VALUES (${placeholders})`
+        ).bind(...allValues).run().catch(taken);
       } else {
         await DB.prepare(
-          `INSERT OR REPLACE INTO ${table} (slug, data, updated_at) VALUES (?, ?, ?)`
-        ).bind(slug, jsonStr, now).run();
+          `${verb} INTO ${table} (slug, data, updated_at) VALUES (?, ?, ?)`
+        ).bind(slug, jsonStr, now).run().catch(taken);
       }
     }
 
@@ -213,6 +217,7 @@ export async function onRequestPost(context) {
       gitCommit: gitStatus,
     });
   } catch (err) {
+    if (err.status === 409) return Response.json({ success: false, error: err.message }, { status: 409 });
     console.error("[save-content]", err);
     return Response.json(
       { success: false, error: err.message || "An unexpected error occurred" },
