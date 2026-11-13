@@ -594,6 +594,8 @@ function useRefocus(selector, ready, otherwise = '.dn-done, .dn-status') {
     if (at.current == null || !ready || at.current.li?.isConnected) return;
     const { i } = at.current;
     at.current = null;
+    // The person moved on meanwhile (typing a note, the Owner filter): the focus stays where they put it
+    if (document.activeElement && document.activeElement !== document.body) return;
     const items = [...document.querySelectorAll(`${selector} > li`)];
     const next = items[Math.min(i, items.length - 1)]?.querySelector('button:not([disabled]), a[href]');
     const fallback = document.querySelector(otherwise);
@@ -960,7 +962,14 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   // The note being added: named here, so pressing Add again after an answer that was lost saves it once
   const pending = useRef(null);
   // Saved after all (its answer lost, the page read again): it's in the list, so the box empties
-  useEffect(() => { if (pending.current && notes.some((n) => n.id === pending.current.id)) { pending.current = null; setText(''); } }, [notes]);
+  // (only when the box still holds those words: typed on since, the box keeps it all, and says the first part saved)
+  useEffect(() => {
+    if (!pending.current || !notes.some((n) => n.id === pending.current.id)) return;
+    const said = pending.current.text;
+    pending.current = null;
+    if (text.trim() === said) setText('');
+    else ctx.addToast('Your note was saved after all. The box still has what you typed since: change it to what’s new, then Add note.', 'info');
+  }, [notes]);
   // A change saved after all (its answers lost, the page read again): the note reads as they wrote it, so it's done
   useEffect(() => {
     const n = editing && notes.find((x) => x.id === editing);

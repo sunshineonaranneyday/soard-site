@@ -93,7 +93,10 @@ export async function ensureCrm(DB) {
   // Organizations kept before name_key: given it (once), so a new one or a rename is checked against every name
   try { await DB.prepare('ALTER TABLE donor_orgs ADD COLUMN name_key TEXT').run(); } catch (e) { if (!/duplicate column/i.test(String(e?.message || e))) throw e; }
   const unkeyed = (await DB.prepare('SELECT key, name FROM donor_orgs WHERE name_key IS NULL').all()).results || [];
-  for (let i = 0; i < unkeyed.length; i += 50) await DB.batch(unkeyed.slice(i, i + 50).map((o) => DB.prepare('UPDATE donor_orgs SET name_key = ? WHERE key = ?').bind(nameKey(o.name), o.key)));
+  for (let i = 0; i < unkeyed.length; i += 50) await DB.batch(unkeyed.slice(i, i + 50).map((o) => DB.prepare('UPDATE donor_orgs SET name_key = ? WHERE key = ?').bind(orgNameKey(o.name), o.key)));
+  // (keys given before a name with no plain letters had its own: given it now)
+  const blank = (await DB.prepare("SELECT key, name FROM donor_orgs WHERE name_key = ''").all()).results || [];
+  for (let i = 0; i < blank.length; i += 50) await DB.batch(blank.slice(i, i + 50).map((o) => DB.prepare('UPDATE donor_orgs SET name_key = ? WHERE key = ?').bind(orgNameKey(o.name), o.key)));
   await DB.prepare('CREATE INDEX IF NOT EXISTS donor_orgs_name_key ON donor_orgs(name_key)').run();
   ready.add(DB);
 }
@@ -425,6 +428,8 @@ const putCall = (DB, call, by, now) => callStmt(DB, call, by, now).run();
  */
 const stillSo = (DB, cond, ...args) => DB.prepare(`INSERT INTO donor_state (key, value) SELECT 'still-so', NULL WHERE NOT (${cond})`).bind(...args);
 const notSo = (e) => /donor_state\.value/.test(String(e?.message || e));
+/** An organization's name as two are told apart (plain letters; a name with none, another script: its own letters) */
+const orgNameKey = (name) => nameKey(name) || `~${String(name || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim()}`;
 // Under the donor it's about (their key), so their page shows it; 'donors' when it's about no one donor
 const audit = (DB, by, name, changes, slug = 'donors') => logAudit(DB, { userEmail: by || 'unknown', action: 'updated', entityType: 'donor-crm', entitySlug: slug, entityName: name, changes }).catch(() => {});
 const usd = (cents) => { const c = Math.round(Number(cents) || 0); return `$${(c / 100).toLocaleString('en-US', { minimumFractionDigits: c % 100 ? 2 : 0, maximumFractionDigits: 2 })}`; };
@@ -471,7 +476,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
   if (a === 'org-new' && orgKeyOf(body.key)) {
     const had = await DB.prepare('SELECT key, name_key FROM donor_orgs WHERE key = ?').bind(body.key).first();
     if (had) {
-      if (had.name_key !== nameKey(clean(body.name).slice(0, 120))) throw bad('That address is another organization’s. Reload and try again.', 409);
+      if (had.name_key !== orgNameKey(clean(body.name).slice(0, 120))) throw bad('That address is another organization’s. Reload and try again.', 409);
       return { ok: true, key: had.key, same: true };
     }
   }
@@ -532,6 +537,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       }
     }
     const off = new Set(keys);
+    if (!body.on && !isOrgKey(key) && [...off].every((k) => !crm.keptKey(k)) && !others.length) return { ok: true, same: true };
     // An organization's name is written down when it's kept (and stays: it counts only while the organization is kept)
     const names = isOrgKey(key) && body.on ? [crm.org.get(key).name, ...(key.startsWith('p:') ? await historyNames(DB, key.slice(2)) : [])] : [];
     const named = [...new Set(names.filter(Boolean))].map((n) => callStmt(DB, { kind: 'kept-name', subject: looseKey(n), target: key, answer: 1, note: n }, by, now));
@@ -565,8 +571,22 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // One record out of a person: never joined with the others again, and the others stay one person
     const key = String(body.key || '');
     const group = crm.keysOf(key);
-    // Not joined to anyone (split already: this sent again after its answer was lost, a teammate first): done already
-    if (group.length < 2 || !group.includes(key)) return { ok: true, same: true };
+    // Where the page goes after: the person the others are (a Zeffy contact's address, else one of their gifts')
+    const refOf = async (crm2, k) => {
+      const after = crm2.canon(k);
+      if (after.startsWith('c:')) return { key: after, ref: after.slice(2) };
+      const rows = await rowsFor(DB, [after]);
+      const place = crm2.placer(rows);
+      const one = rows.find((r) => place(r).person === after);
+      return { key: after, ref: one ? `g:${one.id}` : null };
+    };
+    // Not joined to anyone (split already: this sent again after its answer was lost, a teammate first): done already,
+    // and the person it was taken out of, as the first answer said
+    if (group.length < 2 || !group.includes(key)) {
+      const last = await DB.prepare("SELECT subject, target FROM donor_calls WHERE kind = 'same' AND answer = 0 AND (subject = ? OR target = ?) ORDER BY at DESC LIMIT 1").bind(key, key).first();
+      const other = last ? (last.subject === key ? last.target : last.subject) : null;
+      return { ok: true, same: true, ...(other ? await refOf(crm, String(other)) : {}) };
+    }
     const rest = group.filter((k) => k !== key);
     // The one the others hang on now: a Zeffy contact first (its address works in a link), then the earliest
     const lead = [...rest].sort((x, y) => (x.startsWith('c:') ? 0 : 1) - (y.startsWith('c:') ? 0 : 1) || (x < y ? -1 : 1))[0];
@@ -590,20 +610,11 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       const [p, q] = [key, k].sort();
       steps.push(callStmt(DB, { kind: 'same', subject: p, target: q, answer: 0 }, by, now));
     }
+    // …and its History (what was done to the person, filed under the record that led them), in the same step
+    if (led) steps.push(...await historySteps(DB, key, lead));
     await DB.batch(steps);
-    // …and its History (what was done to the person, filed under the record that led them)
-    if (led) await moveHistory(DB, key, lead);
     await audit(DB, by, 'A record is not the same person after all', { key, from: rest }, lead);
-    const crm2 = await loadCrm(DB, { now });
-    const after = crm2.canon(lead);
-    let ref = after.startsWith('c:') ? after.slice(2) : null;
-    if (!ref) {
-      const rows = await rowsFor(DB, [after]);
-      const place = crm2.placer(rows);
-      const one = rows.find((r) => place(r).person === after);
-      ref = one ? `g:${one.id}` : null;
-    }
-    return { ok: true, key: after, ref };
+    return { ok: true, ...await refOf(await loadCrm(DB, { now }), lead) };
   }
   if (a === 'level') {
     const key = orgOk(body.org);
@@ -656,8 +667,8 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // since this page was read, or it's an organization's own name) is never taken from it: nothing is made
     // Only while no organization here has that name (two kept at the same moment, by two people or two tabs: one is)
     const steps = [
-      stillSo(DB, 'NOT EXISTS (SELECT 1 FROM donor_orgs WHERE name_key = ?)', nameKey(name)),
-      DB.prepare('INSERT INTO donor_orgs (key, name, created_at, by, name_key) VALUES (?, ?, ?, ?, ?)').bind(key, name, iso(now), by || null, nameKey(name)),
+      stillSo(DB, 'NOT EXISTS (SELECT 1 FROM donor_orgs WHERE name_key = ?)', orgNameKey(name)),
+      DB.prepare('INSERT INTO donor_orgs (key, name, created_at, by, name_key) VALUES (?, ?, ?, ?, ?)').bind(key, name, iso(now), by || null, orgNameKey(name)),
     ];
     for (const l of Array.isArray(body.links) ? body.links.slice(0, 10) : []) {
       if (!KINDS.has(l?.kind)) continue;
@@ -714,10 +725,10 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     try {
       await DB.batch([
         // (and no other organization here took the new name meanwhile)
-        stillSo(DB, 'EXISTS (SELECT 1 FROM donor_orgs WHERE key = ? AND name = ?) AND NOT EXISTS (SELECT 1 FROM donor_orgs WHERE name_key = ? AND key <> ?)', key, crm.org.get(key).name, nameKey(name), key),
+        stillSo(DB, 'EXISTS (SELECT 1 FROM donor_orgs WHERE key = ? AND name = ?) AND NOT EXISTS (SELECT 1 FROM donor_orgs WHERE name_key = ? AND key <> ?)', key, crm.org.get(key).name, orgNameKey(name), key),
         ...await pinOldName(DB, crm, key, by, now),
         ...await keepOthersGifts(DB, crm, name, key, by, now),
-        DB.prepare('UPDATE donor_orgs SET name = ?, name_key = ? WHERE key = ?').bind(name, nameKey(name), key),
+        DB.prepare('UPDATE donor_orgs SET name = ?, name_key = ? WHERE key = ?').bind(name, orgNameKey(name), key),
         // Both names written down, kept or not (they count only while it's kept)
         callStmt(DB, { kind: 'kept-name', subject: looseKey(crm.org.get(key).name), target: key, answer: 1, note: crm.org.get(key).name }, by, now),
         callStmt(DB, { kind: 'kept-name', subject: looseKey(name), target: key, answer: 1, note: name }, by, now),
@@ -748,7 +759,12 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       if (typeof saw.owner === 'string' && (crm.lookedAfterBy(key) || '') !== saw.owner.toLowerCase()) throw bad(`Someone changed who looks after it since you looked. Nothing was taken out.`, 409);
     }
     // (and none added in the moment between: checked in the step that takes it out)
-    const noneNew = stillSo(DB, `(SELECT COUNT(*) FROM donor_notes WHERE subject = ? AND id NOT IN (SELECT value FROM json_each(?))) = 0`, key, JSON.stringify(notesNow.map((n) => n.id)));
+    const ownRead = crm.ownerRows([key]);
+    const noneNew = stillSo(DB, `(SELECT COUNT(*) FROM donor_notes WHERE subject = ? AND id NOT IN (SELECT value FROM json_each(?))) = 0
+      AND (SELECT COUNT(*) FROM donor_calls WHERE kind = 'owner' AND subject = ?) = ?
+      AND (SELECT COUNT(*) FROM donor_calls d, json_each(?) j WHERE d.kind = 'owner' AND d.subject = json_extract(j.value, '$[0]')
+        AND d.answer = json_extract(j.value, '$[1]') AND d.note IS json_extract(j.value, '$[2]') AND d.at = json_extract(j.value, '$[3]')) = ?`,
+    key, JSON.stringify(notesNow.map((n) => n.id)), key, ownRead.length, JSON.stringify(ownRead), ownRead.length);
     // Made from a Zeffy contact (kept as an organization): everything said about it goes back to that contact (owner,
     // notes, Keep anonymous, "not the same person", History); its links and names, which were the organization's, go
     const from = await DB.prepare("SELECT target FROM donor_calls WHERE kind = 'made-from' AND subject = ? AND answer = 1").bind(key).first();
@@ -764,7 +780,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       );
     }
     const historyAt = from?.target ? String(from.target) : key;
-    await DB.batch([
+    const takeOut = [
       noneNew,
       ...back,
       DB.prepare('DELETE FROM donor_orgs WHERE key = ?').bind(key),
@@ -772,7 +788,11 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       DB.prepare('DELETE FROM donor_notes WHERE subject = ?').bind(key),
       // A gift a person counted for it goes back to counting as the site works it out
       DB.prepare("DELETE FROM donor_calls WHERE kind = 'payment' AND note = ?").bind(key),
-    ]);
+    ];
+    try { await DB.batch(takeOut); } catch (e) {
+      if (!notSo(e)) throw e;
+      throw bad('Someone added a note or changed who looks after it a moment ago. Nothing was taken out; read it first.', 409);
+    }
     if (from?.target) await oneLinkEach(DB);
     await audit(DB, by, `Organization taken out: ${crm.org.get(key).name} (its gifts count for the people who gave them)`, { key }, historyAt);
     return { ok: true };

@@ -1649,3 +1649,38 @@ test('a person joined from two records is named as they gave last, whichever rec
   await doIt({ act: 'same', a: 'c:ct_aa', b: 'c:ct_zz', same: true });
   assert.ok((await list()).some((p) => p.name === 'Uma Small' && p.gifts === 2));
 });
+
+// ─── Found in the tenth round ───────────────────────────────────────
+
+test('a record taken out of a person, sent again: done, and the answer says where the person is, as the first did', async () => {
+  await add(pay({ id: 'sa1', contact: 'ct_sa', first: 'Rae', last: 'Lin', email: 'rae@example.com' }), pay({ id: 'sa2', contact: 'ct_sb', first: 'Rae', last: 'Lin', email: 'rae.lin@example.org', created: S(NOW - 3 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_sa', b: 'c:ct_sb', same: true });
+  const first = await doIt({ act: 'split', key: 'c:ct_sa' });
+  const again = await doIt({ act: 'split', key: 'c:ct_sa' });
+  assert.deepEqual([again.same, again.key, again.ref], [true, first.key, first.ref]);
+});
+
+test('Take it out from a page read before a teammate set an owner: refused in the same step, and the owner stays', async () => {
+  await withTeam();
+  const { key } = await doIt({ act: 'org-new', name: 'Elm Trust', links: [] });
+  const teammate = () => db.prepare("INSERT INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES ('owner', ?, '', 1, 'jordan@soardcharity.com', 'jordan@soardcharity.com', ?)").bind(key, new Date(NOW).toISOString()).run();
+  await assert.rejects(C.act({ DB: racing(db, teammate) }, { act: 'org-delete', key, was: { notes: [], owner: '' } }, by, { now: NOW }), (e) => e.status === 409);
+  assert.ok(await db.prepare('SELECT 1 AS y FROM donor_orgs WHERE key = ?').bind(key).first(), 'still here');
+  assert.equal((await C.orgView(env, key, { now: NOW })).owner, 'jordan@soardcharity.com');
+});
+
+test('Keep anonymous turned off, sent again: done already, one History entry', async () => {
+  await withTeam();
+  await add(pay({ id: 'ko', contact: 'ct_ko', first: 'Ko', last: 'Quiet', email: 'ko@example.com' }));
+  await doIt({ act: 'anon', key: 'c:ct_ko', on: true });
+  await doIt({ act: 'anon', key: 'c:ct_ko', on: false });
+  assert.equal((await doIt({ act: 'anon', key: 'c:ct_ko', on: false })).same, true);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE entity_name LIKE 'No longer kept anonymous%'").first()).n, 1);
+});
+
+test('organizations named in another script can each be kept (their names told apart by their own letters)', async () => {
+  const a = await doIt({ act: 'org-new', name: '한인교회', links: [] });
+  const b = await doIt({ act: 'org-new', name: '日本財団', links: [] });
+  assert.notEqual(a.key, b.key);
+  await assert.rejects(doIt({ act: 'org-new', name: '日本財団', links: [] }), (e) => e.status === 409, 'the same one twice is still one');
+});
