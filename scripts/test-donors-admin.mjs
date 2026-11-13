@@ -107,12 +107,15 @@ const calls = [];
 const saved = [];
 // An answer lost on the way back (a 524): the change is made, and the page is told the site didn't answer
 let lose = null;
+// Every change the page sent (its act and state): a double click is one press
+const posts = [];
 function serve() {
   const server = createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/api/donors-admin') {
       calls.push(u.search);
       const request = await toRequest(req);
+      if (req.method === 'POST') posts.push(await request.clone().json().catch(() => ({})));
       if (req.method === 'POST' && lose) {
         const b = await request.clone().json().catch(() => ({}));
         if (lose(b)) { lose = null; await donorsPost({ env, request, data: { userEmail: 'alex@soardcharity.com' } }); res.writeHead(524, { 'Content-Type': 'text/html' }); return res.end('<html>A timeout occurred</html>'); }
@@ -700,6 +703,20 @@ try {
   await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
   await page.waitForFunction((id) => document.activeElement?.closest?.(`[data-thank="${id}"]`), { timeout: 8000 }, lostId).catch(() => {});
   ok(await page.evaluate((id) => !!document.activeElement?.closest?.(`[data-thank="${id}"]`), lostId), '⌘Z / Ctrl+Z undoes it: back on the list, the focus on it');
+  // A double click on Thanked is one press: the item that moves up under the pointer isn't thanked too
+  await page.waitForSelector('.dn-needs[aria-label="To thank"] [data-thank] .btn-primary', { timeout: 8000 }).catch(() => {});
+  const before = posts.filter((b) => b.act === 'thanks' && b.state === 'thanked').length;
+  const box = await page.$eval('.dn-needs[aria-label="To thank"] [data-thank] .btn-primary', (b) => { const r = b.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }).catch(() => null);
+  if (box) await page.mouse.click(box.x, box.y, { clickCount: 1 });
+  await wait(250);
+  if (box) await page.mouse.click(box.x, box.y, { clickCount: 2 });
+  await wait(1500);
+  ok(!!box && posts.filter((b) => b.act === 'thanks' && b.state === 'thanked').length - before === 1, `a double click on Thanked thanks one gift (${posts.filter((b) => b.act === 'thanks' && b.state === 'thanked').length - before})`);
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.keyboard.down(process.platform === 'darwin' ? 'Meta' : 'Control');
+  await page.keyboard.press('z');
+  await page.keyboard.up(process.platform === 'darwin' ? 'Meta' : 'Control');
+  await wait(800);
   // Put on the website from a page read before a teammate took the organization out: nothing is made
   const { key: walkOrg } = await C.act(env, { act: 'org-new', name: 'Walkthrough Works', links: [] }, 'alex@soardcharity.com');
   await page.evaluate((k) => { location.hash = `#donors/org/${encodeURIComponent(k)}`; }, walkOrg);

@@ -491,7 +491,9 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     if (!subject) throw bad('Which name?');
     const target = orgOk(body.org);
     // A person joined from several Zeffy contacts: every one of them, in one step (never some linked and some not)
-    const subjects = [...new Set([body.subject, ...(body.kind === 'contact' && Array.isArray(body.subjects) ? body.subjects : [])].map((x) => subjectOf(body.kind, x)).filter(Boolean))].slice(0, 20);
+    // (a contact picked anywhere, an organization's Add a Zeffy name too: every contact of the person it is)
+    const said = [body.subject, ...(body.kind === 'contact' && Array.isArray(body.subjects) ? body.subjects : [])].map((x) => subjectOf(body.kind, x)).filter(Boolean);
+    const subjects = [...new Set(body.kind === 'contact' ? said.flatMap((c) => [c, ...crm.keysOf(crm.canon(`c:${c}`)).filter((k) => k.startsWith('c:')).map((k) => k.slice(2))]) : said)].slice(0, 20);
     // So already (sent again after its answer was lost, a teammate first): done, nothing more in History
     if (subjects.every((sub) => (a === 'link' ? crm.calls.yes.get(`${body.kind}\n${sub}`) === target : crm.calls.no.has(`${body.kind}\n${sub}\n${target}`)))) return { ok: true, same: true };
     if (a === 'link') {

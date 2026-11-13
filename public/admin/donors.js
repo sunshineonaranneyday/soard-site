@@ -279,6 +279,13 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   useJobCostsStyles();
   useStyles();
   const [place, setPlace] = useState(() => ({ ...placeOf(), n: ++moves }));
+  // A double click is one press: its second half never lands on what moved under the pointer (the next item's
+  // Thanked, a card's answer, the To thank box where a row was)
+  useEffect(() => {
+    const once = (e) => { if (e.detail > 1 && e.target?.closest?.('.dn button, .dn a, .dn .dn-row, .dn-picker button')) { e.preventDefault(); e.stopPropagation(); } };
+    document.addEventListener('click', once, true);
+    return () => document.removeEventListener('click', once, true);
+  }, []);
   useEffect(() => {
     // An old Job Costs link to Checks settles on this area's own address, opened fresh or followed from here
     const settle = () => { if (/^#job-costs\/checks\b/.test(location.hash)) history.replaceState(null, '', '#donors/checks'); };
@@ -386,6 +393,8 @@ function DonorList({ ctx, view, onView, onOpen }) {
   const [err, setErr] = useState(null);
   const back = useRef(lastPlace);
   const [q, setQ] = useState(back.current?.q || '');
+  // To thank and Needs you aren't searched: their own lists, with no words left in the box over them
+  useEffect(() => { if (view) setQ(''); }, [view]);
   const [stage, setStage] = useState(back.current?.stage || 'all');
   const [sort, setSort] = useState(back.current?.sort || 'latest');
   const [owner, setOwner] = useState(lastOwner);
@@ -396,12 +405,13 @@ function DonorList({ ctx, view, onView, onOpen }) {
     const b = back.current;
     if (!b || !v || view) return;
     back.current = null;
-    lastPlace = null;
     requestAnimationFrame(() => {
       window.scrollTo({ top: b.scroll, behavior: 'instant' });
       document.querySelector(`.dn-row[data-key="${CSS.escape(b.key)}"] .dn-name`)?.focus({ preventScroll: true });
     });
   }, [!!v]);
+  // (kept as it changes, so Back, Forward and Back again find the same list)
+  useEffect(() => { if (lastPlace) lastPlace = { ...lastPlace, q, stage, sort, owner, shown }; }, [q, stage, sort, owner, shown]);
   const openDonor = (p) => { lastPlace = { q, stage, sort, owner, shown, scroll: window.scrollY, key: p.key }; backTo = null; backFor = null; onOpen(p); };
   const latest = useLatest();
   // Left (a donor opened): a read still out lands nowhere, and its count never reaches the sidebar
@@ -900,26 +910,41 @@ function GiftList({ gifts, byWho = false, staff = [], ctx = null }) {
 /** Who on the team looks after a donor */
 function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
   const [busy, setBusy] = useState(false);
-  const saving = useRef(null);
-  const pick = async (e) => {
+  // The one picked, shown until it's saved (a re-read meanwhile never puts the select back under the person)
+  const [picked, setPicked] = useState(null);
+  const saving = useRef(false);
+  const wait = useRef(null);
+  useEffect(() => () => clearTimeout(wait.current), []);
+  // Saved a moment after the pick settles, or when the select is left: arrowing through a closed select (Windows
+  // changes it at each press) saves only the one landed on, never an owner and a History line per name passed
+  const pick = (e) => {
+    if (saving.current) return;
     const email = e.target.value;
-    // One change at a time: a pick while the last saves goes back to it
-    if (saving.current !== null) { e.target.value = saving.current; return; }
-    saving.current = email;
+    setPicked(email);
+    clearTimeout(wait.current);
+    wait.current = setTimeout(() => save(email), 700);
+  };
+  const settle = () => { if (wait.current && picked !== null) { clearTimeout(wait.current); save(picked); } };
+  const save = async (email) => {
+    wait.current = null;
+    if (saving.current) return;
+    if (email === (owner || '')) { setPicked(null); return; }
+    saving.current = true;
     setBusy(true);
     const r = await change({ act: 'owner', key: subject, email, was: owner || '' });
-    saving.current = null;
+    saving.current = false;
     setBusy(false);
     // Refused, or the answer lost on the way back (it may have saved): the page reads again, so it shows who it is now
-    if (!r.success) { ctx.addToast(r.error, 'error'); e.target.value = owner || ''; await onDone(); return; }
+    if (!r.success) { ctx.addToast(r.error, 'error'); setPicked(null); await onDone(); return; }
     listChanged();
-    ctx.addToast(email ? `${fullName(email, staff)} looks after ${name} now` : `No one looks after ${name} now`, 'success');
+    if (!r.same) ctx.addToast(email ? `${fullName(email, staff)} looks after ${name} now` : `No one looks after ${name} now`, 'success');
     await onDone();
+    setPicked(null);
   };
   const left = owner && staff.find((s) => s.email === owner)?.left;
   return html`<section class="kd-card dn-card--owner" aria-labelledby="dn-owner-h">
     <h3 id="dn-owner-h">Owner</h3>
-    <select id="dn-owner-pick" class="form-select" aria-label=${`Who on the team looks after ${name}`} value=${owner || ''} aria-busy=${busy ? 'true' : null} onChange=${pick}>
+    <select id="dn-owner-pick" class="form-select" aria-label=${`Who on the team looks after ${name}`} value=${picked ?? owner ?? ''} aria-busy=${busy ? 'true' : null} onChange=${pick} onBlur=${settle}>
       <option value="">No one yet</option>
       ${staff.map((s) => html`<option key=${s.email} value=${s.email}>${s.name}${s.left ? ' (left the team)' : ''}</option>`)}
     </select>
@@ -1142,7 +1167,8 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   // Left (another donor, the list, another area): a read or a change still out lands nowhere, and moves no one
   const left = useRef(false);
   useEffect(() => () => { left.current = true; seq.current++; }, []);
-  const load = async () => {
+  // `follow`: read after the person's own change (Count it for an organization): it goes where they went
+  const load = async ({ follow = false } = {}) => {
     const mine = ++seq.current;
     const fresh = () => mine === seq.current;
     setErr(null);
@@ -1163,9 +1189,10 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     // Gone since it was read (taken out, merged, by a teammate): the page stays as it was, so nothing typed is lost
     if (!j.success && shown.current) { setGone({ text: j.error }); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
-    // (shown already: a teammate linked them meanwhile. The page stays, so nothing typed is lost, and says where they are)
-    if (j.org && shown.current) { setGone({ text: 'Their gifts count for an organization now: someone linked them since this page was read.', org: j.org }); return; }
+    // (shown already, not by this person's change: the page stays, so nothing typed is lost, and says where they are)
+    if (j.org && shown.current && follow !== true) { setGone({ text: 'Their gifts count for an organization now: they were linked to it since this page was read.', org: j.org }); return; }
     if (j.org) { onOrg(j.org); return; }
+    setGone(null);
     setV(j);
     thanksRead();
   };
@@ -1208,7 +1235,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     if (!r.success) { ctx.addToast(r.error, 'error'); await load(); return false; }
     listChanged();
     ctx.addToast(`${link.kind === 'company' ? `Gifts for ${link.subject}` : `${d.name}’s gifts`} count for ${orgName} now`, 'success', { label: 'Open', fn: () => goTo({ tab: 'people', org: orgKey }) });
-    await load();
+    await load({ follow: true });
     return true;
   };
   return html`
@@ -1313,7 +1340,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   const seq = useRef(0);
   const left = useRef(false);
   useEffect(() => () => { left.current = true; seq.current++; }, []);
-  const load = async () => {
+  const load = async ({ follow = false } = {}) => {
     const mine = ++seq.current;
     setErr(null);
     const j = await get(`?org=${encodeURIComponent(orgKey)}`);
@@ -1323,8 +1350,9 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     if (!j.success && shown.current) { setGone({ text: j.error }); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // Kept here before, on the website now: its partner's page, at its address
-    if (j.org && !j.donor && shown.current) { setGone({ text: 'It’s on the website now: someone put it there since this page was read.', org: j.org }); return; }
+    if (j.org && !j.donor && shown.current && follow !== true) { setGone({ text: 'It’s on the website now: it was put there since this page was read.', org: j.org }); return; }
     if (j.org && !j.donor) { history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
+    setGone(null);
     setV(j);
     thanksRead();
   };
@@ -1386,9 +1414,10 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
       if (await ask({ title: `Use the partner card “${made.name}”?`, text: `There’s a partner card with this name already. ${o.name}’s gifts, notes and owner go to it, and it’s on the website after you publish. To make another card instead, rename this organization first.`, yes: 'Use it' })) await finishOnSite(made.slug, o.name);
       return;
     }
-    const slug = await ctx.createPartner({ name: o.name });
-    if (!slug) return;
-    await finishOnSite(slug, o.name, true);
+    const got = await ctx.createPartner({ name: o.name });
+    if (!got) return;
+    const card = typeof got === 'string' ? { slug: got, name: o.name } : got;
+    await finishOnSite(card.slug, card.name || o.name, true);
   };
   // Its partner card is made: everything said about it moves to the partner (tried again from the toast if it failed)
   const finishOnSite = async (slug, name = v.name, madeNow = false) => {
@@ -1399,7 +1428,11 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
       if (!left.current) await load();
       return;
     }
-    if (!r.success) { ctx.addToast(`${name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug, name, madeNow) }); return; }
+    // Both answers lost: it may have gone through all the same (then it's done, and says so)
+    const now = r.success ? null : await get(`?org=${encodeURIComponent(v.key)}`);
+    const went = now?.success && now.org && !now.donor ? now.org : null;
+    if (!r.success && !went) { ctx.addToast(`${name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug, name, madeNow) }); return; }
+    if (went) r.key = went;
     listChanged();
     ctx.addToast(`${name} is on the Partners page after you publish`, 'success', null, { publish: true });
     // By address: this can finish from a toast after the page was left
@@ -1491,8 +1524,11 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
 function RenameDialog({ name: shownName, onSave, onClose }) {
   const box = useRef(null);
   const input = useRef(null);
-  // The name it opened on: what the person saw, and is renaming (sent as such, whatever a re-read shows since)
-  const [name] = useState(shownName);
+  // The name it opened on: what the person saw, and is renaming (sent as such, whatever a re-read shows since). Told
+  // of a teammate's rename (refused), it's that one they've seen: Save then renames it
+  const [name, setName] = useState(shownName);
+  const latestShown = useRef(shownName);
+  latestShown.current = shownName;
   const [val, setVal] = useState(name);
   const [busy, setBusy] = useState(false);
   useDialog(box, onClose, busy);
@@ -1504,6 +1540,7 @@ function RenameDialog({ name: shownName, onSave, onClose }) {
     setBusy(true);
     const ok = await onSave(t, name);
     setBusy(false);
+    if (ok === false) setName(latestShown.current);
     if (ok !== false) onClose();
   };
   return html`<div class="modal-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>

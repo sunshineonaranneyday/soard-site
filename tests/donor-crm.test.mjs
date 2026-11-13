@@ -1721,3 +1721,10 @@ test('Take it out from a page read before a teammate kept it anonymous: refused,
   await assert.rejects(doIt({ act: 'org-delete', key, was: { notes: [], owner: '', kept: false } }), (e) => e.status === 409 && /kept it anonymous/.test(e.message));
   assert.ok((await C.loadCrm(db, { now: NOW })).keptKey(key));
 });
+
+test('a joined person’s one Zeffy record linked from an organization’s page links all of theirs', async () => {
+  await add(pay({ id: 'jp1', contact: 'ct_jp1', first: 'Pat', last: 'Joined', email: 'pat@example.com', amount: 5000 }), pay({ id: 'jp2', contact: 'ct_jp2', first: 'Pat', last: 'Joined', email: 'pat@example.org', amount: 4000, created: S(NOW - 3 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_jp1', b: 'c:ct_jp2', same: true });
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_jp2', org: 'p:pella' });
+  assert.equal((await list()).find((p) => p.key === 'p:pella')?.total, 9000);
+});

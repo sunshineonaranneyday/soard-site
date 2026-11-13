@@ -7953,12 +7953,12 @@
         return () => window.removeEventListener('keydown', key);
       }, []);
       const folded = all ? 0 : Math.max(0, toasts.length - TOAST_SHOWN);
-      return html`<div class="toast-container" role="status" aria-live="polite" aria-atomic="true" ref=${box}
+      return html`<div class="toast-container" role="status" aria-live="polite" aria-atomic="false" ref=${box}
         onPointerOver=${() => holdToasts(true)} onPointerOut=${(e) => { if (!e.currentTarget.contains(e.relatedTarget) && !e.currentTarget.contains(document.activeElement)) holdToasts(false); }}
         onFocusIn=${() => holdToasts(true)} onFocusOut=${(e) => { if (!e.currentTarget.contains(e.relatedTarget) && !e.currentTarget.matches(':hover')) holdToasts(false); }}>
         ${pinned ? html`<div class="toast toast-info toast-pinned"><span class="toast-action"><span>${pinned.msg}</span><button class="toast-undo" onClick=${pinned.fn}>${pinned.label}</button></span></div>` : null}
         ${folded ? html`<button type="button" class="toast-more" onClick=${() => setAll(true)} aria-label=${`Show ${folded} earlier ${folded === 1 ? 'message' : 'messages'}`}>${folded} more</button>` : null}
-        ${toasts.slice(folded).map(t => html`<div key=${t.id} class="toast toast-${t.type}" role="alert">
+        ${toasts.slice(folded).map(t => html`<div key=${t.id} class=${`toast toast-${t.type}`}>
           ${t.action ? html`<span class="toast-action">
             <span>${t.msg}</span>
             <button class="toast-undo" onClick=${() => use(t)} aria-keyshortcuts=${t.action.label === 'Undo' ? UNDO_KEY.aria : null}>${t.action.label}</button>${t.action.label === 'Undo' ? html`<span class="toast-key" aria-hidden="true">${UNDO_KEY.show}</span>` : null}
@@ -25422,11 +25422,13 @@ ${sections || '<p>No one yet.</p>'}
           if (m === undefined || m === null) return;
           const was = s.mark;
           s.mark = m;
-          if (moved && s.had && m !== was) window.dispatchEvent(new Event(moved));
+          if (moved && s.had && m !== was && !s.quiet) window.dispatchEvent(new Event(moved));
+          s.quiet = false;
           s.had = true;
         } catch { /* keeps what it had until the next look */ }
       };
-      const heard = (e) => { if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } else refresh(); };
+      // (this tab's own change: the next look takes the mark it moved to quietly, never announcing it as a teammate's)
+      const heard = (e) => { s.quiet = true; if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } refresh(); };
       const back = () => { if (!document.hidden && Date.now() - s.at > backAfterMs) refresh(); };
       function use() {
         const [v, setV] = useState(s.v);
@@ -26001,6 +26003,14 @@ ${sections || '<p>No one yet.</p>'}
       const [donorPartner, setDonorPartner] = useState(null);
       // Left Donors & Partners while it was open: answered "no", so nothing waits on it and it doesn't come back
       useEffect(() => { if (view !== 'donors' && donorPartner) { donorPartner.resolve(null); setDonorPartner(null); } }, [view]);
+      // Its Add dialog is about the page it was opened on: going elsewhere (Back, a link) closes it, adding nothing
+      useEffect(() => {
+        if (!donorPartner) return;
+        const away = () => { donorPartner.resolve(null); setDonorPartner(null); };
+        window.addEventListener('hashchange', away);
+        window.addEventListener('popstate', away);
+        return () => { window.removeEventListener('hashchange', away); window.removeEventListener('popstate', away); };
+      }, [donorPartner]);
       const [deleteLoading, setDeleteLoading] = useState(false);
 
       const handleListDelete = async () => {
@@ -26401,7 +26411,7 @@ ${sections || '<p>No one yet.</p>'}
               ${donorPartner ? html`<${PartnerCreateDialog} partners=${partners} addToast=${addToast}
                 prefill=${{ ...donorPartner.prefill, category: 'funding', note: 'They go on the Partners page under Funding, as a Friend, when you publish. Their gifts in Donors & Partners go with them.' }}
                 onClose=${() => { donorPartner.resolve(null); setDonorPartner(null); }}
-                onCreated=${(slug) => { donorPartner.resolve(slug); setDonorPartner(null); loadData(); }} />` : null}`;
+                onCreated=${(slug, name) => { donorPartner.resolve({ slug, name }); setDonorPartner(null); loadData(); }} />` : null}`;
 
           // ─── Board: ./board-admin.js (#board, #board/meeting/<id>, #board/documents…) ───
           case 'board':
