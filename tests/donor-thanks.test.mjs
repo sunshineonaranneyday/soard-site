@@ -691,3 +691,10 @@ test('an old gift a read left out, listed again: the gift it always was, never T
   assert.equal((await db.prepare("SELECT first_seen FROM donor_payments WHERE id = 'old_chk'").first()).first_seen, new Date(START - 300 * DAY).toISOString());
   assert.ok(!(await todo()).some((t) => t.ids.includes('old_chk')));
 });
+
+test('a new To thank says how its own charges came (a card and a check the same hour, one thank-you: Card and Check)', async () => {
+  await note(pay({ id: 'hw1', amount: 50000, created: S(START + HOUR) }));
+  await note(pay({ id: 'hw2', amount: 30000, method: 'cheque', type: 'manual', created: S(START + HOUR + 10 * MIN) }));
+  const t = (await db.prepare("SELECT how FROM donor_thanks WHERE ids LIKE '%hw2%' AND state = 'todo'").first());
+  assert.equal(t?.how, 'Card and Check');
+});

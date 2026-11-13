@@ -1695,3 +1695,29 @@ test('a joined person counted for an organization is one name there; Take off ta
   await doIt({ act: 'not', kind: 'contact', subject: names[0].subject, subjects: names[0].subjects, org: 'p:pella' });
   assert.ok(!(await list()).some((p) => p.key === 'p:pella'), 'nothing of hers counts for Pella');
 });
+
+// ─── Found in the eleventh round ────────────────────────────────────
+
+test('Keep as an organization looks at the contact’s own gifts, never another contact’s that shares its email', async () => {
+  await add(pay({ id: 'hc1', contact: 'ct_hc', first: 'Hope', last: 'Church', email: 'office@hopechurch.example', amount: 250000 }));
+  await add(pay({ id: 'jd1', contact: 'ct_jd', first: 'John', last: 'Doe', email: 'office@hopechurch.example', amount: 5000, company: 'Acme Builders' }));
+  const { key } = await doIt({ act: 'org-new', name: 'Hope Church', links: [{ kind: 'contact', subject: 'ct_hc' }] });
+  assert.equal((await list()).find((p) => p.key === key)?.total, 250000);
+});
+
+test('a gift with no contact under the email of a contact that is an organization counts for that organization', async () => {
+  await db.prepare(partner('ivers', 'Ivers Foundation')).run();
+  await add(pay({ id: 'iv1', contact: 'ct_iv', first: 'Ivers', last: 'Foundation', email: 'info@ivers.example', amount: 500000 }));
+  await add(pay({ id: 'iv2', contact: null, first: 'Mary', last: 'Ivers', email: 'info@ivers.example', amount: 300000, method: 'cheque', type: 'manual' }));
+  const people = await list();
+  assert.equal(people.find((p) => p.key === 'p:ivers')?.total, 800000, 'both gifts are the foundation’s');
+  assert.ok(!people.some((p) => p.type === 'person' && /Mary Ivers|info@ivers/.test(p.name)));
+  assert.deepEqual((await C.orgView(env, 'p:ivers', { now: NOW })).gifts.map((g) => g.id).sort(), ['iv1', 'iv2']);
+});
+
+test('Take it out from a page read before a teammate kept it anonymous: refused, and it stays kept', async () => {
+  const { key } = await doIt({ act: 'org-new', name: 'Quiet Society', links: [] });
+  await doIt({ act: 'anon', key, on: true });
+  await assert.rejects(doIt({ act: 'org-delete', key, was: { notes: [], owner: '', kept: false } }), (e) => e.status === 409 && /kept it anonymous/.test(e.message));
+  assert.ok((await C.loadCrm(db, { now: NOW })).keptKey(key));
+});

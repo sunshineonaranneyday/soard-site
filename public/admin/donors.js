@@ -128,6 +128,7 @@ const STYLE = `
 .dn-plain { display: grid; gap: .6rem; margin: 0; padding: 0; list-style: none; font-size: var(--fs-sm); }
 .dn-plain li { display: grid; gap: .15rem; min-width: 0; overflow-wrap: anywhere; }
 .dn-row-do { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .75rem; margin-top: .15rem; }
+.dn .btn[aria-disabled="true"], .dn-picker .btn[aria-disabled="true"] { opacity: 0.45; cursor: progress; box-shadow: none; }
 .dn-linkbtn { padding: 0; border: none; background: none; font: inherit; font-size: inherit; cursor: pointer; justify-self: start; text-align: left; }
 .dn-suggest { margin-top: .75rem; padding: .7rem .8rem; border-radius: 10px; background: var(--tone-warn-surface, #FFF9DB); font-size: var(--fs-sm); }
 .dn-suggest p { margin: 0 0 .4rem; }
@@ -1160,8 +1161,10 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     if (!fresh()) return;
     if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`The page couldn’t be read again just now: ${j.error} It shows what was read before.`, 'error', { label: 'Try again', fn: () => load() }); return; }
     // Gone since it was read (taken out, merged, by a teammate): the page stays as it was, so nothing typed is lost
-    if (!j.success && shown.current) { setGone(j.error); return; }
+    if (!j.success && shown.current) { setGone({ text: j.error }); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
+    // (shown already: a teammate linked them meanwhile. The page stays, so nothing typed is lost, and says where they are)
+    if (j.org && shown.current) { setGone({ text: 'Their gifts count for an organization now: someone linked them since this page was read.', org: j.org }); return; }
     if (j.org) { onOrg(j.org); return; }
     setV(j);
     thanksRead();
@@ -1210,7 +1213,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   };
   return html`
     ${back}
-    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone}</strong> This page shows it as it was: copy anything you typed here, then go back.</div></div>` : null}
+    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone.text}</strong> This page shows it as it was: copy anything you typed here${gone.org ? ', then open where it is now.' : ', then go back.'}</div>${gone.org ? html`<div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => goTo({ tab: 'people', org: gone.org })}>Open it</button></div>` : null}</div>` : null}
     <div class="dn-head">
       <h2 tabindex="-1" ref=${heading}>${d.name} ${stageTag(d.stage)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : d.anonymous ? html`<span class="tag">Asked to be anonymous</span>` : null}</h2>
       <p class="dn-head__sub">${[d.funds.length ? `Through ${d.funds.join(', ')}` : null, d.email].filter(Boolean).join(' · ')}</p>
@@ -1317,9 +1320,10 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     if (mine !== seq.current) return;
     if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`The page couldn’t be read again just now: ${j.error} It shows what was read before.`, 'error', { label: 'Try again', fn: () => load() }); return; }
     // Gone since it was read (taken out, merged, by a teammate): the page stays as it was, so nothing typed is lost
-    if (!j.success && shown.current) { setGone(j.error); return; }
+    if (!j.success && shown.current) { setGone({ text: j.error }); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // Kept here before, on the website now: its partner's page, at its address
+    if (j.org && !j.donor && shown.current) { setGone({ text: 'It’s on the website now: someone put it there since this page was read.', org: j.org }); return; }
     if (j.org && !j.donor) { history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
     setV(j);
     thanksRead();
@@ -1404,7 +1408,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   const takeOut = async () => {
     if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length ? plural(v.notes.length, 'note') : null].filter(Boolean).join(' and ')} ${v.madeFrom ? `go back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'go with it.'}` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
     // (what the question said goes with it: a teammate's note or owner since is never lost unseen)
-    const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '' } });
+    const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '', kept: !!v.keepAnonymous } });
     if (!r.success) { ctx.addToast(r.error, 'error'); if (!left.current) await load(); return; }
     listChanged();
     ctx.addToast(`${v.name} taken out`, 'success');
@@ -1419,7 +1423,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   };
   return html`
     ${back}
-    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone}</strong> This page shows it as it was: copy anything you typed here, then go back.</div></div>` : null}
+    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone.text}</strong> This page shows it as it was: copy anything you typed here${gone.org ? ', then open where it is now.' : ', then go back.'}</div>${gone.org ? html`<div class="notice__actions"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => goTo({ tab: 'people', org: gone.org })}>Open it</button></div>` : null}</div>` : null}
     <div class="dn-head">
       <h2 tabindex="-1" ref=${heading}>${v.name} ${stageTag(d.stage)} ${orgTag(v)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : null}</h2>
       <p class="dn-head__sub">An organization: every gift from the names below counts for it.</p>
@@ -1480,13 +1484,15 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     ${adding ? html`<${Picker} title=${`Add a Zeffy name to ${v.name}`} sub="A company name its gifts carry, or the Zeffy contact it gives as. Every gift under it counts here." placeholder="Name or email in Zeffy"
       search=${findNames} onClose=${() => setAdding(false)}
       onPick=${async (x) => { const ok = await say({ act: 'link', kind: x.kind, subject: x.subject, org: v.key }, `“${x.name}” counts for ${v.name} now`); return ok; }} />` : null}
-    ${renaming ? html`<${RenameDialog} name=${v.name} onClose=${() => setRenaming(false)} onSave=${(name) => say({ act: 'org-rename', key: v.key, name, was: v.name }, 'Renamed')} />` : null}`;
+    ${renaming ? html`<${RenameDialog} name=${v.name} onClose=${() => setRenaming(false)} onSave=${(name, was) => say({ act: 'org-rename', key: v.key, name, was }, 'Renamed')} />` : null}`;
 }
 
 /** A new name for an organization kept here (a partner's name is changed in its partner card) */
-function RenameDialog({ name, onSave, onClose }) {
+function RenameDialog({ name: shownName, onSave, onClose }) {
   const box = useRef(null);
   const input = useRef(null);
+  // The name it opened on: what the person saw, and is renaming (sent as such, whatever a re-read shows since)
+  const [name] = useState(shownName);
   const [val, setVal] = useState(name);
   const [busy, setBusy] = useState(false);
   useDialog(box, onClose, busy);
@@ -1496,7 +1502,7 @@ function RenameDialog({ name, onSave, onClose }) {
     const t = val.trim();
     if (!t || t === name) { onClose(); return; }
     setBusy(true);
-    const ok = await onSave(t);
+    const ok = await onSave(t, name);
     setBusy(false);
     if (ok !== false) onClose();
   };

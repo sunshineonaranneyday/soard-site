@@ -159,6 +159,9 @@ async function firstTimes(DB, gifts) {
   return first;
 }
 
+/** How a thank-you's own charges came, each way once ("Card and Check"): never the whole gift's when it holds part */
+const howOfCharges = (rs, g) => [...new Set(rs.map((r) => howOf(r)))].join(' and ') || howOf(g);
+
 async function syncOnce(env, { now, fetchImpl, ask }) {
   const { DB } = env;
   const st = await readState(DB);
@@ -291,7 +294,7 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     let id = rowIds.has(g.id) ? `${g.id}~${rs.length}${rs.at(-1).id}` : g.id;
     for (let k = 2; rowIds.has(id); k++) id = `${g.id}~${rs.length}${rs.at(-1).id}~${k}`;
     steps.push(DB.prepare(`INSERT OR IGNORE INTO donor_thanks (id, ids, state, why, at, cents, in_kind, name, company, campaign, how, contact, created_at)
-      VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, rs.map((r) => r.id).join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOf(g), r0.contact || null, iso(now)));
+      VALUES (?, ?, 'todo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(id, rs.map((r) => r.id).join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOfCharges(rs, g), r0.contact || null, iso(now)));
     rowIds.add(id);
     added++;
   }
@@ -328,7 +331,7 @@ async function syncOnce(env, { now, fetchImpl, ask }) {
     const r0 = giving[0];
     if (why) {
       // (written only when something differs: what changed is counted, and open tabs read again)
-      const vals = [ids.join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOf(g), r0.contact || null];
+      const vals = [ids.join(' '), why, g.at, g.inKind ? 0 : g.cents, g.inKind ? g.cents : 0, named(r0), r0.company || null, g.campaign || null, howOfCharges(giving, g), r0.contact || null];
       steps.push(DB.prepare(`UPDATE donor_thanks SET ids = ?, why = ?, at = ?, cents = ?, in_kind = ?, name = ?, company = ?, campaign = ?, how = ?, contact = ?, missing_at = NULL WHERE id = ? AND state = 'todo'
         AND NOT (ids IS ? AND why IS ? AND at IS ? AND cents IS ? AND in_kind IS ? AND name IS ? AND company IS ? AND campaign IS ? AND how IS ? AND contact IS ? AND missing_at IS NULL)`)
         .bind(...vals, t.id, ...vals));

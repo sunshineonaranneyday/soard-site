@@ -274,7 +274,8 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
     const p = pay.get(String(r.id));
     if (p === 'person') return person;
     if (p && live(p)) return p;
-    return contactOrgOf(r) || companyOrgOf(r) || person;
+    // (a gift with no contact of its own, placed with one that is an organization as a whole: that organization's)
+    return contactOrgOf(r) || (r.borrowed ? contactIsOrg(r.contact) : null) || companyOrgOf(r) || person;
   };
   const keepAnonymous = (k) => (isOrgKey(k) ? !!anon.get(k) : keysOf(k).some((x) => anon.get(x)));
   /** Who looks after a donor (any record of a person: the latest said) → email or null */
@@ -390,7 +391,7 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
         const k = raw.get(r) ?? keyOf(r);
         const person = canon(k);
         const cid = r.contact ? null : k.startsWith('c:') ? k.slice(2) : oneOrgOf(person);
-        const rr = cid ? { ...r, contact: cid } : r;
+        const rr = cid ? { ...r, contact: cid, borrowed: true } : r;
         const owner = ownerOf(rr, person);
         const was = r.was_contact ? canon(`c:${r.was_contact}`) : null;
         const payerKept = personKept(person) || (!r.contact && !!r.email && quietEmails.has(r.email)) || (!!was && was !== person && personKept(was));
@@ -681,7 +682,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
         // Its gifts count for an organization already (their company is linked, or its own name is one's)
         const rs = await rowsFor(DB, [`c:${subject}`]);
         const place = crm.placer(rs);
-        has = rs.map((r) => place(r).owner).find((o) => crm.isOrg(o)) || null;
+        has = rs.filter((r) => r.contact === subject).map((r) => place(r).owner).find((o) => crm.isOrg(o)) || null;
       }
       if (has) throw bad(`${l.kind === 'company' ? `“${clean(l.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(has)?.name || 'an organization'} already. Nothing was changed.`, 409);
       // A link to an organization that's gone (a partner deleted) counts for nothing: this one replaces it
@@ -757,14 +758,17 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       const added = notesNow.find((n) => !seen.has(n.id));
       if (added) throw bad(`${(added.by || 'Someone').split('@')[0].replace(/^./, (c) => c.toUpperCase())} added a note since you looked. Nothing was taken out; read it first.`, 409);
       if (typeof saw.owner === 'string' && (crm.lookedAfterBy(key) || '') !== saw.owner.toLowerCase()) throw bad(`Someone changed who looks after it since you looked. Nothing was taken out.`, 409);
+      // Kept anonymous since (taking it out would show its givers' names on the board's list again, unasked)
+      if (typeof saw.kept === 'boolean' && saw.kept !== crm.keptKey(key)) throw bad(`Someone ${crm.keptKey(key) ? 'kept it anonymous' : 'stopped keeping it anonymous'} since you looked. Nothing was taken out; read it first.`, 409);
     }
     // (and none added in the moment between: checked in the step that takes it out)
     const ownRead = crm.ownerRows([key]);
     const noneNew = stillSo(DB, `(SELECT COUNT(*) FROM donor_notes WHERE subject = ? AND id NOT IN (SELECT value FROM json_each(?))) = 0
       AND (SELECT COUNT(*) FROM donor_calls WHERE kind = 'owner' AND subject = ?) = ?
       AND (SELECT COUNT(*) FROM donor_calls d, json_each(?) j WHERE d.kind = 'owner' AND d.subject = json_extract(j.value, '$[0]')
-        AND d.answer = json_extract(j.value, '$[1]') AND d.note IS json_extract(j.value, '$[2]') AND d.at = json_extract(j.value, '$[3]')) = ?`,
-    key, JSON.stringify(notesNow.map((n) => n.id)), key, ownRead.length, JSON.stringify(ownRead), ownRead.length);
+        AND d.answer = json_extract(j.value, '$[1]') AND d.note IS json_extract(j.value, '$[2]') AND d.at = json_extract(j.value, '$[3]')) = ?
+      AND (SELECT COUNT(*) FROM donor_calls WHERE kind = 'anon' AND subject = ? AND answer = 1) = ?`,
+    key, JSON.stringify(notesNow.map((n) => n.id)), key, ownRead.length, JSON.stringify(ownRead), ownRead.length, key, crm.keptKey(key) ? 1 : 0);
     // Made from a Zeffy contact (kept as an organization): everything said about it goes back to that contact (owner,
     // notes, Keep anonymous, "not the same person", History); its links and names, which were the organization's, go
     const from = await DB.prepare("SELECT target FROM donor_calls WHERE kind = 'made-from' AND subject = ? AND answer = 1").bind(key).first();
@@ -791,7 +795,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     ];
     try { await DB.batch(takeOut); } catch (e) {
       if (!notSo(e)) throw e;
-      throw bad('Someone added a note or changed who looks after it a moment ago. Nothing was taken out; read it first.', 409);
+      throw bad('Someone added a note, changed who looks after it or changed Keep anonymous a moment ago. Nothing was taken out; read it first.', 409);
     }
     if (from?.target) await oneLinkEach(DB);
     await audit(DB, by, `Organization taken out: ${crm.org.get(key).name} (its gifts count for the people who gave them)`, { key }, historyAt);
