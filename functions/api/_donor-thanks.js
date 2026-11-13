@@ -95,7 +95,7 @@ export const WHY = {
   kind: 'A gift in kind: Zeffy sends no thank-you',
   hand: 'Entered by hand: Zeffy sends no thank-you',
   major: '$1,000 or more',
-  partly: 'Part of it was refunded since; Zeffy thanked them by email for what’s left',
+  partly: 'Part of it was refunded since. Say whether what’s left needs a thank-you from the team',
 };
 
 // ─── Keeping the list ───────────────────────────────────────────────

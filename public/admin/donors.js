@@ -28,7 +28,9 @@ import { Checks } from './checks.js';
 import { useStyles as useJobCostsStyles } from './job-costs.js';
 import { zeffyPaymentUrl, zeffyContactUrl } from './zeffy-links.js';
 import { AreaTabs, setChecksWaiting } from './donor-tabs.js';
-import { ask } from './ask.js';
+import { ask as askAnywhere } from './ask.js';
+// A question about this page closes when the page is left (Back, a link): it never acts on a page no longer shown
+const ask = (o) => askAnywhere({ ...o, closeOnMove: true });
 import { useDialog } from './dialog.js';
 
 const html = htm.bind(h);
@@ -641,13 +643,13 @@ function ThanksList({ ctx, owner = '', ownerName = '', onCount = () => {} }) {
   return html`
     <p class="dn-status">Zeffy thanks online givers by email. These it doesn’t, or they’re big enough for a call or a note from the team. The one waiting longest is first${owner ? `; looked after by ${ownerName}` : ''}.</p>
     <ul class="dn-needs" aria-label="To thank">${items.map((t) => html`<li key=${t.id} class="card dn-need" data-thank=${t.id}>
-      <p class="dn-need__q">Thank ${t.name}${t.org && t.org.name !== t.name ? ` (for ${t.org.name})` : !t.org && t.company && t.company !== t.name && t.how !== 'Donor-advised fund' ? ` (for ${t.company})` : ''}: ${amountOf(t)}</p>
+      <p class="dn-need__q">Thank ${t.name === 'No name' ? 'a giver Zeffy has no name for' : t.name}${t.org && t.org.name !== t.name ? ` (for ${t.org.name})` : !t.org && t.company && t.company !== t.name && t.how !== 'Donor-advised fund' ? ` (for ${t.company})` : ''}: ${amountOf(t)}</p>
       <p class="dn-need__sub">${[t.how, t.campaign, day(t.at)].filter(Boolean).join(' · ')}. ${t.whyText}.</p>
       <p class="dn-need__sub">${t.owner ? `Looked after by ${fullName(t.owner, v.staff)}` : 'No one looks after them yet'} · ${waiting(t.since)}</p>
       <div class="dn-need__do">
         <button type="button" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'thanked', e); }}>${busy === `${t.id}:thanked` ? html`<span class="spinner spinner-14" />` : null}Thanked</button>
         <button type="button" class="btn btn-ghost btn-sm" aria-disabled=${busy ? 'true' : null} onClick=${(e) => { if (!busy) doIt(t, 'skipped', e); }}>${busy === `${t.id}:skipped` ? html`<span class="spinner spinner-14" />` : null}Not needed</button>
-        <a class="link" href=${t.org ? `#donors/org/${encodeURIComponent(t.org.key)}` : t.ref && !t.ref.startsWith('g:') ? `#donors/${encodeURIComponent(t.ref)}` : `#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${cameFrom('thanks')}>${t.org ? `Open ${t.org.name}` : `Open ${t.name}`}</a>
+        <a class="link" href=${t.org ? `#donors/org/${encodeURIComponent(t.org.key)}` : t.ref && !t.ref.startsWith('g:') ? `#donors/${encodeURIComponent(t.ref)}` : `#donors/gift/${encodeURIComponent(t.ids?.[0] || t.id)}`} onClick=${cameFrom('thanks')}>${t.org ? `Open ${t.org.name}` : t.name === 'No name' ? 'Open their gift' : `Open ${t.name}`}</a>
         <a class="link" href=${zeffyPaymentUrl(t.ids?.[0] || t.id)} target="_blank" rel="noopener">Open in Zeffy</a>
       </div></li>`)}</ul>
     ${v.more ? html`<p class="dn-status">And ${plural(v.more, 'more gift')} after these.</p>` : null}`;
@@ -867,12 +869,18 @@ const thankWords = (t, staff) => (!t ? null : t.state === 'todo' ? html`<span cl
   : t.state === 'skipped' ? `no thank-you needed${t.by ? ` (${firstName(t.by, staff)})` : ''}` : null);
 
 /** Thanked or Not needed by mistake, found later: To thank again, from the gift (the toast's Undo lasts seconds) */
+const againNow = new Set();
 async function thankAgain(ctx, t) {
-  const r = await change({ act: 'thanks', id: t.id, state: 'todo', was: t.state });
-  listChanged();
-  thanksChanged();
-  if (!r.success) { ctx.addToast(r.error, 'error'); return; }
-  ctx.addToast(`To thank again: ${amountOf(t)}`, 'success');
+  if (againNow.has(t.id)) return;
+  againNow.add(t.id);
+  try {
+    const r = await change({ act: 'thanks', id: t.id, state: 'todo', was: t.state });
+    listChanged();
+    thanksChanged();
+    if (!r.success) { ctx.addToast(r.error, 'error'); return; }
+    if (r.same && !(r.retried && r.you)) return;
+    ctx.addToast(`To thank again: ${amountOf(t)}`, 'success');
+  } finally { againNow.delete(t.id); }
 }
 function GiftList({ gifts, byWho = false, staff = [], ctx = null }) {
   if (!gifts.length) return html`<p class="dn-sub">No gifts of their own.</p>`;
@@ -970,8 +978,20 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
     if (text.trim() === said) setText('');
     else ctx.addToast('Your note was saved after all. The box still has what you typed since: change it to what’s new, then Add note.', 'info');
   }, [notes]);
-  // A change saved after all (its answers lost, the page read again): the note reads as they wrote it, so it's done
+  // A change saved after all (its answers lost, the page read again): the note reads as they wrote it, so it's done.
+  // The note being changed deleted by a teammate meanwhile: the person's words go to the new note box, never lost
   useEffect(() => {
+    if (editing && !notes.some((x) => x.id === editing)) {
+      const words = draft.trim();
+      setEditing(null);
+      setFrom(null);
+      if (words) {
+        setText((x) => (x.trim() ? `${x.trimEnd()}\n\n${words}` : words));
+        ctx.addToast('The note you were changing was deleted by someone else. Your words are in the new note box: Add note saves them.', 'info');
+        requestAnimationFrame(() => box.current?.focus());
+      }
+      return;
+    }
     const n = editing && notes.find((x) => x.id === editing);
     if (n && from !== null && n.body !== from && n.body === draft.trim()) { setEditing(null); setFrom(null); focusNote(n.id); }
   }, [notes]);
@@ -983,7 +1003,7 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
     setBusy(true);
     const r = await change({ act: 'note-add', key: subject, body: t, id: pending.current.id });
     setBusy(false);
-    if (!r.success) { ctx.addToast(r.error, 'error'); return; }
+    if (!r.success) { ctx.addToast(r.error, 'error'); requestAnimationFrame(() => box.current?.focus()); return; }
     pending.current = null;
     setText('');
     await onDone();
@@ -1278,6 +1298,8 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
 
 // ─── One organization ───────────────────────────────────────────────
 
+// (one Put it on the website at a time: a double click asks once)
+let puttingOnSite = false;
 function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   const [v, setV] = useState(null);
   const [err, setErr] = useState(null);
@@ -1329,7 +1351,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   const near = v.needs.filter((n) => n.kind === 'near');
   const unlink = async (n) => {
     if (!(await ask({ title: `Take “${n.name}” off ${v.name}?`, text: n.kind === 'payment' ? 'That gift counts as it would without your answer: for its giver’s organization if they have one, else for them.' : 'Its gifts count for the people who gave them again, and the site won’t link that name to it by itself.', yes: 'Take it off' }))) return;
-    const r = await change(n.kind === 'payment' ? { act: 'payment-clear', id: n.subject } : { act: 'not', kind: n.kind, subject: n.subject, org: v.key });
+    const r = await change(n.kind === 'payment' ? { act: 'payment-clear', id: n.subject } : { act: 'not', kind: n.kind, subject: n.subject, ...(n.subjects?.length > 1 ? { subjects: n.subjects } : {}), org: v.key });
     if (!r.success) { ctx.addToast(r.error, 'error'); return; }
     listChanged();
     ctx.addToast(`“${n.name}” is off ${v.name}`, 'success');
@@ -1338,6 +1360,11 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   // Refused (answered by someone since): the page as it is now, so the question it showed goes
   const say = async (body, done) => { setBusy(true); const r = await change(body); setBusy(false); if (!r.success) { ctx.addToast(r.error, 'error'); await load(); return false; } listChanged(); if (done) ctx.addToast(done, 'success'); await load(); return true; };
   const putOnSite = async () => {
+    if (puttingOnSite) return;
+    puttingOnSite = true;
+    try { await putOnSiteNow(); } finally { puttingOnSite = false; }
+  };
+  const putOnSiteNow = async () => {
     if (!ctx.createPartner) { location.hash = '#partners'; return; }
     // As it is now, not as this page read it: taken out, renamed or put on the website by a teammate since
     const now = await get(`?org=${encodeURIComponent(v.key)}`);
@@ -1478,7 +1505,7 @@ function RenameDialog({ name, onSave, onClose }) {
       <h3 id="dn-rename-h">Rename ${name}</h3>
       <p>Only staff see this name. It isn’t on the website.</p>
       <label class="sr-only" for="dn-rename-input">Name</label>
-      <input id="dn-rename-input" ref=${input} class="form-input" value=${val} onInput=${(e) => setVal(e.target.value)} autocomplete="off" />
+      <input id="dn-rename-input" ref=${input} class="form-input" maxlength="120" value=${val} onInput=${(e) => setVal(e.target.value)} autocomplete="off" />
       <div class="modal-buttons"><button type="button" class="btn btn-ghost" onClick=${onClose} disabled=${busy}>Cancel</button>
         <button type="submit" class="btn btn-primary" disabled=${busy || !val.trim()}>${busy ? html`<span class="spinner spinner-14" />` : null}Save</button></div>
     </form></div></div>`;

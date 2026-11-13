@@ -7943,7 +7943,8 @@
         const key = (e) => {
           if (e.key.toLowerCase() !== 'z' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented) return;
           const el = e.target;
-          if (el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]') || document.querySelector('[aria-modal="true"]')) return;
+          const typing = el?.closest?.('textarea, [contenteditable=""], [contenteditable="true"]') || (el?.matches?.('input') && !/^(checkbox|radio|button|submit|reset|range|color|file)$/i.test(el.type || ''));
+          if (typing || document.querySelector('[aria-modal="true"]')) return;
           const t = [...latest.current].reverse().find((x) => x.action?.label === 'Undo');
           if (!t) return;
           e.preventDefault();

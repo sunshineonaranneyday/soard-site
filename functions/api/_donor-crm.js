@@ -825,7 +825,7 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // Already them (tried again after an answer was lost, a teammate who picked the same): nothing to change
     if ((crm.lookedAfterBy(key) || '') === email) return { ok: true, same: true };
     // The owner the person saw (another tab, a teammate since): never a quiet second answer over the first
-    const changed = (now2) => bad(`Someone changed who looks after them since you looked${now2 ? ` (${now2.split('@')[0]})` : ' (no one)'}. Nothing was changed.`, 409);
+    const changed = (now2) => bad(`Someone changed who looks after them since you looked${now2 ? ` (${now2.split('@')[0].replace(/^./, (c) => c.toUpperCase())} now)` : ' (no one now)'}. Nothing was changed.`, 409);
     if (typeof body.was === 'string' && (crm.lookedAfterBy(key) || '') !== body.was.toLowerCase()) throw changed(crm.lookedAfterBy(key));
     let name = null;
     if (email) {
@@ -1693,7 +1693,7 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
   }
   for (const pe of people.values()) if (ownRow.has(pe.key)) pe.name = personName(ownRow.get(pe.key));
   // Its own Zeffy record (every name of it this one's): no page apart from this one, so no link back to it
-  for (const pe of people.values()) if (pe.key.startsWith('c:') && crm.contactIsOrg(pe.key.slice(2)) === key) pe.self = true;
+  for (const pe of people.values()) if (pe.key.startsWith('c:') && crm.keysOf(pe.key).length === 1 && crm.contactIsOrg(pe.key.slice(2)) === key) pe.self = true;
   // Links made with no gifts yet (a contact or a name a person linked before it gave)
   for (const [k, t] of crm.calls.yes) {
     if (t !== key) continue;
@@ -1704,6 +1704,17 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
       const typed = clean(rows.find((r) => r.company && nameKey(r.company) === subject)?.company) || crm.companyName(subject) || subject;
       companies.set(subject, { kind, subject: typed, name: typed, how: 'linked', noGifts: !rows.some((r) => r.company && nameKey(r.company) === subject && Number(r.giving) > 0) });
     }
+  }
+  // A person joined from several Zeffy contacts is one name here (Take off takes them all, as Count it linked them all)
+  const byPerson = new Map();
+  for (const [k, c] of contacts) {
+    if (c.kind !== 'contact') continue;
+    const p = crm.canon(`c:${c.subject}`);
+    const had = byPerson.get(p);
+    if (!had) { c.subjects = [c.subject]; byPerson.set(p, c); continue; }
+    had.subjects.push(c.subject);
+    if (c.how === 'linked') had.how = 'linked';
+    contacts.delete(k);
   }
   const needs = needsOf(rows, crm, { now, unplaced: st.unplaced || [] }).filter((n) => n.org === key || n.counted === key || n.other === key);
   return {

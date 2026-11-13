@@ -1361,7 +1361,7 @@ test('an owner changed by a teammate between the read and the write is never wri
   await add(pay({ id: 'rc', contact: 'ct_rae', first: 'Rae', last: 'Cole', email: 'rae@example.com' }));
   const teammate = () => db.prepare("INSERT INTO donor_calls (kind, subject, target, answer, note, by, at) VALUES ('owner', 'c:ct_rae', '', 1, 'jordan@soardcharity.com', 'jordan@soardcharity.com', ?)").bind(new Date(NOW).toISOString()).run();
   const renv = { DB: racing(db, teammate) };
-  await assert.rejects(C.act(renv, { act: 'owner', key: 'c:ct_rae', email: 'alex@soardcharity.com', was: '' }, by, { now: NOW }), (e) => e.status === 409 && /jordan/.test(e.message));
+  await assert.rejects(C.act(renv, { act: 'owner', key: 'c:ct_rae', email: 'alex@soardcharity.com', was: '' }, by, { now: NOW }), (e) => e.status === 409 && /Jordan now/.test(e.message));
   assert.equal((await C.personView(env, 'ct_rae', { now: NOW })).owner, 'jordan@soardcharity.com', 'Jordan’s answer stands');
 });
 
@@ -1683,4 +1683,15 @@ test('organizations named in another script can each be kept (their names told a
   const b = await doIt({ act: 'org-new', name: '日本財団', links: [] });
   assert.notEqual(a.key, b.key);
   await assert.rejects(doIt({ act: 'org-new', name: '日本財団', links: [] }), (e) => e.status === 409, 'the same one twice is still one');
+});
+
+test('a joined person counted for an organization is one name there; Take off takes all their records', async () => {
+  await add(pay({ id: 'dw1', contact: 'ct_dw1', first: 'Dana', last: 'Whitfield', email: 'dana@example.com', amount: 5000 }), pay({ id: 'dw2', contact: 'ct_dw2', first: 'Dana', last: 'Whitfield', email: 'dana@example.org', amount: 4000, created: S(NOW - 3 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_dw1', b: 'c:ct_dw2', same: true });
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_dw1', subjects: ['ct_dw1', 'ct_dw2'], org: 'p:pella' });
+  const names = (await C.orgView(env, 'p:pella', { now: NOW })).names.filter((n) => n.kind === 'contact');
+  assert.equal(names.length, 1);
+  assert.deepEqual(names[0].subjects.sort(), ['ct_dw1', 'ct_dw2']);
+  await doIt({ act: 'not', kind: 'contact', subject: names[0].subject, subjects: names[0].subjects, org: 'p:pella' });
+  assert.ok(!(await list()).some((p) => p.key === 'p:pella'), 'nothing of hers counts for Pella');
 });
