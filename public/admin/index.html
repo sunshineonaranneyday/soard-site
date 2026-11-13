@@ -25405,8 +25405,18 @@ ${sections || '<p>No one yet.</p>'}
     // `moved` (an event name) is sent when what `mark` reads changes between two looks (a teammate's change in another
     // tab): never on the first look
     // `backAfterMs`: back on the tab after that long, it looks again at once (never waits for the next turn)
-    function sharedPoll(url, read, everyMs, { on = null, moved = null, mark = null, backAfterMs = everyMs / 2 } = {}) {
-      const s = { v: read(null), at: 0, subs: new Set(), timer: null, n: 0, mark: undefined, had: false };
+    function sharedPoll(url, read, everyMs, { on = null, moved = null, mark = null, revOf = null, ownRev = null, backAfterMs = everyMs / 2 } = {}) {
+      const s = { v: read(null), at: 0, subs: new Set(), timer: null, n: 0, mark: undefined, had: false, own: new Set() };
+      // (`revOf`: the mark's change number. Every number passed since the last look this tab's own (`ownRev` events
+      // name them): nothing to announce; any other, someone else's, so whoever shows the same thing reads again)
+      const onlyOurs = (was, m) => {
+        if (!revOf) return s.quiet;
+        const a = revOf(was);
+        const b = revOf(m);
+        if (a == null || b == null || b <= a) return false;
+        for (let x = a + 1; x <= b; x++) if (!s.own.has(x)) return false;
+        return true;
+      };
       const put = (v) => { if (v !== s.v) { s.v = v; s.subs.forEach((f) => f(v)); } };
       // Only the newest answer counts: a slow one from before a change never lands over the number after it
       const refresh = async () => {
@@ -25425,13 +25435,15 @@ ${sections || '<p>No one yet.</p>'}
           if (m === undefined || m === null) return;
           const was = s.mark;
           s.mark = m;
-          if (moved && s.had && m !== was && !s.quiet) window.dispatchEvent(new Event(moved));
+          if (moved && s.had && m !== was && !onlyOurs(was, m)) window.dispatchEvent(new Event(moved));
           s.quiet = false;
+          if (revOf) { const b = revOf(m); if (b != null) for (const x of s.own) if (x <= b) s.own.delete(x); }
           s.had = true;
         } catch { /* keeps what it had until the next look */ }
       };
       // (this tab's own change: the next look takes the mark it moved to quietly, never announcing it as a teammate's)
-      const heard = (e) => { s.quiet = true; if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } refresh(); };
+      const heard = (e) => { if (!revOf) s.quiet = true; if (e?.detail && 'value' in e.detail) { s.at = Date.now(); s.n++; put(e.detail.value); } refresh(); };
+      const mine = (e) => { if (Number.isFinite(e?.detail?.rev)) s.own.add(e.detail.rev); };
       const back = () => { if (!document.hidden && Date.now() - s.at > backAfterMs) refresh(); };
       function use() {
         const [v, setV] = useState(s.v);
@@ -25441,6 +25453,7 @@ ${sections || '<p>No one yet.</p>'}
             s.timer = setInterval(() => { if (!document.hidden) refresh(); }, everyMs);
             document.addEventListener('visibilitychange', back);
             if (on) window.addEventListener(on, heard);
+            if (ownRev) window.addEventListener(ownRev, mine);
           }
           if (Date.now() - s.at > everyMs / 2) refresh();
           return () => {
@@ -25449,6 +25462,7 @@ ${sections || '<p>No one yet.</p>'}
               clearInterval(s.timer);
               document.removeEventListener('visibilitychange', back);
               if (on) window.removeEventListener(on, heard);
+              if (ownRev) window.removeEventListener(ownRev, mine);
             }
           };
         }, []);
@@ -25463,7 +25477,7 @@ ${sections || '<p>No one yet.</p>'}
     // Families at Applied, waiting for a first look: Applications' badge
     const applicantsNew = sharedPoll('/api/applicants-count', (j) => (j?.success ? j.applied || 0 : 0), 300e3);
     // Gifts waiting for a thank-you (Donors & Partners → To thank): its badge. Donors says when one is marked
-    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j === null ? 0 : j?.success && Number.isFinite(j.thanks) ? j.thanks : undefined), 300e3, { on: 'soard-thanks-changed', moved: 'soard-thanks-moved', backAfterMs: 15e3, mark: (j) => (j?.success && typeof j.thanksMark === 'string' ? j.thanksMark : undefined) });
+    const thanksWaiting = sharedPoll('/api/donors-admin?counts=1', (j) => (j === null ? 0 : j?.success && Number.isFinite(j.thanks) ? j.thanks : undefined), 300e3, { on: 'soard-thanks-changed', moved: 'soard-thanks-moved', backAfterMs: 15e3, mark: (j) => (j?.success && typeof j.thanksMark === 'string' ? j.thanksMark : undefined), revOf: (m) => { const x = parseInt(String(m ?? '').split('|')[0], 10); return Number.isFinite(x) ? x : null; }, ownRev: 'soard-donors-rev' });
     // One of the Board area's admins (Board → Members): the menu and ⌘K show Board only to them
     const boardAdminGate = sharedPoll('/api/board-admin?me=1', (j) => j?.admin === true, 30 * 60e3);
     const navShown = (it, boardAdmin) => it.gate !== 'board' || boardAdmin;
@@ -25927,8 +25941,9 @@ ${sections || '<p>No one yet.</p>'}
         askToLeave(globalDirtyReason()).then((ok) => { if (ok) { setGlobalDirty(false); go(); } });
       };
       const navigate = (v, slug = null, tab = null, filter = null) => leaveThen(() => {
-        // (an area opened by name, from the sidebar: it shows fresh, as it first does)
-        window.dispatchEvent(new Event('soard-nav'));
+        // (an area opened by name, from the sidebar: it shows fresh, as it first does; the event names the area, so
+        // another area's opening leaves this one's place for Back to find)
+        window.dispatchEvent(new CustomEvent('soard-nav', { detail: v }));
         // The address follows the area. One the caller already set inside it
         // (#broadcast/invites, #site/newsletter) stays as it is. A Site Config page asked for by name goes in it too.
         const to = v === 'site-hub' && tab ? `#site/${tab}` : addressOf(v);

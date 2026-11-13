@@ -109,6 +109,8 @@ const saved = [];
 let lose = null;
 // Every change the page sent (its act and state): a double click is one press
 const posts = [];
+// A slow answer: the change waits this long (ms) before it's made and answered
+let slow = null;
 function serve() {
   const server = createServer(async (req, res) => {
     const u = new URL(req.url, 'http://x');
@@ -116,6 +118,11 @@ function serve() {
       calls.push(u.search);
       const request = await toRequest(req);
       if (req.method === 'POST') posts.push(await request.clone().json().catch(() => ({})));
+      if (req.method === 'POST' && slow) {
+        const b = await request.clone().json().catch(() => ({}));
+        const ms = slow(b);
+        if (ms) { slow = null; await new Promise((r) => setTimeout(r, ms)); }
+      }
       if (req.method === 'POST' && lose) {
         const b = await request.clone().json().catch(() => ({}));
         if (lose(b)) { lose = null; await donorsPost({ env, request, data: { userEmail: 'alex@soardcharity.com' } }); res.writeHead(524, { 'Content-Type': 'text/html' }); return res.end('<html>A timeout occurred</html>'); }
@@ -808,6 +815,45 @@ try {
   await page.evaluate(() => [...document.querySelectorAll('.kd-rail button')].find((b) => /Put it on the website/.test(b.textContent))?.click());
   await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /taken out since this page was read/.test(t.textContent)), { timeout: 8000 }).catch(() => {});
   ok(saved.length === savedBefore && !(await page.$('.kd-dialog')) && await page.evaluate(() => [...document.querySelectorAll('.toast')].some((t) => /taken out since this page was read/.test(t.textContent))), 'taken out by a teammate meanwhile: Put it on the website says so and makes no partner card');
+  // A note whose save is slow, the page left while it saves: back on the page, it's in the list once, the box empty,
+  // never back in its box as not saved (and Add note can't make it twice)
+  await page.evaluate(() => { location.hash = '#donors/ct_fill_11'; });
+  await page.waitForSelector('#dn-note-text', { timeout: 8000 });
+  await page.evaluate(() => document.querySelectorAll('.toast').forEach((t) => { t.dataset.before = '1'; }));
+  await page.click('#dn-note-text');
+  await page.keyboard.type('Sent the gala photos');
+  slow = (b) => (b.act === 'note-add' ? 2000 : 0);
+  await page.evaluate(() => [...document.querySelectorAll('.dn-note-new button')].find((b) => b.textContent.trim() === 'Add note')?.click());
+  await wait(200);
+  await page.evaluate(() => history.back());
+  await wait(3000);
+  await page.evaluate(() => history.forward());
+  await page.waitForFunction(() => [...document.querySelectorAll('.dn-note__body')].some((n) => /Sent the gala photos/.test(n.textContent)), { timeout: 8000 }).catch(() => {});
+  const after = { box: await page.$eval('#dn-note-text', (t) => t.value).catch(() => '?'), shown: await page.$$eval('.dn-note__body', (l) => l.filter((n) => /Sent the gala photos/.test(n.textContent)).length), toasts: await page.evaluate(() => [...document.querySelectorAll('.toast:not([data-before])')].map((t) => t.textContent.trim())) };
+  ok(after.box === '' && after.shown === 1 && !after.toasts.some((t) => /not saved yet/.test(t)), `a note saved after the page was left: in the list once, its box empty, nothing says it isn’t saved (${JSON.stringify(after)})`);
+  ok((await DB.prepare("SELECT COUNT(*) AS n FROM donor_notes WHERE body = 'Sent the gala photos'").first()).n === 1, 'and saved once');
+  // Back through another area: the list as it was (its search), not fresh
+  await page.evaluate(() => { location.hash = '#donors'; });
+  await page.waitForSelector('input[aria-label="Search donors"]', { timeout: 8000 });
+  await page.$eval('input[aria-label="Search donors"]', (i) => { i.value = 'Filler'; i.dispatchEvent(new Event('input', { bubbles: true })); });
+  await wait(500);
+  await page.evaluate(() => [...document.querySelectorAll('.dn-table .dn-name')].find((b) => /Filler Donor 012/.test(b.textContent))?.click());
+  await page.waitForFunction(() => /Filler Donor 012/.test(document.querySelector('.dn-head h2')?.textContent || ''), { timeout: 8000 }).catch(() => {});
+  // (another area from the sidebar: the first one that isn't Donors)
+  await page.evaluate(() => [...document.querySelectorAll('.sidebar a.nav-item')].find((a) => /^#[a-z]/.test(a.getAttribute('href') || '') && !/^#donors/.test(a.getAttribute('href')))?.click());
+  await page.waitForFunction(() => !/^#donors/.test(location.hash), { timeout: 6000 }).catch(() => {});
+  const away = await page.evaluate(() => location.hash);
+  // (that area's own reads in this walk, which serves Donors only: not this page's)
+  const errAt = errors.length;
+  await wait(1200);
+  errors.splice(errAt);
+  await page.evaluate(() => history.back());
+  await page.waitForFunction(() => /Filler Donor 012/.test(document.querySelector('.dn-head h2')?.textContent || ''), { timeout: 8000 }).catch(() => {});
+  await page.evaluate(() => history.back());
+  await page.waitForSelector('input[aria-label="Search donors"]', { timeout: 8000 }).catch(() => {});
+  await wait(400);
+  ok(!/^#donors/.test(away) && await page.$eval('input[aria-label="Search donors"]', (i) => i.value).catch(() => '') === 'Filler', `Back through another area (${away}): the list as it was, its search kept`);
+  await page.$eval('input[aria-label="Search donors"]', (i) => { i.value = ''; i.dispatchEvent(new Event('input', { bubbles: true })); });
   ok(!calls.some((c) => /%40|@/.test(c)), 'still no email in any request');
   ok(errors.length === 0, `no console errors on the laptop${errors.length ? `: ${errors.slice(0, 3).join(' | ')}` : ''}`);
 

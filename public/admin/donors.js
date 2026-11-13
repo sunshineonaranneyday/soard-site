@@ -41,7 +41,7 @@ const STYLE = `
 .dn { display: grid; gap: 1rem; min-width: 0; }
 /* Each one-column stack is as wide as its box, never as wide as its widest content asks (the filter pills' row
    asks for its whole length before it scrolls): what's too long wraps or scrolls inside, the page never widens */
-:is(.dn, .dn-years, .dn-gifts, .dn-facts, .dn-needs, .dn-need, .dn-plain, .dn-thank__list, .dn-thank__one, .dn-notes, .dn-note-new) { grid-template-columns: minmax(0, 1fr); }
+:is(.dn, .dn-years, .dn-gifts, .dn-facts, .dn-needs, .dn-need, .dn-plain, .dn-thank__list, .dn-thank__one, .dn-notes, .dn-note-new, .dn-picker__list, .dn-picker__item) { grid-template-columns: minmax(0, 1fr); }
 .dn-status { margin: 0; font-size: var(--fs-xs); color: var(--color-text-muted); }
 .dn-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem .75rem; }
 .dn-toolbar .search-bar { flex: 1 1 16rem; min-width: 0; }
@@ -115,7 +115,8 @@ const STYLE = `
 .dn-picker { width: min(32rem, 100%); }
 .dn-picker .form-input { width: 100%; margin-bottom: .6rem; }
 .dn-picker__list { display: grid; gap: .25rem; max-height: 50vh; overflow: auto; margin: 0 0 1rem; padding: 0; list-style: none; }
-.dn-picker__item { display: grid; gap: .1rem; width: 100%; padding: .55rem .7rem; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-card); font: inherit; text-align: left; color: var(--color-text); cursor: pointer; }
+.dn-picker__list > li { min-width: 0; }
+.dn-picker__item { display: grid; gap: .1rem; width: 100%; min-width: 0; overflow-wrap: anywhere; padding: .55rem .7rem; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-card); font: inherit; text-align: left; color: var(--color-text); cursor: pointer; }
 .dn-picker__item:hover:not(:disabled) { border-color: var(--color-border-strong); background: var(--color-bg-hover); }
 .dn-picker__item:disabled { opacity: .55; cursor: default; }
 .dn-picker__none { padding: .5rem .2rem; }
@@ -237,13 +238,18 @@ const get = (params) => call(params);
 // Every change, sent twice, is made once and answers as it is (done already, or refused): an answer lost on the way
 // back is asked once more, so the page says what really happened
 const lostAnswer = (r) => !r.success && (!r.status || r.status >= 500);
+// A change's answer names the mark it moved the lists to: this tab's own, so the counts' look never takes it for a
+// teammate's (and a teammate's landing just after is never taken for this one)
+const ownRev = (r) => { if (Number.isFinite(r?.rev)) window.dispatchEvent(new CustomEvent('soard-donors-rev', { detail: { rev: r.rev } })); };
 const change = async (body) => {
   let r = await call('', body);
+  ownRev(r);
   // (twice more, a moment apart: a short outage, or two answers lost in a row, still ends in what really happened)
   for (const ms of [0, 800]) {
     if (!lostAnswer(r)) break;
     if (ms) await new Promise((ok) => setTimeout(ok, ms));
     r = { ...(await call('', body)), retried: true };
+    ownRev(r);
   }
   if (!r.success) {
     listChanged();
@@ -359,9 +365,9 @@ const SORTS = [
 let lastList = null; // the list as last read, so coming back from a donor shows it at once
 // Where the list was (search, filter, sort, how many shown, scroll, the donor opened), so Back returns there
 let lastPlace = null;
-// The admin's sidebar (or anything that opens an area by name) brings Donors fresh: its list as it first shows.
-// Back and Forward through the areas find it as it was
-if (typeof window !== 'undefined') window.addEventListener('soard-nav', () => { lastPlace = null; });
+// The admin's sidebar (or anything that opens Donors by name) brings Donors fresh: its list as it first shows.
+// Another area opened by name leaves it be: Back and Forward through the areas find it as it was
+if (typeof window !== 'undefined') window.addEventListener('soard-nav', (e) => { if (!e.detail || e.detail === 'donors') lastPlace = null; });
 // The Owner filter, kept while the admin is open (a donor's page and back, To thank and back)
 let lastOwner = '';
 // Where a donor's page was opened from, when not the list ('thanks' | 'needs'): its Back goes there. Kept with the
@@ -378,10 +384,12 @@ const keepDraft = (k, v) => { try { if (v) localStorage.setItem(k, JSON.stringif
  * the words being written there go with it, added to any already kept there */
 function moveDraft(from, to) {
   if (!from || !to || from === to) return;
-  const words = [draftOf(draftKey(from, 'new'))?.text, draftOf(draftKey(from, 'edit'))?.draft].map((x) => String(x || '').trim()).filter(Boolean);
+  const n = draftOf(draftKey(from, 'new'));
+  const words = [n?.text, draftOf(draftKey(from, 'edit'))?.draft].map((x) => String(x || '').trim()).filter(Boolean);
   if (!words.length) return;
   const there = String(draftOf(draftKey(to, 'new'))?.text || '').trim();
-  keepDraft(draftKey(to, 'new'), { text: [there, ...words].filter(Boolean).join('\n\n') });
+  const text = [there, ...words].filter(Boolean).join('\n\n');
+  keepDraft(draftKey(to, 'new'), { text, moved: true, ...(n?.id && text === String(n.text || '').trim() ? { id: n.id } : {}) });
   keepDraft(draftKey(from, 'new'), null);
   keepDraft(draftKey(from, 'edit'), null);
 }
@@ -611,7 +619,9 @@ async function sayThanks(ctx, g, state) {
     listChanged();
     thanksChanged();
     if (!u.success) { ctx.addToast(u.error, 'error'); return; }
-    ctx.addToast(`To thank again: ${amountOf(g)}${from}`, 'info');
+    // (put back already, by a teammate or another tab: said so, never as if this Undo did it)
+    if (u.same && !(u.retried && u.you)) ctx.addToast(`Back on To thank already${u.you ? ', by you in another tab' : u.by ? `, put back by ${u.by.split('@')[0].replace(/^./, (c) => c.toUpperCase())}` : ''}: ${amountOf(g)}${from}`, 'info');
+    else ctx.addToast(`To thank again: ${amountOf(g)}${from}`, 'info');
     await back;
   };
   // (Zeffy with no name for them: the gift alone, never "from No name")
@@ -993,18 +1003,35 @@ function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
   // Who it is as last read (a save's re-read moves it on: the next pick's `was`)
   const shown = useRef(owner);
   shown.current = owner;
-  useEffect(() => () => clearTimeout(wait.current), []);
   // Saved a moment after the pick settles, or when the select is left: arrowing through a closed select (Windows
   // changes it at each press) saves only the one landed on, never an owner and a History line per name passed
+  const waiting = useRef(null);
+  // The page going (another page, a reload, the tab closed) with a pick still waiting: it's sent as it goes, so what
+  // the select showed is what's saved
+  useEffect(() => {
+    const flush = () => {
+      if (!wait.current || waiting.current === null) return;
+      clearTimeout(wait.current);
+      wait.current = null;
+      const email = waiting.current;
+      waiting.current = null;
+      if (email === (shown.current || '')) return;
+      try { fetch(API, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Accept: 'application/json' }, body: JSON.stringify({ act: 'owner', key: subject, email, was: shown.current || '' }) }).then(() => listChanged(), () => {}); } catch { /* sent as far as the browser lets it */ }
+    };
+    window.addEventListener('pagehide', flush);
+    return () => { window.removeEventListener('pagehide', flush); flush(); };
+  }, [subject]);
   const pick = (e) => {
     const email = e.target.value;
     setPicked(email);
     clearTimeout(wait.current);
+    waiting.current = email;
     wait.current = setTimeout(() => save(email), 700);
   };
   const settle = () => { if (wait.current && picked !== null) { clearTimeout(wait.current); save(picked); } };
   const save = async (email) => {
     wait.current = null;
+    waiting.current = null;
     // One at a time: a pick while one saves goes once that's saved and read again
     if (saving.current) { next.current = email; return; }
     if (email === (shown.current || '')) { setPicked((p) => (p === email ? null : p)); return; }
@@ -1070,8 +1097,18 @@ function ThankBox({ gifts, name, ctx }) {
 
 /** The team's notes: newest first, anyone on the team can add, change or delete one */
 function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDone }) {
-  // Words typed here before and not saved (left, reloaded): back in their box
-  const [had] = useState(() => ({ text: draftOf(draftKey(subject, 'new'))?.text || '', edit: draftOf(draftKey(subject, 'edit')) }));
+  const kNew = draftKey(subject, 'new');
+  const kEdit = draftKey(subject, 'edit');
+  // Words typed here before and not saved (left, reloaded, another tab): back in their box. Saved since (the save
+  // landed after the page was left, or in another tab), the note is in the list, so the words aren't put back
+  const [had] = useState(() => {
+    let n = draftOf(kNew);
+    let e = draftOf(kEdit);
+    // (the kept words carry the note's id only while they're what Add note sent: that id in the list is them)
+    if (n?.id && notes.some((x) => x.id === n.id)) { keepDraft(kNew, null); n = null; }
+    if (e && notes.some((x) => x.id === e.id && x.body === String(e.draft || '').trim())) { keepDraft(kEdit, null); e = null; }
+    return { text: n?.text || '', id: n?.id || null, moved: !!n?.moved, edit: e };
+  });
   const [text, setText] = useState(had.text);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(had.edit?.id ?? null);
@@ -1079,13 +1116,50 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   // The note's words when Change was pressed: changed by a teammate since, it shows above the person's own
   const [from, setFrom] = useState(had.edit?.from ?? null);
   const box = useRef(null);
-  // The note being added: named here, so pressing Add again after an answer that was lost saves it once
-  const pending = useRef(null);
+  // The note being added: named here and in the kept words, so Add note pressed again (after an answer that was lost,
+  // after leaving and coming back, in another tab) saves it once
+  const pending = useRef(had.id ? { id: had.id, text: had.text.trim() } : null);
+  const textNow = useRef(text);
+  textNow.current = text;
+  // (this page's own save still out: what it hears of that note is its own)
+  const saving = useRef(null);
+  const gone = useRef(false);
+  useEffect(() => () => { gone.current = true; }, []);
   // Words typed and not saved: kept as they're typed (a move, Back, a reload never loses them), gone once saved
-  useEffect(() => { keepDraft(draftKey(subject, 'new'), text.trim() ? { text } : null); }, [text]);
-  useEffect(() => { keepDraft(draftKey(subject, 'edit'), editing !== null && from !== null && draft.trim() !== String(from).trim() ? { id: editing, from, draft } : null); }, [editing, draft, from]);
+  const keepNew = (t) => keepDraft(kNew, t.trim() ? { text: t, ...(pending.current?.text === t.trim() ? { id: pending.current.id } : {}) } : null);
+  useEffect(() => { keepNew(text); }, [text]);
+  useEffect(() => { keepDraft(kEdit, editing !== null && from !== null && draft.trim() !== String(from).trim() ? { id: editing, from, draft } : null); }, [editing, draft, from]);
+  // Saved by this page before it was left and opened again (the save landed after): the list read again shows it
+  useEffect(() => {
+    const on = (e) => { if (e.detail?.subject === subject && e.detail.id === pending.current?.id && saving.current !== e.detail.id) onDone(); };
+    window.addEventListener('soard-note-saved', on);
+    return () => window.removeEventListener('soard-note-saved', on);
+  }, [subject]);
+  // The same giver open in another tab: a box showing what that tab had follows it (the words, the note's id once its
+  // Add note is pressed), and empties when that tab saves it, so the same words never become two notes
+  useEffect(() => {
+    const read = (x) => { try { return JSON.parse(x || 'null'); } catch { return null; } };
+    const on = (e) => {
+      if (e.key !== kNew || saving.current) return;
+      const was = read(e.oldValue);
+      const now = read(e.newValue);
+      // (only a box as that tab had it: what's typed here since is this person's)
+      if (textNow.current.trim() !== String(was?.text || '').trim()) return;
+      if (now) {
+        if (now.id) pending.current = { id: now.id, text: String(now.text || '').trim() };
+        if (String(now.text || '') !== textNow.current) setText(String(now.text || ''));
+        return;
+      }
+      const said = was?.id && pending.current?.id === was.id;
+      pending.current = null;
+      setText('');
+      if (said) onDone();
+    };
+    window.addEventListener('storage', on);
+    return () => window.removeEventListener('storage', on);
+  }, [subject]);
   // (back in the box: said so, once)
-  useEffect(() => { if (had.text.trim() || had.edit) ctx.addToast('Your note from before, not saved yet, is back in its box.', 'info'); }, []);
+  useEffect(() => { if (had.text.trim() || had.edit) ctx.addToast(had.moved && !had.edit ? 'The note you were writing came here with the page. It isn’t saved yet.' : 'Your note from before, not saved yet, is back in its box.', 'info'); }, []);
   // Saved after all (its answer lost, the page read again): it's in the list, so the box empties
   // (only when the box still holds those words: typed on since, the box keeps it all, and says the first part saved)
   useEffect(() => {
@@ -1117,8 +1191,23 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
     const t = text.trim();
     if (!t || busy) return;
     if (!pending.current || pending.current.text !== t) pending.current = { id: crypto.randomUUID(), text: t };
+    const id = pending.current.id;
+    // (the kept words named as this note now: left, reloaded or open in another tab meanwhile, it's the same note)
+    keepNew(text);
+    saving.current = id;
     setBusy(true);
-    const r = await change({ act: 'note-add', key: subject, body: t, id: pending.current.id });
+    const r = await change({ act: 'note-add', key: subject, body: t, id });
+    // Saved: the kept words go, wherever the person is now (never back in a box as not saved)
+    if (r.success) {
+      if (draftOf(kNew)?.id === id) keepDraft(kNew, null);
+      window.dispatchEvent(new CustomEvent('soard-note-saved', { detail: { subject, id } }));
+    }
+    saving.current = null;
+    if (gone.current) {
+      // (left while it saved: said only when it may not have, the words kept for the page)
+      if (!r.success) ctx.addToast(`Your note about ${name} may not have saved. ${lostAnswer(r) ? 'The site didn’t answer. ' : ''}Its words are kept on their page: open it again to see.`, 'error');
+      return;
+    }
     setBusy(false);
     if (!r.success) { ctx.addToast(r.error, 'error'); requestAnimationFrame(() => box.current?.focus()); return; }
     pending.current = null;
@@ -1135,6 +1224,8 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
     if (t === n.body) { stop(n); return; }
     setBusy(true);
     const r = await change({ act: 'note-edit', id: n.id, body: t, was: n.body });
+    if (r.success && draftOf(kEdit)?.id === n.id && String(draftOf(kEdit).draft || '').trim() === t) keepDraft(kEdit, null);
+    if (gone.current) { if (!r.success) ctx.addToast(`Your change to a note about ${name} may not have saved. Its words are kept on their page: open it again to see.`, 'error'); return; }
     setBusy(false);
     if (!r.success) {
       // Never the person's words lost: deleted since, they go to the new note box; changed since, they stay in the
@@ -1323,6 +1414,9 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     if (!j.success && shown.current) { setGone({ text: j.error }); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // (shown already, not by this person's change: the page stays, so nothing typed is lost, and says where they are)
+    // (a Zeffy record merged into another since: its address opens that one, the words being written with it)
+    // (the next read moves them, to the key that page is under)
+    if (j.moved) { if (!shownKey.current && !String(ref).startsWith('g:')) shownKey.current = `c:${String(ref).replace(/^c:/, '')}`; onDonor(j.moved); return; }
     if (j.org && shown.current && follow !== true) { setGone({ text: 'Their gifts count for an organization now: they were linked to it since this page was read.', org: j.org }); return; }
     if (j.org) { moveDraft(shownKey.current, j.org); onOrg(j.org); return; }
     // (joined under another lead since: the words being written go with the page)
@@ -1462,7 +1556,10 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
       }}
       onPick=${async (p) => {
         const r = await change({ act: 'same', a: v.key, b: p.id, same: true });
-        const joined = !r.success && lostAnswer(r) && ((await get(`?donor=${encodeURIComponent(donor || v.ref || '')}`)).also || []).some((a) => a.key === p.id);
+        const joined = !r.success && lostAnswer(r) && await (async () => {
+          const j = await get(`?donor=${encodeURIComponent(donor || v.ref || '')}`);
+          return [j.key, j.shownAs, ...(j.also || []).map((a) => a.key)].includes(p.id);
+        })();
         if (!r.success && !joined) { ctx.addToast(r.error, 'error'); return false; }
         listChanged();
         ctx.addToast(`${d.name} and ${p.label} are one donor now`, 'success');
@@ -1592,12 +1689,17 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   const takeOut = async () => {
     const ownNotes = (v.notes || []).filter((n) => n.subject === v.key).length;
     const ownOwner = v.ownOwner || null;
-    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${ownNotes || ownOwner ? ` Its ${[ownOwner ? 'owner' : null, ownNotes === 1 ? 'note' : ownNotes ? `${ownNotes} notes` : null].filter(Boolean).join(' and its ')} ${(ownOwner && ownNotes) || ownNotes > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : `with it: ${(ownOwner && ownNotes) || ownNotes > 1 ? 'they’re' : 'it’s'} deleted.`}` : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
+    // (a note being written here: said what becomes of it, never lost unasked)
+    const writing = !!(String(draftOf(draftKey(v.key, 'new'))?.text || '').trim() || draftOf(draftKey(v.key, 'edit')));
+    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${ownNotes || ownOwner ? ` Its ${[ownOwner ? 'owner' : null, ownNotes === 1 ? 'note' : ownNotes ? `${ownNotes} notes` : null].filter(Boolean).join(' and its ')} ${(ownOwner && ownNotes) || ownNotes > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : `with it: ${(ownOwner && ownNotes) || ownNotes > 1 ? 'they’re' : 'it’s'} deleted.`}` : ''}${writing ? (v.madeFrom ? ` The note you’re writing here goes to ${v.madeFrom.name}’s page, not saved yet.` : ' The note you’re writing here isn’t saved, and goes with it.') : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
     // (what the question said goes with it: a teammate's note or owner since is never lost unseen)
     const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '', kept: !!v.keepAnonymous } });
     // (its answers lost every time: taken out after all, it's done)
     const gone = !r.success && lostAnswer(r) && (await get(`?org=${encodeURIComponent(v.key)}`)).status === 404;
     if (!r.success && !gone) { ctx.addToast(r.error, 'error'); if (!left.current) await load(); return; }
+    // (the note being written: to the record it goes back to, else gone with it, as the question said)
+    if (v.madeFrom?.key) moveDraft(v.key, v.madeFrom.key);
+    else { keepDraft(draftKey(v.key, 'new'), null); keepDraft(draftKey(v.key, 'edit'), null); }
     listChanged();
     ctx.addToast(`${v.name} taken out`, 'success');
     if (!left.current) onBack();

@@ -1945,3 +1945,52 @@ test('an organization’s page says which notes and owner are its own (a linked 
   const ken = await C.personView(env, 'ct_kw', { now: NOW });
   assert.deepEqual([ken.owner, ken.notes.map((n) => n.body)], ['alex@soardcharity.com', ['Ken: a makeover in 2019']]);
 });
+
+// ─── Found in the seventeenth round's QA ────────────────────────────
+
+test('Count it for an organization on a record Zeffy moved since the page was read: it counts where the gifts are now', async () => {
+  await add(pay({ id: 'mm1', contact: 'ct_mia', first: 'Mia', last: 'Mover', email: 'mia@example.com', amount: 50000 }));
+  await add(pay({ id: 'mm1', contact: 'ct_mia_new', first: 'Mia', last: 'Mover', email: 'mia@example.com', amount: 50000 }));
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_mia', subjects: ['ct_mia'], org: 'p:acme' });
+  const crm = await C.loadCrm(db, { now: NOW });
+  assert.equal(crm.calls.yes.get('contact\nct_mia_new'), 'p:acme');
+  assert.ok(!(await list()).some((p) => p.key === 'c:ct_mia_new'), 'she counts for Acme, not as a person');
+});
+
+test('Same person as a record Zeffy moved since the page was read: the two are one donor at once', async () => {
+  await add(pay({ id: 'nl1', contact: 'ct_nellie', first: 'Nellie', last: 'Bly', email: 'nellie@example.com', amount: 3000 }),
+    pay({ id: 'nl2', contact: 'ct_nell', first: 'Nell', last: 'Bly', email: 'nell@example.com', amount: 20000 }));
+  await add(pay({ id: 'nl2', contact: 'ct_nell_new', first: 'Nell', last: 'Bly', email: 'nell@example.com', amount: 20000 }));
+  await doIt({ act: 'same', a: 'c:ct_nellie', b: 'c:ct_nell', same: true });
+  const crm = await C.loadCrm(db, { now: NOW });
+  assert.equal(crm.canon('c:ct_nellie'), crm.canon('c:ct_nell_new'));
+  const one = (await list()).find((p) => p.key === crm.canon('c:ct_nellie'));
+  assert.equal(one.total, 23000);
+});
+
+test('a donor address Zeffy merged into another opens that one', async () => {
+  await add(pay({ id: 'ad1', contact: 'ct_adr', first: 'Ada', last: 'Ray', email: 'ada@example.com' }));
+  await add(pay({ id: 'ad1', contact: 'ct_adr_new', first: 'Ada', last: 'Ray', email: 'ada@example.com' }));
+  assert.equal(await C.personView(env, 'ct_adr', { now: NOW }), null);
+  assert.equal(await C.movedTo(env, 'ct_adr'), 'ct_adr_new');
+  assert.equal(await C.movedTo(env, 'ct_adr_new'), null, 'a record with gifts of its own is where it is');
+  assert.equal(await C.movedTo(env, 'ct_nobody'), null);
+});
+
+test('a donor page names the record it shows as theirs (a lost Same person answer checks against it too)', async () => {
+  await add(pay({ id: 'bo1', contact: 'ct_bea_old', first: 'Bea', last: 'Older', email: 'bea@example.com', created: S(NOW - 100 * DAY) }),
+    pay({ id: 'bo2', contact: 'ct_bea_new', first: 'Beatrice', last: 'Older', email: 'beatrice@example.com', created: S(NOW - 2 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_bea_old', b: 'c:ct_bea_new', same: true });
+  const v = await C.personView(env, 'ct_bea_old', { now: NOW });
+  assert.deepEqual([v.shownAs, ...v.also.map((x) => x.key)].sort(), ['c:ct_bea_new', 'c:ct_bea_old']);
+});
+
+test('every change names the mark it moved the lists to, refusals too (the tab knows its own)', async () => {
+  await add(pay({ id: 'rv1', contact: 'ct_rv', first: 'Rae', last: 'Vee', email: 'rae@example.com' }));
+  const a = await doIt({ act: 'owner', key: 'c:ct_rv', email: 'alex@soardcharity.com' });
+  const b = await doIt({ act: 'note-add', key: 'c:ct_rv', body: 'Hello', id: 'note-rv-1' });
+  assert.ok(Number.isFinite(a.rev) && b.rev === a.rev + 1);
+  const e = await doIt({ act: 'owner', key: 'c:ct_rv', email: 'jordan@soardcharity.com', was: 'nobody@example.com' }).catch((x) => x);
+  assert.equal(e.status, 409);
+  assert.equal(e.rev, b.rev + 1);
+});

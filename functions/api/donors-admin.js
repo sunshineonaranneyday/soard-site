@@ -29,7 +29,7 @@
  *                             if someone answered it since
  * A donor's page (?donor, ?org) also carries { owner, notes, history, staff }, and each gift its thank-you
  */
-import { listView, needsView, thanksView, personView, orgView, orgSummary, orgsList, findNames, findPeople, giftOwner, act } from './_donor-crm.js';
+import { listView, needsView, thanksView, personView, orgView, orgSummary, orgsList, findNames, findPeople, giftOwner, act, movedTo } from './_donor-crm.js';
 import { kitFindSubscribers, kitConfigured } from './_kit.js';
 import { checksFacts } from './_check-gifts.js';
 import { thanksCount, thanksMark } from './_donor-thanks.js';
@@ -61,7 +61,8 @@ export async function onRequestGet({ env, request, data }) {
     }
     if (q.get('donor')) {
       const v = await personView(env, q.get('donor'));
-      if (!v) return fail('No donor by that link. Their gifts may have moved to another donor in Zeffy.', 404);
+      // A Zeffy record whose gifts all moved to one other (Zeffy merged them): its address opens that one
+      if (!v) { const to = await movedTo(env, q.get('donor')); return to ? ok({ moved: to }) : fail('No donor by that link. Their gifts may have moved to another donor in Zeffy.', 404); }
       // Every gift of theirs counts for an organization: that's where they are
       if (v.org) return ok({ org: v.org });
       let kit = null;
@@ -88,7 +89,7 @@ export async function onRequestPost({ env, request, data }) {
     return ok(await act(env, body, data?.userEmail || null));
   } catch (e) {
     // (`went`: put on the website as another partner card meanwhile, so the page names the card that isn't needed)
-    if (e.status && e.status < 500) return Response.json({ success: false, error: e.message, ...(e.went ? { went: e.went } : {}) }, { status: e.status });
+    if (e.status && e.status < 500) return Response.json({ success: false, error: e.message, ...(e.went ? { went: e.went } : {}), ...(e.rev ? { rev: e.rev } : {}) }, { status: e.status });
     console.error('[donors-admin] post', e.message);
     return fail(typeof body?.find === 'string' || typeof body?.findPeople === 'string' ? 'The site didn’t answer.' : 'The site didn’t save that. Try again in a minute.', 500);
   }

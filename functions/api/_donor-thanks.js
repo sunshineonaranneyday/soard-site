@@ -412,7 +412,9 @@ export async function thanksCount(DB) {
  * count every open tab compares, so each reads its lists again, whoever changed it
  */
 export async function markChanged(DB) {
-  await DB.prepare("INSERT INTO donor_state (key, value) VALUES ('rev', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)").run();
+  // (the mark it moved to: the tab that made the change knows that one is its own, and any other is someone else's)
+  const r = await DB.prepare("INSERT INTO donor_state (key, value) VALUES ('rev', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT) RETURNING value").first();
+  return Number(r?.value) || null;
 }
 /** What To thank is, as a mark that changes with every change (markChanged) */
 export async function thanksMark(DB) {

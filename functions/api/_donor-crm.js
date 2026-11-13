@@ -490,8 +490,16 @@ const subjectOf = (kind, v) => (kind === 'company' ? nameKey(v) : clean(v));
  * History (its own type: nothing here waits for Publish). → whatever the change returns
  */
 export async function act(env, body, by, opts = {}) {
-  // Whatever it changed, every open tab reads its lists again (a refusal that changed nothing costs them one read)
-  try { return await actNow(env, body, by, opts); } finally { await markChanged(env.DB).catch(() => {}); }
+  // Whatever it changed, every open tab reads its lists again (a refusal that changed nothing costs them one read).
+  // The answer names the mark it moved to (`rev`): the tab that asked knows that change as its own
+  let r;
+  try { r = await actNow(env, body, by, opts); } catch (e) {
+    const rev = await markChanged(env.DB).catch(() => null);
+    if (rev && e && typeof e === 'object') e.rev = rev;
+    throw e;
+  }
+  const rev = await markChanged(env.DB).catch(() => null);
+  return r && typeof r === 'object' && rev ? { ...r, rev } : r;
 }
 async function actNow(env, body, by, { now = Date.now() } = {}) {
   const { DB } = env;
@@ -500,17 +508,35 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
   const a = body?.act;
   const orgOk = (k) => { if (!crm.live(String(k || ''))) throw bad('That organization isn’t here any more: someone took it out or put it on the website since. Nothing was changed.', 409); return String(k); };
   // A person's record whose gifts Zeffy moved since the page was read (the 15-minute read has them, the move of what
-  // was said about it hasn't run): what was said follows them now, so this change lands where they are
-  if (/^c:/.test(String(body?.key || ''))) {
-    const c = String(body.key).slice(2);
-    const own = await DB.prepare('SELECT 1 AS y FROM donor_payments WHERE contact = ? LIMIT 1').bind(c).first();
-    const went = own ? [] : ((await DB.prepare('SELECT DISTINCT contact FROM donor_payments WHERE was_contact = ? AND contact IS NOT NULL LIMIT 6').bind(c).all()).results || []).map((r) => String(r.contact));
-    if (went.length > 1) throw bad('Zeffy split this donor’s gifts between records since this page was read. Nothing was changed; Needs you asks where what was said about them goes.', 409);
-    if (went.length === 1) {
+  // was said about it hasn't run): what was said follows them now, so this change lands where they are. Every record
+  // the change names: the page's own, the two said to be one person, the contacts counted for an organization
+  const contactRef = (f, v) => (f === 'subject' || f === 'subjects' ? String(v || '') : /^c:/.test(String(v || '')) ? String(v).slice(2) : '');
+  const named = [
+    ...['key', 'a', 'b'].map((f) => [f, contactRef(f, body?.[f])]),
+    ...(body?.kind === 'contact' && (a === 'link' || a === 'not') ? [['subject', contactRef('subject', body.subject)], ...(Array.isArray(body.subjects) ? body.subjects.slice(0, 20).map((x) => ['subjects', contactRef('subjects', x)]) : [])] : []),
+  ].filter(([, c]) => c);
+  const ids = [...new Set(named.map(([, c]) => c))];
+  if (ids.length) {
+    const own = new Set(((await DB.prepare(`SELECT DISTINCT contact FROM donor_payments WHERE contact IN (${ids.map(() => '?').join(', ')})`).bind(...ids).all()).results || []).map((r) => String(r.contact)));
+    const gone = ids.filter((c) => !own.has(c));
+    const went = new Map();
+    if (gone.length) {
+      for (const r of (await DB.prepare(`SELECT DISTINCT was_contact AS was, contact FROM donor_payments WHERE was_contact IN (${gone.map(() => '?').join(', ')}) AND contact IS NOT NULL`).bind(...gone).all()).results || []) {
+        went.set(String(r.was), [...(went.get(String(r.was)) || []), String(r.contact)]);
+      }
+    }
+    if ([...went.values()].some((w) => w.length > 1)) throw bad('Zeffy split this donor’s gifts between records since this page was read. Nothing was changed; Needs you asks where what was said about them goes.', 409);
+    if (went.size) {
       await followMerges(DB, { now });
       crm = await loadCrm(DB, { now });
+      const to = (c) => went.get(c)?.[0] || c;
+      const next = { ...body };
       // (a record to take out of a person is the record itself, never the person it now leads to)
-      body = { ...body, key: a === 'split' ? `c:${went[0]}` : crm.canon(`c:${went[0]}`) };
+      if (contactRef('key', body.key) && went.has(contactRef('key', body.key))) next.key = a === 'split' ? `c:${to(contactRef('key', body.key))}` : crm.canon(`c:${to(contactRef('key', body.key))}`);
+      for (const f of ['a', 'b']) if (contactRef(f, body[f]) && went.has(contactRef(f, body[f]))) next[f] = `c:${to(contactRef(f, body[f]))}`;
+      if (named.some(([f]) => f === 'subject')) next.subject = to(String(body.subject));
+      if (named.some(([f]) => f === 'subjects')) next.subjects = [...new Set(body.subjects.map((x) => to(String(x || ''))))];
+      body = next;
     }
   }
   // Keep as an organization sent again (its answer lost on the way back): the one it made, by the key the page chose
@@ -1755,6 +1781,15 @@ export async function needsView(env, { now = Date.now() } = {}) {
 }
 
 /** A person's page: their gifts, what they gave for organizations, the company names they gave for that aren't linked */
+/** A Zeffy contact's address whose gifts all went to one other contact (Zeffy merged them): that contact's, else null */
+export async function movedTo(env, ref) {
+  const c = String(ref || '').replace(/^c:/, '');
+  if (!c || c.startsWith('g:')) return null;
+  if (await env.DB.prepare('SELECT 1 AS y FROM donor_payments WHERE contact = ? LIMIT 1').bind(c).first()) return null;
+  const went = ((await env.DB.prepare('SELECT DISTINCT contact FROM donor_payments WHERE was_contact = ? AND contact IS NOT NULL LIMIT 2').bind(c).all()).results || []).map((r) => String(r.contact));
+  return went.length === 1 ? went[0] : null;
+}
+
 export async function personView(env, ref, { now = Date.now() } = {}) {
   const crm = await loadCrm(env.DB, { now });
   const raw = await keyOfRef(env, ref);
@@ -1793,7 +1828,7 @@ export async function personView(env, ref, { now = Date.now() } = {}) {
   const why = pa.why(key);
   const otherName = why?.other ? (() => { const r = allPlaced.find((x) => pa(x).person === why.other); return r ? personName(r) : 'someone else'; })() : null;
   const emails = [...new Set(mine.map((r) => r.email).filter(Boolean))];
-  return { ...v, ...(await pageExtras(env, crm, key, v, { emails })), key, ref: refOfKey(key, mine[0]?.id || ''), keepAnonymous: pa.kept(key), keptWhy: why ? { ...why, otherName } : null, companies: [...loose.values()], also };
+  return { ...v, ...(await pageExtras(env, crm, key, v, { emails })), key, ref: refOfKey(key, mine[0]?.id || ''), keepAnonymous: pa.kept(key), keptWhy: why ? { ...why, otherName } : null, companies: [...loose.values()], also, shownAs };
 }
 
 /** An organization's page: its gifts (and who paid each), the Zeffy names it gives under, the people who gave for it */
@@ -1811,7 +1846,8 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
   // Made from a Zeffy contact (kept as an organization): Take it out gives back to it, and says so
   const made = await env.DB.prepare("SELECT target FROM donor_calls WHERE kind = 'made-from' AND subject = ? AND answer = 1").bind(key).first().catch(() => null);
   const madeRow = made?.target ? rows.find((r) => `c:${r.contact}` === made.target) : null;
-  const madeFrom = made?.target ? { ref: String(made.target).slice(2), name: madeRow ? personName(madeRow) : 'the Zeffy record' } : null;
+  // (`key`: the page it goes back to, as its notes are kept: a note being written there goes with it)
+  const madeFrom = made?.target ? { ref: String(made.target).slice(2), key: crm.canon(String(made.target)), name: madeRow ? personName(madeRow) : 'the Zeffy record' } : null;
   d.name = facts.name;
   const v = await giftsView(env, d, mine, kids, { by: true });
   // The names it gives under, and why each counts
