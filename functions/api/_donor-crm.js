@@ -496,6 +496,11 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     const subjects = [...new Set(body.kind === 'contact' ? said.flatMap((c) => [c, ...crm.keysOf(crm.canon(`c:${c}`)).filter((k) => k.startsWith('c:')).map((k) => k.slice(2))]) : said)].slice(0, 20);
     // So already (sent again after its answer was lost, a teammate first): done, nothing more in History
     if (subjects.every((sub) => (a === 'link' ? crm.calls.yes.get(`${body.kind}\n${sub}`) === target : crm.calls.no.has(`${body.kind}\n${sub}\n${target}`)))) return { ok: true, same: true };
+    // Linked to another organization since the page was read (a teammate): never taken from it unseen. Take it off
+    // there first; a link to an organization that's gone counts for nothing and is replaced
+    // (`from`: the organization the person saw it count for, as Add a Zeffy name shows it: moving it from there is theirs)
+    const taken = a === 'link' && body.asked !== true && subjects.map((sub) => crm.calls.yes.get(`${body.kind}\n${sub}`)).find((t) => t && t !== target && crm.live(t) && t !== String(body.from ?? ''));
+    if (taken) throw bad(`${body.kind === 'company' ? `“${clean(body.subject)}”` : 'That Zeffy contact'} counts for ${crm.org.get(taken).name} already: someone linked it since this page was read. Nothing was changed.`, 409);
     if (a === 'link') {
       // One organization per contact or company name: a link elsewhere goes, in the same step
       await DB.batch(subjects.flatMap((sub) => [
@@ -814,13 +819,33 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     const key = orgOk(body.key);
     if (!key.startsWith('o:') || !crm.live(`p:${slug}`)) throw bad('That partner card isn’t saved yet. Save it, then try again.', 409);
     const name = crm.org.get(key).name;
-    // The gifts its name counted by itself go with it, whatever the partner card is called
-    const pins = await pinOldName(DB, crm, key, by, now);
-    if (pins.length) await DB.batch(pins);
-    // Safe to repeat: a failure part way leaves it kept here, and trying again finishes it
-    await moveCalls(DB, key, `p:${slug}`);
-    // Its old address (a link in a toast, a bookmark) leads to the partner: in the same step as it goes
-    await DB.batch([DB.prepare('DELETE FROM donor_orgs WHERE key = ?').bind(key), callStmt(DB, { kind: 'forward', subject: key, target: `p:${slug}`, answer: 1 }, by, now)]);
+    // Kept anonymous (or not) as the person saw it when they chose to put it on the website: a teammate's change
+    // since is never put on the Partners page unasked
+    const saw = body.was && typeof body.was === 'object' ? body.was : null;
+    if (saw && typeof saw.kept === 'boolean' && saw.kept !== crm.keptKey(key)) {
+      throw bad(`Someone ${crm.keptKey(key) ? 'kept it anonymous' : 'stopped keeping it anonymous'} since you looked, so it wasn’t put on the website. The partner card just made isn’t on the Partners page until you publish: delete it in Partners if it isn’t wanted.`, 409);
+    }
+    // All of it in one step, while its owner and Keep anonymous are as read (a teammate's change in between is never
+    // left behind under the old address): the gifts its name counted by itself, everything said about it, its History,
+    // and its old address leading to the partner (a link in a toast, a bookmark)
+    const ownRead = crm.ownerRows([key]);
+    const steps = [
+      stillSo(DB, `(SELECT COUNT(*) FROM donor_calls WHERE kind = 'owner' AND subject = ?) = ?
+        AND (SELECT COUNT(*) FROM donor_calls d, json_each(?) j WHERE d.kind = 'owner' AND d.subject = json_extract(j.value, '$[0]')
+          AND d.answer = json_extract(j.value, '$[1]') AND d.note IS json_extract(j.value, '$[2]') AND d.at = json_extract(j.value, '$[3]')) = ?
+        AND (SELECT COUNT(*) FROM donor_calls WHERE kind = 'anon' AND subject = ? AND answer = 1) = ?`,
+      key, ownRead.length, JSON.stringify(ownRead), ownRead.length, key, crm.keptKey(key) ? 1 : 0),
+      ...await pinOldName(DB, crm, key, by, now, { to: `p:${slug}` }),
+      ...await moveSteps(DB, key, `p:${slug}`),
+      ...await historySteps(DB, key, `p:${slug}`),
+      DB.prepare('DELETE FROM donor_orgs WHERE key = ?').bind(key),
+      callStmt(DB, { kind: 'forward', subject: key, target: `p:${slug}`, answer: 1 }, by, now),
+    ];
+    try { await DB.batch(steps); } catch (e) {
+      if (!notSo(e)) throw e;
+      throw bad('Someone changed who looks after it or Keep anonymous a moment ago, so it wasn’t put on the website. Look again, then try once more.', 409);
+    }
+    await oneLinkEach(DB);
     await audit(DB, by, `${name} is on the website now`, { key, partner: slug }, `p:${slug}`);
     return { ok: true, key: `p:${slug}` };
   }
@@ -965,7 +990,8 @@ async function keepOthersGifts(DB, crm, name, key, by, now, { linking = [] } = {
   for (const r of rows) {
     if (nameKey(givenName({ first_name: r.first, last_name: r.last })) !== k) continue;
     const owner = place(r).owner;
-    if (!crm.isOrg(owner)) continue;
+    // (counting for this one already: its own, never told "not this one")
+    if (!crm.isOrg(owner) || owner === key) continue;
     if (r.contact) {
       if (!keep.has(r.contact) && !linking.includes(r.contact) && !crm.calls.yes.has(`contact\n${r.contact}`)) keep.add(r.contact);
     } else if (!crm.calls.pay.has(String(r.id))) {
@@ -981,7 +1007,8 @@ async function keepOthersGifts(DB, crm, name, key, by, now, { linking = [] } = {
  * its old name counted by itself (a company typed exactly so, a Zeffy contact named so) are linked to it, so they stay.
  * → the statements
  */
-async function pinOldName(DB, crm, key, by, now) {
+// (`to`: where they're linked, when it goes elsewhere in the same step: put on the website as a partner card)
+async function pinOldName(DB, crm, key, by, now, { to = key } = {}) {
   const old = crm.org.get(key)?.name;
   const k = nameKey(old);
   if (!k) return [];
@@ -996,17 +1023,17 @@ async function pinOldName(DB, crm, key, by, now) {
     const whole = byName && r.contact && !crm.calls.yes.has(`contact\n${r.contact}`) && crm.contactIsOrg(r.contact) === key;
     if (whole && !seen.has(`c${r.contact}`)) {
       seen.add(`c${r.contact}`);
-      steps.push(callStmt(DB, { kind: 'contact', subject: r.contact, target: key, answer: 1 }, by, now));
+      steps.push(callStmt(DB, { kind: 'contact', subject: r.contact, target: to, answer: 1 }, by, now));
     }
     // A gift given under its name by a person (their other gifts are theirs), or with no Zeffy contact: told, itself,
     // that it's this one's, and nothing more of theirs moves
     if (byName && !whole && !(r.contact && crm.calls.yes.get(`contact\n${r.contact}`) === key) && !crm.calls.pay.has(String(r.id))) {
-      steps.push(callStmt(DB, { kind: 'payment', subject: r.id, answer: 1, note: key }, by, now));
+      steps.push(callStmt(DB, { kind: 'payment', subject: r.id, answer: 1, note: to }, by, now));
     }
     const ck = r.corporate && clean(r.company) ? nameKey(r.company) : '';
     if (ck === k && !seen.has(`k${ck}`) && !crm.calls.yes.has(`company\n${ck}`)) {
       seen.add(`k${ck}`);
-      steps.push(callStmt(DB, { kind: 'company', subject: ck, target: key, answer: 1, note: clean(r.company).slice(0, 200) }, by, now));
+      steps.push(callStmt(DB, { kind: 'company', subject: ck, target: to, answer: 1, note: clean(r.company).slice(0, 200) }, by, now));
     }
   }
   return steps;

@@ -282,7 +282,7 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
   // A double click is one press: its second half never lands on what moved under the pointer (the next item's
   // Thanked, a card's answer, the To thank box where a row was)
   useEffect(() => {
-    const once = (e) => { if (e.detail > 1 && e.target?.closest?.('.dn button, .dn a, .dn .dn-row, .dn-picker button')) { e.preventDefault(); e.stopPropagation(); } };
+    const once = (e) => { if (e.detail > 1 && e.target?.closest?.('.dn button, .dn a, .dn .dn-row, .dn-picker button, .dn input[type="checkbox"], .dn label')) { e.preventDefault(); e.stopPropagation(); } };
     document.addEventListener('click', once, true);
     return () => document.removeEventListener('click', once, true);
   }, []);
@@ -300,7 +300,7 @@ export function Donors({ addToast = () => {}, partners = [], partnersCount = nul
     window.addEventListener('hashchange', on);
     // An address changed between the first draw and now (a link followed at once) isn't missed
     on();
-    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); backTo = null; backFor = null; };
+    return () => { window.removeEventListener('popstate', on); window.removeEventListener('hashchange', on); backTo = null; backFor = null; lastPlace = null; };
   }, []);
   const open = (p) => { go(p); setPlace({ ...p, n: ++moves }); window.scrollTo({ top: 0, behavior: 'instant' }); };
   // A move that took away what had the focus (Take it out, then the list): the page's heading has it
@@ -534,7 +534,7 @@ function DonorList({ ctx, view, onView, onOpen }) {
         </tr>`)}</tbody>
       </table>
       ${matches.length > shown ? html`<div class="dn-more"><button type="button" class="btn btn-ghost btn-sm" onClick=${() => { const at = shown; setShown((n) => n + PAGE); requestAnimationFrame(() => document.querySelectorAll('.dn-table tbody .dn-name')[at]?.focus()); }}>Show ${Math.min(PAGE, matches.length - shown)} more of ${matches.length.toLocaleString()}</button></div>` : null}`
-      : html`<p class="dn-empty">${people.length ? `No donors match${words ? ` “${q.trim()}”` : ''}${owner ? `, looked after by ${ownerName}` : ''}.` : 'No gifts read from Zeffy yet. They come in within 15 minutes.'}</p>`}
+      : html`<p class="dn-empty">${people.length ? `No donors match${words ? ` “${q.trim()}”` : ''}${stage !== 'all' ? ` among ${Object.fromEntries(filters)[stage] || stage}` : ''}${owner ? `, looked after by ${ownerName}` : ''}.${stage !== 'all' || owner ? ' Try Everyone and Anyone.' : ''}` : 'No gifts read from Zeffy yet. They come in within 15 minutes.'}</p>`}
     </div>`}`;
 }
 
@@ -770,12 +770,12 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
     if (it.kind === 'near') return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">Is ${it.link === 'company' ? html`“${it.subject}”` : it.name} ${it.orgName}?</p>
       <p class="dn-need__sub">${it.link === 'company' ? `A company named on ${usd(it.cents)} of gifts${it.people?.length ? ` (${it.people.join(', ')})` : ''}.` : `A Zeffy contact who gave ${usd(it.cents)}.`} ${it.why}. Yes counts its gifts for ${it.orgName}.</p>
-      <div class="dn-need__do">${btn(id, `Yes, it’s ${it.orgName}`, () => said({ act: 'link', kind: it.link, subject: it.subject, org: it.org }, `Its gifts count for ${it.orgName} now`), true)}${btn(`${id}:no`, 'No', () => said({ act: 'not', kind: it.link, subject: it.subject, org: it.org }))}
+      <div class="dn-need__do">${btn(id, `Yes, it’s ${it.orgName}`, () => said({ act: 'link', kind: it.link, subject: it.subject, org: it.org }, `Its gifts count for ${it.orgName} now`), true)}${btn(`${id}:no`, 'No', () => said({ act: 'not', kind: it.link, subject: it.subject, org: it.org }, `It won’t link that name to ${it.orgName}`))}
         ${it.link === 'contact' ? html`<a class="link" href=${zeffyContactUrl(it.subject)} target="_blank" rel="noopener">Open in Zeffy</a>` : null}</div></li>`;
     if (it.kind === 'clash') return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">${it.name}’s gift of ${usd(it.cents)} on ${day(it.at)} was for ${it.company}, but their Zeffy contact counts for ${it.countedName}.</p>
       <p class="dn-need__sub">It counts for ${it.countedName} until you say.</p>
-      <div class="dn-need__do">${btn(id, `Count it for ${it.otherName}`, () => said({ act: 'payment', id: it.payment, owner: it.other }, `That gift counts for ${it.otherName} now`))}${btn(`${id}:keep`, `Keep it with ${it.countedName}`, () => said({ act: 'payment', id: it.payment, owner: it.counted }))}
+      <div class="dn-need__do">${btn(id, `Count it for ${it.otherName}`, () => said({ act: 'payment', id: it.payment, owner: it.other }, `That gift counts for ${it.otherName} now`))}${btn(`${id}:keep`, `Keep it with ${it.countedName}`, () => said({ act: 'payment', id: it.payment, owner: it.counted }, `That gift counts for ${it.countedName}`))}
         <a class="link" href=${zeffyPaymentUrl(it.payment)} target="_blank" rel="noopener">Open in Zeffy</a></div></li>`;
     if (it.kind === 'same') return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">Same person? ${it.a.name} and ${it.b.name}</p>
@@ -783,7 +783,7 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
       <div class="dn-same">${[it.a, it.b].map((s) => html`<div key=${s.key} class="dn-same__one"><strong>${s.ref ? who(s) : s.name}</strong>
         <span class="dn-sub">${[s.email, `${plural(s.gifts, 'gift')}, ${usd(s.cents)}`, s.latest ? `latest ${day(s.latest)}` : null].filter(Boolean).join(' · ')}</span>
         ${s.ref ? html`<a class="link dn-sub" href=${zeffyContactUrl(s.ref)} target="_blank" rel="noopener">Open in Zeffy</a>` : null}</div>`)}</div>
-      <div class="dn-need__do">${btn(id, 'Same person', () => said({ act: 'same', a: it.a.key, b: it.b.key, same: true }, 'One donor now'), true)}${btn(`${id}:no`, 'Not the same', () => said({ act: 'same', a: it.a.key, b: it.b.key, same: false }))}</div></li>`;
+      <div class="dn-need__do">${btn(id, 'Same person', () => said({ act: 'same', a: it.a.key, b: it.b.key, same: true }, 'One donor now'), true)}${btn(`${id}:no`, 'Not the same', () => said({ act: 'same', a: it.a.key, b: it.b.key, same: false }, 'Two donors, and it won’t ask again'))}</div></li>`;
     if (it.kind === 'moved') {
       // The team's notes and owner, left on the old record: they go to the contact picked, never left where no one sees them
       const kept = [it.notes === 1 ? 'note' : it.notes ? `${it.notes} notes` : null, it.owner ? `owner (${firstName(it.owner, staff)})` : null].filter(Boolean);
@@ -797,7 +797,7 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
       ${it.to.length ? html`<ul class="dn-plain">${it.to.map((c, i) => html`<li key=${c}>${whoFull(i)} · <a class="link" href=${zeffyContactUrl(c)} target="_blank" rel="noopener" aria-label=${`${whoFull(i)}, in Zeffy`}>In Zeffy</a></li>`)}</ul>` : null}
       <div class="dn-need__do">
         ${kept.length ? it.to.map((c, i) => btn(`${id}:${c}`, `Give them to ${whoFull(i)}`, () => said({ act: 'moved-done', contact: it.contact, to: c }, `Its ${kept.join(' and its ')} went to ${who(i)}`)))
-          : btn(id, 'Done', () => said({ act: 'moved-done', contact: it.contact }))}</div></li>`;
+          : btn(id, 'Done', () => said({ act: 'moved-done', contact: it.contact }, 'Done'))}</div></li>`;
     }
     return null;
   })}</ul>`;
@@ -827,14 +827,14 @@ function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null
     return () => { live = false; clearTimeout(t); };
   }, [q, tries]);
   // Refused (gone since, someone answered first): the choices are read again, as they are now
-  const pick = async (x) => { setBusy(true); const done = await onPick(x); setBusy(false); if (done !== false) onClose(); else { search.reset?.(); setTries((n) => n + 1); } };
+  const pick = async (x) => { setBusy(true); const done = await onPick(x); setBusy(false); if (done !== false) onClose(); else { search.reset?.(); setTries((n) => n + 1); input.current?.focus(); } };
   return html`<div class="modal-overlay" onClick=${(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
     <div class="modal dn-picker" role="dialog" aria-modal="true" aria-labelledby="dn-pick-h" tabindex="-1" ref=${box}>
       <h3 id="dn-pick-h">${title}</h3>
       ${sub ? html`<p>${sub}</p>` : null}
       <input class="form-input" type="search" ref=${input} placeholder=${placeholder} aria-label=${placeholder} value=${q} onInput=${(e) => setQ(e.target.value)} />
-      <ul class="dn-picker__list" aria-label="Choices">${list.length ? list.map((x) => html`<li key=${x.id}><button type="button" class="dn-picker__item" disabled=${busy || x.disabled} onClick=${() => pick(x)}>
-        <strong>${x.label}</strong>${x.sub ? html`<span class="dn-sub">${x.sub}</span>` : null}</button></li>`) : failed ? html`<li class="dn-sub dn-picker__none">Couldn’t search just now: ${failed}. <button type="button" class="link dn-linkbtn" onClick=${() => setTries((n) => n + 1)}>Try again</button></li>` : html`<li class="dn-sub dn-picker__none">${q.trim().length < 2 ? 'Type a couple of letters' : 'Nothing by that name'}</li>`}</ul>
+      <ul class="dn-picker__list" aria-label="Choices">${list.length ? list.map((x) => html`<li key=${x.id}><button type="button" class="dn-picker__item" disabled=${x.disabled} aria-disabled=${busy ? 'true' : null} onClick=${() => { if (!busy) pick(x); }}>
+        <strong>${x.label}</strong>${x.sub ? html`<span class="dn-sub">${x.sub}</span>` : null}</button></li>`) : failed ? html`<li class="dn-sub dn-picker__none">Couldn’t search just now: ${String(failed).replace(/[.\s]+$/, '').replace(/ Try again.*$/, '')}. <button type="button" class="link dn-linkbtn" onClick=${() => setTries((n) => n + 1)}>Try again</button></li>` : html`<li class="dn-sub dn-picker__none">${q.trim().length < 2 ? 'Type a couple of letters' : 'Nothing by that name'}</li>`}</ul>
       ${extra}
       <div class="modal-buttons"><button type="button" class="btn btn-ghost" onClick=${onClose} disabled=${busy}>Cancel</button></div>
     </div></div>`;
@@ -889,7 +889,7 @@ async function thankAgain(ctx, t) {
     listChanged();
     thanksChanged();
     if (!r.success) { ctx.addToast(r.error, 'error'); return; }
-    if (r.same && !(r.retried && r.you)) return;
+    if (r.same && !(r.retried && r.you)) { ctx.addToast(`To thank already${r.you ? ', by you' : r.by ? `, said by ${r.by.split('@')[0].replace(/^./, (c) => c.toUpperCase())}` : ''}`, 'info'); return; }
     ctx.addToast(`To thank again: ${amountOf(t)}`, 'success');
   } finally { againNow.delete(t.id); }
 }
@@ -913,12 +913,15 @@ function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
   // The one picked, shown until it's saved (a re-read meanwhile never puts the select back under the person)
   const [picked, setPicked] = useState(null);
   const saving = useRef(false);
+  const next = useRef(null);
   const wait = useRef(null);
+  // Who it is as last read (a save's re-read moves it on: the next pick's `was`)
+  const shown = useRef(owner);
+  shown.current = owner;
   useEffect(() => () => clearTimeout(wait.current), []);
   // Saved a moment after the pick settles, or when the select is left: arrowing through a closed select (Windows
   // changes it at each press) saves only the one landed on, never an owner and a History line per name passed
   const pick = (e) => {
-    if (saving.current) return;
     const email = e.target.value;
     setPicked(email);
     clearTimeout(wait.current);
@@ -927,18 +930,24 @@ function OwnerCard({ subject, owner, staff = [], name, ctx, onDone }) {
   const settle = () => { if (wait.current && picked !== null) { clearTimeout(wait.current); save(picked); } };
   const save = async (email) => {
     wait.current = null;
-    if (saving.current) return;
-    if (email === (owner || '')) { setPicked(null); return; }
+    // One at a time: a pick while one saves goes once that's saved and read again
+    if (saving.current) { next.current = email; return; }
+    if (email === (shown.current || '')) { setPicked((p) => (p === email ? null : p)); return; }
     saving.current = true;
     setBusy(true);
-    const r = await change({ act: 'owner', key: subject, email, was: owner || '' });
+    const r = await change({ act: 'owner', key: subject, email, was: shown.current || '' });
+    if (!r.success) ctx.addToast(r.error, 'error');
+    else {
+      listChanged();
+      if (!r.same) ctx.addToast(email ? `${fullName(email, staff)} looks after ${name} now` : `No one looks after ${name} now`, 'success');
+    }
+    // Refused, or the answer lost on the way back (it may have saved): the page reads again, so it shows who it is now
+    await onDone();
     saving.current = false;
     setBusy(false);
-    // Refused, or the answer lost on the way back (it may have saved): the page reads again, so it shows who it is now
-    if (!r.success) { ctx.addToast(r.error, 'error'); setPicked(null); await onDone(); return; }
-    listChanged();
-    if (!r.same) ctx.addToast(email ? `${fullName(email, staff)} looks after ${name} now` : `No one looks after ${name} now`, 'success');
-    await onDone();
+    const then = next.current;
+    next.current = null;
+    if (then !== null && then !== email) { save(then); return; }
     setPicked(null);
   };
   const left = owner && staff.find((s) => s.email === owner)?.left;
@@ -1098,7 +1107,7 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
           <button type="button" class="btn btn-ghost btn-sm" onClick=${() => { if (!busy) stop(n); }}>Cancel</button></span>`
       : html`<p class="dn-note__body">${n.body}</p>`}
       <span class="dn-note__meta"><span>${n.by ? fullName(n.by, staff) : 'Someone'} · ${when(n.at)}${n.editedAt ? ` · changed${n.editedBy && n.editedBy !== n.by ? ` by ${firstName(n.editedBy, staff)}` : ''} ${when(n.editedAt)}` : ''}</span>
-        ${editing === n.id ? null : html`<button type="button" class="link dn-linkbtn dn-note__change" onClick=${() => { if (!busy) { setDraft(n.body); setFrom(n.body); setEditing(n.id); } }}>Change</button>
+        ${editing === n.id || editing ? null : html`<button type="button" class="link dn-linkbtn dn-note__change" onClick=${() => { if (!busy) { setDraft(n.body); setFrom(n.body); setEditing(n.id); } }}>Change</button>
         <button type="button" class="link dn-linkbtn" onClick=${() => del(n)}>Delete</button>`}</span>
     </li>`)}</ul>` : null}
   </section>`;
@@ -1252,7 +1261,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           <p>${stageTag(d.stage)}</p>
           <p class="kd-card__note">${STAGES[d.stage]?.what}</p>
         </section>
-        <${OwnerCard} subject=${v.key} owner=${v.owner} staff=${v.staff} name=${d.name} ctx=${ctx} onDone=${load} />
+        <${OwnerCard} subject=${v.key} owner=${v.owner} staff=${v.staff} name=${d.name === 'No name' ? 'this giver' : d.name} ctx=${ctx} onDone=${load} />
         <section class="kd-card kd-card--health dn-card--zeffy" aria-labelledby="dn-zeffy-h">
           <h3 id="dn-zeffy-h">In Zeffy</h3>
           <dl class="dn-facts">
@@ -1278,7 +1287,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
         <${KeepAnonymous} subject=${v.key} on=${!!v.keepAnonymous} why=${v.keptWhy} name=${d.name} ctx=${ctx} onDone=${load} />
         <section class="kd-card dn-card--late" aria-labelledby="dn-orgs-h">
           <h3 id="dn-orgs-h">Organizations</h3>
-          ${v.gaveFor?.length ? html`<ul class="dn-plain">${v.gaveFor.map((o) => html`<li key=${o.key}>Gave ${usd(o.cents)} for <a class="link" href=${`#donors/org/${encodeURIComponent(o.key)}`}>${o.name}</a><span class="dn-sub">${plural(o.gifts, 'gift')}, counted for them</span></li>`)}</ul>` : null}
+          ${v.gaveFor?.length ? html`<ul class="dn-plain">${v.gaveFor.map((o) => html`<li key=${o.key}><span>Gave ${usd(o.cents)} for <a class="link" href=${`#donors/org/${encodeURIComponent(o.key)}`}>${o.name}</a></span><span class="dn-sub">${plural(o.gifts, 'gift')}, counted for them</span></li>`)}</ul>` : null}
           ${v.companies?.length ? html`<ul class="dn-plain">${v.companies.map((c) => html`<li key=${c.name}>Gave ${usd(c.cents)} for ${c.name}
             <span class="dn-sub">Counted as ${d.name}’s until it’s linked</span>
             <span class="dn-row-do">
@@ -1297,7 +1306,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           <header class="kd-sec__head"><h3 id="dn-giving-h">Giving</h3></header>
           <${GivingTiles} d=${d} />
         </section>
-        <${Notes} subject=${v.key} notes=${v.notes} staff=${v.staff} name=${d.name} zeffy=${!!d.contact} ctx=${ctx} onDone=${load} />
+        <${Notes} subject=${v.key} notes=${v.notes} staff=${v.staff} name=${d.name === 'No name' ? 'this giver' : d.name} zeffy=${!!d.contact} ctx=${ctx} onDone=${load} />
         <section class="card kd-sec" aria-labelledby="dn-gifts-h">
           <header class="kd-sec__head"><h3 id="dn-gifts-h">Gifts <span class="count">${v.gifts.length}</span></h3></header>
           <${GiftList} gifts=${v.gifts} staff=${v.staff} ctx=${ctx} />
@@ -1417,11 +1426,11 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     const got = await ctx.createPartner({ name: o.name });
     if (!got) return;
     const card = typeof got === 'string' ? { slug: got, name: o.name } : got;
-    await finishOnSite(card.slug, card.name || o.name, true);
+    await finishOnSite(card.slug, card.name || o.name, true, o.keepAnonymous);
   };
   // Its partner card is made: everything said about it moves to the partner (tried again from the toast if it failed)
-  const finishOnSite = async (slug, name = v.name, madeNow = false) => {
-    const r = await change({ act: 'website', key: v.key, slug });
+  const finishOnSite = async (slug, name = v.name, madeNow = false, kept = null) => {
+    const r = await change({ act: 'website', key: v.key, slug, ...(typeof kept === 'boolean' ? { was: { kept } } : {}) });
     // Refused (taken out, or on the website as another card, since): the card just made says so, never left unmentioned
     if (!r.success && r.status === 409) {
       ctx.addToast(`${r.error}${madeNow && !r.went ? ` The partner card “${name}” was made just before: delete it in Partners if it isn’t wanted.` : ''}`, 'error');
@@ -1431,7 +1440,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     // Both answers lost: it may have gone through all the same (then it's done, and says so)
     const now = r.success ? null : await get(`?org=${encodeURIComponent(v.key)}`);
     const went = now?.success && now.org && !now.donor ? now.org : null;
-    if (!r.success && !went) { ctx.addToast(`${name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug, name, madeNow) }); return; }
+    if (!r.success && !went) { ctx.addToast(`${name} has a partner card, but its gifts haven’t moved to it yet: ${r.error}`, 'error', { label: 'Try again', fn: () => finishOnSite(slug, name, madeNow, kept) }); return; }
     if (went) r.key = went;
     listChanged();
     ctx.addToast(`${name} is on the Partners page after you publish`, 'success', null, { publish: true });
@@ -1439,7 +1448,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     goTo({ tab: 'people', org: r.key });
   };
   const takeOut = async () => {
-    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length ? plural(v.notes.length, 'note') : null].filter(Boolean).join(' and ')} ${v.madeFrom ? `go back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'go with it.'}` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
+    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it.'}` : ''}${v.keepAnonymous ? ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.' : ''}`, yes: 'Take it out', danger: true }))) return;
     // (what the question said goes with it: a teammate's note or owner since is never lost unseen)
     const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '', kept: !!v.keepAnonymous } });
     if (!r.success) { ctx.addToast(r.error, 'error'); if (!left.current) await load(); return; }
@@ -1516,8 +1525,8 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     </div></div>
     ${adding ? html`<${Picker} title=${`Add a Zeffy name to ${v.name}`} sub="A company name its gifts carry, or the Zeffy contact it gives as. Every gift under it counts here." placeholder="Name or email in Zeffy"
       search=${findNames} onClose=${() => setAdding(false)}
-      onPick=${async (x) => { const ok = await say({ act: 'link', kind: x.kind, subject: x.subject, org: v.key }, `“${x.name}” counts for ${v.name} now`); return ok; }} />` : null}
-    ${renaming ? html`<${RenameDialog} name=${v.name} onClose=${() => setRenaming(false)} onSave=${(name, was) => say({ act: 'org-rename', key: v.key, name, was }, 'Renamed')} />` : null}`;
+      onPick=${async (x) => { const ok = await say({ act: 'link', kind: x.kind, subject: x.subject, org: v.key, from: x.org || '' }, `“${x.name}” counts for ${v.name} now`); return ok; }} />` : null}
+    ${renaming && !gone ? html`<${RenameDialog} name=${v.name} onClose=${() => setRenaming(false)} onSave=${(name, was) => say({ act: 'org-rename', key: v.key, name, was }, 'Renamed')} />` : null}`;
 }
 
 /** A new name for an organization kept here (a partner's name is changed in its partner card) */
@@ -1540,6 +1549,8 @@ function RenameDialog({ name: shownName, onSave, onClose }) {
     setBusy(true);
     const ok = await onSave(t, name);
     setBusy(false);
+    // Saved after all (its answers lost, the page read again): it reads as they wrote it, so it's done
+    if (ok === false && latestShown.current === t) { onClose(); return; }
     if (ok === false) setName(latestShown.current);
     if (ok !== false) onClose();
   };

@@ -1728,3 +1728,23 @@ test('a joined person’s one Zeffy record linked from an organization’s page 
   await doIt({ act: 'link', kind: 'contact', subject: 'ct_jp2', org: 'p:pella' });
   assert.equal((await list()).find((p) => p.key === 'p:pella')?.total, 9000);
 });
+
+// ─── Found in the twelfth round ─────────────────────────────────────
+
+test('Link to… from a page read before a teammate linked it elsewhere is refused; moving it from where the person saw it is theirs', async () => {
+  await add(pay({ id: 'sl', contact: 'ct_lee', first: 'Lee', last: 'Sample', email: 'lee@example.com', company: 'Sample Builders', amount: 30000 }));
+  await C.act(env, { act: 'link', kind: 'company', subject: 'Sample Builders', org: 'p:acme' }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(doIt({ act: 'link', kind: 'company', subject: 'Sample Builders', org: 'p:pella' }), (e) => e.status === 409 && /Acme Builders already/.test(e.message));
+  assert.equal((await list()).find((p) => p.key === 'p:acme')?.total, 30000, 'Jordan’s link stands');
+  await doIt({ act: 'link', kind: 'company', subject: 'Sample Builders', org: 'p:pella', from: 'p:acme' });
+  assert.equal((await list()).find((p) => p.key === 'p:pella')?.total, 30000, 'moved, seeing where it was');
+});
+
+test('a rename keeps the organization’s own Zeffy contact its own (never told “not this one”)', async () => {
+  await add(pay({ id: 'oc1', contact: 'ct_bw', first: 'Birchwood', last: 'Homes', email: 'office@birchwood.example', company: 'Birchwood', amount: 50000 }));
+  const { key } = await doIt({ act: 'org-new', name: 'Birchwood', links: [{ kind: 'company', subject: 'Birchwood' }] });
+  await doIt({ act: 'org-rename', key, name: 'Birchwood Homes', was: 'Birchwood' });
+  assert.equal(await db.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'contact' AND subject = 'ct_bw' AND answer = 0").first(), null);
+  await add(pay({ id: 'oc2', contact: 'ct_bw', first: 'Birchwood', last: 'Homes', email: 'office@birchwood.example', amount: 70000, created: S(NOW - 2 * DAY) }));
+  assert.equal((await list()).find((p) => p.key === key)?.total, 120000, 'its later gift counts for it too');
+});

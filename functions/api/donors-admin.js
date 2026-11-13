@@ -90,6 +90,6 @@ export async function onRequestPost({ env, request, data }) {
     // (`went`: put on the website as another partner card meanwhile, so the page names the card that isn't needed)
     if (e.status && e.status < 500) return Response.json({ success: false, error: e.message, ...(e.went ? { went: e.went } : {}) }, { status: e.status });
     console.error('[donors-admin] post', e.message);
-    return fail('The site didn’t save that. Try again in a minute.', 500);
+    return fail(typeof body?.find === 'string' || typeof body?.findPeople === 'string' ? 'The site didn’t answer.' : 'The site didn’t save that. Try again in a minute.', 500);
   }
 }
