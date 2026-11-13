@@ -154,7 +154,7 @@ const STYLE = `
 .dn-history__what { font-size: var(--fs-xs); color: var(--color-text-secondary); overflow-wrap: anywhere; }
 @media (max-width: 720px) { .dn-same { grid-template-columns: minmax(0, 1fr); } }
 /* Room under a list on a phone, so the item after one answered can sit above the message at the foot of the screen */
-@media (max-width: 720px) { .dn-needs, .dn-thank__list { padding-bottom: 7rem; } }
+@media (max-width: 720px) { .dn-needs { padding-bottom: 7rem; } }
 @media (pointer: coarse) { .dn-linkbtn, .dn-plain a, .dn-need__do a { min-height: 44px; display: inline-flex; align-items: center; } }
 `;
 
@@ -179,7 +179,7 @@ const ago = (iso) => {
 const plural = (n, w) => `${n.toLocaleString()} ${w}${n === 1 ? '' : 's'}`;
 const STAGES = {
   new: { label: 'New', tone: 'dn-stage--new', what: 'Their first gift was within the last 12 months.' },
-  active: { label: 'Active', tone: '', what: 'They gave within the last 18 months, and before the last 12.' },
+  active: { label: 'Active', tone: '', what: 'They first gave more than a year ago, and have given within the last 18 months.' },
   lapsed: { label: 'Lapsed', tone: 'dn-stage--lapsed', what: 'No gift in the last 18 months.' },
   inkind: { label: 'In kind only', tone: '', what: 'Only gifts in kind so far.' },
   none: { label: 'No gifts of their own', tone: '', what: 'Only tickets, purchases, gifts refunded in full, or gifts that count for an organization.' },
@@ -258,8 +258,9 @@ function placeOf(hash = location.hash) {
   if (parts[0] === 'org') return parts[1] ? { tab: 'people', org: parts[1] } : { tab: 'people' };
   return { tab: 'people', donor: parts[0] };
 }
+// (a gift's link that settled on its donor is at the donor's address: the gift only marks which one to show)
 const addressOf = (place) => (place.tab === 'checks' ? '#donors/checks' : place.needs ? '#donors/needs' : place.thanks ? '#donors/thanks' : place.org ? `#donors/org/${encodeURIComponent(place.org)}`
-  : place.gift ? `#donors/gift/${encodeURIComponent(place.gift)}` : place.donor ? `#donors/${encodeURIComponent(place.donor)}` : '#donors');
+  : place.donor ? `#donors/${encodeURIComponent(place.donor)}` : place.gift ? `#donors/gift/${encodeURIComponent(place.gift)}` : '#donors');
 function go(place) {
   const next = addressOf(place);
   if (location.hash !== next) history.pushState(null, '', next);
@@ -362,7 +363,9 @@ function useThanksSaid(reload) {
 /** A read whose answer still counts: one started later wins, whatever order they come back in */
 function useLatest() {
   const n = useRef(0);
-  return () => { const mine = ++n.current; return () => mine === n.current; };
+  // (left: the list is gone, another view opened meanwhile; its slow read never lands on the counts or the sidebar)
+  useEffect(() => () => { n.current = -1; }, []);
+  return () => { if (n.current < 0) return () => false; const mine = ++n.current; return () => mine === n.current; };
 }
 /** The pressed pill in sight in its row (a phone scrolls the row sideways; the page never moves) */
 function usePressedInView(deps) {
@@ -768,13 +771,17 @@ function NeedsList({ ctx, onChanged, only = null, onCount = () => {} }) {
       <div class="dn-need__do">${btn(id, 'Same person', () => said({ act: 'same', a: it.a.key, b: it.b.key, same: true }, 'One donor now'), true)}${btn(`${id}:no`, 'Not the same', () => said({ act: 'same', a: it.a.key, b: it.b.key, same: false }))}</div></li>`;
     if (it.kind === 'moved') {
       // The team's notes and owner, left on the old record: they go to the contact picked, never left where no one sees them
-      const kept = [it.notes ? plural(it.notes, 'note') : null, it.owner ? `its owner (${firstName(it.owner, staff)})` : null].filter(Boolean);
+      const kept = [it.notes === 1 ? 'note' : it.notes ? `${it.notes} notes` : null, it.owner ? `owner (${firstName(it.owner, staff)})` : null].filter(Boolean);
+      const keptWords = kept.length ? `Its ${kept.join(' and its ')} ${kept.length > 1 || it.notes > 1 ? 'go' : 'goes'} to the one you pick.` : '';
+      // Each told apart (two of one name, as a duplicate Zeffy split is): its email and its gifts
       const who = (i) => it.names?.[i] || `Contact ${i + 1}`;
+      const whoFull = (i) => [who(i), it.who?.[i]?.email, it.who?.[i]?.gifts ? plural(it.who[i].gifts, 'gift') : null].filter(Boolean).join(', ');
       return html`<li key=${id} class="card dn-need">
       <p class="dn-need__q">Zeffy split a contact’s gifts between ${plural(it.to.length, 'contact')}${it.names?.some(Boolean) ? `: ${it.to.map((c, i) => who(i)).join(' and ')}` : ''}.</p>
-      <p class="dn-need__sub">What was said about it here (an organization, Keep anonymous, the same person) stayed with the old record. Look at them in Zeffy and say it again on the right one.${kept.length ? ` Its ${kept.join(' and ')} go to the one you pick.` : ''}</p>
-      <div class="dn-need__do">${it.to.map((c, i) => html`<a key=${c} class="link" href=${zeffyContactUrl(c)} target="_blank" rel="noopener">${who(i)} in Zeffy</a>`)}
-        ${kept.length ? it.to.map((c, i) => btn(`${id}:${c}`, `Give them to ${who(i)}`, () => said({ act: 'moved-done', contact: it.contact, to: c }, `${kept.join(' and ')} went to ${who(i)}`)))
+      <p class="dn-need__sub">What was said about it here (an organization, the same person) stayed with the old record. Look at them in Zeffy and say it again on the right one.${it.anon ? ' It was kept anonymous, so each of them is kept anonymous too.' : ''} ${keptWords}</p>
+      ${it.to.length ? html`<ul class="dn-plain">${it.to.map((c, i) => html`<li key=${c}>${whoFull(i)} · <a class="link" href=${zeffyContactUrl(c)} target="_blank" rel="noopener" aria-label=${`${whoFull(i)}, in Zeffy`}>In Zeffy</a></li>`)}</ul>` : null}
+      <div class="dn-need__do">
+        ${kept.length ? it.to.map((c, i) => btn(`${id}:${c}`, `Give them to ${whoFull(i)}`, () => said({ act: 'moved-done', contact: it.contact, to: c }, `Its ${kept.join(' and its ')} went to ${who(i)}`)))
           : btn(id, 'Done', () => said({ act: 'moved-done', contact: it.contact }))}</div></li>`;
     }
     return null;
@@ -792,7 +799,8 @@ function Picker({ title, sub, placeholder, search, onPick, onClose, extra = null
   const [failed, setFailed] = useState(null);
   const [tries, setTries] = useState(0);
   const [busy, setBusy] = useState(false);
-  useDialog(box, onClose, busy);
+  // Closed after the page changed under it (the row that opened it gone): the focus on the page's heading
+  useDialog(box, onClose, busy, { returnTo: '.dn-head h2' });
   // Opened: the focus in the search box (the dialog itself takes it first)
   useEffect(() => { input.current?.focus(); }, []);
   // Asked a moment after typing stops, and only the latest answer shows; one that failed says so
@@ -953,6 +961,11 @@ function Notes({ subject, notes = [], staff = [], name, zeffy = false, ctx, onDo
   const pending = useRef(null);
   // Saved after all (its answer lost, the page read again): it's in the list, so the box empties
   useEffect(() => { if (pending.current && notes.some((n) => n.id === pending.current.id)) { pending.current = null; setText(''); } }, [notes]);
+  // A change saved after all (its answers lost, the page read again): the note reads as they wrote it, so it's done
+  useEffect(() => {
+    const n = editing && notes.find((x) => x.id === editing);
+    if (n && from !== null && n.body !== from && n.body === draft.trim()) { setEditing(null); setFrom(null); focusNote(n.id); }
+  }, [notes]);
   const add = async (e) => {
     e?.preventDefault();
     const t = text.trim();
@@ -1091,6 +1104,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   const [v, setV] = useState(null);
   const [rowBusy, setRowBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const [gone, setGone] = useState(null);
   const [picking, setPicking] = useState(null);
   const [joining, setJoining] = useState(false);
   // Only the latest read lands (a quick move to another donor never shows the one before)
@@ -1115,7 +1129,9 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     }
     const j = await get(`?donor=${encodeURIComponent(ref)}`);
     if (!fresh()) return;
-    if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`Saved. The page couldn’t be read again just now: ${j.error}`, 'error', { label: 'Try again', fn: () => load() }); return; }
+    if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`The page couldn’t be read again just now: ${j.error} It shows what was read before.`, 'error', { label: 'Try again', fn: () => load() }); return; }
+    // Gone since it was read (taken out, merged, by a teammate): the page stays as it was, so nothing typed is lost
+    if (!j.success && shown.current) { setGone(j.error); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     if (j.org) { onOrg(j.org); return; }
     setV(j);
@@ -1165,6 +1181,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
   };
   return html`
     ${back}
+    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone}</strong> This page shows it as it was: copy anything you typed here, then go back.</div></div>` : null}
     <div class="dn-head">
       <h2 tabindex="-1" ref=${heading}>${d.name} ${stageTag(d.stage)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : d.anonymous ? html`<span class="tag">Asked to be anonymous</span>` : null}</h2>
       <p class="dn-head__sub">${[d.funds.length ? `Through ${d.funds.join(', ')}` : null, d.email].filter(Boolean).join(' · ')}</p>
@@ -1255,6 +1272,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
 function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   const [v, setV] = useState(null);
   const [err, setErr] = useState(null);
+  const [gone, setGone] = useState(null);
   const [adding, setAdding] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1266,7 +1284,9 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     setErr(null);
     const j = await get(`?org=${encodeURIComponent(orgKey)}`);
     if (mine !== seq.current) return;
-    if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`Saved. The page couldn’t be read again just now: ${j.error}`, 'error', { label: 'Try again', fn: () => load() }); return; }
+    if (!j.success && shown.current && j.status !== 404) { ctx.addToast(`The page couldn’t be read again just now: ${j.error} It shows what was read before.`, 'error', { label: 'Try again', fn: () => load() }); return; }
+    // Gone since it was read (taken out, merged, by a teammate): the page stays as it was, so nothing typed is lost
+    if (!j.success && shown.current) { setGone(j.error); return; }
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // Kept here before, on the website now: its partner's page, at its address
     if (j.org && !j.donor) { history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
@@ -1363,6 +1383,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
   };
   return html`
     ${back}
+    ${gone ? html`<div class="notice notice--warn" role="alert"><div class="notice__body"><strong>${gone}</strong> This page shows it as it was: copy anything you typed here, then go back.</div></div>` : null}
     <div class="dn-head">
       <h2 tabindex="-1" ref=${heading}>${v.name} ${stageTag(d.stage)} ${orgTag(v)}${v.keepAnonymous ? html`<span class="tag">Kept anonymous</span>` : null}</h2>
       <p class="dn-head__sub">An organization: every gift from the names below counts for it.</p>

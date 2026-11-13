@@ -1584,3 +1584,68 @@ test('a contact Zeffy split: its notes and owner go to the contact a person pick
   assert.deepEqual([page.notes.map((n) => n.body), page.owner], [['Met at the gala'], 'jordan@soardcharity.com']);
   assert.ok(!(await needs()).some((i) => i.kind === 'moved'));
 });
+
+// ─── Found in the ninth round ───────────────────────────────────────
+
+/** env.DB whose first batch fails (a D1 hiccup): the change must leave everything as it was */
+const failingOnce = (DB) => { let done = false; return new Proxy(DB, { get(t, k) { if (k === 'batch') return async (st) => { if (!done) { done = true; throw new Error('D1 hiccup'); } return t.batch(st); }; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } }); };
+
+test('kept from a contact and taken out: one step each, so a failure and the page sending it again never lose the contact’s notes or Keep anonymous', async () => {
+  await add(pay({ id: 'gt', contact: 'ct_gt', first: 'Grace Tower', last: 'Foundation', email: 'office@gt.example', amount: 30000 }));
+  await doIt({ act: 'anon', key: 'c:ct_gt', on: true });
+  await doIt({ act: 'note-add', key: 'c:ct_gt', body: 'Board chair’s family', id: 'note-gt-1' });
+  const body = { act: 'org-new', key: 'o:1111222233334444', name: 'Grace Tower Foundation', links: [{ kind: 'contact', subject: 'ct_gt' }] };
+  await assert.rejects(C.act({ DB: failingOnce(db) }, body, by, { now: NOW }));
+  assert.equal(await db.prepare("SELECT 1 AS y FROM donor_orgs WHERE key = 'o:1111222233334444'").first(), null, 'nothing made');
+  assert.equal((await db.prepare("SELECT subject FROM donor_notes WHERE id = 'note-gt-1'").first()).subject, 'c:ct_gt', 'the note still the contact’s');
+  await doIt(body);
+  assert.equal((await db.prepare("SELECT subject FROM donor_notes WHERE id = 'note-gt-1'").first()).subject, 'o:1111222233334444');
+  assert.ok(await db.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'made-from' AND subject = 'o:1111222233334444'").first(), 'made from the contact, in the same step');
+  const out = { act: 'org-delete', key: 'o:1111222233334444', was: { notes: ['note-gt-1'], owner: '' } };
+  await assert.rejects(C.act({ DB: failingOnce(db) }, out, by, { now: NOW }));
+  assert.ok(await db.prepare("SELECT 1 AS y FROM donor_orgs WHERE key = 'o:1111222233334444'").first(), 'a failure takes nothing out');
+  await doIt(out);
+  assert.equal((await doIt(out)).same, true, 'sent again: done already');
+  const page = await C.personView(env, 'ct_gt', { now: NOW });
+  assert.deepEqual([page.notes.map((n) => n.id), page.keepAnonymous], [['note-gt-1'], true], 'back with the contact');
+});
+
+test('Move to Champion sent again after the partner moved: done (its answer written), never “nothing was changed”', async () => {
+  const real = await createD1({ schemaFiles: ['scripts/schema.sql'] });
+  await real.exec('CREATE TABLE IF NOT EXISTS kids (slug TEXT, name TEXT, data TEXT)').catch(() => {});
+  await real.prepare('INSERT INTO partners (slug, name, level, category, data) VALUES (?, ?, ?, ?, ?)').bind('acme', 'Acme Builders', 'champion', 'funding', JSON.stringify({ name: 'Acme Builders', slug: 'acme', level: 'champion', category: ['funding'] })).run();
+  const r = await C.act({ DB: real }, { act: 'level', org: 'p:acme', done: true, was: 'Friend', move: true }, by, { now: NOW });
+  assert.equal(r.same, true);
+  assert.ok(await real.prepare("SELECT 1 AS y FROM donor_calls WHERE kind = 'level' AND subject = 'p:acme' AND answer = 1").first());
+});
+
+test('a kept-anonymous contact Zeffy split between two: both kept at once; a stale pick of where its notes go is refused', async () => {
+  await withTeam();
+  await add(pay({ id: 'k1', contact: 'ct_kold', first: 'Ivy', last: 'Kept', email: 'ivy@example.com' }), pay({ id: 'k2', contact: 'ct_kold', first: 'Ivy', last: 'Kept', email: 'ivy@example.com' }));
+  await doIt({ act: 'anon', key: 'c:ct_kold', on: true });
+  await doIt({ act: 'note-add', key: 'c:ct_kold', body: 'Gives quietly', id: 'note-ivy' });
+  await add(pay({ id: 'k1', contact: 'ct_ka', first: 'Ivy', last: 'Kept', email: 'ivy@example.com' }), pay({ id: 'k2', contact: 'ct_kb', first: 'Ivy', last: 'Kept', email: 'ivy2@example.com' }));
+  await C.followMerges(db, { now: NOW });
+  const crm = await C.loadCrm(db, { now: NOW });
+  assert.deepEqual([crm.keptKey('c:ct_ka'), crm.keptKey('c:ct_kb')], [true, true], 'privacy first: both kept');
+  const card = (await needs()).find((i) => i.kind === 'moved');
+  assert.equal(card.anon, true);
+  assert.deepEqual(card.who.map((w) => w.email).sort(), ['ivy2@example.com', 'ivy@example.com'], 'told apart by email');
+  await C.act(env, { act: 'moved-done', contact: 'ct_kold', to: 'ct_kb', asked: true }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(doIt({ act: 'moved-done', contact: 'ct_kold', to: 'ct_ka', asked: true }), (e) => e.status === 409);
+  assert.equal((await doIt({ act: 'moved-done', contact: 'ct_kold', to: 'ct_kb', asked: true })).same, true);
+});
+
+test('a link sent again (its answer lost) is done already, with one History entry', async () => {
+  await withTeam();
+  await add(pay({ id: 'hl', company: 'Bright Futures LLC', amount: 20000 }));
+  await doIt({ act: 'link', kind: 'company', subject: 'Bright Futures LLC', org: 'p:pella' });
+  assert.equal((await doIt({ act: 'link', kind: 'company', subject: 'Bright Futures LLC', org: 'p:pella' })).same, true);
+  assert.equal((await db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE entity_type = 'donor-crm' AND entity_name LIKE 'Linked%'").first()).n, 1);
+});
+
+test('a person joined from two records is named as they gave last, whichever record leads', async () => {
+  await add(pay({ id: 'nm1', contact: 'ct_aa', first: 'Filler', last: 'Donor', email: 'f@example.com', created: S(NOW - 300 * DAY) }), pay({ id: 'nm2', contact: 'ct_zz', first: 'Uma', last: 'Small', email: 'uma@example.com', created: S(NOW - DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_aa', b: 'c:ct_zz', same: true });
+  assert.ok((await list()).some((p) => p.name === 'Uma Small' && p.gifts === 2));
+});

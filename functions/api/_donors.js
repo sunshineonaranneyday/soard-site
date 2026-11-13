@@ -82,6 +82,9 @@ const SCHEMA = [
   // A giver known by email: whose contact it is now (./_donor-crm.js followMerges, every whole read)
   'CREATE INDEX IF NOT EXISTS donor_payments_email ON donor_payments(email)',
   'CREATE TABLE IF NOT EXISTS donor_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+  // When the site first saw each payment, kept after one leaves the list (a read that left it out): back in it, it's
+  // the gift it always was, never new (an old check To thank as if it came today)
+  'CREATE TABLE IF NOT EXISTS donor_seen (id TEXT PRIMARY KEY, first_seen TEXT NOT NULL)',
 ];
 const ready = new WeakSet();
 export async function ensureDonors(DB) {
@@ -165,13 +168,13 @@ const COLS = ['id', 'contact', 'at', 'cents', 'net', 'giving', 'in_kind', 'type'
 export const READ_COLS = [...COLS, 'was_contact'];
 // first_seen keeps the first time any read saw it; everything else is what Zeffy says now. A payment whose contact
 // changed keeps the one it had (SET reads the row as it was)
-const UPSERT = `INSERT INTO donor_payments (${COLS.join(', ')}) VALUES (${COLS.map(() => '?').join(', ')})
+const UPSERT = `INSERT INTO donor_payments (${COLS.join(', ')}) VALUES (${COLS.map((c) => (c === 'first_seen' ? 'COALESCE((SELECT s.first_seen FROM donor_seen s WHERE s.id = ?), ?)' : '?')).join(', ')})
   ON CONFLICT(id) DO UPDATE SET ${COLS.filter((c) => !['id', 'first_seen', 'checked_at'].includes(c)).map((c) => `${c} = excluded.${c}`).join(', ')},
     checked_at = MAX(donor_payments.checked_at, excluded.checked_at),
     was_contact = CASE WHEN donor_payments.contact IS NOT NULL AND donor_payments.contact IS NOT excluded.contact THEN donor_payments.contact ELSE donor_payments.was_contact END`;
 async function putRows(DB, rows) {
   await ensureDonors(DB);
-  for (let i = 0; i < rows.length; i += 50) await DB.batch(rows.slice(i, i + 50).map((r) => DB.prepare(UPSERT).bind(...COLS.map((c) => r[c] ?? null))));
+  for (let i = 0; i < rows.length; i += 50) await DB.batch(rows.slice(i, i + 50).map((r) => DB.prepare(UPSERT).bind(...COLS.flatMap((c) => (c === 'first_seen' ? [r.id, r[c] ?? null] : [r[c] ?? null])))));
 }
 
 /** A payment the gift webhook just delivered: in the list at once, and To thank at once if it needs a thank-you */
@@ -229,8 +232,12 @@ async function dropUnseen(DB, { from = 0, to = Number.MAX_SAFE_INTEGER, since, n
   const big = gone > HOLD_MIN && (kind === 'fill' || gone > total * HOLD_SHARE);
   const agreed = held?.kind === kind && now - Date.parse(held.at) <= HOLD_AGREE_MS && Math.abs(held.count - gone) <= Math.max(2, held.count * 0.05);
   if (big && !agreed) return { dropped: 0, held: { kind, count: gone, of: total, at: new Date(now).toISOString() } };
-  const r = await DB.prepare(`DELETE FROM donor_payments WHERE ${where}`).bind(from, to, since, grace).run();
-  return { dropped: r.meta?.changes || 0, held: null };
+  // (when each was first seen, kept: one listed again is the gift it was)
+  const [, r] = await DB.batch([
+    DB.prepare(`INSERT OR IGNORE INTO donor_seen (id, first_seen) SELECT id, first_seen FROM donor_payments WHERE ${where}`).bind(from, to, since, grace),
+    DB.prepare(`DELETE FROM donor_payments WHERE ${where}`).bind(from, to, since, grace),
+  ]);
+  return { dropped: r?.meta?.changes || 0, held: null };
 }
 
 /** The last WINDOW_DAYS, read whole: settles that window only when it reached Zeffy's last page */
@@ -366,8 +373,9 @@ export function donorOf(key, rows, { now = Date.now(), kids = [] } = {}) {
   // Years in a row, counting back from this year (or last year, while this year has nothing yet)
   let streak = 0;
   for (let y = byYear.has(thisYear) ? thisYear : thisYear - 1; byYear.has(y); y--) streak++;
-  // Named as their own Zeffy record names them (never by a gift that only shares their email)
-  const own = String(key).startsWith('c:') ? rows.filter((r) => `c:${r.contact}` === String(key)) : [];
+  // Named as their own Zeffy records name them, the newest (one joined from several: the name they gave under last),
+  // never by a gift that only shares their email
+  const own = String(key).startsWith('c:') ? rows.filter((r) => r.contact) : [];
   const newest = [...(own.length ? own : rows)].sort((a, b) => b.at - a.at);
   const named = newest.find((r) => clean(r.first) || clean(r.last)) || newest[0] || {};
   // As the board and Slack say it: a name typed in both boxes ("Pella" / "Pella") once

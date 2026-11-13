@@ -677,3 +677,17 @@ test('the same gift needing a thank-you again and again (its method changed back
   for (const m of ['cheque', 'card', 'cheque', 'card', 'cheque']) await note(chk(m), (t += HOUR));
   assert.equal((await todo()).length, 1, 'To thank again, the last time too');
 });
+
+// ─── Found in the ninth round ───────────────────────────────────────
+
+test('an old gift a read left out, listed again: the gift it always was, never To thank as new', async () => {
+  await note(pay({ id: 'old_chk', amount: 50000, method: 'cheque', type: 'manual', created: S(START - 400 * DAY) }), START - 300 * DAY);
+  await db.prepare("UPDATE donor_payments SET first_seen = ? WHERE id = 'old_chk'").bind(new Date(START - 300 * DAY).toISOString()).run();
+  await db.prepare("DELETE FROM donor_thanks").run();
+  await db.prepare("UPDATE donor_state SET value = json_set(value, '$.wholeAt', ?) WHERE key = 'thanks'").bind(new Date(START).toISOString()).run().catch(() => {});
+  // A read that left it out drops it (remembering when it was first seen), and the next lists it again
+  await db.batch([db.prepare("INSERT OR IGNORE INTO donor_seen (id, first_seen) SELECT id, first_seen FROM donor_payments WHERE id = 'old_chk'"), db.prepare("DELETE FROM donor_payments WHERE id = 'old_chk'")]);
+  await note(pay({ id: 'old_chk', amount: 50000, method: 'cheque', type: 'manual', created: S(START - 400 * DAY) }), START + 5 * HOUR);
+  assert.equal((await db.prepare("SELECT first_seen FROM donor_payments WHERE id = 'old_chk'").first()).first_seen, new Date(START - 300 * DAY).toISOString());
+  assert.ok(!(await todo()).some((t) => t.ids.includes('old_chk')));
+});
