@@ -374,6 +374,17 @@ const cameFrom = (view) => (e) => { const li = e.currentTarget.closest('li'); ba
 const DRAFT_DAYS = 7;
 const draftKey = (subject, part) => `soard-note-draft:${subject}:${part}`;
 const keepDraft = (k, v) => { try { if (v) localStorage.setItem(k, JSON.stringify({ ...v, at: Date.now() })); else localStorage.removeItem(k); } catch { /* storage off: nothing kept */ } };
+/** The page now under another address (counted for an organization, put on the website, joined under another lead):
+ * the words being written there go with it, added to any already kept there */
+function moveDraft(from, to) {
+  if (!from || !to || from === to) return;
+  const words = [draftOf(draftKey(from, 'new'))?.text, draftOf(draftKey(from, 'edit'))?.draft].map((x) => String(x || '').trim()).filter(Boolean);
+  if (!words.length) return;
+  const there = String(draftOf(draftKey(to, 'new'))?.text || '').trim();
+  keepDraft(draftKey(to, 'new'), { text: [there, ...words].filter(Boolean).join('\n\n') });
+  keepDraft(draftKey(from, 'new'), null);
+  keepDraft(draftKey(from, 'edit'), null);
+}
 const draftOf = (k) => { try { const v = JSON.parse(localStorage.getItem(k) || 'null'); return v && Date.now() - v.at < DRAFT_DAYS * 864e5 ? v : null; } catch { return null; } };
 // Where To thank or Needs you was when a giver was opened from it: back there, the same place and the same item
 let viewPlace = null;
@@ -1277,6 +1288,7 @@ function useWide(el, at = 1000) {
 function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Donors', onDonor, onOrg }) {
   const [shell, setShell] = useState(null);
   const wide = useWide(shell);
+  const shownKey = useRef(null);
   const [v, setV] = useState(null);
   const [rowBusy, setRowBusy] = useState(false);
   const [err, setErr] = useState(null);
@@ -1312,7 +1324,10 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // (shown already, not by this person's change: the page stays, so nothing typed is lost, and says where they are)
     if (j.org && shown.current && follow !== true) { setGone({ text: 'Their gifts count for an organization now: they were linked to it since this page was read.', org: j.org }); return; }
-    if (j.org) { onOrg(j.org); return; }
+    if (j.org) { moveDraft(shownKey.current, j.org); onOrg(j.org); return; }
+    // (joined under another lead since: the words being written go with the page)
+    if (shownKey.current && j.key && j.key !== shownKey.current) moveDraft(shownKey.current, j.key);
+    shownKey.current = j.key;
     setGone(null);
     setV(j);
     thanksRead();
@@ -1415,7 +1430,7 @@ function DonorPage({ donor, gift, fromList = false, ctx, onBack, backLabel = 'Do
           <header class="kd-sec__head"><h3 id="dn-giving-h">Giving</h3></header>
           <${GivingTiles} d=${d} />
         </section>
-        <${Notes} subject=${v.key} notes=${v.notes} staff=${v.staff} name=${d.name === 'No name' ? 'this giver' : d.name} zeffy=${!!d.contact} ctx=${ctx} onDone=${load} />
+        <${Notes} key=${v.key} subject=${v.key} notes=${v.notes} staff=${v.staff} name=${d.name === 'No name' ? 'this giver' : d.name} zeffy=${!!d.contact} ctx=${ctx} onDone=${load} />
         <section class="card kd-sec" aria-labelledby="dn-gifts-h">
           <header class="kd-sec__head"><h3 id="dn-gifts-h">Gifts <span class="count">${v.gifts.length}</span></h3></header>
           <${GiftList} gifts=${v.gifts} staff=${v.staff} ctx=${ctx} />
@@ -1483,7 +1498,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     if (!j.success) { setErr({ text: j.error, final: j.status === 404 }); return; }
     // Kept here before, on the website now: its partner's page, at its address
     if (j.org && !j.donor && shown.current && follow !== true) { setGone({ text: 'It’s on the website now: it was put there since this page was read.', org: j.org }); return; }
-    if (j.org && !j.donor) { history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
+    if (j.org && !j.donor) { moveDraft(orgKey, j.org); history.replaceState(null, '', `#donors/org/${encodeURIComponent(j.org)}`); ctx.open({ tab: 'people', org: j.org }); return; }
     setGone(null);
     setV(j);
     thanksRead();
@@ -1571,10 +1586,13 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
     ctx.addToast(`${name} is on the Partners page after you publish`, 'success', null, { publish: true });
     // By address: pressed from its toast after the page was left, it goes there; finished on its own after the person
     // left, it never pulls them back
+    moveDraft(v.key, r.key);
     if (!left.current || fromToast) location.replace(addressOf({ tab: 'people', org: r.key }));
   };
   const takeOut = async () => {
-    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${v.notes?.length || v.owner ? ` Its ${[v.owner ? 'owner' : null, v.notes?.length === 1 ? 'note' : v.notes?.length ? `${v.notes.length} notes` : null].filter(Boolean).join(' and its ')} ${(v.owner && v.notes?.length) || v.notes?.length > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : 'with it: they’re deleted.'}` : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
+    const ownNotes = (v.notes || []).filter((n) => n.subject === v.key).length;
+    const ownOwner = v.ownOwner || null;
+    if (!(await ask({ title: `Take ${v.name} out?`, text: `Its gifts count for the people who gave them again. Nothing changes in Zeffy.${ownNotes || ownOwner ? ` Its ${[ownOwner ? 'owner' : null, ownNotes === 1 ? 'note' : ownNotes ? `${ownNotes} notes` : null].filter(Boolean).join(' and its ')} ${(ownOwner && ownNotes) || ownNotes > 1 ? 'go' : 'goes'} ${v.madeFrom ? `back to ${v.madeFrom.name}, the Zeffy record it was made from.` : `with it: ${(ownOwner && ownNotes) || ownNotes > 1 ? 'they’re' : 'it’s'} deleted.`}` : ''}${v.keepAnonymous ? (v.madeFrom ? ` It’s kept anonymous, and ${v.madeFrom.name} stays kept anonymous.` : ' It’s kept anonymous: their names show on the board’s list of gifts again, unless they’re kept anonymous themselves.') : ''}`, yes: 'Take it out', danger: true }))) return;
     // (what the question said goes with it: a teammate's note or owner since is never lost unseen)
     const r = await change({ act: 'org-delete', key: v.key, was: { notes: (v.notes || []).map((n) => n.id), owner: v.owner || '', kept: !!v.keepAnonymous } });
     // (its answers lost every time: taken out after all, it's done)
@@ -1624,7 +1642,7 @@ function OrgPage({ orgKey, gift = null, ctx, onBack, backLabel = 'Donors' }) {
           <header class="kd-sec__head"><h3 id="dn-giving-h">Giving</h3></header>
           <${GivingTiles} d=${d} />
         </section>
-        <${Notes} subject=${v.key} notes=${v.notes} staff=${v.staff} name=${v.name} ctx=${ctx} onDone=${load} />
+        <${Notes} key=${v.key} subject=${v.key} notes=${v.notes} staff=${v.staff} name=${v.name} ctx=${ctx} onDone=${load} />
         <section class="card kd-sec" aria-labelledby="dn-names-h">
           <header class="kd-sec__head"><h3 id="dn-names-h">Names it gives under</h3>
             <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setAdding(true)}>Add a Zeffy name</button></header>

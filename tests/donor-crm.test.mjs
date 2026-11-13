@@ -1904,3 +1904,44 @@ test('Keep anonymous turned off for someone still kept by a shared name: said so
   await doIt({ act: 'anon', key: 'c:ct_kp2', on: true });
   assert.equal((await doIt({ act: 'anon', key: 'c:ct_kp2', on: false })).still, true);
 });
+
+// ─── Found in the seventeenth round ─────────────────────────────────
+
+test('Not the same person on a record Zeffy has since merged into someone else: that record comes out, the lead keeps her notes and owner', async () => {
+  await withTeam();
+  await add(pay({ id: 'ja1', contact: 'ct_ja', first: 'Jane', last: 'Doe', email: 'jane@example.com' }),
+    pay({ id: 'jx1', contact: 'ct_jx', first: 'Jane', last: 'Doe', email: 'jane3@example.com' }),
+    pay({ id: 'jy1', contact: 'ct_jy', first: 'Joan', last: 'Roe', email: 'joan@example.com' }));
+  await doIt({ act: 'same', a: 'c:ct_ja', b: 'c:ct_jx', same: true });
+  await doIt({ act: 'note-add', key: 'c:ct_ja', body: 'Jane: prefers a call', id: 'note-ja-1' });
+  await doIt({ act: 'owner', key: 'c:ct_ja', email: 'alex@soardcharity.com' });
+  // Zeffy merges ct_jx into Joan's record before anyone reads again
+  await add(pay({ id: 'jx1', contact: 'ct_jy', first: 'Jane', last: 'Doe', email: 'jane3@example.com' }));
+  await doIt({ act: 'split', key: 'c:ct_jx' });
+  const jane = await C.personView(env, 'ct_ja', { now: NOW });
+  const joan = await C.personView(env, 'ct_jy', { now: NOW });
+  assert.deepEqual([jane.owner, jane.notes.map((n) => n.body)], ['alex@soardcharity.com', ['Jane: prefers a call']]);
+  assert.deepEqual([joan.owner, joan.notes.length], [null, 0]);
+  const crm = await C.loadCrm(db, { now: NOW });
+  assert.notEqual(crm.canon('c:ct_ja'), crm.canon('c:ct_jy'), 'the merged record is out of Jane’s group');
+});
+
+test('an organization’s page says which notes and owner are its own (a linked contact’s stay theirs when it’s taken out)', async () => {
+  await withTeam();
+  await add(pay({ id: 'kw1', contact: 'ct_kw', first: 'Ken', last: 'Wu', email: 'ken@example.com', amount: 50000 }));
+  await doIt({ act: 'note-add', key: 'c:ct_kw', body: 'Ken: a makeover in 2019', id: 'note-kw-1' });
+  await doIt({ act: 'owner', key: 'c:ct_kw', email: 'alex@soardcharity.com' });
+  const made = await doIt({ act: 'org-new', name: 'Wu Family Trust', key: 'o:0123456789abcdef' });
+  await doIt({ act: 'link', kind: 'contact', subject: 'ct_kw', org: made.key });
+  let page = await C.orgView(env, made.key, { now: NOW });
+  assert.deepEqual(page.notes.map((n) => n.subject), ['c:ct_kw']);
+  assert.equal(page.ownOwner, null);
+  await doIt({ act: 'note-add', key: made.key, body: 'Trust: call in March', id: 'note-wt-1' });
+  await doIt({ act: 'owner', key: made.key, email: 'jordan@soardcharity.com' });
+  page = await C.orgView(env, made.key, { now: NOW });
+  assert.deepEqual(page.notes.filter((n) => n.subject === made.key).map((n) => n.body), ['Trust: call in March']);
+  assert.equal(page.ownOwner, 'jordan@soardcharity.com');
+  await doIt({ act: 'org-delete', key: made.key });
+  const ken = await C.personView(env, 'ct_kw', { now: NOW });
+  assert.deepEqual([ken.owner, ken.notes.map((n) => n.body)], ['alex@soardcharity.com', ['Ken: a makeover in 2019']]);
+});

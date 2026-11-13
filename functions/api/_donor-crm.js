@@ -509,7 +509,8 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     if (went.length === 1) {
       await followMerges(DB, { now });
       crm = await loadCrm(DB, { now });
-      body = { ...body, key: crm.canon(`c:${went[0]}`) };
+      // (a record to take out of a person is the record itself, never the person it now leads to)
+      body = { ...body, key: a === 'split' ? `c:${went[0]}` : crm.canon(`c:${went[0]}`) };
     }
   }
   // Keep as an organization sent again (its answer lost on the way back): the one it made, by the key the page chose
@@ -1669,8 +1670,8 @@ const withOwners = (staff, owners) => {
 const inChunks = async (keys, read) => { const out = []; for (let i = 0; i < keys.length; i += 80) out.push(...await read(keys.slice(i, i + 80))); return out; };
 async function notesOf(DB, keys) {
   if (!keys.length) return [];
-  const r = await inChunks([...new Set(keys)], async (ks) => (await DB.prepare(`SELECT id, body, by, at, edited_by, edited_at FROM donor_notes WHERE subject IN (${ks.map(() => '?').join(', ')})`).bind(...ks).all()).results || []);
-  return r.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).map((n) => ({ id: n.id, body: n.body, by: n.by || null, at: n.at, editedBy: n.edited_by || null, editedAt: n.edited_at || null }));
+  const r = await inChunks([...new Set(keys)], async (ks) => (await DB.prepare(`SELECT id, subject, body, by, at, edited_by, edited_at FROM donor_notes WHERE subject IN (${ks.map(() => '?').join(', ')})`).bind(...ks).all()).results || []);
+  return r.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)).map((n) => ({ id: n.id, subject: n.subject, body: n.body, by: n.by || null, at: n.at, editedBy: n.edited_by || null, editedAt: n.edited_at || null }));
 }
 /** What the team did about a donor, newest first (their History) */
 async function historyOf(DB, keys) {
@@ -1703,7 +1704,9 @@ async function pageExtras(env, crm, key, v, { emails = [] } = {}) {
   const [notes, history, gifts, staff] = await Promise.all([notesOf(env.DB, keys), historyOf(env.DB, keys), withThanks(env.DB, v.gifts), staffList(env.DB)]);
   // The owner is the one the list shows (an owner said under the old email moves to the contact on the next read)
   const owner = crm.lookedAfterBy(key);
-  return { owner, notes, history, gifts, staff: withOwners(staff, [owner]) };
+  // (an organization's own owner, said on it: not one shown from a contact counted for it)
+  const ownOwner = crm.ownerRows([key]).find(([, ans, note]) => ans && note)?.[2] || null;
+  return { owner, ownOwner, notes, history, gifts, staff: withOwners(staff, [owner]) };
 }
 
 /** Every gift waiting for a thank-you, the one waiting longest first, with whose it is and who looks after them */

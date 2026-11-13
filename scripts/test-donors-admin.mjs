@@ -784,6 +784,21 @@ try {
   ok(await page.$eval('#dn-note-text', (t) => t.value) === 'Met at the gala', 'and after a reload too');
   await page.click('#dn-note-text', { clickCount: 3 });
   await page.keyboard.press('Backspace');
+  // A note half written, then Count it for an organization: the page becomes the organization's, the words go with it
+  await page.click('#dn-note-text');
+  await page.keyboard.type('Wants a tour of a finished room');
+  await wait(300);
+  await page.evaluate(() => [...document.querySelectorAll('.dn button')].find((b) => /Count it for an organization/.test(b.textContent))?.click());
+  await page.waitForSelector('.dn-picker input', { timeout: 5000 });
+  await page.type('.dn-picker input', 'Acme');
+  await page.waitForFunction(() => [...document.querySelectorAll('.dn-picker__item')].some((b) => /Acme Builders/.test(b.textContent)), { timeout: 6000 }).catch(() => {});
+  await page.evaluate(() => [...document.querySelectorAll('.dn-picker__item')].find((b) => /Acme Builders/.test(b.textContent))?.click());
+  await page.waitForFunction(() => /Acme Builders/.test(document.querySelector('.dn-head h2')?.textContent || ''), { timeout: 8000 }).catch(() => {});
+  await page.waitForSelector('#dn-note-text', { timeout: 8000 }).catch(() => {});
+  ok(/Acme Builders/.test(await textOf(page, '.dn-head h2')) && await page.$eval('#dn-note-text', (t) => t.value).catch(() => '') === 'Wants a tour of a finished room', `counted for an organization: the note being written is in its note box (${await page.$eval('#dn-note-text', (t) => t.value).catch(() => 'none')})`);
+  await page.click('#dn-note-text', { clickCount: 3 });
+  await page.keyboard.press('Backspace');
+  await wait(300);
   // Put on the website from a page read before a teammate took the organization out: nothing is made
   const { key: walkOrg } = await C.act(env, { act: 'org-new', name: 'Walkthrough Works', links: [] }, 'alex@soardcharity.com');
   await page.evaluate((k) => { location.hash = `#donors/org/${encodeURIComponent(k)}`; }, walkOrg);
