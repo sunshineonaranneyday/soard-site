@@ -1280,6 +1280,8 @@ test('Move to Champion is one step on the site: done, or nothing said (refused w
   await putP('acme', 'Acme Builders', 'friend');
   await putP('sigco', 'Sig Co', 'signature');
   const renv = { DB: real };
+  // (giving that makes them Champion: $12,000 in the last 12 months)
+  await D.noteDonorPayment(renv, pay({ id: 'ch1', company: 'Acme Builders', amount: 1200000, created: S(NOW - 20 * DAY) }), { now: NOW });
   const act = (body) => C.act(renv, body, by, { now: NOW });
   await act({ act: 'level', org: 'p:acme', done: true, was: 'Friend', asked: true, move: true });
   assert.equal(JSON.parse((await real.prepare("SELECT data FROM partners WHERE slug = 'acme'").first()).data).level, 'champion');
@@ -1865,4 +1867,40 @@ test('a joined person’s page counts their own records for an organization; one
   await doIt({ act: 'link', kind: 'contact', subject: 'ct_p1', subjects: ['ct_p1', 'ct_p2'], org: 'p:pella' });
   const people = await list();
   assert.deepEqual([people.find((p) => p.key === 'p:pella')?.total, people.find((p) => p.key === 'p:acme')?.total], [5000, 7000]);
+});
+
+// ─── Found in the sixteenth round ───────────────────────────────────
+
+test('Move to Champion from a card read before the partner was kept anonymous: refused, its level unchanged', async () => {
+  const real = await createD1({ schemaFiles: ['scripts/schema.sql'] });
+  await real.exec('CREATE TABLE IF NOT EXISTS kids (slug TEXT, name TEXT, data TEXT)').catch(() => {});
+  await real.prepare('INSERT INTO partners (slug, name, level, category, data) VALUES (?, ?, ?, ?, ?)').bind('acme', 'Acme Builders', 'friend', 'funding', JSON.stringify({ name: 'Acme Builders', slug: 'acme', level: 'friend', category: ['funding'] })).run();
+  const renv = { DB: real };
+  await D.noteDonorPayment(renv, pay({ id: 'ck1', company: 'Acme Builders', amount: 1200000, created: S(NOW - 20 * DAY) }), { now: NOW });
+  await C.act(renv, { act: 'anon', key: 'p:acme', on: true }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act(renv, { act: 'level', org: 'p:acme', done: true, was: 'Friend', asked: true, move: true }, by, { now: NOW }), (e) => e.status === 409 && /kept anonymous/.test(e.message));
+  assert.equal(JSON.parse((await real.prepare("SELECT data FROM partners WHERE slug = 'acme'").first()).data).level, 'friend');
+});
+
+test('Not the same person at the same moment as a teammate’s join or owner change: refused, theirs stands', async () => {
+  await withTeam();
+  await add(pay({ id: 'sz1', contact: 'ct_m', first: 'Zed', last: 'Ray', email: 'z1@example.com' }), pay({ id: 'sz2', contact: 'ct_z', first: 'Zed', last: 'Ray', email: 'z2@example.com', created: S(NOW - 2 * DAY) }), pay({ id: 'sz3', contact: 'ct_a', first: 'Zed', last: 'Ray', email: 'z3@example.com', created: S(NOW - 3 * DAY) }));
+  await doIt({ act: 'same', a: 'c:ct_m', b: 'c:ct_z', same: true });
+  const join = () => C.act(env, { act: 'same', a: 'c:ct_a', b: 'c:ct_z', same: true }, 'jordan@soardcharity.com', { now: NOW });
+  await assert.rejects(C.act({ DB: racing(db, join) }, { act: 'split', key: 'c:ct_z' }, by, { now: NOW }), (e) => e.status === 409);
+  const crm = await C.loadCrm(db, { now: NOW });
+  assert.equal(crm.canon('c:ct_a'), crm.canon('c:ct_z'), 'Jordan’s join stands');
+});
+
+test('the organization’s “Who gave for it” counts a gift Zeffy took in three charges as one gift', async () => {
+  for (const [i, c] of [[1, 400000], [2, 400000], [3, 200000]]) await add(pay({ id: `tc${i}`, company: 'Acme Builders', amount: c, created: S(NOW - 5 * DAY) + i * 60 }));
+  const p = (await C.orgView(env, 'p:acme', { now: NOW })).people[0];
+  assert.deepEqual([p.cents, p.gifts], [1000000, 1]);
+});
+
+test('Keep anonymous turned off for someone still kept by a shared name: said so', async () => {
+  await add(pay({ id: 'kp1', contact: 'ct_kp1', first: 'Kim', last: 'Park', email: 'kim1@example.com' }), pay({ id: 'kp2', contact: 'ct_kp2', first: 'Kim', last: 'Park', email: 'kim2@example.com' }));
+  await doIt({ act: 'anon', key: 'c:ct_kp1', on: true });
+  await doIt({ act: 'anon', key: 'c:ct_kp2', on: true });
+  assert.equal((await doIt({ act: 'anon', key: 'c:ct_kp2', on: false })).still, true);
 });

@@ -86,6 +86,8 @@ export async function onRequestPost(context) {
     // Adding a new record where one is already (another tab, a teammate, a list read before it was added): never
     // overwrites it
     if (create === true && oldRaw !== null) {
+      // The very record it would add (this save sent again after its answer was lost): done already
+      if (oldRaw === jsonStr) return Response.json({ success: true, sha: await generateSha(oldRaw), same: true });
       return Response.json({ success: false, error: 'There’s one at that address already: someone added it since this list was read. Nothing was changed.' }, { status: 409 });
     }
     // A person loaded with a sha whose row is gone was renamed or deleted

@@ -122,3 +122,11 @@ test('save-content create at an address taken a moment before (no record when it
   assert.equal(r.status, 409);
   assert.equal(JSON.parse((await realPrepare("SELECT data FROM partners WHERE slug = 'race-co'").first()).data).level, 'champion');
 });
+
+test('save-content create sent again after its answer was lost (the very record there): done, never refused', async () => {
+  const DB = await createD1({ schemaFiles: ['scripts/schema.sql'] });
+  const save = () => saveContent({ env: { DB }, data: { userEmail: 'staff@soardcharity.com' }, waitUntil: () => {},
+    request: new Request('https://admin.test/api/save-content', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'src/content/partners/again-co.json', content: JSON.stringify({ name: 'Again Co', slug: 'again-co', level: 'friend', category: ['funding'] }), message: 'Add partner', create: true }) }) });
+  assert.equal((await save()).status, 200);
+  assert.equal((await save()).status, 200);
+});

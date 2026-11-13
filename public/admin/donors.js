@@ -1254,8 +1254,10 @@ function KeepAnonymous({ subject, on, why = null, names = [], name, ctx, onDone 
     if (!r.success) { ctx.addToast(r.error, 'error'); e.target.checked = !next; setSaved(null); onDone(); return; }
     setSaved(next);
     listChanged();
-    ctx.addToast(next ? `${name} is kept anonymous` : `${name} is no longer kept anonymous`, 'success');
-    onDone();
+    ctx.addToast(next ? `${name} is kept anonymous` : r.still ? `${name}’s own Keep anonymous is off, but they’re still kept anonymous: they share a name or email with someone who is` : `${name} is no longer kept anonymous`, r.still ? 'info' : 'success');
+    // The page read again shows what's so (still kept by someone else's setting): the box follows it
+    await onDone();
+    setSaved(null);
   };
   return html`<section class="kd-card dn-card--late" aria-labelledby="dn-anon-h">
     <h3 id="dn-anon-h">Anonymous</h3>

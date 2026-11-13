@@ -24,7 +24,9 @@
  * contact each payment had): what was said about it follows them (followMerges). If they went to several contacts, a
  * person decides (Needs you); nothing is dropped.
  */
-import { allRows, rowsFor, donorsView, donorView, giftsView, donorOf, ensureDonors, readDonorState, isOrgKey, personKeys, keyOfRef, refOfKey, donorOfPayment, noteDonorPayment, READ_COLS } from './_donors.js';
+import { allRows, rowsFor, donorsView, donorView, giftsView, donorOf, ensureDonors, readDonorState, isOrgKey, personKeys, keyOfRef, refOfKey, donorOfPayment, noteDonorPayment, READ_COLS, giftsFrom } from './_donors.js';
+/** How many gifts some charges are, as the list and the gift list count them (a gift Zeffy took in several charges is one) */
+const giftCount = (rows) => giftsFrom(rows.filter((r) => Number(r.giving) > 0)).length;
 import { kidNames } from './_board-gifts.js';
 import { givenName, zeffyGet } from './_zeffy.js';
 import { nameKey, nearPartners, categoriesOf, levelOf } from '../../public/admin/partners-shared.js';
@@ -299,6 +301,8 @@ export function makeCrm({ partners = [], orgs = [], calls = [], now = Date.now()
     calls: { yes, no, pay, level, big, notSame: notSameNow, notSameRaw: notSame, forward, movedDone },
     /** A linked company's name as typed when it was linked (its key, plain letters, is no name to show) */
     companyName: (k) => companyNames.get(String(k)) || null,
+    /** Every "same person" answer with one of these on either side, as read: [[subject, target, answer, note, at]] */
+    sameRowsOf: (keys) => { const set = new Set(keys.map(String)); return [...rawBy.entries()].filter(([k]) => k.startsWith('same\n')).flatMap(([, rows]) => rows).filter(([sub, tgt]) => set.has(sub) || set.has(tgt)); },
     /** The answers of one kind about these subjects, as read: [[subject, target, answer, note, at]] */
     rowsOf: (kind, subjects) => subjects.flatMap((sub) => rawBy.get(`${kind}\n${sub}`) || []),
     /** The owner answers stored under these keys, as read: [[subject, answer, note, at]] */
@@ -590,6 +594,12 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
       ...named,
     ]);
     await audit(DB, by, `${body.on ? 'Keep anonymous' : 'No longer kept anonymous'}: ${isOrgKey(key) ? crm.org.get(key).name : 'a donor'}`, { key, on: !!body.on }, key);
+    // Their own setting off, and still kept (they share a name or an email with someone kept): said so, never "off"
+    if (!body.on && !isOrgKey(key)) {
+      const crm2 = await loadCrm(DB, { now });
+      // (everyone's gifts: who shares their name or email is read from all of them, as their page reads it)
+      if (crm2.placer(await allRows(DB)).kept(crm2.canon(key))) return { ok: true, still: true };
+    }
     return { ok: true };
   }
   if (a === 'payment') {
@@ -635,7 +645,19 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     const lead = [...rest].sort((x, y) => (x.startsWith('c:') ? 0 : 1) - (y.startsWith('c:') ? 0 : 1) || (x < y ? -1 : 1))[0];
     // One batch: all of it or none, so a failure part way never breaks the person up; and only while who is the same
     // as whom is as read (a teammate's split in between is never undone)
-    const steps = [asRead(DB, crm, 'same', group), DB.prepare("UPDATE donor_calls SET answer = 0 WHERE kind = 'same' AND answer = 1 AND (subject = ? OR target = ?)").bind(key, key)];
+    const sameRows = crm.sameRowsOf(group);
+    const ownersRead = crm.ownerRows(group);
+    const steps = [
+      stillSo(DB, `(SELECT COUNT(*) FROM donor_calls WHERE kind = 'same' AND (subject IN (SELECT value FROM json_each(?)) OR target IN (SELECT value FROM json_each(?)))) = ?
+        AND (SELECT COUNT(*) FROM donor_calls d, json_each(?) j WHERE d.kind = 'same' AND d.subject = json_extract(j.value, '$[0]') AND d.target = json_extract(j.value, '$[1]')
+          AND d.answer = json_extract(j.value, '$[2]') AND d.at = json_extract(j.value, '$[4]')) = ?
+        AND (SELECT COUNT(*) FROM donor_calls WHERE kind = 'owner' AND subject IN (SELECT value FROM json_each(?))) = ?
+        AND (SELECT COUNT(*) FROM donor_calls d, json_each(?) j WHERE d.kind = 'owner' AND d.subject = json_extract(j.value, '$[0]')
+          AND d.answer = json_extract(j.value, '$[1]') AND d.note IS json_extract(j.value, '$[2]') AND d.at = json_extract(j.value, '$[3]')) = ?`,
+      JSON.stringify(group), JSON.stringify(group), sameRows.length, JSON.stringify(sameRows), sameRows.length,
+      JSON.stringify(group), ownersRead.length, JSON.stringify(ownersRead), ownersRead.length),
+      DB.prepare("UPDATE donor_calls SET answer = 0 WHERE kind = 'same' AND answer = 1 AND (subject = ? OR target = ?)").bind(key, key),
+    ];
     // The person's notes and owner were said on the record that led them: they stay with the person
     const led = crm.canon(key) === key;
     if (led) steps.push(DB.prepare('UPDATE donor_notes SET subject = ? WHERE subject = ?').bind(lead, key));
@@ -693,6 +715,11 @@ async function actNow(env, body, by, { now = Date.now() } = {}) {
     // a failure part way leaves nothing said, so it can simply be tried again)
     if (body.done && body.move === true) {
       if (!key.startsWith('p:')) throw bad('Only a partner on the website has a level');
+      // Still a Champion by its giving, as Needs you would ask it now: kept anonymous since (its giving on the Partners
+      // page unasked), or its gifts refunded or given anonymously since, it isn't moved
+      if (crm.keepAnonymous(key)) throw bad(`${crm.org.get(key).name} is kept anonymous since this was read, so it wasn’t moved. Nothing was changed.`, 409);
+      const stillDue = needsOf(await allRows(DB), crm, { now }).some((i) => i.kind === 'level' && i.org === key);
+      if (!stillDue) throw bad(`${crm.org.get(key).name}’s giving in the last 12 months is under Champion’s now (refunded, or given anonymously, since). Nothing was changed.`, 409);
       const { updatePartners } = await import('./partners-batch.js');
       const r = await updatePartners(env, [{ slug: key.slice(2), set: { level: 'champion' }, from: { level: ['builder', 'friend'] } }], by || 'unknown');
       if (r.status !== 200) throw bad(r.body?.error || 'The Partners page didn’t take the change', r.status >= 400 && r.status < 500 ? r.status : 500);
@@ -1495,9 +1522,10 @@ export function needsOf(rows, crm, { now = Date.now(), unplaced = [] } = {}) {
   const people = new Map();
   for (const { r, person, owner } of placed) {
     if (owner !== person) continue;
-    const p = people.get(person) || { key: person, name: personName(r), emails: new Set(), same: '', cents: 0, gifts: 0, at: 0 };
+    const p = people.get(person) || { key: person, name: personName(r), emails: new Set(), same: '', cents: 0, gifts: 0, at: 0, rows: [] };
     p.cents += Number(r.giving) || 0;
-    if (Number(r.giving) > 0) p.gifts++;
+    p.rows.push(r);
+    p.gifts = giftCount(p.rows);
     if (r.email) p.emails.add(r.email);
     if (r.at > p.at) { p.at = r.at; p.name = personName(r); p.same = sameName(r) || p.same; } else if (!p.same) p.same = sameName(r);
     people.set(person, p);
@@ -1772,11 +1800,12 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
   const contacts = new Map();
   const companies = new Map();
   const people = new Map();
+  const byGiver = new Map();
   for (const r of mine) {
     const p = place(r).person;
     const pe = people.get(p) || { key: p, ref: p.startsWith('c:') ? p.slice(2) : `g:${r.id}`, name: personName(r), cents: 0, gifts: 0 };
     pe.cents += Number(r.giving) || 0;
-    if (Number(r.giving) > 0) pe.gifts++;
+    (byGiver.get(p) || byGiver.set(p, []).get(p)).push(r);
     people.set(p, pe);
     // Each name it counts under, however many: a gift given by a linked contact for a linked company shows both
     const viaContact = !!r.contact && crm.contactOrgOf(r) === key;
@@ -1792,6 +1821,7 @@ export async function orgView(env, key, { now = Date.now() } = {}) {
     }
     if (!viaContact && !viaCompany && crm.calls.pay.get(String(r.id)) === key) contacts.set(`pay:${r.id}`, { kind: 'payment', subject: r.id, name: `One gift from ${personName(r)}`, how: 'this gift' });
   }
+  for (const pe of people.values()) pe.gifts = giftCount(byGiver.get(pe.key) || []);
   // Who gave for it, by their own name (a person who typed the organization's name on its gift is named as themselves:
   // their newest gift of their own, else the name on the gift)
   const ownRow = new Map();
@@ -1893,15 +1923,16 @@ export async function findPeople(env, q, { now = Date.now(), except = null } = {
     const { person, owner } = place(r);
     // A gift with no contact, email or name can't be joined to anyone
     if (owner !== person || !/^[cen]:/.test(person)) continue;
-    const p = by.get(person) || { key: person, name: personName(r), email: r.email || null, cents: 0, gifts: 0, hit: false, at: 0 };
+    const p = by.get(person) || { key: person, name: personName(r), email: r.email || null, cents: 0, gifts: 0, hit: false, at: 0, rows: [] };
     p.cents += Number(r.giving) || 0;
-    if (Number(r.giving) > 0) p.gifts++;
+    p.rows.push(r);
+    p.gifts = giftCount(p.rows);
     if (r.at > p.at) { p.at = r.at; p.name = personName(r); p.email = r.email || p.email; }
     if (personName(r).toLowerCase().includes(t) || String(r.email || '').includes(t)) p.hit = true;
     by.set(person, p);
   }
   const ex = except ? crm.canon(except) : null;
-  return { people: [...by.values()].filter((p) => p.hit && p.key !== ex).sort((a, b) => b.cents - a.cents).slice(0, 12).map(({ hit, ...p }) => p) };
+  return { people: [...by.values()].filter((p) => p.hit && p.key !== ex).sort((a, b) => b.cents - a.cents).slice(0, 12).map(({ hit, rows, ...p }) => p) };
 }
 
 /** Which donor a gift is (the MAJOR GIFT Slack link): a person's address, or an organization's */
