@@ -3,9 +3,9 @@
  * =======================================================================
  * The starting-soon screen (SlateScreen.astro, via slate-design.ts) and the
  * live page's "The design" section (LiveDesign.astro) both ask
- * /api/reveal-design for the before photos, drawings and boards, which it
- * only gives from an hour before the reveal (public/admin/reveal-design.js
- * has the rules). This is the one place that asks, and the one place that
+ * /api/reveal-design for the before photos and drawings, which it only
+ * gives once the reveal is confirmed (public/admin/reveal-design.js has the
+ * rules). This is the one place that asks, and the one place that
  * turns a slide into a picture address.
  *
  * The family's address: a floor plan that still has its title block is only
@@ -33,7 +33,6 @@ export interface DesignAnswer {
   open: boolean;
   /** The reveal has started: the room is "before", not "today" */
   after?: boolean;
-  opensAt?: string | null;
   name?: string;
   slides?: DesignSlide[];
 }
@@ -45,10 +44,10 @@ export async function fetchDesign(kid: string, signal?: AbortSignal): Promise<De
   if (!kid) return null;
   try {
     const res = await fetch(`/api/reveal-design?kid=${encodeURIComponent(kid)}`, { cache: 'no-store', signal });
-    if (res.status === 404) return { open: false, opensAt: null };
+    if (res.status === 404) return { open: false };
     if (!res.ok) return null;
     const d = await res.json();
-    return { open: !!d?.open, after: !!d?.after, opensAt: d?.opensAt || null, name: d?.name || '', slides: Array.isArray(d?.slides) ? d.slides.filter(validSlide) : [] };
+    return { open: !!d?.open, after: !!d?.after, name: d?.name || '', slides: Array.isArray(d?.slides) ? d.slides.filter(validSlide) : [] };
   } catch {
     return null;
   }

@@ -1369,6 +1369,14 @@
     .bc-links { display: flex; flex-wrap: wrap; gap: .3rem 1.25rem; margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--color-border); font-size: var(--fs-xs); color: var(--color-text-muted); }
     .bc-links a { color: var(--color-text-secondary); text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
     .bc-links a:hover { color: var(--color-text); text-decoration-color: currentColor; }
+    /* Reveals → Now: the before photos the live reveal page plays, under the links */
+    .bc-befores { margin-top: .85rem; padding-top: .75rem; border-top: 1px solid var(--color-border); }
+    .bc-befores__head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: .5rem 1rem; }
+    .bc-befores__words { min-width: 0; flex: 1 1 260px; margin: 0; max-width: 72ch; font-size: var(--fs-xs); line-height: 1.5; color: var(--color-text-muted); }
+    .bc-befores__words strong { display: block; font-size: var(--fs-sm); color: var(--color-text); }
+    .bc-befores__row { list-style: none; margin: .65rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(6, minmax(0, 76px)); gap: .5rem; }
+    .bc-befores__row img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; background: var(--color-bg-secondary); }
+    .bc-befores + .bc-note { margin-top: 1rem; }
     .bc-actions, .bc-btns { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
     .bc-callout { margin-top: 1rem; padding: .85rem 1rem; border: 1px solid var(--tone-warn-line-strong); border-radius: var(--radius-md); background: var(--tone-warn-surface); display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
     .bc-card-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem 1rem; flex-wrap: wrap; margin-bottom: .9rem; }
@@ -3054,7 +3062,11 @@
     /* Photos → Before photos: their own group under the gallery */
     .kd-befores { position: relative; margin-top: 1.75rem; padding-top: 1.25rem; border-top: 1px solid var(--color-border); }
     .kd-befores__head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 0.6rem 1rem; margin-bottom: 0.9rem; }
-    .kd-befores__head h4 { margin: 0; font-size: var(--fs-sm); font-weight: 700; letter-spacing: -0.01em; }
+    .kd-befores__head h4 { margin: 0; font-size: var(--fs-sm); font-weight: 700; letter-spacing: -0.01em; outline: none; }
+    /* Opened at Before photos (Reveals → Choose them): a short ring shows where you landed, under the sticky bar */
+    .kd-befores { scroll-margin-top: 76px; }
+    .kd-befores.is-target { animation: kdBeforesTarget 1.6s var(--ease-out); }
+    @keyframes kdBeforesTarget { 0%, 35% { box-shadow: 0 0 0 3px var(--color-primary); border-radius: 12px; } 100% { box-shadow: 0 0 0 3px transparent; border-radius: 12px; } }
     .kd-befores__n { margin-left: 0.4rem; font-weight: 600; color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
     .kd-befores .kd-dropcover { border-radius: 12px; }
 
@@ -3488,7 +3500,7 @@
       .kd-toolbar { top: var(--top-h); }
       .kd-sec .rte-toolbar { top: calc(var(--top-h) + 52px); }
       .kd-bar { top: var(--top-h); margin: 0 -1.5rem 1rem; padding: 0.45rem 1.5rem; }
-      .card.kd-sec { scroll-margin-top: calc(var(--top-h) + 64px); }
+      .card.kd-sec, .kd-befores { scroll-margin-top: calc(var(--top-h) + 64px); }
       .kd-selectbar { top: calc(var(--top-h) + 62px); gap: 0.35rem; padding: 0.45rem 0.6rem; }
       .kd-selectbar .btn { padding-inline: 0.6rem; white-space: nowrap; }
       .kd-photo { grid-template-columns: 1fr; }
@@ -5679,6 +5691,35 @@
       return html`<div class="bc-note bc-draft-note" role="note">${icons.warning}<span>${n} isn't published on the site yet. Reveal links will open the main live page until you publish ${n} and the site redeploys, and the starting-soon screen won't exist. Publish ${n} before reveal day.</span></div>`;
     }
 
+    /**
+     * Reveals → Now: the before photos this reveal's live page and starting-soon screen play, from the confirm on (the
+     * first RD.BEFORE_SHOWN on the page, in their order in the kid's Photos → Before photos, exactly as
+     * /api/reveal-design picks them), and Choose them, which opens the profile there. Peter, Nov 16 2026. Nothing is
+     * kept here: the choosing is done on the profile, so the kid page, the live page and this card always agree.
+     */
+    function BcBefores({ kid }) {
+      const all = kid.beforePhotos || [];
+      const plays = RD.beforePhotosOf(kid).slice(0, RD.BEFORE_SHOWN);
+      const on = all.filter(RD.onPage).length;
+      const off = all.filter(RD.keptOff).length;
+      const waiting = all.length - on - off;
+      const whose = kdPoss(kid.name || 'this kid');
+      const said = !all.length ? `None yet. They come in from JobTread on their own once the reveal is confirmed, or add them on ${whose} profile.`
+        : !plays.length ? `None is on ${whose} page yet, so the live page has no before photos.`
+        : on > plays.length ? `The first ${plays.length} of the ${on} on ${whose} page play, in their order on the profile.`
+        : plays.length === 1 ? `The only one on ${whose} page plays.` : `All ${plays.length} on ${whose} page play.`;
+      const rest = [off && `${off} ${off === 1 ? 'is' : 'are'} kept off the page.`, waiting && `${waiting} ${waiting === 1 ? 'isn’t' : 'aren’t'} checked yet.`].filter(Boolean).join(' ');
+      return html`<div class="bc-befores">
+        <div class="bc-befores__head">
+          <p class="bc-befores__words"><strong>Before photos on the live reveal page</strong> ${said}${rest ? ` ${rest}` : ''}</p>
+          <a class="btn btn-ghost btn-sm" href=${`#kids/${encodeURIComponent(kid.slug)}/before-photos`}>Choose them</a>
+        </div>
+        ${plays.length ? html`<ol class="bc-befores__row">${plays.map((p, i) => html`<li key=${p.url}>
+          <img src=${kdImg(p.url, 'w=160,h=160,fit=cover,q=70')} alt=${`Before photo ${i + 1}${p.room ? `, ${p.room}` : ''}`} loading="lazy" decoding="async" />
+        </li>`)}</ol>` : null}
+      </div>`;
+    }
+
     // Settings form ⇄ the saved config (functions/api/_broadcast.js readConfig)
     const bcCfgFrom = (c) => ({
       facebookMode: c.facebook?.mode || 'persistent',
@@ -5981,6 +6022,9 @@
       const waiting = (phase === 'idle' || sched) ? (sch.waiting || []).map((w) => html`<div class="bc-note" role="note" key=${w.jobId}>${icons.warning}<span>${bcWaitingNote(w)} <a href=${`https://app.jobtread.com/jobs/${w.jobId}/schedule`} target="_blank" rel="noopener">Open in JobTread ↗</a></span></div>`) : null;
 
       const showKid = pub.kidName && phase !== 'idle' && !(pub.title || '').includes(pub.kidName);
+      // The before photos this reveal plays, while it's coming up or live (a hidden profile shows none: its note says so)
+      const beforesKid = pub.kidSlug && (sched || live) ? kidBySlug(pub.kidSlug) : null;
+      const befores = beforesKid && beforesKid.publishStatus !== 'draft' ? html`<${BcBefores} kid=${beforesKid} />` : null;
       const status = html`<div class="card bc-status" style=${`--phase:${P.color}`}>
         <div class="bc-status-top">
           <div class="bc-status-main">
@@ -5993,6 +6037,7 @@
           ${actions ? html`<div class="bc-actions">${actions}</div>` : null}
         </div>
         ${links.length ? html`<div class="bc-links">${links}</div>` : null}
+        ${befores}
         ${kidPicker}
         ${waiting}
       </div>`;
@@ -12592,18 +12637,13 @@
       return Comp ? html`<${Comp} ...${props} Dialog=${KdDialogBox} />` : null;
     }
     const kdPoss = (name) => (/s$/i.test(name || '') ? `${name}’` : `${name}’s`);
-    /** When an unrevealed kid's design first shows: an hour before a confirmed reveal, on their live page and stream */
+    /** When an unrevealed kid's design first shows: from the confirmed reveal, on their page, live page and stream */
     function kdDesignWhen(name, reveal, hidden = false) {
       const who = name || 'this kid';
       // A hidden profile has no live page or reveal screen of its own (/api/reveal-design answers nothing for it)
-      if (hidden) return html`${kdPoss(who)} profile is hidden, so the design doesn’t show anywhere: not on the page, the live page or the stream. Show the profile on the site and the existing and proposed plans show on the page once the reveal is confirmed, and play from an hour before it.`;
-      if (reveal?.confirmed && reveal.startsAt) {
-        const at = new Date(Date.parse(reveal.startsAt) - RD.DESIGN_LEAD_MS);
-        const time = at.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
-        const day = at.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/New_York' });
-        return html`The reveal is confirmed, so the existing and proposed plans show on ${kdPoss(who)} page (each once its address is seen to). They play on ${kdPoss(who)} live page and stream from <strong>${time}, ${day}</strong>, an hour before. Design boards stay off until after the reveal.`;
-      }
-      return html`The existing and proposed plans show on ${kdPoss(who)} page once JobTread confirms the reveal, and play on the live page and stream from an hour before it. Design boards stay off until after the reveal.`;
+      if (hidden) return html`${kdPoss(who)} profile is hidden, so the design doesn’t show anywhere: not on the page, the live page or the stream. Show the profile on the site and the existing and proposed plans show on the page and the live reveal page once the reveal is confirmed.`;
+      if (reveal?.confirmed) return html`The reveal is confirmed, so the existing and proposed plans show on ${kdPoss(who)} page and live reveal page now (each once its address is seen to), and play on the stream before it starts. Design boards stay off until after the reveal.`;
+      return html`The existing and proposed plans show on ${kdPoss(who)} page and live reveal page once JobTread confirms the reveal, and play on the stream before it starts. Design boards stay off until after the reveal.`;
     }
 
     /** One plan: what it is (as-built, proposed, board), the page's crop (floor plans lose the address block), caption, place */
@@ -14260,6 +14300,24 @@
         setTimeout(() => el.classList.remove('is-target'), 1600);
         setActive(id);
       };
+      // Opened at Before photos (#kids/<slug>/before-photos: Reveals → Choose them): there, once the profile has loaded.
+      // Read as the editor opens, before the admin tidies the address back to #kids/<slug>
+      const toBefores = useRef(/^#kids\/[^/?#]+\/before-photos(?:[/?]|$)/.test(location.hash));
+      useEffect(() => {
+        if (loading || !toBefores.current) return undefined;
+        toBefores.current = false;
+        const raf = requestAnimationFrame(() => {
+          const el = document.getElementById('kd-befores');
+          if (!el) return;
+          spyHold.current = Date.now() + 1200;
+          el.scrollIntoView({ block: 'start' });
+          el.querySelector('#kd-befores-h')?.focus({ preventScroll: true });
+          el.classList.add('is-target');
+          setTimeout(() => el.classList.remove('is-target'), 1600);
+          setActive('photos');
+        });
+        return () => cancelAnimationFrame(raf);
+      }, [loading]);
       useEffect(() => {
         if (loading) return undefined;
         let raf = 0;
@@ -14445,7 +14503,7 @@
           onDrop=${(e) => { if (!e.dataTransfer?.files?.length) return; e.preventDefault(); e.stopPropagation(); setDropping(null); addBeforePhotos([...e.dataTransfer.files]); }}>
         <header class="kd-befores__head">
           <div>
-            <h4 id="kd-befores-h" aria-label=${befores.length ? `Before photos, ${befores.length}` : null}>Before photos${befores.length ? html`<span class="kd-befores__n" aria-hidden="true">${befores.length}</span>` : null}</h4>
+            <h4 id="kd-befores-h" tabindex="-1" aria-label=${befores.length ? `Before photos, ${befores.length}` : null}>Before photos${befores.length ? html`<span class="kd-befores__n" aria-hidden="true">${befores.length}</span>` : null}</h4>
             <p class="kd-sec__sub">${beforeSub}</p>
             ${beforeState ? html`<p class="kd-sec__sub kd-befores__state">${kdIcon.eyeOff} ${beforeState}</p>` : null}
           </div>

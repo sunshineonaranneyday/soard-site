@@ -4,8 +4,8 @@
  * Drives the kid editor in a real browser (admin from an Astro dev server,
  * every /api/* answered here, JobTread's CDN faked with a generated plan set)
  * at 1440 and 390:
- *   - the note on an unrevealed kid: off their page until the reveal, on the
- *     live page and stream from an hour before (the real time when confirmed)
+ *   - the note on an unrevealed kid: the existing and proposed plans on their
+ *     page and live reveal page from the confirm, boards after the reveal
  *   - Bring in from JobTread: every PDF page drawn; the as-built and proposed
  *     plans and the design board picked to start (by JobTread's sheet name,
  *     else the words on the page), the electrical sheet and cover left out;
@@ -263,9 +263,9 @@ async function desktop(browser, files) {
   const { page, api, errors } = await open(browser, { width: 1440, height: 900, mobile: false }, files);
   await openDylan(page, false);
 
-  // The note: the real time it opens
+  // The note: confirmed, so it's out now (Peter, Nov 16 2026: from the confirm, not an hour before)
   const note = await page.$eval('#kd-sec-plans .kd-design-when', (e) => e.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
-  ok(/existing and proposed plans show on Dylan’s page/.test(note) && /3:00 PM, Wednesday, November 18/.test(note) && /Design boards stay off until after the reveal/.test(note), `plans note says where and when: “${note}”`);
+  ok(/existing and proposed plans show on Dylan’s page and live reveal page now/.test(note) && !/hour before/.test(note) && /Design boards stay off until after the reveal/.test(note), `plans note says where and when: “${note}”`);
   const tsub = await page.$eval('#kd-sec-transform .kd-sec__sub', (e) => e.textContent.trim()).catch(() => '');
   ok(/shown once the room is revealed/.test(tsub) && /before photos for the reveal screen are in Photos/.test(tsub) && !(await page.$('#kd-sec-transform .kd-design-when')), `Before & after says where the reveal's before photos are, not the long note again: “${tsub}”`);
   ok(!(await page.$('#kd-sec-transform input[type="file"][multiple]')), 'Before & after has no Add before photos');

@@ -19,12 +19,14 @@
  *     2026: "no design boards on the live page"); they wait for the kid page,
  *     after the reveal.
  *
- * When: from DESIGN_LEAD_MS before the reveal (JobTread's confirmed time, or
- * the broadcast's own), through the reveal and after it. Until then the live
- * page has none of it (/api/reveal-design says only when it opens); the kid
- * page shows the before photos and the existing and proposed plans from the
- * confirmed reveal, its boards and Transformation from the reveal (pagePlans,
- * pageBefores).
+ * When: from the moment the reveal is confirmed (JobTread's Reveal Date
+ * Confirmed, or the broadcast scheduled for this kid), through the reveal and
+ * after it. Peter, Nov 16 2026: "once a reveal is confirmed they should show
+ * on the page", the live page as well as the kid page, instead of from an hour
+ * before. Until then the live page has none of it (/api/reveal-design says
+ * only that it isn't open); the kid page shows the before photos and the
+ * existing and proposed plans from the confirmed reveal too, its boards and
+ * Transformation from the reveal (pagePlans, pageBefores).
  *
  * Shared by functions/api/reveal-design.js (who sees it, when), the kid
  * editor (Admin → Kids) and its JobTread import, and tests. What the kid
@@ -32,8 +34,6 @@
  * How It Works shows whole pairs of revealed rooms only.
  */
 
-/** The design opens this long before the reveal starts */
-export const DESIGN_LEAD_MS = 60 * 60 * 1000;
 /** Before photos on the starting-soon screen (Peter: "about 4-6"): the first ones in Photos → Before photos */
 export const BEFORE_SHOWN = 6;
 export const BEFORE_SUGGESTED = 6;
@@ -220,15 +220,16 @@ const STARTED_PHASES = new Set(['live', 'ending', 'replay']);
  * Whether the design is public yet. kid: the profile; reveal: this kid's
  * reveal from JobTread's schedule ({ startsAt, confirmed }), coming up or from
  * the last few months; broadcast: the live state ({ kidSlug, phase, scheduledAt }).
- * It belongs to a reveal: open from an hour before it, through it and its
- * replay, and while JobTread's schedule still keeps it. A room revealed long
- * ago has its design on its kid page instead, so it isn't open here.
- * → { open, opensAt, after } (opensAt: when it will open, if that's known;
- *   after: the reveal has started)
+ * It belongs to a confirmed reveal: open from the confirm (the moment the kid
+ * page starts showing the before photos and plans), through the reveal and its
+ * replay, and while JobTread's schedule still keeps it. A tentative reveal
+ * never opens it. A room revealed long ago has its design on its kid page
+ * instead, so it isn't open here.
+ * → { open, after } (after: the reveal has started)
  */
 export function designWindow({ kid, reveal = null, broadcast = null, now = Date.now() }) {
-  const closed = (opensAt = null) => ({ open: false, opensAt, after: false });
-  if (!kid || kid.publishStatus === 'draft') return closed();
+  const closed = { open: false, after: false };
+  if (!kid || kid.publishStatus === 'draft') return closed;
   const starts = [];
   if (reveal && reveal.confirmed !== false && reveal.startsAt) starts.push(Date.parse(reveal.startsAt));
   const ours = !!broadcast && !!broadcast.kidSlug && broadcast.kidSlug === kid.slug;
@@ -237,10 +238,9 @@ export function designWindow({ kid, reveal = null, broadcast = null, now = Date.
   const first = known.length ? Math.min(...known) : NaN;
   const after = (ours && STARTED_PHASES.has(broadcast.phase)) || (Number.isFinite(first) && now >= first);
   // The crew's stream is up (or over) for this kid: open, whatever the clock says
-  if (ours && OPEN_PHASES.has(broadcast.phase)) return { open: true, opensAt: null, after };
-  if (!Number.isFinite(first)) return closed();
-  const opens = first - DESIGN_LEAD_MS;
-  return now >= opens ? { open: true, opensAt: null, after } : closed(new Date(opens).toISOString());
+  if (ours && OPEN_PHASES.has(broadcast.phase)) return { open: true, after };
+  // Confirmed, with its time: open from now on
+  return Number.isFinite(first) ? { open: true, after } : closed;
 }
 
 // ── Bringing drawings in from JobTread ───────────────────────────────

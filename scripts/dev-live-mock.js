@@ -24,8 +24,8 @@
  *
  * Also answers /api/reveal-design (the kid's design for the starting-soon
  * screen and the live page) by the real rules against the fake broadcast:
- * &design=auto (the default: open from an hour before the fake reveal, so
- * state=starting opens it and state=upcoming doesn't), &design=open or
+ * &design=auto (the default: open once the fake reveal is scheduled for the
+ * kid, as a confirmed one is, so state=upcoming opens it), &design=open or
  * &design=closed to force it, or &design=sample to open it with a sample
  * design (Adrian's 2025 plans, boards and site photos) for a kid with none yet.
  *
@@ -209,11 +209,11 @@ function handler(logger) {
       if (!kid || kid.publishStatus === 'draft') return json(404, { error: 'No such reveal' });
       const shown = designMode === 'sample' ? withSampleDesign(kid) : kid;
       const state = buildState(url.origin);
-      const win = designMode === 'open' || designMode === 'sample' ? { open: true, opensAt: null }
-        : designMode === 'closed' ? { open: false, opensAt: null }
+      const win = designMode === 'open' || designMode === 'sample' ? { open: true }
+        : designMode === 'closed' ? { open: false }
         : designWindow({ kid: shown, broadcast: { kidSlug: state.kidSlug, phase: state.phase, scheduledAt: state.scheduledAt } });
       const after = win.after ?? (state.kidSlug === kid.slug && ['live', 'ending', 'replay'].includes(state.phase));
-      return json(200, win.open ? { open: true, after, name: kid.name, slides: revealSlides(shown, { after }) } : { open: false, opensAt: win.opensAt });
+      return json(200, win.open ? { open: true, after, name: kid.name, slides: revealSlides(shown, { after }) } : { open: false });
     }
 
     if (url.pathname === '/api/live-replay') {

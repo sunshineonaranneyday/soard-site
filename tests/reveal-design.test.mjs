@@ -1,6 +1,6 @@
 /**
- * A kid's design on their reveal screen: when it opens, what it shows, and
- * that nothing of it (nor the family's address) gets out early.
+ * A kid's design on their reveal screen: when it opens (the confirmed reveal),
+ * what it shows, and that nothing of it (nor the family's address) gets out early.
  * public/admin/reveal-design.js, functions/api/reveal-design.js,
  * kids-shared.js kidRecord (before-only pairs, design boards).
  */
@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import {
-  DESIGN_LEAD_MS, BEFORE_SHOWN, revealSlides, designWindow, kindFromText, suggestBefores, addressWords,
+  BEFORE_SHOWN, revealSlides, designWindow, kindFromText, suggestBefores, addressWords,
   needsTitleCrop, planKind, normalizePlanType, completePairs, isRevealed, pagePlans, pageBefores,
   onPage, keptOff, pageState, revealPlaces, revealMoveTo, beforePhotosOf, freeBeforePlaces, pagePairs,
 } from '../public/admin/reveal-design.js';
@@ -121,31 +121,31 @@ test('once the reveal has started the room is "before", not "today"', () => {
   assert.equal(designWindow({ kid: DYLAN, broadcast: { kidSlug: 'dylan-2026', phase: 'armed', scheduledAt: STARTS }, now: NOW }).after, false);
 });
 
-test('closed until an hour before a confirmed reveal; open from then on', () => {
+test('open from the confirmed reveal on, however far ahead it is (Peter, Nov 16 2026: not an hour before)', () => {
   const reveal = { startsAt: STARTS, confirmed: true };
-  const before = designWindow({ kid: DYLAN, reveal, now: Date.parse(STARTS) - DESIGN_LEAD_MS - 1000 });
-  assert.equal(before.open, false);
-  assert.equal(before.opensAt, new Date(Date.parse(STARTS) - DESIGN_LEAD_MS).toISOString());
-  assert.equal(designWindow({ kid: DYLAN, reveal, now: Date.parse(STARTS) - DESIGN_LEAD_MS }).open, true);
+  // Confirmed two weeks ahead: open now, and not "after"
+  const ahead = designWindow({ kid: DYLAN, reveal, now: Date.parse(STARTS) - 14 * 86_400_000 });
+  assert.deepEqual(ahead, { open: true, after: false });
+  assert.equal(designWindow({ kid: DYLAN, reveal, now: Date.parse(STARTS) - 60 * 60_000 - 1000 }).open, true, 'just over an hour before');
   // During and after the reveal
   assert.equal(designWindow({ kid: DYLAN, reveal, now: Date.parse(STARTS) + 3 * 86_400_000 }).open, true);
-  // A tentative reveal ("mid November") never opens it
-  assert.equal(designWindow({ kid: DYLAN, reveal: { startsAt: STARTS, confirmed: false }, now: NOW + DESIGN_LEAD_MS }).open, false);
+  // A tentative reveal ("mid November") never opens it, even on the day
+  assert.deepEqual(designWindow({ kid: DYLAN, reveal: { startsAt: STARTS, confirmed: false }, now: Date.parse(STARTS) - 60_000 }), { open: false, after: false });
   // No reveal at all
-  assert.deepEqual(designWindow({ kid: DYLAN, now: NOW }), { open: false, opensAt: null, after: false });
+  assert.deepEqual(designWindow({ kid: DYLAN, now: NOW }), { open: false, after: false });
 });
 
-test('the broadcast opens it too: its own time, or its stream being up for this kid', () => {
+test('the broadcast opens it too: scheduled for this kid, or its stream being up for this kid', () => {
   const sched = { kidSlug: 'dylan-2026', phase: 'scheduled', scheduledAt: STARTS };
-  assert.equal(designWindow({ kid: DYLAN, broadcast: sched, now: NOW }).open, false);
-  assert.equal(designWindow({ kid: DYLAN, broadcast: sched, now: Date.parse(STARTS) - DESIGN_LEAD_MS + 1 }).open, true);
+  assert.equal(designWindow({ kid: DYLAN, broadcast: sched, now: Date.parse(STARTS) - 5 * 86_400_000 }).open, true);
+  assert.equal(designWindow({ kid: DYLAN, broadcast: { kidSlug: 'dylan-2026', phase: 'idle', scheduledAt: STARTS }, now: NOW }).open, false, 'an idle broadcast says nothing');
   for (const phase of ['armed', 'live', 'ending', 'replay']) {
     assert.equal(designWindow({ kid: DYLAN, broadcast: { kidSlug: 'dylan-2026', phase }, now: NOW - 5 * 86_400_000 }).open, true, phase);
   }
   // Another kid's broadcast says nothing about this one
   assert.equal(designWindow({ kid: DYLAN, broadcast: { kidSlug: 'max', phase: 'live' }, now: NOW }).open, false);
-  // The sooner of the two times decides
-  assert.equal(designWindow({ kid: DYLAN, reveal: { startsAt: '2026-11-25T21:00:00Z', confirmed: true }, broadcast: sched, now: Date.parse(STARTS) - 30 * 60_000 }).open, true);
+  // The sooner of the two times says when it has started
+  assert.equal(designWindow({ kid: DYLAN, reveal: { startsAt: '2026-11-25T21:00:00Z', confirmed: true }, broadcast: sched, now: Date.parse(STARTS) + 60_000 }).after, true);
 });
 
 test('a room revealed long ago isn\'t open here (its design is on its kid page); a hidden profile never', () => {
@@ -226,21 +226,21 @@ const ask = async (env, q) => {
 };
 const dayOf = (iso) => new Date(Date.parse(iso) - 5 * 3600e3).toISOString().slice(0, 10);
 
-test('the endpoint says nothing of the design before it opens, only when it will', async () => {
-  const startsAt = new Date(Date.now() + 3 * 3600e3).toISOString();
-  const env = await makeEnv({ reveals: { reveals: [], upcoming: [{ slug: 'dylan-2026', name: 'Dylan', confirmed: true, startsAt, date: dayOf(startsAt) }], updatedAt: new Date().toISOString() } });
+test('the endpoint says nothing of the design until the reveal is confirmed', async () => {
+  // Tentative (the job is being built, no date confirmed with the family): nothing
+  const env = await makeEnv({ reveals: { reveals: [], upcoming: [{ slug: 'dylan-2026', name: 'Dylan', confirmed: false, window: 'Mid November' }], updatedAt: new Date().toISOString() } });
   const r = await ask(env, '?kid=dylan-2026');
   assert.equal(r.status, 200);
-  assert.equal(r.body.open, false);
-  assert.equal(r.body.opensAt, new Date(Date.parse(startsAt) - DESIGN_LEAD_MS).toISOString());
-  assert.equal(r.body.slides, undefined);
+  assert.deepEqual(r.body, { open: false });
   assert.ok(!JSON.stringify(r.body).includes('imagedelivery'), 'no picture address before it opens');
-  // The edge copy never outlives a minute
+  // The edge copy never outlives a minute, so the confirm shows on the next ask
   assert.match(r.cache, /max-age=(\d|[1-5]\d|60)\b/);
+  // Nothing coming up at all
+  assert.deepEqual((await ask(await makeEnv(), '?kid=dylan-2026')).body, { open: false });
 });
 
-test('the endpoint opens an hour before, and while the stream is up', async () => {
-  const startsAt = new Date(Date.now() + 40 * 60_000).toISOString();
+test('the endpoint opens from the confirm, days ahead, and while the stream is up', async () => {
+  const startsAt = new Date(Date.now() + 9 * 86_400_000).toISOString();
   const env = await makeEnv({ reveals: { reveals: [], upcoming: [{ slug: 'dylan-2026', name: 'Dylan', confirmed: true, startsAt, date: dayOf(startsAt) }], updatedAt: new Date().toISOString() } });
   const r = await ask(env, '?kid=dylan-2026');
   assert.equal(r.body.open, true);

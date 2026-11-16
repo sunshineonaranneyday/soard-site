@@ -321,7 +321,8 @@ test('a minute on the site looks at those, then the rest come in and are looked 
   assert.match(note, /Photos → Before photos/);
   assert.match(note, /After the site’s check: 16 on the page, 2 kept off \(a person in it, boxes or deliveries\)/);
   assert.match(note, /Open any one to switch it on the page if it’s fine to show/);
-  assert.match(note, /The first 6 on the page play on the reveal screen/);
+  assert.match(note, /The first 6 on the page play on the live reveal page now/);
+  assert.doesNotMatch(note, /hour before/);
   assert.match(note, /1 more couldn’t be brought in yet; the site tries again later/);
   // All in and looked at, the design too: back to every 10 minutes
   assert.equal((await run(NOW + 6 * MIN + 3000)).skipped, 'not yet');

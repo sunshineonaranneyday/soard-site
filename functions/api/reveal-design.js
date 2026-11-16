@@ -4,8 +4,8 @@
  * The starting-soon screen (/live/<kid>/slate/) and the live page ask here
  * for the before photos, drawings and design boards on the kid's profile
  * (public/admin/reveal-design.js has the rules). Public, and it says nothing
- * until the design opens, an hour before the reveal:
- *   { open: false, opensAt }          not yet (opensAt: when, if a time is set)
+ * until the design opens, once the reveal is confirmed:
+ *   { open: false }                  not yet (no confirmed reveal)
  *   { open: true, after, name, slides: [...] }  from then on, through the reveal and its replay
  *                                    (after: it has started; the slides say "before", not "today")
  * The profile is read as saved, so a change in Admin → Kids shows on the next
@@ -49,12 +49,9 @@ export async function onRequestGet({ env, request }) {
     cachedReveals(env).catch(() => null),
   ]);
   const now = Date.now();
-  const { open, opensAt, after } = designWindow({ kid, reveal: revealOf(schedule, slug), broadcast, now });
-  if (!open) {
-    // Asked again soon after it opens: the edge copy never outlives the wait
-    const wait = opensAt ? Math.max(0, Math.floor((Date.parse(opensAt) - now) / 1000)) : 300;
-    return json({ open: false, opensAt }, 200, Math.min(60, wait));
-  }
+  const { open, after } = designWindow({ kid, reveal: revealOf(schedule, slug), broadcast, now });
+  // Not confirmed yet: kept for a minute at most, so the confirm shows on the next ask
+  if (!open) return json({ open: false }, 200, 60);
   // after: the reveal has started, so the room is "before", not "today"
   return json({ open: true, after, name: kid.name || '', slides: revealSlides(kid, { after }) });
 }

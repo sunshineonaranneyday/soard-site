@@ -27,9 +27,9 @@
  * LiveMessages.astro + utils/live-messages.ts (the messages),
  * LiveGive.astro + utils/live-give.ts (giving without leaving the reveal)
  * and utils/live-player.ts (the video). The room's design goes with the
- * video once it's out, an hour before (LiveDesignRail.astro: down the side
- * of a portrait video, under a landscape one), and in full under the hero
- * (LiveDesign.astro); utils/live-design.ts fills both.
+ * video during the watch party (LiveDesignRail.astro: down the side of a
+ * portrait video, under a landscape one), and in full under the hero from
+ * the confirmed reveal on (LiveDesign.astro); utils/live-design.ts fills both.
  */
 import { storyLead } from '../../utils/story-lead';
 import { cfRaw } from '../../utils/cf-image';
@@ -104,7 +104,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   <span data-whole-end hidden></span>
 </section>
 
-<!-- The room's design, from an hour before the reveal (empty until /api/reveal-design says so) -->
+<!-- The room's design, from the confirmed reveal on (empty until /api/reveal-design says so) -->
 <LiveDesign />
 
 <section class="live-msgs" id="messages" data-live-msgs hidden>
@@ -535,7 +535,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       ? createMessages({ client, panel, heroSlot, section, sectionSlot, cta: q('cta-messages') })
       : null;
 
-    // ── The room's design, from an hour before the reveal (it asks for whichever kid render() is showing) ──
+    // ── The room's design, from the confirmed reveal on (it asks for whichever kid render() is showing) ──
     const designEl = document.querySelector<HTMLElement>('[data-live-design]');
     const design = designEl ? createLiveDesign(designEl, {
       hero,

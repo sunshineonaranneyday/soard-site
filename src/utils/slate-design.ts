@@ -3,8 +3,9 @@
  * ==============================================================================
  * Peter, Nov 9 2026: "it's more important the slate page is visually
  * interesting, there's something to look at while the users wait for the
- * reveal". From an hour before the reveal (/api/reveal-design decides), the
- * frame that holds the kid's photo plays, and plays again:
+ * reveal". From the confirmed reveal on (/api/reveal-design decides; Peter,
+ * Nov 16 2026: from the confirm, not an hour before), the frame that holds
+ * the kid's photo plays, and plays again:
  *
  *   the kid → the room today (before photos, drifting) → the floor plan today
  *   → the new plan, wiped in over it → the design boards
@@ -27,7 +28,7 @@ import { fetchDesign, slideSrc, preload, designSignature, validSlide, type Desig
 const HOLD_MS: Record<string, number> = { kid: 8000, before: 6500, 'as-built': 9000, proposed: 11000, board: 9000 };
 const WIPE_MS = 2600;
 const ASK_OPEN_MS = 3 * 60_000;     // open: a change in the admin shows within a few minutes
-const ASK_CLOSED_MS = 10 * 60_000;  // closed with no time set: the reveal may get one
+const ASK_CLOSED_MS = 10 * 60_000;  // closed: the reveal isn't confirmed yet, and may be
 const ASK_FAILED_MS = 2 * 60_000;
 
 interface Options {
@@ -214,12 +215,7 @@ export function startSlateDesign(o: Options) {
     const d = await fetchDesign(kidSlug);
     let wait = ASK_FAILED_MS;
     if (d) {
-      if (d.open) { await apply(d.slides || []); wait = ASK_OPEN_MS; } else {
-        await apply([]);
-        const until = d.opensAt ? Date.parse(d.opensAt) - Date.now() : NaN;
-        // Asked again the moment it opens (a moment after, so the server agrees)
-        wait = Number.isFinite(until) ? Math.min(ASK_CLOSED_MS, Math.max(1500, until + 1500)) : ASK_CLOSED_MS;
-      }
+      if (d.open) { await apply(d.slides || []); wait = ASK_OPEN_MS; } else { await apply([]); wait = ASK_CLOSED_MS; }
     }
     askTimer = setTimeout(ask, wait);
   }

@@ -32,7 +32,7 @@
  * silent), ?slide=N (hold one slide of the design) and ?pace=0.2 (play it
  * faster, for checking).
  *
- * The design: from an hour before the reveal the frame plays the room's
+ * The design: from the confirmed reveal on, the frame plays the room's
  * story, the kid, the room today, the floor plan today, the new plan and the
  * design boards (src/utils/slate-design.ts; /api/reveal-design says when).
  *
@@ -251,7 +251,7 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
       canvas.style.transform = `translate(-50%, -50%) scale(${Math.min(innerWidth / w, innerHeight / h)})`;
     }
 
-    // ── The design, from an hour before the reveal (set up below, once the frame is sized) ──
+    // ── The design, from the confirmed reveal on (set up below, once the frame is sized) ──
     const designPreview = params.get('design') === 'preview';
     let design: ReturnType<typeof startSlateDesign> | null = null;
 

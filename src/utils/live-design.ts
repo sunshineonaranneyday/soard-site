@@ -3,10 +3,10 @@
  * ==========================================================
  * The page says which kid it's showing and what moment it's in (setKid: its
  * own kid, or on /live/ the one being revealed); this asks /api/reveal-design
- * for them, draws the room as it was, the plan and the look once it's open
- * (an hour before the reveal), and asks again: when the moment changes
- * (starting soon, live, replay), at the moment it opens, and every few
- * minutes after, so a change in Admin → Kids shows up on its own.
+ * for them, draws the room as it was and the plan once it's open (once the
+ * reveal is confirmed), and asks again: when the moment changes (starting
+ * soon, live, replay), and every few minutes, so the confirm and a change in
+ * Admin → Kids show up on their own.
  *
  * Two places, the same pictures:
  *   - The strip beside the video (LiveDesignRail.astro), during the watch
@@ -314,11 +314,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     if (!alive || forKid !== kid) return;
     let wait = ASK_FAILED_MS;
     if (d) {
-      if (d.open) { draw(d.name || '', d.slides || [], !!d.after); wait = ASK_OPEN_MS; } else {
-        hide();
-        const until = d.opensAt ? Date.parse(d.opensAt) - Date.now() : NaN;
-        wait = Number.isFinite(until) ? Math.min(ASK_CLOSED_MS, Math.max(1500, until + 1500)) : ASK_CLOSED_MS;
-      }
+      if (d.open) { draw(d.name || '', d.slides || [], !!d.after); wait = ASK_OPEN_MS; } else { hide(); wait = ASK_CLOSED_MS; }
     } else if (!slides.length) {
       // No answer and nothing drawn: a place kept for the pictures shouldn't stand empty
       mark(false);

@@ -854,7 +854,7 @@ async function tellBefores(env, job, kid, { n, waiting, gaveUp, unchecked = 0, l
     off.length || unseen ? 'Open any one to switch it on the page if it’s fine to show, or off if it isn’t.' : '',
     !n ? '' : !on ? 'None is on the page yet, so the reveal screen has no before photos.'
       : kid.publishStatus === 'draft' ? 'They show nowhere while the profile is hidden.'
-      : `${shown === 1 ? 'The first one on the page plays' : `The first ${shown} on the page play`} on the reveal screen from an hour before; move another into the first ${BEFORE_SHOWN} to show it instead.`,
+      : `${shown === 1 ? 'The first one on the page plays' : `The first ${shown} on the page play`} on the live reveal page now; move another into the first ${BEFORE_SHOWN} to show it instead.`,
     waiting ? `${plural(waiting, 'more')} couldn’t be brought in yet; the site tries again later.` : '',
     gaveUp.length ? `${plural(gaveUp.length, 'photo')} tagged Before couldn’t be brought in after several tries (${names(gaveUp)}); add ${it(gaveUp.length, 'it', 'them')} with Add before photos if ${it(gaveUp.length, 'it’s', 'they’re')} wanted.` : '',
   ].filter(Boolean);
@@ -901,7 +901,7 @@ async function tellFilled(env, job, kid, added) {
   const list = added.plans.map((p) => KIND[p.type].long.toLowerCase());
   const lines = [`Brought in from JobTread for ${possessive(job.name)} reveal on ${whenOf(job.startsAt)}: ${list.join(', ')}.`,
     s.unchecked.length ? `${plural(s.unchecked.length, 'drawing')} didn’t show the street in its words, so it stays off ${possessive(job.name)} page and the reveal screen until someone covers the address or ticks that it has none.` : '',
-    `The existing and proposed plans show on ${possessive(job.name)} page now and play on the reveal screen from an hour before; a design board waits for the page until after the reveal. Look it over in Admin → Kids.`].filter(Boolean);
+    `The existing and proposed plans show on ${possessive(job.name)} page and live reveal page now; a design board waits for the page until after the reveal. Look it over in Admin → Kids.`].filter(Boolean);
   await slackPost(env, adminCard({ level: 'info', icon: '🎨', title: `${possessive(job.name)} design is in`, detail: lines.join(' '), url: adminLink(job.slug), urlLabel: `Open ${possessive(job.name)} profile` }), { kind: s.unchecked.length ? 'attention' : 'news' }).catch(() => {});
   return true;
 }
@@ -931,7 +931,7 @@ async function tellStanding(env, reveals, kids, ledger, now, { save = async () =
     const s = standing(kid);
     const name = kid.name || r.name || r.slug;
     if (s.ready) {
-      await slackPost(env, adminCard({ level: 'info', icon: '✅', title: `${possessive(name)} design is ready`, detail: `For the reveal on ${whenOf(r.startsAt)}: ${s.inParts.join(', ')}. It shows on the reveal screen and live page from an hour before.`, url: adminLink(r.slug), urlLabel: `Open ${possessive(name)} profile` }), { kind: 'news' }).catch(() => {});
+      await slackPost(env, adminCard({ level: 'info', icon: '✅', title: `${possessive(name)} design is ready`, detail: `For the reveal on ${whenOf(r.startsAt)}: ${s.inParts.join(', ')}. It’s on the live reveal page now.`, url: adminLink(r.slug), urlLabel: `Open ${possessive(name)} profile` }), { kind: 'news' }).catch(() => {});
     } else {
       const parts = [s.missing.length && `Missing: ${s.missing.join(', ')}.`, s.unchecked.length && `${plural(s.unchecked.length, 'drawing')} still need${s.unchecked.length === 1 ? 's' : ''} the address covered, or a tick that it has none.`].filter(Boolean).join(' ');
       const config = await readConfig(env.DB).catch(() => ({}));

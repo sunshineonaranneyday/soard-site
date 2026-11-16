@@ -11,7 +11,9 @@
  * that kid, a draft links to Kit, and a page that isn't published says so.
  * Also: Customize, the Kit switch and "Check now" post the right actions,
  * the Invites tab keeps its switches and wording without the list, and the
- * page fits a phone. Screenshots land in test-results/reveals/. Exits
+ * page fits a phone. The status card shows the before photos the live reveal
+ * page plays (the first six on the kid's page), and Choose them opens the
+ * kid's profile at Before photos. Screenshots land in test-results/reveals/. Exits
  * non-zero on any failure or console error.
  *
  *   node scripts/test-reveals.mjs
@@ -20,6 +22,7 @@ import puppeteer from 'puppeteer';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { extname, join, normalize } from 'node:path';
+import { deflateSync } from 'node:zlib';
 import { DEFAULT_TEMPLATE, TEMPLATE_LIMITS } from '../functions/api/_reveal-invites.js';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -35,8 +38,20 @@ const iso = (msFromNow) => new Date(Date.now() + msFromNow).toISOString();
 const day = (n) => iso(n * D).slice(0, 10);
 const maxAt = new Date(`${day(10)}T20:00:00Z`).toISOString(); // 4:00 PM Eastern
 
-// Per-scenario tweaks to the stubbed server
-const KNOBS = { schedule: {}, setup: {}, slack: null, fb: null };
+// Per-scenario tweaks to the stubbed server (kids: the profiles Admin → Kids has)
+const KNOBS = { schedule: {}, setup: {}, slack: null, fb: null, kids: [] };
+
+/** A plain PNG of one colour: each before photo its own, so a screenshot shows their order */
+function png(w, h, [r, g, b]) {
+  const table = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc = (buf) => { let c = 0xffffffff; for (const x of buf) c = table[(c ^ x) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const chunk = (type, data) => { const len = Buffer.alloc(4); len.writeUInt32BE(data.length); const td = Buffer.concat([Buffer.from(type), data]); const c = Buffer.alloc(4); c.writeUInt32BE(crc(td)); return Buffer.concat([len, td, c]); };
+  const ihdr = Buffer.alloc(13); ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
+  const row = Buffer.concat([Buffer.from([0]), Buffer.alloc(w * 3).map((_, i) => [r, g, b][i % 3])]);
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(Buffer.concat(Array(h).fill(row)))), chunk('IEND', Buffer.alloc(0))]);
+}
+const SHADES = [[120, 144, 156], [230, 81, 0], [67, 160, 71], [30, 136, 229], [142, 36, 170], [251, 192, 45], [0, 137, 123], [216, 27, 96], [93, 64, 55], [117, 117, 117]];
+const tile = (path) => png(16, 16, SHADES[Number((path.match(/before-(\d+)/) || [])[1] || 0) % SHADES.length]);
 
 function adminData(phase) {
   const rehearsal = phase === 'rehearsal';
@@ -130,6 +145,8 @@ async function open(browser, base, viewport, phase, hash = '#broadcast', waitSel
   page.on('request', (req) => {
     const url = new URL(req.url());
     const json = (obj, status = 200) => req.respond({ status, contentType: 'application/json', body: JSON.stringify(obj) });
+    // The site's pictures, as Cloudflare would serve them
+    if (url.host === 'sunshineonaranneyday.com' && url.pathname.startsWith('/cdn-cgi/imagedelivery/')) return req.respond({ status: 200, contentType: 'image/png', body: tile(url.pathname) });
     if (url.origin !== base) return req.abort();
     if (req.method() === 'POST' && url.pathname.startsWith('/api/')) { try { posts.push({ path: url.pathname, body: JSON.parse(req.postData() || '{}') }); } catch { posts.push({ path: url.pathname, body: null }); } }
     if (url.pathname === '/api/broadcast-admin' && req.method() === 'GET') return json(adminData(phase));
@@ -150,6 +167,8 @@ async function open(browser, base, viewport, phase, hash = '#broadcast', waitSel
     if (url.pathname === '/api/reveal-invites-admin') return json(invitesData(phase));
     if (url.pathname === '/api/list-content' && (url.searchParams.get('dir') || '').includes('team')) return json({ success: true, items: TEAM.map((t) => ({ name: `${t.slug}.json`, path: `src/content/team/${t.slug}.json`, sha: t.slug, content: t })), total: TEAM.length, hasMore: false });
     if (url.pathname === '/api/read-content' && (url.searchParams.get('path') || '').includes('src/content/team/')) { const t = TEAM.find((x) => url.searchParams.get('path').endsWith(`${x.slug}.json`)); return json({ success: true, content: JSON.stringify(t), sha: t.slug }); }
+    if (url.pathname === '/api/list-content' && (url.searchParams.get('dir') || '').includes('src/content/kids')) return json({ success: true, items: KNOBS.kids.map((k) => ({ name: `${k.slug}.json`, path: `src/content/kids/${k.slug}.json`, sha: k.slug, content: k })), total: KNOBS.kids.length, hasMore: false });
+    if (url.pathname === '/api/read-content' && (url.searchParams.get('path') || '').includes('src/content/kids/')) { const k = KNOBS.kids.find((x) => url.searchParams.get('path').endsWith(`/${x.slug}.json`)); return json(k ? { success: true, content: JSON.stringify(k), sha: k.slug } : { success: false, error: 'Not found' }, k ? 200 : 404); }
     if (url.pathname === '/api/live-ws') return req.abort();
     if (url.pathname.startsWith('/api/list-content')) return json({ success: true, items: [], total: 0, hasMore: false });
     if (url.pathname.startsWith('/api/pending-changes')) return json({ success: true, changes: [], since: null });
@@ -415,6 +434,91 @@ try {
   ok(ppl.errors.length === 0, `no console errors (${ppl.errors.join(' | ')})`);
   await ppl.page.screenshot({ path: join(OUT, 'people-board.png'), fullPage: false });
   await ppl.page.close();
+
+  console.log('The before photos the live reveal page plays (Peter, Nov 16 2026)');
+  {
+    const shot = (n, extra = {}) => ({ url: `https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/kids/max/before-${n}/public`, alt: '', room: n === 1 ? 'Bathroom' : '', ...extra });
+    // 1 on (staff), 2 kept off by the site's check, 3-7 on, 8 not checked yet, 9 on: the six that play are 1, 3, 4, 5, 6, 7
+    const MAX = {
+      name: 'Max', slug: 'max', year: 2026, status: 'in-progress', publishStatus: 'published', rooms: ['Accessible Bathroom'],
+      beforePhotos: [shot(1, { looked: 'staff' }), shot(2, { looked: 'site', offPage: true, offWhy: 'A person in it' }), ...[3, 4, 5, 6, 7].map((n) => shot(n, { looked: 'site' })), shot(8), shot(9, { looked: 'site' })],
+    };
+    KNOBS.kids = [MAX];
+    const v = await open(browser, base, { width: 1440, height: 1000 }, 'scheduled');
+    await v.page.waitForSelector('.bc-befores', { timeout: 5000 }).catch(() => {});
+    const words = await text(v.page, '.bc-befores__words');
+    ok(words.startsWith('Before photos on the live reveal page') && words.includes('The first 6 of the 7 on Max’s page play, in their order on the profile.') && words.includes('1 is kept off the page.') && words.includes('1 isn’t checked yet.'), `the card says which play: “${words}”`);
+    const imgs = await v.page.$$eval('.bc-befores__row img', (x) => x.map((i) => ({ n: (i.getAttribute('src').match(/before-(\d+)/) || [])[1], alt: i.alt, w: Math.round(i.getBoundingClientRect().width), done: i.complete && i.naturalWidth > 0 })));
+    ok(imgs.map((i) => i.n).join(',') === '1,3,4,5,6,7', `the six that play, in their order, the kept-off one skipped (${imgs.map((i) => i.n).join(',')})`);
+    ok(imgs[0]?.alt === 'Before photo 1, Bathroom' && imgs[1]?.alt === 'Before photo 2', `each says which it is (${imgs.slice(0, 2).map((i) => i.alt).join(' / ')})`);
+    await v.page.waitForFunction(() => [...document.querySelectorAll('.bc-befores__row img')].every((i) => i.complete && i.naturalWidth > 0), { timeout: 5000 }).catch(() => {});
+    ok(imgs.every((i) => i.w >= 60 && i.w <= 80), `thumbnails are a readable size (${imgs.map((i) => i.w).join(',')}px)`);
+    const link = await v.page.$eval('.bc-befores a', (a) => ({ href: a.getAttribute('href'), label: a.textContent.trim() })).catch(() => ({}));
+    ok(link.href === '#kids/max/before-photos' && link.label === 'Choose them', `Choose them goes to Max’s Before photos (${link.href})`);
+    ok(await v.page.evaluate(() => document.querySelector('.bc-status .bc-links')?.nextElementSibling?.classList.contains('bc-befores')), 'it sits right under the starting-soon screen links, in the status card');
+    const card = await v.page.$('.bc-status');
+    if (card) await card.screenshot({ path: join(OUT, 'befores-strip.png') });
+    // Choose them: Max's profile, at Before photos, with focus there
+    await v.page.click('.bc-befores a');
+    await v.page.waitForSelector('#kd-befores', { timeout: 10000 }).catch(() => {});
+    await pause(700);
+    const landed = await v.page.evaluate(() => { const r = document.getElementById('kd-befores')?.getBoundingClientRect(); return { top: r ? Math.round(r.top) : null, focus: document.activeElement?.id || '', hash: location.hash, tiles: document.querySelectorAll('#kd-before-tiles .kd-tile').length }; });
+    ok(landed.top !== null && landed.top >= 0 && landed.top < 260, `Choose them opens Max’s profile scrolled to Before photos (its top at ${landed.top}px)`);
+    ok(landed.focus === 'kd-befores-h', `focus is on the Before photos heading (${landed.focus})`);
+    ok(landed.tiles === 9, `every before photo is there to choose from (${landed.tiles})`);
+    ok(landed.hash === '#kids/max', `the address settles to the profile's own (${landed.hash})`);
+    await v.page.screenshot({ path: join(OUT, 'befores-chosen-here.png') });
+    await v.page.goBack();
+    await v.page.waitForSelector('.bc-befores', { timeout: 8000 }).catch(() => {});
+    ok((await v.page.evaluate(() => location.hash)).startsWith('#broadcast') && !!(await v.page.$('.bc-befores')), 'Back comes back to Reveals');
+    ok(v.errors.length === 0, `no console errors (${v.errors.join(' | ').slice(0, 300)})`);
+    await v.page.close();
+
+    // Fewer than six on the page, one, none on it, none at all
+    for (const [kid, want, n] of [
+      [{ ...MAX, beforePhotos: MAX.beforePhotos.slice(0, 4) }, 'All 3 on Max’s page play. 1 is kept off the page.', 3],
+      [{ ...MAX, beforePhotos: [shot(1, { looked: 'staff' })] }, 'The only one on Max’s page plays.', 1],
+      [{ ...MAX, beforePhotos: [shot(8), shot(10)] }, 'None is on Max’s page yet, so the live page has no before photos. 2 aren’t checked yet.', 0],
+      [{ ...MAX, beforePhotos: [] }, 'None yet. They come in from JobTread on their own once the reveal is confirmed', 0],
+    ]) {
+      KNOBS.kids = [kid];
+      const c = await open(browser, base, { width: 1440, height: 1000 }, 'scheduled');
+      await c.page.waitForSelector('.bc-befores', { timeout: 5000 }).catch(() => {});
+      const w = await text(c.page, '.bc-befores__words');
+      const got = (await c.page.$$('.bc-befores__row img')).length;
+      ok(w.includes(want) && got === n, `${n} shown: “${w.replace('Before photos on the live reveal page ', '')}”`);
+      ok(c.errors.length === 0, `no console errors (${c.errors.join(' | ').slice(0, 200)})`);
+      await c.page.close();
+    }
+    // A hidden profile (its own note says so), and between reveals: nothing
+    KNOBS.kids = [{ ...MAX, publishStatus: 'draft' }];
+    const hid = await open(browser, base, { width: 1440, height: 1000 }, 'scheduled');
+    await pause(400);
+    ok(!(await hid.page.$('.bc-befores')), 'a hidden profile gets no before photos on the card');
+    await hid.page.close();
+    KNOBS.kids = [MAX];
+    const idle = await open(browser, base, { width: 1440, height: 1000 }, 'idle');
+    await pause(400);
+    ok(!(await idle.page.$('.bc-befores')), 'no reveal coming up: no before photos on the card');
+    await idle.page.close();
+
+    // A phone: the six fit across, nothing scrolls sideways, Choose them is big enough to tap
+    const ph = await open(browser, base, { width: 390, height: 844, isMobile: true, hasTouch: true }, 'scheduled');
+    await ph.page.waitForSelector('.bc-befores', { timeout: 5000 }).catch(() => {});
+    const fit = await ph.page.evaluate(() => {
+      const row = document.querySelector('.bc-befores__row')?.getBoundingClientRect();
+      const card = document.querySelector('.bc-status')?.getBoundingClientRect();
+      const btn = document.querySelector('.bc-befores a')?.getBoundingClientRect();
+      return { over: document.documentElement.scrollWidth - document.documentElement.clientWidth, rowIn: !!row && !!card && row.right <= card.right + 0.5, n: document.querySelectorAll('.bc-befores__row img').length, side: Math.round(document.querySelector('.bc-befores__row img')?.getBoundingClientRect().width || 0), tap: Math.round(btn?.height || 0) };
+    });
+    ok(fit.over <= 0 && fit.rowIn && fit.n === 6, `the six fit a 390px phone (${fit.side}px each, ${fit.over}px sideways)`);
+    ok(fit.tap >= 32, `Choose them is big enough to tap (${fit.tap}px)`);
+    const pcard = await ph.page.$('.bc-status');
+    if (pcard) await pcard.screenshot({ path: join(OUT, 'befores-strip-phone.png') });
+    ok(ph.errors.length === 0, `no console errors on a phone (${ph.errors.join(' | ').slice(0, 200)})`);
+    await ph.page.close();
+    KNOBS.kids = [];
+  }
 
   console.log('Phone');
   const phone = await open(browser, base, { width: 390, height: 844, isMobile: true, hasTouch: true }, 'scheduled');
