@@ -10,9 +10,11 @@
  *   uploadImage(env, { file | bytes, type?, filename?, id? }, fetchImpl?)
  *     → Cloudflare's answer as it comes ({ success, result, errors })
  *   publicUrl(result)  the /public address of an uploaded picture
+ *   deleteImage(env, id, fetchImpl?) → true once it's gone
  */
 
 import { stripLocation } from './_photo-location.js';
+import { validImageId, imagePath } from './delete-image.js';
 
 export const CF_HASH = 'ROYFuPmfN2vPS6mt5sCkZQ';
 export const imagesApi = (env) => `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}/images/v1`;
@@ -32,6 +34,18 @@ export async function uploadImage(env, { file = null, bytes = null, type = '', f
   const j = await res.json().catch((e) => { if (signal?.aborted) throw e; return { success: false, errors: [{ message: `Cloudflare Images answered ${res.status}` }] }; });
   // (status: whether a refusal was the picture's, 4xx, or Cloudflare's, 5xx; ./_reveal-design-auto.js tells them apart)
   return { ...j, status: res.status };
+}
+
+/**
+ * Take a picture off Cloudflare Images by its id → true once it's gone (or was never there). Its id is checked
+ * as /api/delete-image checks one, so nothing else on the API can be reached through it.
+ */
+export async function deleteImage(env, id, fetchImpl = fetch) {
+  if (!validImageId(id) || !env?.CF_ACCOUNT_ID || !env?.CF_IMAGES_TOKEN) return false;
+  const res = await fetchImpl(`${imagesApi(env)}/${imagePath(id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${env.CF_IMAGES_TOKEN}` } });
+  if (res.status === 404) return true;
+  const j = await res.json().catch(() => ({}));
+  return !!j.success;
 }
 
 /** An uploaded picture's /public address, from Cloudflare's `result` */

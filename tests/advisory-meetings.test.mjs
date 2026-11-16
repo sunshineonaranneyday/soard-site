@@ -241,7 +241,7 @@ test('Google down: plain words, never what Google said; the emails switch has it
   await saveSettings(env.DB, { emails: false });
   const off = await act('send-invite', { id: m.id });
   assert.equal(off.status, 409);
-  assert.match(off.error, /Turn on emails/);
+  assert.match(off.error, /Turn on Advisory Board emails/);
   await saveSettings(env.DB, { emails: true });
   globalThis.fetch = async (url) => (String(url).includes('oauth2') ? new Response('{"error":"backendError"}', { status: 503 }) : new Response('{}', { status: 503 }));
   const down = await act('send-invite', { id: m.id });
@@ -316,7 +316,7 @@ test('the screen gets the advisors, and from the board only the person running i
   const { meeting: m } = await createAdvisoryMeeting(env, { date: FUTURE }, { now: NOW });
   let view = await act('meeting-view', { id: m.id });
   let slugs = view.people.map((p) => p.slug).sort();
-  assert.deepEqual(slugs, ['ada-advisor', 'cal-advisor', 'dee-advisor', 'mary-lead', 'no-email']);
+  assert.deepEqual(slugs, ['ada-advisor', 'cal-advisor', 'dee-advisor', 'draft-person', 'mary-lead', 'no-email']);
   assert.ok(!JSON.stringify(view).includes('Treasurer'));
   assert.ok(view.people.filter((p) => p.group === 'advisory').length >= 4, 'the Welcome slide’s faces');
   await saveAdvisoryMeeting(env.DB, { ...m, sections: m.sections.map((s, i) => (i ? s : { ...s, items: s.items.map((it) => ({ ...it, who: ['ann-presents'] })) })) }, {});
@@ -363,15 +363,15 @@ test('the invite: from the board’s organizer, Google Meet, guests hidden, advi
   assert.equal(post.body.conferenceData.createRequest.conferenceSolutionKey.type, 'hangoutsMeet');
   assert.ok(post.body.description.includes(`/advisory/${m.id}`));
   const guests = post.body.attendees.map((a) => a.email).sort();
-  assert.deepEqual(guests, ['ada@example.com', 'cal@example.org', 'dee@example.com', 'mary@example.com']);
+  assert.deepEqual(guests, ['ada@example.com', 'cal@example.org', 'dee@example.com', 'draft@example.com', 'mary@example.com']);
   assert.equal(out.invite.meet, 'https://meet.google.com/abc-defg-hij');
-  assert.deepEqual(Object.keys(out.invite.who).sort(), ['ada-advisor', 'cal-advisor', 'dee-advisor', 'mary-lead']);
+  assert.deepEqual(Object.keys(out.invite.who).sort(), ['ada-advisor', 'cal-advisor', 'dee-advisor', 'draft-person', 'mary-lead']);
   assert.equal(out.invite.replies['ada-advisor'], 'invited');
 });
 
-test('no draft advisor, no one without an email; the organizer isn’t a guest of their own invite', async () => {
+test('a hidden advisor is invited, no one without an email; the organizer isn’t a guest of their own invite', async () => {
   const { emails } = await guestsOf(env.DB);
-  assert.ok(!emails.includes('draft@example.com'));
+  assert.ok(emails.includes('draft@example.com'), 'hidden from the site, still on the Advisory Board');
   assert.ok(emails.includes('jane@soardcharity.com'), 'an admin who isn’t sending it would be on it');
   const { meeting: m } = await createAdvisoryMeeting(env, { date: FUTURE }, { now: NOW });
   const out = await sendAdvisoryInvite(env, m.id, { fetchImpl: g.fetchImpl, now: NOW });
@@ -575,6 +575,6 @@ test('with the emails switch off, Send invite is refused and nothing goes out on
   await saveSettings(env.DB, { emails: false });
   const r = await act('send-invite', { id: made.meeting.id });
   assert.equal(r.status, 409);
-  assert.match(r.error, /Turn on emails/);
+  assert.match(r.error, /Turn on Advisory Board emails/);
   assert.equal(g.events ? Object.keys(g.events).length : 0, 0, 'nothing reached Google');
 });

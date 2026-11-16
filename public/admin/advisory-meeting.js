@@ -84,7 +84,7 @@ export function AdvisoryMeetings({ data, reload, call }) {
       <button type="submit" class="am-btn am-btn--main" disabled=${busy}>${busy ? 'Adding…' : 'Add meeting'}</button>
       ${note ? html`<p class="am-note" role="alert">${note}</p>` : null}
     </form>
-    ${list.length ? null : html`<div class="am-card am-empty"><p class="am-empty__t">No meetings yet</p><p class="am-muted">Pick a day above. The agenda starts itself, and nothing reaches advisors until you send the invite and share it.</p></div>`}
+    ${list.length ? null : html`<div class="am-card am-empty"><p class="am-empty__t">No meetings yet</p><p class="am-muted">Pick a day above. The agenda starts itself, and nothing reaches the Advisory Board until you send the invite and share it.</p></div>`}
     ${ahead.length ? html`<h3 class="am-h">Ahead</h3><ul class="am-list">${ahead.map((m) => html`<${Row} m=${m} key=${m.id} onOpen=${() => setOpen(m.id)} />`)}</ul>` : null}
     ${past.length ? html`<h3 class="am-h">Past</h3><ul class="am-list">${past.map((m) => html`<${Row} m=${m} key=${m.id} onOpen=${() => setOpen(m.id)} />`)}</ul>` : null}
   </div>`;
@@ -455,7 +455,7 @@ function Stage({ m, focusId }) {
       <button type="button" class="am-ic" disabled=${!stops.length || at >= stops.length - 1} onClick=${() => post({ type: 'board-preview-step', dir: 1 })} aria-label="Next slide">›</button>
       <button type="button" class="am-btn am-btn--main am-push" disabled=${!stops.length} onClick=${play}>Play from here</button>
     </div>
-    <p class="am-muted am-small">${m.shared ? 'As advisors will see it.' : 'Only you see this until it’s shared.'} In its window, the arrow keys or a clicker move it, B blanks the screen, and F fills it.</p>
+    <p class="am-muted am-small">${m.shared ? 'As the Advisory Board will see it.' : 'Only you see this until it’s shared.'} In its window, the arrow keys or a clicker move it, B blanks the screen, and F fills it.</p>
   </aside>`;
 }
 
@@ -478,15 +478,15 @@ function GettingOut({ m, act, emailsOn }) {
   // The day, time or place as they were last sent: a change there is the one thing that emails everyone
   const moved = !!inv?.eventId && (inv.when !== `${m.date} ${m.start || ''}-${m.end || ''}` || ([m.location, m.address].filter(Boolean).join(', ') && [m.location, m.address].filter(Boolean).join(', ') !== inv.place));
   const label = inv?.eventId ? 'Update everyone’s calendar' : m.inviteGone ? 'Send it again' : 'Send invite';
-  return html`<section class="am-card" aria-labelledby="am-out"><h3 class="am-card__h" id="am-out">Getting it to advisors</h3>
+  return html`<section class="am-card" aria-labelledby="am-out"><h3 class="am-card__h" id="am-out">Getting it to the Advisory Board</h3>
     <div class="am-out">
       <div>
         <p class="am-strong">${inv?.eventId ? `Invite sent ${shortDate(new Date(inv.sentAt).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }))}` : m.inviteGone ? 'The invite was deleted in Google Calendar' : 'No invite yet'}</p>
         <p class="am-muted">${inv?.eventId
           ? `${inv.guests} ${inv.guests === 1 ? 'person' : 'people'} on it, with Google Meet. Guests can’t see each other. A new day, time or place follows by itself.`
-          : `It goes to every advisor with an email on file, whoever runs the group, and the admins, with Google Meet. Guests can’t see each other.${emailsOn ? ' Nothing goes out until you press the button.' : ''}`}</p>
+          : `It goes to every Advisory Board member with an email on file, whoever runs the group, and the admins, with Google Meet. Guests can’t see each other.${emailsOn ? ' Nothing goes out until you press the button.' : ''}`}</p>
         ${inv?.differs ? html`<p class="am-note">The invite was changed in Google Calendar and put back once. It’s been changed again, so it’s been left alone. Update the invite to put this meeting’s details back.</p>` : null}
-        ${!emailsOn ? html`<p class="am-muted">Emails to advisors are off, so ${inv?.eventId ? 'changes to the invite wait' : 'the invite waits'} until they’re on under Members. Everything else here works the same.</p>`
+        ${!emailsOn ? html`<p class="am-muted">Advisory Board emails are off, so ${inv?.eventId ? 'changes to the invite wait' : 'the invite waits'} until they’re on under Members. Everything else here works the same.</p>`
           : m.canInvite === false ? html`<p class="am-note">Google Calendar isn’t connected yet, so an invite can’t go out. Peter or Holly can connect it.</p>`
             : html`<button type="button" class="am-btn" disabled=${busy || timesWrong(m)} onClick=${sendIt}>${busy ? 'Sending…' : label}</button>
               ${inv?.eventId ? html`<p class="am-muted am-small">${moved ? 'The day, time or place changed, so Google will email everyone.' : 'Only a change of day, time or place emails them.'}</p>` : null}
@@ -494,8 +494,8 @@ function GettingOut({ m, act, emailsOn }) {
         ${problem ? html`<p class="am-note" role="alert">${problem}</p>` : null}
       </div>
       <div>
-        <label class="am-switch"><input type="checkbox" checked=${m.shared} onChange=${(e) => act({ action: 'share-meeting', id: m.id, shared: e.target.checked }, { here: setProblem })} /><span class="am-strong">On the advisors’ page</span></label>
-        <p class="am-muted">${m.shared ? 'Advisors can see this meeting, its agenda and its documents.' : 'Advisors don’t see this meeting yet.'}</p>
+        <label class="am-switch"><input type="checkbox" checked=${m.shared} onChange=${(e) => act({ action: 'share-meeting', id: m.id, shared: e.target.checked }, { here: setProblem })} /><span class="am-strong">On the Advisory Board page</span></label>
+        <p class="am-muted">${m.shared ? 'The Advisory Board can see this meeting, its agenda and its documents.' : 'The Advisory Board doesn’t see this meeting yet.'}</p>
       </div>
     </div>
     ${replies.length ? html`<h4 class="am-h4">Who’s coming</h4><ul class="am-replies">${replies.map((r) => html`<li key=${r.slug}><span>${r.name}</span><span class="am-muted">${ANSWERS[r.answer] || ''}</span></li>`)}</ul>` : null}
@@ -518,7 +518,7 @@ function Recap({ m, edit, act, held }) {
       <label class="am-link am-upload">Add a file<input type="file" multiple hidden accept=${FILE_OK} onChange=${(e) => { upload([...e.target.files]); e.target.value = ''; }} /></label>
       ${problem ? html`<p class="am-note am-wide" role="alert">${problem}</p>` : null}
     </div>
-    <label class="am-switch"><input type="checkbox" checked=${m.recapShared && !empty} disabled=${empty} onChange=${(e) => act({ action: 'share-recap', id: m.id, shared: e.target.checked }, { here })} /><span class="am-strong">On the advisors’ page</span></label>
+    <label class="am-switch"><input type="checkbox" checked=${m.recapShared && !empty} disabled=${empty} onChange=${(e) => act({ action: 'share-recap', id: m.id, shared: e.target.checked }, { here })} /><span class="am-strong">On the Advisory Board page</span></label>
     ${empty ? html`<p class="am-muted am-small">Write something or add a file, and it can go on the page.</p>` : null}
   </section>`;
 }
@@ -532,7 +532,7 @@ function Files({ m, act }) {
   return html`<section class="am-card" aria-labelledby="am-files"><h3 class="am-card__h" id="am-files">Documents</h3>
     <ul class="am-files">${files.map((f, i) => html`<li key=${f.id}>
       <a ...${viewerLink(vf, i)}>${f.name}</a><span class="am-muted">${sizeText(f.size)}</span>
-      <label class="am-switch am-switch--small"><input type="checkbox" checked=${!f.staffOnly} onChange=${(e) => act({ action: 'update-meeting-file', fileId: f.id, staffOnly: !e.target.checked }, { here })} /><span>Advisors see it</span></label>
+      <label class="am-switch am-switch--small"><input type="checkbox" checked=${!f.staffOnly} onChange=${(e) => act({ action: 'update-meeting-file', fileId: f.id, staffOnly: !e.target.checked }, { here })} /><span>The Advisory Board sees it</span></label>
       <${TwoStep} label="Delete" asked="Delete this file?" empty=${false} onYes=${() => act({ action: 'delete-meeting-file', fileId: f.id }, { here })} name=${f.name} />
     </li>`)}</ul>
     ${problem ? html`<p class="am-note" role="alert">${problem}</p>` : null}

@@ -7,6 +7,7 @@
  * referrer. Everything sent waits in the admin as a suggestion until someone
  * uses it. Not indexed. API: functions/api/profile-request.js.
  */
+import BotTrap from '../components/global/BotTrap.astro';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { cfUrl } from '../utils/cf-image';
 import { heroHtml, type HeroPart } from '../utils/hero-words';
@@ -73,10 +74,7 @@ const hero = {
         </div>
 
         <!-- Left empty by people; bots fill it in -->
-        <div class="pu-hp" aria-hidden="true">
-          <label for="pu-website">Website</label>
-          <input id="pu-website" name="website" type="text" tabindex="-1" autocomplete="off" />
-        </div>
+        <BotTrap />
 
         <p class="pu-error" id="pu-error" role="alert" hidden></p>
         <button class="btn btn-primary btn-lg pu-submit" id="pu-submit" type="submit">Send to SOARD</button>

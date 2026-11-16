@@ -18,6 +18,7 @@
  * Public: listed in the middleware's PUBLIC_ROUTES and rate limited per
  * address there; these add per-email and per-day limits through D1.
  */
+import { trapFilled } from './_bot-trap.js';
 import { findLink, hashToken, readDocSettings, LIMITS } from './_vendors.js';
 import { requirementLines } from './_vendor-read.js';
 import { signIn, startPartner, saveCompany, signW9, saveAgent, saveBank, freshBankLink, patchProfile, ensurePartnerSchema } from './_trade-partners.js';
@@ -59,7 +60,7 @@ export async function onRequestPost(context) {
       return reply({ ok: true });
     }
     if (action === 'start') {
-      if (body.website2) return reply({ ok: true }); // a bot filled the hidden field
+      if (trapFilled(body)) return reply({ ok: true }); // a bot filled the hidden box (./_bot-trap.js)
       const email = String(body.email || '').trim().toLowerCase();
       const byIp = await limit(env.DB, `tp-start:ip:${ip}`, 6, 86400);
       const byEmail = await limit(env.DB, `tp-start:email:${(await hashToken(email)).slice(0, 24)}`, 3, 3600);

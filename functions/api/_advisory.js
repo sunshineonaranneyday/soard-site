@@ -60,7 +60,7 @@ export const SHELVES = [
   { id: 'group', label: 'For the group', sub: 'How the Advisory Board works' },
 ];
 export const DOC_KINDS = [
-  { id: 'agreement', label: 'Advisor agreement', sign: true },
+  { id: 'agreement', label: 'Advisory Board agreement', sign: true },
   { id: 'overview', label: 'Overview' },
   { id: 'pitch', label: '30-second pitch' },
   { id: 'post', label: 'Post to share' },
@@ -188,7 +188,7 @@ export async function whoIs(context) {
 /** The advisors as advisors see each other: a photo, a company, a public bio. Never a private email */
 export async function advisorCards(DB) {
   const people = await peopleRows(DB);
-  return people.filter((p) => p.group === 'advisory' && p.status === 'active' && !p.draft)
+  return people.filter((p) => p.group === 'advisory' && p.status === 'active')
     .sort((a, b) => String(a.name).localeCompare(String(b.name)))
     .map((p) => ({
       slug: p.slug, name: p.name, photo: p.photo ? photoUrl(p, 240) : '', organization: p.organization || '',
@@ -504,7 +504,8 @@ export async function moveSlug(DB, from, to) {
   try { await DB.prepare('UPDATE advisory_links SET slug = ? WHERE slug = ?').bind(to, from).run(); } catch { /* no links yet */ }
   // Who's on a meeting's list and who answered are in its record
   try {
-    const rows = (await DB.prepare('SELECT id, data FROM advisory_meetings WHERE data LIKE ?').bind(`%"${from}"%`).all()).results || [];
+    // (instr, not LIKE: D1 refuses a LIKE pattern over 50 bytes, which a long name's slug can make)
+    const rows = (await DB.prepare('SELECT id, data FROM advisory_meetings WHERE instr(data, ?) > 0').bind(`"${from}"`).all()).results || [];
     for (const r of rows) await DB.prepare('UPDATE advisory_meetings SET data = ? WHERE id = ?').bind(r.data.split(`"${from}"`).join(`"${to}"`), r.id).run();
   } catch { /* no meetings yet */ }
   const s = await getSettings(DB);
@@ -512,11 +513,11 @@ export async function moveSlug(DB, from, to) {
   await saveSettings(DB, { pages, ...(s.lead === from ? { lead: to } : {}) });
 }
 
-/** Everyone's sign-in for Access (./_board-access.js): only advisors who are active and published */
+/** Everyone's sign-in for Access (./_board-access.js): every active advisor, shown on the site or not */
 export const advisorSignIns = async (DB) => [...new Set((await activeAdvisors(DB)).map((a) => a.email).filter(isEmail))];
 
 /** Advisors with no email on file: they can't sign in yet */
 export async function missingEmails(DB) {
   const [people, emails] = await Promise.all([peopleRows(DB), privateEmails(DB)]);
-  return people.filter((p) => p.group === 'advisory' && p.status === 'active' && !p.draft && !isEmail(emails[p.slug] || '')).map((p) => ({ slug: p.slug, name: p.name }));
+  return people.filter((p) => p.group === 'advisory' && p.status === 'active' && !isEmail(emails[p.slug] || '')).map((p) => ({ slug: p.slug, name: p.name }));
 }

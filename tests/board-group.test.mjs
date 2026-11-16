@@ -12,7 +12,7 @@ import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
-import { syncBoardGroup, maybeSyncBoardGroup, groupStatus, groupWanted, advisoryGroupWanted, syncAdvisoryGroup, advisoryGroupStatus, GROUP_EMAIL, ADVISORY_GROUP_EMAIL, GROUP_SCOPE } from '../functions/api/_board-group.js';
+import { syncBoardGroup, maybeSyncBoardGroup, groupStatus, groupWanted, advisoryGroupWanted, syncAdvisoryGroup, maybeSyncAdvisoryGroup, advisoryGroupStatus, GROUP_EMAIL, ADVISORY_GROUP_EMAIL, GROUP_SCOPE } from '../functions/api/_board-group.js';
 import { clearTokenCache } from '../functions/api/_google-calendar.js';
 
 const { privateKey: SA_PEM } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
@@ -258,4 +258,45 @@ test('advisory@ is kept to the advisors, whoever runs the group and the admins, 
   assert.equal(status.wanted, want.members.length);
   assert.equal(before.group, GROUP_EMAIL, 'board@ keeps its own');
   assert.equal(typeof syncAdvisoryGroup, 'function');
+});
+
+test('advisory@ with advisor emails off: whoever leaves is still taken off, and nobody new is put in', async () => {
+  // advisory@ answers at its own address; this test's Google keeps one group, so it stands in for advisory@ here
+  const ADV = `https://admin.googleapis.com/admin/directory/v1/groups/${encodeURIComponent(ADVISORY_GROUP_EMAIL)}/members`;
+  const inner = globalThis.fetch;
+  globalThis.fetch = (input, init) => inner(String(input).replace(ADV, MEMBERS), init);
+  // As the site left it: the owner, Ada, and Gil, who has since moved to alumni
+  group = [m('jane@soardcharity.com', 'OWNER'), m('ada@example.com'), m('gil@example.com')];
+  await setPerson('gil-gone', { name: 'Gil Gone', group: 'advisory', status: 'alumni' });
+  await env.DB.prepare('INSERT INTO reveal_board_emails (slug, email) VALUES (?, ?)').bind('gil-gone', 'gil@example.com').run();
+  const want = (await advisoryGroupWanted(env.DB)).members.map((x) => x.email);
+  assert.ok(want.some((e) => !emails().includes(e)), 'someone the group would take is missing (so a full run would add them)');
+
+  await maybeSyncAdvisoryGroup(env, { adding: false });
+  assert.deepEqual(changes('DELETE'), ['gil@example.com'], 'the one who left is taken off');
+  assert.deepEqual(changes('POST'), [], 'nobody is put in while emails are off');
+  assert.ok(emails().includes('ada@example.com') && emails().includes('jane@soardcharity.com'));
+
+  assert.equal(await maybeSyncAdvisoryGroup(env, { adding: false, now: later(6) }), null, 'nothing new: Google isn’t asked again');
+  assert.deepEqual(changes('POST'), []);
+
+  // Emails back on: the next look fills in whoever is missing
+  await maybeSyncAdvisoryGroup(env, { now: later(12) });
+  assert.ok(changes('POST').length > 0, 'the missing ones go in once emails are on');
+  for (const e of want) assert.ok(emails().includes(e), `${e} is in`);
+});
+
+test('advisory@: the last Advisory Board member with an email who leaves comes off too (People was read; the admins and owner stay)', async () => {
+  const ADV = `https://admin.googleapis.com/admin/directory/v1/groups/${encodeURIComponent(ADVISORY_GROUP_EMAIL)}/members`;
+  const inner = globalThis.fetch;
+  globalThis.fetch = (input, init) => inner(String(input).replace(ADV, MEMBERS), init);
+  group = [m('jane@soardcharity.com', 'OWNER'), m('ada@example.com')];
+  await setPerson('ada-advisor', { name: 'Ada Advisor', group: 'advisory', status: 'alumni' });
+  const want = await advisoryGroupWanted(env.DB);
+  assert.equal(want.board, 0, 'nobody active on People → Advisory with an email');
+  await maybeSyncAdvisoryGroup(env, { adding: false });
+  assert.deepEqual(changes('DELETE'), ['ada@example.com'], 'the last one who left is taken off');
+  assert.ok(emails().includes('jane@soardcharity.com'), 'the owner stays');
+  // board@ never empties on a read that finds nobody (unchanged)
+  globalThis.fetch = inner;
 });

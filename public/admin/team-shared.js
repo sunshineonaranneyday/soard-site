@@ -348,8 +348,11 @@ export function normalizeLinkedIn(raw) {
 
 // ── Adding several people at once (People → Board or Advisory → Paste a list) ──
 
-/** A web address from a name: the admin's slugify */
-export const slugOf = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+// Letters with no accent to take off, as people write them in plain letters (Søren → soren, Groß → gross)
+const PLAIN = { ø: 'o', ł: 'l', đ: 'd', ð: 'd', æ: 'ae', œ: 'oe', ß: 'ss', þ: 'th', ı: 'i', ħ: 'h', ŋ: 'ng', ĸ: 'k' };
+/** A web address from a name: the admin's slugify, with an accented letter as its plain one ("José Núñez" → jose-nunez) */
+export const slugOf = (s) => String(s || '').toLowerCase().replace(/[øłđðæœßþıħŋĸ]/g, (c) => PLAIN[c])
+  .normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 const EMAIL_IN = /[^\s<>()[\],;:"“”]+@[^\s<>()[\],;:"“”]+\.[^\s<>()[\],;:"“”]+/;
 // Something with an @ that isn't a whole address ("jane@", "jane@example"): kept as the email, so the plan flags it
 const BROKEN_EMAIL_IN = /[^\s<>()[\],;:"“”]*@[^\s<>()[\],;:"“”]*/;

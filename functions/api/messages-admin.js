@@ -690,8 +690,8 @@ export async function buildPreview(env, id, { lang = 'en', me = '', now = Date.n
       });
     case 'advisory-thanks':
     case 'advisory-staff': {
-      // A made-up applicant, through the form's own rules
-      const app = { id: 'adv-sample-0001', answers: advisoryAnswers(ADVISORY_SAMPLE).answers };
+      // A made-up applicant, through the form's own rules; the team plushie stands in for their headshot
+      const app = { id: 'adv-sample-0001', answers: advisoryAnswers(ADVISORY_SAMPLE).answers, headshot: { url: 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/emails/soard-team-plushie/public', width: 1008, height: 1008 } };
       return id === 'advisory-thanks'
         ? email(advisoryThanks(app), { to: 'The applicant, at the address they typed' })
         : email(advisoryStaff(app), { to: 'The list in People → Applications → “Who hears about them”', note: 'The Slack card says the same, without their email, phone or address.' });
@@ -701,7 +701,7 @@ export async function buildPreview(env, id, { lang = 'en', me = '', now = Date.n
         from: 'SOARD Advisory Board', to: 'Each active advisor, on their own', note: 'Goes out when whoever runs the group presses Put it out, and only with the emails switch on (Board → Advisory → Members). The buttons open a page that asks them to confirm, so a mail scanner can’t answer for them.',
       });
     case 'advisory-welcome':
-      return email(advisoryWelcome('Alex', 'Jordan Ellis'), { from: 'SOARD Advisory Board', to: 'Each active advisor who hasn’t had it', note: 'Sent from Board → Advisory → Members, once each, and only with the emails switch on.' });
+      return email(advisoryWelcome('Alex', 'Jordan Ellis'), { from: 'SOARD Advisory Board', to: 'Each Advisory Board member who hasn’t had it', note: 'Sent when staff press Add to Advisory Board on an application (as soon as the sign-in knows them), or from Board → Advisory → Members; once each, and only with Email the Advisory Board on.' });
     case 'staff-medical': {
       const diagnosis = 'Cerebral palsy';
       const note = await medicalNote(env, diagnosis).catch(() => null);

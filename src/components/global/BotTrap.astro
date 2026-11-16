@@ -1,0 +1,11 @@
+---
+/**
+ * The site's bot trap, inside a form: one hidden box people never see or reach, that bots fill in. Every public form
+ * uses this one (what it is and why each part: functions/api/_bot-trap.js). The form's script reads it with
+ * trapValue(form); a form posted straight to the server is read there with trapFilled(form).
+ */
+import { TRAP_INPUT_ATTRS, TRAP_STYLE } from '../../../functions/api/_bot-trap.js';
+---
+<div style={TRAP_STYLE} aria-hidden="true">
+  <label>Leave this empty <input {...TRAP_INPUT_ATTRS} /></label>
+</div>

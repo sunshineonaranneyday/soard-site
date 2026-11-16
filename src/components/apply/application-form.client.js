@@ -30,6 +30,7 @@
  * sample answers on request; after Submit, the thank-you shows the intake in
  * JobTread step by step as it happens. Its draft is kept apart from a real one.
  */
+import { trapValue } from '../../../functions/api/_bot-trap.js';
 import * as tus from 'tus-js-client';
 import {
   DEFAULT_DEFINITION, LANGS, AREA_VALUES, resolveForm, allFields, indexById, isVisible, pageVisible,
@@ -212,7 +213,6 @@ function init(root, cfg, mode) {
     stopBody: $('[data-stop-body]'),
     stopMap: $('[data-stop-map]'),
     done: $('[data-done]'),
-    honeypot: $('[data-honeypot]'),
     turnstile: $('[data-turnstile]'),
     dialog: $('[data-later-dialog]'),
     detail: $('[data-detail-dialog]'),
@@ -2084,7 +2084,7 @@ function init(root, cfg, mode) {
       if (token) { notice('pickedUp', 'info'); announce(T('pickedUp')); return false; }
     }
     let r;
-    try { r = await api({ action: 'start', kind, year, lang, turnstileToken, website: ui.honeypot?.value || '', ...(renew ? { renew } : {}), ...(testRun ? { test: true } : {}) }); } catch { r = { ok: false, offline: true }; }
+    try { r = await api({ action: 'start', kind, year, lang, turnstileToken, website: trapValue(ui.form), ...(renew ? { renew } : {}), ...(testRun ? { test: true } : {}) }); } catch { r = { ok: false, offline: true }; }
     if (token) return true; // started meanwhile (a second press)
     if (r.code === 'staff-only') { testRun = { signIn: true }; paintTestBar(); }
     if (!r.ok) {
@@ -4872,7 +4872,7 @@ function init(root, cfg, mode) {
         const res = await fetch('/api/newsletter', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email, hp: notifyForm.querySelector('[name="website"]')?.value || '', source: 'application-waitlist', lang, page: 'apply-form', ...(turnstileToken ? { turnstileToken } : {}) }),
+          body: JSON.stringify({ email, hp: trapValue(notifyForm), source: 'application-waitlist', lang, page: 'apply-form', ...(turnstileToken ? { turnstileToken } : {}) }),
         });
         const data = await res.json().catch(() => null);
         notifyCheck.reset();

@@ -185,3 +185,15 @@ test('a collection name never finds something on Object.prototype', async () => 
   assert.equal((await reorder({ DB }, { collection: ['team'], items: [{ slug: 'a', order: 0 }] })).status, 403, 'not a string');
   assert.notEqual((await reorder({ DB }, { collection: 'team', items: [{ slug: 'a', order: 0 }] })).status, 403, 'a real collection still works');
 });
+
+test('anyone deleted from People takes their private email with them, whatever their group (else it would be nobody’s, and still in the way)', async () => {
+  const DB = await siteDb();
+  const { setBoardEmail } = await import('../functions/api/_reveal-invites.js');
+  for (const [slug, group] of [['casey-staff', 'team'], ['dana-advisory', 'advisory'], ['lee-board', 'board']]) {
+    await DB.prepare('INSERT INTO team (slug, name, "group", order_num, data, updated_at) VALUES (?, ?, ?, 0, ?, ?)').bind(slug, slug, group, JSON.stringify({ name: slug, group }), 'x').run();
+    await setBoardEmail(DB, slug, `${slug}@example.org`);
+    const res = await post(deleteContent, DB, { path: `src/content/team/${slug}.json`, message: 'gone' });
+    assert.equal(res.status, 200, `${slug}: ${await res.clone().text()}`);
+    assert.equal(await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(slug).first(), null, `${group}: the email went too`);
+  }
+});

@@ -229,6 +229,26 @@ test('the board comes from the website (with a private email) and the JobTread B
     'Mary has no email yet, Brent is a memorial, Holly is staff not board');
 });
 
+test('one email, one person: someone else on People already has it (refused, by name); a row left by someone deleted is nobody’s; a check that can’t run stops the save', async () => {
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS team (slug TEXT PRIMARY KEY, data TEXT NOT NULL)').run();
+  const put = (slug, data) => env.DB.prepare('INSERT OR REPLACE INTO team (slug, data) VALUES (?, ?)').bind(slug, JSON.stringify(data)).run();
+  await put('scott-wierson', { name: 'Scott Wierson', group: 'board' });
+  await put('mary-atchley', { name: 'Mary Atchley', group: 'board' });
+  await setBoardEmail(env.DB, 'scott-wierson', 'scott@example.com');
+  await assert.rejects(() => setBoardEmail(env.DB, 'mary-atchley', 'Scott@Example.com'), /That email is already Scott Wierson’s/);
+  // Someone deleted from People before their email went with them: the address is free, and their row goes
+  await env.DB.prepare("INSERT INTO reveal_board_emails (slug, email) VALUES ('gone-person', 'mary@example.com')").run();
+  await setBoardEmail(env.DB, 'mary-atchley', 'mary@example.com');
+  const rows = (await env.DB.prepare("SELECT slug FROM reveal_board_emails WHERE email = 'mary@example.com'").all()).results.map((r) => r.slug);
+  assert.deepEqual(rows, ['mary-atchley']);
+  // D1 failing the check: the save stops, in words (never a pass that would let two people sign in as one)
+  const real = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => (/JOIN team/.test(sql) ? { bind: () => ({ first: async () => { throw new Error('D1_ERROR: busy'); } }) } : real(sql));
+  await assert.rejects(() => setBoardEmail(env.DB, 'mary-atchley', 'scott@example.com'), /couldn’t check that email just now/);
+  env.DB.prepare = real;
+  assert.equal((await env.DB.prepare("SELECT email FROM reveal_board_emails WHERE slug = 'mary-atchley'").first()).email, 'mary@example.com', 'unchanged');
+});
+
 test('board status field: alumni and memorials are never invited; a draft is still on the board', async () => {
   await env.DB.prepare('CREATE TABLE IF NOT EXISTS team (slug TEXT PRIMARY KEY, data TEXT NOT NULL)').run();
   const put = (slug, data) => env.DB.prepare('INSERT OR REPLACE INTO team (slug, data) VALUES (?, ?)').bind(slug, JSON.stringify(data)).run();

@@ -11,9 +11,15 @@
  * with a bar across the top, a segment per step, a screen of questions at a time
  * (as many as fit), Back and Continue held at the bottom, and Back from the phone
  * or browser going a screen back.
+ *
+ * The headshot (a 'photo' question) is run by ./advisory-photo.js: the photo itself is kept on this
+ * device in IndexedDB (never in the answers' localStorage), its answer here is 'added' or '', and
+ * Send sends it with the answers as one multipart request.
  */
-import { ADVISORY_STEPS, ADVISORY_FIELDS, checkAnswers, isShown } from '../../../functions/api/_advisory-form.js';
+import { trapValue } from '../../../functions/api/_bot-trap.js';
+import { ADVISORY_STEPS, ADVISORY_FIELDS, PHOTO_FIELDS, checkAnswers, isShown } from '../../../functions/api/_advisory-form.js';
 import { mailFix } from '../apply/mail-fix.js';
+import { photoField, PHOTO_PING } from './advisory-photo.js';
 
 const STORE = 'soard-advisory-application';
 const SENT = 'soard-advisory-sent'; // when this device sent one (a reload says so, not "Start the application")
@@ -23,7 +29,8 @@ const API = '/api/advisory-apply';
 const CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3L12.5 5" /></svg>';
 const CHEV = '<svg class="adv-review-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>';
 // About 20 minutes in all (what the hero says), shared out by what each step asks
-const SECONDS = { text: 20, email: 15, tel: 15, url: 20, address: 20, textarea: 120, choice: 10, check: 10 };
+const SECONDS = { text: 20, email: 15, tel: 15, url: 20, address: 20, textarea: 120, choice: 10, check: 10, photo: 45 };
+const PHOTO_IDS = new Set(PHOTO_FIELDS.map((f) => f.id));
 
 function read() {
   try { return JSON.parse(localStorage.getItem(STORE) || 'null'); } catch { return null; }
@@ -38,11 +45,18 @@ const sentStore = {
   get() { try { const x = JSON.parse(localStorage.getItem(SENT) || 'null'); return Number(x?.at) > Date.now() - 183 * 864e5 ? x : null; } catch { return null; } },
   set(at) { try { localStorage.setItem(SENT, JSON.stringify({ at })); } catch { /* private mode */ } },
 };
+// A send whose answer never came (it may have arrived): the earliest such send is remembered, and only its own answer
+// (or the application known sent, or Start over) lets it go. A later send's answer says nothing about it: a "too many
+// attempts" never wipes "this may already have been sent"
 const sendingStore = {
   get() { try { const x = JSON.parse(localStorage.getItem(SENDING) || 'null'); return Number(x?.at) > Date.now() - 30 * 864e5 ? x : null; } catch { return null; } },
+  start(id) { try { if (!this.get()) localStorage.setItem(SENDING, JSON.stringify({ at: Date.now(), id })); } catch { /* private mode */ } },
+  done(id) { try { const x = this.get(); if (!x || !x.id || x.id === id) localStorage.removeItem(SENDING); } catch { /* private mode */ } },
   set(on) { try { if (on) localStorage.setItem(SENDING, JSON.stringify({ at: Date.now() })); else localStorage.removeItem(SENDING); } catch { /* private mode */ } },
 };
-const MAYBE_SENT = 'This was being sent when the page closed, so it may have arrived. Send it again to be sure: if it did, it won’t be sent twice.';
+const MAYBE_ARRIVED = 'We couldn’t tell whether that arrived. Your answers are still here. To be sure, press Send again without changing your answers: if it arrived, it won’t be sent twice.';
+// (the same answers again are the same application; an answer changed first is a new one, so it says so)
+const MAYBE_SENT = 'This may already have been sent: it was on its way from this device. To be sure, send it again without changing your answers: if it arrived, it won’t be sent twice.';
 const session = {
   get() { try { return sessionStorage.getItem(FOCUS) === '1'; } catch { return false; } },
   set(on) { try { if (on) sessionStorage.setItem(FOCUS, '1'); else sessionStorage.removeItem(FOCUS); } catch { /* private mode */ } },
@@ -103,6 +117,10 @@ export function initAdvisoryForm() {
   // comes back to this one, not to whichever screen that piece's neighbor ended up on (the family form's way)
   let anchor = null;
   let startedAt = stored?.startedAt || Date.now();
+  // This application's own id on this device (kept with the answers): with a fingerprint of what's sent, it makes the
+  // send's id, so the same send twice at once (a second tab, a retry while the first is still on its way) is one
+  const newSendSession = () => { try { return crypto.randomUUID(); } catch { return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`; } };
+  let sendSession = stored?.session || newSendSession();
   let turnstileKey = null;
   let turnstileToken = null;
   let turnstileScript = null; // the quick check's script: 'loading' | 'loaded' | 'failed'
@@ -124,6 +142,7 @@ export function initAdvisoryForm() {
   const sayError = (text) => putText(ui.sendError, text);
   let sending = false;
   let clearedThere = false; // Start over pressed in another tab: the overview here says why its answers went
+  let clearingElsewhere = false; // that Start over, being done here: the other tab took the photo off this device
   let restored = false;
   let typedHere = false; // something typed or picked on this visit (not the browser filling boxes from its history)
 
@@ -131,17 +150,27 @@ export function initAdvisoryForm() {
 
   // ── Answers in and out of the page ──
   const fieldEl = (id) => form.querySelector(`[data-field="${id}"]`);
+  // The headshot: its own script holds the photo (./advisory-photo.js)
+  const announce = (words) => { if (!ui.live) return; ui.live.textContent = ''; setTimeout(() => { ui.live.textContent = words; }, 40); };
+  const photos = Object.fromEntries(PHOTO_FIELDS.map((f) => [f.id, photoField(fieldEl(f.id), { id: f.id, signal, announce, onChange: (o) => photoChanged(f.id, o) })]));
+  // (what this device kept, brought back, and any photo being got ready: Continue waits for both on the photos it
+  // reads, Send on every one)
+  const photosSettled = (ids = Object.keys(photos)) => Promise.all(ids.map((id) => Promise.all([photos[id].loaded, photos[id].settled()])));
+  // Brought back (or found not kept): the review and the overview say what's so now, whether or not it changed anything
+  for (const ph of Object.values(photos)) ph.loaded.then(() => { if (step === REVIEW && !sent) buildReview(); paint(); });
   function collect() {
     const a = {};
     for (const f of ADVISORY_FIELDS) {
       if (f.type === 'choice') a[f.id] = form.querySelector(`input[name="${f.id}"]:checked`)?.value || '';
       else if (f.type === 'check') a[f.id] = !!form.elements[f.id]?.checked;
+      else if (f.type === 'photo') a[f.id] = photos[f.id]?.value || '';
       else a[f.id] = form.elements[f.id]?.value ?? '';
     }
     return a;
   }
   function fill(a) {
     for (const f of ADVISORY_FIELDS) {
+      if (f.type === 'photo') continue; // the photo comes from where it's kept, never from the saved answers
       const v = a?.[f.id];
       if (v == null) continue;
       if (f.type === 'choice') { const r = form.querySelector(`input[name="${f.id}"][value="${CSS.escape(String(v))}"]`); if (r) r.checked = true; }
@@ -186,6 +215,11 @@ export function initAdvisoryForm() {
   // Styles still easing to new values, at them now (with reduced motion every change eases for an instant)
   const settle = () => { for (const a of document.getAnimations()) if (a.transitionProperty) a.finish(); };
   const idsOf = (el) => (el.matches('[data-field]') ? [el.dataset.field] : [...el.querySelectorAll('[data-field]')].map((x) => x.dataset.field));
+  /**
+   * The last question on a step's screen: where a position is kept by (see whereNow). A step split again (a photo
+   * card that grew) can part a screen's questions; Back or a return lands with the one nearest where they went on from
+   */
+  const lastIdOn = (i, n) => { let last = null; for (const k of packs[i]?.[n] || []) { const ids = idsOf(k); if (ids.length) last = ids[ids.length - 1]; } return last; };
   function room(el) {
     const top = ui.top?.offsetHeight || 0;
     const nav = form.querySelector('.adv-nav')?.offsetHeight || 0;
@@ -218,7 +252,8 @@ export function initAdvisoryForm() {
     const tucked = [...el.querySelectorAll('[data-field][hidden]')].filter((k) => ADVISORY_FIELDS.find((x) => x.id === k.dataset.field)?.showIf);
     tucked.forEach((k) => { k.hidden = false; });
     const kids = pieces(i);
-    const h = kids.map((k) => k.getBoundingClientRect().height + (parseFloat(getComputedStyle(k).marginBottom) || 0));
+    // (a photo's card at its tallest: a photo going in never splits the step again)
+    const h = kids.map((k) => (k.matches('[data-field]') && photos[k.dataset.field] ? photos[k.dataset.field].tallest() : k.getBoundingClientRect().height) + (parseFloat(getComputedStyle(k).marginBottom) || 0));
     // The step's pieces are a gap apart (only between two that show)
     const gap = parseFloat(getComputedStyle(el).rowGap) || 0;
     const join = (a, b) => (a && b ? a + gap + b : a + b);
@@ -328,9 +363,12 @@ export function initAdvisoryForm() {
       const el = fieldEl(id);
       const msg = problems[id];
       const err = el.querySelector('.adv-error');
+      if (msg && photos[id]) photos[id].quiet(); // ("Photo removed." beside "Please add a headshot." says it twice)
+      // (a photo turned down says why: that stays, never "Please add a headshot." over it)
+      const own = msg && photos[id] && err.dataset.pick && err.textContent;
       el.classList.toggle('is-invalid', !!msg);
       err.hidden = !msg;
-      err.textContent = msg || '';
+      if (!own) err.textContent = msg || '';
       for (const input of el.querySelectorAll('input, textarea')) {
         if (msg) input.setAttribute('aria-invalid', 'true'); else input.removeAttribute('aria-invalid');
       }
@@ -398,6 +436,19 @@ export function initAdvisoryForm() {
     paintSummary(stillWrong(), { always: true }); // what's left (one fixed: "2 answers" no more), or gone
   }
 
+  /**
+   * The headshot changed (picked, removed, brought back from this device, or one that wouldn't do): its note,
+   * the step's summary, Continue's words, the review and the save, as a typed answer does
+   */
+  function photoChanged(id, { problem = false, silent = false } = {}) {
+    if (!silent) typedHere = true;
+    if (problem) { if (step >= 0 && step < total && pages[step]?.contains(fieldEl(id))) paintSummary(stillWrong(), { always: true }); }
+    else recheck(id);
+    paint();
+    if (step === REVIEW) buildReview();
+    if (!silent) save();
+  }
+
   // ── What's on screen ──
   const secondsOf = (i) => (ADVISORY_STEPS[i]?.fields || []).filter((f) => !f.showIf).reduce((t, f) => t + (SECONDS[f.type] || 15) * (f.required ? 1 : 0.5), 0);
   const minutesOf = (i) => Math.max(1, Math.round((secondsOf(i) / ADVISORY_STEPS.reduce((t, _, j) => t + secondsOf(j), 0)) * 20));
@@ -405,7 +456,7 @@ export function initAdvisoryForm() {
   function summaryOf(i, a = collect()) {
     const parts = [];
     for (const f of ADVISORY_STEPS[i]?.fields || []) {
-      if (!isShown(f, a) || f.type === 'check') continue;
+      if (!isShown(f, a) || f.type === 'check' || f.type === 'photo') continue;
       const v = String(a[f.id] || '').split('\n')[0].trim();
       // A Yes or No says what it's to ("Four meetings a year: Yes"), not "Yes · Yes"
       const said = f.brief ? `${f.brief}: ${v}` : v;
@@ -453,17 +504,20 @@ export function initAdvisoryForm() {
   function paintHub(a = collect()) {
     if (focused) return;
     // A name typed and Save and exit at once is started too; boxes the browser filled from its history aren't
-    const started = restored || furthest > 0 || (typedHere && anyAnswer(a));
+    // (a photo kept on this device is a start too: the overview says so, and Start over can take it off)
+    const started = restored || furthest > 0 || (typedHere && anyAnswer(a)) || Object.values(photos).some((ph) => !!ph.file);
     const doneCount = ADVISORY_STEPS.filter((_, i) => stepDone(i, a)).length;
     // Sent from this device before (a reload, a visit back): said, so it isn't sent a second time unsure
     const was = sent ? { at: Date.now() } : !started ? sentStore.get() : null;
     const on = was ? new Date(was.at).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }) : '';
-    ui.hubTitle.textContent = was ? 'We received your application' : started ? (canKeep ? 'Your application is saved on this device' : 'Keep this page open until you send it') : 'Six steps, about 20 minutes';
+    // (a photo this browser couldn't keep: the answers are saved, the photo isn't, so it isn't said to be)
+    const photoUnkept = Object.values(photos).some((ph) => ph.file && !ph.kept);
+    ui.hubTitle.textContent = was ? 'We received your application' : started ? (canKeep && !photoUnkept ? 'Your application is saved on this device' : canKeep ? 'Your answers are saved on this device; keep this page open until you send it, since this browser can’t keep your photo' : 'Keep this page open until you send it') : 'Six steps, about 20 minutes';
     ui.hubLead.textContent = was ? `It arrived on ${on}, and we’ll be in touch by email.`
-      : !canKeep ? (started ? 'This browser blocks saving, so your answers are only on this page until you send them.' : 'Have a reference in mind. This browser blocks saving, so plan to finish in one sitting.')
+      : !canKeep ? (started ? 'This browser blocks saving, so your answers are only on this page until you send them.' : 'Have a reference in mind and a photo of yourself ready. This browser blocks saving, so plan to finish in one sitting.')
         : started ? (doneCount === total ? (sendingStore.get() ? MAYBE_SENT : 'Every step is done. Look it over and send it.') : `${doneCount} of ${total + 1} steps done. Pick up where you left off.`)
           : clearedThere ? 'Your answers were deleted: Start over was pressed in another tab. Start again whenever you’re ready.'
-            : 'Have a reference in mind. Your answers save on this device as you go.';
+            : 'Have a reference in mind and a photo of yourself ready. Your answers save on this device as you go.';
     ui.goLabel.textContent = was ? 'Start a new application' : !started ? 'Start the application' : doneCount === total ? 'Review and send' : 'Continue where you left off';
     const cta = document.querySelector('[data-adv-cta]'); // the hero's button says the same
     if (cta && cta.textContent !== ui.goLabel.textContent) cta.textContent = ui.goLabel.textContent;
@@ -538,7 +592,7 @@ export function initAdvisoryForm() {
     return vt.updateCallbackDone.catch(() => {}).finally(() => { moving = false; });
   }
   /** Put a step on screen, a screen of it (a number, 'last', or the one holding `at`) */
-  function go(i, { dir = 0, screen = 0, at = null, focus = true } = {}) {
+  function go(i, { dir = 0, screen = 0, at = null, field = null, focus = true } = {}) {
     const changed = i !== step;
     if (dir) calmUntil = performance.now() + 350; // a second press of Continue mid-change (a double tap) counts once
     return swap(() => {
@@ -548,12 +602,14 @@ export function initAdvisoryForm() {
       pages.forEach((p, j) => { p.hidden = j !== step; });
       if (i < total && (changed || !packs[i])) { ui.title.textContent = titles[i]; packs[i] = pack(i); }
       const n = screensIn(i);
-      screenNo = Math.max(0, Math.min(n - 1, at ? screenOf(i, at) : screen === 'last' ? n - 1 : Number(screen) || 0));
+      screenNo = Math.max(0, Math.min(n - 1, at ? screenOf(i, at) : field && fieldEl(field) ? screenOf(i, field) : screen === 'last' ? n - 1 : Number(screen) || 0));
       if (!at && dir > 0) while (screenNo < n - 1 && emptyScreen(i, screenNo)) screenNo++;
       if (!at && (dir < 0 || screen === 'last')) while (screenNo > 0 && emptyScreen(i, screenNo)) screenNo--;
       paintScreen();
       anchor = packs[i]?.[screenNo]?.find((k) => k.getClientRects().length) || null;
       ui.sendError.hidden = true;
+      if (changed && ui.live) ui.live.textContent = ''; // (an old message never sits beside the next step's buttons)
+      if (changed) for (const ph of Object.values(photos)) ph.leave(); // (a warning about a photo turned down stays on its step)
       if (i === REVIEW && !sent && sendingStore.get()) { sayError(MAYBE_SENT); ui.sendError.hidden = false; } // (said on the review too)
       paint();
       if (focused) window.scrollTo({ top: 0, behavior: 'auto' });
@@ -582,8 +638,10 @@ export function initAdvisoryForm() {
   const trail = []; // depth → the screen that entry is
   let swallow = false;
   // (a step reached from the review says so: a reload or Back and Forward keeps "Back to review")
-  const whereNow = () => ({ step, screen: step >= total ? 0 : screenNo, ...(fromReview && step < total ? { fromReview } : {}) });
-  const sameAt = (x, y) => !!x && !!y && x.step === y.step && x.screen === y.screen;
+  // (the screen's last question too: the step can be split again (a photo card that grew), and the question finds
+  // the screen it's on now, where its number wouldn't)
+  const whereNow = () => ({ step, screen: step >= total ? 0 : screenNo, ...(step < total && lastIdOn(step, screenNo) ? { field: lastIdOn(step, screenNo) } : {}), ...(fromReview && step < total ? { fromReview } : {}) });
+  const sameAt = (x, y) => !!x && !!y && x.step === y.step && (x.field && y.field ? x.field === y.field : x.screen === y.screen);
   function pushLoc() {
     if (!focused) return;
     const at = whereNow();
@@ -618,14 +676,15 @@ export function initAdvisoryForm() {
     const target = i != null && i <= furthest ? i : resumeAt && resumeAt.step <= furthest ? resumeAt.step : step;
     // Coming back to the step they left: the screen they were on
     const screen = resumeAt && resumeAt.step === target ? resumeAt.screen : 0;
+    const field = resumeAt && resumeAt.step === target ? resumeAt.field || null : null;
     resumeAt = null;
     step = -1; // a step put on screen afresh
-    go(target, { screen }).then(() => (depth ? replaceLoc() : pushLoc()));
+    go(target, { screen, field }).then(() => (depth ? replaceLoc() : pushLoc()));
   }
   function exitFocus({ fromPop = false, keep = true } = {}) {
     if (!focused) return;
     if (keep) saveNow();
-    if (step >= 0 && step < total) resumeAt = { step, screen: screenNo }; // "Continue where you left off": this screen
+    if (step >= 0 && step < total) resumeAt = { step, screen: screenNo, field: lastIdOn(step, screenNo) }; // "Continue where you left off": this screen
     // Left by the browser's Back (a screen at a time, back to the first): the furthest step they'd reached instead
     // (kept with the answers too: after they've been to another page and come back, it's still there)
     if (fromPop && furthest > step) {
@@ -722,7 +781,7 @@ export function initAdvisoryForm() {
     if (!to || sent) { exitFocus({ fromPop: true }); return true; } // back to the page itself
     const at = st.advAt;
     if (at && at.step < total) fromReview = at.fromReview || false; // as the entry was left
-    if (at && !sameAt(at, whereNow())) go(at.step, { dir, screen: at.screen }).then(save); // a reload comes back here
+    if (at && !sameAt(at, whereNow())) go(at.step, { dir, screen: at.screen, field: at.field || null }).then(save); // a reload comes back here
     else if (!at && dir < 0) back(); // an entry from before they said where they were: a screen back
     return true;
   };
@@ -742,6 +801,8 @@ export function initAdvisoryForm() {
   }
   function buildReview() {
     const a = collect();
+    // A photo this device kept, still being brought back after a reload: not "Needs an answer" for that moment
+    for (const [pid, ph] of Object.entries(photos)) if (!ph.isLoaded && !a[pid]) a[pid] = 'added';
     const all = checkAnswers(a).problems;
     const secs = ADVISORY_STEPS.map((s, i) => {
       const sec = document.createElement('section');
@@ -756,7 +817,7 @@ export function initAdvisoryForm() {
       const dl = sec.querySelector('dl');
       for (const f of s.fields) {
         if (!isShown(f, a)) continue;
-        const v = f.type === 'check' ? (a[f.id] ? 'Yes, I’ve read it' : '') : String(a[f.id] || '').trim();
+        const v = f.type === 'check' ? (a[f.id] ? 'Yes, I’ve read it' : '') : f.type === 'photo' ? (a[f.id] ? 'Added' : '') : String(a[f.id] || '').trim();
         if (!v && !all[f.id]) continue;
         const row = document.createElement('div');
         row.className = `adv-review-item${all[f.id] ? ' is-missing' : ''}`;
@@ -764,6 +825,16 @@ export function initAdvisoryForm() {
         dt.textContent = f.label;
         const dd = document.createElement('dd');
         dd.textContent = all[f.id] ? all[f.id] : v;
+        // The headshot as itself, in its circle
+        if (f.type === 'photo' && !all[f.id] && photos[f.id]?.url) {
+          const pic = document.createElement('img');
+          pic.src = photos[f.id].url;
+          pic.alt = 'Your headshot';
+          pic.width = 64;
+          pic.height = 64;
+          dd.className = 'adv-review-photo';
+          dd.replaceChildren(pic);
+        }
         const change = document.createElement('button');
         change.type = 'button';
         change.className = 'adv-linkbtn';
@@ -845,9 +916,11 @@ export function initAdvisoryForm() {
     const now = collect();
     const there = read();
     const answers = { ...(there?.answers || {}) };
-    for (const [id, v] of Object.entries(now)) if (!there?.answers || !same(v, synced[id])) answers[id] = v;
+    for (const [id, v] of Object.entries(now)) if (!PHOTO_IDS.has(id) && (!there?.answers || !same(v, synced[id]))) answers[id] = v;
+    for (const id of PHOTO_IDS) delete answers[id]; // (kept where it is: ./advisory-photo.js)
     furthest = Math.max(furthest, Math.min(REVIEW, Number(there?.furthest) || 0));
-    write({ answers, step: Math.min(step, REVIEW), screen: screenNo, furthest, startedAt: Math.min(startedAt, Number(there?.startedAt) || startedAt), savedAt: Date.now() });
+    if (there?.session) sendSession = there.session; // (another tab's, saved first: the one id for the application)
+    write({ answers, step: Math.min(step, REVIEW), screen: screenNo, field: step < total ? lastIdOn(step, screenNo) : null, furthest, startedAt: Math.min(startedAt, Number(there?.startedAt) || startedAt), session: sendSession, savedAt: Date.now() });
     takeTheirs(answers, now);
     const said = canKeep ? 'Saved on this device' : 'Not saved: this browser blocks it';
     if (ui.saved.textContent !== said) ui.saved.textContent = said; // (heard once, not at every pause in typing)
@@ -858,6 +931,7 @@ export function initAdvisoryForm() {
     let took = false;
     const settled = [];
     for (const f of ADVISORY_FIELDS) {
+      if (f.type === 'photo') continue; // another tab's photo comes by its own note (PHOTO_PING)
       const v = answers[f.id];
       // Typed here and not saved yet: it stays, and this tab's save puts it over theirs (it's still unsaved till then)
       if (!same(now[f.id], synced[f.id]) && !same(v, now[f.id])) continue;
@@ -878,10 +952,12 @@ export function initAdvisoryForm() {
   window.addEventListener('storage', (e) => {
     if (sent || e.storageArea !== localStorage) return;
     if (e.key === SENT && e.newValue) { sentElsewhere(); return; }
+    if (e.key === PHOTO_PING) { for (const ph of Object.values(photos)) ph.load(); return; } // a photo changed in another tab
     if (e.key === STORE && !e.newValue && e.oldValue) { overElsewhere(); return; }
     if (e.key !== STORE || !e.newValue) return;
     const there = read();
     if (!there?.answers) return;
+    if (there.session) sendSession = there.session;
     furthest = Math.max(furthest, Math.min(REVIEW, Number(there.furthest) || 0));
     takeTheirs(there.answers);
   }, { signal });
@@ -1005,6 +1081,7 @@ export function initAdvisoryForm() {
   form.addEventListener('focusout', (e) => {
     const el = e.target.closest?.('[data-field]');
     if (!el || el.contains(e.relatedTarget) || !el.classList.contains('is-invalid') || step >= total) return;
+    if (el.querySelector('.adv-error')?.dataset.pick) return; // a photo that wouldn't do: its own note says why
     const msg = problemsOn(step)[el.dataset.field];
     if (!msg) { recheck(el.dataset.field); return; }
     const err = el.querySelector('.adv-error');
@@ -1172,7 +1249,7 @@ export function initAdvisoryForm() {
 
   // Enter (the keyboard's "next") goes to the next box on the screen; on the last one it's Continue
   form.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing || e.shiftKey || !(e.target instanceof HTMLInputElement) || ['radio', 'checkbox', 'submit', 'button'].includes(e.target.type)) return;
+    if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing || e.shiftKey || !(e.target instanceof HTMLInputElement) || ['radio', 'checkbox', 'submit', 'button', 'file'].includes(e.target.type)) return;
     const boxes = [...pages[step].querySelectorAll('input:not([type=hidden]), textarea')].filter((x) => x.getClientRects().length && !x.closest('[hidden], [data-off]'))
       .filter((x, k, all) => x.type !== 'radio' || all.findIndex((y) => y.type === 'radio' && y.name === x.name) === k);
     const after = boxes[boxes.indexOf(e.target) + 1];
@@ -1200,9 +1277,26 @@ export function initAdvisoryForm() {
   }));
   ui.exit.addEventListener('click', () => exitFocus());
 
+  let photoWait = false;
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (sending || moving || performance.now() < calmUntil) return;
+    if (sending || moving || photoWait || performance.now() < calmUntil) return;
+    // A photo still being got ready: Continue (or Send) once it is, not "Please add a headshot" meanwhile (said, and
+    // Continue looks busy, while it waits). Only the photos this press reads: on the screen being left, any of the
+    // step's when it's being left or one is still marked to look at, every one at the review. (A browser whose
+    // IndexedDB hangs takes seconds to say a kept photo isn't there: Continue on name and email never waits for it.)
+    const reads = step >= REVIEW ? Object.keys(photos) : (() => {
+      const here = screenIds();
+      const leaving = !screenAhead() || fromReview === 'answer';
+      const wrong = new Set(stillWrong());
+      const inStep = new Set((ADVISORY_STEPS[step]?.fields || []).map((f) => f.id));
+      return Object.keys(photos).filter((id) => inStep.has(id) && (here.has(id) || leaving || wrong.has(id)));
+    })();
+    if (reads.length) {
+      photoWait = true;
+      const slowPhoto = setTimeout(() => { ui.next.setAttribute('aria-busy', 'true'); announce('Getting your photo ready. One moment.'); }, 150);
+      try { await photosSettled(reads); } finally { clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false; }
+    }
     ui.sendError.hidden = true;
     if (step === REVIEW) { await send(); return; }
     const here = screenIds();
@@ -1239,7 +1333,7 @@ export function initAdvisoryForm() {
     if (firstBad !== -1) {
       const id = ADVISORY_STEPS[firstBad].fields.find((f) => all.problems[f.id]).id;
       fromReview = 'answer';
-      await go(firstBad, { dir: -1, at: id });
+      await go(firstBad, { dir: -1, at: id }).then(pushLoc); // (the phone's Back comes back to the review)
       showProblems(all.problems);
       return;
     }
@@ -1284,19 +1378,43 @@ export function initAdvisoryForm() {
       if (ui.live) { ui.live.textContent = ''; setTimeout(() => { ui.live.textContent = 'Still sending. This is taking longer than usual; please keep this page open.'; }, 40); }
     }, 15000);
     posting = true;
-    sendingStore.set(true);
+    const sendNonce = Math.random().toString(36).slice(2);
+    sendingStore.start(sendNonce);
     try {
       // No connection: said in words, not the browser's ("Failed to fetch", "Load failed")
-      const res = await fetch(API, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers: all.answers, website: form.elements.website?.value || '', turnstileToken, startedAt }),
-      }).catch(() => { throw new Error('That didn’t send: you seem to be offline. Your answers are still here; please try again once you’re connected.'); });
-      const d = await res.json().catch(() => ({}));
-      sendingStore.set(false); // answered: it's known whether it arrived
+      // The answers and the headshot together (the browser sets the multipart boundary). The send's id: this
+      // application's, and a fingerprint of these answers and this photo (an answer changed since is a new send)
+      let sendId = null;
+      try {
+        const files = Object.values(photos).map((ph) => (ph.file ? String(ph.file.size) : '')).join('|'); // (its size: the same after a reload)
+        const sum = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${JSON.stringify(all.answers)}|${files}`)));
+        sendId = `${sendSession}-${[...sum.slice(0, 12)].map((b) => b.toString(16).padStart(2, '0')).join('')}`.toLowerCase();
+      } catch { sendId = null; } // (no crypto.subtle: the server's own same-answers check still holds)
+      const body = new FormData();
+      // (photoAt: when the photo was picked: one application sent twice keeps the newer photo, whichever arrives last)
+      const photoAt = Math.max(0, ...Object.values(photos).map((ph) => ph.pickedAt || 0));
+      const photoSeq = Math.max(0, ...Object.values(photos).map((ph) => ph.pickedSeq || 0));
+      // (elapsedMs: how long since it was started, by this device's clock against itself: a clock that's off never matters)
+      // (as it is: a clock turned back since it was started gives less than nothing, which the server never takes as a bot)
+      body.append('payload', JSON.stringify({ answers: all.answers, website: trapValue(form), turnstileToken, startedAt, elapsedMs: Date.now() - startedAt, sendId, photoAt, photoSeq }));
+      for (const [id, ph] of Object.entries(photos)) if (ph.file) body.append(id, ph.file, ph.file.name || `${id}.jpg`);
+      // No answer: offline is said as offline; a connection that dropped may have got it there first, so that's said
+      const res = await fetch(API, { method: 'POST', body })
+        .catch(() => {
+          throw new Error(navigator.onLine === false
+            ? 'That didn’t send: you seem to be offline. Your answers are still here; please try again once you’re connected.'
+            : MAYBE_ARRIVED);
+        });
+      // Not the site's own answer (a gateway's error page, the connection cut mid-answer): it may have arrived first
+      const d = await res.json().catch(() => null);
+      if (!d || typeof d !== 'object') throw Object.assign(new Error(MAYBE_ARRIVED), { maybe: true });
+      sendingStore.done(sendNonce); // answered: it's known whether this one arrived
       if (res.status === 422 && d.problems) {
+        if (d.spent) resetTurnstile(); // (checked after the robot check: the next send needs a fresh one)
+        // A photo the server turned down: taken off, so they choose another (never "Added." beside its refusal)
+        for (const [pid, ph] of Object.entries(photos)) if (d.problems[pid]) await ph.refuse();
         const at = ADVISORY_STEPS.findIndex((s) => s.fields.some((f) => d.problems[f.id]));
-        if (at !== -1) { fromReview = 'answer'; await go(at, { dir: -1 }); showProblems(d.problems); }
+        if (at !== -1) { fromReview = 'answer'; await go(at, { dir: -1 }).then(pushLoc); showProblems(d.problems); } // (Back returns to the review)
         throw Object.assign(new Error(d.error || 'A few answers need a look.'), { sentBack: at !== -1 });
       }
       if (!res.ok || !d.ok) {
@@ -1323,6 +1441,8 @@ export function initAdvisoryForm() {
         paint();
         return;
       }
+      // (a send that reached the server used up the robot check: the next press needs a fresh one)
+      if (turnstileToken) resetTurnstile();
       sayError(err.message || 'That didn’t send. Your answers are still here; please try again.');
       ui.sendError.hidden = false;
       ui.next.removeAttribute('aria-disabled');
@@ -1339,7 +1459,7 @@ export function initAdvisoryForm() {
       });
     } finally {
       clearTimeout(slow);
-      if (posting && !navigator.onLine) sendingStore.set(false); // never left this device
+      if (posting && !navigator.onLine) sendingStore.done(sendNonce); // never left this device
       posting = false;
       sending = false;
       ui.exit.disabled = false;
@@ -1352,6 +1472,7 @@ export function initAdvisoryForm() {
     sent = true;
     clearTimeout(saveTimer);
     if (!elsewhere) { sentStore.set(Date.now()); write(null); }
+    for (const ph of Object.values(photos)) ph.clear({ keep: elsewhere }); // (the tab that sent it took it off this device)
     sendingStore.set(false); // (in this order: another tab hears it was sent, not started over)
     ui.saved.textContent = '';
     session.set(false);
@@ -1445,7 +1566,7 @@ export function initAdvisoryForm() {
     fill(stored.answers);
     step = Math.min(Math.max(0, Number(stored.step) || 0), REVIEW);
     furthest = Math.min(Math.max(step, Number(stored.furthest) || 0), REVIEW);
-    resumeAt = { step, screen: Math.max(0, Number(stored.screen) || 0) };
+    resumeAt = { step, screen: Math.max(0, Number(stored.screen) || 0), field: typeof stored.field === 'string' ? stored.field : null };
     restored = true;
   }
   synced = collect();
@@ -1471,6 +1592,7 @@ export function initAdvisoryForm() {
   function clearAll() {
     clearTimeout(saveTimer);
     saveTimer = null;
+    sendingStore.set(false); // ("may already have been sent" was about the answers going now)
     form.reset();
     synced = collect();
     step = 0;
@@ -1478,8 +1600,10 @@ export function initAdvisoryForm() {
     screenNo = 0;
     restored = false;
     startedAt = Date.now();
+    sendSession = newSendSession(); // a new application from here
     for (const el of form.querySelectorAll('.adv-field.is-invalid')) el.classList.remove('is-invalid');
     for (const el of form.querySelectorAll('.adv-error, [data-summary]')) el.hidden = true;
+    for (const ph of Object.values(photos)) ph.clear({ keep: clearingElsewhere });
     ui.saved.textContent = '';
     follow();
     paint();
@@ -1490,7 +1614,8 @@ export function initAdvisoryForm() {
     const wasIn = focused;
     if (wasIn) exitFocus({ keep: false });
     clearedThere = true;
-    clearAll();
+    clearingElsewhere = true;
+    try { clearAll(); } finally { clearingElsewhere = false; }
     if (wasIn || document.visibilityState === 'visible') hubSay(ui.hubLead.textContent);
   }
   follow();
@@ -1503,9 +1628,15 @@ export function initAdvisoryForm() {
   window.__advWant = false;
   // A reload on one of its own history entries: that screen, even when they'd gone back from further on
   const entry = history.state?.advFocus ? history.state.advAt : null;
-  if (restored && session.get() && entry && entry.step <= furthest) { step = entry.step; resumeAt = { step, screen: Math.max(0, Number(entry.screen) || 0) }; if (entry.fromReview && step < total) fromReview = entry.fromReview; }
+  if (restored && session.get() && entry && entry.step <= furthest) { step = entry.step; resumeAt = { step, screen: Math.max(0, Number(entry.screen) || 0), field: typeof entry.field === 'string' ? entry.field : null }; if (entry.fromReview && step < total) fromReview = entry.fromReview; }
   let fresh = false;
   try { fresh = sessionStorage.getItem(AGAIN) === '1'; sessionStorage.removeItem(AGAIN); } catch { /* storage off */ }
   if (restored && session.get()) begin(step);
+  // In the application with only a photo picked so far (no answer typed yet), then a reload: back in it, as with any answer
+  else if (session.get()) {
+    Promise.all(Object.values(photos).map((ph) => ph.loaded)).then(() => {
+      if (!focused && !sent && Object.values(photos).some((ph) => !!ph.file)) begin(0);
+    });
+  }
   else if (early || (fresh && !restored)) begin();
 }

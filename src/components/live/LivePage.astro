@@ -31,6 +31,7 @@
  * portrait video, under a landscape one), and in full under the hero from
  * the confirmed reveal on (LiveDesign.astro); utils/live-design.ts fills both.
  */
+import BotTrap from '../global/BotTrap.astro';
 import { storyLead } from '../../utils/story-lead';
 import { cfRaw } from '../../utils/cf-image';
 import { LIVE_GENERIC_LEAD } from '../../utils/live-hero-text';
@@ -137,7 +138,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
               <span class="btn-text">Email me</span><span class="btn-busy"><span class="btn-spinner" aria-hidden="true"></span><span class="sr-only">Sending</span></span><span class="btn-done">Done</span>
             </button>
           </div>
-          <div class="remind-hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off" /></label></div>
+          <BotTrap />
           <p class="remind-note" role="status" aria-live="polite"></p>
         </form>
         <!-- The quick check (Turnstile) runs in a small frame here, out of sight unless it needs a click -->

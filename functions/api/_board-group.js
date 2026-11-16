@@ -15,7 +15,10 @@
  *     and that's how to keep someone who isn't on the board)
  *   - a group, or the whole domain, listed as a member
  *   - anything while People → Board has nobody with an email: a read that
- *     comes back empty never empties the group
+ *     comes back empty never empties the group. advisory@ is different: the
+ *     last Advisory Board member with an email can leave, so once People itself
+ *     was read (it has people on it), nobody left on People → Advisory takes
+ *     the last one off (the Board area's admins and whoever runs it stay)
  * Adding someone through Google's API sends them no email.
  *
  * Google: the service account behind GOOGLE_CALENDAR_KEY with
@@ -141,27 +144,33 @@ export async function advisoryGroupWanted(DB) {
   if (leadPerson && isEmail(emails[lead] || '')) byEmail.set(primary(emails[lead]), leadPerson.name);
   for (const e of admins) if (!byEmail.has(primary(e))) byEmail.set(primary(e), e);
   const members = [...byEmail].map(([email, name]) => ({ email, name })).sort((a, b) => a.email.localeCompare(b.email));
-  return { members, board: advisors.filter((a) => isEmail(a.email)).length, missing: advisors.filter((a) => !isEmail(a.email)).map((a) => ({ slug: a.slug, name: a.name })) };
+  return { members, board: advisors.filter((a) => isEmail(a.email)).length, missing: advisors.filter((a) => !isEmail(a.email)).map((a) => ({ slug: a.slug, name: a.name })), peopleRead: people.length };
 }
 
 const BOARD = { email: GROUP_EMAIL, key: 'group', runs: 'group-runs', wanted: groupWanted, empty: 'People → Board has nobody with an email, so the group was left as it is' };
-const ADVISORY = { email: ADVISORY_GROUP_EMAIL, key: 'advisory-group', runs: 'advisory-group-runs', wanted: advisoryGroupWanted, empty: 'People → Advisory has nobody with an email, so the group was left as it is' };
+const ADVISORY = { email: ADVISORY_GROUP_EMAIL, key: 'advisory-group', runs: 'advisory-group-runs', wanted: advisoryGroupWanted, canEmpty: true, empty: 'People → Advisory has nobody with an email, so the group was left as it is' };
+
+/** What a run is checked against: the people it wants, and whether it may put anyone in (a run that only takes people off is its own state) */
+const runHash = (members, adding) => hashOf([...members.map((m) => m.email), ...(adding ? [] : ['(taking off only)'])]);
 
 /**
  * Bring a group up to its people. → the saved state
  *   { ok, configured, subject, members, wanted, hash, triedHash, syncedAt, error, needs, failing: [{ email, name, error }], changes: [{ at, added, removed }] }
+ * adding: false only takes off whoever left (advisory@ while advisor emails are off): nobody is put in
  */
-async function syncGroup(env, cfg, { fetchImpl = fetch, now = Date.now() } = {}) {
+async function syncGroup(env, cfg, { fetchImpl = fetch, now = Date.now(), adding = true } = {}) {
   const KEY = cfg.key;
   const MEMBERS_API = membersApi(cfg.email);
   const prev = await readState(env.DB, KEY);
   const at = new Date(now).toISOString();
   const want = await cfg.wanted(env.DB);
-  const hash = await hashOf(want.members.map((m) => m.email));
+  const hash = await runHash(want.members, adding);
   // failingSince: when this run of failures began, so a passing outage reads as one
   const fail = (err) => writeState(env.DB, KEY, { ...prev, ok: false, configured: true, triedHash: hash, error: err.message, needs: err.needs || null, failedAt: at, failingSince: prev.failingSince || at });
   if (!env.GOOGLE_CALENDAR_KEY) return { ...prev, ok: false, configured: false };
-  if (!want.board) return fail(Object.assign(new Error(cfg.empty), { needs: 'empty' }));
+  // (nobody wanted from a read of People that found nobody at all: never acted on. advisory@ with People read and
+  // nobody left on it with an email: the last one comes off)
+  if (!want.board && !(cfg.canEmpty && want.peopleRead > 0)) return fail(Object.assign(new Error(cfg.empty), { needs: 'empty' }));
 
   // The founder that worked last time, then staff sign-in's, then each founder: only "not a Workspace admin" is worth trying the next one for
   let staffSubject = '';
@@ -180,7 +189,7 @@ async function syncGroup(env, cfg, { fetchImpl = fetch, now = Date.now() } = {})
 
   const wanted = new Set(want.members.map((m) => m.email));
   const inGroup = new Set(current.map((m) => m.email).filter(Boolean));
-  const toAdd = want.members.filter((m) => !inGroup.has(m.email));
+  const toAdd = adding ? want.members.filter((m) => !inGroup.has(m.email)) : [];
   let budget = MAX_CHANGES;
   const added = [], removed = [], failing = [];
   const aliased = new Set(); // domains where an address turned out to be another member's alias
@@ -243,19 +252,19 @@ export const groupStatus = (env) => statusOf(env, BOARD);
 export const advisoryGroupStatus = (env) => statusOf(env, ADVISORY);
 
 /** Heartbeat: when the people changed (checked every 5 minutes), every 6 hours anyway, and half-hourly while something fails. Never throws. */
-async function maybeSync(env, cfg, { fetchImpl = fetch, now = Date.now() } = {}) {
+async function maybeSync(env, cfg, { fetchImpl = fetch, now = Date.now(), adding = true } = {}) {
   try {
     if (!env.DB || !env.GOOGLE_CALENDAR_KEY) return null;
     const runs = await readState(env.DB, cfg.runs);
     if (now - (Number(runs.lookedAt) || 0) < LOOK_MS) return null;
     await writeState(env.DB, cfg.runs, { lookedAt: now });
     const state = await readState(env.DB, cfg.key);
-    const hash = await hashOf((await cfg.wanted(env.DB)).members.map((m) => m.email));
+    const hash = await runHash((await cfg.wanted(env.DB)).members, adding);
     const last = Date.parse((state.ok ? state.syncedAt : state.failedAt) || '') || 0;
     // A young outage (Google erring, nothing to set) is asked again at each look for its first half hour, as the panel says
     const young = !state.ok && !state.needs && state.failingSince && now - Date.parse(state.failingSince) < RETRY_MS;
     const due = state.triedHash !== hash || now - last >= (state.ok ? RECHECK_MS : young ? LOOK_MS : RETRY_MS);
-    return due ? await syncGroup(env, cfg, { fetchImpl, now }) : null;
+    return due ? await syncGroup(env, cfg, { fetchImpl, now, adding }) : null;
   } catch (err) {
     console.error('[board-group]', err.message);
     return null;

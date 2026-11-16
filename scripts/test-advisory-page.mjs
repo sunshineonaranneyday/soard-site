@@ -41,7 +41,7 @@ const PEOPLE = [
   { slug: 'dana-bright', name: 'Dana Bright', photo: '/cdn-cgi/imagedelivery/x/dana/w=240', organization: 'Bright Events', bio: '', linkedin: '' },
   { slug: 'lee-a-very-long-name-hyphenated-person', name: 'Lee Alexandria Montgomery-Featherstonehaugh', photo: '', organization: 'A Company With A Really Rather Long Name And Partners LLC', bio: 'Word '.repeat(90), linkedin: '' },
 ];
-const KINDS = [{ id: 'library', label: 'Document' }, { id: 'agreement', label: 'Advisor agreement', sign: true }, { id: 'overview', label: 'Overview' }, { id: 'pitch', label: '30-second pitch' }, { id: 'post', label: 'Post to share' }, { id: 'sponsor', label: 'Sponsor one-pager' }, { id: 'matching', label: 'Employer matching steps' }, { id: 'hosting', label: 'How to host a fundraiser' }];
+const KINDS = [{ id: 'library', label: 'Document' }, { id: 'agreement', label: 'Advisory Board agreement', sign: true }, { id: 'overview', label: 'Overview' }, { id: 'pitch', label: '30-second pitch' }, { id: 'post', label: 'Post to share' }, { id: 'sponsor', label: 'Sponsor one-pager' }, { id: 'matching', label: 'Employer matching steps' }, { id: 'hosting', label: 'How to host a fundraiser' }];
 const STATUSES = [{ id: 'thanks', label: 'Thanks', sub: 'We have it and we’ll take a look' }, { id: 'talking', label: 'Talking', sub: 'We’re in touch with them' }, { id: 'yes', label: 'Said yes', sub: 'They’re helping SOARD' }, { id: 'not-now', label: 'Not now', sub: 'Not the right time' }];
 const HELP = [{ id: 'donor', label: 'Could give' }, { id: 'sponsor', label: 'Could sponsor' }, { id: 'vendor', label: 'Trade or vendor' }, { id: 'volunteer', label: 'Could volunteer' }];
 const ME = {
@@ -171,7 +171,7 @@ function adminPost(w, b, res) {
   const a = w.admin;
   if (b.action === 'intro-status') { a.intros = a.intros.map((i) => (i.id === b.id ? { ...i, status: b.status, note: b.note, updatedBy: 'them' } : i)); return json(res, 200, { ok: true }); }
   if (b.action === 'save-ask') { const ask = { id: `ask_${Date.now()}`, ...b.ask, sentAt: '', closedAt: '', answers: [] }; a.asks = [ask, ...a.asks]; return json(res, 200, { ok: true, ask }); }
-  if (b.action === 'send-ask' && w.switched && b.emailsOk !== true) { a.settings = { ...a.settings, emails: true }; return json(res, 409, { ok: false, emails: true, error: 'Emails are on, so this will email every advisor.' }); }
+  if (b.action === 'send-ask' && w.switched && b.emailsOk !== true) { a.settings = { ...a.settings, emails: true }; return json(res, 409, { ok: false, emails: true, error: 'Emails are on, so this will email every Advisory Board member.' }); }
   if (b.action === 'send-ask') { w.lastSent = a.settings.emails ? { sent: a.advisors.length, failed: 0 } : { off: true }; a.asks = a.asks.map((x) => (x.id === b.id ? { ...x, sentAt: new Date().toISOString() } : x.sentAt && !x.closedAt ? { ...x, closedAt: new Date().toISOString() } : x)); return json(res, 200, { ok: true, sent: w.lastSent }); }
   if (b.action === 'save-wish') { const wish = { id: `w_${Date.now()}`, ...b.wish }; a.wishes = [...a.wishes, wish]; return json(res, 200, { ok: true, wish }); }
   if (b.action === 'email-ask') return json(res, 200, { ok: true, sent: a.advisors.length, failed: 0 });
@@ -477,7 +477,7 @@ for (const width of [390, 1280]) {
 // ─── A page that won't open ─────────────────────────────────────────
 {
   const key = 'advisor/down';
-  worlds.set(key, { portal: emptyPortal('advisor'), admin: emptyAdmin('advisor'), posts: [], down: { status: 403, body: { ok: false, error: 'The advisory page is for SOARD’s Advisory Board' } } });
+  worlds.set(key, { portal: emptyPortal('advisor'), admin: emptyAdmin('advisor'), posts: [], down: { status: 403, body: { ok: false, error: 'The Advisory Board page is for SOARD’s Advisory Board' } } });
   const page = await tab(key, 390);
   await page.goto(`${ORIGIN}/admin/advisory/`, { waitUntil: 'networkidle0' });
   check((await page.$eval('.bp-fail h1', (x) => x.textContent)).includes('This page is for SOARD’s Advisory Board'), 'refused: it says who the page is for');
@@ -546,7 +546,7 @@ for (const width of [390, 1280]) {
   w.admin.intros = [{ ...filledAdmin('lead').intros[0], id: 'in_newnewnew' }, ...w.admin.intros];
   await page.reload({ waitUntil: 'networkidle0' });
   await page.waitForSelector('.ar-card');
-  await page.evaluate(() => [...document.querySelectorAll('.ar-field')].find((f) => f.textContent.includes('A note for the advisor')).querySelector('input').focus());
+  await page.evaluate(() => [...document.querySelectorAll('.ar-field')].find((f) => f.textContent.includes('A note for the Advisory Board member')).querySelector('input').focus());
   await page.keyboard.type('Called them today');
   await page.keyboard.press('Tab');
   await settle(200);
@@ -598,8 +598,8 @@ for (const width of [390, 1280]) {
   await page.$eval('.ar-card input[placeholder^="Do you know"]', (x) => x.focus());
   await page.keyboard.type('Half-written ask');
   const beforeSend = w.posts.filter((x) => x.action === 'send-ask').length;
-  await press(page, 'Put it out and email advisors');
-  check((await page.evaluate(() => document.querySelector('.ask')?.textContent || '')).includes('Email all 3 advisors?'), 'Run it: emails on, it asks before emailing everyone');
+  await press(page, 'Put it out and email the Advisory Board');
+  check((await page.evaluate(() => document.querySelector('.ask')?.textContent || '')).includes('Email all 3 Advisory Board members?'), 'Run it: emails on, it asks before emailing everyone');
   await page.screenshot({ path: join(SHOTS, `ask-dialog-${width}.png`) });
   await press(page, 'Not yet');
   check(w.posts.filter((x) => x.action === 'send-ask').length === beforeSend, 'Run it: Not yet sends nothing');
@@ -676,11 +676,11 @@ for (const width of [390, 1280]) {
   await page.keyboard.type('Stale switch');
   await press(page, 'Put it on the page');
   await settle(200);
-  check((await inAsk()).includes('Email all 3 advisors?'), 'round two: a switch turned on elsewhere asks before anything goes');
+  check((await inAsk()).includes('Email all 3 Advisory Board members?'), 'round two: a switch turned on elsewhere asks before anything goes');
   await press(page, 'Put it out and email them');
   await settle(200);
   check(w.posts.some((x) => x.action === 'send-ask' && x.emailsOk === true), 'round two: emailsOk only after they agreed');
-  check((await said()).includes('emailed to 3 advisors'), `round two: the note says what happened (${await said()})`);
+  check((await said()).includes('emailed to 3 Advisory Board members'), `round two: the note says what happened (${await said()})`);
   // A status emails the advisor: said at the control
   check((await textOf(page)).includes('Changing this emails Sam'), 'round two: the control says it emails them');
   check((await textOf(page)).includes('Got it'), 'round two: Run it says Got it');
@@ -737,7 +737,7 @@ for (const width of [390, 1280]) {
   await press(page, 'Yes, send it');
   await settle(240);
   check(w.posts.find((x) => x.action === 'send-welcome')?.slugs.length === 2, 'round two: who’s had the sign-in email is left out');
-  check((await page.$eval('.bp-toast', (x) => x.textContent)).includes('Sent to 2 advisors'), 'round two: it says how many');
+  check((await page.$eval('.bp-toast', (x) => x.textContent)).includes('Sent to 2 Advisory Board members'), 'round two: it says how many');
   check(!(await textOf(page)).includes('Send the sign-in email'), 'round two: the button goes once everyone has it');
   await page.close();
 }
@@ -850,12 +850,12 @@ for (const width of [390, 1280]) {
   // A fundraiser's buttons email the advisor
   check((await textOf(page)).includes('Changing this emails Dana'), 'round three: a fundraiser’s row says it emails them');
   // An ask out but never emailed
-  await press(page, 'Email it to advisors');
-  check((await inAsk()).includes('Email all 3 advisors?'), 'round three: emailing an ask that’s out asks first');
+  await press(page, 'Email it to the Advisory Board');
+  check((await inAsk()).includes('Email all 3 Advisory Board members?'), 'round three: emailing an ask that’s out asks first');
   await press(page, 'Email them');
   await settle(200);
   check(w.posts.some((x) => x.action === 'email-ask'), 'round three: then it goes');
-  check((await said()).includes('Emailed to 3 advisors'), 'round three: and it says so');
+  check((await said()).includes('Emailed to 3 Advisory Board members'), 'round three: and it says so');
   // Delete only on an ask that never went out
   await page.evaluate(() => document.querySelectorAll('.ar-fold').forEach((d) => { d.open = true; }));
   await settle(100);

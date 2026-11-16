@@ -77,7 +77,14 @@ export async function onRequestPost(context) {
         const row = await DB.prepare(`SELECT data FROM ${parsed.table} WHERE slug = ?`).bind(parsed.slug).first();
         if (row) { oldRaw = row.data; oldData = JSON.parse(row.data); isCreate = false; }
       }
-    } catch (e) { /* first save — no old data */ }
+    } catch (e) {
+      // No table yet: the first save. A stored record that isn't JSON: as before. The database not answering: stop
+      // here in words (saving blind could write over a change, or answer "renamed or deleted" when neither is so)
+      if (!(e instanceof SyntaxError) && !/no such table/i.test(e?.message || '')) {
+        console.error('[save-content] read before save', e?.message);
+        return Response.json({ success: false, error: 'The site’s database didn’t answer just now, so nothing was saved. Please try again in a moment.' }, { status: 503 });
+      }
+    }
 
     // Optimistic concurrency: if the client sent the sha it loaded and the row
     // still exists, reject when the stored content changed since. The client's

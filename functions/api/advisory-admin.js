@@ -192,7 +192,7 @@ export async function onRequestPost(context) {
       case 'save-ask': return Response.json({ ok: true, ask: await saveAsk(env.DB, body.ask || {}, { by }) });
       case 'send-ask': {
         // The switch as it stands now, not as this screen last saw it: nobody emails the group by surprise
-        if (settings.emails && body.emailsOk !== true) return Response.json({ ok: false, emails: true, error: 'Emails are on, so this will email every advisor.' }, { status: 409 });
+        if (settings.emails && body.emailsOk !== true) return Response.json({ ok: false, emails: true, error: 'Emails are on, so this will email every Advisory Board member.' }, { status: 409 });
         const ask = await putAskOut(env.DB, id);
         const sent = settings.emails ? await sendAsk(env, ask) : { off: true };
         await audit(context, by, 'updated', `Advisory ask out: ${ask.title}`);
@@ -243,11 +243,11 @@ export async function onRequestPost(context) {
         // One paper at a time, so a stale tab can't undo someone else's switch. Only a paper that can be shared: never one
         // the board signs, a written one, or a staff-only file
         const on = body.on === true;
-        if (on && !(await sharableBoardDocs(env.DB)).some((d) => d.id === id)) return fail('That paper can’t be shared with advisors');
+        if (on && !(await sharableBoardDocs(env.DB)).some((d) => d.id === id)) return fail('That paper can’t be shared with the Advisory Board');
         const ids = new Set(settings.boardDocs || []);
         if (on) ids.add(id); else ids.delete(id);
         const next = await saveSettings(env.DB, { boardDocs: [...ids] });
-        await audit(context, by, 'updated', `Advisors ${on ? 'can open' : 'can no longer open'} a board paper`);
+        await audit(context, by, 'updated', `The Advisory Board ${on ? 'can open' : 'can no longer open'} a board paper`);
         return Response.json({ ok: true, boardDocs: next.boardDocs });
       }
       case 'delete-file': {

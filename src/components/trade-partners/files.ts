@@ -3,6 +3,7 @@
  *   - an iPhone photo (HEIC) becomes a JPEG: Safari draws it itself, any other
  *     browser fetches libheif (src/utils/heic-to.js, 3 MB) the first time
  *   - every photo goes up as a JPEG at most 2400 px across, on white
+ *     (both by src/utils/photo-prep.ts, which the Advisory Board application shares)
  *   - a PDF goes as it is, with its first pages drawn as pictures by pdf.js
  *     (public/trade-partners/pdf/), because a W-9's signature and what's typed
  *     into a form's boxes aren't in a PDF's text
@@ -10,47 +11,14 @@
  * picked fails here, in words, not halfway through sending.
  */
 
-const MAX_SIDE = 2400;
+import { isHeic, toJpeg } from '../../utils/photo-prep';
+
+export { isHeic, toJpeg };
 export const MAX_BYTES = 15 * 1024 * 1024;
 const PDF_BASE = '/trade-partners/pdf/';
 const PAGE_SIDE = 2000;
 
-/** An iPhone photo (HEIC), by its first bytes as well as its name */
-export async function isHeic(f: File) {
-  if (/^image\/hei[cf]/.test(f.type) || /\.hei[cf]$/i.test(f.name)) return true;
-  const s = String.fromCharCode(...new Uint8Array(await f.slice(0, 12).arrayBuffer()));
-  return s.slice(4, 8) === 'ftyp' && /^(heic|heix|hevc|mif1|msf1|heif)$/.test(s.slice(8, 12));
-}
-
 export const isPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
-
-/** A photo as a JPEG no bigger than the reader needs; one already small enough goes as it is unless `always`; null when this browser can't draw it */
-export async function toJpeg(f: Blob, name: string, always = false): Promise<File | null> {
-  const url = URL.createObjectURL(f);
-  try {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    if (!img.naturalWidth) return null;
-    const scale = Math.min(1, MAX_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
-    if (scale === 1 && !always && f.size < 4 * 1024 * 1024 && f instanceof File) return new File([await f.arrayBuffer()], f.name, { type: f.type });
-    const c = document.createElement('canvas');
-    c.width = Math.round(img.naturalWidth * scale);
-    c.height = Math.round(img.naturalHeight * scale);
-    const ctx = c.getContext('2d');
-    if (!ctx) return null;
-    // White under it: a JPEG has no see-through, and a transparent PNG would come out black
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(0, 0, c.width, c.height);
-    ctx.drawImage(img, 0, 0, c.width, c.height);
-    const blob = await new Promise<Blob | null>((r) => c.toBlob(r, 'image/jpeg', 0.88));
-    return blob ? new File([blob], `${name.replace(/\.[^.]+$/, '') || 'photo'}.jpg`, { type: 'image/jpeg' }) : null;
-  } catch {
-    return null;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
 
 /** What goes up: a PDF as it is, a photo as a JPEG → File, or null for an iPhone photo nothing could open */
 export async function prepare(f: File): Promise<File | null> {

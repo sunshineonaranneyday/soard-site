@@ -55,6 +55,16 @@ export async function onRequestPost(context) {
  * kept for Recently deleted. Shared by this endpoint and Partners → Merge into (./_room-credits.js mergeCredits),
  * which deletes the merged company inside its own locked step. → { gitCommit: 'ok' | 'failed' }
  */
+/** Applications linked to someone deleted from People: unlinked, each with a note saying who it was */
+async function unlinkApplications(DB, slug, name, by) {
+  const { results } = await DB.prepare('SELECT id FROM advisory_applications WHERE person_slug = ?').bind(slug).all();
+  await DB.prepare('DELETE FROM advisory_add_intents WHERE slug = ?').bind(slug).run().catch(() => {}); // (none made yet: no table)
+  if (!results?.length) return;
+  const { addAdvisoryNote } = await import('./_advisory-applications.js');
+  await DB.prepare('UPDATE advisory_applications SET person_slug = NULL WHERE person_slug = ?').bind(slug).run();
+  for (const r of results) await addAdvisoryNote(DB, r.id, `Their People record (${name}) was deleted, so this application isn’t linked to anyone now.`, { by });
+}
+
 export async function deleteItem(env, { path, message }, userEmail = 'unknown', waitUntil = (p) => p) {
   const { DB } = env;
   const parsed = parsePath(path);
@@ -111,11 +121,19 @@ export async function deleteItem(env, { path, message }, userEmail = 'unknown', 
     catch (e) { console.error(`[delete-content] ${parsed.table} history:`, e.message); }
   }
 
-  // A board or Advisory Board member removed from the website: forget their private reveal
-  // email and take them off open reveal invites now
-  if (parsed.table === 'team' && (oldData?.group === 'board' || oldData?.group === 'advisory')) {
+  // Anyone removed from People: forget their private email (left behind, it would be no one's and still block
+  // someone else using it), and an Advisory Board member's welcome record; a board or Advisory Board member comes
+  // off open reveal invites now too
+  if (parsed.table === 'team') {
     await setBoardEmail(DB, parsed.slug, '').catch(() => {});
-    waitUntil(refreshForBoardChange(env));
+    // An Advisory Board member's welcome went with them: someone later added at this address gets their own
+    if (oldData?.group === 'advisory') await (await import('./_advisory-mail.js')).forgetMember(DB, parsed.slug).catch((e) => console.error('[delete-content] advisory welcome', e?.message));
+    // Their Advisory Board applications stop pointing at this address (a new person may be given it): each keeps a
+    // note of who it was linked to
+    await unlinkApplications(DB, parsed.slug, entityName || parsed.slug, userEmail).catch((e) => {
+      if (!/no such table/i.test(e?.message || '')) console.error('[delete-content] advisory applications', e?.message);
+    });
+    if (oldData?.group === 'board' || oldData?.group === 'advisory') waitUntil(refreshForBoardChange(env));
   }
 
   return { gitCommit: gitStatus };

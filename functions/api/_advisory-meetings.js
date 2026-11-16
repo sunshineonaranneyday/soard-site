@@ -286,7 +286,7 @@ async function screenData(env, id) {
   const card = (p) => ({ slug: p.slug, name: p.name, title: p.title || '', organization: p.organization || '', since: p.since || null, group: p.group, photo: p.photo ? photoUrl(p, 160) : '' });
   return {
     ok: true, today: todayEastern(), meetings: [view(m), ...later], previews: [], presenting: [], numbers: {}, lineNotes: {},
-    people: people.filter((p) => p.status === 'active' && !p.draft && (p.group === 'advisory' || named.has(p.slug))).map(card),
+    people: people.filter((p) => p.status === 'active' && (p.group === 'advisory' || (!p.draft && named.has(p.slug)))).map(card),
   };
 }
 
@@ -483,7 +483,7 @@ export async function meetingAction(context, { action, body = {}, form = null, b
         return Response.json({ ok: true });
       case 'send-invite':
         // An invite is an email to people outside SOARD: it waits for the same switch as the rest
-        if (!(await getSettings(env.DB)).emails) throw err('Turn on emails to advisors on Members first. Until then, this meeting stays on the page.', 409);
+        if (!(await getSettings(env.DB)).emails) throw err('Turn on Advisory Board emails on Members first. Until then, this meeting stays on the page.', 409);
         {
           // Pressed again with nothing different: nothing goes to anyone. A new day, time or place emails everyone;
           // words alone update the calendar quietly

@@ -12,6 +12,7 @@
  * Messages arrive over the real-time hub; without one that relays them, the
  * panel polls every 20 seconds.
  */
+import { trapValue } from '../../functions/api/_bot-trap.js';
 import type { LiveClient, LiveMessage } from './live-client';
 
 export interface MessagesView {
@@ -170,7 +171,7 @@ export function createMessages(opts: Options) {
       try {
         const res = await fetch('/api/live-messages', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-          body: JSON.stringify({ name, body: text, website: (form.querySelector('input[name="website"]') as HTMLInputElement)?.value || '' }),
+          body: JSON.stringify({ name, body: text, website: trapValue(form) }),
         });
         const data = await res.json().catch(() => ({}));
         if (res.ok && data.ok) {

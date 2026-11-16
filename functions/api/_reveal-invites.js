@@ -363,11 +363,24 @@ export async function boardRoster(DB, group = 'board') {
 export async function setBoardEmail(DB, slug, email) {
   await ensureSchema(DB);
   const e = normEmail(email);
-  if (e && !isEmail(e)) throw new Error('That email doesn\'t look right');
-  // (each board member signs in with their own: an address already someone else's would sign one in as the other)
+  if (e && !isEmail(e)) throw new Error('That email doesn’t look right.');
+  // (each board member signs in with their own: an address already someone else's would sign one in as the other).
+  // Someone else's means someone on People: a row left by a person no longer there (deleted before their email was
+  // cleared with them) is nobody's, and goes
+  // A check that couldn't run stops the save (never a pass: two people would sign in as one)
   if (e) {
-    const other = await DB.prepare('SELECT r.slug, t.name FROM reveal_board_emails r LEFT JOIN team t ON t.slug = r.slug WHERE lower(r.email) = ? AND r.slug != ? LIMIT 1').bind(e, slug).first().catch(() => null);
-    if (other) throw new Error(`That email is already ${other.name || other.slug}’s. Each person signs in to the board page with their own.`);
+    let other = null;
+    try {
+      other = await DB.prepare('SELECT r.slug, t.data FROM reveal_board_emails r JOIN team t ON t.slug = r.slug WHERE lower(r.email) = ? AND r.slug != ? LIMIT 1').bind(e, slug).first();
+    } catch (err) {
+      if (!/no such table: team/i.test(err?.message || '')) throw new Error('The site couldn’t check that email just now. Please try again in a moment.');
+    }
+    if (other) {
+      const name = (() => { try { return JSON.parse(other.data || '{}').name || ''; } catch { return ''; } })();
+      throw new Error(`That email is already ${name || other.slug}’s. Each person signs in to the board page with their own.`);
+    }
+    await DB.prepare('DELETE FROM reveal_board_emails WHERE lower(email) = ? AND slug != ? AND slug NOT IN (SELECT slug FROM team)').bind(e, slug).run()
+      .catch((err) => { if (!/no such table: team/i.test(err?.message || '')) throw err; });
   }
   const was = await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(slug).first().catch(() => null);
   const r = e

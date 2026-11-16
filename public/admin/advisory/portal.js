@@ -127,7 +127,7 @@ function App() {
 
   if (fail) {
     // (a board member who isn't on the committee, the one sign-in that gets here and has somewhere else to go)
-    const staff = fail.status === 403 && /advisory page is for/i.test(fail.error || '');
+    const staff = fail.status === 403 && /(advisory|Advisory Board) page is for/i.test(fail.error || '');
     if (fail.signedOut) {
       return html`<div class="bp-fail" role="alert">
         <img src=${LOGO} alt="" width="64" height="64" />
@@ -138,12 +138,12 @@ function App() {
     }
     return html`<div class="bp-fail" role="alert">
       <img src=${LOGO} alt="" width="64" height="64" />
-      <h1>${fail.status === 403 ? 'This page is for SOARD’s Advisory Board' : 'The advisory page didn’t open'}</h1>
-      <p>${fail.status === 403 ? `It opens for the email address SOARD has on file for each advisor. If that should be you, write to ${QUESTIONS} and we’ll check the address we have.` : fail.error}</p>
+      <h1>${fail.status === 403 ? 'This page is for SOARD’s Advisory Board' : 'The Advisory Board page didn’t open'}</h1>
+      <p>${fail.status === 403 ? `It opens for the email address SOARD has on file for each Advisory Board member. If that should be you, write to ${QUESTIONS} and we’ll check the address we have.` : fail.error}</p>
       <p class="bp-btns bp-btns--center">${staff ? html`<a class="bp-btn" href="/admin/board/">Go to the board page</a>` : null}<button type="button" class="bp-btn" onClick=${() => load()}>Try again</button><a class="bp-btn bp-btn--quiet" href="/cdn-cgi/access/logout">Sign out</a></p>
     </div>`;
   }
-  if (!data) return html`<div class="bp-boot"><img src=${LOGO} alt="" width="56" height="56" /><p>Opening the advisory page…</p></div>`;
+  if (!data) return html`<div class="bp-boot"><img src=${LOGO} alt="" width="56" height="56" /><p>Opening the Advisory Board page…</p></div>`;
   const say = (text, tone = '', act = null) => setNote({ text, tone, act, at: Date.now() });
   /** A change, then the page as it is now. A refusal says why and leaves what they typed where it is */
   const post = async (body, done = '', { refused = null } = {}) => {
@@ -224,7 +224,7 @@ function HomePage({ ctx }) {
   const shots = [...data.photos, ...rooms];
   return html`<div class="ad-home">
     <${HomeHero} title=${name ? `${greeting()}, ${name}.` : 'The Advisory Board'} today=${today} shots=${shots} impact=${data.impact} />
-    ${me.answers ? null : html`<p class="ad-seeing bp-rise" style=${rise(0)}>This is the page as advisors see it. Only an advisor can answer or sign here.${me.runs ? html` <a href="#/run">Go to Run it</a>` : null}</p>`}
+    ${me.answers ? null : html`<p class="ad-seeing bp-rise" style=${rise(0)}>This is the page as Advisory Board members see it. Only an Advisory Board member can answer or sign here.${me.runs ? html` <a href="#/run">Go to Run it</a>` : null}</p>`}
     <div class=${`bp-meets ad-meets ${ask ? '' : 'ad-meets--one'}`}>
       <div class="bp-meets__col bp-rise" style=${rise(1)}>
         <${NextMeeting} ctx=${ctx} />
@@ -389,7 +389,7 @@ function ComingUp({ data }) {
   const { reveals, events, hosted } = data.coming;
   const rows = [
     ...events.map((e) => ({ key: `e-${e.slug}`, date: e.date, title: e.title, sub: [e.time, e.location].filter(Boolean).join(' · '), href: e.url })),
-    ...hosted.map((x) => ({ key: `h-${x.id}`, date: x.date, title: x.title, sub: x.where || 'Hosted by an advisor', href: x.giveUrl })),
+    ...hosted.map((x) => ({ key: `h-${x.id}`, date: x.date, title: x.title, sub: x.where || 'Hosted by an Advisory Board member', href: x.giveUrl })),
   ].filter((x) => x.date).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6);
   if (!rows.length && reveals.length) return null;
   return html`<section class="bp-card" aria-labelledby="up-h">
@@ -419,7 +419,7 @@ function YourYear({ ctx }) {
     <dl class="ad-stats">
       <div><dt>Introductions</dt><dd>${data.intros.length}</dd></div>
       <div><dt>Said yes</dt><dd>${yes}</dd></div>
-      <div><dt>${data.term?.ends && data.term.ends < data.today ? 'Term ended' : 'Term ends'}</dt><dd>${data.term?.ends ? shortDate(data.term.ends) : '–'}</dd></div>
+      <div><dt>${data.term?.ends && data.term.ends < data.today ? 'Term ended' : 'Term ends'}</dt><dd>${data.term?.ends ? shortDate(data.term.ends) : 'Not set yet'}</dd></div>
     </dl>
   </section>`;
 }
@@ -450,12 +450,12 @@ function IntroductionsPage({ ctx }) {
     return html`<li key=${i.id}><div><strong>${i.name}</strong><span class="bp-muted">${[i.company, dateOfIso(i.at)].filter(Boolean).join(' · ')}</span></div>
               <div class="ad-intros__s"><span class=${`bp-chip ${i.status === 'yes' ? 'bp-chip--ok' : i.status === 'talking' ? 'bp-chip--info' : ''}`}>${s?.label || i.status}</span><span class="bp-muted">${s?.sub || ''}</span></div>
               ${i.note ? html`<p class="ad-intros__note">${i.note}</p>` : null}</li>`;
-  })}</ul>` : html`<p class="bp-muted">${data.me.answers ? 'Your introductions will show here, with where each one stands.' : 'Each advisor sees their own here.'}</p>`}
+  })}</ul>` : html`<p class="bp-muted">${data.me.answers ? 'Your introductions will show here, with where each one stands.' : 'Each Advisory Board member sees their own here.'}</p>`}
         </section>
       </div>
       <section class="bp-card bp-rise ad-form" ref=${formRef} style=${rise(1)} aria-labelledby="know-h">
         <h2 class="bp-h2" id="know-h" tabindex="-1">I know someone</h2>
-        ${data.me.answers ? html`<${IntroForm} ctx=${ctx} wish=${on} clearWish=${() => setWish('')} />` : html`<p class="bp-muted">Advisors introduce people here. What they send goes to whoever runs the group.</p>`}
+        ${data.me.answers ? html`<${IntroForm} ctx=${ctx} wish=${on} clearWish=${() => setWish('')} />` : html`<p class="bp-muted">Advisory Board members introduce people here. What they send goes to whoever runs the group.</p>`}
       </section>
     </div>
   </div>`;
@@ -633,7 +633,7 @@ function PeoplePage({ ctx }) {
   const { people, lead, groupEmail } = data;
   return html`<div>
     <header class="bp-pagehead bp-rise" style=${rise(0)}>
-      <div><h1 class="bp-h1">People</h1><p class="bp-lede">${people.length === 1 ? '1 advisor' : `${people.length} advisors`}${lead ? `, led by ${lead.name}` : ''}.</p></div>
+      <div><h1 class="bp-h1">People</h1><p class="bp-lede">${people.length === 1 ? '1 Advisory Board member' : `${people.length} Advisory Board members`}${lead ? `, led by ${lead.name}` : ''}.</p></div>
       <div class="bp-btns ad-head"><a class="bp-btn bp-btn--primary" href=${`mailto:${groupEmail}`}><${Icon} name="mail" size=${18} />Email the group</a><${CopyBtn} text=${groupEmail} label="Copy the address" ctx=${ctx} /></div>
     </header>
     <ul class="ad-people bp-rise" style=${rise(1)}>${people.map((p) => html`<li class="bp-card" key=${p.slug}>
@@ -645,7 +645,7 @@ function PeoplePage({ ctx }) {
         ${p.linkedin ? html`<a class="bp-link" href=${p.linkedin} target="_blank" rel="noopener">LinkedIn</a>` : null}
       </div>
     </li>`)}</ul>
-    ${!people.length ? html`<p class="bp-muted">The advisors will show here.</p>` : null}
+    ${!people.length ? html`<p class="bp-muted">The Advisory Board members will show here.</p>` : null}
   </div>`;
 }
 
@@ -677,7 +677,7 @@ function PaperPage({ id, ctx }) {
       ${d.url ? html`<div class="bp-btns"><a class="bp-btn bp-btn--primary" href=${d.url} target="_blank" rel="noopener"><${Icon} name="external" size=${18} />Open the ${/\.pdf(\?|$)/i.test(d.url) ? 'PDF' : 'paper'}</a></div>` : null}
       <${Files} files=${d.files} />
     </article>
-    ${d.kind !== 'agreement' ? null : !data.me.answers ? html`<p class="bp-muted ad-under">Each advisor signs this once a term.</p>`
+    ${d.kind !== 'agreement' ? null : !data.me.answers ? html`<p class="bp-muted ad-under">Each Advisory Board member signs this once a term.</p>`
     : signed && !due ? html`<p class="bp-chips ad-under"><span class="bp-chip bp-chip--ok"><${Icon} name="check" size=${14} />Signed ${dateOfIso(signed.at)}</span></p>`
       : html`<form class="bp-card ad-sign" onSubmit=${sign}>
         <h2 class="bp-h2">Sign with your name</h2>

@@ -151,7 +151,7 @@ export function DocumentsPage({ ctx }) {
     </header>
     ${nothing ? html`<p class="bp-found" role="status">Nothing here matches “${q.trim()}”.</p>` : null}
     ${toSign.length ? html`<section class="bp-card bp-gap bp-tosign bp-rise" style=${rise(1)} aria-labelledby="sign-h">
-      <${SecHead} id="sign-h" title="To read and sign" sub="Each advisor signs once a term." />
+      <${SecHead} id="sign-h" title="To read and sign" sub="Each Advisory Board member signs once a term." />
       <ul class="bp-signlist">${toSign.map((d) => html`<li key=${d.id} class="bp-doc" id=${`doc-${d.id}`}>
         <a class="bp-signlist__cover" href=${`#/papers/${d.id}`} aria-hidden="true" tabindex="-1"><${Cover} x=${d} shelf="status" /></a>
         <div class="bp-signlist__body">

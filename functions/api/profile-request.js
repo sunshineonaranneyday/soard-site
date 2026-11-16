@@ -12,6 +12,7 @@
  * as a suggestion in the admin; nothing reaches the site until someone uses it.
  * Env: DB, CF_ACCOUNT_ID + CF_IMAGES_TOKEN (for the photo).
  */
+import { trapFilled } from './_bot-trap.js';
 import { findRequest, saveSubmission, LIMITS, normalizeLinkedIn, cleanText } from './_profile-requests.js';
 import { personName } from './_team.js';
 import { checkImage } from './_image-types.js';
@@ -74,7 +75,7 @@ export async function onRequestPost(context) {
     const { DB } = context.env;
     let form;
     try { form = await context.request.formData(); } catch { return Response.json({ ok: false, error: 'Send the form again' }, { status: 400 }); }
-    if (form.get('website')) return Response.json({ ok: true }); // a bot filled the hidden field
+    if (trapFilled(form)) return Response.json({ ok: true }); // a bot filled the hidden box (./_bot-trap.js)
     const { row, problem } = await findRequest(DB, form.get('token'));
     if (problem === 'unknown') return Response.json({ ok: false, error: 'This link isn’t right. Check that you copied all of it.' }, { status: 404 });
     if (problem) return Response.json({ ok: false, error: GONE[problem] }, { status: 410 });

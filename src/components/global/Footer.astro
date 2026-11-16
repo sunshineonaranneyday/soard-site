@@ -13,6 +13,7 @@
  * SEO: address in <address> tag, tel: and mailto: links, external rels
  * Performance: SVG social icons inline (no external requests)
  */
+import BotTrap from './BotTrap.astro';
 import site from '../../content/site/settings.json';
 import { cfRaw, cfSrcset } from '../../utils/cf-image';
 import { getTrustBadges, badgeImage, badgeTitle } from '../../utils/trust-badges';
@@ -61,7 +62,7 @@ const trustBadges = getTrustBadges(site);
           </button>
         </div>
         {/* Honeypot — hidden field that bots fill out, humans don't see */}
-        <div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;"><input type="text" name="website" tabindex="-1" autocomplete="off" /></div>
+        <BotTrap />
         <input type="hidden" name="source" value="newsletter" />
         {/* The quick check (src/utils/signup-check.ts): out of sight unless Cloudflare wants a click */}
         <div class="newsletter-check" data-signup-check></div>
@@ -230,6 +231,7 @@ const trustBadges = getTrustBadges(site);
     </div>
   </div>
   <script>
+    import { trapValue } from '../../../functions/api/_bot-trap.js';
     import { signupCheck, postPlainly } from '../../utils/signup-check';
     import { onPageLoad } from '../../utils/page-load';
 
@@ -276,9 +278,8 @@ const trustBadges = getTrustBadges(site);
         const email = input.value.trim();
         if (!email) return;
 
-        // Honeypot check — bots fill hidden fields, humans don't
-        const honeypot = form.querySelector('[name="website"]');
-        const hp = honeypot ? honeypot.value : '';
+        // The bot trap: people never see it, bots fill it in (functions/api/_bot-trap.js)
+        const hp = trapValue(form);
 
         // Sending state
         resetNote();

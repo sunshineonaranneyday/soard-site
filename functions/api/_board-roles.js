@@ -79,10 +79,14 @@ export async function boardMemberFor(DB, email) {
   return p ? { slug: p.slug, name: p.name, title: p.title || '', seat: p.seat || '', committees: Array.isArray(p.committees) ? p.committees : [], email: e } : null;
 }
 
-/** The Advisory Board who can sign in: active and published ("Add as an advisor" makes a draft, which can't yet), with their email */
+/**
+ * The Advisory Board, with their email: everyone active on People → Advisory, shown on the site or not.
+ * Show on the site is only about the public pages: someone added with "Add to Advisory Board" (hidden
+ * until staff show them) signs in, joins advisory@ and gets what the group gets straight away
+ */
 export async function activeAdvisors(DB) {
   const [people, emails] = await Promise.all([peopleRows(DB), privateEmails(DB)]);
-  return people.filter((p) => p.group === 'advisory' && p.status === 'active' && !p.draft)
+  return people.filter((p) => p.group === 'advisory' && p.status === 'active')
     .map((p) => ({ ...p, email: emails[p.slug] || null }));
 }
 

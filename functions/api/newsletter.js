@@ -34,6 +34,7 @@
  *   - The honeypot field `website` answers "done" without doing anything.
  */
 
+import { trapHtml, trapFilled } from './_bot-trap.js';
 import { kitSubscribe, cleanSource } from './_kit.js';
 import { recordSignup } from './_application-waitlist.js';
 import { turnstileOn, turnstileSiteKey, verifyTurnstile, clientIp, shownAddress } from './_secure.js';
@@ -132,7 +133,7 @@ function confirmPage({ email, source, lang, page, back, ticket, early }) {
   const html = notePage({
     title: w.title, lang: lang === 'es' ? 'es' : 'en',
     inner: `<p>${w.lead(`<strong>${shownAddress(esc(email))}</strong>`).replace(/'/g, '&#39;')}</p>${early ? `<p>${esc(w.wait)}</p>` : ''}
-<form method="POST" action="/api/newsletter">${fields}<div class="hp" aria-hidden="true"><input type="text" name="website" tabindex="-1" autocomplete="off"></div><button class="btn" type="submit">${esc(w.button)}</button></form>
+<form method="POST" action="/api/newsletter">${fields}${trapHtml()}<button class="btn" type="submit">${esc(w.button)}</button></form>
 <a class="quiet" href="${esc(back)}">${esc(w.back)}</a>`,
   });
   return new Response(html, {
@@ -197,7 +198,7 @@ export async function onRequestPost(context) {
     } else {
       const form = await context.request.formData();
       email = form.get('email');
-      hp = form.get('website');
+      hp = trapFilled(form) ? 'filled' : ''; // (./_bot-trap.js: its name now, or the old one)
       source = form.get('source');
       lang = form.get('lang');
       page = form.get('page');

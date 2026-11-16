@@ -1,8 +1,12 @@
 /**
  * The Advisory Board application: its questions in order, and the checks
  * both the page (/advisory-board/apply/) and the server run on the answers.
- * Its one import (the applications' web-address rule) imports nothing, so
- * the page's script can share it.
+ * Its imports (the applications' web-address rule, and People's smallest
+ * sharp photo) import nothing, so the page's script can share it.
+ *
+ * The headshot (a 'photo' question) isn't words: its answer here is only
+ * 'added' or not. The page holds the photo itself and sends it as a file;
+ * the server sets 'added' from that file, never from what the page says.
  *
  * It asks what the Jotform application asked (form 261805783731058, used
  * July to October 2026), grouped into the page's five steps. JOTFORM_FIELDS
@@ -12,6 +16,7 @@
  */
 
 import { isWebAddress } from './_application-constants.js';
+import { PHOTO_MIN, PHOTO_GOOD } from '../../public/admin/team-shared.js';
 
 export const OVERVIEW_PDF = 'https://files.sunshineonaranneyday.com/advisory/SOARD_Advisory%20Board%20Overview.docx.pdf';
 
@@ -23,7 +28,7 @@ export const ADVISORY_STEPS = [
     id: 'you',
     short: 'About you',
     title: 'About you',
-    intro: 'How to reach you, and what you do.',
+    intro: 'How to reach you, what you do, and a photo of you.',
     fields: [
       { id: 'fullName', label: 'Full name', type: 'text', required: true, autocomplete: 'name', max: 120 },
       { id: 'preferredName', label: 'Preferred name', hint: 'What you like to be called, if it’s different.', type: 'text', autocomplete: 'nickname', max: 60 },
@@ -34,6 +39,8 @@ export const ADVISORY_STEPS = [
       { id: 'company', label: 'Employer or company', type: 'text', autocomplete: 'organization', max: 160 },
       { id: 'jobTitle', label: 'Job title', type: 'text', autocomplete: 'organization-title', max: 160 },
       { id: 'link', label: 'LinkedIn profile or website', hint: 'If you have one.', type: 'url', autocomplete: 'url', max: 300 },
+      // Peter, Nov 16 2026: "headshot required". If they join, it's their photo on People → Advisory and the site
+      { id: 'headshot', label: 'A headshot', hint: 'A clear, recent photo of your face. If you join the Advisory Board, it goes on our website. A phone photo works.', type: 'photo', required: true },
     ],
   },
   {
@@ -95,6 +102,31 @@ export const ADVISORY_STEPS = [
 ];
 
 export const ADVISORY_FIELDS = ADVISORY_STEPS.flatMap((s) => s.fields.map((f) => ({ ...f, step: s.id })));
+/** The questions answered with a photo (the headshot) */
+export const PHOTO_FIELDS = ADVISORY_FIELDS.filter((f) => f.type === 'photo');
+/** A photo's answer: there or not */
+export const PHOTO_ADDED = 'added';
+/** The smallest a headshot may be on its shorter side: People's own least for a sharp photo on the site */
+export const HEADSHOT_MIN = PHOTO_MIN;
+/** From this size on its shorter side it's sharp at any size the site shows it (People's own) */
+export const HEADSHOT_GOOD = PHOTO_GOOD;
+/** The largest file the server takes for one (the page sends a JPEG at most 2400 pixels across, well under it) */
+export const HEADSHOT_MAX_BYTES = 10 * 1024 * 1024;
+
+/** A photo that didn't come whole (cut off partway), in words for the applicant */
+export const HEADSHOT_CUT = 'That photo didn’t come through whole. Please choose it again, or another one.';
+/** Any file that isn't a photo the site can use */
+export const HEADSHOT_NOT_PHOTO = 'That file isn’t a photo we can use. Please choose a JPEG, PNG, WebP or HEIC photo.';
+
+/** What's wrong with a headshot's size, in words for the applicant, or null */
+export function headshotProblem(size) {
+  const w = Number(size?.width) || 0;
+  const h = Number(size?.height) || 0;
+  if (!w || !h) return HEADSHOT_NOT_PHOTO;
+  if (Math.min(w, h) < HEADSHOT_MIN) return `This photo is too small (${w} × ${h} pixels). Please choose a larger one, at least ${HEADSHOT_MIN} pixels on each side.`;
+  // (a wide or tall photo is fine: the site uses the square around their face, as big as its short side)
+  return null;
+}
 const BY_ID = Object.fromEntries(ADVISORY_FIELDS.map((f) => [f.id, f]));
 
 /** Is this field asked, given the answers so far? (follow-ups show after a Yes) */
@@ -104,7 +136,7 @@ export function isShown(field, answers) {
 }
 
 // A title before the name ("Dr. Jordan Smith"): not what to call them on its own
-const TITLE = /^(?:dr|mr|mrs|ms|mx|miss|rev|prof|fr|hon|judge|sir|dame|capt|col|maj|gen|lt|sgt)\.?$/i;
+export const TITLE = /^(?:dr|mr|mrs|ms|mx|miss|rev|prof|fr|hon|judge|sir|dame|capt|col|maj|gen|lt|sgt)\.?$/i;
 /** What a thank-you calls them: the name they go by, else their first name past a title ("Mrs. Lee", alone, stays so) */
 export function greetName(a) {
   const pref = String(a?.preferredName || '').trim().replace(/\s+/g, ' ');
@@ -115,6 +147,9 @@ export function greetName(a) {
   return (i && i === words.length - 1 ? words.slice(i - 1) : words.slice(i, i + 1)).join(' ').replace(/[,;:]+$/, '');
 }
 export const EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>"',;]+\.[a-z]{2,}$/i; // (an apostrophe is fine before the @: o'brien@)
+// The mailer's own rule (_broadcast-notify.js isEmail, the one the sign-in list and private emails use too; a test keeps
+// them the same): an address it would drop, or a person couldn't sign in with, is never taken from the form
+export const MAILER_EMAIL = /^(?!\.)(?!.*\.\.)(?!.*\.@)[^\s@<>()[\],;:"]+@[^\s@<>()[\],;:".]+(?:\.[^\s@<>()[\],;:".]+)*\.[^\s@<>()[\],;:".]{2,}$/;
 
 /** A link people typed without https:// still works */
 export function normalizeLink(s) {
@@ -126,6 +161,9 @@ export function normalizeLink(s) {
 /** One answer, cleaned to what the field takes ('' when it's empty) */
 function clean(field, raw) {
   if (field.type === 'check') return raw === true || raw === 'true' || raw === 'on' || raw === 'yes';
+  if (field.type === 'photo') return raw === PHOTO_ADDED ? PHOTO_ADDED : '';
+  // Words only: anything else sent as an answer (an object, a list) is no answer, never "[object Object]"
+  if (raw != null && typeof raw !== 'string' && typeof raw !== 'number') return '';
   let v = String(raw ?? '').replace(/\r\n?/g, '\n');
   v = field.type === 'textarea' ? v.replace(/[ \t]+\n/g, '\n').trim() : v.replace(/\s+/g, ' ').trim();
   if (field.type === 'url') v = normalizeLink(v);
@@ -140,10 +178,11 @@ export function fieldProblem(field, value) {
     if (!field.required) return null;
     if (field.type === 'check') return 'Please confirm you’ve read the overview.';
     if (field.type === 'choice') return 'Please choose one.';
+    if (field.type === 'photo') return 'Please add a headshot.';
     return 'Please fill this in.';
   }
   // (an ending no address has, "gmail.con", is a typo: the page's "Did you mean" says the fix)
-  if (field.type === 'email' && (!EMAIL_RE.test(value) || /^\.|\.\.|\.@|@[.-]/.test(value) || /\.(?:con|cmo|ocm|vom|xom|comm|coom|cpm|cim|nte|ent|nett|ogr|rog|orgg)$/i.test(value))) return 'That doesn’t look like an email address.';
+  if (field.type === 'email' && (!EMAIL_RE.test(value) || !MAILER_EMAIL.test(value) || /^\.|\.\.|\.@|@[.-]/.test(value) || /\.(?:con|cmo|ocm|vom|xom|comm|coom|cpm|cim|nte|ent|nett|ogr|rog|orgg)$/i.test(value))) return 'That doesn’t look like an email address.';
   if (field.type === 'tel') {
     // Ten digits (a 1 before them, or a + number from abroad, is fine; so is a work line's extension), as the family application asks
     const d = String(value).replace(/\s*(?:x|ext\.?|extension)\s*\d{1,6}\s*$/i, '').replace(/[^\d+]/g, '');
@@ -187,12 +226,12 @@ export function answerText(id, value) {
   return String(value);
 }
 
-/** The questions and answers, step by step, for an email or the admin (empty answers left out) */
+/** The questions and answers, step by step, for an email or the admin (empty answers left out; the headshot is a picture, shown on its own) */
 export function answerSections(answers) {
   return ADVISORY_STEPS.map((s) => ({
     id: s.id,
     title: s.title,
-    items: s.fields.filter((f) => answers?.[f.id] != null && answers[f.id] !== '' && f.id !== 'acknowledge').map((f) => ({ id: f.id, label: f.label, value: answerText(f.id, answers[f.id]) })),
+    items: s.fields.filter((f) => answers?.[f.id] != null && answers[f.id] !== '' && f.id !== 'acknowledge' && f.type !== 'photo').map((f) => ({ id: f.id, label: f.label, value: answerText(f.id, answers[f.id]) })),
   })).filter((s) => s.items.length);
 }
 

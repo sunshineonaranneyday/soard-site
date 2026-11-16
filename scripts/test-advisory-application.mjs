@@ -6,28 +6,34 @@
  * handler (functions/api/advisory-applications-admin.js) over an in-memory D1:
  *   - the list: status counts that filter, search, the Jotform ones tagged and
  *     the one already on People → Advisory marked Joined
- *   - one application: contact links, answers by step, a Yes on conflicts
- *     flagged, status, a note, Add as an advisor (a hidden draft through the
- *     admin's api, their private email saved, Joined), delete
+ *   - one application: its headshot, contact links, answers by step, a Yes on
+ *     conflicts flagged, status, a note, Add to Advisory Board (hidden from the
+ *     public site through the admin's api, the headshot their photo, their
+ *     private email saved, Joined), Link (a headshot for someone with no photo),
+ *     delete
  *   - who hears about new applications, a link straight to one, the phone,
  *     and an axe scan
  * With DIST=<an astro build folder> (npx astro build --outDir <dir>, then
  * node scripts/csp-hash.mjs <dir>) it also drives /advisory-board/apply/ on the
  * REAL public handler: the overview, the application on its own screen a screen
- * at a time, follow-ups, saving on the device, the review and Edit, sending, and
- * the Advisory Board page's Apply buttons.
+ * at a time, the headshot (none, too small, not a photo, an iPhone photo under
+ * the page's own strict CSP from dist/_headers, kept through a reload, removed,
+ * on the review, sent as the file it is), follow-ups, saving on the device, the
+ * review and Edit, sending, and the Advisory Board page's Apply buttons.
  *
  *   node scripts/test-advisory-application.mjs
  *   DIST=/tmp/soard-build node scripts/test-advisory-application.mjs
  */
 import puppeteer from 'puppeteer';
 import { createServer } from 'node:http';
-import { mkdirSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { createD1 } from '../tests/lib/d1-shim.mjs';
 import * as adminApi from '../functions/api/advisory-applications-admin.js';
 import * as publicApi from '../functions/api/advisory-apply.js';
-import { submitApplication, listAdvisoryApplications, getAdvisoryApplication } from '../functions/api/_advisory-applications.js';
+import { submitApplication, listAdvisoryApplications, getAdvisoryApplication, readHeadshot } from '../functions/api/_advisory-applications.js';
+import sharp from 'sharp';
+import { execFileSync } from 'node:child_process';
 import { axeScan, axeText } from './lib/axe.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
@@ -38,19 +44,43 @@ const failures = [];
 const ok = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${cond ? '  ✓' : '  ✗'} ${msg}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Emails and Slack are captured, never sent
-const sent = { emails: [], slack: [] };
+// Emails and Slack are captured, never sent; Cloudflare Images is faked (what went up is kept to look at)
+const sent = { emails: [], slack: [], images: [] };
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(typeof input === 'string' ? input : input.url);
   if (url.host === 'api.resend.com') { const b = JSON.parse(init.body); sent.emails.push(...b); return Response.json({ data: b.map((_, i) => ({ id: `e${i}` })) }); }
   if (url.host === 'hooks.slack.test') { sent.slack.push(JSON.parse(init.body)); return new Response('ok'); }
+  if (url.host === 'api.cloudflare.com' && /\/images\/v1/.test(url.pathname)) {
+    if (init.method === 'POST') {
+      const id = init.body.get('id');
+      const bytes = new Uint8Array(await init.body.get('file').arrayBuffer());
+      sent.images.push({ id, bytes, meta: await sharp(bytes).metadata() });
+      return Response.json({ success: true, result: { id, variants: [`https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/${id}/public`] } });
+    }
+    return Response.json({ success: true, result: {} });
+  }
   return realFetch(input, init);
 };
+// Photos to pick: a good JPEG, one too small, a file that only says it's a photo, and an iPhone photo (HEIC, made by macOS's sips)
+const SHOTS = join(OUT, 'shots');
+mkdirSync(SHOTS, { recursive: true });
+const shot = (w, h, name, fmt = 'jpeg') => sharp({ create: { width: w, height: h, channels: 3, background: { r: 196, g: 170, b: 140 } } }).composite([{ input: Buffer.from(`<svg width="${w}" height="${h}"><circle cx="${w / 2}" cy="${h * 0.4}" r="${Math.min(w, h) / 5}" fill="#7a5a44"/></svg>`) }])[fmt]().toFile(join(SHOTS, name)).then(() => join(SHOTS, name));
+const GOOD_JPG = await shot(900, 1200, 'headshot.jpg');
+const SOFT_JPG = await shot(500, 500, 'soft.jpg'); // (taken, with a two-line "may look a little soft" note under it)
+const SMALL_JPG = await shot(300, 300, 'tiny.jpg');
+const WIDE_JPG = await shot(6000, 900, 'wide.jpg');
+const CUT_JPG = join(SHOTS, 'cut.jpg');
+writeFileSync(CUT_JPG, readFileSync(GOOD_JPG).subarray(0, 900));
+const FAKE_JPG = join(SHOTS, 'notes.jpg');
+writeFileSync(FAKE_JPG, 'These are my notes, not a photo.');
+const HEIC = join(SHOTS, 'IMG_0413.HEIC');
+const heicMade = await shot(1500, 2000, 'iphone.png', 'png').then((png) => { execFileSync('sips', ['-s', 'format', 'heic', png, '--out', HEIC], { stdio: 'ignore' }); return true; }).catch(() => false);
+const headshotOf = async (file) => (await readHeadshot(new File([readFileSync(file)], 'headshot.jpg', { type: 'image/jpeg' }))).headshot;
 
 // ── D1: two site applications, two from Jotform (one already an advisor) ──
 const DB = await createD1();
-const env = { DB, RESEND_API_KEY: 'r', SLACK_WEBHOOK_URL: 'https://hooks.slack.test/x' };
+const env = { DB, RESEND_API_KEY: 'r', SLACK_WEBHOOK_URL: 'https://hooks.slack.test/x', CF_ACCOUNT_ID: 'acct', CF_IMAGES_TOKEN: 't' };
 const base = {
   email: 'jordan@example.org', phone: '(770) 555-0142', address: '12 Maple Dr\nMarietta, GA 30062', heardFrom: 'A friend on the board',
   why: 'I have watched what a room can do for a child, and I want to help build more of them.', connection: 'My nephew uses a wheelchair.',
@@ -58,16 +88,25 @@ const base = {
   networks: 'Maybe', conflict: 'No', hostEvent: 'Maybe', meetings: 'Yes', ambassador: 'Yes', refName: 'Sam Lee', refRelationship: 'Former manager',
   refEmail: 'sam@example.org', acknowledge: true,
 };
-const jordan = (await submitApplication(env, { ...base, fullName: 'Jordan Avery', preferredName: 'Jo', company: 'Peachtree Builders', jobTitle: 'Director of Partnerships', link: 'linkedin.com/in/jordan-avery', signature: 'Jordan Avery' }, { now: Date.now() - 3 * 86400000 })).app;
-const morgan = (await submitApplication(env, { ...base, fullName: 'Morgan Ellis', email: 'morgan@example.org', company: 'Ellis Supply', jobTitle: 'Owner', conflict: 'Yes', conflictMore: 'We sell flooring to SOARD’s builders.', meetings: 'No', signature: 'Morgan Ellis' }, { now: Date.now() - 86400000 })).app;
-await DB.exec('CREATE TABLE jotform_backfill (submission_id TEXT PRIMARY KEY, form_id TEXT, kind TEXT, name TEXT, submitted_at TEXT, answers TEXT)');
-await DB.exec('CREATE TABLE team (slug TEXT PRIMARY KEY, data TEXT)');
+const jordan = (await submitApplication(env, { ...base, fullName: 'Jordan Avery', preferredName: 'Jo', company: 'Peachtree Builders', jobTitle: 'Director of Partnerships', link: 'linkedin.com/in/jordan-avery', signature: 'Jordan Avery' }, { now: Date.now() - 3 * 86400000, headshot: await headshotOf(GOOD_JPG) })).app;
+const morgan = (await submitApplication(env, { ...base, fullName: 'Morgan Ellis', email: 'morgan@example.org', company: 'Ellis Supply', jobTitle: 'Owner', conflict: 'Yes', conflictMore: 'We sell flooring to SOARD’s builders.', meetings: 'No', signature: 'Morgan Ellis' }, { now: Date.now() - 86400000, headshot: await headshotOf(GOOD_JPG) })).app;
+// Morgan applied before the form asked for a headshot
+await DB.prepare('UPDATE advisory_applications SET headshot = NULL WHERE id = ?').bind(morgan.id).run();
+// Avery is already on People → Advisory with no photo: Link gives them this headshot
+const avery = (await submitApplication(env, { ...base, fullName: 'Avery Lin', email: 'avery@example.org', company: 'Lin Studio', signature: 'Avery Lin' }, { now: Date.now() - 2 * 86400000, headshot: await headshotOf(GOOD_JPG) })).app;
+for (const sql of (await import('../functions/api/_jotform-backfill.js')).SCHEMA) await DB.exec(sql.replace(/\s+/g, ' ')); // the backfill's own table, as in D1
+await DB.exec('CREATE TABLE team (slug TEXT PRIMARY KEY, name TEXT, "group" TEXT, order_num INTEGER, data TEXT NOT NULL, updated_at TEXT)');
 await DB.exec('CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, user_email TEXT, action TEXT, entity_type TEXT, entity_slug TEXT, entity_name TEXT, changes TEXT, path TEXT, git_status TEXT, created_at TEXT)');
-await DB.prepare('INSERT INTO team (slug, data) VALUES (?, ?)').bind('casey-reed', JSON.stringify({ name: 'Casey Reed', group: 'advisory', publishStatus: 'published' })).run();
+const onPeople = (slug, d) => DB.prepare('INSERT INTO team (slug, name, "group", order_num, data) VALUES (?, ?, ?, ?, ?)').bind(slug, d.name, d.group, d.order || 0, JSON.stringify({ slug, status: 'active', ...d })).run();
+await onPeople('casey-reed', { name: 'Casey Reed', group: 'advisory', publishStatus: 'published', order: 0 });
+// Avery Lin is on People → Advisory already, with no photo and no email on file
+await onPeople('avery-lin', { name: 'Avery Lin', group: 'advisory', publishStatus: 'draft', bio: 'Kept as it is.', order: 1 });
 // The board member who leads the Advisory Board committee (People → Board), with a private email
-await DB.prepare('INSERT INTO team (slug, data) VALUES (?, ?)').bind('lee-lead', JSON.stringify({ name: 'Lee Lead', group: 'board', committees: ['Advisory Board'] })).run();
-await DB.exec('CREATE TABLE reveal_board_emails (slug TEXT PRIMARY KEY, email TEXT NOT NULL, updated_at TEXT)');
+await onPeople('lee-lead', { name: 'Lee Lead', group: 'board', committees: ['Advisory Board'] });
+await DB.exec('CREATE TABLE IF NOT EXISTS reveal_board_emails (slug TEXT PRIMARY KEY, email TEXT NOT NULL, updated_at TEXT)');
 await DB.prepare("INSERT INTO reveal_board_emails VALUES ('lee-lead', 'lee@example.org', null)").run();
+// (Casey's email on file: what links her old-form application to her)
+await DB.prepare("INSERT INTO reveal_board_emails VALUES ('casey-reed', 'casey@example.org', null)").run();
 const jf = (first, last) => JSON.stringify({ createdAt: '2026-07-08 14:20:00', answers: {
   3: { type: 'control_fullname', text: 'Full Name', answer: { first, last } },
   5: { type: 'control_email', text: 'Email Address', answer: `${first.toLowerCase()}@example.org` },
@@ -75,8 +114,8 @@ const jf = (first, last) => JSON.stringify({ createdAt: '2026-07-08 14:20:00', a
   12: { type: 'control_textarea', text: 'Why are you interested in serving on the Sunshine on a Ranney Day Advisory Board?', answer: 'To give back.' },
 } });
 await DB.batch([
-  DB.prepare("INSERT INTO jotform_backfill VALUES ('6261000000000000001', '261805783731058', 'advisory', 'Casey Reed', '2026-07-08 14:20:00', ?)").bind(jf('Casey', 'Reed')),
-  DB.prepare("INSERT INTO jotform_backfill VALUES ('6261000000000000002', '261805783731058', 'advisory', 'Riley Stone', '2026-07-09 09:00:00', ?)").bind(jf('Riley', 'Stone')),
+  DB.prepare("INSERT INTO jotform_backfill (submission_id, form_id, kind, name, submitted_at, answers, updated_at) VALUES ('6261000000000000001', '261805783731058', 'advisory', 'Casey Reed', '2026-07-08 14:20:00', ?, 'x')").bind(jf('Casey', 'Reed')),
+  DB.prepare("INSERT INTO jotform_backfill (submission_id, form_id, kind, name, submitted_at, answers, updated_at) VALUES ('6261000000000000002', '261805783731058', 'advisory', 'Riley Stone', '2026-07-09 09:00:00', ?, 'x')").bind(jf('Riley', 'Stone')),
 ]);
 
 // ── The admin shell around the module, with the admin's kit faked ──
@@ -92,25 +131,56 @@ import { h, render } from './vendor.js';
 import { AdvisoryApplications } from './advisory-applications.js';
 window.__toasts = []; window.__saved = []; window.__opened = [];
 const addToast = (msg, kind) => { window.__toasts.push({ msg, kind }); };
-const team = [{ slug: 'casey-reed', name: 'Casey Reed', group: 'advisory', order: 0 }];
+const team = [{ slug: 'casey-reed', name: 'Casey Reed', group: 'advisory', order: 0 }, { slug: 'avery-lin', name: 'Avery Lin', group: 'advisory', order: 1, publishStatus: 'draft' }];
 const kit = {
   team,
-  api: { saveContent: async (path, content, message) => { window.__saved.push({ path, record: JSON.parse(content), message }); return { success: true }; } },
+  api: {
+    saveContent: async (path, content, message, sha, opts) => { window.__saved.push({ path, record: JSON.parse(content), message, sha, opts }); return { success: true }; },
+    readContent: async (path) => ({ success: true, sha: 'sha-avery', content: JSON.stringify({ name: 'Avery Lin', slug: 'avery-lin', group: 'advisory', bio: 'Kept as it is.', order: 1, publishStatus: 'draft' }) }),
+  },
   toPersonRecord: (d) => ({ ...d }),
   onOpenPerson: (slug) => window.__opened.push(slug),
   onTeamChanged: () => {},
 };
 render(h(AdvisoryApplications, { addToast, kit }), document.getElementById('root'));
 </script></body></html>`;
+// The Apply page's own CSP, exactly as the build's _headers sends it: the strict one, its inline scripts allowed by hash
+// (scripts/csp-hash.mjs enforces it, leaving no Report-Only line; with ENFORCE off, that Report-Only line is the strict
+// one). The live site's origin counts as 'self' here (pages name their pictures by it), and nothing is reported anywhere
+const applyCsp = (() => {
+  if (!DIST || !existsSync(`${DIST}_headers`)) return null;
+  const text = readFileSync(`${DIST}_headers`, 'utf8');
+  const at = text.indexOf('\n/advisory-board/apply/*\n');
+  if (at < 0) return null;
+  const lines = text.slice(at + 1).split('\n\n')[0].split('\n');
+  const line = lines.find((l) => /^\s*Content-Security-Policy-Report-Only:/.test(l)) || lines.find((l) => /^\s*Content-Security-Policy:/.test(l));
+  return line ? line.replace(/^\s*Content-Security-Policy(-Report-Only)?:\s*/, '').replace(/;\s*report-(uri|to)[^;]*/g, '').replace(/'self'/g, "'self' https://sunshineonaranneyday.com") : null;
+})();
+if (DIST && !(applyCsp && /script-src 'self'[^;]*'sha256-/.test(applyCsp) && /worker-src 'self'[^;]*blob:/.test(applyCsp))) {
+  console.error(`The Apply page's CSP wasn't found in ${DIST}_headers: build it with scripts/csp-hash.mjs first`);
+  process.exit(1);
+}
 const TYPES = { '.js': 'text/javascript', '.html': 'text/html', '.css': 'text/css', '.svg': 'image/svg+xml', '.json': 'application/json', '.woff2': 'font/woff2', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon' };
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (path === '/admin/__advisory.html') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(harness); }
+  // The public endpoint, as the page reaches it: the multipart body byte for byte (the headshot is binary)
+  if (path === '/api/advisory-apply') {
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const request = new Request(`https://site.test${req.url}`, { method: req.method, headers: { 'content-type': req.headers['content-type'] || 'application/json', 'CF-Connecting-IP': '198.51.100.77' }, body: req.method === 'POST' ? Buffer.concat(chunks) : undefined });
+    const waits = [];
+    const ctx = { env, request, data: {}, waitUntil: (p) => waits.push(p) };
+    const r = req.method === 'POST' ? await publicApi.onRequestPost(ctx) : await publicApi.onRequestGet(ctx);
+    await Promise.all(waits);
+    res.writeHead(r.status, { 'content-type': 'application/json' });
+    return res.end(Buffer.from(await r.arrayBuffer()));
+  }
   const rootDir = path.startsWith('/admin/') || !DIST ? join(ROOT, 'public') : DIST;
   if (path.endsWith('/')) path += 'index.html';
   const file = join(rootDir, path);
   if (file.startsWith(rootDir) && existsSync(file) && statSync(file).isFile()) {
-    res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' });
+    res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', ...(applyCsp && path === '/advisory-board/apply/index.html' ? { 'content-security-policy': applyCsp } : {}) });
     return res.end(readFileSync(file));
   }
   res.writeHead(404); res.end('not found');
@@ -119,6 +189,11 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const SITE = `http://127.0.0.1:${server.address().port}`;
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==', 'base64');
 const revealEmails = [];
+
+let failAdd = false;
+let gatewayOnce = false;
+let refuseOnce = false;
+let limitOnce = false;
 
 async function answer(req, ip) {
   const url = new URL(req.url());
@@ -130,13 +205,27 @@ async function answer(req, ip) {
     await Promise.all(waits);
     return req.respond({ status: res.status, contentType: 'application/json', body: Buffer.from(await res.arrayBuffer()) });
   };
+  // (failAdd: the next Add answers as a database that didn't answer would, in words)
+  if (url.pathname === '/api/advisory-applications-admin' && failAdd && req.method() === 'POST' && /"add"/.test(req.postData() || '')) {
+    failAdd = false;
+    return req.respond({ status: 503, contentType: 'application/json', body: JSON.stringify({ success: false, error: 'Adding them stopped partway: the site’s database didn’t answer just now. Press Add to Advisory Board again in a moment: it finishes what’s left, and never adds them twice.' }) });
+  }
   if (url.pathname === '/api/advisory-applications-admin') return run(adminApi);
-  if (url.pathname === '/api/advisory-apply') return run(publicApi);
+  if (url.pathname === '/api/advisory-apply' && req.method() === 'POST') {
+    // (what the page sent, for the checks; gatewayOnce: the next send answered as a gateway's error page would)
+    if (gatewayOnce) { gatewayOnce = false; return req.respond({ status: 502, contentType: 'text/html', body: '<html><body><h1>502 Bad Gateway</h1></body></html>' }); }
+    if (limitOnce) { limitOnce = false; return req.respond({ status: 429, contentType: 'application/json', body: JSON.stringify({ ok: false, error: 'Too many attempts. Please wait a minute and try again.' }) }); }
+    if (refuseOnce) { refuseOnce = false; return req.respond({ status: 422, contentType: 'application/json', body: JSON.stringify({ ok: false, problems: { headshot: 'We couldn’t use that photo. Please choose a different one.' }, error: 'A few answers need a look.', spent: true }) }); }
+  }
+  if (url.pathname === '/api/advisory-apply') return false; // the test server answers it (above), byte for byte
   if (url.pathname === '/api/reveal-invites-admin') { revealEmails.push(JSON.parse(req.postData()).boardEmail); return req.respond({ status: 200, contentType: 'application/json', body: '{"ok":true}' }); }
   // The home address's suggestions (the application's endpoint), as Google would answer
   if (url.pathname === '/api/apply' && url.searchParams.has('address')) return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, source: 'google', results: /^3167/.test(url.searchParams.get('address')) ? [{ id: 'ChIJ_home_one_0001', line1: '3167 Main St', sub: 'Duluth, GA' }] : [] }) });
   if (url.pathname === '/api/apply' && url.searchParams.has('place')) return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, address: { line1: '3167 Main St', line2: '', city: 'Duluth', state: 'GA', zip: '30096' } }) });
-  if (url.hostname !== '127.0.0.1') return req.respond({ status: 200, contentType: 'image/png', body: PNG });
+  // A headshot on Cloudflare Images: a real photo, so the screenshots show how one looks
+  if (/\/cdn-cgi\/imagedelivery\/|^imagedelivery\.net$/.test(url.pathname + url.hostname) && /advisory-applications\//.test(url.pathname)) return req.respond({ status: 200, contentType: 'image/jpeg', body: readFileSync(GOOD_JPG) });
+  // Anything from outside: a script (Cloudflare's analytics) answered as an empty one, anything else as a picture
+  if (url.hostname !== '127.0.0.1') return req.respond(req.resourceType() === 'script' ? { status: 200, contentType: 'text/javascript', body: '' } : { status: 200, contentType: 'image/png', body: PNG });
   return false;
 }
 
@@ -151,6 +240,13 @@ async function open(width, path, height = 900) {
     try { if (await answer(req, `198.51.100.${width % 250}`) === false) req.continue(); } catch (e) { console.error(e); req.respond({ status: 500, body: '{}' }); }
   });
   page.on('pageerror', (e) => errors.push(e.message));
+  // The page's CSP refusing anything is an error here
+  await page.evaluateOnNewDocument(() => { addEventListener('securitypolicyviolation', (e) => console.error(`CSP refused ${e.violatedDirective}: ${e.blockedURI}`)); });
+  // (what the Apply page sends, for the checks: its payload part, as it went)
+  await page.evaluateOnNewDocument(() => {
+    const was = window.fetch;
+    window.fetch = (input, init) => { try { if (init?.body instanceof FormData && init.body.has('payload')) window.__lastPayload = init.body.get('payload'); } catch { /* not a form */ } return was(input, init); };
+  });
   page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|live-ws/.test(m.text())) errors.push(m.text()); });
   await page.goto(`${SITE}${path}`, { waitUntil: 'networkidle0' });
   return page;
@@ -168,13 +264,17 @@ const sideways = (page) => page.evaluate(() => {
 console.log('Admin → People → Applications, 1440');
 const page = await open(1440, '/admin/__advisory.html');
 await page.waitForSelector('.ava-row', { timeout: 15000 });
-ok((await page.$$('.ava-row')).length === 4, 'all four applications: two from the site, two from Jotform');
+ok((await page.$$('.ava-row')).length === 5, 'all five applications: three from the site, two from Jotform');
 ok(await page.evaluate(() => window.__toasts.some((t) => /2 applications from the old form are here now/.test(t.msg))), 'the earlier applications came in, and it says so once');
 const strip = await page.$$eval('.ava-strip button', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
-ok(JSON.stringify(strip) === JSON.stringify(['All 4', 'New 3', 'In conversation 0', 'Joined 1', 'Not now 0']), `status counts ${JSON.stringify(strip)}`);
+ok(JSON.stringify(strip) === JSON.stringify(['All 5', 'New 4', 'In conversation 0', 'Joined 1', 'Not now 0']), `status counts ${JSON.stringify(strip)}`);
 ok(/Casey Reed/.test(await page.$$eval('.ava-row', (els) => els.find((e) => /Joined/.test(e.textContent))?.textContent || '')), 'the Jotform applicant already on People → Advisory is Joined');
 ok(await page.$$eval('.ava-tag', (els) => els.filter((e) => e.textContent === 'Earlier form').length) === 2, 'the ones sent before the website form are tagged');
-ok(await page.$$eval('.ava-row.is-new', (els) => els.length) === 3, 'new ones stand out');
+ok(await page.$$eval('.ava-row.is-new', (els) => els.length) === 4, 'new ones stand out');
+// Their headshots in the list, their face in the middle; initials for anyone without one
+const avatars = await page.$$eval('.ava-row', (els) => Object.fromEntries(els.map((e) => [e.querySelector('.ava-name')?.textContent.replace(/ \(.*\)$/, '').trim(), e.querySelector('.ava-avatar img')?.getAttribute('src') || e.querySelector('.ava-avatar')?.textContent.trim()])));
+ok(avatars['Jordan Avery']?.includes(`/${jordan.headshot.url.split('/').slice(-4, -1).join('/')}/w=80,h=80,fit=cover,gravity=face`), `a headshot in the list (${avatars['Jordan Avery']})`);
+ok(avatars['Morgan Ellis'] === 'ME' && avatars['Riley Stone'] === 'RS', `initials without one (${avatars['Morgan Ellis']}, ${avatars['Riley Stone']})`);
 ok(/Jordan Avery \(Jo\)/.test(await text(page, '.ava-list')), 'a preferred name shows beside the full one');
 await clickText(page, '.ava-strip button', /^Joined/); await sleep(150);
 ok((await page.$$('.ava-row')).length === 1, 'a status filters the list');
@@ -191,14 +291,27 @@ await page.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
 ok(await page.$$eval('.ava-a.is-flag', (els) => els.map((e) => e.textContent)).then((t) => t.includes('Yes') && t.includes('No')), 'a Yes on conflicts and a No on four meetings stand out');
 ok(await page.$eval('.ava-contact a[href^="mailto:"]', (el) => el.getAttribute('href')) === 'mailto:morgan@example.org', 'email is a link');
 ok(await page.$eval('.ava-contact a[href^="tel:"]', (el) => el.getAttribute('href')) === 'tel:7705550142', 'and so is the phone');
+ok(/None: they applied before the form asked for one\./.test(await text(page, '[aria-label="Headshot"]')), 'an application from before the headshot says so');
 await page.keyboard.press('Escape'); await sleep(250);
 ok(!(await page.$('.ava-drawer')), 'Escape closes it');
 
-// Jordan: status, a note, Add as an advisor
+// Jordan: status, a note, Add to Advisory Board
 await clickText(page, '.ava-row', /Jordan Avery/);
 await page.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
 ok(/Peachtree Builders/.test(await text(page, '.ava-dhead')), 'the panel heads with their work');
-ok((await page.$$eval('.ava-panel h3', (els) => els.map((e) => e.textContent))).join('|').startsWith('Where it stands|How to reach them|Your interest|Strengths'.replace('Strengths', 'What you’d bring')), 'contact first, then the answers by step');
+await sleep(300);
+await page.screenshot({ path: join(OUT, 'admin-headshot-1440.png') });
+ok((await page.$$eval('.ava-panel h3', (els) => els.map((e) => e.textContent))).join('|').startsWith('Where it stands|Headshot|How to reach them|Your interest|What you’d bring'), 'their headshot and how to reach them first, then the answers by step');
+{
+  const shotPanel = await page.$eval('[aria-label="Headshot"]', (el) => {
+    const full = [...el.querySelectorAll('a')].find((a) => /Open full size/.test(a.textContent));
+    const pic = el.querySelector('img')?.closest('a');
+    return { src: el.querySelector('img')?.getAttribute('src'), href: full?.href, label: full?.getAttribute('aria-label'), name: full?.textContent.replace(/\s+/g, ' ').trim(), picStop: pic?.tabIndex, picHidden: pic?.getAttribute('aria-hidden'), words: el.textContent.replace(/\s+/g, ' ') };
+  });
+  ok(/w=256,h=256,fit=cover,gravity=face/.test(shotPanel.src) && shotPanel.href === jordan.headshot.url && shotPanel.label === null && shotPanel.name === 'Open full size (Jordan Avery’s headshot)' && /900 × 1200 pixels/.test(shotPanel.words),
+    `the headshot, its size, and full size a click away (${JSON.stringify(shotPanel)})`);
+  ok(shotPanel.picStop === -1 && shotPanel.picHidden === 'true', 'the picture and "Open full size" are one stop for the keys, not two to the same place');
+}
 await clickText(page, '.ava-status button', /In conversation/);
 await page.waitForFunction(() => document.querySelector('.ava-status button[aria-pressed="true"]')?.textContent.includes('In conversation'), { timeout: 5000 }).catch(() => null);
 ok((await getAdvisoryApplication(DB, jordan.id)).status === 'talking', 'status saved');
@@ -208,22 +321,92 @@ await clickText(page, '.ava-note-form button', /Add note/);
 await page.waitForFunction(() => /Coffee next week/.test(document.querySelector('.ava-notes')?.textContent || ''), { timeout: 5000 }).catch(() => null);
 ok((await getAdvisoryApplication(DB, jordan.id)).notes[0]?.by === 'linzi@soardcharity.com', 'a note, with who wrote it');
 await page.screenshot({ path: join(OUT, 'admin-drawer-1440.png') });
-await clickText(page, '.ava-drawer button', /^Add as an advisor$/);
+await clickText(page, '.ava-drawer button', /^Add to Advisory Board$/);
 await page.waitForSelector('.ava-dialog', { timeout: 4000 });
-ok(/hidden draft/.test(await text(page, '.ava-dialog')) && /jordan@example\.org/.test(await text(page, '.ava-dialog')), 'it says what Add does first');
+{
+  const said = await text(page, '.ava-dialog');
+  ok(/sign in to the Advisory Board page with jordan@example\.org/.test(said) && /every reveal invite/.test(said) && /advisory@soardcharity\.com once Advisory Board emails are on/.test(said) && /Show on the site/.test(said), 'it says what Add does first: the page, reveal invites, advisory@, and off the public site till shown');
+  ok(/with their headshot as their photo/.test(said) && /emails jordan@example\.org how to sign in once Advisory Board emails are turned on \(they’re off now\)/.test(said) && !/add a photo/.test(said), `and their headshot, and that the sign-in email waits for the Advisory Board’s emails (${said})`);
+  ok(!/advisor(?!y)/i.test(said), `never "advisor" (${(said.match(/\S*advisor(?!y)\S*/gi) || []).join(', ')})`);
+  await page.waitForFunction(() => document.activeElement?.closest?.('.ava-dialog'), { timeout: 2000 }).catch(() => null);
+  ok(await page.evaluate(() => document.activeElement?.textContent.trim()) === 'Cancel', `it opens on Cancel: a stray Enter adds nobody (${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))})`);
+}
 await page.screenshot({ path: join(OUT, 'admin-add-1440.png') });
+// A press that fails: said in words, the box stays (asked again of the server), and the keys go back to Cancel
+failAdd = true;
+await clickText(page, '.ava-dialog button', /^Add them$/);
+await page.waitForFunction(() => window.__toasts.some((t) => /stopped partway/.test(t.msg)), { timeout: 5000 }).catch(() => null);
+await sleep(400);
+ok(!!(await page.$('.ava-dialog')) && await page.evaluate(() => document.activeElement?.textContent.trim()) === 'Cancel' && !(await getAdvisoryApplication(DB, jordan.id)).personSlug,
+  `a failed press: told in words, the box stays, the keys on Cancel (${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 60))})`);
 await clickText(page, '.ava-dialog button', /^Add them$/);
 await page.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 6000 }).catch(() => null);
-const saved = await page.evaluate(() => window.__saved);
-ok(saved.length === 1 && saved[0].path === 'src/content/team/jordan-avery.json', 'a People record through the admin’s own save');
-const rec = saved[0]?.record || {};
-ok(rec.group === 'advisory' && rec.publishStatus === 'draft' && rec.title === 'Advisory Board Member' && rec.organization === 'Peachtree Builders' && rec.linkedin === 'https://www.linkedin.com/in/jordan-avery' && rec.order === 1,
-  `a hidden advisor, with their company and LinkedIn (${JSON.stringify(rec)})`);
-ok(revealEmails.some((e) => e.slug === 'jordan-avery' && e.email === 'jordan@example.org'), 'their email kept private for reveal invites');
+// The server did it, through the admin's own save: People, their private email, Joined
+const rec = JSON.parse((await DB.prepare('SELECT data FROM team WHERE slug = ?').bind('jordan-avery').first())?.data || '{}');
+ok(rec.group === 'advisory' && rec.publishStatus === 'draft' && rec.title === 'Advisory Board Member' && rec.organization === 'Peachtree Builders' && rec.linkedin === 'https://www.linkedin.com/in/jordan-avery' && rec.order === 2,
+  `a hidden Advisory Board member, with their company and LinkedIn (${JSON.stringify(rec)})`);
+ok(rec.photo === jordan.headshot.url && JSON.stringify(rec.photoSize) === '[900,1200]', `their headshot is their photo, its size with it (${rec.photo} ${JSON.stringify(rec.photoSize)})`);
+ok((await page.evaluate(() => window.__saved)).length === 0, 'nothing saved from the browser: the server adds them, in one go');
+{
+  const said = (await page.evaluate(() => window.__toasts)).map((t) => t.msg).find((m) => /Jordan Avery is on the Advisory Board/.test(m)) || '';
+  ok(/with their headshot as their photo\. Advisory Board emails are off, so their sign-in email goes once those are turned on\. They stay off the public site/.test(said), `the message after says what happened (${said})`);
+}
+ok((await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind('jordan-avery').first())?.email === 'jordan@example.org', 'their email kept private (their sign-in, and reveal invites)');
+await sleep(200);
+ok(await page.evaluate(() => !!document.activeElement?.closest('.ava-callout')), `the keys land on what the panel says now (${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 60))})`);
 ok((await getAdvisoryApplication(DB, jordan.id)).status === 'joined', 'and the application is Joined');
 ok(await visible(page, '.ava-callout.is-good'), 'the panel says they’re on People → Advisory');
 await clickText(page, '.ava-callout button', /Open their page/);
 ok((await page.evaluate(() => window.__opened)).includes('jordan-avery'), 'with a way to their page');
+// Off Joined: asked first, and told how someone really leaves (Keep it Joined changes nothing)
+await clickText(page, '.ava-status button', /In conversation/);
+await page.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+{
+  const asked = await text(page, '.ava-dialog');
+  ok(/Mark Jordan Avery’s application In conversation\?/.test(asked) && /stays on the Advisory Board.*Move to alumni on their People page is how someone leaves/.test(asked), `moving off Joined asks first, and says how someone leaves (${asked})`);
+  await clickText(page, '.ava-dialog button', /^Keep it Joined$/); await sleep(300);
+  ok((await getAdvisoryApplication(DB, jordan.id)).status === 'joined', 'Keep it Joined changes nothing');
+  await clickText(page, '.ava-status button', /In conversation/);
+  await page.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+  await clickText(page, '.ava-dialog button', /^Mark it In conversation$/);
+}
+await page.waitForFunction(() => document.querySelector('.ava-status button[aria-pressed="true"]')?.textContent.includes('In conversation'), { timeout: 5000 }).catch(() => null);
+ok(/On People → Advisory as Jordan Avery.*This application isn’t marked Joined: Add to Advisory Board below finishes adding them/.test(await text(page, '.ava-callout.is-good')) && await visible(page, '.ava-actions .btn-primary'),
+  `marked something else, the panel still says they’re on the Advisory Board, and Add stays to finish it (${await text(page, '.ava-callout')})`);
+// Joined again: the pill opens Add's box (Joined is only ever set by Add)
+await clickText(page, '.ava-status button', /Joined/);
+await page.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+ok(/Link Jordan Avery/.test(await text(page, '.ava-dialog h2')), `the Joined pill opens Add’s box (${await text(page, '.ava-dialog h2')})`);
+await clickText(page, '.ava-dialog button', /^Link them$/);
+await page.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 6000 }).catch(() => null);
+ok((await getAdvisoryApplication(DB, jordan.id)).status === 'joined', 'and Add marks it Joined again');
+await page.keyboard.press('Escape'); await sleep(200);
+
+// Avery: already on People → Advisory with no photo: Link gives them this headshot, nothing else on their page changes
+await clickText(page, '.ava-row', /Avery Lin/);
+await page.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+await clickText(page, '.ava-drawer button', /^Add to Advisory Board$/);
+await page.waitForSelector('.ava-dialog', { timeout: 4000 });
+{
+  const said = await text(page, '.ava-dialog');
+  ok(/Is this the same Avery Lin\?/.test(said) && /no email on file/.test(said) && /avery@example\.org/.test(said), `the same name with no email on file: staff say who it is, both shown (${said})`);
+  ok(/The same person links this application to Avery Lin, makes this headshot their photo \(they have none\), saves avery@example\.org as their sign-in email, lets them sign in to the Advisory Board page, puts them on every reveal invite, puts them on advisory@soardcharity\.com once Advisory Board emails are on, and emails avery@example\.org how to sign in once Advisory Board emails are turned on \(they’re off now\)\./.test(said)
+    && /A different person adds Avery Lin to People → Advisory as someone new, at Lin Studio, with this headshot as their photo, lets them sign in to the Advisory Board page with avery@example\.org, emails avery@example\.org how to sign in once Advisory Board emails are turned on \(they’re off now\), puts them on every reveal invite, puts them on advisory@soardcharity\.com once Advisory Board emails are on, shows them to the other Advisory Board members on the Advisory Board page, and keeps them off the public site until you turn on Show on the site\./.test(said)
+    && /Either way, this application is marked Joined\./.test(said), `and everything each choice does (${said})`);
+  await sleep(500); // (its fade in)
+  const top = await page.evaluate(() => { const d = document.querySelector('.ava-dialog').getBoundingClientRect(); const at = document.elementFromPoint(d.left + d.width / 2, d.top + d.height / 2); return { onTop: !!at?.closest('.ava-dialog'), opacity: getComputedStyle(document.querySelector('.ava-dialog')).opacity }; });
+  ok(top.onTop && top.opacity === '1', `the box is over the panel, nothing of the panel on top of it (${JSON.stringify(top)})`);
+  await page.screenshot({ path: join(OUT, 'admin-choose-1440.png') });
+}
+await clickText(page, '.ava-dialog button', /^The same person$/);
+await page.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 6000 }).catch(() => null);
+{
+  const a2 = JSON.parse((await DB.prepare('SELECT data FROM team WHERE slug = ?').bind('avery-lin').first()).data);
+  ok(a2.photo === avery.headshot.url && a2.bio === 'Kept as it is.' && JSON.stringify(a2.photoSize) === '[900,1200]', `their page with only the photo added (${JSON.stringify(a2)})`);
+  ok((await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind('avery-lin').first())?.email === 'avery@example.org', 'their email saved (they had none)');
+  ok((await getAdvisoryApplication(DB, avery.id)).status === 'joined', 'and the application is Joined');
+  ok((await DB.prepare("SELECT count(*) AS n FROM team WHERE slug LIKE 'avery-lin%'").first()).n === 1, 'never a second Avery');
+}
 await page.keyboard.press('Escape'); await sleep(200);
 
 // Who hears about new applications
@@ -246,7 +429,7 @@ await clickText(page, '.ava-foot button', /Delete application/);
 await page.waitForSelector('.ava-dialog');
 await clickText(page, '.ava-dialog button', /^Delete application$/);
 await page.waitForFunction(() => !document.querySelector('.ava-drawer'), { timeout: 5000 }).catch(() => null);
-ok(!(await listAdvisoryApplications(DB)).some((a) => a.name === 'Riley Stone') && (await page.$$('.ava-row')).length === 3, 'deleted from the site, and from the list');
+ok(!(await listAdvisoryApplications(DB)).some((a) => a.name === 'Riley Stone') && (await page.$$('.ava-row')).length === 4, 'deleted from the site, and from the list');
 const av = await axeScan(page, '.ava');
 ok(!av.length, `axe: the list has no WCAG 2.1 AA problems${av.length ? ` (${axeText(av)})` : ''}`);
 await page.close();
@@ -261,12 +444,47 @@ ok(!small.length, `buttons are big enough to tap${small.length ? ` (${small.join
 const dv = await axeScan(phone, '.ava-drawer');
 ok(!dv.length, `axe: the panel has no WCAG 2.1 AA problems${dv.length ? ` (${axeText(dv)})` : ''}`);
 await phone.screenshot({ path: join(OUT, 'admin-drawer-390.png') });
-await phone.keyboard.press('Escape'); await sleep(250);
+{
+  const joined = await phone.$$eval('.ava-status button', (bs) => { const b = bs.find((x) => /Joined/.test(x.textContent)); return { title: b.title }; });
+  await clickText(phone, '.ava-status button', /Joined/);
+  await phone.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+  const opened = await text(phone, '.ava-dialog h2');
+  ok(/Opens Add to Advisory Board/.test(joined.title) && /Add Morgan Ellis to the Advisory Board/.test(opened) && (await getAdvisoryApplication(DB, morgan.id)).status === 'new',
+    `Joined before they’re added opens Add’s box, and nothing changes until it’s pressed (${opened})`);
+  await clickText(phone, '.ava-dialog button', /^Cancel$/); await sleep(300);
+  // A note being written survives Escape
+  await phone.type('#ava-note', 'Draft about Morgan');
+  await phone.keyboard.press('Escape'); await sleep(250);
+  await clickText(phone, '.ava-row', /Morgan Ellis/);
+  await phone.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  ok(await phone.$eval('#ava-note', (e) => e.value) === 'Draft about Morgan', 'a note being written is still there after Escape');
+  await phone.$eval('#ava-note', (e) => { e.value = ''; e.dispatchEvent(new Event('input', { bubbles: true })); });
+  // Up and down keep the keys on the button
+  const nav = await phone.$('.ava-close[data-nav="next"]:not([disabled])') || await phone.$('.ava-close[data-nav="prev"]:not([disabled])');
+  const which = await nav.evaluate((b) => b.dataset.nav);
+  await nav.click(); await sleep(400);
+  ok(await phone.evaluate(() => document.activeElement?.dataset?.nav || '') !== '', `up and down keep the keys on that button (${which})`);
+  await phone.keyboard.press('Escape'); await sleep(250);
+  // Under a filter, a status change keeps the one open on the list (up and down still work), and Escape lands on the list
+  await clickText(phone, '.ava-strip button', /^New/); await sleep(200);
+  await clickText(phone, '.ava-row', /Morgan Ellis/);
+  await phone.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(phone, '.ava-status button', /In conversation/);
+  await phone.waitForFunction(() => document.querySelector('.ava-status button[aria-pressed="true"]')?.textContent.includes('In conversation'), { timeout: 5000 }).catch(() => null);
+  ok(!!(await phone.$(`.ava-row[data-id="${morgan.id}"]`)) && !/Nobody matches/.test(await text(phone, '.ava')), 'a status change under a filter keeps the one open on the list');
+  await phone.keyboard.press('Escape'); await sleep(300);
+  ok(await phone.evaluate(() => !!document.activeElement?.closest?.('.ava-list, .ava-search, .ava-zero')), `and Escape puts the keys on the list (${await phone.evaluate(() => document.activeElement?.outerHTML.slice(0, 60))})`);
+  await clickText(phone, '.ava-strip button', /^All/); await sleep(200);
+}
 ok(!(await sideways(phone)), 'phone: nothing past the edge');
 await phone.screenshot({ path: join(OUT, 'admin-list-390.png') });
 await phone.close();
 
 if (DIST) {
+  {
+    const head = await realFetch(`${SITE}/advisory-board/apply/`);
+    ok(head.headers.get('content-security-policy') === applyCsp, 'the Apply page is served with its own strict CSP from the build (inline scripts by hash, workers from blob:)');
+  }
   for (const width of [1440, 390]) {
     console.log(`The Apply page, ${width}`);
     const p = await open(width, '/advisory-board/apply/');
@@ -314,9 +532,15 @@ if (DIST) {
     const a2 = await axeScan(p, '#application');
     ok(!a2.length, `axe: with its problems showing too${a2.length ? ` (${axeText(a2)})` : ''}`);
     ok(await p.evaluate(() => document.activeElement?.id) === 'adv-fullName', 'focus on the first');
-    await type('fullName', 'Taylor Brooks'); await type('email', `taylor${width}@example.org`); await type('phone', '404 555 0199');
+    await type('fullName', 'Taylor Brooks');
+    if (width < 500) {
+      // A typo in the address offers the fix: a button big enough for a finger
+      await type('email', 'quinn@gmial.com'); await p.keyboard.press('Tab'); await sleep(300);
+      const fix = await p.$eval('.adv-mailfix:not([hidden]) button', (b) => Math.round(b.getBoundingClientRect().height)).catch(() => 0);
+      ok(fix >= 44, `“Did you mean …?” is at least 44 px tall on a phone (${fix})`);
+    }
+    await type('email', `taylor${width}@example.org`); await type('phone', '404 555 0199');
     ok(await p.evaluate(() => document.querySelector('[data-field="email"]').parentElement.matches('.adv-pair')), 'email and phone share a row where there is room');
-    await type('company', 'Brooks Law');
     // The home address: one line, suggestions as it's typed; a pick puts the whole address in it
     await type('address', '3167 Main');
     await p.waitForSelector('#adv-address-suggest:not([hidden]) [role="option"]', { timeout: 4000 }).catch(() => {});
@@ -329,12 +553,96 @@ if (DIST) {
     await sleep(300);
     ok(await p.$eval('#adv-address', (e) => e.value) === '3167 Main St, Duluth, GA 30096' && await p.$eval('#adv-address-suggest', (e) => e.hidden), `Enter picks it: the whole address in the line (${await p.$eval('#adv-address', (e) => e.value)})`);
     ok((await text(p, '#adv-title')) === 'About you', 'and stays on the step (Enter picked, it did not move on)');
+    await type('company', 'Brooks Law');
+    // The headshot: required, checked here as the server checks it, drawn as an upright JPEG, kept on this device
+    // (an iPhone's Safari screen: the step splits into more parts, so it's given a moment to before going on)
+    if (width < 500) { await p.setViewport({ width: 390, height: 664, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await sleep(600); }
+    await reach('#adv-headshot');
+    ok(/A clear, recent photo of your face/.test(await text(p, '#adv-headshot-hint')), 'the headshot says what it’s for');
+    const state = () => p.$eval('[data-photo="headshot"]', (el) => el.dataset.state);
+    const pick = async (file) => { const el = await p.$('#adv-headshot'); await el.uploadFile(file); };
+    const settled = (ms = 15000) => p.waitForFunction(() => document.querySelector('[data-photo="headshot"]').dataset.state !== 'busy', { timeout: ms }).catch(() => null);
+    if (width < 500) {
+      // A photo turned down the first time: its note (under a card laid out without it) brought into sight above Back / Continue
+      const before = await p.evaluate(() => ({ err: document.querySelector('#adv-headshot-err').hidden, card: Math.round(document.querySelector('[data-photo="headshot"]').getBoundingClientRect().bottom), bar: Math.round(document.querySelector('.adv-nav').getBoundingClientRect().top) }));
+      await pick(SMALL_JPG); await sleep(150); await settled(); await sleep(800);
+      await p.screenshot({ path: join(OUT, 'apply-refused-390x664.png') });
+      const seen = await p.evaluate(() => { const e = document.querySelector('#adv-headshot-err').getBoundingClientRect(); const el = document.querySelector('#adv-headshot-err'); return { top: Math.round(e.top), bottom: Math.round(e.bottom), h: Math.round(e.height), hidden: el.hidden, shown: el.getClientRects().length, title: document.querySelector('#adv-title')?.textContent, y: scrollY, bar: Math.round(document.querySelector('.adv-nav').getBoundingClientRect().top), text: el.textContent.slice(0, 30) }; });
+      ok(before.err && seen.text.startsWith('This photo is too small') && seen.shown > 0 && seen.h > 0 && seen.top >= 0 && seen.bottom <= seen.bar, `on an iPhone’s screen, a refused photo’s note is in sight above Back / Continue (before ${JSON.stringify(before)}, after ${JSON.stringify(seen)})`);
+      await p.setViewport({ width: 390, height: 900, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await sleep(250);
+    }
+    await p.click('#adv-next'); await sleep(450);
+    // (on the phone a photo was just turned down: its own reason stays, never "Please add a headshot." over it)
+    ok((width < 500 ? /^This photo is too small \(300 × 300 pixels\)/.test(await text(p, '#adv-headshot-err')) : (await text(p, '#adv-headshot-err')) === 'Please add a headshot.') && (await text(p, '#adv-title')) === 'About you',
+      `Continue without one asks for it (or keeps the reason the last one was turned down), and stays (${await text(p, '#adv-headshot-err')})`);
+    await pick(SMALL_JPG); await sleep(150); await settled();
+    ok((await text(p, '#adv-headshot-err')) === 'This photo is too small (300 × 300 pixels). Please choose a larger one, at least 440 pixels on each side.' && await state() === 'empty', `one too small says its size and the least (${await text(p, '#adv-headshot-err')})`);
+    await sleep(120);
+    ok(/This photo is too small \(300 × 300 pixels\)/.test(await text(p, '#adv-live')), 'and a screen reader hears it');
+    if (width > 500) {
+      // A wide photo is judged on what it is, not on a shrunken copy (6000 × 900: its short side is 900)
+      await pick(WIDE_JPG); await sleep(150); await settled();
+      const wide = await p.evaluate(() => ({ state: document.querySelector('[data-photo="headshot"]').dataset.state, status: document.getElementById('adv-headshot-status').textContent }));
+      ok(wide.state === 'done' && /^Added\./.test(wide.status), `a wide photo is taken (${JSON.stringify(wide)})`);
+      await p.click('[data-photo-remove]'); await sleep(200);
+      // A photo cut off partway
+      await pick(CUT_JPG); await sleep(150); await settled();
+      ok((await text(p, '#adv-headshot-err')) === 'That photo didn’t come through whole. Please choose it again, or another one.', `a photo cut off partway is turned down (${await text(p, '#adv-headshot-err')})`);
+      // A photo dropped just off the card: nothing happens (the browser never opens it in place of the application)
+      const stray = await p.evaluate(async () => {
+        const dt = new DataTransfer();
+        dt.items.add(new File([new Uint8Array([0xFF, 0xD8, 0xFF])], 'x.jpg', { type: 'image/jpeg' }));
+        const at = document.querySelector('[data-field="headshot"] .adv-label');
+        const over = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true });
+        at.dispatchEvent(over);
+        const drop = new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true });
+        at.dispatchEvent(drop);
+        return { over: over.defaultPrevented, drop: drop.defaultPrevented, state: document.querySelector('[data-photo="headshot"]').dataset.state };
+      });
+      ok(stray.over && stray.drop && stray.state === 'empty', `a photo dropped just off the card is caught and ignored (${JSON.stringify(stray)})`);
+    }
+    await pick(FAKE_JPG); await sleep(150); await settled();
+    ok(/That file isn’t a photo we can use/.test(await text(p, '#adv-headshot-err')), 'a file that only says it’s a photo is turned away');
+    await p.click('#adv-next'); await sleep(450);
+    ok((await text(p, '#adv-title')) === 'About you', 'and Continue still waits for one');
+    const useHeic = width > 500 && heicMade;
+    await pick(useHeic ? HEIC : GOOD_JPG); await sleep(150); await settled(45000);
+    const got = await p.evaluate(() => { const box = document.querySelector('[data-photo="headshot"]'); const img = box.querySelector('.adv-photo-img'); return { state: box.dataset.state, src: img.getAttribute('src') || '', w: img.naturalWidth, status: document.getElementById('adv-headshot-status').textContent.trim(), err: !document.getElementById('adv-headshot-err').hidden, pick: document.querySelector('[data-photo-pick]').textContent, remove: !document.querySelector('[data-photo-remove]').hidden }; });
+    ok(got.state === 'done' && got.src.startsWith('blob:') && got.w > 0 && got.status === 'Added.' && !got.err && got.pick === 'Choose a different photo' && got.remove, `${useHeic ? 'an iPhone photo (HEIC), drawn as a JPEG under the page’s own strict CSP' : 'a good photo'}: in the circle, "Added.", the note gone (${JSON.stringify(got)})`);
+    await sleep(400); // (its colours ease for .15s)
+    const look = await p.evaluate(() => {
+      const field = document.querySelector('[data-field="headshot"]');
+      const box = field.querySelector('[data-photo]');
+      const r = box.getBoundingClientRect();
+      const out = [...box.querySelectorAll('*')].filter((el) => el.getClientRects().length).map((el) => ({ el: el.className || el.tagName, r: el.getBoundingClientRect() })).filter((x) => x.r.right > r.right + 0.5 || x.r.left < r.left - 0.5).map((x) => x.el);
+      return { invalid: field.classList.contains('is-invalid'), over: box.classList.contains('is-over'), border: getComputedStyle(box).borderTopColor, out };
+    });
+    ok(!look.invalid && !look.over && look.border !== 'rgb(138, 114, 0)' && !look.out.length, `the card looks done, not flagged, and everything in it fits inside it (${JSON.stringify(look)})`);
+    await p.screenshot({ path: join(OUT, `apply-headshot-${width}.png`) });
+    if (width > 500) {
+      // One turned down while a good one is in: said beside it, and gone once they've left the step and come back
+      await pick(SMALL_JPG); await sleep(150); await settled();
+      ok(/Your earlier headshot is still here/.test(await text(p, '#adv-headshot-status')) && await state() === 'done', 'one turned down keeps the earlier headshot, and says so');
+      await onTo('Your interest');
+      await p.click('#adv-back'); await sleep(500);
+      await reach('#adv-headshot');
+      ok(!/still here|too small/.test(await text(p, '#adv-headshot-status')) && await state() === 'done', `back on the step, that warning is gone and the headshot is there (${await text(p, '#adv-headshot-status')})`);
+    }
+    if (width < 500) {
+      await p.click('[data-photo-remove]'); await sleep(300);
+      ok(await state() === 'empty' && (await text(p, '#adv-headshot-status')) === 'Photo removed.' && await p.evaluate(() => document.activeElement?.id) === 'adv-headshot', 'Remove takes it off, says so, and leaves the keys on the picker');
+      await pick(GOOD_JPG); await sleep(150); await settled();
+      ok(await state() === 'done', 'and another goes in');
+    }
+    const a1b = await axeScan(p, '#application');
+    ok(!a1b.length, `axe: with a headshot in, no WCAG 2.1 AA problems${a1b.length ? ` (${axeText(a1b)})` : ''}`);
     await onTo('Your interest');
     const into = await p.evaluate(() => ({ tag: document.activeElement?.tagName, first: document.activeElement === [...document.querySelectorAll('.adv-page:not([hidden]) [data-field]')].find((f) => f.getClientRects().length && !f.closest('[data-off]'))?.querySelector('input, textarea') }));
     await sleep(150);
     const heard = await p.$eval('#adv-live', (e) => e.textContent);
     if (width < 500) ok(into.tag === 'H2', 'on a touch screen each step starts at its heading (no keyboard sliding up over the questions)');
     else ok(['TEXTAREA', 'INPUT'].includes(into.tag) && into.first && /^Step \d of \d: Your interest$/.test(heard), `on a computer each step starts in its first box, and a screen reader hears the step ("${heard}")`);
+    if (width < 500) ok(!/too small|Getting your photo ready|Photo removed/.test(heard), `nothing said about the last step is left for a screen reader beside the next one’s buttons (${heard})`);
     await type('heardFrom', 'LinkedIn'); await type('why', 'To help.'); await type('connection', 'Neighbors.');
     ok(!(await visible(p, '[data-field="involvedHow"]')), 'a follow-up waits');
     await choose('involved', 'Yes'); await sleep(80);
@@ -348,6 +656,7 @@ if (DIST) {
     await p.reload({ waitUntil: 'networkidle0' });
     await sleep(300);
     ok(await p.evaluate(() => document.documentElement.classList.contains('adv-focus')) && (await text(p, '#adv-title')) === 'Your interest' && await p.$eval('#adv-why', (el) => el.value) === 'To help.', 'a reload comes back to the same step, answers kept');
+    ok(await state() === 'done' && await p.$eval('[data-photo="headshot"] .adv-photo-img', (img) => img.getAttribute('src')?.startsWith('blob:')), 'and the headshot with them (kept on this device)');
     // Two tabs of it: what one saves comes into the other, and neither's save wipes the other's answers
     const p2 = await open(width, '/advisory-board/apply/');
     await p2.click('#adv-go');
@@ -390,6 +699,9 @@ if (DIST) {
     ok((await text(p, '#adv-title')) === 'Review and send' && /Send my application/.test(await text(p, '#adv-next')), 'the review sends');
     const rows = await p.$$eval('.adv-review-section', (els) => els.map((e) => ({ open: e.hasAttribute('data-open'), sum: e.querySelector('.adv-review-sum').textContent })));
     ok(rows.length === 5 && rows.every((r) => !r.open) && /Taylor Brooks/.test(rows[0].sum), `a row per step with its answers in a line (${rows[0]?.sum})`);
+    const rv = await p.$eval('.adv-review-section[data-step="0"] .adv-review-photo img', (img) => ({ src: img.getAttribute('src'), alt: img.alt, w: img.naturalWidth })).catch(() => null);
+    ok(rv && rv.src.startsWith('blob:') && rv.alt === 'Your headshot' && rv.w > 0, `the review shows the headshot itself (${JSON.stringify(rv)})`);
+    ok(!/added/i.test(rows[0].sum), 'and its line of answers doesn’t say "added"');
     const a4 = await axeScan(p, '#application');
     ok(!a4.length, `axe: the review has no problems${a4.length ? ` (${axeText(a4)})` : ''}`);
     await p.click('.adv-review-section[data-step="1"] .adv-linkbtn[data-edit]');
@@ -413,10 +725,40 @@ if (DIST) {
     await sleep(500);
     ok((await text(p, '#adv-title')) === 'Review and send', `and it opens the review, not the screen they left (${readAgain})`);
     await sleep(500);
-    // A test fills it in seconds: say they took their time (the server drops anything faster than a person)
-    await p.evaluate(() => { const k = 'soard-advisory-application'; const s = JSON.parse(localStorage.getItem(k)); s.startedAt = Date.now() - 900000; localStorage.setItem(k, JSON.stringify(s)); });
+    // A test fills it in seconds: say they took their time (the server drops anything faster than a person). On the
+    // phone, a clock that was an hour fast when they started and is right now: started "in the future", never dropped
+    await p.evaluate((fast) => { const k = 'soard-advisory-application'; const s = JSON.parse(localStorage.getItem(k)); s.startedAt = fast ? Date.now() + 3600000 : Date.now() - 900000; localStorage.setItem(k, JSON.stringify(s)); }, width < 500);
     await p.reload({ waitUntil: 'networkidle0' });
     await sleep(300);
+    if (width > 500) {
+      // The server turning the photo down: back to the photo, its reason under it, and it stays once the keys move on
+      refuseOnce = true;
+      await p.click('#adv-next');
+      await p.waitForFunction(() => /couldn’t use that photo/.test(document.querySelector('#adv-headshot-err')?.textContent || ''), { timeout: 8000 }).catch(() => null);
+      const said = await text(p, '#adv-headshot-err');
+      await p.keyboard.press('Tab'); await sleep(250); await p.keyboard.press('Tab'); await sleep(250);
+      ok(/We couldn’t use that photo/.test(said) && (await text(p, '#adv-headshot-err')) === said, `a photo the server turned down: its reason stays after Tab (${said} → ${await text(p, '#adv-headshot-err')})`);
+      await p.goBack({ timeout: 3000 }).catch(() => null); await sleep(700);
+      ok((await text(p, '#adv-title')) === 'Review and send', `the browser’s Back from there returns to the review (${await text(p, '#adv-title')})`);
+      await p.goForward({ timeout: 3000 }).catch(() => null); await sleep(700);
+      await reach('#adv-headshot');
+      const pick2 = await p.$('#adv-headshot'); await pick2.uploadFile(useHeic ? HEIC : GOOD_JPG); // (the same photo again)
+      await p.waitForFunction(() => document.querySelector('[data-photo="headshot"]').dataset.state === 'done', { timeout: 45000 }).catch(() => null);
+      for (let i = 0; i < 6 && (await text(p, '#adv-title')) !== 'Review and send'; i++) { await p.click('#adv-next'); await sleep(500); }
+      // A reply that isn't the site's own (a gateway's error page): it may have arrived, said so, and the warning kept
+      gatewayOnce = true;
+      await p.click('#adv-next');
+      await p.waitForFunction(() => !document.querySelector('#adv-send-error').hidden, { timeout: 8000 }).catch(() => null);
+      ok(/We couldn’t tell whether that arrived/.test(await text(p, '#adv-send-error')), `a gateway’s error page: “we couldn’t tell whether that arrived”, never “didn’t send” (${await text(p, '#adv-send-error')})`);
+      await p.reload({ waitUntil: 'networkidle0' });
+      await sleep(400);
+      ok(/This may already have been sent/.test(await text(p, '#adv-send-error')), 'and after a reload the review still says it may already have been sent');
+      limitOnce = true;
+      await p.click('#adv-next');
+      await p.waitForFunction(() => /Too many attempts/.test(document.querySelector('#adv-send-error')?.textContent || ''), { timeout: 8000 }).catch(() => null);
+      await p.reload({ waitUntil: 'networkidle0' }); await sleep(400);
+      ok(/This may already have been sent/.test(await text(p, '#adv-send-error')), `a later send turned away ("too many attempts") never wipes "may already have been sent" (${await text(p, '#adv-send-error')})`);
+    }
     await p.click('#adv-next');
     await p.waitForSelector('#adv-done:not([hidden])', { timeout: 8000 }).catch(() => null);
     ok(/Thank you, Taylor\./.test(await text(p, '#adv-done h2')), 'sent: thanks by name');
@@ -424,7 +766,20 @@ if (DIST) {
     const a5 = await axeScan(p, '#application');
     ok(!a5.length, `axe: the thank-you has no problems${a5.length ? ` (${axeText(a5)})` : ''}`);
     ok(await p.evaluate(() => localStorage.getItem('soard-advisory-application')) === null, 'the device forgets the answers');
-    ok((await listAdvisoryApplications(DB)).some((a) => a.email === `taylor${width}@example.org`), 'stored, for the admin');
+    ok((await listAdvisoryApplications(DB)).some((a) => a.email === `taylor${width}@example.org`), `stored, for the admin${width < 500 ? ' (its clock an hour fast when it was started)' : ''}`);
+    {
+      const sentWith = JSON.parse(await p.evaluate(() => window.__lastPayload || '{}'));
+      ok(typeof sentWith.elapsedMs === 'number' && (width < 500 ? sentWith.elapsedMs < 0 : sentWith.elapsedMs > 0) && sentWith.photoSeq >= 1 && sentWith.website === '',
+        `the page sends how long it took by its own clock (as it is), the pick’s number, and an empty trap (${JSON.stringify({ elapsedMs: sentWith.elapsedMs, photoSeq: sentWith.photoSeq, website: sentWith.website })})`);
+    }
+    {
+      const stored = (await listAdvisoryApplications(DB)).find((a) => a.email === `taylor${width}@example.org`);
+      const up = sent.images.find((i) => stored?.headshot?.url.includes(`/${i.id}/`));
+      const [w, h] = useHeic ? [1500, 2000] : [900, 1200];
+      ok(stored?.headshot?.width === w && stored.headshot.height === h && up?.meta.format === 'jpeg' && up.meta.width === w && up.meta.height === h, `sent as the JPEG the page drew, its size kept (${JSON.stringify(stored?.headshot)}, ${up?.meta.format} ${up?.meta.width}×${up?.meta.height})`);
+      const kept = await p.evaluate(() => new Promise((res) => { const r = indexedDB.open('soard-advisory', 1); r.onsuccess = () => { try { const q = r.result.transaction('photos', 'readonly').objectStore('photos').get('headshot'); q.onsuccess = () => res(!!q.result); q.onerror = () => res('error'); } catch { res(false); } }; r.onerror = () => res('error'); }));
+      ok(kept === false, `and the device forgets the photo too (${kept})`);
+    }
     await p.screenshot({ path: join(OUT, `apply-done-${width}.png`) });
     // Back on the page later: this device says it went (not a fresh "Start the application")
     await p.evaluate(() => sessionStorage.clear());
@@ -447,11 +802,14 @@ if (DIST) {
     await a.click('#adv-go');
     await sleep(700);
     await a.type('#adv-fullName', 'Morgan Tabs');
+    await (await a.$('#adv-headshot')).uploadFile(GOOD_JPG);
+    await a.waitForFunction(() => document.querySelector('[data-photo="headshot"]').dataset.state === 'done', { timeout: 15000 }).catch(() => null);
     await sleep(900);
     const b = await open(1280, '/advisory-board/apply/', 720);
     await b.click('#adv-go');
     await sleep(700);
     ok(await b.$eval('#adv-fullName', (e) => e.value) === 'Morgan Tabs', 'a second tab carries on with the first’s answers');
+    ok(await b.$eval('[data-photo="headshot"]', (e) => e.dataset.state) === 'done', 'and its headshot');
     await a.click('#adv-exit');
     await sleep(600);
     await a.click('#adv-start-over');
@@ -462,8 +820,133 @@ if (DIST) {
     await sleep(900);
     const kept = await b.evaluate(() => localStorage.getItem('soard-advisory-application'));
     ok(/Start over was pressed in another tab/.test(there.lead) && !there.focus && !there.name && !kept, `Start over in one tab: the other starts over too, says why, and never saves its answers back (${JSON.stringify(there)}, kept ${kept ? 'yes' : 'no'})`);
+    ok(await b.$eval('[data-photo="headshot"]', (e) => e.dataset.state) === 'empty', 'its headshot goes too');
     await a.close();
     await b.close();
+  }
+  {
+    // A browser whose IndexedDB never answers (a Safari fault): the form still moves, and a photo says it can't be kept
+    const h = await browser.newPage();
+    await h.setViewport({ width: 1280, height: 900 });
+    await h.setRequestInterception(true);
+    h.on('request', async (req) => { try { if (await answer(req, '198.51.100.77') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    await h.evaluateOnNewDocument(() => { localStorage.clear(); indexedDB.open = () => ({}); });
+    await h.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await h.click('#adv-go'); await sleep(500);
+    for (const [id, v] of [['fullName', 'Hana Hung'], ['email', 'hana@example.org'], ['phone', '404 555 0123']]) { await h.click(`#adv-${id}`); await h.type(`#adv-${id}`, v); }
+    const part = await text(h, '#adv-part');
+    const pressed = Date.now();
+    await h.click('#adv-next');
+    const moved = await h.waitForFunction((was) => document.querySelector('#adv-part')?.textContent.trim() !== was, { timeout: 9000 }, part).then(() => true).catch(() => false);
+    const took = Date.now() - pressed;
+    ok(moved && took < 1500, `IndexedDB that never answers doesn’t hold the form: Continue on name and email moves at once, never waiting on the photo (${part} → ${await text(h, '#adv-part')}, ${took} ms)`);
+    await h.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
+    for (let i = 0; i < 6 && !(await h.$('#adv-headshot:not([data-off] *)')); i++) { const el = await h.evaluate(() => !document.querySelector('[data-field="headshot"]').closest('[data-off]')); if (el) break; await h.click('#adv-next'); await sleep(500); }
+    const input = await h.$('#adv-headshot');
+    await input.uploadFile(GOOD_JPG);
+    await h.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 15000 }).catch(() => null);
+    // Save and exit straight away, while this browser is still failing to keep it: once it gives up (its first
+    // unanswered request, 4 seconds after the page opened), the overview and the photo's note both say so
+    await h.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
+    const opened = await h.evaluate(() => performance.now());
+    await h.click('#adv-exit');
+    const said = await h.waitForFunction(() => /can’t keep your photo/.test(document.getElementById('adv-hub-title').textContent), { timeout: 7000 }).then(() => true).catch(() => false);
+    const when = Math.round(await h.evaluate(() => performance.now()));
+    ok(said && when < 5000, `and the overview says the photo can’t be kept as soon as this browser fails to keep it, by 4 seconds after the page opened (${await text(h, '#adv-hub-title')}, at ${when} ms, Save and exit at ${Math.round(opened)} ms)`);
+    ok(/can’t keep it if the page closes/.test(await text(h, '#adv-headshot-status')), `and the photo’s own note says so too (${await text(h, '#adv-headshot-status')})`);
+    await h.close();
+  }
+  {
+    // At an iPhone's height (390 × 664 and near it), as a person goes: About you through each of its screens, a photo in
+    // (its card grows, a two-line note under it), Continue, then the phone's Back: the step isn't split again, and
+    // Back walks every screen of it, the headshot's first, down to Part 1
+    for (const height of [664, 688, 704]) {
+      const w = await browser.newPage();
+      await w.setViewport({ width: 390, height, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await w.setRequestInterception(true);
+      w.on('request', async (req) => { try { if (await answer(req, '198.51.100.88') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await w.evaluateOnNewDocument(() => { if (!sessionStorage.getItem('walked')) { localStorage.clear(); sessionStorage.setItem('walked', '1'); } });
+      await w.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      await w.evaluate(() => indexedDB.deleteDatabase('soard-advisory'));
+      await w.click('#adv-go'); await sleep(600);
+      const part = () => text(w, '#adv-part');
+      const on = () => w.evaluate(() => [...document.querySelectorAll('.adv-page:not([hidden]) [data-field]')].filter((f) => !f.closest('[data-off]') && f.getClientRects().length).map((f) => f.dataset.field));
+      const fill = { fullName: 'Walk Tester', email: 'walk@example.org', phone: '404 555 0177', address: '3167 Main St, Duluth, GA 30096' };
+      const laid = [];
+      for (let k = 0; k < 8 && (await text(w, '#adv-title')) === 'About you'; k++) {
+        const here = await on();
+        laid.push({ part: await part(), with: here });
+        for (const id of here) if (fill[id]) { await w.click(`#adv-${id}`, { clickCount: 3 }); await w.type(`#adv-${id}`, fill[id]); await w.keyboard.press('Escape'); }
+        if (here.includes('headshot')) { const el = await w.$('#adv-headshot'); await el.uploadFile(SOFT_JPG); await w.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 15000 }).catch(() => null); }
+        await w.click('#adv-next'); await sleep(700);
+      }
+      const total = laid.length;
+      const walked = [];
+      if ((await text(w, '#adv-title')) !== 'About you') {
+        for (let k = 0; k < total + 1; k++) {
+          await w.goBack({ timeout: 3000 }).catch(() => null); await sleep(700);
+          // (one more Back leaves the application for the overview: not a screen of the step)
+          if (!(await w.evaluate(() => document.documentElement.classList.contains('adv-focus'))) || (await text(w, '#adv-title')) !== 'About you') break;
+          walked.push({ part: await part(), with: await on() });
+        }
+      }
+      const expect = laid.map((l) => l.part).reverse();
+      ok(total > 1 && walked.length === total && walked.every((x, n) => x.part === expect[n]) && walked[0].with.includes('headshot'),
+        `at 390 × ${height}: Back walks every screen of About you, the headshot’s first, down to Part 1 (${JSON.stringify({ laid: laid.map((l) => `${l.part} ${l.with.join('+')}`), walked: walked.map((x) => `${x.part} ${x.with.join('+')}`) })})`);
+      await w.close();
+    }
+  }
+  {
+    // Reduced motion on a 320 × 568 phone: a refusal while a photo is in, its whole warning above Back / Continue
+    const m = await browser.newPage();
+    await m.setViewport({ width: 320, height: 568, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await m.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+    await m.setRequestInterception(true);
+    m.on('request', async (req) => { try { if (await answer(req, '198.51.100.99') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    await m.evaluateOnNewDocument(() => { if (!sessionStorage.getItem('rm')) { localStorage.clear(); sessionStorage.setItem('rm', '1'); } });
+    await m.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await m.evaluate(() => indexedDB.deleteDatabase('soard-advisory'));
+    await m.click('#adv-go'); await sleep(600);
+    const fill = { fullName: 'Rm Tester', email: 'rm@example.org', phone: '404 555 0166', address: '3167 Main St, Duluth, GA 30096' };
+    for (let k = 0; k < 8; k++) {
+      const here = await m.evaluate(() => [...document.querySelectorAll('.adv-page:not([hidden]) [data-field]')].filter((f) => !f.closest('[data-off]') && f.getClientRects().length).map((f) => f.dataset.field));
+      if (here.includes('headshot')) break;
+      for (const id of here) if (fill[id]) { await m.click(`#adv-${id}`, { clickCount: 3 }); await m.type(`#adv-${id}`, fill[id]); await m.keyboard.press('Escape'); }
+      await m.click('#adv-next'); await sleep(600);
+    }
+    const inp = await m.$('#adv-headshot');
+    await inp.uploadFile(GOOD_JPG);
+    await m.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 15000 }).catch(() => null);
+    await inp.uploadFile(SMALL_JPG);
+    await m.waitForFunction(() => /still here/.test(document.getElementById('adv-headshot-status').textContent), { timeout: 15000 }).catch(() => null);
+    await sleep(700);
+    const w = await m.evaluate(() => { const n = document.getElementById('adv-headshot-status').getBoundingClientRect(); return { top: Math.round(n.top), bottom: Math.round(n.bottom), bar: Math.round(document.querySelector('.adv-nav').getBoundingClientRect().top), text: document.getElementById('adv-headshot-status').textContent.slice(-36) }; });
+    ok(/still here/.test(w.text) && w.top >= 0 && w.bottom <= w.bar, `reduced motion, 320 × 568: a refusal’s whole warning sits above Back / Continue (${JSON.stringify(w)})`);
+    await m.close();
+  }
+  {
+    // A photo kept on this device and no answers typed: the overview says it's started, and Start over takes it off
+    const k = await open(1440, '/advisory-board/apply/');
+    await k.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+    await k.evaluate(async (b64) => {
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      await new Promise((res) => { const r = indexedDB.open('soard-advisory', 1); r.onupgradeneeded = () => r.result.createObjectStore('photos'); r.onsuccess = () => { const tx = r.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new Blob([bytes], { type: 'image/jpeg' }), name: 'me.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { r.result.close(); res(); }; }; });
+    }, readFileSync(GOOD_JPG).toString('base64'));
+    await k.reload({ waitUntil: 'networkidle0' }); await sleep(800);
+    const hub = { title: await text(k, '#adv-hub-title'), go: await text(k, '#adv-go'), over: await k.$eval('#adv-start-over', (e) => !e.hidden).catch(() => false) };
+    ok(hub.title !== 'Six steps, about 20 minutes' && hub.go !== 'Start the application' && hub.over, `a photo kept and nothing typed: the overview says it’s started (${JSON.stringify(hub)})`);
+    // In the application with only that photo, then a reload: back in the application, as with any answer
+    await k.click('#adv-go'); await sleep(700);
+    await k.reload({ waitUntil: 'networkidle0' }); await sleep(1200);
+    ok(await k.evaluate(() => document.documentElement.classList.contains('adv-focus')), 'a reload with only a photo picked goes back into the application');
+    // Start over: the photo, and a "may already have been sent" from an earlier send, both go
+    await k.evaluate(() => localStorage.setItem('soard-advisory-sending', JSON.stringify({ at: Date.now() })));
+    await k.click('#adv-exit'); await sleep(600);
+    await k.click('#adv-start-over'); await sleep(300); // (pressed twice: the first asks)
+    await k.click('#adv-start-over'); await sleep(800);
+    const after = await k.evaluate(() => new Promise((res) => { const r = indexedDB.open('soard-advisory', 1); r.onsuccess = () => { try { const q = r.result.transaction('photos', 'readonly').objectStore('photos').get('headshot'); q.onsuccess = () => res({ photo: !!q.result, sending: localStorage.getItem('soard-advisory-sending') }); } catch { res({ photo: false, sending: localStorage.getItem('soard-advisory-sending') }); } }; r.onerror = () => res({ photo: false, sending: localStorage.getItem('soard-advisory-sending') }); }));
+    ok(!after.photo && after.sending === null, `Start over takes the photo off this device, and "may already have been sent" with it (${JSON.stringify(after)})`);
+    await k.close();
   }
   const ab = await open(1440, '/advisory-board/');
   const links = await ab.$$eval('a', (els) => els.filter((a) => /Apply to Join/.test(a.textContent)).map((a) => [a.getAttribute('href'), a.target, a.hasAttribute('data-astro-reload')]));

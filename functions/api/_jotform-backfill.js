@@ -49,7 +49,8 @@ const bucket = (env) => env?.APPLICANT_FILES || env?.FILES || null;
 
 // ─── D1 ─────────────────────────────────────────────────────────────
 
-const SCHEMA = [
+/** Its tables, as they are in D1 (tests build the same ones) */
+export const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS jotform_backfill (
     submission_id TEXT PRIMARY KEY, form_id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT, submitted_at TEXT,
     account_id TEXT, matched_by TEXT, folder TEXT, status TEXT NOT NULL DEFAULT 'pending',

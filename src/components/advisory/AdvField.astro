@@ -22,6 +22,32 @@ const described = [f.hint && `${fid(f.id)}-hint`, `${fid(f.id)}-err`].filter(Boo
         ))}
       </div>
     </fieldset>
+  ) : f.type === 'photo' ? (
+    <>
+      <span class="adv-label" id={`${fid(f.id)}-label`}>{f.label}{!f.required && <span class="adv-optional">{' optional'}</span>}</span>
+      {f.hint && <p class="adv-hint" id={`${fid(f.id)}-hint`}>{f.hint}</p>}
+      {/* The page's script (advisory-photo.js) makes it work: the photo drawn as a JPEG, shown here, kept on this device */}
+      <div class="adv-photo" data-photo={f.id} data-state="empty">
+        <div class="adv-photo-frame" aria-hidden="true">
+          <img class="adv-photo-img" alt="" hidden />
+          <svg class="adv-photo-blank" viewBox="0 0 48 48"><circle cx="24" cy="18" r="8" /><path d="M8.5 41.5c1.8-8.2 8-13 15.5-13s13.7 4.8 15.5 13" /></svg>
+          <span class="adv-photo-spin" hidden></span>
+        </div>
+        <div class="adv-photo-side">
+          <div class="adv-photo-btns">
+            <label class="btn btn-outline-dark adv-photo-pick">
+              <input type="file" id={fid(f.id)} name={`${f.id}-file`} accept="image/*,.heic,.heif"
+                aria-labelledby={`${fid(f.id)}-label ${fid(f.id)}-pick`} aria-describedby={[f.hint && `${fid(f.id)}-hint`, `${fid(f.id)}-status`, `${fid(f.id)}-err`].filter(Boolean).join(' ')} />
+              <span id={`${fid(f.id)}-pick`} data-photo-pick>Choose a photo</span>
+            </label>
+            <button type="button" class="adv-linkbtn adv-photo-remove" data-photo-remove aria-label="Remove headshot" hidden>Remove</button>
+          </div>
+          <p class="adv-photo-status" id={`${fid(f.id)}-status`} data-photo-status aria-live="polite"></p>
+          {/* For a mouse (a phone has none); not read out, the button says what to do */}
+          <p class="adv-photo-drag" aria-hidden="true">or drag one here</p>
+        </div>
+      </div>
+    </>
   ) : f.type === 'check' ? (
     <label class="adv-check">
       <input type="checkbox" name={f.id} id={fid(f.id)} aria-describedby={`${fid(f.id)}-err`} />

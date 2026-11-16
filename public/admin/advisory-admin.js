@@ -49,7 +49,7 @@ const signedNow = (sig, doc, term = null) => !!sig && sig.version === (doc.versi
  * the group edits them before anyone sees them (a paper is only on the page once it's saved).
  */
 export const STARTERS = {
-  agreement: { title: 'Advisor Agreement', body: 'As a member of the Sunshine on a Ranney Day Advisory Board, I agree to:\n\n- Serve a one-year term, renewable each year\n- Attend at least four meetings a year, plus ad hoc support as needed\n- Help the group raise the funds for one SOARD makeover each year\n- Make introductions to potential donors, sponsors, partners, and volunteers\n- Serve as a positive ambassador for SOARD and the families it serves\n- Keep what I learn about families private\n\nThe Advisory Board is advisory and ambassadorial in nature. Members do not hold fiduciary, governance, operational, budgetary, staffing, or voting authority.' },
+  agreement: { title: 'Advisory Board Agreement', body: 'As a member of the Sunshine on a Ranney Day Advisory Board, I agree to:\n\n- Serve a one-year term, renewable each year\n- Attend at least four meetings a year, plus ad hoc support as needed\n- Help the group raise the funds for one SOARD makeover each year\n- Make introductions to potential donors, sponsors, partners, and volunteers\n- Serve as a positive ambassador for SOARD and the families it serves\n- Keep what I learn about families private\n\nThe Advisory Board is advisory and ambassadorial in nature. Members do not hold fiduciary, governance, operational, budgetary, staffing, or voting authority.' },
   overview: { title: 'Advisory Board Overview', body: '' },
   pitch: { title: 'Your 30-second pitch', body: 'Sunshine on a Ranney Day builds free dream bedrooms, accessible bathrooms, and therapy rooms for children with special needs in Atlanta. Every child deserves a space that makes them feel safe, seen, and loved. I serve on the Advisory Board, and together we’re raising the funds for one makeover this year. I’d love to tell you about it.' },
   post: { title: 'A post to share', body: 'I’m proud to serve on the Advisory Board of Sunshine on a Ranney Day. They build free dream bedrooms, accessible bathrooms, and therapy rooms for children with special needs in Atlanta. This year our group is raising the funds for one makeover: a real room for a real child. If you’d like to help, here’s my page.' },
@@ -205,7 +205,7 @@ function Waiting({ ctx }) {
   const n = intros.length + hosted.length + pages.length + lost.length;
   const restIntros = data.intros.filter((i) => !introNew(i));
   const restHosted = data.hosted.filter((x) => x.status !== 'new');
-  return html`<${Card} title="Waiting on you" count=${n || null} sub=${n ? 'Every introduction gets an answer, so advisors keep making them.' : ''}>
+  return html`<${Card} title="Waiting on you" count=${n || null} sub=${n ? 'Every introduction gets an answer, so Advisory Board members keep making them.' : ''}>
     ${n ? html`<ul class="ar-list">
       ${intros.map((i) => html`<li key=${i.id}><${IntroRow} i=${i} ctx=${ctx} /></li>`)}
       ${hosted.map((x) => html`<li key=${x.id}><${HostedRow} x=${x} ctx=${ctx} /></li>`)}
@@ -232,17 +232,17 @@ function IntroRow({ i, ctx }) {
   const set = (status) => { choosing.current = false; return act({ action: 'intro-status', id: i.id, status, note }, status === i.status && !undecided ? 'Saved' : `Marked ${statusWord(data.introStatuses.find((x) => x.id === status) || {})}`); };
   return html`<div class="ar-row">
     <div class="ar-row__t"><strong>${i.name}</strong>${i.company ? html`<span class="ar-muted">${i.company}</span>` : null}</div>
-    <p class="ar-muted">From ${i.by || 'an advisor'}, ${dayOf(i.at)}</p>
+    <p class="ar-muted">From ${i.by || 'an Advisory Board member'}, ${dayOf(i.at)}</p>
     ${i.how ? html`<p class="ar-quote">${i.how}</p>` : null}
     ${help.length ? html`<div class="ar-tags">${help.map((t) => html`<span class="ar-tag" key=${t}>${t}</span>`)}</div>` : null}
     ${i.email || i.phone ? html`<p class="ar-contact">${i.email ? html`<a href=${`mailto:${i.email}`}>${i.email}</a>` : null}${i.phone ? html`<a href=${`tel:${i.phone.replace(/[^\d+]/g, '')}`}>${i.phone}</a>` : null}</p>` : null}
-    <${Field} label="A note for the advisor (they’ll see where it stands)" hint=${undecided && typed ? 'It saves when you pick where this stands.' : ''}>
+    <${Field} label="A note for the Advisory Board member (they’ll see where it stands)" hint=${undecided && typed ? 'It saves when you pick where this stands.' : ''}>
       <input class="ar-input" value=${note} maxlength="800" onInput=${(e) => setNote(e.currentTarget.value)} onBlur=${() => { if (typed && !undecided && !choosing.current) set(i.status); }} />
     <//>
     <div class="ar-seg" role="group" aria-label=${`Where ${i.name} stands`} onPointerDown=${() => { choosing.current = true; }}>
       ${data.introStatuses.map((st) => html`<button type="button" key=${st.id} aria-pressed=${i.status === st.id && !undecided} onClick=${() => set(st.id)}>${statusWord(st)}</button>`)}
     </div>
-    ${data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(i.by) || 'the advisor'}.</p>` : null}
+    ${data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(i.by) || 'the Advisory Board member'}.</p>` : null}
   </div>`;
 }
 
@@ -262,12 +262,12 @@ function HostedRow({ x, ctx }) {
     if (j?.hosted) setGiveUrl(j.hosted.giveUrl || '');
   };
   const approve = async () => {
-    if (!date && !(await ask({ title: 'Approve it without a date?', text: 'It won’t show under Coming up for the advisors until it has one.', yes: 'Approve it anyway', no: 'Add the date first', careful: true }))) return;
+    if (!date && !(await ask({ title: 'Approve it without a date?', text: 'It won’t show under Coming up for the Advisory Board until it has one.', yes: 'Approve it anyway', no: 'Add the date first', careful: true }))) return;
     send('approved', 'Approved');
   };
   return html`<div class="ar-row">
     <div class="ar-row__t"><strong>${x.title}</strong><span class=${`ar-tag ${x.status === 'approved' ? 'ar-tag--ok' : ''}`}>${{ new: 'New idea', approved: 'Approved', 'not-now': 'Not now', done: 'Held' }[x.status]}</span></div>
-    <p class="ar-muted">From ${x.by || 'an advisor'}, ${dayOf(x.at)}</p>
+    <p class="ar-muted">From ${x.by || 'an Advisory Board member'}, ${dayOf(x.at)}</p>
     <dl class="ar-facts">
       ${x.when ? html`<dt>When</dt><dd>${x.when}</dd>` : null}
       ${x.where ? html`<dt>Where</dt><dd>${x.where}</dd>` : null}
@@ -279,13 +279,13 @@ function HostedRow({ x, ctx }) {
         <${Field} label="The date" hint=${x.status === 'approved' && !date ? 'It won’t show under Coming up until it has one.' : ''}><input class="ar-input" type="date" value=${date} onInput=${(e) => setDate(e.currentTarget.value)} /><//>
         <${Field} label="Its Zeffy page" hint="So what it raises counts toward the goal" for=${`ar-give-${x.id}`}><${ZeffyLink} cls="ar-input" inputCls="ar-input" openCls="ar-btn" from=${ZEFFY_FROM} inputId=${`ar-give-${x.id}`} describedBy=${`ar-give-${x.id}-hint`} value=${giveUrl} prefer=${['peer', 'tickets', 'donation']} label="Its Zeffy page" saved=${x.giveUrl || ''} onPick=${(f) => setGiveUrl(f ? f.url : '')} /><//>
       </div>
-      <${Field} label="A note for the advisor"><input class="ar-input" value=${note} maxlength="800" onInput=${(e) => setNote(e.currentTarget.value)} /><//>
+      <${Field} label="A note for the Advisory Board member"><input class="ar-input" value=${note} maxlength="800" onInput=${(e) => setNote(e.currentTarget.value)} /><//>
       <div class="ar-btns">
         ${x.status === 'approved' ? html`<button type="button" class="ar-btn ar-btn--go" disabled=${busy} onClick=${() => send('approved', 'Saved')}>Save</button><button type="button" class="ar-btn" disabled=${busy} onClick=${() => send('done', 'Marked as held')}>It was held</button>`
           : html`<button type="button" class="ar-btn ar-btn--go" disabled=${busy} onClick=${approve}>Approve</button>`}
         ${x.status !== 'not-now' ? html`<button type="button" class="ar-btn" disabled=${busy} onClick=${() => send('not-now', 'Marked not now')}>Not now</button>` : null}
       </div>
-      ${ctx.data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(x.by) || 'the advisor'}.</p>` : null}`}
+      ${ctx.data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(x.by) || 'the Advisory Board member'}.</p>` : null}`}
   </div>`;
 }
 
@@ -296,7 +296,7 @@ function PageRow({ p, ctx }) {
     <div class="ar-row__t"><strong>A Zeffy page nobody’s matched to</strong></div>
     <p class="ar-muted">${p.url ? html`<a href=${p.url} target="_blank" rel="noopener">${p.title || 'Open the page'}</a>` : p.title}</p>
     <div class="ar-inline">
-      <${Field} label="Whose page is it?"><select class="ar-input" value=${slug} onChange=${(e) => setSlug(e.currentTarget.value)}><option value="">Choose an advisor</option>${data.advisors.map((a) => html`<option value=${a.slug} key=${a.slug}>${a.name}</option>`)}</select><//>
+      <${Field} label="Whose page is it?"><select class="ar-input" value=${slug} onChange=${(e) => setSlug(e.currentTarget.value)}><option value="">Choose an Advisory Board member</option>${data.advisors.map((a) => html`<option value=${a.slug} key=${a.slug}>${a.name}</option>`)}</select><//>
       <button type="button" class="ar-btn ar-btn--go" disabled=${!slug || ctx.busy} onClick=${() => act({ action: 'match-page', campaignId: p.id, slug }, 'Matched')}>Match it</button>
     </div>
   </div>`;
@@ -313,20 +313,20 @@ function AskCard({ ctx }) {
   const up = (k) => (e) => setDraft({ ...draft, [k]: e.currentTarget.value });
   useDirty(ctx, 'ask', draft.title || draft.body || draft.link ? 'the ask you’re writing' : '');
   // With the emails on, this reaches every advisor's inbox at once: it asks first
-  const agree = ({ text = 'This puts the ask on the page and emails every advisor now.', yes = 'Put it out and email them' } = {}) => ask({ title: `Email all ${data.advisors.length} advisors?`, text, yes, no: 'Not yet', careful: true });
+  const agree = ({ text = 'This puts the ask on the page and emails every Advisory Board member now.', yes = 'Put it out and email them' } = {}) => ask({ title: `Email all ${data.advisors.length} Advisory Board members?`, text, yes, no: 'Not yet', careful: true });
   // What really happened, from the server's answer
   const sentWords = (r) => (r?.off ? 'It’s on the page. Emails are off, so nothing was sent.'
-    : r?.already ? 'It’s on the page. Advisors already had this email.'
-      : r?.sent ? `It’s out, and emailed to ${r.sent === 1 ? '1 advisor' : `${r.sent} advisors`}${r.failed ? `. ${r.failed} didn’t go` : ''}`
+    : r?.already ? 'It’s on the page. The Advisory Board already had this email.'
+      : r?.sent ? `It’s out, and emailed to ${r.sent === 1 ? '1 Advisory Board member' : `${r.sent} Advisory Board members`}${r.failed ? `. ${r.failed} didn’t go` : ''}`
         : 'It’s on the page, but no email went out.');
   // Out already and never emailed (the switch was off, or the send failed)
   const emailIt = async (id) => {
-    if (!(await agree({ text: 'This emails every advisor now.', yes: 'Email them' }))) return;
+    if (!(await agree({ text: 'This emails every Advisory Board member now.', yes: 'Email them' }))) return;
     const j = await act({ action: 'email-ask', id }, '', { raw: true });
     if (!j) return;
     if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); return; }
     const r = j.sent && typeof j.sent === 'object' ? j.sent : j;
-    ctx.tell(r.off ? 'Nothing went out: emails are off.' : r.already ? 'Advisors already had this email.' : r.sent ? `Emailed to ${r.sent === 1 ? '1 advisor' : `${r.sent} advisors`}${r.failed ? `. ${r.failed} didn’t go` : ''}` : 'No email went out. Try again in a while.', !r.sent || !!r.failed);
+    ctx.tell(r.off ? 'Nothing went out: emails are off.' : r.already ? 'The Advisory Board already had this email.' : r.sent ? `Emailed to ${r.sent === 1 ? '1 Advisory Board member' : `${r.sent} Advisory Board members`}${r.failed ? `. ${r.failed} didn’t go` : ''}` : 'No email went out. Try again in a while.', !r.sent || !!r.failed);
   };
   // agreed: they said yes to emailing everyone. The server holds the real switch: if it was turned on since this
   // screen last looked, it says so, and this asks before anything goes
@@ -349,7 +349,7 @@ function AskCard({ ctx }) {
     if (j && thenOut) await putOut(j.ask.id, emailing);
     if (j) setDraft(blank);
   };
-  return html`<${Card} title="This month’s ask" sub="One clear ask at a time. It sits on every advisor’s Home page.">
+  return html`<${Card} title="This month’s ask" sub="One clear ask at a time. It sits on every Advisory Board member’s Home page.">
     ${out ? html`<${AskOut} a=${out} ctx=${ctx} emailIt=${emailIt} />` : html`<p class="ar-muted">Nothing is out right now.</p>`}
     <div class="ar-sub">
       <h4>${out ? 'Write the next one' : 'Write one'}</h4>
@@ -357,10 +357,10 @@ function AskCard({ ctx }) {
       <${Field} label="A little more, if it helps"><textarea class="ar-input" rows="3" maxlength="1500" value=${draft.body} onInput=${up('body')}></textarea><//>
       <${Field} label="A link, if there’s one"><input class="ar-input" type="url" inputmode="url" placeholder="https://" value=${draft.link} onInput=${up('link')} /><//>
       <div class="ar-btns">
-        <button type="button" class="ar-btn ar-btn--go" disabled=${busy || !draft.title.trim()} onClick=${() => save(true)}>${data.settings.emails ? 'Put it out and email advisors' : 'Put it on the page'}</button>
+        <button type="button" class="ar-btn ar-btn--go" disabled=${busy || !draft.title.trim()} onClick=${() => save(true)}>${data.settings.emails ? 'Put it out and email the Advisory Board' : 'Put it on the page'}</button>
         <button type="button" class="ar-btn" disabled=${busy || !draft.title.trim()} onClick=${() => save(false)}>Save for later</button>
       </div>
-      <p class="ar-muted ar-small">${data.settings.emails ? `This emails all ${data.advisors.length} advisors.` : 'Emails are off, so this only goes on the page.'}${out ? ' A new one closes the one that’s out now.' : ''}</p>
+      <p class="ar-muted ar-small">${data.settings.emails ? `This emails all ${data.advisors.length} Advisory Board members.` : 'Emails are off, so this only goes on the page.'}${out ? ' A new one closes the one that’s out now.' : ''}</p>
     </div>
     ${drafts.length ? html`<${Fold} summary=${`Saved for later (${drafts.length})`}><ul class="ar-list">${drafts.map((a) => html`<li key=${a.id}><${DraftAsk} a=${a} ctx=${ctx} agree=${agree} putOut=${putOut} /></li>`)}</ul><//>` : null}
     ${past.length ? html`<${Fold} summary=${`Past asks (${past.length})`}><ul class="ar-list">${past.map((a) => html`<li key=${a.id}><${AskOut} a=${a} ctx=${ctx} past=${true} /></li>`)}</ul><//>` : null}
@@ -404,8 +404,8 @@ function AskOut({ a, ctx, past = false, emailIt = null }) {
     <p class="ar-muted ar-small">Out since ${dayOf(a.sentAt)}. ${yes.length} can help, ${no.length} not this time.</p>
     ${a.answers.length ? html`<ul class="ar-answers">${[...yes, ...no].map((x) => html`<li key=${x.slug}><span class="ar-answers__w"><strong>${x.name}</strong><span class=${`ar-tag ${x.answer === 'yes' ? 'ar-tag--ok' : ''}`}>${x.answer === 'yes' ? 'Can help' : 'Not this time'}</span></span>${x.note ? html`<span>${x.note}</span>` : null}</li>`)}</ul>` : null}
     ${past ? null : html`<div class="ar-btns">
-      ${ctx.data.settings.emails && a.mailed === false ? html`<button type="button" class="ar-btn ar-btn--go" disabled=${ctx.busy} onClick=${() => emailIt?.(a.id)}>Email it to advisors</button>` : null}
-      <${Sure} label="Close it" yes="Yes, close it" note="It comes off every advisor’s Home page." onYes=${() => act({ action: 'close-ask', id: a.id }, 'Closed')} />
+      ${ctx.data.settings.emails && a.mailed === false ? html`<button type="button" class="ar-btn ar-btn--go" disabled=${ctx.busy} onClick=${() => emailIt?.(a.id)}>Email it to the Advisory Board</button>` : null}
+      <${Sure} label="Close it" yes="Yes, close it" note="It comes off every Advisory Board member’s Home page." onYes=${() => act({ action: 'close-ask', id: a.id }, 'Closed')} />
     </div>`}
   </div>`;
 }
@@ -417,8 +417,8 @@ function Wishes({ ctx }) {
   const [w, setW] = useState(blank);
   const add = async () => { if (await act({ action: 'save-wish', wish: w }, 'Added')) setW(blank); };
   useDirty(ctx, 'wish', w.title || w.detail ? 'the person you’re adding' : '');
-  return html`<${Card} title="Who we’re looking for" sub="On every advisor’s Introductions page. Be specific: a name or a trade gets answers.">
-    ${data.wishes.length ? html`<ul class="ar-list">${data.wishes.map((x) => html`<li key=${x.id}><${WishRow} w=${x} ctx=${ctx} /></li>`)}</ul>` : html`<p class="ar-muted">The list is empty. Advisors told us they know vendors, contractors, event people, and corporate partners, so that’s a good place to start.</p>`}
+  return html`<${Card} title="Who we’re looking for" sub="On every Advisory Board member’s Introductions page. Be specific: a name or a trade gets answers.">
+    ${data.wishes.length ? html`<ul class="ar-list">${data.wishes.map((x) => html`<li key=${x.id}><${WishRow} w=${x} ctx=${ctx} /></li>`)}</ul>` : html`<p class="ar-muted">The list is empty. Advisory Board members told us they know vendors, contractors, event people, and corporate partners, so that’s a good place to start.</p>`}
     <div class="ar-sub">
       <div class="ar-grid2">
         <${Field} label="Who"><input class="ar-input" maxlength="140" placeholder="A licensed electrician in Cherokee County" value=${w.title} onInput=${(e) => setW({ ...w, title: e.currentTarget.value })} /><//>
@@ -467,7 +467,7 @@ function Goal({ ctx }) {
     if (moved.includes('lead')) {
       const next = data.board.find((p) => p.slug === f.lead)?.name || 'them';
       const yours = data.me.kind === 'lead';
-      if (!(await ask({ title: `Hand the group to ${next}?`, text: `${next} gets Run it on the advisors’ page${yours ? ', and you lose it the next time this page opens.' : `, and ${data.leadName || 'the person running it now'} loses it.`}`, yes: `Yes, hand it to ${first(next)}`, no: 'Keep it as it is', careful: true }))) return;
+      if (!(await ask({ title: `Hand the group to ${next}?`, text: `${next} gets Run it on the Advisory Board page${yours ? ', and you lose it the next time this page opens.' : `, and ${data.leadName || 'the person running it now'} loses it.`}`, yes: `Yes, hand it to ${first(next)}`, no: 'Keep it as it is', careful: true }))) return;
     }
     const patch = Object.fromEntries(moved.map((k) => [k, k === 'goal' ? Number(edits.goal) : edits[k]]));
     // A campaign goes with its ID, even when the ID is the one already saved (the same campaign's link written another way)
@@ -499,11 +499,11 @@ function Goal({ ctx }) {
       <${Field} label="The Zeffy campaign" for="ar-campaign-url" hint=${campaignNote({ url: f.campaignUrl, id: f.campaignId }, { url: s.campaignUrl, id: s.campaignId }, forms)}><${ZeffyLink} cls="ar-input" inputCls="ar-input" openCls="ar-btn" from=${ZEFFY_FROM} inputId="ar-campaign-url" describedBy="ar-campaign-url-hint" value=${f.campaignUrl} saved=${s.campaignUrl || ''} id=${f.campaignId || ''} prefer=${['peer']} label="The Zeffy campaign" onPick=${pickCampaign} /><//>
       <div class="ar-btns"><button type="button" class="ar-btn ar-btn--go" disabled=${!changed || ctx.busy} onClick=${saveIt}>Save</button></div>
     <//>
-    ${m.byAdvisor?.some((a) => a.gifts) ? html`<${Fold} summary="By advisor">
+    ${m.byAdvisor?.some((a) => a.gifts) ? html`<${Fold} summary="By Advisory Board member">
       <ul class="ar-money">${m.byAdvisor.filter((a) => a.gifts).map((a) => html`<li key=${a.slug}><span>${a.name}</span><span>${dollars(a.dollars)} · ${a.gifts} ${a.gifts === 1 ? 'gift' : 'gifts'}</span></li>`)}</ul>
     <//>` : null}
     <${Fold} summary=${`Credit a gift from another campaign${m.credits?.length ? ` (${m.credits.length})` : ''}`}>
-      <p class="ar-muted ar-small">A gala table an advisor brought in, say. Find it by the donor’s email. The amount stays Zeffy’s, so a refund comes off by itself.</p>
+      <p class="ar-muted ar-small">A gala table an Advisory Board member brought in, say. Find it by the donor’s email. The amount stays Zeffy’s, so a refund comes off by itself.</p>
       <div class="ar-inline">
         <${Field} label="Donor’s email"><input class="ar-input" type="email" inputmode="email" value=${email} onInput=${(e) => setEmail(e.currentTarget.value)} /><//>
         <button type="button" class="ar-btn" disabled=${!email.includes('@') || ctx.busy} onClick=${look}>Find their gifts</button>
@@ -548,7 +548,7 @@ function Makeover({ ctx }) {
     <div class="ar-btns"><${Sure} label="Choose another kid" yes="Yes, take them off" note=${`This takes the Advisory Board off ${k.name}’s job and page.`} onYes=${() => change({ action: 'clear-kid' }, 'Taken off')} /></div>`
       : data.kids.length ? html`<ul class="ar-list">${data.kids.map((x) => html`<li key=${x.slug}><div class="ar-row ar-row--tight">
           <span class="ar-kid ar-kid--small">${x.photo ? html`<img src=${x.photo} alt="" width="44" height="44" loading="lazy" />` : null}<a href=${x.url} target="_blank" rel="noopener">${x.name}</a></span>
-          <${Sure} label=${`Pick ${x.name}`} yes=${`Yes, pick ${x.name}`} note="Every advisor gets their Demo Day invite, and the group’s logo goes on their page." cls="ar-btn--small" onYes=${() => change({ action: 'pick-kid', kid: x.slug }, `${x.name} is the group’s makeover`)} />
+          <${Sure} label=${`Pick ${x.name}`} yes=${`Yes, pick ${x.name}`} note="Every Advisory Board member gets their Demo Day invite, and the group’s logo goes on their page." cls="ar-btn--small" onYes=${() => change({ action: 'pick-kid', kid: x.slug }, `${x.name} is the group’s makeover`)} />
         </div></li>`)}</ul>`
         : html`<p class="ar-muted">No kid is waiting on funding with a public page right now.</p>`}
   <//>`;
@@ -564,12 +564,12 @@ function GroupCard({ ctx }) {
     : !g ? 'The group’s list isn’t being kept yet.'
     : g.error ? (/HTTP \d|answered \d/.test(g.error) ? 'Google didn’t answer the last time. The site will try again.' : `Google didn’t take the last change: ${g.error}`)
       : g.current === false ? 'A change is on its way to the group.'
-        : g.syncedAt ? `Matches the advisors on People, as of ${dayOf(g.syncedAt)}.` : 'The site will fill the group on its next look.';
+        : g.syncedAt ? `Matches People → Advisory, as of ${dayOf(g.syncedAt)}.` : 'The site will fill the group on its next look.';
   const unsent = data.advisors.filter((a) => !a.lastSeen && a.email && !data.welcomed?.[a.slug]);
   const welcome = async () => {
     const j = await act({ action: 'send-welcome', slugs: unsent.map((a) => a.slug) });
     if (!j) return;
-    if (j.sent) ctx.tell(`Sent to ${j.sent === 1 ? '1 advisor' : `${j.sent} advisors`}${j.failed ? `. ${j.failed} didn’t go` : ''}`, !!j.failed);
+    if (j.sent) ctx.tell(`Sent to ${j.sent === 1 ? '1 Advisory Board member' : `${j.sent} Advisory Board members`}${j.failed ? `. ${j.failed} didn’t go` : ''}`, !!j.failed);
     else ctx.tell(j.off ? 'Nothing went out: emails are off.' : j.failed ? `Nothing went out: ${j.failed === 1 ? 'the email' : `all ${j.failed} emails`} failed. Try again in a while.` : 'Nothing went out: they’ve all had it already.', true);
   };
   return html`<${Card} title="Reaching the group">
@@ -578,7 +578,7 @@ function GroupCard({ ctx }) {
     ${missing ? html`<p class="ar-note">No email on file for ${g.missing.map((p) => p.name).join(', ')}.</p>` : null}
     ${g?.error ? html`<div class="ar-btns"><button type="button" class="ar-btn" disabled=${busy} onClick=${async () => { setBusy(true); await act({ action: 'sync-group' }, 'Tried again'); setBusy(false); }}>Try again</button></div>` : null}
     <div class="ar-sub">
-      <${Toggle} checked=${data.settings.emails} label="Email the advisors" sub="The monthly ask, updates on introductions, and invites to meetings and Demo Days. Off, it all stays on the page."
+      <${Toggle} checked=${data.settings.emails} label="Email the Advisory Board" sub="Each new member’s sign-in email, the monthly ask, updates on introductions, and invites to meetings and Demo Days. Turned on, sign-in emails that waited while it was off go too. Off, it all stays on the page."
         onChange=${(on) => act({ action: 'save-settings', settings: { emails: on } }, on ? 'Emails are on' : 'Emails are off')} />
       ${data.settings.emails && unsent.length ? html`<div class="ar-btns"><${Sure} label=${`Send the sign-in email to ${unsent.length}`} yes="Yes, send it" note=${`To ${unsent.map((a) => first(a.name)).join(', ')}: how to open the page.`} onYes=${welcome} /></div>` : null}
     </div>
@@ -592,8 +592,8 @@ function People({ ctx }) {
   const agreement = data.docs.find((d) => d.kind === 'agreement' && d.shared !== false);
   return html`<${Card} title="The Advisory Board" count=${data.advisors.length} sub="Added and removed on People in the staff admin. Each person’s sign-in and the group’s list follow by themselves.">
     ${data.missing.length ? html`<p class="ar-note">Can’t sign in yet, no email on file: ${data.missing.map((p) => p.name).join(', ')}.</p>` : null}
-    ${data.advisors.length ? html`<div class="ar-table" role="table" aria-label="Advisors">
-      <div class="ar-tr ar-tr--h" role="row"><span role="columnheader">Advisor</span><span role="columnheader">Last signed in</span><span role="columnheader">Agreement</span><span role="columnheader">Term ends</span></div>
+    ${data.advisors.length ? html`<div class="ar-table" role="table" aria-label="Advisory Board members">
+      <div class="ar-tr ar-tr--h" role="row"><span role="columnheader">Member</span><span role="columnheader">Last signed in</span><span role="columnheader">Agreement</span><span role="columnheader">Term ends</span></div>
       ${data.advisors.map((a) => html`<${PersonRow} a=${a} agreement=${agreement} ctx=${ctx} key=${a.slug} />`)}
     </div>` : html`<p class="ar-muted">Nobody’s on the Advisory Board yet.</p>`}
   <//>`;
@@ -638,11 +638,11 @@ function DocsTab({ ctx }) {
     </li>`;
   });
   return html`<div class="ar-stack">
-    <${Card} title="Papers" sub="On their Documents page. The agreement is signed by each advisor once a term."><ul class="ar-list">${group(PAPERS)}</ul><//>
+    <${Card} title="Papers" sub="On their Documents page. The agreement is signed by each Advisory Board member once a term."><ul class="ar-list">${group(PAPERS)}</ul><//>
     <${LibraryCard} ctx=${ctx} open=${open} setOpen=${setOpen} editing=${editing} />
     <${BoardPapersCard} ctx=${ctx} />
     <${PublicOverview} ctx=${ctx} />
-    <${Card} title="Words for the Fundraise page" sub="What advisors copy and share. Nobody sees a draft until it’s saved."><ul class="ar-list">${group(WORDS)}</ul><//>
+    <${Card} title="Words for the Fundraise page" sub="What Advisory Board members copy and share. Nobody sees a draft until it’s saved."><ul class="ar-list">${group(WORDS)}</ul><//>
   </div>`;
 }
 
@@ -650,7 +650,7 @@ function DocsTab({ ctx }) {
 function LibraryCard({ ctx, open, setOpen, editing }) {
   const { data } = ctx;
   const kind = data.docKinds.find((k) => k.id === 'library');
-  return html`<${Card} title="On their Documents page" sub="Links and files, shelf by shelf. Advisors also see SOARD’s facts, logos, photos, filings, and the words below.">
+  return html`<${Card} title="On their Documents page" sub="Links and files, shelf by shelf. Advisory Board members also see SOARD’s facts, logos, photos, filings, and the words below.">
     ${data.shelves.map((sh) => {
     const docs = data.docs.filter((d) => d.kind === 'library' && d.shelf === sh.id);
     return html`<div class="ar-shelf" key=${sh.id}>
@@ -677,7 +677,7 @@ function BoardPapersCard({ ctx }) {
       .finally(() => setWant(({ [id]: gone, ...rest }) => rest));
   };
   if (!data.boardDocs.length) return null;
-  return html`<${Card} title="From the board’s documents" sub="Advisors can open only the ones turned on here. Papers the board signs stay with the board.">
+  return html`<${Card} title="From the board’s documents" sub="The Advisory Board can open only the ones turned on here. Papers the board signs stay with the board.">
     <div class="ar-stack ar-stack--tight">${data.boardDocs.map((d) => html`<${Toggle} checked=${d.id in want ? want[d.id] : on.has(d.id)} disabled=${d.id in want} onChange=${(v) => flip(d.id, v)} label=${d.title} key=${d.id} />`)}</div>
   <//>`;
 }
@@ -747,7 +747,7 @@ function DocEditor({ doc, kind, ctx, onDone, track }) {
     // New words on a paper people signed: their signatures stop counting, so it says so first
     if (kind?.sign && saved && body !== saved.body) {
       const n = data.advisors.filter((a) => signedNow(a.signed[id], current)).length;
-      if (n && !(await ask({ title: 'Ask everyone to sign again?', text: `The words changed, so the ${n === 1 ? 'advisor who has signed' : `${n} advisors who have signed`} will be asked to sign again.`, yes: 'Save and ask them', no: 'Keep editing', careful: true }))) return null;
+      if (n && !(await ask({ title: 'Ask everyone to sign again?', text: `The words changed, so the ${n === 1 ? 'Advisory Board member who has signed' : `${n} Advisory Board members who have signed`} will be asked to sign again.`, yes: 'Save and ask them', no: 'Keep editing', careful: true }))) return null;
     }
     setSaving(true);
     const onPage = shared && !hide;
@@ -802,8 +802,8 @@ function DocEditor({ doc, kind, ctx, onDone, track }) {
       <${Field} label="A few words about it" hint="Optional"><input class="ar-input" maxlength="200" value=${note} onInput=${(e) => setNote(e.currentTarget.value)} /><//>
       <${Field} label="Its web address" hint="Or add a file below"><input class="ar-input" type="url" inputmode="url" placeholder="https://" value=${url} onInput=${(e) => setUrl(e.currentTarget.value)} /><//>
       <${Field} label="Shelf"><select class="ar-input" value=${shelf} onChange=${(e) => setShelf(e.currentTarget.value)}>${data.shelves.map((sh) => html`<option value=${sh.id} key=${sh.id}>${sh.label}</option>`)}</select><//>
-    ` : html`<${ReportEditor} value=${body} onChange=${setBody} resetKey=${fresh} label="The words" placeholder="The words advisors read" timed="read" fields=${false} minHeight=${200} />`}
-    ${doc.kind === 'overview' ? html`<${Field} label="The PDF’s web address" hint="Advisors get an Open button for it"><input class="ar-input" type="url" inputmode="url" placeholder="https://" value=${url} onInput=${(e) => setUrl(e.currentTarget.value)} /><//>` : null}
+    ` : html`<${ReportEditor} value=${body} onChange=${setBody} resetKey=${fresh} label="The words" placeholder="The words Advisory Board members read" timed="read" fields=${false} minHeight=${200} />`}
+    ${doc.kind === 'overview' ? html`<${Field} label="The PDF’s web address" hint="Advisory Board members get an Open button for it"><input class="ar-input" type="url" inputmode="url" placeholder="https://" value=${url} onInput=${(e) => setUrl(e.currentTarget.value)} /><//>` : null}
     <div class="ar-files">
       ${files.length ? html`<ul class="ar-list">${files.map((f, i) => html`<li key=${f.id}><div class="ar-row ar-row--tight">
         <a ...${viewerLink(views, i)}>${f.name}</a><span class="ar-inline"><span class="ar-muted">${sizeText(f.size)}</span><${Sure} label="Remove" yes="Yes, remove it" cls="ar-btn--small" onYes=${() => act({ action: 'delete-file', id: f.id }, 'Removed')} /></span>
@@ -811,9 +811,9 @@ function DocEditor({ doc, kind, ctx, onDone, track }) {
       <input ref=${fileRef} type="file" hidden onChange=${addFile} />
       <button type="button" class="ar-btn" disabled=${saving} onClick=${() => fileRef.current?.click()}>${files.length ? 'Add another file' : 'Add a file'}</button>
     </div>
-    <${Toggle} checked=${shared} onChange=${setShared} label="On the advisors’ page" />
+    <${Toggle} checked=${shared} onChange=${setShared} label="On the Advisory Board page" />
     ${saved && !saved.shared && shared ? html`<p class="ar-note">It’s saved as a draft. Press Save to put it on the page.</p>` : null}
-    ${library && !url.trim() && !files.length ? html`<p class="ar-muted ar-small">Add a web address or a file so advisors have something to open.</p>` : null}
+    ${library && !url.trim() && !files.length ? html`<p class="ar-muted ar-small">Add a web address or a file so Advisory Board members have something to open.</p>` : null}
     <div class="ar-btns">
       <button type="button" class="ar-btn ar-btn--go" disabled=${saving || ctx.busy || !title.trim() || (library && !url.trim() && !files.length)} onClick=${async () => { if (await save()) onDone(); }}>Save</button>
       <button type="button" class="ar-btn ar-btn--quiet" onClick=${close}>Close</button>

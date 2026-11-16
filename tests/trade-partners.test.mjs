@@ -523,6 +523,10 @@ test('“Get started”: checked, a bot ignored, and an email JobTread has is a 
   r = await call({ action: 'start', company: 'Bot Co', name: 'Bot', email: 'bot@x.example', phone: '4045550100', website2: 'http://spam' });
   assert.equal(r.ok, true);
   assert.equal(world.emails.length, 0, 'the hidden field caught a bot');
+  // The site's bot trap by its name now (functions/api/_bot-trap.js), as the page sends every box by its name
+  r = await call({ action: 'start', company: 'Bot Two', name: 'Bot', email: 'bot2@x.example', phone: '4045550101', 'leave-this-empty': 'x' });
+  assert.equal(r.ok, true);
+  assert.equal(world.emails.length, 0, 'the trap by its new name caught it too');
   r = await call({ action: 'start', company: 'Whatever They Typed', name: 'Tom', email: 'Tom@TKO.example', phone: '4045550134' });
   assert.equal(r.ok, true);
   assert.equal(r.how, undefined, 'the page never says what JobTread has');

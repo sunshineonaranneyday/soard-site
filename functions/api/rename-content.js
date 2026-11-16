@@ -145,8 +145,13 @@ export async function rename(env, { collection, from, to } = {}, userEmail = 'un
       try { await DB.prepare(`UPDATE OR IGNORE ${t} SET slug = ? WHERE slug = ?`).bind(to, from).run(); } catch {}
     }
     try { await DB.prepare("UPDATE board_files SET slug = ? WHERE slug = ? AND owner_type IN ('signed', 'record')").bind(to, from).run(); } catch {}
-    // An advisor's records follow them too (./_advisory.js)
+    // An Advisory Board member's records follow them too (./_advisory.js), and their application, a press of Add
+    // to Advisory Board that was partway, and their welcome (had, or waiting): never sent twice, never lost
     try { await (await import('./_advisory.js')).moveSlug(DB, from, to); } catch {}
+    const said = (what) => (e) => { if (!/no such table/i.test(e?.message || '')) console.error(`[rename] ${what}`, e?.message); };
+    await DB.prepare('UPDATE advisory_applications SET person_slug = ? WHERE person_slug = ?').bind(to, from).run().catch(said('advisory application'));
+    await DB.prepare('UPDATE advisory_add_intents SET slug = ? WHERE slug = ?').bind(to, from).run().catch(said('advisory add'));
+    try { await (await import('./_advisory-mail.js')).renameMember(DB, from, to); } catch (e) { console.error('[rename] advisory welcome', e?.message); }
     try {
       const { appendEvents } = await import('./_board-sign.js');
       const had = await DB.prepare('SELECT COUNT(*) AS n FROM board_sign_events WHERE slug = ?').bind(from).first();

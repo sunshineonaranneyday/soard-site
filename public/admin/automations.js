@@ -2071,9 +2071,9 @@ const MAP = { t: 'SOARD', children: [
           does: 'The gala auction link.', touches: ['Qtego'], where: 'src/utils/auction.ts' },
         { t: 'Advisory Board application', s: 'live', k: 'visitor',
           when: 'Someone applies on /advisory-board/apply/ (always open; it replaced the Jotform form in October 2026).',
-          does: 'Five steps, saved on their device as they go. Each application is stored; the applicant gets a copy of what they sent; staff get an email (the list in People → Applications) and a Slack post without contact details. A name starting with TEST is a test: both emails go only to the address on it.',
-          touches: ['D1', 'Resend', 'Slack', 'Cloudflare Turnstile'], where: 'src/pages/advisory-board/apply.astro · functions/api/advisory-apply.js · _advisory-applications.js',
-          info: 'Staff work through them in People → Applications: where each stands, notes, and Add as an advisor (a hidden draft on People → Advisory with their private email). Turnstile, a hidden honeypot and a daily limit per address keep bots out.',
+          does: 'Five steps with a required headshot, saved on their device as they go. Each application is stored, its headshot on Cloudflare Images; the applicant gets a copy of what they sent; staff get an email (the list in People → Applications) and a Slack post without contact details. A name starting with TEST is a test: both emails go only to the address on it.',
+          touches: ['D1', 'Resend', 'Slack', 'Cloudflare Turnstile', 'Cloudflare Images'], where: 'src/pages/advisory-board/apply.astro · functions/api/advisory-apply.js · _advisory-applications.js',
+          info: 'Staff work through them in People → Applications: where each stands, notes, and Add to Advisory Board (on People → Advisory with their private email and their headshot as their photo: they can sign in to the advisory page and get reveal invites at once, are emailed how to sign in with Email the Advisory Board on, and stay off the public site until staff show them). Turnstile, a hidden honeypot and a daily limit per address keep bots out.',
           live: (f) => {
             if (!env(f)) return null;
             if (!f.env.resend) return ATTN('RESEND_API_KEY is missing, so neither the applicant nor staff are emailed.');

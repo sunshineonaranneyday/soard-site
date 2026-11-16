@@ -6927,7 +6927,7 @@
                 const advisory = data.advisory || [];
                 const missing = advisory.filter((m) => !m.hasEmail);
                 if (!advisory.length) return null;
-                return html`<div><dt>Advisory Board</dt><dd><strong>${advisory.length - missing.length} of ${advisory.length}</strong> advisors have an email for reveal invites.${missing.length ? html` <span class="ri-warn">Missing:</span> ${missing.map((m) => m.name).join(', ')}. Add each one on their page in <a class="link" href="#people/advisory">People → Advisory</a>.` : ''}</dd></div>`;
+                return html`<div><dt>Advisory Board</dt><dd><strong>${advisory.length - missing.length} of ${advisory.length}</strong> Advisory Board members have an email for reveal invites.${missing.length ? html` <span class="ri-warn">Missing:</span> ${missing.map((m) => m.name).join(', ')}. Add each one on their page in <a class="link" href="#people/advisory">People → Advisory</a>.` : ''}</dd></div>`;
               })()}
             </dl>
           </div>
@@ -9105,7 +9105,7 @@
         .filter((p) => inviteEmails[p.group] && p.status === 'active' && !inviteEmails[p.group][p.slug])
         .sort((a, b) => (a.group === 'advisory') - (b.group === 'advisory') || comparePeople(a, b)) : [];
       const noInviteGroups = [...new Set(noInvite.map((p) => p.group))];
-      const noInviteNoun = noInviteGroups.length > 1 ? 'board and advisory board member' : noInviteGroups[0] === 'advisory' ? 'advisor' : 'board member';
+      const noInviteNoun = noInviteGroups.length > 1 ? 'board and advisory board member' : noInviteGroups[0] === 'advisory' ? 'Advisory Board member' : 'board member';
       if (noInvite.length) needs.push({
         key: 'board-invites', tone: 'fix', icon: DI.mail,
         title: noInvite.length === 1 ? `${noInvite[0].name} won’t get reveal invites` : `${dashCount(noInvite.length, noInviteNoun)} won’t get reveal invites`,
@@ -11774,7 +11774,7 @@
       partner: { module: './partner-preview.js', noun: 'partner', publishType: 'partners', more: null, list: 'the partners page', name: (x) => x.name || 'New partner' },
       press: { module: './press-preview.js', noun: 'story', publishType: 'press', more: null, list: 'the publicity page', name: (x) => x.title || 'New story' },
       team: { module: './team-preview.js', noun: 'person', publishType: 'team', more: null, list: 'the Leadership page', name: (x) => x.name || 'New person' },
-      advisory: { module: './advisory-preview.js', noun: 'person', publishType: 'team', more: null, list: 'the Advisory Board page', name: (x) => x.name || 'New advisor' },
+      advisory: { module: './advisory-preview.js', noun: 'person', publishType: 'team', more: null, list: 'the Advisory Board page', name: (x) => x.name || 'New Advisory Board member' },
       person: { module: './person-preview.js', noun: 'profile', publishType: 'team', more: '“More of our board”', name: (x) => x.name || 'New person' },
     };
     const previewModules = {};
@@ -18638,7 +18638,7 @@
       ],
       advisory: [
         { id: 'members', title: 'Members', match: (p) => p.status !== 'memorial', sortable: true,
-          empty: 'No one here yet. Add an advisor, or paste a list of names and emails.' },
+          empty: 'No one here yet. Add an Advisory Board member, or paste a list of names and emails.' },
         { id: 'memorial', title: 'In memory', match: (p) => p.status === 'memorial', sortable: true, hideEmpty: true },
       ],
     };
@@ -18646,7 +18646,7 @@
     const PPL_GROUPS = {
       team: { heading: 'Team', add: 'team member', noun: 'team member', pageLabel: 'Leadership page', page: '/about/leadership/', anchor: '/about/leadership/#our-team', anchorHint: 'Our Team section' },
       board: { heading: 'Board', add: 'board member', noun: 'board member', pageLabel: 'Leadership page', page: '/about/leadership/', anchor: '/about/leadership/#board', anchorHint: 'Board of Directors section' },
-      advisory: { heading: 'Advisory Board', add: 'advisor', noun: 'advisor', pageLabel: 'Advisory Board page', page: '/advisory-board/', anchor: '/advisory-board/#members', anchorHint: 'Advisory Board page' },
+      advisory: { heading: 'Advisory Board', add: 'Advisory Board member', noun: 'Advisory Board member', pageLabel: 'Advisory Board page', page: '/advisory-board/', anchor: '/advisory-board/#members', anchorHint: 'Advisory Board page' },
     };
     const pplGroup = (g) => PPL_GROUPS[g] || PPL_GROUPS.team;
     /** Board and advisory records keep a private reveal invite email (also the Email menu's Bcc list) */
@@ -19396,7 +19396,7 @@ ${sections || '<p>No one yet.</p>'}
             until: status === 'alumni' ? (saved.until || pplYear()) : saved.until });
           const res = await api.saveContent(path, JSON.stringify(next, null, 2), `${status === 'alumni' ? 'Move to alumni' : 'Restore'}: ${n.name}`, r.sha);
           if (!res.success) throw new Error(res.error);
-          addToast(status === 'alumni' ? `${n.name} moved to alumni. They leave the site when you publish.` : `${n.name} is active again`, 'success', {
+          addToast(status === 'alumni' ? (group === 'advisory' ? `${n.name} is off the Advisory Board. Within a few minutes their sign-in to the Advisory Board page, reveal invites and advisory@ stop. They leave the public site when you publish.` : `${n.name} moved to alumni. They leave the site when you publish.`) : `${n.name} is active again`, 'success', {
             label: 'Undo',
             fn: async () => {
               const back = await api.saveContent(path, JSON.stringify(saved, null, 2), `Undo: ${n.name}`, res.sha);
@@ -19443,7 +19443,7 @@ ${sections || '<p>No one yet.</p>'}
             { divider: true },
             p.status === 'alumni'
               ? { label: 'Restore to active', hint: 'Back on the site after the next publish', onSelect: () => setStatus(p, 'active') }
-              : p.status === 'active' ? { label: 'Move to alumni', hint: 'Off the site, kept here', onSelect: () => setStatus(p, 'alumni') } : null,
+              : p.status === 'active' ? { label: 'Move to alumni', hint: group === 'advisory' ? 'Off the Advisory Board: sign-in, invites and advisory@ stop' : 'Off the site, kept here', onSelect: () => setStatus(p, 'alumni') } : null,
             { label: 'Delete…', danger: true, onSelect: () => onDelete(p.raw) },
           ]} />
         </li>`;
@@ -19487,7 +19487,7 @@ ${sections || '<p>No one yet.</p>'}
         ${empty ? html`<div class="card ppl-empty-all">
             <p><strong>${group === 'advisory' ? 'No one on the Advisory Board yet.' : `No ${label.toLowerCase()} members yet.`}</strong></p>
             <p class="text-muted">${group === 'advisory'
-              ? 'Add the first advisor, or paste a list of names and emails to add everyone at once. They’ll appear on the Advisory Board page after you publish.'
+              ? 'Add the first Advisory Board member, or paste a list of names and emails to add everyone at once. They’ll appear on the Advisory Board page after you publish.'
               : 'Add the first one and they’ll appear on the Leadership page after you publish.'}</p>
             <div class="ppl-empty-all__btns">
               ${withEmail ? html`<button type="button" class="btn btn-ghost" onClick=${() => setShowPaste(true)}>Paste a list</button>` : null}
@@ -20145,7 +20145,7 @@ ${sections || '<p>No one yet.</p>'}
         if (p.act !== 'skip' && d) return { tone: 'warn', label: d };
         return { tone: p.act === 'skip' ? 'quiet' : p.act === 'add' ? 'add' : 'quiet', label: p.note };
       };
-      return html`<${KdDialogBox} title=${group === 'advisory' ? 'Add advisors from a list' : 'Add board members from a list'}
+      return html`<${KdDialogBox} title=${group === 'advisory' ? 'Add Advisory Board members from a list' : 'Add board members from a list'}
         sub="One person per line: their name, then their email. Straight from an email or a spreadsheet is fine. Emails stay private: they’re never shown on the site, and every reveal’s calendar invite goes to them."
         onClose=${onClose} busy=${!!busy} size="md" className="ppl-paste"
         footer=${html`
@@ -20941,7 +20941,7 @@ ${sections || '<p>No one yet.</p>'}
             <${PplSegmented} label="Status" value=${data.status} onChange=${changeStatus}
               options=${board || advisory || data.status === 'memorial' ? TS_STATUSES : TS_STATUSES.filter((s) => s.id !== 'memorial')} />
             <div class="form-hint">${data.status === 'alumni' ? 'Off the site, but kept here. Restore them any time.'
-              : data.status === 'memorial' ? `Stays on the page, marked “In memoriam”, after the other ${advisory ? 'advisors' : 'board members'}.`
+              : data.status === 'memorial' ? `Stays on the page, marked “In memoriam”, after the other ${advisory ? 'Advisory Board members' : 'board members'}.`
               : advisory ? 'Shown on the Advisory Board page and the Leadership page.' : 'Shown on the Leadership page.'}</div>
           </div>
           <div class="form-row ppl-years">
@@ -20962,7 +20962,7 @@ ${sections || '<p>No one yet.</p>'}
             <span class="bc-switch-track" aria-hidden="true"></span>
             ${advisory ? 'Show on the site' : 'Show on the Leadership page'}
           </label>
-          <p class="form-hint">${data.status === 'alumni' ? 'Alumni are never shown.' : data.publishStatus === 'draft' ? `Hidden while you get them ready${withEmail ? '. Reveal invites still reach them' : ''}.` : listed ? 'Turn off to keep them hidden while you get their details ready.' : ''}</p>
+          <p class="form-hint">${data.status === 'alumni' ? 'Alumni are never shown.' : data.publishStatus === 'draft' ? (advisory ? 'Hidden from the public site. They can still sign in to the Advisory Board page and get reveal invites.' : `Hidden while you get them ready${withEmail ? '. Reveal invites still reach them' : ''}.`) : listed ? 'Turn off to keep them hidden while you get their details ready.' : ''}</p>
         </section>
 
         ${advisory ? html`<section class="card" aria-labelledby="ppl-adv-h">
@@ -20973,7 +20973,7 @@ ${sections || '<p>No one yet.</p>'}
               ? html`<p class="text-sm text-muted u-m-0">${data.status === 'memorial' ? 'Memorial entries are never invited.' : 'Alumni aren’t invited. Restore them to active to invite them again.'}</p>`
               : html`<input id="ppl-email" class="form-input" type="email" autocomplete="off" placeholder="name@example.com" disabled=${emails === null}
                   value=${emailValue} onInput=${(e) => setEmail(e.target.value)} />
-                <div class=${`form-hint${emailBad ? ' ppl-bad' : ''}`}>${emailBad ? 'That doesn’t look like an email address.' : 'Private: never shown on the site. Active advisors join every reveal’s calendar invite with the board, from the tentative date on. Saved with Save.'}</div>`}
+                <div class=${`form-hint${emailBad ? ' ppl-bad' : ''}`}>${emailBad ? 'That doesn’t look like an email address.' : 'Private: never shown on the site. It’s how they sign in to the Advisory Board page, and active Advisory Board members join every reveal’s calendar invite with the board, from the tentative date on. Saved with Save.'}</div>`}
           </div>
         </section>` : null}
 
@@ -25257,7 +25257,7 @@ ${sections || '<p>No one yet.</p>'}
     }
 
     // People → Applications: Advisory Board applications from /advisory-board/apply/.
-    // Kept in ./advisory-applications.js, loaded on first visit. Add as an advisor
+    // Kept in ./advisory-applications.js, loaded on first visit. Add to Advisory Board
     // saves through the admin's own api and person record, passed in as a kit.
     let advisoryModule = null;
     const loadAdvisory = () => (advisoryModule ||= import('./advisory-applications.js').catch((e) => { advisoryModule = null; throw e; }));
@@ -26162,7 +26162,7 @@ ${sections || '<p>No one yet.</p>'}
         { id: 'board', label: 'Board', icon: 'board', hash: '#board', meta: 'Meetings, minutes and documents for the board', gate: 'board' },
       ] },
       { label: 'Website', items: [
-        { id: 'people-hub', label: 'People', icon: 'team', hash: '#people', meta: 'Team, board, advisors' },
+        { id: 'people-hub', label: 'People', icon: 'team', hash: '#people', meta: 'Team, board, Advisory Board' },
         { id: 'press-hub', label: 'Press', icon: 'press', hash: '#press', meta: 'Stories, found coverage, outlets' },
         { id: 'events', label: 'Events', icon: 'events', hash: '#events' },
         { id: 'site-hub', label: 'Site Config', icon: 'globe', hash: '#site', meta: 'Every public page, page by page' },

@@ -15,6 +15,7 @@
  * email. The insurance minimums come from the server at load.
  * The hero photo: Admin → Site Config (tradePartnersPhotos.hero).
  */
+import BotTrap from '../../components/global/BotTrap.astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import siteSettings from '../../content/site/settings.json';
 import { getSiteStats } from '../../utils/stats';
@@ -110,7 +111,7 @@ const hero = {
             <label class="tp-field"><span class="tp-label" data-t="name">Your name</span><input name="name" autocomplete="name" required maxlength="80" /></label>
             <label class="tp-field"><span class="tp-label" data-t="phone">Phone</span><input name="phone" type="tel" autocomplete="tel" inputmode="tel" required maxlength="20" /></label>
             <label class="tp-field tp-span"><span class="tp-label" data-t="emailLabel">Email address</span><input name="email" type="email" autocomplete="email" inputmode="email" required maxlength="120" /></label>
-            <div class="tp-hp" aria-hidden="true"><label>Leave this empty <input name="website2" tabindex="-1" autocomplete="off" /></label></div>
+            <BotTrap />
           </div>
           <div class="tp-turnstile" id="tp-turnstile"></div>
           <p class="tp-error" id="tp-start-error" role="alert" hidden></p>

@@ -20,9 +20,10 @@
  * "ready" as soon as it loads; one that never does (its page failed, or was
  * blocked) is given up on, and the next press builds a fresh one.
  *
- * The form needs: input[name="email"], input[name="website"] (the honeypot),
+ * The form needs: input[name="email"], the bot trap (src/components/global/BotTrap.astro),
  * a submit button with .btn-text / .btn-busy / .btn-done, and a .remind-note.
  */
+import { trapValue } from '../../functions/api/_bot-trap.js';
 import { mailFix } from '../components/apply/mail-fix.js';
 import { isEmail } from './email-rule.js';
 
@@ -284,7 +285,7 @@ export function wireRemindForm(form: HTMLFormElement, { checkBox, kid, source, t
     calledOff = false;
     const email = input.value.trim();
     if (!email) { say('Enter your email address.', { error: true, field: true }); input.focus(); return; }
-    const hp = (form.querySelector('input[name="website"]') as HTMLInputElement | null)?.value || '';
+    const hp = trapValue(form);
     const fix = mailFix(email);
     if (!isEmail(email)) {
       // "ana@gmail.com." is a slip with an answer; anything else needs fixing by hand

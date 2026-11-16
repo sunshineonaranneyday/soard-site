@@ -109,6 +109,18 @@ export async function syncBoardAccess(env, { fetchImpl = fetch, now = Date.now()
   }
 }
 
+/**
+ * Can this address sign in now? Cloudflare took the site's last list, that list is everyone who signs in as
+ * things stand (so it has them), and the policy naming it is on the admin's sign-in. Before a "your page is
+ * ready" email goes, so its link never meets a sign-in that doesn't know them yet.
+ */
+export async function canSignIn(env, email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!isEmail(e)) return false;
+  const [state, everyone] = await Promise.all([readState(env.DB, KEY), everyoneSignIns(env.DB)]);
+  return Boolean(state.ok && state.attached && everyone.emails.includes(e) && state.hash === await hashOf(everyone.emails));
+}
+
 /** For the admin: whether board members can sign in, and who can't yet */
 export async function accessStatus(env) {
   const [state, { emails, missing }, everyone] = await Promise.all([readState(env.DB, KEY), boardSignIns(env.DB), everyoneSignIns(env.DB)]);

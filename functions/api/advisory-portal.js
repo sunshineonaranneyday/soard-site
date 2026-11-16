@@ -26,7 +26,7 @@ const fromError = (e) => {
   return Response.json({ ok: false, error: 'That didn’t go through. Try again in a moment.' }, { status: 500 });
 };
 const later = async (context, p) => { if (context.waitUntil) context.waitUntil(p); else await p; };
-const REFUSED = 'The advisory page is for SOARD’s Advisory Board';
+const REFUSED = 'The Advisory Board page is for SOARD’s Advisory Board';
 
 export async function onRequestGet(context) {
   try {
@@ -48,7 +48,7 @@ export async function onRequestPost(context) {
       if (w.kind === 'advisor') await later(context, noteEvents(env, w, request, body));
       return Response.json({ ok: true });
     }
-    if (!w.answers) return fail('Only an advisor can do this', 403);
+    if (!w.answers) return fail('Only an Advisory Board member can do this', 403);
     switch (body.action) {
       case 'answer': {
         const mine = await answerAsk(env.DB, String(body.askId || ''), w.slug, { answer: body.answer, note: body.note });

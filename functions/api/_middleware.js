@@ -308,7 +308,7 @@ async function handle(context) {
         }
       }
       return Response.json(
-        { ok: false, error: 'Too many attempts — please wait a minute and try again.' },
+        { ok: false, error: 'Too many attempts. Please wait a minute and try again.' },
         { status: 429, headers: { ...publicCors, 'Retry-After': String(wait) } }
       );
     }
@@ -391,7 +391,7 @@ async function handle(context) {
         member
           ? { success: false, error: 'This sign-in opens the board page only.', board: BOARD_PAGE }
           : advisor
-            ? { success: false, error: 'This sign-in opens the advisory page only.', advisory: ADVISORY_PAGE }
+            ? { success: false, error: 'This sign-in opens the Advisory Board page only.', advisory: ADVISORY_PAGE }
             : { success: false, error: 'This sign-in isn’t on SOARD’s team or board list.' },
         { status: 403, headers: cors }
       );

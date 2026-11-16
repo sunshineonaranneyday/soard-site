@@ -17,6 +17,7 @@
  * - Accent photo in <picture> to skip mobile download
  * - prefers-reduced-motion kills all animation
  */
+import BotTrap from '../components/global/BotTrap.astro';
 import BaseLayout from '../layouts/BaseLayout.astro';
 import FAQSection from '../components/ui/FAQSection.astro';
 import { getPublishedKids, getPublishedCommunity } from '../utils/collections';
@@ -215,7 +216,7 @@ const hero = {
             />
             <button type="submit" class="notify-btn" id="notify-btn">Notify Me</button>
           </div>
-          <div aria-hidden="true" style="position:absolute;left:-9999px;top:-9999px;"><input type="text" name="website" tabindex="-1" autocomplete="off" /></div>
+          <BotTrap />
           <input type="hidden" name="source" value="application-waitlist" />
           <input type="hidden" name="page" value="apply" />
           <!-- The quick check (src/utils/signup-check.ts): out of sight unless Cloudflare wants a click -->
@@ -516,6 +517,7 @@ const hero = {
      The family picks the language of their emails (Spanish is preselected for
      a Spanish browser, or for someone who used the form in Spanish). -->
 <script>
+  import { trapValue } from '../../functions/api/_bot-trap.js';
   import { signupCheck, postPlainly } from '../utils/signup-check';
   import { onPageLoad } from '../utils/page-load';
 
@@ -594,9 +596,8 @@ const hero = {
       const email = input.value.trim();
       if (!email) return;
 
-      // Honeypot: bots fill hidden fields, humans don't
-      const honeypot = form.querySelector<HTMLInputElement>('[name="website"]');
-      const hp = honeypot ? honeypot.value : '';
+      // The bot trap: people never see it, bots fill it in (functions/api/_bot-trap.js)
+      const hp = trapValue(form);
 
       setNote(IDLE_NOTE);
       btn.disabled = true;

@@ -23,6 +23,7 @@
  * all of it off with reduced motion.
  */
 
+import BotTrap from '../global/BotTrap.astro';
 import { remindPromise } from '../../utils/live-banner';
 import { upcomingAtBuild } from '../../utils/reveals-copy';
 import { bandRowsHtml } from '../../utils/band-rows';
@@ -105,7 +106,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
               <span class="btn-text">Email me</span><span class="btn-busy"><span class="btn-spinner" aria-hidden="true"></span><span class="sr-only">Sending</span></span><span class="btn-done">Done</span>
             </button>
           </div>
-          <div class="upn-mail__hp" aria-hidden="true"><label>Website<input type="text" name="website" tabindex="-1" autocomplete="off" /></label></div>
+          <BotTrap />
           <p class="remind-note" role="status" aria-live="polite"></p>
         </form>
         <!-- The quick check (Turnstile) runs in a small frame here, out of sight unless it needs a click -->

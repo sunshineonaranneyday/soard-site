@@ -78,9 +78,9 @@ test('an advisor reaches only the advisors’ routes; a stranger reaches nothing
   assert.deepEqual(routesFor({}), []);
 });
 
-test('only active, published advisors can sign in, and a board member is never taken for one', async () => {
+test('every active advisor can sign in, shown on the site or not, and a board member is never taken for one', async () => {
   assert.equal((await advisorFor(env.DB, 'ADA@private.example')).slug, 'ada-advisor');
-  assert.equal(await advisorFor(env.DB, EMAILS['dee-draft']), null, 'a draft');
+  assert.equal((await advisorFor(env.DB, EMAILS['dee-draft']))?.slug, 'dee-draft', 'hidden from the site (Add to Advisory Board) still signs in');
   assert.equal(await advisorFor(env.DB, EMAILS['old-advisor']), null, 'someone who left');
   assert.equal(await advisorFor(env.DB, EMAILS['bo-kim']), null, 'a board member');
   assert.equal(await boardMemberFor(env.DB, EMAILS['ada-advisor']), null, 'an advisor is not a board member');
@@ -89,7 +89,8 @@ test('only active, published advisors can sign in, and a board member is never t
 test('the Access list holds the board and advisors; the board count stays the board’s', async () => {
   const all = (await everyoneSignIns(env.DB)).emails;
   assert.ok(all.includes(EMAILS['ada-advisor']) && all.includes(EMAILS['bo-kim']));
-  assert.ok(!all.includes(EMAILS['dee-draft']) && !all.includes(EMAILS['old-advisor']));
+  assert.ok(all.includes(EMAILS['dee-draft']), 'a hidden advisor is on the list');
+  assert.ok(!all.includes(EMAILS['old-advisor']));
   assert.ok(!(await boardSignIns(env.DB)).emails.includes(EMAILS['ada-advisor']));
 });
 
@@ -119,7 +120,7 @@ test('nothing private reaches an advisor’s page', async () => {
     assert.ok(!(key in page), `board key on the page: ${key}`);
   }
   assert.ok(page.people.every((p) => !('email' in p)), 'no email on a card');
-  assert.deepEqual(page.people.map((p) => p.name), ['Ada Advisor', 'Ben Advisor'], 'active and published only');
+  assert.deepEqual(page.people.map((p) => p.name), ['Ada Advisor', 'Ben Advisor', 'Dee Draft'], 'every active advisor, shown on the site or not; never someone who left');
 });
 
 test('dollars are only under fundraise, and an advisor sees only their own', async () => {
@@ -412,6 +413,17 @@ test('a renamed advisor keeps their records', async () => {
   assert.equal((await getSettings(env.DB)).pages.p1, 'ada-new');
 });
 
+test('a renamed advisor with a long name: their meetings follow too (D1 refuses a LIKE pattern over 50 bytes)', async () => {
+  const long = 'maria-del-carmen-alejandra-fernandez-de-la-cruz-rodriguez';
+  await ensureAdvisory(env.DB);
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS advisory_meetings (id TEXT PRIMARY KEY, data TEXT NOT NULL, at TEXT)').run();
+  await env.DB.prepare('INSERT INTO advisory_meetings (id, data) VALUES (?, ?)').bind('m-long', JSON.stringify({ sections: [{ items: [{ who: [long] }] }], replies: { [long]: 'accepted' } })).run();
+  await moveSlug(env.DB, long, 'maria-fernandez');
+  const after = (await env.DB.prepare('SELECT data FROM advisory_meetings WHERE id = ?').bind('m-long').first()).data;
+  assert.ok(!after.includes(long), 'no trace of the old slug');
+  assert.deepEqual(JSON.parse(after), { sections: [{ items: [{ who: ['maria-fernandez'] }] }], replies: { 'maria-fernandez': 'accepted' } });
+});
+
 // ─── Money ──────────────────────────────────────────────────────────
 
 const pay = (o) => ({ id: 'p', status: 'succeeded', amount: 10000, campaign_id: 'camp', refunds: [], ...o });
@@ -684,6 +696,15 @@ test('advisory@ stays as it is until emails are on', async () => {
   assert.deepEqual(await readState(env.DB, 'advisory-group-runs'), {}, 'it didn’t even look');
 });
 
+test('emails off after the site filled advisory@: it still looks, so whoever leaves is taken off', async () => {
+  const { maybeRunAdvisory } = await import('../functions/api/_advisory-heartbeat.js');
+  const { readState, writeState } = await import('../functions/api/_board-roles.js');
+  env.GOOGLE_CALENDAR_KEY = 'x';
+  await writeState(env.DB, 'advisory-group', { ok: true, syncedAt: new Date(NOW - 86400000).toISOString(), hash: 'old' });
+  await maybeRunAdvisory(env, { fetchImpl: async () => { throw new Error('Google is down'); }, now: NOW });
+  assert.equal((await readState(env.DB, 'advisory-group-runs')).lookedAt, NOW, 'it looked');
+});
+
 test('editing a paper keeps its link and its place', async () => {
   const d = await saveDoc(env.DB, { kind: 'overview', title: 'Overview', url: 'https://files.example/o.pdf', sort: 3 });
   const e = await saveDoc(env.DB, { id: d.id, kind: 'overview', title: 'Overview', body: 'New words' });
@@ -708,7 +729,7 @@ test('sendAsk does nothing with the switch off, and goes once with it on', async
   globalThis.fetch = async (u, o) => { sent.push(JSON.parse(o.body)); return new Response(JSON.stringify({ data: [{ id: 'x' }] }), { status: 200 }); };
   try {
     const r = await sendAsk(env, ask, { now: NOW });
-    assert.equal(r.sent, 2);
+    assert.equal(r.sent, 3, 'Ada, Ben and Dee (hidden from the site, still an advisor)');
     assert.deepEqual(await sendAsk(env, ask, { now: NOW }), { already: true });
     assert.equal((await mailLog(env.DB))[0].kind, 'ask');
     const body = JSON.stringify(sent);

@@ -21,7 +21,7 @@ const AGREEMENT = `I agree to serve on the Sunshine on a Ranney Day Advisory Boa
 - The Advisory Board is advisory and ambassadorial. I hold no fiduciary, governance, operational, budgetary, staffing, or voting authority, and I don't sign or commit anything on SOARD's behalf.`;
 
 const DOCS = [
-  { kind: 'agreement', title: 'Advisor agreement', body: AGREEMENT },
+  { kind: 'agreement', title: 'Advisory Board agreement', body: AGREEMENT },
   { kind: 'overview', title: 'Advisory Board overview', body: 'What the Advisory Board is, what members do, and what we ask.', url: OVERVIEW_URL },
   { kind: 'pitch', title: 'Your 30-second pitch', body: `Sunshine on a Ranney Day builds life-changing spaces for children with special needs, because every child deserves a space that makes them feel safe, seen, and loved.
 

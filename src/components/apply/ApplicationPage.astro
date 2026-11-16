@@ -19,6 +19,7 @@
  * follows its own switch (application.orgOpen, open unless switched off),
  * is in English, and while closed points to our email instead.
  */
+import BotTrap from '../global/BotTrap.astro';
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import siteSettings from '../../content/site/settings.json';
 import { getSiteStats } from '../../utils/stats';
@@ -138,7 +139,7 @@ const breadcrumbs = [
             <input id="af-notify-email" type="email" name="email" autocomplete="email" inputmode="email" required placeholder={w('notifyPlaceholder')} data-af-t-placeholder="notifyPlaceholder" />
             <button type="submit" class="btn btn-primary" data-notify-btn>{w('notifyButton')}</button>
           </div>
-          <div class="af-sr" aria-hidden="true"><input type="text" name="website" tabindex="-1" autocomplete="off" /></div>
+          <BotTrap />
           <!-- The quick check (src/utils/signup-check.ts): out of sight unless Cloudflare wants a click -->
           <div class="af-notify-check" data-signup-check></div>
           <p class="af-notify-note" data-notify-note role="status" aria-live="polite">{w('notifyNote')}</p>
@@ -264,9 +265,7 @@ const breadcrumbs = [
             </div>
 
             <!-- People never see this; bots fill it in -->
-            <div class="af-hp" aria-hidden="true">
-              <label>Website <input type="text" name="website" tabindex="-1" autocomplete="off" data-honeypot /></label>
-            </div>
+            <BotTrap />
 
             <div class="af-turnstile" data-turnstile hidden><div class="cf-turnstile"></div></div>
 
