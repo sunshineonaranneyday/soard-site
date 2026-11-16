@@ -181,7 +181,8 @@ export function nextWork(reveals, kids, ledger, now = Date.now()) {
     const rs = mine.resheet || {};
     const redo = ['as-built', 'proposed'].filter((part) => (kid.plans || []).some((p) => cutDown(p) && planKind(p) === part)
       && rs[part] !== 'done' && !(Number(rs[part]) > now - RESHEET_RETRY_MS));
-    if (redo.length) return { ...job, work: 'drawings', want: redo, redo: true };
+    // (One sheet a run: a big plan set's two sheets don't fit one run's time with JobTread read first)
+    if (redo.length) return { ...job, work: 'drawings', want: [redo[0]], redo: true };
   }
   return null;
 }
@@ -566,7 +567,9 @@ async function inBrowser(data, drawSrc, designSrc, base, opts) {
     const doc = await task.promise;
     const zeroBased = opts.sheets.some((s) => s.page === 0);
     const pages = [];
-    for (let n = 1; n <= Math.min(doc.numPages, 40); n++) {
+    // Drawing again whole (resheet): its pages are known from the first time, so no other page is read
+    if (opts.only?.length) for (const o of opts.only) { if (o.n >= 1 && o.n <= doc.numPages) pages.push({ n: o.n, kind: o.kind, title: '', sheet: '' }); }
+    else for (let n = 1; n <= Math.min(doc.numPages, 40); n++) {
       const page = await doc.getPage(n);
       const scale = 360 / page.getViewport({ scale: 1 }).width;
       const viewport = page.getViewport({ scale });
@@ -638,8 +641,14 @@ async function drawSheets(env, ctx, bytes, opts) {
 
 async function bringDrawings(env, ctx, job, src, kid, want, fetchImpl, now, deadline = Infinity, clock = () => Date.now(), { redo = false } = {}) {
   const have = sourcesOf(kid);
-  // Drawing again whole (resheet): the cut-down pages are wanted again, and only a whole sheet takes their place
-  if (redo) for (const p of kid?.plans || []) if (cutDown(p) && want.includes(planKind(p))) have.delete(p.source);
+  // Drawing again whole (resheet): the cut-down pages are wanted again, and only a whole sheet takes their place. Their
+  // pages are known ("jt:<file>#<page>"): only their files are opened, and only those pages drawn
+  const redoPages = new Map();
+  if (redo) for (const p of kid?.plans || []) if (cutDown(p) && want.includes(planKind(p))) {
+    have.delete(p.source);
+    const m = /^jt:([^#]+)#(\d+)$/.exec(p.source);
+    if (m) redoPages.set(m[1], [...(redoPages.get(m[1]) || []), { n: Number(m[2]), kind: planKind(p) }]);
+  }
   const words = addressWords(src.address);
   const streetWords = src.address.street ? addressWords({ street: src.address.street }) : [];
   const plans = [];
@@ -652,7 +661,7 @@ async function bringDrawings(env, ctx, job, src, kid, want, fetchImpl, now, dead
   // before), then the uploads, so the notes and the publish after it have their time (AFTER_MS)
   const drawBy = deadline - DRAW_UPLOAD_MS;
   // The plan sets, final plans first (sortFiles' order), a document (a scope of work, a letter) never
-  for (const f of src.drawings.filter((x) => isPdf(x) && !isDocumentName(x.name))) {
+  for (const f of src.drawings.filter((x) => isPdf(x) && !isDocumentName(x.name) && (!redo || redoPages.has(x.id)))) {
     if (!still.size || looked >= PDFS_A_RUN) break;
     // (A plan set takes the browser several seconds: none is started without the time for it)
     if (deadline - clock() < DRAW_MIN_MS) { starved ||= looked === 0; cut ||= looked > 0; break; }
@@ -661,7 +670,7 @@ async function bringDrawings(env, ctx, job, src, kid, want, fetchImpl, now, dead
       const { bytes } = await fileBytes(f.url, fetchImpl, 'JobTread’s files', { timeoutMs: Math.max(2000, drawBy - 3000 - clock()) });
       if (drawBy - clock() < 3000) { cut = true; break; }
       const sheets = src.sheets.filter((s) => s.fileId === f.id);
-      const got = await withDeadline(drawSheets(env, ctx, bytes, { words, streetWords, sheets, want: [...still], maxEdge: MAX_EDGE, document: false }), drawBy - clock(), 'drawing the plan set');
+      const got = await withDeadline(drawSheets(env, ctx, bytes, { words, streetWords, sheets, want: [...still], maxEdge: MAX_EDGE, document: false, ...(redo ? { only: redoPages.get(f.id) || [] } : {}) }), drawBy - clock(), 'drawing the plan set');
       const boards = [];
       for (const o of got.out) {
         const source = `jt:${f.id}#${o.n}`;
@@ -1282,8 +1291,14 @@ export async function runRevealDesigns(env, ctx = {}) {
           const got = await bringDrawings(env, ctx, job, src, kids[job.slug], job.want, fetchImpl, now, drawEnd, clock, { redo: !!job.redo });
           plans = got.plans;
           missing = got.missing;
-          // A redraw is done once looked at properly, whole or not (not whole: the cut-down one stays, as it was)
-          if (job.redo && !got.starved && !got.cut) for (const part of job.want) mine.resheet[part] = 'done';
+          // A redraw is done once looked at properly, whole or not (not whole: the cut-down one stays, as it was). One cut
+          // short (out of time, a service down) tries again a minute on, three times running, when JobTread's reveals are
+          // still fresh and the run has its time for the drawing; then every half hour
+          if (job.redo && !got.starved && !got.cut) { for (const part of job.want) mine.resheet[part] = 'done'; delete mine.resheetCuts; }
+          else if (job.redo) {
+            mine.resheetCuts = (mine.resheetCuts || 0) + 1;
+            if (mine.resheetCuts <= 3) { for (const part of job.want) mine.resheet[part] = now - RESHEET_RETRY_MS + 60_000; soon = true; }
+          }
           // No time to look at all, or out of it partway (or a service down): not a real try, so what's still wanted
           // isn't left for 6 hours, only half an hour, twice that each time in a row (so this kid doesn't take every
           // run from the others while JobTread is slow, and a plan set too big for a run ends up with the usual wait)

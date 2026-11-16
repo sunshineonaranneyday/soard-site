@@ -1395,7 +1395,7 @@ test('a drawing this import cut down before whole sheets is drawn again whole, o
   const remy = { name: 'Remy', slug: 'remy', status: 'in-progress', plans: [cutPlan('remy', 'as-built', 2), cutPlan('remy', 'proposed', 3)], beforePhotos: [{ url: 'https://imagedelivery.net/HASH/kids/remy/b1/public', looked: 'staff' }] };
   const mine = (extra = {}) => ({ remy: { befores: { checked: T }, done: { 'as-built': T, proposed: T, board: T }, ...extra } });
   const w = nextWork(reveals, { remy }, mine(), T);
-  assert.deepEqual([w.work, w.want, w.redo], ['drawings', ['as-built', 'proposed'], true]);
+  assert.deepEqual([w.work, w.want, w.redo], ['drawings', ['as-built'], true], 'one sheet a run');
   assert.equal(nextWork(reveals, { remy }, mine({ resheet: { 'as-built': 'done', proposed: 'done' } }), T), null, 'once each');
   assert.equal(nextWork(reveals, { remy }, mine({ resheet: { 'as-built': 'done', proposed: T - 10 * MIN } }), T), null, 'one cut short waits half an hour');
   assert.deepEqual(nextWork(reveals, { remy }, mine({ resheet: { 'as-built': 'done', proposed: T - 40 * MIN } }), T).want, ['proposed'], 'then itâ€™s tried again');
@@ -1423,10 +1423,14 @@ test('the redraw: the existing sheet (its street found) takes the cut-down oneâ€
   const reveals = [{ slug: 'remy', name: 'Remy', startsAt: new Date(T + 5 * DAY).toISOString(), confirmed: true, jobId: 'JOB9' }];
   const was = (await kid('remy')).plans;
   let r;
-  // (Its before photos first, then the redraw: a run each, ten minutes apart)
+  // (Its before photos first, then the redraw, one sheet a run: a run each, ten minutes apart)
   let t = T;
-  for (let i = 0; i < 6 && r?.did?.work !== 'drawings'; i++, t += 11 * MIN) r = await run(t, { reveals });
-  assert.deepEqual([r.did.slug, r.did.work, r.did.added.plans], ['remy', 'drawings', ['as-built']]);
+  const redraws = [];
+  const asked = drawn.length;
+  for (let i = 0; i < 8 && redraws.length < 2; i++, t += 11 * MIN) { r = await run(t, { reveals }); if (r.did?.work === 'drawings') redraws.push(r.did); }
+  assert.deepEqual(redraws.map((d) => [d.slug, d.added.plans.join()]), [['remy', 'as-built'], ['remy', '']], 'the existing sheet redrawn whole; the proposed looked at, not whole, left');
+  // Only the page it came from was drawn, of only its file
+  assert.deepEqual(drawn.slice(asked).map((o) => o.only), [[{ n: 2, kind: 'as-built' }], [{ n: 3, kind: 'proposed' }]]);
   const now = (await kid('remy')).plans;
   assert.deepEqual(now.map((p) => [p.type, p.label, p.source]), was.map((p) => [p.type, p.label, p.source]), 'caption, kind and place kept');
   assert.match(now[1].url, /-sheet\.png/);
@@ -1442,3 +1446,28 @@ test('the redraw: the existing sheet (its street found) takes the cut-down oneâ€
   assert.match((await ledger()).kids.remy.page || '', /\|\w+$/);
 });
 
+
+test('a redraw cut short tries again a minute on (JobTreadâ€™s reveals still fresh, so the run has its time), three times running; then it gets in', async () => {
+  await onlyDue();
+  const T = NOW + 640 * 3600e3;
+  await putKid('rory', { name: 'Rory', publishStatus: 'published', plans: [cutPlan('rory', 'as-built', 2), cutPlan('rory', 'proposed', 3, { addressCheck: 'checked', source: undefined }), { url: 'https://imagedelivery.net/HASH/kids/rory/board/public', label: 'Board', type: 'board', source: 'jt:BRD' }], beforePhotos: [{ url: 'https://imagedelivery.net/HASH/kids/rory/b1/public', looked: 'staff', source: 'jt:Q1' }] });
+  SOURCES.rory = { ...SOURCES['dylan-2026'], kid: { slug: 'rory', name: 'Rory' }, job: { id: 'JOB10', name: 'Rory Vale (2026)' }, befores: [photo('Q1')] };
+  const reveals = [{ slug: 'rory', name: 'Rory', startsAt: new Date(T + 5 * DAY).toISOString(), confirmed: true, jobId: 'JOB10' }];
+  let tick = 0;
+  // The plan set comes so late there's no time left to draw it
+  const slowSet = async (input, init) => { const u = typeof input === 'string' ? input : input.url; if (u.endsWith('/set.pdf')) tick = 18_500; return fetchImpl(input, init); };
+  let t = T;
+  let r;
+  for (let i = 0; i < 6 && r?.did?.work !== 'drawings'; i++, t += 11 * MIN) { tick = 0; r = await run(t, { reveals, clock: () => tick, fetchImpl: slowSet }); }
+  const at = t - 11 * MIN;
+  let l = await ledger();
+  assert.deepEqual([r.did.added.plans, l.kids.rory.resheet['as-built'], l.kids.rory.resheetCuts], [[], at - 30 * MIN + MIN, 1], 'cut short: again in a minute');
+  assert.equal(Number((await claimRow()).data), at + MIN, 'the next run a minute on');
+  // A minute on, with the time: redrawn whole, and the count of cuts ends
+  tick = 0;
+  const again = await run(at + MIN + 1000, { reveals, clock: () => tick });
+  assert.deepEqual([again.did.work, again.did.added.plans], ['drawings', ['as-built']]);
+  l = await ledger();
+  assert.deepEqual([l.kids.rory.resheet['as-built'], l.kids.rory.resheetCuts], ['done', undefined]);
+  assert.match((await kid('rory')).plans[0].url, /-sheet\.png/);
+});
