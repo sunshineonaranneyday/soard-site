@@ -11,8 +11,9 @@
  *
  * Set up (once), signed in as someone who is a member of the backup shared drive (Contributor or more):
  * script.google.com → New project → paste this file as Code.gs; Project Settings → tick "Show appsscript.json"
- * and paste appsscript.json; then pick setUp in the toolbar and press Run (Google asks to allow it once). That's
- * all: it runs by itself from then on.
+ * and paste appsscript.json (it turns on the Drive API for this script, which its calls to Drive need: without it
+ * Google answers 403 "Google Drive API has not been used in project …"); then pick setUp in the toolbar and press
+ * Run (Google asks to allow it once). That's all: it runs by itself from then on.
  */
 const NAMED = /back\s*-?\s*up/i;
 const TZ = 'America/New_York';
