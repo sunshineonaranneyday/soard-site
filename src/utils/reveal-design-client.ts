@@ -66,6 +66,15 @@ export function focusOf(s: DesignSlide | null | undefined): { x: number; y: numb
   return f;
 }
 
+/**
+ * A whole plan sheet: the designer's own, border, title block and wall legend, its address painted out (a -sheet file,
+ * or one whose drawing's place is known). Shown whole everywhere, filling its card, its badge in the sheet's empty
+ * top-right corner (the legend is top-left). The kid page has the same rule (src/pages/kids/[slug].astro isWholeSheet,
+ * public/admin/kids-shared.js for its Preview)
+ */
+export const isWholeSheet = (s: DesignSlide | null | undefined): boolean =>
+  !!s && (s.kind === 'as-built' || s.kind === 'proposed') && (!!focusOf(s) || /-sheet\./i.test(s.url || ''));
+
 /** Same slides, same order: nothing to redraw */
 export const designSignature = (slides: DesignSlide[]) => slides.map((s) => `${s.kind}|${s.url}|${s.crop ? 1 : 0}|${s.caption}|${focusOf(s) ? Object.values(focusOf(s)!).join(',') : ''}`).join('\n');
 

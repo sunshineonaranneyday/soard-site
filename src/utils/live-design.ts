@@ -25,6 +25,14 @@
  *     a tiny copy first), so nothing below it jumps.
  * A picture that can't load leaves both, and the viewer.
  *
+ * What's downloaded (Peter, Nov 16 2026: "wicked fast"): each of the
+ * section's pictures comes at the size it shows at on this screen (a photo
+ * covering its card counts the part cropped off), never bigger than it was
+ * before, and lazily; if the card grows (a phone turned) a bigger one is
+ * taken. A tiny copy of each is read first, so one that can't load leaves at
+ * once. The strip's pictures come only once it shows (the watch party, out of
+ * full screen), all at once, so none pops in while it's scrolled.
+ *
  * The viewer: any picture opens large. During the watch party the reveal
  * keeps playing in sight (Peter, Nov 9 2026: the design has to be seen
  * during the reveal): on a laptop the viewer opens beside the video, over
@@ -33,7 +41,7 @@
  * player in its top corner (a tap on it goes back). Otherwise it's a plain
  * full-screen viewer. The page holds still behind it either way.
  */
-import { fetchDesign, slideSrc, designSignature, focusOf, type DesignSlide } from './reveal-design-client';
+import { fetchDesign, slideSrc, designSignature, focusOf, isWholeSheet, type DesignSlide } from './reveal-design-client';
 import { holdPlace } from './hold-place';
 import type { Stage } from './live-stage';
 import { DESK } from './live-media';
@@ -46,6 +54,16 @@ const SIDE_MIN_W = 420;
 // The rest of /live/ writes names with a straight apostrophe ("Don't miss Dylan's reveal")
 const straight = (s: string) => s.replace(/’/g, "'");
 const possessive = (name: string) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
+
+/** The widths a card's picture is offered at; the browser takes the one it needs (sizes, set from the card) */
+const WIDTHS = [320, 480, 640, 800, 960, 1200, 1600, 1800];
+/** A card's picture as a set: every width up to most (what the card always took before). null: one that can't be had */
+async function pictureSet(s: DesignSlide, most: number): Promise<{ src: string; srcset: string } | null> {
+  const widths = [...WIDTHS.filter((w) => w < most && (!isWholeSheet(s) || !s.w || w <= s.w)), most];
+  const urls = await Promise.all(widths.map((w) => slideSrc(s, w)));
+  if (urls.some((u) => !u)) return null;
+  return { src: urls[urls.length - 1]!, srcset: urls.map((u, i) => `${u} ${widths[i]}w`).join(', ') };
+}
 
 /** height ÷ width of a slide's picture as it will show, from a tiny copy of the same picture */
 function shapeOf(s: DesignSlide): Promise<number | null> {
@@ -91,6 +109,18 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   const cards = new Map<DesignSlide, HTMLElement[]>();
   const railCards = new Map<DesignSlide, HTMLButtonElement>();
   let recounts: (() => void)[] = [];
+  // Each section picture's sizes follows its card: the width it shows at, and a photo covering its 4:3 card (cover: its
+  // height ÷ width) shows wider than the card when it's wider than 4:3. Only ever grows (a phone turned, a card that
+  // widens when another drops), so the browser takes a bigger picture when it needs one and never swaps for a smaller
+  const fits = new WeakMap<Element, { img: HTMLImageElement; cover: number | null; px: number }>();
+  function fit(pic: Element) {
+    const f = fits.get(pic);
+    if (!f) return;
+    const r = pic.getBoundingClientRect();
+    const need = Math.ceil(f.cover ? Math.max(r.width, r.height / f.cover) : r.width);
+    if (need > f.px) { f.px = need; f.img.sizes = `${need}px`; }
+  }
+  const sizeWatch = typeof ResizeObserver !== 'undefined' ? new ResizeObserver((list) => { for (const e of list) fit(e.target); }) : null;
 
   /** The strip's place in the hero: for this kid, while there's a picture to show */
   function mark(on: boolean) {
@@ -111,6 +141,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     cards.clear();
     railCards.clear();
     recounts = [];
+    sizeWatch?.disconnect();
     sig = '';
     slides = [];
     if (!keepPlace) mark(false);
@@ -149,7 +180,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   function item(s: DesignSlide, width: number, label: string) {
     const li = el('li');
     // (A whole plan sheet is its own paper: ldz-sheet, edge to edge in the card)
-    const b = el('button', `ldz-item${s.kind === 'before' ? '' : ' ldz-paper'}${focusOf(s) ? ' ldz-sheet' : ''}`);
+    const b = el('button', `ldz-item${s.kind === 'before' ? '' : ' ldz-paper'}${isWholeSheet(s) ? ' ldz-sheet' : ''}`);
     b.type = 'button';
     b.setAttribute('aria-label', `Enlarge: ${s.badge ? `${s.badge}, ` : ''}${label}`);
     const tag = badge(s, 'ldz-badge');
@@ -158,17 +189,30 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     const img = el('img');
     img.alt = straight(s.alt);
     img.decoding = 'async';
+    // (before its src: a lazy picture waits until it's near the screen)
+    img.loading = 'lazy';
     pic.append(img);
     b.append(pic);
     const gone = () => drop(s);
     img.addEventListener('error', gone, { once: true });
-    // The card takes its picture's shape first (photos are always 4:3), then the picture comes
-    const shape = s.kind === 'before' ? Promise.resolve(0.75) : shapeOf(s);
-    void shape.then((r) => {
+    // A tiny copy first: the card takes the picture's shape (a photo's card is always 4:3; its shape says how much
+    // the card crops off), and one that can't load leaves now, not when it's scrolled to. Then the picture comes
+    void shapeOf(s).then((r) => {
       if (!cards.get(s)?.includes(li)) return; // redrawn or dropped meanwhile
       if (!r) { gone(); return; }
       if (s.kind !== 'before') pic.style.aspectRatio = `1 / ${r.toFixed(4)}`;
-      return slideSrc(s, width).then((src) => { if (src) img.src = src; else gone(); });
+      return pictureSet(s, width).then((set) => {
+        if (!set) { gone(); return; }
+        if (!cards.get(s)?.includes(li)) return;
+        // sizes before srcset and src (the card is in the page by now: holdPlace puts it in at once). Not laid out
+        // yet: the screen's width, never more than the card always took
+        fits.set(pic, { img, cover: s.kind === 'before' ? r : null, px: 0 });
+        fit(pic);
+        if (!img.sizes) img.sizes = '100vw';
+        img.srcset = set.srcset;
+        img.src = set.src;
+        sizeWatch?.observe(pic);
+      });
     });
     b.addEventListener('click', () => open(s));
     li.append(b);
@@ -190,7 +234,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   /** One picture in the strip beside the video: a small card with its badge */
   function railItem(s: DesignSlide, label: string) {
     const li = el('li');
-    const b = el('button', `hds-item${s.kind === 'before' ? '' : ' hds-paper'}${focusOf(s) ? ' hds-sheet' : ''}`);
+    const b = el('button', `hds-item${s.kind === 'before' ? '' : ' hds-paper'}${isWholeSheet(s) ? ' hds-sheet' : ''}`);
     b.type = 'button';
     b.setAttribute('aria-label', `See it big: ${s.badge ? `${s.badge}, ` : ''}${label}`);
     const img = el('img');
@@ -200,13 +244,29 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     const tag = badge(s, 'hds-tag');
     if (tag) b.append(tag);
     img.addEventListener('error', () => drop(s), { once: true });
-    void slideSrc(s, 320).then((src) => { if (!cards.get(s)?.includes(li)) return; if (src) img.src = src; else drop(s); });
+    // Its picture waits for the strip to show (fillRail)
+    void slideSrc(s, 320).then((src) => { if (!cards.get(s)?.includes(li)) return; if (!src) { drop(s); return; } img.dataset.src = src; fillRail(); });
     b.addEventListener('click', () => open(s));
     li.append(b);
     track(s, li);
     railCards.set(s, b);
     return li;
   }
+
+  /**
+   * The strip's pictures, once it shows: every one at once. It's hidden outside the watch party (the hero without
+   * data-party and data-design, LiveDesignRail.astro) and in full screen (LiveStage.astro), and gets a size the moment
+   * it shows, however that happens (railWatch). Without ResizeObserver: at once, as before
+   */
+  function fillRail() {
+    if (!railScroll || (railWatch && !rail?.getClientRects().length)) return;
+    for (const img of railScroll.querySelectorAll<HTMLImageElement>('img[data-src]')) {
+      img.src = img.dataset.src!;
+      delete img.dataset.src;
+    }
+  }
+  const railWatch = rail && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => fillRail()) : null;
+  if (rail) railWatch?.observe(rail);
 
   function drawRail(next: DesignSlide[]) {
     if (!railScroll) return;
@@ -245,6 +305,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     cards.clear();
     railCards.clear();
     recounts = [];
+    sizeWatch?.disconnect();
     if (nameEl) nameEl.textContent = name ? possessive(name) : 'The';
     // The line under the heading says what's here, as it is now: "looks today" until the reveal starts, then "looked"
     // (Peter, Nov 16 2026: the design boards don't show here, so it no longer promises "the look they chose")
@@ -573,6 +634,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     destroy() {
       alive = false;
       shapeWatch?.disconnect();
+      railWatch?.disconnect();
+      sizeWatch?.disconnect();
       laptop.removeEventListener('change', onLayout);
       asking?.abort();
       clearTimeout(askTimer);

@@ -12,8 +12,8 @@
  *
  * Each picture carries what it is, strongly, on itself: BEFORE on the room's
  * photos (nobody may take the old room for the finished one), EXISTING and
- * PROPOSED on the plans (the slide's badge). A whole plan sheet (one with a
- * focus: the designer's sheet, border and title block and all) fills the frame
+ * PROPOSED on the plans (the slide's badge). A whole plan sheet (isWholeSheet:
+ * the designer's sheet, border and title block and all) fills the frame
  * whole for its whole turn, as on the kid page (Peter, Nov 16 2026: "why does
  * the reveal live page show the plans cut off still"); it never moves in on its
  * drawing, and its badge sits in the sheet's free top-right corner, as on the
@@ -28,7 +28,7 @@
  * slides, read from the parent window (window.__soardRevealDesign), open
  * whatever the clock says. ?slide=N holds one slide (still screenshots).
  */
-import { fetchDesign, slideSrc, preload, designSignature, validSlide, focusOf, type DesignSlide } from './reveal-design-client';
+import { fetchDesign, slideSrc, preload, designSignature, validSlide, isWholeSheet, type DesignSlide } from './reveal-design-client';
 
 const HOLD_MS: Record<string, number> = { kid: 8000, before: 6500, 'as-built': 9000, proposed: 11000, board: 9000 };
 const WIPE_MS = 2600;
@@ -182,7 +182,7 @@ export function startSlateDesign(o: Options) {
     if (!slides.length) { at = 0; steps.replaceChildren(); steps.hidden = true; chipFor(null); return; }
     for (const s of slides) {
       const layer = document.createElement('div');
-      layer.className = `slide slide--${s.kind}${s.kind === 'before' ? '' : ' paper'}${s.badge ? ' has-badge' : ''}${focusOf(s) ? ' is-sheet' : ''}`;
+      layer.className = `slide slide--${s.kind}${s.kind === 'before' ? '' : ' paper'}${s.badge ? ' has-badge' : ''}${isWholeSheet(s) ? ' is-sheet' : ''}`;
       const img = document.createElement('img');
       img.alt = '';
       img.decoding = 'async';

@@ -177,6 +177,9 @@ export const TITLE_BLOCK = 0.10;
 // (A sheet stored without its title block, -notitle, or whole with its address painted out, -sheet, has nothing to
 // crop: the kid page's rule)
 export const isFloorPlan = (p) => /(before|after|existing|existi|proposed|layout|floor\s*plan)/i.test(p?.label || '') && !/-(?:notitle|sheet)\./i.test(p?.url || '');
+// A whole sheet (-sheet, or one whose drawing's place is known): its badge goes in its empty top-right corner, off the
+// wall legend (the kid page's isWholeSheet; src/utils/reveal-design-client.ts has the same rule for the live page)
+export const isWholeSheet = (p) => p?.type !== 'board' && (!!p?.focus || /-sheet\./i.test(p?.url || ''));
 export const PLANS_SHOWN = 2;
 /** A caption that is really a file name ("CompanyCam 2445", "IMG_0042") */
 export const looksLikeFileName = (s) => /^\s*(?:companycam|img|dsc|pxl|screenshot|scan|photo|image|untitled)[\s_-]*\d/i.test(String(s || '')) || /^\s*[\d_-]+\s*$/.test(String(s || '')) || /\.(?:jpe?g|png|pdf|heic|webp)\s*$/i.test(String(s || ''));

@@ -23,7 +23,7 @@ import {
   loadTemplates, tools, guardFrame,
 } from './page-preview.js';
 
-import { youTubeId, splitBio, heroHookOf, TITLE_BLOCK, isFloorPlan, focusCss } from './kids-shared.js';
+import { youTubeId, splitBio, heroHookOf, TITLE_BLOCK, isFloorPlan, isWholeSheet, focusCss } from './kids-shared.js';
 import { pagePlans, pageBefores, pagePairs, planKind, addressChecked } from './reveal-design.js';
 
 export { cfId, youTubeId };
@@ -329,6 +329,8 @@ export function patchKidPage(doc, win, model) {
     itemProto.querySelector('.design__badge')?.remove();
     grid.replaceChildren(...plans.slice(0, 2).map((plan, i) => {
       const b = itemProto.cloneNode(true);
+      // (the template's card may be either kind)
+      b.classList.toggle('design__item--sheet', isWholeSheet(plan));
       const badge = planBadge(plan);
       if (badge && badgeProto) {
         const tag = badgeProto.cloneNode(true);

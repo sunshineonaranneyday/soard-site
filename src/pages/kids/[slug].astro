@@ -258,6 +258,9 @@ const TITLE_BLOCK = 0.10;
 // A sheet stored without its title block (-notitle: the admin trims it on upload), or whole with its address painted
 // out (-sheet), has nothing to crop
 const isFloorPlan = (p: any) => /(before|after|existing|existi|proposed|layout|floor\s*plan)/i.test(p?.label || '') && !/-(?:notitle|sheet)\./i.test(p?.url || '');
+// A whole sheet (-sheet: border, title block and wall legend as the designer drew them): its badge goes in its empty
+// top-right corner, off the legend, as on the live page
+const isWholeSheet = (p: any) => planKindOf(p) !== 'board' && (!!p?.focus || /-sheet\./i.test(p?.url || ''));
 function planRatio(p: any): number {
   const id = cfId(p.url);
   const known = _dimsMap[id];
@@ -618,7 +621,7 @@ const planOrientation = (() => {
               const lbIndex = galleryShown + i;
               return (
                 <button
-                  class="design__item"
+                  class:list={['design__item', { 'design__item--sheet': isWholeSheet(plan) }]}
                   data-lb-index={lbIndex}
                   type="button"
                   aria-label={`View ${plan.label || 'design plan'}`}
@@ -3622,6 +3625,8 @@ const planOrientation = (() => {
     pointer-events: none;
   }
   .design__badge--proposed { background: var(--c-yellow); color: var(--c-dark); box-shadow: 0 0 0 1px rgba(30, 31, 37, 0.25); }
+  /* A whole plan sheet's wall legend is in its top-left corner: the badge goes top-right, where the sheet is empty */
+  .design__item--sheet .design__badge { left: auto; right: 10px; }
 
   /* ═══ 4. Before & After — Premium Slider ═══ */
   .ba-section {
@@ -5034,6 +5039,7 @@ const planOrientation = (() => {
     .befores__item { flex-basis: calc((100% - 10px) / 2); width: calc((100% - 10px) / 2); }
     .befores__item { border-radius: 10px; }
     .befores__badge, .design__badge { top: 8px; left: 8px; max-width: calc(100% - 16px); padding: 4px 8px; font-size: 0.66rem; }
+    .design__item--sheet .design__badge { right: 8px; }
 
     .design { padding-block: 56px; }
     .design__title { font-size: 1.8rem; text-align: center; margin-bottom: 32px; }
