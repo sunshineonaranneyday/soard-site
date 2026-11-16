@@ -75,6 +75,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   const { hero = null, rail = null, frame = null, stage = null } = opts;
   const parts = section.querySelector<HTMLElement>('[data-ldz="parts"]')!;
   const nameEl = section.querySelector<HTMLElement>('[data-ldz="name"]');
+  const leadEl = section.querySelector<HTMLElement>('[data-ldz="lead"]');
   const railName = rail?.querySelector<HTMLElement>('[data-hds="name"]') || null;
   const railScroll = rail?.querySelector<HTMLElement>('[data-hds="scroll"]') || null;
   const viewer = document.querySelector<HTMLDialogElement>('[data-ldz-viewer]');
@@ -244,6 +245,18 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     railCards.clear();
     recounts = [];
     if (nameEl) nameEl.textContent = name ? possessive(name) : 'The';
+    // The line under the heading says what's here, as it is now: "looks today" until the reveal starts, then "looked"
+    // (Peter, Nov 16 2026: the design boards don't show here, so it no longer promises "the look they chose")
+    const lead = () => {
+      if (!leadEl) return;
+      const room = isAfter ? 'How the room looked' : 'How the room looks today';
+      const hasBefores = slides.some((x) => x.kind === 'before');
+      const hasPlans = slides.some((x) => x.kind === 'as-built' || x.kind === 'proposed');
+      const said = hasBefores && hasPlans ? `${room} and the plan the designers drew.` : hasBefores ? `${room}.` : hasPlans ? 'The plan the designers drew.' : '';
+      leadEl.textContent = `${said}${said ? ' ' : ''}Watch the reveal to see it finished.`;
+    };
+    lead();
+    recounts.push(lead);
     if (railName) railName.textContent = name ? `${possessive(name)} design` : 'The design';
     const befores = next.filter((x) => x.kind === 'before');
     const plans = next.filter((x) => x.kind === 'as-built' || x.kind === 'proposed');
