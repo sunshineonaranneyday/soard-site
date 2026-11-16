@@ -626,10 +626,6 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
     .photo .paper img { object-fit: contain; object-position: center; padding: 32px 36px; }
     .photo .paper.has-badge img { padding-top: 100px; }
     body[data-o='portrait'] .photo .paper.has-badge img { padding-top: 116px; }
-    /* A whole plan sheet moves in on its drawing and back out (slate-design.ts ZOOM_MS), never slides into place */
-    .photo .paper.is-sheet { overflow: hidden; }
-    .photo .paper.is-sheet img { transform-origin: 0 0; transition: transform 3s cubic-bezier(0.45, 0, 0.2, 1); }
-    .photo .paper.is-sheet img.is-still { transition: none; }
     /* What each picture is, on it: BEFORE on the room's photos, EXISTING and PROPOSED on the plans. Solid and ringed in
        white so it reads on any photo; the new plan's is the yellow one */
     .slide-badge {
@@ -721,6 +717,14 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
     body.embed[data-o='portrait'] .step { height: 10px; border-radius: 5px; }
     body.embed[data-o='portrait'] .slide-badge { top: 36px; left: 36px; padding: 20px 30px 18px; border-radius: 16px; font-size: 60px; }
     body.embed[data-o='portrait'] .photo .paper.has-badge img { padding-top: 170px; }
+    /* A whole plan sheet (slate-design.ts is-sheet) fills the frame whole, its own border, title block and legend all in
+       view, as on the kid page and the live page's cards (Peter, Nov 16 2026: "why does the reveal live page show the
+       plans cut off still"). Its badge goes in the sheet's free top-right corner (the wall legend is top-left). After
+       every orientation's paper padding, so it wins them all */
+    body[data-o] .photo .slide.paper.is-sheet img { padding: 12px; }
+    body .slide.is-sheet .slide-badge { left: auto; right: 24px; }
+    body[data-o='portrait'] .slide.is-sheet .slide-badge { right: 28px; }
+    body.embed[data-o='portrait'] .slide.is-sheet .slide-badge { right: 36px; }
     body.embed[data-o='portrait'] .partners { height: 200px; gap: 32px; }
     body.embed[data-o='portrait'] .partners-label { font-size: 56px; letter-spacing: 0.08em; width: 400px; line-height: 1.2; }
     body.embed[data-o='portrait'] .chip { --logo-h: 116px; height: 156px; min-width: 260px; padding: 16px 32px; border-radius: 26px; }

@@ -12,7 +12,12 @@
  *
  * Each picture carries what it is, strongly, on itself: BEFORE on the room's
  * photos (nobody may take the old room for the finished one), EXISTING and
- * PROPOSED on the plans (the slide's badge). The line above the frame says
+ * PROPOSED on the plans (the slide's badge). A whole plan sheet (one with a
+ * focus: the designer's sheet, border and title block and all) fills the frame
+ * whole for its whole turn, as on the kid page (Peter, Nov 16 2026: "why does
+ * the reveal live page show the plans cut off still"); it never moves in on its
+ * drawing, and its badge sits in the sheet's free top-right corner, as on the
+ * live page's cards. The line above the frame says
  * the rest ("Dylan's room today", "The new floor plan", "THE LOOK · The
  * design") and a row of steps at its end shows where it is in the story. Nothing is
  * shown before it has loaded; a picture that can't load is skipped. The
@@ -45,20 +50,8 @@ interface Options {
   pace?: number;
 }
 
-type Focus = { x: number; y: number; w: number; h: number };
-interface Built { slide: DesignSlide | null; layer: HTMLElement | null; ready: boolean; failed: boolean; step?: HTMLElement | null; focus?: Focus | null }
+interface Built { slide: DesignSlide | null; layer: HTMLElement | null; ready: boolean; failed: boolean; step?: HTMLElement | null }
 const FADE_MS = 1100; // .slide's opacity transition
-// A whole plan sheet (Peter, Nov 16 2026: the plans as the official plan set) shows whole, then moves in on its drawing
-// over ZOOM_MS (SlateScreen.astro's transition); the new plan wipes in on its drawing over the old one's, and goes back
-// out to its whole sheet before the story moves on
-const ZOOM_MS = 3000;
-const ZOOM_AFTER_MS = 1400;
-/** The box holding every one of these drawings: the existing and proposed sheets zoom to the same place, so the walls line up as one wipes over the other */
-const unionOf = (list: Focus[]): Focus => {
-  const x0 = Math.min(...list.map((f) => f.x)), y0 = Math.min(...list.map((f) => f.y));
-  const x1 = Math.max(...list.map((f) => f.x + f.w)), y1 = Math.max(...list.map((f) => f.y + f.h));
-  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-};
 
 export function startSlateDesign(o: Options) {
   const { body, photoBox, chip, steps, kidChip, kidSlug, preview, pinned, still } = o;
@@ -79,38 +72,6 @@ export function startSlateDesign(o: Options) {
   let askTimer: ReturnType<typeof setTimeout> | undefined;
   let generation = 0;
   let underTimer: ReturnType<typeof setTimeout> | undefined;
-  let zoomTimers: ReturnType<typeof setTimeout>[] = [];
-
-  /** The move that puts a whole sheet's drawing in the middle of its paper, filling it: '' when it can't be worked out */
-  function zoomOf(b: Built): string {
-    const img = b.layer?.querySelector<HTMLImageElement>('img');
-    const f = b.focus;
-    const s = b.slide;
-    if (!img || !f || !s) return '';
-    const cs = getComputedStyle(img);
-    const pl = parseFloat(cs.paddingLeft) || 0, pr = parseFloat(cs.paddingRight) || 0;
-    const pt = parseFloat(cs.paddingTop) || 0, pb = parseFloat(cs.paddingBottom) || 0;
-    const cw = img.clientWidth - pl - pr, ch = img.clientHeight - pt - pb;
-    const sw = s.w || img.naturalWidth, sh = s.h || img.naturalHeight;
-    if (cw <= 0 || ch <= 0 || !sw || !sh) return '';
-    const fit = Math.min(cw / sw, ch / sh);
-    const dw = sw * fit, dh = sh * fit;
-    const k = Math.max(1, Math.min(cw / (f.w * dw), ch / (f.h * dh)) * 0.94);
-    const cx = pl + (cw - dw) / 2 + (f.x + f.w / 2) * dw, cy = pt + (ch - dh) / 2 + (f.y + f.h / 2) * dh;
-    return `translate(${(pl + cw / 2 - k * cx).toFixed(1)}px, ${(pt + ch / 2 - k * cy).toFixed(1)}px) scale(${k.toFixed(4)})`;
-  }
-  /** A sheet on its drawing (on) or whole; moving there over ZOOM_MS, or straight there */
-  function setZoom(b: Built, on: boolean, moving: boolean) {
-    const img = b.layer?.querySelector<HTMLImageElement>('img');
-    if (!img || !b.focus) return;
-    img.classList.toggle('is-still', !moving);
-    img.style.transform = on ? zoomOf(b) : '';
-    b.layer?.toggleAttribute('data-zoomed', on);
-    if (!moving) { void img.offsetWidth; requestAnimationFrame(() => img.classList.remove('is-still')); }
-  }
-  // Turned (the screen's own shape changes): a sheet on its drawing is put back on it for the new shape
-  const shapeWatch = new MutationObserver(() => { for (const b of built) if (b.layer?.hasAttribute('data-zoomed')) setZoom(b, true, false); });
-  shapeWatch.observe(body, { attributes: true, attributeFilter: ['data-o', 'class'] });
 
   const portrait = () => body.dataset.o === 'portrait';
   // About twice the frame's width on the 1920/1080 canvas: sharp on a TV, light enough for a phone
@@ -183,23 +144,6 @@ export function startSlateDesign(o: Options) {
       void line.offsetWidth;
       line.classList.add('is-wiping');
     }
-    // A whole plan sheet: every other one back to whole out of sight (the one underneath keeps its place while the new
-    // one comes in over it); this one whole, then in on its drawing. The new plan wiping in over the old one comes in
-    // already on its drawing, then goes back out to its whole sheet. Still (a held slide, reduced motion): on its drawing
-    zoomTimers.forEach(clearTimeout);
-    zoomTimers = [];
-    for (const b of built) if (b !== next && b !== under && b.layer?.hasAttribute('data-zoomed')) setZoom(b, false, false);
-    if (next.focus) {
-      const holdNow = Math.max(1000, HOLD_MS[next.slide?.kind || 'kid'] * pace) + (wipe ? WIPE_MS : 0);
-      if (still || reduced || pinned != null) setZoom(next, true, false);
-      else if (wipe) {
-        setZoom(next, true, false);
-        zoomTimers.push(setTimeout(() => setZoom(next, false, true), Math.max(WIPE_MS + 600, holdNow - ZOOM_MS - 600)));
-      } else {
-        setZoom(next, false, false);
-        zoomTimers.push(setTimeout(() => setZoom(next, true, true), Math.min(ZOOM_AFTER_MS * pace + 200, holdNow / 3)));
-      }
-    }
     // A before photo drifts from the start each time it comes round
     if (next.layer && next.slide?.kind === 'before') {
       const img = next.layer.querySelector('img');
@@ -236,13 +180,9 @@ export function startSlateDesign(o: Options) {
     // The frame is the same with or without the design (SlateScreen.astro): this swaps the words above it, nothing moves
     body.toggleAttribute('data-design', slides.length > 0);
     if (!slides.length) { at = 0; steps.replaceChildren(); steps.hidden = true; chipFor(null); return; }
-    // Whole plan sheets zoom to their drawings; an existing and a proposed one to the same place (unionOf)
-    const sheets = slides.filter((s) => (s.kind === 'as-built' || s.kind === 'proposed') && focusOf(s));
-    const shared = sheets.length > 1 ? unionOf(sheets.map((s) => focusOf(s)!)) : null;
     for (const s of slides) {
       const layer = document.createElement('div');
-      const focus = focusOf(s) ? (shared && sheets.includes(s) ? shared : focusOf(s)) : null;
-      layer.className = `slide slide--${s.kind}${s.kind === 'before' ? '' : ' paper'}${s.badge ? ' has-badge' : ''}${focus ? ' is-sheet' : ''}`;
+      layer.className = `slide slide--${s.kind}${s.kind === 'before' ? '' : ' paper'}${s.badge ? ' has-badge' : ''}${focusOf(s) ? ' is-sheet' : ''}`;
       const img = document.createElement('img');
       img.alt = '';
       img.decoding = 'async';
@@ -255,7 +195,7 @@ export function startSlateDesign(o: Options) {
         layer.append(badge);
       }
       show.append(layer);
-      const b: Built = { slide: s, layer, ready: false, failed: false, focus };
+      const b: Built = { slide: s, layer, ready: false, failed: false };
       built.push(b);
       void slideSrc(s, widthFor(s)).then(async (src) => {
         if (gen !== generation) return;
@@ -306,6 +246,6 @@ export function startSlateDesign(o: Options) {
   return {
     /** The screen turned (landscape ↔ portrait): pictures sized for the new frame */
     refit() { const s = sig; sig = ''; if (s) void apply(built.map((b) => b.slide).filter((x): x is DesignSlide => !!x)); },
-    stop() { clearTimeout(timer); clearTimeout(askTimer); clearTimeout(underTimer); zoomTimers.forEach(clearTimeout); shapeWatch.disconnect(); clearInterval(previewTimer); document.removeEventListener('visibilitychange', onVisible); },
+    stop() { clearTimeout(timer); clearTimeout(askTimer); clearTimeout(underTimer); clearInterval(previewTimer); document.removeEventListener('visibilitychange', onVisible); },
   };
 }
