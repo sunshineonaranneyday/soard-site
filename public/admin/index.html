@@ -5924,7 +5924,7 @@
 
       const kidsSorted = useMemo(() => bcSortKids(kids), [kids]);
       const kidBySlug = (slug) => (slug ? kids.find((k) => k.slug === slug) : null);
-      const kit = s.kitConfigured ? { audience: c.kitLive?.audience?.name || 'All subscribers', def: c.kitLive?.enabled !== false } : null;
+      const kit = s.kitConfigured ? { audience: 'All subscribers', def: c.kitLive?.enabled !== false } : null;
       const kitWanted = typeof st.kitLiveEmail === 'boolean' ? st.kitLiveEmail : !!kit?.def;
       const kitSent = !!(st.kit?.live && st.kit.live.sendAt && !st.kit.live.error);
       const kitVia = { scheduled: st.jobId ? 'from JobTread' : 'from the schedule', admin: 'picked here', 'facebook-live': 'from the Facebook live post', 'facebook-post': 'from a Facebook post' }[st.kidVia] || '';
@@ -6244,7 +6244,7 @@
       const goTo = (id) => document.getElementById(`bc-set-${id}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       useEffect(() => { if (!jump) return; requestAnimationFrame(() => { goTo(jump); clearJump(); }); }, [jump]);
       const out = (t) => data.outputs?.find((o) => o.target === t);
-      const kitAudience = c.kitLive?.audience?.name || 'All subscribers';
+      const kitAudience = 'All subscribers';
       const common = { s, busy, setup, setConfirm, addToast };
 
       // ── System checks: only what needs a fix stays open

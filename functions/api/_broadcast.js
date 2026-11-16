@@ -174,7 +174,7 @@ export function defaultConfig() {
     alerts: { emails: [] },
     defaults: { title: 'Live room reveal', message: "It's reveal day! We're live right now." },
     // Email the Kit list when a scheduled reveal goes live. Each reveal can opt out (state.kitLiveEmail).
-    kitLive: { enabled: true, audience: { type: 'all', id: null, name: 'All subscribers' } },
+    kitLive: { enabled: true },
     messages: { enabled: true }, // viewers' notes for the family on the live page (functions/api/_live-messages.js)
     vapid: null,           // { publicKey, privateJwk, createdAt }
     setupAt: null, setupBy: null, updatedAt: null,
@@ -1094,16 +1094,17 @@ export function reminderArgs(state, kind, config = {}) {
 export async function sendKitLive(env, config, state, work, { by = 'live-broadcast' } = {}) {
   if (!kitConfigured(env) || !state.broadcastId) return state;
   if (!await claimSend(env.DB, state.broadcastId, 'live', 'kit')) return state;
-  const audience = config.kitLive?.audience?.type && config.kitLive.audience.type !== 'all' ? config.kitLive.audience : { type: 'all', id: null, name: 'All subscribers' };
+  // Always the whole list, less who asked for less: the one audience Kit can take with the sign-ups left out
+  // (Kit takes one rule per email, so "a group, but not the sign-ups" can't be sent; no screen ever picked one)
+  const audience = { type: 'all', id: null, name: 'All subscribers' };
   const s = { ...state, kit: { ...(state.kit || {}) } };
   try {
     const tpl = notify.reminderEmail({ ...reminderArgs(s, 'live', config), unsubscribeUrl: '{{ unsubscribe_url }}', list: true });
     const sendAt = new Date(Date.now() + KIT_SEND_DELAY_MS).toISOString();
-    // Everyone (or the group picked in Kit), but not the reveal sign-ups whose own copy went (or is on its way) when it started
+    // Everyone, but not the reveal sign-ups whose own copy went (or is on its way) when it started
     const covered = await signupsCovered(env, config, s, 'live');
     if (!covered) throw new Error('Kit couldn’t say who signed up for reveal emails');
-    const filter = audience.type === 'all' ? await wholeListFilter(env, { leaveOut: covered })
-      : [{ all: [{ type: audience.type, ids: [Number(audience.id)] }], any: null, none: covered.length ? [{ type: 'tag', ids: covered.map(Number) }] : null }];
+    const filter = await wholeListFilter(env, { leaveOut: covered });
     if (!filter) throw new Error('Kit couldn’t say who to leave out');
     const r = await kitCreateBroadcast(env, { subject: tpl.subject, previewText: tpl.preheader, description: `[auto] ${s.kidName || 'Reveal'} live`, html: tpl.html, sendAt, audience, filter });
     if (r.ok) {

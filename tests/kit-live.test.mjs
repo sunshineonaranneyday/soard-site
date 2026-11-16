@@ -83,7 +83,7 @@ after(() => { Date.now = realNow; globalThis.fetch = realFetch; });
 test('defaults: on, all subscribers', async () => {
   const cfg = await b.readConfig(env.DB);
   assert.equal(cfg.kitLive.enabled, true);
-  assert.equal(cfg.kitLive.audience.type, 'all');
+  assert.equal(cfg.kitLive.audience, undefined, 'no group to pick: the whole list, less who asked for less');
 });
 
 test('scheduled reveal going live emails the whole Kit list once', async () => {
@@ -275,19 +275,21 @@ test('Kit failure releases the claim so a retry can send', async () => {
   await endAndReset();
 });
 
-test('a group picked in the config, less the reveal sign-ups, is two rules Kit can’t take: never sent wider, staff told', async () => {
+test('the "we\'re live" email is always the whole list less who asked for less, one rule Kit takes, whatever an old setting names', async () => {
   const cfg = await b.readConfig(env.DB);
   cfg.kitLive = { enabled: true, audience: { type: 'tag', id: 42, name: 'Newsletter' } };
   await b.writeConfig(env.DB, cfg);
   await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 5 * M).toISOString() }, 'peter@test');
   kitPosts.length = 0;
   await goLiveSteady();
-  // Only the Newsletter tag AND none of the sign-ups: Kit takes one rule per email (Nov 2026)
-  assert.equal(liveKitPosts().length, 0, 'not sent to the whole group, nor to everyone');
+  const sends = liveKitPosts();
+  assert.equal(sends.length, 1, 'sent, once');
+  // Everyone but the one-reveal-only people and the sign-ups, who had theirs the moment it started: exactly one email each
+  assert.deepEqual(sends[0].subscriber_filter, [{ none: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups for one reveal only').id, kitTags.byName('Reveal sign-ups').id] }] }]);
+  assert.equal(signupPosts().length, 1, 'the sign-ups had their own');
   const live = (await b.readState(env.DB)).kit.live;
-  assert.equal(live.audience, 'Newsletter');
-  assert.match(live.error, /one audience rule per email/);
-  assert.equal(signupPosts().length, 1, 'the sign-ups still had theirs');
+  assert.equal(live.audience, 'All subscribers');
+  assert.equal(live.error, null);
   await endAndReset();
 });
 

@@ -563,7 +563,7 @@ export async function kitCreateBroadcast(env, { subject, previewText, descriptio
   if (onlyWaitlist) body.subscriber_filter = [{ none: [{ type: 'tag', ids: leaveOut }] }];
   if (body.subscriber_filter) {
     const aim = kitFilter(body.subscriber_filter);
-    if (!aim.ok) return { ok: false, status: 0, error: aim.error };
+    if (!aim.ok) return { ok: false, status: 0, error: `${aim.error}, so it wasn’t made` };
     if (aim.filter) body.subscriber_filter = aim.filter;
     else delete body.subscriber_filter;
   }
@@ -620,7 +620,7 @@ export async function kitUpdateDraft(env, id, { subject, previewText, descriptio
       if (none.length) filter = [{ none: [{ type: 'tag', ids: none }] }];
     }
     const aim = filter ? kitFilter(filter) : { ok: true, filter: null };
-    if (!aim.ok) return { ok: false, error: aim.error };
+    if (!aim.ok) return { ok: false, error: `${aim.error} (set in Kit), which the site can’t write back, so it left the draft as it is` };
     const res = await kitFetch(env, `/broadcasts/${id}`, {
       method: 'PUT',
       body: JSON.stringify({
@@ -710,7 +710,7 @@ export function kitFilter(filter) {
     }
   }
   const used = Object.keys(rules);
-  if (used.length > 1) return { ok: false, error: `Kit takes one audience rule per email (only these, any of these, or everyone but these), and this one needs ${used.length}, so it wasn’t made` };
+  if (used.length > 1) return { ok: false, error: `Kit takes one audience rule per email (only these, any of these, or everyone but these), and this one has ${used.length}` };
   return { ok: true, filter: used.length ? [rules] : null };
 }
 

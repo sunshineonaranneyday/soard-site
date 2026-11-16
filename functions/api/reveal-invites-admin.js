@@ -224,7 +224,7 @@ export async function onRequestGet(context) {
           enabled: bcConfig?.reminders?.enabled !== false,
           hoursBefore: bcConfig?.reminders?.hoursBefore || [24, 1],
         },
-        kit: { configured: kitConfigured(env), enabled: bcConfig?.kitLive?.enabled !== false, audience: bcConfig?.kitLive?.audience?.name || 'All subscribers' },
+        kit: { configured: kitConfigured(env), enabled: bcConfig?.kitLive?.enabled !== false, audience: 'All subscribers' },
       },
     });
   } catch (err) {
