@@ -88,7 +88,7 @@ const BEFORES_A_RUN = 12;                       // before photos one run brings,
 const RUN_BUDGET_MS = 20_000;                   // from a run's start; Cloudflare gives a heartbeat's work about 30 s
 // A before photo JobTread won't give is tried again this long after each failure, then left out (and said)
 const RETRY_AFTER_MS = [30 * 60_000, 3 * 3600e3, 12 * 3600e3];
-const MAX_EDGE = 2400;                          // a drawing's long side, as the button draws it
+const MAX_EDGE = 3200;                          // a plan set page's long side, as the button draws it (SHEET_EDGE)
 const PDF_BASE = '/trade-partners/pdf/';        // the site's public copy of pdf.js (as ./_coi-backfill.js draws W-9s)
 const PDFS_A_RUN = 2;
 const DRAW_MIN_MS = 10_000;                     // a plan set isn't started with less of the run left than this
@@ -143,6 +143,14 @@ export function partsOf(kid) {
   };
 }
 
+/**
+ * A drawing this import (or the button) brought in before whole sheets (Peter, Nov 16 2026: "make this look more like
+ * an official plan set"): an existing or proposed plan from JobTread, cut down to its drawing (-notitle), its address
+ * wiped by its words. Drawn again whole once (resheet), in its own place. One staff covered or ticked by hand stays.
+ */
+export const cutDown = (p) => !!p?.url && /^jt:/.test(String(p.source || '')) && /-notitle\./i.test(p.url) && p.addressCheck === 'wiped' && ['as-built', 'proposed'].includes(planKind(p));
+const RESHEET_RETRY_MS = 30 * 60_000; // a redraw cut short (out of time, a service down) is tried again this soon
+
 /** Every JobTread file already on the profile ("jt:<id>" or "jt:<id>#<page>"), so nothing comes in twice */
 const sourcesOf = (kid) => new Set([...(kid?.plans || []), ...(kid?.beforePhotos || []), ...(kid?.beforeAfterPhotos || []), ...(kid?.photos || [])].map((x) => x?.source).filter(Boolean));
 
@@ -154,6 +162,7 @@ const sourcesOf = (kid) => new Set([...(kid?.plans || []), ...(kid?.beforePhotos
    (The site's look at before photos nobody has looked at comes before all of this, with no JobTread read: nextLook)
  *   - then the drawings and board: a part is wanted when the profile has none, it was never brought in for this
  *     kid, and it wasn't looked for in the last RETRY_MS
+ *   - then, once each, an existing or proposed drawing brought in cut down (cutDown) is drawn again whole: { redo: true }
  */
 export function nextWork(reveals, kids, ledger, now = Date.now()) {
   for (const r of reveals) {
@@ -169,6 +178,10 @@ export function nextWork(reveals, kids, ledger, now = Date.now()) {
     const open = (part) => !has[part] && !mine.done?.[part] && !(Number(mine.tried?.[part]) > now - RETRY_MS);
     const want = DRAWING_PARTS.filter(open);
     if (want.length) return { ...job, work: 'drawings', want };
+    const rs = mine.resheet || {};
+    const redo = ['as-built', 'proposed'].filter((part) => (kid.plans || []).some((p) => cutDown(p) && planKind(p) === part)
+      && rs[part] !== 'done' && !(Number(rs[part]) > now - RESHEET_RETRY_MS));
+    if (redo.length) return { ...job, work: 'drawings', want: redo, redo: true };
   }
   return null;
 }
@@ -575,10 +588,13 @@ async function inBrowser(data, drawSrc, designSrc, base, opts) {
     const out = [];
     for (const p of chosen) {
       const drawn = await draw.drawPdfPage(await doc.getPage(p.n), { longEdge: opts.maxEdge, words: opts.words });
-      const done = draw.finishSheet(drawn.canvas);
+      // Its street found by its words and painted out: the whole sheet goes up, as the designer drew it
+      const found = [...drawn.hits].some((w) => street.has(w));
+      const done = draw.finishSheet(drawn.canvas, { whole: found });
       out.push({
-        n: p.n, kind: p.kind, title: p.title, sheet: p.sheet, w: done.w, h: done.h, trimmed: done.trimmed,
-        wiped: drawn.wiped, textLayer: drawn.textLayer, street: [...drawn.hits].some((w) => street.has(w)),
+        n: p.n, kind: p.kind, title: p.title, sheet: p.sheet, w: done.w, h: done.h, trimmed: done.trimmed, whole: done.whole,
+        ...(done.focus ? { focus: done.focus } : {}),
+        wiped: drawn.wiped, textLayer: drawn.textLayer, street: found,
         png: done.canvas.toDataURL('image/png').split(',')[1],
       });
     }
@@ -620,8 +636,10 @@ async function drawSheets(env, ctx, bytes, opts) {
   }
 }
 
-async function bringDrawings(env, ctx, job, src, kid, want, fetchImpl, now, deadline = Infinity, clock = () => Date.now()) {
+async function bringDrawings(env, ctx, job, src, kid, want, fetchImpl, now, deadline = Infinity, clock = () => Date.now(), { redo = false } = {}) {
   const have = sourcesOf(kid);
+  // Drawing again whole (resheet): the cut-down pages are wanted again, and only a whole sheet takes their place
+  if (redo) for (const p of kid?.plans || []) if (cutDown(p) && want.includes(planKind(p))) have.delete(p.source);
   const words = addressWords(src.address);
   const streetWords = src.address.street ? addressWords({ street: src.address.street }) : [];
   const plans = [];
@@ -647,15 +665,16 @@ async function bringDrawings(env, ctx, job, src, kid, want, fetchImpl, now, dead
       const boards = [];
       for (const o of got.out) {
         const source = `jt:${f.id}#${o.n}`;
-        if (have.has(source) || (o.kind !== 'board' && !still.has(o.kind))) continue;
+        if (have.has(source) || (o.kind !== 'board' && !still.has(o.kind)) || (redo && (!o.whole || o.kind === 'board'))) continue;
         // (Out of the run's time: what's up so far is kept; the rest comes another time, soon)
         if (deadline - clock() < 1000) { cut = true; break; }
         const named = o.sheet && !looksLikeFileName(o.sheet) ? o.sheet : o.title;
         const label = captionOf(named) || KIND[o.kind].long;
-        const url = await uploadPicture(env, fromBase64(o.png), 'image/png', `kids/${job.slug}/plan-${now + plans.length}-${unguessable()}-${slugOf(label)}-notitle.png`, fetchImpl, { timeoutMs: deadline - clock() });
+        // A whole sheet is named -sheet and says where its drawing is, so the page can zoom to it; a cut-down one -notitle
+        const url = await uploadPicture(env, fromBase64(o.png), 'image/png', `kids/${job.slug}/plan-${now + plans.length}-${unguessable()}-${slugOf(label)}-${o.whole ? 'sheet' : 'notitle'}.png`, fetchImpl, { timeoutMs: deadline - clock() });
         // Wiped: the street itself was found by its words and painted out (as the button marks it). A board has no address to check
         const addressCheck = o.kind === 'board' ? null : o.street ? 'wiped' : null;
-        plans.push({ url, label, type: o.kind, source, w: o.w, h: o.h, ...(addressCheck ? { addressCheck } : {}) });
+        plans.push({ url, label, type: o.kind, source, w: o.w, h: o.h, ...(addressCheck ? { addressCheck } : {}), ...(o.whole && o.focus ? { focus: o.focus } : {}) });
         if (o.kind === 'board') boards.push(o); else still.delete(o.kind);
       }
       if (boards.length) still.delete('board');
@@ -715,6 +734,30 @@ async function changeKid(env, slug, change, now) {
     return { data: out.data };
   }
   return null;
+}
+
+/**
+ * Drawings drawn again whole (resheet): each takes the place of the cut-down one from the same JobTread page, keeping
+ * its caption, kind and place in the list; one staff changed meanwhile (covered, ticked, another picture) is left as
+ * it is → the saved profile, or null
+ */
+async function resheetKid(env, slug, { plans = [] }, now) {
+  const r = await changeKid(env, slug, (before) => {
+    const bySource = new Map(plans.map((p) => [p.source, p]));
+    const done = [];
+    const next = (before.plans || []).map((p) => {
+      const w = bySource.get(p.source);
+      if (!w || !cutDown(p)) return p;
+      done.push(p);
+      return { ...p, url: w.url, w: w.w, h: w.h, ...(w.focus ? { focus: w.focus } : {}) };
+    });
+    if (!done.length) return null;
+    return {
+      data: { ...before, plans: next },
+      changes: [{ field: 'plans', from: null, to: `${done.map((p) => KIND[planKind(p)].long).join(' and ')} shown as the whole sheet, its address painted out` }],
+    };
+  }, now);
+  return r?.data || null;
 }
 
 /** Adds drawings and before photos to the profile, leaving out any JobTread file it has had meanwhile → the saved profile, or null */
@@ -957,6 +1000,9 @@ async function tellStanding(env, reveals, kids, ledger, now, { save = async () =
  * has confirmed, and that hasn't started, is published again without them; one whose reveal has started needs
  * nothing (the room's status takes it from there). mine.page: "<startsAt>|<befores>|<plans>" last published for.
  */
+/** A short fingerprint of some text */
+const hashOf = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+
 async function publishPages(env, reveals, kids, ledger, now, fetchImpl, { canLook = true, hasTime = () => true, canDeploy = hasTime, left = () => Infinity } = {}) {
   const want = [];
   const marks = []; // [mine, page]: set only once the publish was asked for, so one there was no time for comes next run
@@ -971,9 +1017,11 @@ async function publishPages(env, reveals, kids, ledger, now, fetchImpl, { canLoo
     // waiting to be tried again doesn't hold it, nor do looks resting after Workers AI's spending cap)
     if (!kid || !mine?.befores?.checked || mine.befores.owed > 0 || kid.publishStatus === 'draft' || isRevealed(kid)) continue;
     if (canLook && dueLooks(kid, mine.befores.looks, now).length) continue;
-    const shows = { befores: pageBefores(kid, { confirmed: true }).length, plans: pagePlans(kid, { confirmed: true }).length };
+    const shown = pagePlans(kid, { confirmed: true });
+    const shows = { befores: pageBefores(kid, { confirmed: true }).length, plans: shown.length };
     if (!shows.befores && !shows.plans) continue;
-    const page = `${r.startsAt}|${shows.befores}|${shows.plans}`;
+    // (Which pictures the plans are too: one drawn again whole, resheet, is a change to the page)
+    const page = `${r.startsAt}|${shows.befores}|${shows.plans}|${hashOf(shown.map((p) => p.url).join(' '))}`;
     if (mine.page === page) continue;
     marks.push([mine, page]);
     want.push(kid.name || r.slug);
@@ -1223,24 +1271,29 @@ export async function runRevealDesigns(env, ctx = {}) {
       } else {
         mine.tried ||= {};
         mine.done ||= {};
-        for (const part of job.want) mine.tried[part] = now;
+        // (A redraw keeps its own time, resheet: the part is on the profile already, so tried and done don't apply)
+        if (job.redo) { mine.resheet ||= {}; for (const part of job.want) mine.resheet[part] = now; }
+        else for (const part of job.want) mine.tried[part] = now;
         let plans = [];
         let missing = job.want;
         if (src?.job) {
           // (Drawing is the run's work: it may run on into the time the notes and the publish after it would have,
           // all but the time for its own note; those then come next run)
-          const got = await bringDrawings(env, ctx, job, src, kids[job.slug], job.want, fetchImpl, now, drawEnd, clock);
+          const got = await bringDrawings(env, ctx, job, src, kids[job.slug], job.want, fetchImpl, now, drawEnd, clock, { redo: !!job.redo });
           plans = got.plans;
           missing = got.missing;
+          // A redraw is done once looked at properly, whole or not (not whole: the cut-down one stays, as it was)
+          if (job.redo && !got.starved && !got.cut) for (const part of job.want) mine.resheet[part] = 'done';
           // No time to look at all, or out of it partway (or a service down): not a real try, so what's still wanted
           // isn't left for 6 hours, only half an hour, twice that each time in a row (so this kid doesn't take every
           // run from the others while JobTread is slow, and a plan set too big for a run ends up with the usual wait)
           if (got.starved || got.cut) restDrawings(mine, missing);
           else delete mine.drawOuts;
         } else delete mine.drawOuts;
-        for (const part of job.want) if (!missing.includes(part)) mine.done[part] = now;
-        const saved = plans.length ? await addToKid(env, job.slug, { plans }, now) : null;
-        if (saved) {
+        if (!job.redo) for (const part of job.want) if (!missing.includes(part)) mine.done[part] = now;
+        const saved = plans.length ? await (job.redo ? resheetKid : addToKid)(env, job.slug, { plans }, now) : null;
+        if (saved && job.redo) kids[job.slug] = saved;
+        else if (saved) {
           kids[job.slug] = saved;
           // (Owed till it's said: the run after says it, when this one has no time left for it)
           mine.filledNote = [...new Set([...(mine.filledNote || []), ...plans.map((p) => p.type)])];

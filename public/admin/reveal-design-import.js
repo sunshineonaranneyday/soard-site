@@ -42,7 +42,8 @@ import { kindFromSheet, captionOf, coverRects, isDocumentName, drawPdfPage, fini
 import { ask } from './ask.js';
 
 const html = htm.bind(h);
-const MAX_EDGE = 2400; // the long side of a drawing as it goes up
+const MAX_EDGE = 2400; // the long side of a picture (a board, a rendering) as it goes up
+const SHEET_EDGE = 3200; // a plan set's page: big enough that the page can zoom to its drawing
 const THUMB_W = 360;
 const KIND = Object.fromEntries(PLAN_KINDS.map((k) => [k.id, k]));
 const SHORT = { 'as-built': 'As-built', proposed: 'Proposed', board: 'Board' };
@@ -226,10 +227,14 @@ const canvasOf = (w, h) => { const c = document.createElement('canvas'); c.width
 const toBlob = (c, type = 'image/png', q) => new Promise((done, fail) => c.toBlob((b) => (b ? done(b) : fail(new Error('The drawing couldn’t be made'))), type, q));
 // Drawing a page and finishing a sheet are shared with the automatic import (./reveal-design-draw.js)
 const drawPage = drawPdfPage;
-/** A sheet as it goes up: a real title block cut off and the white margin trimmed. → { blob, w, h, trimmed } */
-async function finish(canvas) {
-  const out = finishSheet(canvas);
-  return { blob: await toBlob(out.canvas), w: out.w, h: out.h, trimmed: out.trimmed };
+/**
+ * A sheet as it goes up (./reveal-design-draw.js finishSheet): whole, as the designer drew it, when its street was
+ * found and painted out (with where its drawing is: focus); else a real title block cut off and the margin trimmed.
+ * → { blob, w, h, trimmed, whole, focus? }
+ */
+async function finish(canvas, { whole = false } = {}) {
+  const out = finishSheet(canvas, { whole });
+  return { blob: await toBlob(out.canvas), w: out.w, h: out.h, trimmed: out.trimmed, whole: out.whole, ...(out.focus ? { focus: out.focus } : {}) };
 }
 
 /** A picture (a board, a rendering or a scanned sheet) on white, no bigger than MAX_EDGE */
@@ -545,7 +550,7 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
     return () => { stop = true; };
   }, [data]);
 
-  // ── A picked drawing, drawn as it will go up (big, wiped, a real title block cut, trimmed) ──
+  // ── A picked drawing, drawn as it will go up (big, wiped; whole when its street was found, else cut down) ──
   const prepare = useCallback((key) => {
     setReady((m) => ({ ...m, [key]: { state: 'working' } }));
     queue.current = queue.current.then(async () => {
@@ -555,12 +560,12 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
         const src = docs.current.get(fileId);
         if (!src) throw new Error('That file didn’t open');
         let canvas, wiped = 0, hits = new Set(), textLayer = false;
-        if (src.doc) ({ canvas, wiped, hits, textLayer } = await drawPage(await src.doc.getPage(Number(n)), { longEdge: MAX_EDGE, words }));
+        if (src.doc) ({ canvas, wiped, hits, textLayer } = await drawPage(await src.doc.getPage(Number(n)), { longEdge: SHEET_EDGE, words }));
         else { canvas = canvasOf(src.picture.width, src.picture.height); canvas.getContext('2d').drawImage(src.picture, 0, 0); }
-        const out = await finish(canvas);
-        if (!alive.current) return;
-        // Wiped means the street itself was found by its words and painted out
+        // Wiped means the street itself was found by its words and painted out: then the sheet goes up whole
         const street = [...hits].some((w) => streetWords.has(w));
+        const out = await finish(canvas, { whole: !!src.doc && street });
+        if (!alive.current) return;
         const url = keepUrl(out.blob);
         setReady((m) => (m[key]?.state === 'working' ? { ...m, [key]: { state: 'ready', ...out, base: out.blob, baseUrl: url, url, wiped, street, textLayer, boxes: [], checked: false } } : m));
       } catch (e) {
@@ -622,8 +627,10 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
       const drawings = pickedDrawings.map(([key, p]) => {
         const r = ready[key];
         const label = String(p.label || '').trim() || KIND[p.kind].long;
-        // Looked after (wiped, covered or checked): nothing left for the site to crop off
-        return { file: new File([r.blob], `${slugOf(label)}-notitle.png`, { type: 'image/png' }), type: p.kind, label, source: key, w: r.w, h: r.h, addressCheck: addressDone(r) };
+        // Looked after (wiped, covered or checked): nothing left for the site to crop off. A whole sheet is named -sheet
+        // and says where its drawing is, so the page can zoom to it
+        const kept = !!r.whole;
+        return { file: new File([r.blob], `${slugOf(label)}-${kept ? 'sheet' : 'notitle'}.png`, { type: 'image/png' }), type: p.kind, label, source: key, w: r.w, h: r.h, addressCheck: addressDone(r), ...(kept && r.focus ? { focus: r.focus } : {}) };
       });
       // The reveal screen's places still free go to ones spread across the visit (freeBeforePlaces); the rest as taken
       const first = suggestBefores(pickedBefores, freeBeforePlaces({ beforePhotos: beforeList }));
@@ -697,7 +704,7 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
       : !r.textLayer ? 'This drawing has no words to search (a picture or a scan), so the address can’t be found by its words.'
       : 'The street wasn’t found among its words. It may be drawn as lines, or spelled another way.';
     return html`<div class="rdi-addr">
-      ${done === 'wiped' ? html`<span class="rdi-meta"><span class="kd-chip kd-chip--ok">${icon.check} Address wiped (${r.wiped})</span>${r.trimmed ? html`<span>Title block cut off</span>` : null}</span>`
+      ${done === 'wiped' ? html`<span class="rdi-meta"><span class="kd-chip kd-chip--ok">${icon.check} Address wiped (${r.wiped})</span>${r.whole ? html`<span>The whole sheet, without the address</span>` : r.trimmed ? html`<span>Title block cut off</span>` : null}</span>`
         : done === 'covered' ? html`<span class="rdi-meta"><span class="kd-chip kd-chip--ok">${icon.check} Covered by hand (${r.boxes.length})</span></span>`
         : done === 'checked' ? html`<span class="rdi-meta"><span class="kd-chip kd-chip--quiet">Checked: no address on it</span></span>`
         : html`<span class="rdi-meta"><span class="kd-chip kd-chip--warn">${icon.alert} Check for the address</span></span><p>${why} Cover it, or tick that there’s none.</p>`}

@@ -12,8 +12,9 @@
  *     every before photo picked (Pick all / Pick none)
  *   - the family's address: red on the test sheets (title block and a note on
  *     the drawing). Not one red pixel survives on a picked drawing, the blue
- *     room labels do, and the title block is cut off
- *   - Add: drawings go up named -notitle with their kind, caption, size and
+ *     room labels do, and a sheet whose street was found goes up whole (its
+ *     title block kept; Peter, Nov 16 2026: the official plan set)
+ *   - Add: drawings go up named -sheet (whole) or -notitle with their kind, caption, size and
  *     JobTread source; before photos go in Photos → Before photos (never the
  *     gallery or Before & after), the six spread across the visit first, the
  *     first six marked as on the reveal screen; items already added show as on
@@ -169,8 +170,19 @@ function makeApi(files, opts = {}) {
       const n = st.uploads.length + 1;
       st.uploads.push(n);
       const failing = st.failUploads > 0 && st.failUploads--;
-      return later(st.uploadDelay, () => (failing ? json({ success: false, error: 'Cloudflare said no' }, 500)
-        : json({ success: true, imageId: `kids/test/up-${n}`, imageUrl: `https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/kids/test/up-${n}/public` })));
+      // As Cloudflare does, the picture keeps the id it was sent with (its name: -sheet, -notitle), when there is one
+      const answer = (raw) => {
+        // (Handed over as base64 by Chrome; read as text either way)
+        const text = String(raw || '');
+        const body = /^[A-Za-z0-9+/=]+$/.test(text.slice(0, 200)) ? Buffer.from(text, 'base64').toString('latin1') : text;
+        const asked = (body.match(/name="id"\r\n\r\n([^\r\n]+)/) || [])[1];
+        const id = asked && /^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(asked) ? asked : `kids/test/up-${n}`;
+        return later(st.uploadDelay, () => (failing ? json({ success: false, error: 'Cloudflare said no' }, 500)
+          : json({ success: true, imageId: id, imageUrl: `https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/${id}/public` })));
+      };
+      // (A big upload's body isn't handed over with the request: it's asked for)
+      if (req.postData()) return answer(req.postData());
+      return (req.fetchPostData ? req.fetchPostData().catch(() => '') : Promise.resolve('')).then(answer);
     }
     if (p === '/api/reveals-admin') return json({ success: true, reveals: [{ slug: SLUG, name: 'Dylan', startsAt: '2026-11-18T21:00:00.000Z', date: '2026-11-18', time: '16:00', confirmed: true, jobId: JOB }], jobs: { [SLUG]: JOB }, statuses: { [SLUG]: 'Build' } });
     if (p === '/api/reveal-design-admin') {
@@ -298,7 +310,8 @@ async function desktop(browser, files) {
     const px = await inspect(page, tiles[i].src);
     ok(px.red === 0, `${tiles[i].sheet}: no red (address) pixel left (${px.red})`);
     ok(px.blue > 50, `${tiles[i].sheet}: the room labels are still there (${px.blue} blue pixels)`);
-    ok(px.fill > 0.8, `${tiles[i].sheet}: cropped to the drawing, not the whole sheet (it fills ${Math.round(px.fill * 100)}% of ${px.w}×${px.h})`);
+    ok(px.w === 3200 && px.fill > 0.85, `${tiles[i].sheet}: the whole sheet, its street found and painted out (${px.w}×${px.h}, ${Math.round(px.fill * 100)}% border to border)`);
+    ok(/The whole sheet, without the address/.test(await page.evaluate((n) => document.querySelectorAll('.rdi .rdi-grid:not(.rdi-grid--photos) > li')[n]?.querySelector('.rdi-addr')?.textContent || '', i)), `${tiles[i].sheet}: it says the whole sheet goes up`);
   }
   // Even the small unpicked pages have the address painted out
   const coverPx = await inspect(page, tiles[0].src);
@@ -338,8 +351,12 @@ async function desktop(browser, files) {
   });
   await sleep(300);
   const ups = await page.evaluate(() => window.__uploads);
-  const drawUps = ups.filter((u) => u.type === 'image/png' && /notitle/.test(u.name));
-  ok(drawUps.length === 3, `every drawing went up as a PNG marked as seen to (-notitle): ${ups.map((u) => u.name).join(', ')}`);
+  const drawUps = ups.filter((u) => u.type === 'image/png' && /-(?:notitle|sheet)\./.test(u.name));
+  ok(drawUps.length === 3 && drawUps.filter((u) => /-sheet\./.test(u.name)).length === 2, `every drawing went up as a PNG marked as seen to, the plans whole (-sheet), the board -notitle: ${ups.map((u) => u.name).join(', ')}`);
+  // (Once they've gone up: a drawing still on its way has no address of its own yet)
+  await page.waitForFunction(() => (window.__soardRevealDesign?.().slides || []).filter((x) => x.kind !== 'before').length === 2, { timeout: 15000 }).catch(() => {});
+  const focused = await page.evaluate(() => (window.__soardRevealDesign?.().slides || []).filter((x) => x.focus).map((x) => x.kind).join());
+  ok(focused === 'as-built,proposed', `both plans say where their drawing is on the sheet, for the zoom: ${focused}`);
   const kinds = await page.$$eval('#kd-sec-plans .kd-plan', (lis) => lis.map((li) => li.querySelector('.kd-plan__kind [aria-checked="true"]')?.textContent.trim()));
   ok(kinds.join() === 'As-built,Proposed,Board', `plan tiles keep their kinds: ${kinds.join()}`);
   const chips = await page.$$eval('#kd-sec-plans .kd-plan', (lis) => lis.map((li) => li.querySelector('.kd-plan__meta .kd-chip')?.textContent.trim() || '(none)'));
@@ -361,7 +378,7 @@ async function desktop(browser, files) {
   ok(bt.length === 8 && bt.map((t) => (t.screen ? 1 : 0)).join('') === '11111100', `8 before photos, the first 6 on the reveal screen: ${bt.map((t) => (t.screen ? 1 : 0)).join('')}`);
   const bz = await page.$$eval('#kd-befores .kd-zone', (z) => z.map((x) => x.textContent.trim()));
   ok(bz.join(' | ') === 'On the reveal screen | Not on the reveal screen', `zones: ${bz.join(' | ')}`);
-  ok(ups.filter((u) => !/notitle/.test(u.name)).length === 8, `8 before photos went up: ${ups.filter((u) => !/notitle/.test(u.name)).map((u) => u.name).join(', ')}`);
+  ok(ups.filter((u) => !/-(?:notitle|sheet)\./.test(u.name)).length === 8, `8 before photos went up: ${ups.filter((u) => !/-(?:notitle|sheet)\./.test(u.name)).map((u) => u.name).join(', ')}`);
   await shot(page, 'after-add-1440');
   for (const id of ['plans', 'photos', 'transform']) {
     const el = await page.$(`#kd-sec-${id}`);
@@ -799,7 +816,7 @@ async function editorFlows(browser) {
   await page.waitForFunction(() => !document.querySelector('.kd-tile__busy'), { timeout: 30000 });
   await sleep(300);
   const toasts = (await page.evaluate(() => window.__toastsSeen)).join(' | ');
-  ok(/“(Existing|Proposed) floor plan” didn’t upload\. Cloudflare said no|1 before photo didn’t upload\. .*Cloudflare said no/.test(toasts), `a failed upload says what didn’t go up (a drawing by its caption): “${toasts.slice(0, 160)}”`);
+  ok(/“(Existing floor plan|Proposed floor plan|Therapy room board)” didn’t upload\. Cloudflare said no|1 before photo didn’t upload\. .*Cloudflare said no/.test(toasts), `a failed upload says what didn’t go up (a drawing by its caption): “${toasts.slice(0, 160)}”`);
   // Take the board off, then look again: nothing is picked again for staff
   await page.evaluate(() => [...document.querySelectorAll('#kd-sec-plans .kd-plan')].find((li) => /Board/.test(li.querySelector('[aria-checked="true"]')?.textContent || ''))?.querySelector('.kd-danger-quiet').click());
   await sleep(300);
@@ -1816,12 +1833,12 @@ async function beforePhotosGroup(browser) {
     await page.evaluate(() => [...document.querySelectorAll('.toast')].find((t) => /removed/.test(t.textContent))?.querySelector('.toast-undo')?.click());
     await sleep(200);
     const after = await page.evaluate(() => [...document.querySelectorAll('#kd-befores .kd-tile__open img')].map((i) => i.getAttribute('src')));
-    ok(after.length === 4 && !after.some((u) => /before-1\.jpg/.test(u)) && after.some((u) => /kids\/test\/up-/.test(u)), `with a photo added since, the Remove’s Undo changes nothing (${after.length})`);
+    ok(after.length === 4 && !after.some((u) => /before-1\.jpg/.test(u)) && after.some((u) => !/before-\d+\.jpg/.test(u)), `with a photo added since, the Remove’s Undo changes nothing (${after.length})`);
     ok(!after.some((u) => /^blob:/.test(u)), 'no dead (blob:) tile');
     await page.click('.kd-bar__save .kd-save');
     await sleep(1200);
     const saved = api.st.saves.at(-1);
-    ok(saved?.beforePhotos.length === 4 && saved.beforePhotos.some((p) => p.room === 'Hall') && saved.beforePhotos.some((p) => /up-/.test(p.url)), `Save keeps the room typed and the upload (${saved?.beforePhotos?.length})`);
+    ok(saved?.beforePhotos.length === 4 && saved.beforePhotos.some((p) => p.room === 'Hall') && saved.beforePhotos.some((p) => !/before-\d+\.jpg/.test(p.url)), `Save keeps the room typed and the upload (${saved?.beforePhotos?.length})`);
     // Move to the gallery one that's in the gallery already: it says so
     const galleryUrl = await page.evaluate(() => [...document.querySelectorAll('#kd-sec-photos .kd-tiles')].filter((x) => !x.closest('#kd-befores')).flatMap((x) => [...x.querySelectorAll(':scope > .kd-tile img')])[3].getAttribute('src'));
     ok(!!galleryUrl, 'a gallery photo to copy');

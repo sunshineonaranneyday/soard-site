@@ -125,7 +125,7 @@ const WORDS = addressWords({ street: '731 Juniper Hill Ln', city: 'Marietta', zi
 
 test('address words: the street, its number and name, city, zip, family', () => {
   assert.ok(WORDS.includes('731 juniper hill ln'));
-  assert.ok(WORDS.includes('426'));
+  assert.ok(WORDS.includes('731'));
   assert.ok(WORDS.includes('juniper hill'));
   assert.ok(WORDS.includes('marietta'));
   assert.ok(WORDS.includes('30064'));
@@ -133,9 +133,9 @@ test('address words: the street, its number and name, city, zip, family', () => 
 });
 
 test('what gives the address away, and what doesn’t', () => {
-  for (const t of ['731 JUNIPER HILL LN', '731 Juniper Hill Ln, Marietta GA 30064', 'HARTWELL RESIDENCE', 'MOUNTAIN', 'Marietta,', '30064']) assert.ok(isAddressText(t, WORDS), t);
-  for (const t of ['PROPOSED FLOOR PLAN', 'VIEW', 'ELEVATION VIEW', '4260', 'A1.0', 'BATH']) assert.ok(!isAddressText(t, WORDS), t);
-  assert.equal(plainWords('Café — 426!'), 'cafe 426');
+  for (const t of ['731 JUNIPER HILL LN', '731 Juniper Hill Ln, Marietta GA 30064', 'HARTWELL RESIDENCE', 'JUNIPER', 'Marietta,', '30064']) assert.ok(isAddressText(t, WORDS), t);
+  for (const t of ['PROPOSED FLOOR PLAN', 'HILL', 'ELEVATION VIEW', '7310', 'A1.0', 'BATH']) assert.ok(!isAddressText(t, WORDS), t);
+  assert.equal(plainWords('Café — 731!'), 'cafe 731');
 });
 
 // pdf.js-like items in a flat (unrotated) page: viewport flips y; scale 2
@@ -145,13 +145,13 @@ const item = (str, x, y, size = 10, width = str.length * 6) => ({ str, transform
 test('wipe boxes: every word of an address line, and the address alone in a note', () => {
   const items = [
     item('PROPOSED FLOOR PLAN', 40, 450, 14),
-    item('426', 300, 40), item('MOUNTAIN', 322, 40), item('VIEW', 374, 40), item('LN', 402, 40), // one line, word by word
+    item('731', 300, 40), item('JUNIPER', 322, 40), item('HILL', 374, 40), item('LN', 402, 40), // one line, word by word
     item('Bath', 120, 300),
     item('Site: 731 Juniper Hill Ln', 40, 200),
   ];
   const boxes = wipeBoxes(items, VT, 2, WORDS);
   assert.equal(boxes.length, 5);
-  // A box covers its letters: the "426" at x 300..318, baseline y 40 → canvas x 600..636, baseline 1000 - 80 = 920, letters above
+  // A box covers its letters: the "731" at x 300..318, baseline y 40 → canvas x 600..636, baseline 1000 - 80 = 920, letters above
   const b = boxes.find((bx) => Math.abs(bx[0][0] - 600) < 10);
   const xs = b.map((p) => p[0]); const ys = b.map((p) => p[1]);
   assert.ok(Math.min(...xs) < 600 && Math.max(...xs) > 636, 'covers the width');
@@ -336,3 +336,110 @@ test('keep box: a board of several pictures stays whole', () => {
   const k = keepBox(d, w, h);
   assert.ok(k.x <= 30 && k.y <= 30 && k.x + k.w >= 360 && k.y + k.h >= 270, JSON.stringify(k));
 });
+
+// ── Whole sheets (Peter, Nov 16 2026: "is there a way to make this look more like an official plan set") ──
+import { restOfLine, isContactText, findContact, relabelLines, cellOf, drawingFocus, keptSpan } from '../public/admin/reveal-design-draw.js';
+import { isTrimmed, isSheet, sheetFocus, needsTitleCrop, revealSlides } from '../public/admin/reveal-design.js';
+import { isFloorPlan } from '../public/admin/kids-shared.js';
+
+// A made-up family and street (the repo is public: never a real one)
+const FAKE = addressWords({ street: '731 Juniper Hill Ln', city: 'Roswell', zip: '30075', family: 'Hartwell' });
+
+test('the address line written back without the address: what’s left, never the address, nothing when only where was said', () => {
+  assert.equal(restOfLine('DYLAN 2026: 731 JUNIPER HILL LN', FAKE), 'DYLAN 2026');
+  assert.equal(restOfLine('DYLAN 2026 - 731 Juniper Hill Lane', FAKE), 'DYLAN 2026');
+  assert.equal(restOfLine('DYLAN 2026: 731 JUNIPER HILL LN, ROSWELL, GA 30075', FAKE), 'DYLAN 2026');
+  assert.equal(restOfLine('ADDRESS: 731 Juniper Hill Ln', FAKE), '');
+  assert.equal(restOfLine('Site: 731 Juniper Hill Ln', FAKE), '');
+  assert.equal(restOfLine('HARTWELL RESIDENCE', FAKE), '');
+  assert.equal(restOfLine('CLIENT: Dylan Hartwell', FAKE), 'CLIENT: Dylan');
+  // Spaced out, or only part of it found: nothing that still gives it away is ever written back
+  assert.equal(restOfLine('7 3 1 J U N I P E R H I L L L N', FAKE), '');
+  assert.equal(restOfLine('JUNIPERHILL 731', FAKE), '');
+});
+
+test('phone numbers and email addresses are painted out too; dimensions, scales and dates are not', () => {
+  for (const s of ['(770) 555-0123', '770.555.0123', '770-555-0123', '+1 770 555 0123', 'CALL 7705550123', 'jo@example.com']) assert.ok(isContactText(s), s);
+  for (const s of ['152 1/2"', 'SCALE: 1/2" = 1\'-0"', 'DATE: September 30, 2026', 'A-2', '129 1/2"', 'SHEET 2 OF 7']) assert.ok(!isContactText(s), s);
+  // One item, or a number split across a line's items
+  assert.equal(findContact([item('DESIGNER: (770) 555-0123', 40, 40)], VT, 2).length, 1);
+  assert.equal(findContact([item('(770)', 40, 40, 10, 30), item('555-0123', 74, 40, 10, 48), item('EXISTING LAYOUT', 400, 40)], VT, 2).length, 2);
+});
+
+test('the lines the address was on, upright ones, with what goes back and where', () => {
+  const lines = relabelLines([item('DYLAN 2026: 731 JUNIPER HILL LN', 300, 50), item('EXISTING LAYOUT', 100, 50, 10, 90), item('**CEILING HEIGHT 8 FT', 300, 300)], VT, 2, FAKE);
+  assert.equal(lines.length, 1);
+  const [l] = lines;
+  assert.equal(l.text, 'DYLAN 2026');
+  assert.equal(l.size, 20);
+  assert.equal(l.baseline, 900);
+  assert.ok(l.x0 < 600 && l.x1 > 600 + 31 * 6 * 2 - 10 && l.y0 < 880 && l.y1 > 900, JSON.stringify(l));
+  // Only the address: painted out, nothing written back. Running up the page: painted out, not written back
+  assert.deepEqual(relabelLines([item('ADDRESS: 731 Juniper Hill Ln', 300, 50)], VT, 2, FAKE), []);
+  const up = { str: 'DYLAN 2026: 731 JUNIPER HILL LN', transform: [0, 10, -10, 0, 580, 100], width: 186, height: 10 };
+  assert.deepEqual(relabelLines([up], VT, 2, FAKE), []);
+});
+
+test('written back in the middle of its title block cell (the rules either side), else where it was', () => {
+  const w = 400, h = 100;
+  const d = sheet(w, h, (px) => { for (let y = 70; y < 98; y++) { px(150, y); px(330, y); } });
+  const l = { x0: 170, x1: 300, y0: 78, y1: 92, size: 10 };
+  const c = cellOf(d, w, h, l);
+  assert.equal(c.mid, 240);
+  assert.ok(c.room > 150 && c.room < 180);
+  const open = cellOf(sheet(w, h, () => {}), w, h, l);
+  assert.equal(open.mid, 235);
+});
+
+test('a whole sheet’s drawing: found inside its border, above its title block, as fractions of the sheet', () => {
+  const w = 400, h = 260;
+  const d = sheet(w, h, (px) => {
+    for (let x = 8; x < w - 8; x++) { px(x, 8); px(x, h - 9); px(x, 220); }
+    for (let y = 8; y < h - 8; y++) { px(8, y); px(w - 9, y); }
+    // The title block's writing, and a drawing in the middle
+    for (let x = 30; x < 120; x++) px(x, 240);
+    for (let x = 150; x < 260; x++) for (let y = 70; y < 160; y += 1) if (x === 150 || x === 259 || y === 70 || y === 159) px(x, y);
+  });
+  const f = drawingFocus(d, w, h);
+  assert.ok(f.x > 0.34 && f.x < 0.38 && f.y > 0.24 && f.y < 0.28, JSON.stringify(f));
+  assert.ok(f.x + f.w > 0.64 && f.x + f.w < 0.68 && f.y + f.h > 0.6 && f.y + f.h < 0.64, JSON.stringify(f));
+});
+
+test('a whole sheet is never cut anywhere it shows, and says where its drawing is', () => {
+  const url = 'https://imagedelivery.net/HASH/kids/remy/plan-1-ab12-existing-layout-sheet.png/public';
+  const sheetPlan = { url, label: 'Existing layout', type: 'as-built', addressCheck: 'wiped', w: 3200, h: 2071, focus: { x: 0.3, y: 0.15, w: 0.36, h: 0.5 } };
+  assert.ok(isTrimmed(url) && isSheet(url));
+  assert.ok(isTrimmed(url.replace('-sheet', '-notitle')) && !isSheet(url.replace('-sheet', '-notitle')));
+  assert.equal(needsTitleCrop(sheetPlan), false);
+  assert.equal(isFloorPlan(sheetPlan), false, 'the kid page crops nothing off it');
+  assert.deepEqual(sheetFocus(sheetPlan), sheetPlan.focus);
+  // Only a whole sheet's, and only a real place on it
+  assert.equal(sheetFocus({ ...sheetPlan, url: url.replace('-sheet', '-notitle') }), null);
+  for (const focus of [null, { x: 0.3, y: 0.1, w: 0.8, h: 0.5 }, { x: -0.1, y: 0, w: 0.5, h: 0.5 }, { x: 0.3, y: 0.1, w: 0.01, h: 0.5 }, { x: 0.3, y: 0.1, w: '0.4', h: 0.5 }]) {
+    assert.equal(sheetFocus({ ...sheetPlan, focus }), null, JSON.stringify(focus));
+  }
+  const slides = revealSlides({ name: 'Remy', plans: [sheetPlan, { ...sheetPlan, url: url.replace('existing-layout-sheet', 'proposed-layout-notitle'), type: 'proposed', focus: undefined }] });
+  assert.deepEqual(slides.map((s) => [s.kind, s.crop, s.focus || null]), [['as-built', false, sheetPlan.focus], ['proposed', false, null]]);
+});
+
+test('the address line’s own letters that stay are found by its spaces: the widest gaps, each wider than any inside a word', () => {
+  // Letters as runs of ink on a 20-row band: [start, width] each, a space after a word
+  const band = (runs, w = 400, h = 20) => sheet(w, h, (px) => { for (const [x, wd] of runs) for (let x2 = x; x2 < x + wd; x2++) for (let y = 4; y < 16; y++) px(x2, y); });
+  // "DYLAN 2026: 731 JUNIPER": D Y L A N | 2 0 2 6 : | 7 3 1 (a "1" with room either side) | J U N I P E R
+  const runs = [];
+  let x = 4;
+  const word = (letters, gapsInside = 2, last = 9) => { letters.forEach((wd, i) => { runs.push([x, wd]); x += wd + (i < letters.length - 1 ? gapsInside : last); }); };
+  word([10, 10, 8, 10, 10]);
+  word([9, 9, 9, 9, 3], 2, 8);
+  runs.push([x, 9]); x += 11; runs.push([x, 9]); x += 15; runs.push([x, 4]); x += 4 + 8;
+  word([8, 10, 10, 4, 9, 9, 10]);
+  const d = band(runs);
+  const k = keptSpan(d, 400, 20, 'DYLAN 2026: 731 JUNIPER', 'DYLAN 2026', 20);
+  assert.equal(k.x0, 4, 'from the D');
+  assert.equal(k.x1, runs[8][0] + runs[8][1] - 1, 'to the 6, the colon left off');
+  // Words that can't be told apart (one space no wider than a gap in a word): typed instead
+  assert.equal(keptSpan(band([[4, 10], [16, 10], [32, 10], [48, 10]]), 400, 20, 'AB CD', 'AB', 20), null);
+  // A rest that isn't the line's own words in order: typed instead
+  assert.equal(keptSpan(d, 400, 20, 'DYLAN 2026: 731 JUNIPER', 'THERAPY ROOM', 20), null);
+});
+

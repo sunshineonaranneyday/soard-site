@@ -81,12 +81,15 @@ const proposedPlan = floorPlans.find(p => p !== existingPlan && /(after|proposed
    bottom ~10%, the same rule the kid profile page applies. The image viewer
    uses the same crop. */
 const TITLE_BLOCK = 0.10;
+/* A drawing with nothing to crop: cut down to its drawing already (-notitle), or a whole sheet with its address painted
+   out and its title block kept (-sheet, Peter, Nov 16 2026: shown as the official plan set) */
+const nothingToCrop = (url: string) => /-(?:notitle|sheet)\./i.test(url);
 function planRatio(url: string): number {
   const known = dimsMap[cfId(url)];
-  return (known ? known[1] / known[0] : 768 / 1187) * (1 - TITLE_BLOCK);
+  return (known ? known[1] / known[0] : 768 / 1187) * (nothingToCrop(url) ? 1 : 1 - TITLE_BLOCK);
 }
-const planSrc = (url: string, w: number) => cfRaw(url, `w=${w},h=${Math.round(w * planRatio(url))},fit=cover,gravity=top,q=80`);
-const planSet = (url: string, widths = [600, 1000, 1400]) => cfSrcset(url, widths, { fit: 'cover', gravity: 'top', aspectRatio: planRatio(url), quality: 80 });
+const planSrc = (url: string, w: number) => (nothingToCrop(url) ? cfRaw(url, `w=${w},q=80`) : cfRaw(url, `w=${w},h=${Math.round(w * planRatio(url))},fit=cover,gravity=top,q=80`));
+const planSet = (url: string, widths = [600, 1000, 1400]) => (nothingToCrop(url) ? cfSrcset(url, widths, { quality: 80 }) : cfSrcset(url, widths, { fit: 'cover', gravity: 'top', aspectRatio: planRatio(url), quality: 80 }));
 const boards = plans.filter(p => isPng(p) && !isFloorPlan(p));
 // A board's box at its real shape before it arrives (a board marked 900x532 that is taller grew
 // 36-64px on arrival and pushed the page down)

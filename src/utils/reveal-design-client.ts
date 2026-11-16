@@ -28,6 +28,8 @@ export interface DesignSlide {
   crop: boolean;
   w?: number;
   h?: number;
+  /** A whole sheet (its address painted out): where its drawing is on it, as fractions, for the views that zoom to it */
+  focus?: { x: number; y: number; w: number; h: number };
 }
 export interface DesignAnswer {
   open: boolean;
@@ -56,8 +58,16 @@ export async function fetchDesign(kid: string, signal?: AbortSignal): Promise<De
 const KINDS = new Set(['before', 'as-built', 'proposed', 'board']);
 export const validSlide = (s: any): s is DesignSlide => !!s && KINDS.has(s.kind) && typeof s.url === 'string' && !!s.url && !/^(blob|data):/.test(s.url);
 
+/** A whole sheet's drawing place, when it's a real one (fractions of the sheet, inside it); else null */
+export function focusOf(s: DesignSlide | null | undefined): { x: number; y: number; w: number; h: number } | null {
+  const f = s?.focus;
+  if (!f || ![f.x, f.y, f.w, f.h].every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+  if (f.w <= 0.02 || f.h <= 0.02 || f.x < 0 || f.y < 0 || f.x + f.w > 1.0001 || f.y + f.h > 1.0001) return null;
+  return f;
+}
+
 /** Same slides, same order: nothing to redraw */
-export const designSignature = (slides: DesignSlide[]) => slides.map((s) => `${s.kind}|${s.url}|${s.crop ? 1 : 0}|${s.caption}`).join('\n');
+export const designSignature = (slides: DesignSlide[]) => slides.map((s) => `${s.kind}|${s.url}|${s.crop ? 1 : 0}|${s.caption}|${focusOf(s) ? Object.values(focusOf(s)!).join(',') : ''}`).join('\n');
 
 const ratios = new Map<string, Promise<number | null>>();
 /** height ÷ width of a picture, read off a tiny copy */
@@ -85,7 +95,9 @@ export async function slideSrc(slide: DesignSlide, w: number): Promise<string | 
   const width = Math.max(64, Math.round(w));
   if (slide.kind === 'before') return cfRaw(slide.url, `w=${width},fit=scale-down,q=85`);
   // Plain white edges trimmed off, so the drawing fills its paper (never on a plan still to be cropped: trimming first
-  // would change its shape, and the crop below could then miss the title block)
+  // would change its shape, and the crop below could then miss the title block). A whole sheet as it is: its drawing's
+  // place is a fraction of exactly that
+  if (focusOf(slide)) return cfRaw(slide.url, `w=${Math.min(width, slide.w || width)},fit=scale-down,q=90`);
   if (!slide.crop) return cfRaw(slide.url, `trim=border,w=${width},fit=scale-down,q=90`);
   const r = slide.w && slide.h ? slide.h / slide.w : await ratioOf(slide.url);
   if (!r) return null;

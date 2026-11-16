@@ -47,6 +47,11 @@
     <button class="ldv__btn" type="button" data-ldv="prev" aria-label="Previous picture">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
     </button>
+    <!-- A whole plan sheet: from its drawing to the whole sheet and back (live-design.ts) -->
+    <button class="ldv__btn ldv__zoom" type="button" data-ldv="zoom" hidden>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <span data-ldv="zoom-text">Zoom in</span>
+    </button>
     <button class="ldv__btn" type="button" data-ldv="next" aria-label="Next picture">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
     </button>
@@ -94,6 +99,10 @@
   /* Drawings and boards on paper: whole, never cropped by the card */
   .ldz-paper { background: #fff; border: 1px solid var(--c-border); box-shadow: 0 18px 40px rgba(30, 31, 37, 0.07); padding: 60px clamp(14px, 2vw, 24px) clamp(14px, 2vw, 24px); }
   .ldz-boards .ldz-paper { padding-top: clamp(14px, 2vw, 24px); }
+  /* A whole plan sheet is its own paper (its border and title block): edge to edge in the card, its badge in the top
+     corner the sheet leaves free (its legend is top left) */
+  .ldz-paper.ldz-sheet { padding: 0; }
+  .ldz-sheet .ldz-badge { left: auto; right: 12px; }
   /* What a picture is, on it: BEFORE on the room's photos, EXISTING and PROPOSED on the plans. Solid and ringed in white
      so it reads on any photo; the new plan's is the yellow one (the strip's and the starting-soon screen's look) */
   .ldz-badge {
@@ -163,8 +172,13 @@
   .ldv.ldv--pinned .ldv__kicker { display: table; margin: 0 0 8px; }
   .ldv__count { color: rgba(255, 255, 255, 0.7); font-size: 14px; font-variant-numeric: tabular-nums; }
   /* The picture always fits the space between the bar and the arrows, whatever its shape and the screen's */
-  .ldv__stage { position: relative; min-height: 0; margin: 8px clamp(8px, 3vw, 28px); touch-action: pinch-zoom; }
-  .ldv__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+  .ldv__stage { position: relative; min-height: 0; margin: 8px clamp(8px, 3vw, 28px); touch-action: pinch-zoom; overflow: hidden; }
+  .ldv__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: 0 0; transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .ldv__img.is-still { transition: none; }
+  /* A whole plan sheet: zoomed to its drawing, or the whole sheet (a double-click or double-tap swaps them) */
+  .ldv__stage[data-sheet] .ldv__img { cursor: zoom-in; }
+  .ldv__stage[data-sheet][data-zoomed] .ldv__img { cursor: zoom-out; }
+  @media (prefers-reduced-motion: reduce) { .ldv__img { transition: none; } }
   .ldv__nav { display: flex; justify-content: center; gap: 16px; padding: 10px 0 max(18px, env(safe-area-inset-bottom)); }
   .ldv__btn {
     display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 50%;
@@ -173,6 +187,9 @@
   .ldv__btn:hover { background: rgba(255, 255, 255, 0.16); }
   .ldv__btn:focus-visible { outline: 3px solid var(--c-yellow); outline-offset: 2px; }
   .ldv__btn[hidden] { display: none; }
+  /* The whole sheet / zoom in button: words, so a pill (after .ldv__btn, which it builds on) */
+  .ldv__btn.ldv__zoom { width: auto; display: inline-flex; align-items: center; gap: 8px; padding: 0 20px 0 16px; border-radius: 24px; font: inherit; font-size: 15px; font-weight: 600; white-space: nowrap; }
+  .ldv__btn.ldv__zoom[hidden] { display: none; }
   /* A narrow phone with a landscape video: beside the small video there's no room for words, so they go under it */
   @media (max-width: 420px) {
     .ldv--pinned.ldv--wide .ldv__bar { min-height: 0; padding: calc(var(--ldp-top) + var(--ldp-hw) + 12px) 12px 0; }

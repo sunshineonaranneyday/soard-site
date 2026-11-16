@@ -8,11 +8,19 @@
  *      over in white (findAddress: the street, its number and name, the
  *      city, the zip and the family's name; a word, a line, or letters set
  *      one at a time or spaced out, "M A R I E T T A");
- *   2. the title block is cut off when there really is one: a dark rule
- *      across the sheet in its bottom fifth (or down its right third) with
- *      writing beyond it. A rule within 5% of the edge is the sheet's own
- *      border, never a title block;
- *   3. the plain white margin around what's left is trimmed.
+ *   2. so is any phone number or email address (findContact), and the line
+ *      the address was on is written back without it, in the sheet's own
+ *      letters ("DYLAN 2026: 12 MAPLE LN" → "DYLAN 2026": relabelLines);
+ *   3. a sheet whose street was found that way goes up whole, as the designer
+ *      drew it (Peter, Nov 16 2026: "is there a way to make this look more like
+ *      an official plan set"): its border, its title block with the SOARD logo,
+ *      the sheet's name, number and scale, the legend and the notes, with where
+ *      the drawing sits on it (drawingFocus) so the page can zoom to it;
+ *   4. any other sheet has its title block cut off when there really is one (a
+ *      dark rule across the sheet in its bottom fifth, or down its right
+ *      third, with writing beyond it; a rule within 5% of the edge is the
+ *      sheet's own border, never a title block), and the plain white margin
+ *      around what's left trimmed.
  * Only words can be found this way. A drawing whose address wasn't found by
  * its words (a picture, a scanned PDF, a job with no address on file) is
  * left for staff to look over, cover or tick (the import won't add it
@@ -33,7 +41,7 @@ export const plainWords = (s) => String(s || '').toLowerCase().normalize('NFD').
 /**
  * The address word this bit of text gives away, or null. words: addressWords()
  * from ./reveal-design.js. A word or phrase whole in the text; a long word the
- * text is one whole word of ("MOUNTAIN" of "juniper hill"); or, with the
+ * text is one whole word of ("JUNIPER" of "juniper hill"); or, with the
  * spaces taken out, a word of five letters or more ("M A R I E T T A",
  * "7 3 1 J U N I P E R H I L L"), a number only as itself.
  */
@@ -78,7 +86,7 @@ export function placeItem(item, vt, scale) {
   const size = Math.hypot(t[2], t[3]) || Math.abs(item.height || 0) * scale || 1;
   const up = [t[2] / size, t[3] / size];
   const width = Math.abs(item.width || 0) * scale || size * 0.5 * String(item.str || '').length;
-  return { x: t[4], y: t[5], along, up, size, width, str: String(item.str || '') };
+  return { x: t[4], y: t[5], along, up, size, width, str: String(item.str || ''), font: String(item.fontName || '') };
 }
 
 /** The box to paint over a placed item, a little bigger than the letters: four corners */
@@ -155,6 +163,130 @@ export function findAddress(items, vt, scale, words) {
 }
 /** The boxes alone (as findAddress) */
 export const wipeBoxes = (items, vt, scale, words) => findAddress(items, vt, scale, words).boxes;
+
+// ── What else reaches the family, and the address's line written back ──
+
+// A phone number ("(770) 555-0123", "770.555.0123", "+1 770 555 0123") or an email address: never on a sheet that's shown
+const PHONE = /(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\b\d{3})[\s.-]?\d{3}[\s.-]?\d{4}\b/;
+const EMAIL = /[^\s@]+@[^\s@]+\.[a-z]{2,}/i;
+export const isContactText = (s) => PHONE.test(String(s || '')) || EMAIL.test(String(s || ''));
+
+/** The boxes to paint over for phone numbers and email addresses: each item that has one, and every item of a line that does */
+export function findContact(items, vt, scale) {
+  const placed = placedOf(items, vt, scale);
+  const hit = new Set(placed.filter((p) => isContactText(p.str)));
+  for (const line of linesOf(placed)) if (line.items.length > 1 && isContactText(line.text)) line.items.forEach((x) => hit.add(x));
+  return [...hit].map((p) => boxOf(p));
+}
+
+// What an address leaves behind once its words are out: a street type, the state, a unit
+const LEFT_BEHIND = /\b(?:ln|lane|st|street|rd|road|dr|drive|ave|avenue|ct|court|way|blvd|boulevard|cir|circle|pl|place|trl|trail|pkwy|parkway|hwy|ter|terrace|apt|unit|ste|suite|ga|georgia|usa)\b\.?|#\s*\d*/gi;
+// A line that only said where ("ADDRESS:", "SITE:", "HARTWELL RESIDENCE") says nothing once the address is out
+const ONLY_WHERE = /^(?:project\s+|job\s*)?(?:address|site|location|property|lot|jobsite|residence|home|house|client|owner)$/i;
+const escapeRe = (w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '[\\s,.]+');
+
+/**
+ * A line with its address taken out: "DYLAN 2026: 12 MAPLE LN" → "DYLAN 2026", "ADDRESS: 12 Maple Ln" → "",
+ * "HARTWELL RESIDENCE" → "". What's left never gives the address away (spaced-out letters included): if it
+ * would, nothing is.
+ */
+export function restOfLine(text, words) {
+  let s = ` ${String(text || '')} `;
+  const list = [...(words || [])].map((x) => String(x || '').trim()).filter(Boolean).sort((a, b) => b.length - a.length);
+  for (const w of list) s = s.replace(new RegExp(`(^|[^a-z0-9])${escapeRe(w)}(?=[^a-z0-9]|$)`, 'gi'), '$1 ');
+  s = s.replace(LEFT_BEHIND, ' ').replace(/\s+/g, ' ');
+  // Separators the address was hung on ("2026: ", " - ", ", ,"), at either end or doubled
+  s = s.replace(/\s*([:;,|·–—-])\s*(?=[:;,|·–—-]|$)/g, '').replace(/^[\s:;,.|·–—/-]+|[\s:;,|·–—/-]+$/g, '').trim();
+  if (!/[a-z0-9]/i.test(s) || ONLY_WHERE.test(s.replace(/[:.]/g, '').trim())) return '';
+  return addressHit(s, words) ? '' : s;
+}
+
+/**
+ * The lines the address was found on, upright ones, with what to write back on each (restOfLine) and where: the
+ * line's box, its baseline, its letter size and the PDF's own font for it (pdf.js's loaded name).
+ * → [{ text, text0 (the line as it was), x0, x1, y0, y1, baseline, size, font }]
+ */
+export function relabelLines(items, vt, scale, words) {
+  const out = [];
+  for (const line of linesOf(placedOf(items, vt, scale))) {
+    if (!addressHit(line.text, words) && !line.items.some((p) => addressHit(p.str, words))) continue;
+    const [ax, ay] = line.items[0].along;
+    if (Math.abs(ax - 1) > 0.02 || Math.abs(ay) > 0.02) continue;
+    const text = restOfLine(line.text, words);
+    if (!text) continue;
+    const corners = line.items.flatMap((p) => boxOf(p));
+    const xs = corners.map((c) => c[0]);
+    const ys = corners.map((c) => c[1]);
+    const first = line.items[0];
+    out.push({ text, text0: line.text, x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys), baseline: first.y, size: line.size, font: first.font });
+  }
+  return out;
+}
+
+/**
+ * The part of a line's own letters that stays, as pixels (so it's the sheet's own lettering, whatever its font): the
+ * words of rest, found among the line's words by the gaps between them. data: the line's band (RGBA, w × h); text: the
+ * line as it was; rest: what stays (restOfLine); size: its letter size. A trailing mark the rest dropped ("2026:" →
+ * "2026") is left off when it stands apart, narrow, at the end of its word. → { x0, x1 } (columns, inclusive), or null
+ * when the words can't be told apart (the line is then written back in type)
+ */
+export function keptSpan(data, w, h, text, rest, size) {
+  const tokens = String(text || '').trim().split(/\s+/).filter(Boolean);
+  const want = String(rest || '').trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length || !want.length) return null;
+  const bare = (t) => t.replace(/[:;,.|·–—-]+$/, '');
+  let from = -1;
+  for (let i = 0; i + want.length <= tokens.length && from < 0; i++) {
+    if (want.every((wd, j) => tokens[i + j] === wd || (j === want.length - 1 && bare(tokens[i + j]) === wd))) from = i;
+  }
+  if (from < 0) return null;
+  const ink = new Uint8Array(w);
+  for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) if (lum(data, (y * w + x) * 4) < 160) { ink[x] = 1; break; }
+  const runs = [];
+  for (let x = 0; x < w;) {
+    if (!ink[x]) { x++; continue; }
+    let e = x;
+    while (e + 1 < w && ink[e + 1]) e++;
+    runs.push([x, e]);
+    x = e + 1;
+  }
+  // The spaces: the line has tokens.length words, so its widest tokens.length - 1 gaps, each wider than any gap left
+  // inside a word (a "1" with room either side is still a letter); else the words can't be told apart
+  if (runs.length < tokens.length) return null;
+  const gaps = runs.slice(1).map((r, i) => ({ i: i + 1, w: r[0] - runs[i][1] - 1 })).sort((a, b) => b.w - a.w);
+  const breaks = gaps.slice(0, tokens.length - 1);
+  const inside = gaps[tokens.length - 1];
+  if (breaks.length && inside && breaks[breaks.length - 1].w <= inside.w) return null;
+  if (breaks.some((g) => g.w < Math.max(2, size * 0.15))) return null;
+  const cut = new Set(breaks.map((g) => g.i));
+  const words = [];
+  runs.forEach((r, i) => { if (!i || cut.has(i)) words.push([r]); else words[words.length - 1].push(r); });
+  if (words.length !== tokens.length) return null;
+  const lastWord = words[from + want.length - 1];
+  let x1 = lastWord[lastWord.length - 1][1];
+  if (tokens[from + want.length - 1] !== want[want.length - 1]) {
+    const tail = lastWord[lastWord.length - 1];
+    if (lastWord.length < 2 || tail[1] - tail[0] + 1 > size * 0.4) return null;
+    x1 = lastWord[lastWord.length - 2][1];
+  }
+  return { x0: words[from][0][0], x1 };
+}
+
+/**
+ * Where a line written back goes across: the middle of the title block's cell it's in (the dark rules either side of
+ * it, as tall as the line, within a third of the sheet), else the middle of where it was. → { mid, room }
+ */
+export function cellOf(data, w, h, l) {
+  const y0 = Math.max(0, Math.floor(l.y0)), y1 = Math.min(h - 1, Math.ceil(l.y1));
+  const tall = Math.max(1, y1 - y0 + 1);
+  const rule = (x) => { let n = 0; for (let y = y0; y <= y1; y++) if (lum(data, (y * w + x) * 4) < 120) n++; return n >= tall * 0.9; };
+  const reach = Math.round(w / 3);
+  let left = null, right = null;
+  for (let x = Math.floor(l.x0) - 1; x >= Math.max(0, Math.floor(l.x0) - reach); x--) if (rule(x)) { left = x; break; }
+  for (let x = Math.ceil(l.x1) + 1; x <= Math.min(w - 1, Math.ceil(l.x1) + reach); x++) if (rule(x)) { right = x; break; }
+  if (left != null && right != null) return { mid: (left + right) / 2, room: right - left - l.size * 1.2 };
+  return { mid: (l.x0 + l.x1) / 2, room: Math.max(l.x1 - l.x0, l.size * 4) };
+}
 
 // ── Which sheet a page is ────────────────────────────────────────────
 
@@ -437,19 +569,91 @@ export async function drawPdfPage(page, { width, longEdge, words = [] }) {
   await page.render({ canvas, canvasContext: ctx, viewport, background: '#ffffff' }).promise;
   const content = await page.getTextContent().catch(() => ({ items: [] }));
   const { boxes, hits } = findAddress(content.items, viewport.transform, scale, words);
+  const contact = findContact(content.items, viewport.transform, scale);
+  // The address's lines, the ink each was written in and its letters as they were, before they're painted out
+  const lines = relabelLines(content.items, viewport.transform, scale, words).map((l) => ({ ...l, ink: inkOf(ctx, l), band: bandOf(ctx, l) }));
   paintOver(ctx, boxes);
+  paintOver(ctx, contact);
+  writeBack(ctx, lines, content.styles || {});
   const textLayer = content.items.some((i) => String(i.str || '').trim());
   const title = sheetTitle(content.items, viewport.transform, scale, words);
   const body = content.items.map((i) => i.str || '').join(' ').replace(/\s+/g, ' ').trim();
-  return { canvas, wiped: boxes.length, hits, textLayer, title, body };
+  // relabeled: how each address line was written back ('letters': its own, moved; 'typed': in type)
+  return { canvas, wiped: boxes.length, hits, textLayer, title, body, contact: contact.length, relabeled: lines.map((l) => l.how) };
 }
 
-/** A sheet as it goes up: a real title block cut off and the white margin trimmed. → { canvas, w, h, trimmed } */
-export function finishSheet(canvas) {
+/** A line's letters as they were: the band from its capitals' tops to its descenders, across its box */
+function bandOf(ctx, l) {
+  const x = Math.max(0, Math.floor(l.x0)), y = Math.max(0, Math.floor(l.baseline - l.size * 0.95));
+  const w = Math.max(1, Math.min(ctx.canvas.width - x, Math.ceil(l.x1 - l.x0)));
+  const h = Math.max(1, Math.min(ctx.canvas.height - y, Math.ceil(l.size * 1.25)));
+  return { x, y, image: ctx.getImageData(x, y, w, h) };
+}
+
+/** The darkest ink inside a line's box (its letters' colour), as a CSS colour; black when there's none */
+function inkOf(ctx, l) {
+  const x = Math.max(0, Math.floor(l.x0)), y = Math.max(0, Math.floor(l.y0));
+  const w = Math.max(1, Math.min(ctx.canvas.width - x, Math.ceil(l.x1 - l.x0))), h = Math.max(1, Math.min(ctx.canvas.height - y, Math.ceil(l.y1 - l.y0)));
+  const { data } = ctx.getImageData(x, y, w, h);
+  let best = 255 * 3, at = -1;
+  for (let i = 0; i < data.length; i += 4) { const v = data[i] + data[i + 1] + data[i + 2]; if (v < best) { best = v; at = i; } }
+  return at < 0 || best > 600 ? '#000' : `rgb(${data[at]}, ${data[at + 1]}, ${data[at + 2]})`;
+}
+
+/**
+ * Each address line written back without the address (relabelLines), in the middle of its cell: its own letters moved
+ * there (keptSpan), so it's the sheet's own lettering whatever its font; else typed in the PDF's own font where the
+ * browser has it (pdf.js loads a sheet's fonts under their loaded names as it draws), else a plain one, never wider
+ * than the cell
+ */
+function writeBack(ctx, lines, styles) {
+  if (!lines.length) return;
+  const { data } = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+  for (const l of lines) {
+    const { mid: at } = cellOf(data, ctx.canvas.width, ctx.canvas.height, l);
+    const b = l.band;
+    const keep = b && keptSpan(b.image.data, b.image.width, b.image.height, l.text0, l.text, l.size);
+    if (keep) {
+      const width = keep.x1 - keep.x0 + 1;
+      ctx.putImageData(b.image, Math.round(at - width / 2) - keep.x0, b.y, keep.x0, 0, width, b.image.height);
+      l.how = 'letters';
+      continue;
+    }
+    l.how = 'typed';
+    const loaded = typeof document !== 'undefined' && l.font && [...(document.fonts || [])].some((f) => f.family === l.font || f.family === `"${l.font}"`);
+    const own = loaded ? `"${l.font}", ` : '';
+    const family = `${own}${styles[l.font]?.fontFamily && styles[l.font].fontFamily !== 'sans-serif' ? `${styles[l.font].fontFamily}, ` : ''}"Helvetica Neue", Arial, sans-serif`;
+    const { mid, room } = cellOf(data, ctx.canvas.width, ctx.canvas.height, l);
+    let size = l.size;
+    ctx.save();
+    ctx.font = `${size}px ${family}`;
+    const wide = ctx.measureText(l.text).width;
+    if (wide > room && room > 0) { size = Math.max(l.size * 0.6, size * (room / wide)); ctx.font = `${size}px ${family}`; }
+    ctx.fillStyle = l.ink || '#000';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(l.text, mid - ctx.measureText(l.text).width / 2, l.baseline);
+    ctx.restore();
+  }
+}
+
+/** Where the drawing sits on a whole sheet, as fractions of it ({ x, y, w, h } from 0 to 1): what the page zooms to */
+export function drawingFocus(data, w, h) {
+  const b = keepBox(data, w, h);
+  const r = (n) => Math.round(n * 10000) / 10000;
+  return { x: r(b.x / w), y: r(b.y / h), w: r(b.w / w), h: r(b.h / h) };
+}
+
+/**
+ * A sheet as it goes up. whole (its street was found by its words and painted out): the whole sheet, as the designer
+ * drew it, with where its drawing is (focus). Otherwise a real title block cut off and the white margin trimmed.
+ * → { canvas, w, h, trimmed, whole, focus? }
+ */
+export function finishSheet(canvas, { whole = false } = {}) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  if (whole) return { canvas, w: canvas.width, h: canvas.height, trimmed: false, whole: true, focus: drawingFocus(data, canvas.width, canvas.height) };
   const box = keepBox(data, canvas.width, canvas.height);
   const out = canvasOf(box.w, box.h);
   out.getContext('2d').drawImage(canvas, box.x, box.y, box.w, box.h, 0, 0, box.w, box.h);
-  return { canvas: out, w: out.width, h: out.height, trimmed: box.titleBlock };
+  return { canvas: out, w: out.width, h: out.height, trimmed: box.titleBlock, whole: false };
 }

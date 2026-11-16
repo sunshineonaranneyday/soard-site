@@ -61,6 +61,9 @@ const kids = defineCollection({
       // The JobTread file it came from ("jt:<id>#<page>"): a drawing brought in from JobTread shows on the page, after the
       // reveal too, only once its address has been seen to (one staff put there themselves always shows)
       source: z.string().optional(),
+      // A whole sheet (-sheet, its address painted out): where its drawing sits on it, as fractions ({ x, y, w, h } from
+      // 0 to 1), so the page can zoom to the drawing (public/admin/reveal-design-draw.js drawingFocus)
+      focus: z.object({ x: z.number(), y: z.number(), w: z.number(), h: z.number() }).optional(),
     })).default([]),
     photoCount: z.number().default(0),
     videoUrl: link().nullable().optional(),

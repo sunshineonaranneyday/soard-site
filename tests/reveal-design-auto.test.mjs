@@ -10,7 +10,7 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
-import { nextWork, partsOf, revealsAhead, standing, runRevealDesigns, currentReveals, dueLooks, AUTO_KEY } from '../functions/api/_reveal-design-auto.js';
+import { nextWork, partsOf, revealsAhead, standing, runRevealDesigns, currentReveals, dueLooks, AUTO_KEY, cutDown } from '../functions/api/_reveal-design-auto.js';
 import { recordVersion } from '../functions/api/_content-history.js';
 
 const NOW = Date.parse('2026-11-10T15:00:00Z');
@@ -175,7 +175,8 @@ const fakeBrowser = {
     evaluate: async (_fn, _b64, _d, _r, _base, opts) => {
       drawn.push(opts);
       const all = [{ n: 2, kind: 'as-built', title: '2 EXISTING LAYOUT', sheet: 'Dylan 2026_Plan Set_08172026.pdf (2)', street: true }, { n: 3, kind: 'proposed', title: 'DIMENTIONED PROPOSED LAYOUT', sheet: '', street: false }];
-      return { pages: [], out: all.filter((o) => opts.want.includes(o.kind)).map((o) => ({ ...o, w: 2400, h: 1600, trimmed: true, wiped: 1, textLayer: true, png: btoa('png') })) };
+      // As reveal-design-draw.js does it: a sheet whose street was found goes up whole, with its drawing's place; else cut down
+      return { pages: [], out: all.filter((o) => opts.want.includes(o.kind)).map((o) => ({ ...o, w: o.street ? 3200 : 2400, h: o.street ? 2071 : 1600, trimmed: !o.street, whole: o.street, ...(o.street ? { focus: { x: 0.3, y: 0.15, w: 0.36, h: 0.5 } } : {}), wiped: 1, textLayer: true, png: btoa('png') })) };
     },
   }),
   close: async () => {},
@@ -535,7 +536,7 @@ test('a confirmed kid’s page is published once their before photos are all in,
     assert.equal(hooks.length, 0, 'the look needs nothing from JobTread: the publish comes with the next run');
     await go(T + 2 * MIN, reveals);
     assert.equal(hooks.length, 1, 'published, so Nia’s page shows them');
-    assert.match((await ledger()).kids.nia.page, /\|2\|0$/);
+    assert.match((await ledger()).kids.nia.page, /\|2\|0\|\w+$/);
     await go(T + 12 * MIN, reveals);
     assert.equal(hooks.length, 1, 'nothing new: not again');
     // A hidden profile's page isn't on the site: nothing to publish
@@ -695,12 +696,12 @@ test('Workers AI at its spending cap: nothing counted, the looks rest, Automatio
   // Resting: the next run does other work, and the page goes out with the one staff put on, not held for the cap
   const resting = await run(T + 11 * MIN, { reveals });
   assert.notEqual(resting.did?.work, 'look');
-  assert.match((await ledger()).kids.vic.page, /\|1\|0$/, 'the page goes out with the one staff put on, not held for the cap');
+  assert.match((await ledger()).kids.vic.page, /\|1\|0\|\w+$/, 'the page goes out with the one staff put on, not held for the cap');
   const back = await run(T + 22 * MIN, { reveals });
   assert.deepEqual([back.did.work, back.did.looked], ['look', 2]);
   assert.equal((await ledger()).lookError, undefined);
   await run(T + 23 * MIN, { reveals });
-  assert.match((await ledger()).kids.vic.page, /\|3\|0$/, 'and published again with them, the run after');
+  assert.match((await ledger()).kids.vic.page, /\|3\|0\|\w+$/, 'and published again with them, the run after');
 });
 
 test('a photo the model can’t answer for, or Cloudflare no longer has, is tried again over a day, off the page meanwhile, then kept off as couldn’t be checked, and Linzi hears by email; Cloudflare down counts against none and holds nothing up', async () => {
@@ -1054,7 +1055,7 @@ test('the notes and the publish after a run’s work get only the time left: non
   } finally { onSlack = null; }
   assert.deepEqual(seen, [reveals[0].startsAt], 'posted once, already saved as told');
   l = await ledger();
-  assert.match(l.kids.lux.page, /\|1\|0$/, 'published');
+  assert.match(l.kids.lux.page, /\|1\|0\|\w+$/, 'published');
   await run(T + 22 * MIN, { reveals, clock: () => tick });
   assert.equal(calls.slack.filter((b) => /Lux/.test(JSON.stringify(b))).length, 1, 'said once');
 });
@@ -1124,7 +1125,7 @@ test('never published with an old copy of the schedule: JobTread down at the pub
     down = false;
     await go(T + 11 * MIN);
     assert.equal(hooks.length, 1);
-    assert.match((await ledger()).kids.pia.page, /\|1\|0$/);
+    assert.match((await ledger()).kids.pia.page, /\|1\|0\|\w+$/);
   } finally { globalThis.fetch = was; }
 });
 
@@ -1383,3 +1384,61 @@ test('one picture that won’t load in a look stops nothing: the photos after it
   assert.equal(l.kids.kai.befores.looks[pic('kai', 'k0-stuck')].outs, 1, 'it rests on its own');
   assert.ok(!(l.lookRest > T), 'the look as a whole doesn’t rest');
 });
+
+// ── Whole sheets (Peter, Nov 16 2026: "is there a way to make this look more like an official plan set") ──
+
+const cutPlan = (slug, kind, n, extra = {}) => ({ url: `https://imagedelivery.net/HASH/kids/${slug}/plan-1-ab12-${kind}-notitle.png/public`, label: kind === 'as-built' ? 'Existing layout' : 'Proposed layout', type: kind, source: `jt:SET#${n}`, addressCheck: 'wiped', w: 820, h: 730, ...extra });
+
+test('a drawing this import cut down before whole sheets is drawn again whole, once each (nextWork); one staff covered, ticked or added, or a whole sheet, never', () => {
+  const T = NOW + 600 * 3600e3;
+  const reveals = [{ slug: 'remy', name: 'Remy', startsAt: new Date(T + 5 * DAY).toISOString(), confirmed: true }];
+  const remy = { name: 'Remy', slug: 'remy', status: 'in-progress', plans: [cutPlan('remy', 'as-built', 2), cutPlan('remy', 'proposed', 3)], beforePhotos: [{ url: 'https://imagedelivery.net/HASH/kids/remy/b1/public', looked: 'staff' }] };
+  const mine = (extra = {}) => ({ remy: { befores: { checked: T }, done: { 'as-built': T, proposed: T, board: T }, ...extra } });
+  const w = nextWork(reveals, { remy }, mine(), T);
+  assert.deepEqual([w.work, w.want, w.redo], ['drawings', ['as-built', 'proposed'], true]);
+  assert.equal(nextWork(reveals, { remy }, mine({ resheet: { 'as-built': 'done', proposed: 'done' } }), T), null, 'once each');
+  assert.equal(nextWork(reveals, { remy }, mine({ resheet: { 'as-built': 'done', proposed: T - 10 * MIN } }), T), null, 'one cut short waits half an hour');
+  assert.deepEqual(nextWork(reveals, { remy }, mine({ resheet: { 'as-built': 'done', proposed: T - 40 * MIN } }), T).want, ['proposed'], 'then it’s tried again');
+  for (const [why, p] of [
+    ['covered by hand', cutPlan('remy', 'as-built', 2, { addressCheck: 'covered' })],
+    ['ticked: no address', cutPlan('remy', 'as-built', 2, { addressCheck: 'checked' })],
+    ['a whole sheet already', cutPlan('remy', 'as-built', 2, { url: 'https://imagedelivery.net/HASH/kids/remy/plan-2-cd34-existing-layout-sheet.png/public' })],
+    ['staff put it there themselves', cutPlan('remy', 'as-built', 2, { source: undefined })],
+    ['a board', cutPlan('remy', 'board', 4)],
+  ]) {
+    assert.equal(cutDown(p), false, why);
+    assert.equal(nextWork(reveals, { remy: { ...remy, plans: [p] } }, mine(), T), null, why);
+  }
+  // A revealed room's drawings stay as they were
+  assert.equal(nextWork(reveals, { remy: { ...remy, status: 'completed' } }, mine(), T), null);
+});
+
+test('the redraw: the existing sheet (its street found) takes the cut-down one’s place, caption, kind and place kept, with its drawing’s place; the proposed (its street not found) stays as it was; never again; the page is published again for it', async () => {
+  await onlyDue();
+  const T = NOW + 600 * 3600e3;
+  const board = { url: 'https://imagedelivery.net/HASH/kids/remy/board/public', label: 'Board', type: 'board', source: 'jt:BRD' };
+  const staffs = cutPlan('remy', 'as-built', 9, { label: 'Covered by staff', addressCheck: 'covered' });
+  await putKid('remy', { name: 'Remy', publishStatus: 'published', plans: [cutPlan('remy', 'proposed', 3), cutPlan('remy', 'as-built', 2, { label: 'Ground floor today' }), staffs, board], beforePhotos: [{ url: 'https://imagedelivery.net/HASH/kids/remy/b1/public', looked: 'staff', source: 'jt:R1' }] });
+  SOURCES.remy = { ...SOURCES['dylan-2026'], kid: { slug: 'remy', name: 'Remy' }, job: { id: 'JOB9', name: 'Remy Hart (2026)' }, befores: [photo('R1')] };
+  const reveals = [{ slug: 'remy', name: 'Remy', startsAt: new Date(T + 5 * DAY).toISOString(), confirmed: true, jobId: 'JOB9' }];
+  const was = (await kid('remy')).plans;
+  let r;
+  // (Its before photos first, then the redraw: a run each, ten minutes apart)
+  let t = T;
+  for (let i = 0; i < 6 && r?.did?.work !== 'drawings'; i++, t += 11 * MIN) r = await run(t, { reveals });
+  assert.deepEqual([r.did.slug, r.did.work, r.did.added.plans], ['remy', 'drawings', ['as-built']]);
+  const now = (await kid('remy')).plans;
+  assert.deepEqual(now.map((p) => [p.type, p.label, p.source]), was.map((p) => [p.type, p.label, p.source]), 'caption, kind and place kept');
+  assert.match(now[1].url, /-sheet\.png/);
+  assert.deepEqual([now[1].w, now[1].h, now[1].addressCheck], [3200, 2071, 'wiped']);
+  assert.deepEqual(now[1].focus, { x: 0.3, y: 0.15, w: 0.36, h: 0.5 });
+  assert.deepEqual([now[0], now[2], now[3]], [was[0], was[2], was[3]], 'the proposed (not whole), the one staff covered and the board as they were');
+  const l = await ledger();
+  assert.deepEqual(l.kids.remy.resheet, { 'as-built': 'done', proposed: 'done' });
+  assert.equal(l.kids.remy.filledNote, undefined, 'no "design is in" note: it was in already');
+  // Never again, and the page goes out with the new picture
+  const again = await run(t + 11 * MIN, { reveals });
+  assert.notEqual(again.did?.work, 'drawings');
+  assert.match((await ledger()).kids.remy.page || '', /\|\w+$/);
+});
+

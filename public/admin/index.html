@@ -14042,7 +14042,7 @@
       // From "Bring in from JobTread": drawings already seen to (wiped, covered or checked) and trimmed, and before photos,
       // each going up into its section; the bar says Unsaved changes while they do
       const addFromJobTread = ({ drawings = [], befores = [] }) => {
-        if (drawings.length) uploadPlans(drawings.map((dr) => ({ file: dr.file, key: kdNewKey(), local: URL.createObjectURL(dr.file), plan: { label: dr.label, type: dr.type, source: dr.source, w: dr.w, h: dr.h, ...(dr.addressCheck ? { addressCheck: dr.addressCheck } : {}) } })));
+        if (drawings.length) uploadPlans(drawings.map((dr) => ({ file: dr.file, key: kdNewKey(), local: URL.createObjectURL(dr.file), plan: { label: dr.label, type: dr.type, source: dr.source, w: dr.w, h: dr.h, ...(dr.addressCheck ? { addressCheck: dr.addressCheck } : {}), ...(dr.focus ? { focus: dr.focus } : {}) } })));
         if (befores.length) addBeforePhotos(befores);
       };
       // The family's address on a drawing already here: someone looked and there's none, or a covered copy goes up in its place
@@ -14051,7 +14051,8 @@
         const plan = dataRef.current.plans.find((x) => x._key === key);
         if (!plan) return;
         const was = { url: plan.url, w: plan.w, h: plan.h, addressCheck: plan.addressCheck };
-        const file = new File([blob], `${slugify(plan.label || '') || 'drawing'}-notitle.png`, { type: 'image/png' });
+        // A whole sheet stays one (its drawing's place, focus, is a fraction of it, so it still holds); anything else is -notitle
+        const file = new File([blob], `${slugify(plan.label || '') || 'drawing'}-${RD.isSheet(plan.url) ? 'sheet' : 'notitle'}.png`, { type: 'image/png' });
         const local = URL.createObjectURL(file);
         set((d) => ({ plans: d.plans.map((x) => (x._key === key ? { ...x, url: local, w, h, addressCheck: 'covered' } : x)) }));
         setUploads((u) => ({ ...u, [key]: true }));

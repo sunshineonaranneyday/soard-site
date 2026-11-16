@@ -255,8 +255,9 @@ const beforeStart = galleryShown + plans.length;
    crop that drops the bottom ~10%, so the address never leaves Cloudflare.
    Presentation boards and site photos are left whole. */
 const TITLE_BLOCK = 0.10;
-// A sheet stored without its title block (-notitle: the admin trims it on upload) has nothing left to crop
-const isFloorPlan = (p: any) => /(before|after|existing|existi|proposed|layout|floor\s*plan)/i.test(p?.label || '') && !/-notitle\./i.test(p?.url || '');
+// A sheet stored without its title block (-notitle: the admin trims it on upload), or whole with its address painted
+// out (-sheet), has nothing to crop
+const isFloorPlan = (p: any) => /(before|after|existing|existi|proposed|layout|floor\s*plan)/i.test(p?.label || '') && !/-(?:notitle|sheet)\./i.test(p?.url || '');
 function planRatio(p: any): number {
   const id = cfId(p.url);
   const known = _dimsMap[id];

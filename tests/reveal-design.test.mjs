@@ -186,7 +186,7 @@ test('six before photos spread across the visit; fewer taken stay as they are', 
 
 test('the address words to wipe: street, its name alone, number, city, zip, family name', () => {
   const w = addressWords({ street: '731 Juniper Hill Ln', city: 'Marietta', zip: '30064', family: 'Hartwell' });
-  for (const x of ['731 juniper hill ln', 'juniper hill', '426', 'marietta', '30064', 'hartwell']) assert.ok(w.includes(x), x);
+  for (const x of ['731 juniper hill ln', 'juniper hill', '731', 'marietta', '30064', 'hartwell']) assert.ok(w.includes(x), x);
   // Nothing shorter than three letters (it would wipe half the drawing)
   assert.deepEqual(addressWords({ street: '7 Oak St', city: 'X' }).sort(), ['7 oak st', 'oak'].sort());
 });

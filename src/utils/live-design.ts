@@ -33,7 +33,7 @@
  * player in its top corner (a tap on it goes back). Otherwise it's a plain
  * full-screen viewer. The page holds still behind it either way.
  */
-import { fetchDesign, slideSrc, designSignature, type DesignSlide } from './reveal-design-client';
+import { fetchDesign, slideSrc, designSignature, focusOf, type DesignSlide } from './reveal-design-client';
 import { holdPlace } from './hold-place';
 import type { Stage } from './live-stage';
 import { DESK } from './live-media';
@@ -148,7 +148,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   /** One picture card in the section, opening the viewer at its place among the pictures that loaded */
   function item(s: DesignSlide, width: number, label: string) {
     const li = el('li');
-    const b = el('button', `ldz-item${s.kind === 'before' ? '' : ' ldz-paper'}`);
+    // (A whole plan sheet is its own paper: ldz-sheet, edge to edge in the card)
+    const b = el('button', `ldz-item${s.kind === 'before' ? '' : ' ldz-paper'}${focusOf(s) ? ' ldz-sheet' : ''}`);
     b.type = 'button';
     b.setAttribute('aria-label', `Enlarge: ${s.badge ? `${s.badge}, ` : ''}${label}`);
     const tag = badge(s, 'ldz-badge');
@@ -189,7 +190,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   /** One picture in the strip beside the video: a small card with its badge */
   function railItem(s: DesignSlide, label: string) {
     const li = el('li');
-    const b = el('button', `hds-item${s.kind === 'before' ? '' : ' hds-paper'}`);
+    const b = el('button', `hds-item${s.kind === 'before' ? '' : ' hds-paper'}${focusOf(s) ? ' hds-sheet' : ''}`);
     b.type = 'button';
     b.setAttribute('aria-label', `See it big: ${s.badge ? `${s.badge}, ` : ''}${label}`);
     const img = el('img');
@@ -358,10 +359,70 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     else if (r.right > c.right) railScroll.scrollBy({ left: r.right - c.right + 6, behavior });
   }
 
+  // ── A whole plan sheet (Peter, Nov 16 2026: the plans shown as the official plan set) ──
+  // It opens as the designer drew it, title block and all; "Zoom in" (or a double-click or double-tap) moves in on its
+  // drawing, big enough to read the dimensions, and "Whole sheet" goes back. The picture is moved, never cropped, so
+  // it's the same sheet either way
+  let zoomed = false;
+  /** Where the picture goes: the drawing filling the stage when zoomed, else the whole sheet fitted in it */
+  function applyZoom() {
+    const img = vq<HTMLImageElement>('img');
+    const stg = vq<HTMLElement>('stage');
+    const f = focusOf(shown);
+    if (!img || !stg) return;
+    const W = stg.clientWidth, H = stg.clientHeight;
+    const sw = shown?.w || img.naturalWidth, sh = shown?.h || img.naturalHeight;
+    if (!f || !zoomed || !W || !H || !sw || !sh) { img.style.transform = ''; return; }
+    const fit = Math.min(W / sw, H / sh);
+    const dw = sw * fit, dh = sh * fit;
+    const k = Math.max(1, Math.min(W / (f.w * dw), H / (f.h * dh)) * 0.94);
+    const cx = (W - dw) / 2 + (f.x + f.w / 2) * dw, cy = (H - dh) / 2 + (f.y + f.h / 2) * dh;
+    img.style.transform = `translate(${(W / 2 - k * cx).toFixed(1)}px, ${(H / 2 - k * cy).toFixed(1)}px) scale(${k.toFixed(4)})`;
+  }
+  /** The button says what it does next, and is there only for a whole sheet */
+  function zoomUi() {
+    const b = vq<HTMLButtonElement>('zoom');
+    if (!b) return;
+    const f = !!focusOf(shown);
+    b.hidden = !f;
+    const t = b.querySelector<HTMLElement>('[data-ldv="zoom-text"]');
+    if (t) t.textContent = zoomed ? 'Whole sheet' : 'Zoom in';
+    b.dataset.zoomed = zoomed ? 'true' : 'false';
+    vq<HTMLElement>('stage')?.toggleAttribute('data-sheet', f);
+    vq<HTMLElement>('stage')?.toggleAttribute('data-zoomed', f && zoomed);
+  }
+  function toggleZoom() {
+    if (!focusOf(shown)) return;
+    zoomed = !zoomed;
+    zoomUi();
+    applyZoom();
+  }
+  const zoomWatch = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (viewer?.open) applyZoom(); }) : null;
+  const stageEl = vq<HTMLElement>('stage');
+  if (stageEl) zoomWatch?.observe(stageEl);
+  const onZoomClick = () => toggleZoom();
+  const onDbl = (e: MouseEvent) => { if (focusOf(shown) && (e.target as Element)?.closest?.('[data-ldv="img"]')) { e.preventDefault(); toggleZoom(); } };
+  // A double tap on the picture (two taps close together, neither a swipe): the same as the button
+  let lastTap = 0;
+  const onTap = (e: TouchEvent) => {
+    if (e.changedTouches.length !== 1 || !(e.target as Element)?.closest?.('[data-ldv="img"]') || !focusOf(shown)) return;
+    const now = Date.now();
+    if (now - lastTap < 320) { lastTap = 0; e.preventDefault(); toggleZoom(); } else lastTap = now;
+  };
+
   async function show(s: DesignSlide) {
     const img = vq<HTMLImageElement>('img');
     if (!img) return;
+    // A new picture comes in where it belongs, without sliding there from the last one's place
+    const moving = shown !== s;
     shown = s;
+    if (moving) {
+      zoomed = false;
+      img.classList.add('is-still');
+      zoomUi();
+      applyZoom();
+      requestAnimationFrame(() => requestAnimationFrame(() => img.classList.remove('is-still')));
+    }
     const i = slides.indexOf(s);
     // The badge leads the caption ("BEFORE  Dylan's room today", "PROPOSED  The new floor plan"); a board keeps its kicker
     const k = vq<HTMLElement>('kicker'); if (k) { k.textContent = s.badge || s.kicker; k.dataset.kind = s.badge ? s.kind : ''; }
@@ -370,8 +431,13 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     img.alt = straight(s.alt);
     for (const k2 of ['prev', 'next']) { const b = vq<HTMLButtonElement>(k2); if (b) b.hidden = slides.length < 2; }
     markShown(s);
-    const src = await slideSrc(s, Math.min(2400, Math.round(Math.max(innerWidth, innerHeight) * (devicePixelRatio || 1))));
-    if (shown === s && src) img.src = src;
+    // A whole sheet comes big enough that its drawing is sharp when zoomed to it (as wide as the sheet is, at most)
+    const dpr = devicePixelRatio || 1;
+    const f = focusOf(s);
+    const want = f ? Math.min(s.w || 3200, 3200, Math.round((Math.max(innerWidth, innerHeight) * dpr) / Math.max(f.w, 0.2)))
+      : Math.min(2400, Math.round(Math.max(innerWidth, innerHeight) * dpr));
+    const src = await slideSrc(s, want);
+    if (shown === s && src) { img.src = src; if (f) img.decode?.().then(() => { if (shown === s) applyZoom(); }).catch(() => {}); }
   }
 
   /** How the viewer opens now: beside the video (laptop), over a phone with the video kept small, or alone */
@@ -479,6 +545,9 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   };
   vq('prev')?.addEventListener('click', onPrev);
   vq('next')?.addEventListener('click', onNext);
+  vq('zoom')?.addEventListener('click', onZoomClick);
+  viewer?.addEventListener('dblclick', onDbl);
+  viewer?.addEventListener('touchend', onTap);
   viewer?.addEventListener('keydown', onKey);
   viewer?.addEventListener('touchstart', onTouchStart, { passive: true });
   viewer?.addEventListener('touchend', onTouchEnd);
@@ -510,6 +579,10 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       document.removeEventListener('visibilitychange', onVisible);
       vq('prev')?.removeEventListener('click', onPrev);
       vq('next')?.removeEventListener('click', onNext);
+      vq('zoom')?.removeEventListener('click', onZoomClick);
+      viewer?.removeEventListener('dblclick', onDbl);
+      viewer?.removeEventListener('touchend', onTap);
+      zoomWatch?.disconnect();
       viewer?.removeEventListener('keydown', onKey);
       viewer?.removeEventListener('touchstart', onTouchStart);
       viewer?.removeEventListener('touchend', onTouchEnd);

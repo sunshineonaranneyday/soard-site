@@ -64,13 +64,24 @@ export const isRevealed = (kid) => kid?.status === 'completed';
 
 // ── The family's address ─────────────────────────────────────────────
 // A drawing sheet's title block carries the street address along the bottom.
-// A sheet that went up without it is named -notitle. Any other floor plan
-// (by its caption, or because it's an as-built or proposed drawing) is shown
-// with the bottom TITLE_BLOCK cropped off, wherever it's shown. Boards are
-// shown whole.
+// A sheet that went up without it is named -notitle; a whole sheet whose
+// address was painted out, its title block kept, -sheet (Peter, Nov 16 2026:
+// "make this look more like an official plan set"). Neither has anything to
+// crop. Any other floor plan (by its caption, or because it's an as-built or
+// proposed drawing) is shown with the bottom TITLE_BLOCK cropped off, wherever
+// it's shown. Boards are shown whole.
 export const TITLE_BLOCK = 0.10;
 const FLOOR_PLAN_WORDS = /(before|after|existing|existi|proposed|layout|floor\s*plan)/i;
-export const isTrimmed = (url) => /-notitle\./i.test(String(url || ''));
+export const isTrimmed = (url) => /-(?:notitle|sheet)\./i.test(String(url || ''));
+/** A whole sheet, its address painted out: shown as the designer drew it, and zoomed to its drawing (focus) */
+export const isSheet = (url) => /-sheet\./i.test(String(url || ''));
+/** Where a whole sheet's drawing is ({ x, y, w, h }, fractions of it), when it's a real place on it; else null */
+export function sheetFocus(p) {
+  const f = p?.focus;
+  if (!isSheet(p?.url) || !f || ![f.x, f.y, f.w, f.h].every(Number.isFinite)) return null;
+  if (f.w <= 0.02 || f.h <= 0.02 || f.x < 0 || f.y < 0 || f.x + f.w > 1.0001 || f.y + f.h > 1.0001) return null;
+  return { x: f.x, y: f.y, w: f.w, h: f.h };
+}
 export const needsTitleCrop = (p) => !isTrimmed(p?.url) && (FLOOR_PLAN_WORDS.test(p?.label || '') || planKind(p) !== 'board');
 
 /**
@@ -169,6 +180,8 @@ export function revealSlides(kid, { after = false } = {}) {
       // A board's own caption says what it is ("Bathroom design board"); a plan says which plan it is
       caption: k === 'board' ? (label && !looksLikeFileName(label) ? label : KIND[k].caption) : (after && KIND[k].captionAfter) || KIND[k].caption,
       ...(Number(p.w) > 0 && Number(p.h) > 0 ? { w: Math.round(p.w), h: Math.round(p.h) } : {}),
+      // A whole sheet: where its drawing is, for the viewer and the starting-soon screen to zoom to
+      ...(sheetFocus(p) ? { focus: sheetFocus(p) } : {}),
     };
   });
   // No design boards on the live page (Peter, Nov 12 2026): they wait for the kid page, after the reveal (pagePlans)
