@@ -1088,7 +1088,7 @@ test('a new design rebuilds an untouched draft on the next look, keeping who it 
   const out = await runProjectEmails(env, { now: NOW + DAY });
   assert.ok(out.some((o) => o.project === 'redesigned'), JSON.stringify(out));
   assert.equal(kit.puts.length, 1);
-  assert.deepEqual(kit.puts[0].subscriber_filter, filter, 'the newsletter leave-out is sent again, never reset to everyone');
+  assert.deepEqual(kit.puts[0].subscriber_filter, [{ none: [{ type: 'tag', ids: [42] }] }], 'the newsletter leave-out is sent again, never reset to everyone');
   assert.equal(emails.length, sent, 'a rebuild emails nobody');
   const after = await readProjectRow(env.DB, SLUG, 'kickoff');
   const { EMAIL_DESIGN } = await import('../functions/api/_reveal-invite-email.js');

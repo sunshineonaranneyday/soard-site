@@ -560,7 +560,13 @@ export async function kitCreateBroadcast(env, { subject, previewText, descriptio
   if (found.some((f) => !f.ok)) return { ok: false, status: 0, error: 'Kit didn’t say which tags to leave out; try again' };
   const leaveOut = found.map((f) => f.id).filter(Boolean);
   const onlyWaitlist = leaveOut.length ? leaveOut : null;
-  if (onlyWaitlist) body.subscriber_filter = [{ all: null, any: null, none: [{ type: 'tag', ids: leaveOut }] }];
+  if (onlyWaitlist) body.subscriber_filter = [{ none: [{ type: 'tag', ids: leaveOut }] }];
+  if (body.subscriber_filter) {
+    const aim = kitFilter(body.subscriber_filter);
+    if (!aim.ok) return { ok: false, status: 0, error: aim.error };
+    if (aim.filter) body.subscriber_filter = aim.filter;
+    else delete body.subscriber_filter;
+  }
   const templateId = parseInt(env.KIT_EMAIL_TEMPLATE_ID, 10);
   if (Number.isFinite(templateId)) body.email_template_id = templateId;
 
@@ -611,13 +617,15 @@ export async function kitUpdateDraft(env, id, { subject, previewText, descriptio
       if (found.some((f) => !f.ok)) return { ok: false, error: 'Kit didn’t say which tags to leave out' };
       const had = (b.subscriber_filter || []).flatMap((g) => (g?.none || []).flatMap((e) => (e?.type === 'tag' ? e.ids || [] : []).map(Number)));
       const none = [...new Set([...had, ...found.map((f) => f.id).filter(Boolean).map(Number)])];
-      if (none.length) filter = [{ all: null, any: null, none: [{ type: 'tag', ids: none }] }];
+      if (none.length) filter = [{ none: [{ type: 'tag', ids: none }] }];
     }
+    const aim = filter ? kitFilter(filter) : { ok: true, filter: null };
+    if (!aim.ok) return { ok: false, error: aim.error };
     const res = await kitFetch(env, `/broadcasts/${id}`, {
       method: 'PUT',
       body: JSON.stringify({
         subject, preview_text: previewText || '', description, content: html,
-        ...(filter ? { subscriber_filter: filter, public: keepPublic ? b.public === true : false, send_at: null, ...(b.email_address ? { email_address: b.email_address } : {}), ...(b.email_template?.id ? { email_template_id: b.email_template.id } : {}) } : {}),
+        ...(filter ? { ...(aim.filter ? { subscriber_filter: aim.filter } : {}), public: keepPublic ? b.public === true : false, send_at: null, ...(b.email_address ? { email_address: b.email_address } : {}), ...(b.email_template?.id ? { email_template_id: b.email_template.id } : {}) } : {}),
       }),
     });
     return res.ok ? { ok: true } : { ok: false, error: `HTTP ${res.status}` };
@@ -679,7 +687,31 @@ export async function kitFindDraft(env, words) {
 function kitSubscriberFilter(audience) {
   const id = parseInt(audience?.id, 10);
   if (!audience || !['tag', 'segment'].includes(audience.type) || !Number.isFinite(id)) return null;
-  return [{ all: [{ type: audience.type, ids: [id] }], any: null, none: null }];
+  return [{ all: [{ type: audience.type, ids: [id] }] }];
+}
+
+/**
+ * Who an email goes to, written the one way Kit takes it: a single rule, `all`
+ * (only these), `any` (any of these) or `none` (everyone but these), and no
+ * empty ones beside it. Kit turns down `any: null, none: null` next to `all`
+ * ("Only a single filter group is supported", Nov 2026). Everyone is no rule at
+ * all: all_subscribers is how Kit writes it back, never something it takes, so
+ * "everyone but these" is `none` on its own. Every audience the site sends goes
+ * through here; one that needs two rules is refused, never sent wider.
+ *
+ * @returns {{ok: true, filter: object[]|null} | {ok: false, error: string}} filter null: everyone
+ */
+export function kitFilter(filter) {
+  const rules = {};
+  for (const g of Array.isArray(filter) ? filter : []) {
+    for (const key of ['all', 'any', 'none']) {
+      const entries = (Array.isArray(g?.[key]) ? g[key] : []).filter((e) => e && e.type !== 'all_subscribers');
+      if (entries.length) rules[key] = [...(rules[key] || []), ...entries];
+    }
+  }
+  const used = Object.keys(rules);
+  if (used.length > 1) return { ok: false, error: `Kit takes one audience rule per email (only these, any of these, or everyone but these), and this one needs ${used.length}, so it wasn’t made` };
+  return { ok: true, filter: used.length ? [rules] : null };
 }
 
 /**

@@ -496,7 +496,7 @@ test('a reminder is one Kit email to the sign-ups, however many: never one each 
   const k = made[0];
   assert.match(k.subject, /Tomorrow: Remi’s room reveal, live/);
   assert.ok(Date.parse(k.send_at) > Date.now(), 'sent by Kit a moment from now');
-  assert.deepEqual(k.subscriber_filter, [{ all: null, any: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups').id, kitTags.byName('Reveal sign-ups: remi').id] }], none: null }], 'every-reveal sign-ups and Remi’s own');
+  assert.deepEqual(k.subscriber_filter, [{ any: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups').id, kitTags.byName('Reveal sign-ups: remi').id] }] }], 'every-reveal sign-ups and Remi’s own');
   assert.match(k.content, /\{\{ unsubscribe_url \}\}/, 'Kit’s own unsubscribe link');
   assert.match(k.content, /You asked us to email you about live room reveals/);
   assert.equal(emails.length, 0, 'nothing from Resend');
@@ -528,7 +528,7 @@ test('what each sign-up gets from Kit: the date only to one-reveal-only people (
   // Someone new signs up for Max alone
   await post({ channel: 'email', email: 'maxfan@example.com', kidSlug: 'max' });
   await flush();
-  const one = [{ all: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups: max').id] }, { type: 'tag', ids: [kitTags.byName('Reveal sign-ups for one reveal only').id] }], any: null, none: null }];
+  const one = [{ all: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups: max').id] }, { type: 'tag', ids: [kitTags.byName('Reveal sign-ups for one reveal only').id] }] }];
   const date = await made('scheduled', 'scheduled');
   assert.equal(date.length, 1);
   assert.deepEqual(date[0].subscriber_filter, one, 'the date: just Max’s one-reveal-only sign-ups');

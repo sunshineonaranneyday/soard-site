@@ -131,7 +131,7 @@ test('confirmed in JobTread: one draft in Kit, to the Reveal Emails segment, pri
   assert.equal(b.subject, 'You’re Invited to Rowan’s Reveal Day!');
   assert.equal(b.send_at, null, 'a draft: nothing is scheduled');
   assert.equal(b.public, false, 'never on the public newsletter page (it has an address)');
-  assert.deepEqual(b.subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }], any: null, none: null }]);
+  assert.deepEqual(b.subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }] }]);
   assert.match(b.content, /100[ \u00A0]Example[ \u00A0]Way/);
 
   assert.equal(emails.length, 1);
@@ -188,7 +188,7 @@ test('no "Reveal Emails" group in Kit: no draft (Kit would send it to everyone),
   // The group is made in Kit: the next look drafts it
   kit.groups.tags.push({ id: 23099769, name: 'Reveal Emails', subscriber_count: 325 });
   assert.equal((await sync()).kit, 'drafted');
-  assert.deepEqual([...kit.broadcasts.values()][0].subscriber_filter, [{ all: [{ type: 'tag', ids: [23099769] }], any: null, none: null }], 'a tag when there’s no segment');
+  assert.deepEqual([...kit.broadcasts.values()][0].subscriber_filter, [{ all: [{ type: 'tag', ids: [23099769] }] }], 'a tag when there’s no segment');
 });
 
 test('quiet until it should act: tentative, no time, rehearsal, a community project, switched off, Kit not connected', async () => {
@@ -303,7 +303,7 @@ test('an update says the audience again: Kit would otherwise reset the draft to 
   await sync();
   await sync(plan({ start: '17:00' }));
   const b = [...kit.broadcasts.values()][0];
-  assert.deepEqual(b.subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }], any: null, none: null }]);
+  assert.deepEqual(b.subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }] }]);
   assert.equal(b.public, false);
   assert.equal(b.send_at, null);
 });
@@ -686,7 +686,7 @@ test('a draft whose group was renamed still follows JobTread, to the same group'
   await sync();
   kit.groups = { tags: [], segments: [{ id: 587253, name: 'Reveal Guests' }] };
   assert.equal((await sync(plan({ start: '17:00' }))).kit, 'updated');
-  assert.deepEqual(only().subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }], any: null, none: null }]);
+  assert.deepEqual(only().subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }] }]);
 });
 
 test('a subject, preview or exclusion edited in Kit is kept too', async () => {
@@ -1290,7 +1290,7 @@ test('the two marks never match each other, so a lost draft is only ever found b
   assert.equal(a.kit, 'drafted');
   assert.equal(kit.broadcasts.size, 2, 'the invite made its own draft');
   assert.notEqual(String(a.id), String(found.id));
-  assert.deepEqual(kit.broadcasts.get(String(a.id)).subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }], any: null, none: null }]);
+  assert.deepEqual(kit.broadcasts.get(String(a.id)).subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }] }]);
 });
 
 test('a new address or notes in JobTread leaves the whole-list invite alone; a new day rewrites it', async () => {

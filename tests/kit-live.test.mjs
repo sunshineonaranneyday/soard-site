@@ -102,11 +102,11 @@ test('scheduled reveal going live emails the whole Kit list once', async () => {
   assert.match(k.subject, /We’re live: Remi’s room reveal/);
   assert.ok(Date.parse(k.send_at) > Date.now(), 'scheduled a moment ahead so Kit accepts it');
   // Every subscriber but the one-reveal-only people and the reveal sign-ups: Kit sent the sign-ups theirs the moment it started
-  assert.deepEqual(k.subscriber_filter, [{ all: [{ type: 'all_subscribers' }], any: null, none: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups for one reveal only').id, kitTags.byName('Reveal sign-ups').id] }] }]);
+  assert.deepEqual(k.subscriber_filter, [{ none: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups for one reveal only').id, kitTags.byName('Reveal sign-ups').id] }] }]);
   const own = signupPosts();
   assert.equal(own.length, 1, 'the sign-ups heard at once, in their own email');
   assert.ok(Date.parse(own[0].send_at) < Date.parse(k.send_at), 'before the whole list');
-  assert.deepEqual(own[0].subscriber_filter, [{ all: null, any: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups').id] }], none: null }]);
+  assert.deepEqual(own[0].subscriber_filter, [{ any: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups').id] }] }]);
   assert.match(k.content, /\{\{ unsubscribe_url \}\}/);
   assert.match(k.content, /subscribed to updates/);
   assert.doesNotMatch(k.content, /You asked us to remind you/);
@@ -134,7 +134,7 @@ test('per-reveal opt out skips the automatic send; manual button still works', a
   const own = signupPosts();
   assert.equal(own.length, 1, 'the sign-ups still hear');
   assert.match(own[0].subject, /We’re live: Remi’s room reveal/);
-  assert.deepEqual(own[0].subscriber_filter, [{ all: null, any: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups').id] }], none: null }]);
+  assert.deepEqual(own[0].subscriber_filter, [{ any: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups').id] }] }]);
   assert.match(own[0].content, /You asked us to email you about live room reveals/);
   const m = await b.adminAction(env, 'sendKitLive', {}, 'peter@test');
   assert.equal(m.success, true, m.error);
@@ -275,17 +275,19 @@ test('Kit failure releases the claim so a retry can send', async () => {
   await endAndReset();
 });
 
-test('a tag audience in the config becomes a Kit subscriber filter', async () => {
+test('a group picked in the config, less the reveal sign-ups, is two rules Kit can’t take: never sent wider, staff told', async () => {
   const cfg = await b.readConfig(env.DB);
   cfg.kitLive = { enabled: true, audience: { type: 'tag', id: 42, name: 'Newsletter' } };
   await b.writeConfig(env.DB, cfg);
   await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 5 * M).toISOString() }, 'peter@test');
   kitPosts.length = 0;
   await goLiveSteady();
-  const k = liveKitPosts()[0];
-  // The group picked in Kit, but not the reveal sign-ups, who had theirs the moment it started
-  assert.deepEqual(k.subscriber_filter, [{ all: [{ type: 'tag', ids: [42] }], any: null, none: [{ type: 'tag', ids: [kitTags.byName('Reveal sign-ups').id] }] }]);
-  assert.equal((await b.readState(env.DB)).kit.live.audience, 'Newsletter');
+  // Only the Newsletter tag AND none of the sign-ups: Kit takes one rule per email (Nov 2026)
+  assert.equal(liveKitPosts().length, 0, 'not sent to the whole group, nor to everyone');
+  const live = (await b.readState(env.DB)).kit.live;
+  assert.equal(live.audience, 'Newsletter');
+  assert.match(live.error, /one audience rule per email/);
+  assert.equal(signupPosts().length, 1, 'the sign-ups still had theirs');
   await endAndReset();
 });
 

@@ -1117,7 +1117,7 @@ test('JobTread confirms a reveal: the same look drafts the Kit email to Reveal E
   assert.equal(invite.subject, 'You’re Invited to Max’s Reveal Day!');
   assert.equal(invite.public, false);
   assert.equal(invite.send_at, null);
-  assert.deepEqual(invite.subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }], any: null, none: null }]);
+  assert.deepEqual(invite.subscriber_filter, [{ all: [{ type: 'segment', ids: [587253] }] }]);
   assert.match(invite.content, /Tuesday, October 27<[\s\S]*4:00 PM/);
   assert.match(invite.content, /100\u00A0Example\u00A0Way, Atlanta,\u00A0GA\u00A030301/);
   assert.match(invite.content, /Park on the(?: |&nbsp;)street/);
@@ -1126,7 +1126,7 @@ test('JobTread confirms a reveal: the same look drafts the Kit email to Reveal E
   assert.equal(whole.subject, 'Join Us Live for Max’s Reveal Day!');
   assert.equal(whole.public, false);
   assert.equal(whole.send_at, null);
-  assert.deepEqual(whole.subscriber_filter[0].all, [{ type: 'all_subscribers' }], 'the whole list');
+  assert.deepEqual(Object.keys(whole.subscriber_filter[0]), ['none'], 'the whole list: everyone but who it leaves out, the one rule Kit takes');
   assert.equal(whole.subscriber_filter[0].none.length, 1, 'but the one-reveal-only sign-ups (their kid\'s comes to them on its own)');
   assert.match(whole.content, /Tuesday, October 27<[\s\S]*4:00 PM/);
   assert.match(whole.content, /Live on our website/);

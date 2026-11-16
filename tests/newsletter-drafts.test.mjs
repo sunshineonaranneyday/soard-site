@@ -224,7 +224,7 @@ test('Event Recap drafts itself once the photos are on the live page, never befo
   assert.equal(b.subject, 'What a Night! See the Photos from our Evening of Sunshine');
   assert.equal(b.send_at, null, 'a draft only');
   assert.equal(b.public, false);
-  assert.deepEqual(b.subscriber_filter, [{ all: null, any: null, none: [{ type: 'tag', ids: [555] }] }], 'the newsletter list, less the families who only asked about applications');
+  assert.deepEqual(b.subscriber_filter, [{ none: [{ type: 'tag', ids: [555] }] }], 'the newsletter list, less the families who only asked about applications');
   assert.match(b.description, /· recap:2027-evening-of-sunshine ·/);
   assert.equal(emails.length, 1);
   assert.deepEqual(emails[0].to, ['linzi@soardcharity.com']);
@@ -260,7 +260,7 @@ test('a waiting draft follows the page until someone touches it; then it’s the
   await look('2027-08-23T15:00:00Z');
   assert.equal(kit.puts.length, 1);
   assert.match(kit.broadcasts.get(id).content, /See All 14 Photos/);
-  assert.deepEqual(kit.puts[0].subscriber_filter, [{ all: null, any: null, none: [{ type: 'tag', ids: [555] }] }], 'never reset to everyone');
+  assert.deepEqual(kit.puts[0].subscriber_filter, [{ none: [{ type: 'tag', ids: [555] }] }], 'never reset to everyone');
   assert.equal(emails.length, 1, 'a rebuild emails nobody');
   // Linzi edits it in Kit: the site leaves it alone for good
   kit.broadcasts.get(id).subject = 'What a night it was!';

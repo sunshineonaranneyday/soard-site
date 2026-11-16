@@ -663,7 +663,7 @@ test('"all subscribers" sends leave out families who only asked about applicatio
   const onlyTag = tagByName(k.WAITLIST_ONLY_TAG);
   const r = await k.kitCreateBroadcast(env, { subject: 'News', description: 'n', html: '<p>hi</p>' });
   assert.equal(r.ok, true);
-  assert.deepEqual(kit.broadcasts.at(-1).subscriber_filter, [{ all: null, any: null, none: [{ type: 'tag', ids: [onlyTag] }] }]);
+  assert.deepEqual(kit.broadcasts.at(-1).subscriber_filter, [{ none: [{ type: 'tag', ids: [onlyTag] }] }]);
   // Joining the newsletter takes them off the waitlist-only list
   await k.kitSubscribe(env, 'only@example.com', { source: 'newsletter' });
   assert.equal(tagsOf('only@example.com').includes(k.WAITLIST_ONLY_TAG), false);

@@ -142,7 +142,7 @@ test('Draft in Kit: a draft only, to the newsletter list; the other reviewer hea
   const b = only();
   assert.equal(b.send_at, null);
   assert.equal(b.public, false);
-  assert.deepEqual(b.subscriber_filter, [{ all: null, any: null, none: [{ type: 'tag', ids: [555] }] }]);
+  assert.deepEqual(b.subscriber_filter, [{ none: [{ type: 'tag', ids: [555] }] }]);
   assert.match(b.description, new RegExp(`· email:${e.id} ·`));
   assert.ok(!/hq720/.test(b.content), 'a video with no widescreen picture uses its standard one');
   assert.deepEqual(emails.map((x) => x.to[0]), [PETER]);
@@ -160,7 +160,7 @@ test('drafting again updates the waiting draft, but never one changed in Kit or 
   const u = await draftCustomEmail(env, { id: e.id, by: LINZI });
   assert.equal(u.result, 'updated');
   assert.equal(kit.broadcasts.get(id).subject, 'A Brighter Day, Together');
-  assert.deepEqual(kit.puts[0].subscriber_filter, [{ all: null, any: null, none: [{ type: 'tag', ids: [555] }] }], 'never reset to everyone');
+  assert.deepEqual(kit.puts[0].subscriber_filter, [{ none: [{ type: 'tag', ids: [555] }] }], 'never reset to everyone');
   assert.equal(kit.broadcasts.size, 1);
   // Changed in Kit by a person: left alone
   kit.broadcasts.get(id).subject = 'Linzi’s own subject';
