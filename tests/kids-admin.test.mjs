@@ -94,7 +94,7 @@ test('gallery zones, floor plan crop, file-name captions, video ids', () => {
 
 test('search title and description match the page’s fallbacks', () => {
   const k = kid({ roomTypes: ['Accessible Bathroom', 'Dream Bedroom'] });
-  assert.equal(KS.pageTitleOf(k), 'Ava\'s Story — Accessible Bathroom & Dream Bedroom | Sunshine on a Ranney Day');
+  assert.equal(KS.pageTitleOf(k), 'Ava\'s Story: Accessible Bathroom & Dream Bedroom | Sunshine on a Ranney Day');
   assert.equal(KS.metaDescriptionOf(k), 'Meet Ava, diagnosed with Cerebral palsy. Learn how Sunshine on a Ranney Day transformed their space with an Accessible Bathroom & Dream Bedroom.');
   assert.equal(KS.metaDescriptionOf({ ...k, shortDescription: 'Short.' }), 'Short.');
   assert.equal(KS.metaDescriptionOf({ ...k, metaDescription: 'Meta.', shortDescription: 'Short.' }), 'Meta.');

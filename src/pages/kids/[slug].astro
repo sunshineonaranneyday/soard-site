@@ -350,7 +350,7 @@ const planOrientation = (() => {
 
 <BaseLayout
   og={{ layout: 'split', eyebrow: [kid.roomTypes?.join(', '), kid.year].filter(Boolean).join(' · '), title: heroHtml([kid.name]), lead: heroHook, photo: kid.heroImage ? { id: kid.heroImage, alt: `Photo of ${kid.name}` } : null, inset: kid.heroImage && accentPhoto ? { id: accentPhoto } : null }}
-  title={`${kid.name}'s Story${kid.roomTypes?.length ? ` — ${kid.roomTypes.join(' & ')}` : ''}`}
+  title={`${kid.name}'s Story${kid.roomTypes?.length ? `: ${kid.roomTypes.join(' & ')}` : ''}`}
   description={metaDesc}
   ogType="article"
   jsonLd={kidSchemas}

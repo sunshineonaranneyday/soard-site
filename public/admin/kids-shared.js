@@ -201,7 +201,7 @@ export function streamUid(s) {
 export const SITE_ORIGIN = 'https://sunshineonaranneyday.com';
 export const META_MAX = 160;
 export function pageTitleOf(kid) {
-  const rooms = kid?.roomTypes?.length ? ` — ${kid.roomTypes.join(' & ')}` : '';
+  const rooms = kid?.roomTypes?.length ? `: ${kid.roomTypes.join(' & ')}` : '';
   return `${kid?.name || 'Name'}'s Story${rooms} | Sunshine on a Ranney Day`;
 }
 export function metaDescriptionOf(kid) {

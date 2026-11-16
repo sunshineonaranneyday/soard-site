@@ -59,7 +59,7 @@ const {
 const pathname = Astro.url.pathname.endsWith('/') ? Astro.url.pathname : `${Astro.url.pathname}/`;
 const canonicalURL = new URL(pathname, Astro.site);
 const fullTitle = title === 'Home'
-  ? 'Sunshine on a Ranney Day — Dreams Built Here'
+  ? 'Sunshine on a Ranney Day: Dreams Built Here'
   : `${title} | Sunshine on a Ranney Day`;
 
 // ── The share card ──────────────────────────────

@@ -207,7 +207,7 @@ export function getKidProfileSchema(kid: {
   schemas.push({
     "@type": "Article",
     "@id": `${url}#article`,
-    "headline": `${kid.name}'s Story — Sunshine on a Ranney Day`,
+    "headline": `${kid.name}'s Story | Sunshine on a Ranney Day`,
     "description": kid.metaDescription || `Meet ${kid.name}${kid.diagnosis ? `, diagnosed with ${kid.diagnosis}` : ''} — learn how Sunshine on a Ranney Day transformed their space${kid.roomTypes?.length ? ` with ${/^[aeiou]/i.test(kid.roomTypes[0]) ? 'an' : 'a'} ${kid.roomTypes.join(' & ')}` : ''}.`,
     "url": url,
     "isPartOf": { "@id": `${SITE_URL}/#website` },
@@ -239,7 +239,7 @@ export function getKidProfileSchema(kid: {
       schemas.push({
         "@type": "VideoObject",
         "@id": `${url}#video`,
-        "name": `${kid.name}'s Story — Sunshine on a Ranney Day`,
+        "name": `${kid.name}'s Story | Sunshine on a Ranney Day`,
         "description": kid.metaDescription || `Watch how Sunshine on a Ranney Day transformed ${kid.name}'s space.`,
         "thumbnailUrl": `https://${STREAM}/${kid.streamVideoId}/thumbnails/thumbnail.jpg?width=1280&height=720`,
         "uploadDate": kid.year ? `${kid.year}-01-01` : undefined,
@@ -251,7 +251,7 @@ export function getKidProfileSchema(kid: {
       schemas.push({
         "@type": "VideoObject",
         "@id": `${url}#video`,
-        "name": `${kid.name}'s Story — Sunshine on a Ranney Day`,
+        "name": `${kid.name}'s Story | Sunshine on a Ranney Day`,
         "description": kid.metaDescription || `Watch how Sunshine on a Ranney Day transformed ${kid.name}'s space.`,
         "thumbnailUrl": `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`,
         "uploadDate": kid.year ? `${kid.year}-01-01` : undefined,

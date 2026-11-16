@@ -90,7 +90,7 @@ export const galleryShown = (p) => ((p?.photos || []).length > 1 ? p.photos : []
 
 // ── Search and sharing (mirrors the page's <title> and description) ─
 export function pageTitleOf(p) {
-  return `${p?.name || 'Project'} — Community Project | Sunshine on a Ranney Day`;
+  return `${p?.name || 'Project'}: Community Project | Sunshine on a Ranney Day`;
 }
 export const metaDescriptionOf = (p) => p?.metaDescription || p?.description || '';
 
