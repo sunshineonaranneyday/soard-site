@@ -66,12 +66,11 @@ name = "PRINT_HUB"
 class_name = "PrintHub"
 script_name = "soard-live-hub"
 
-# SOARD's nightly backup, its own Worker (workers/backup): the site reaches it only through this binding, which
-# opens its one door, the BackupAPI entrypoint (functions/api/_backup.js). A site bound to a Worker that doesn't
-# exist yet can fail to publish, so these four lines stay commented out until soard-backup is deployed
-# (cd workers/backup; npm ci; npx wrangler r2 bucket create soard-backup-staging; npx wrangler deploy). Then
-# uncomment them and publish. Until then the admin shows the backup as not set up yet.
-# [[services]]
-# binding = "BACKUP"
-# service = "soard-backup"
-# entrypoint = "BackupAPI"
+# SOARD's nightly backup, its own Worker (workers/backup, deployed as soard-backup Nov 16 2026): the site reaches it
+# only through this binding, which opens its one door, the BackupAPI entrypoint (functions/api/_backup.js). The
+# Worker must exist before a site build with this binding: a site bound to a Worker that doesn't exist can fail to
+# publish.
+[[services]]
+binding = "BACKUP"
+service = "soard-backup"
+entrypoint = "BackupAPI"

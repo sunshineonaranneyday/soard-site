@@ -77,7 +77,7 @@ function printSheet(props) {
 }
 
 /** The steps still to do, in order, in plain words (from the backup's own check) */
-const DEPLOY = 'Put the backup Worker on Cloudflare first: in workers/backup run npm ci, then npx wrangler r2 bucket create soard-backup-staging (once), then npx wrangler deploy (it asks you to sign in to Cloudflare once). Then connect the site to it: in the site’s wrangler.toml, uncomment the four BACKUP lines under “SOARD’s nightly backup”, and publish.';
+const DEPLOY = 'Put the backup Worker on Cloudflare first: in workers/backup run npm ci, then npx wrangler r2 bucket create soard-backup-staging (once), then npx wrangler deploy (it asks you to sign in to Cloudflare once). Then connect the site to it: the BACKUP service binding in the site’s wrangler.toml, under “SOARD’s nightly backup”, and publish.';
 function steps(b) {
   if (b?.error && b.connected === undefined) return [{ text: `The admin couldn’t read the backup’s report just now (${b.error}). Reload the page.` }];
   if (!b?.connected) return [{ text: DEPLOY }];
