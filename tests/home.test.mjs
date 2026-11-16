@@ -147,8 +147,8 @@ test('a kid’s Home card: the Zestimate leads, Zillow is a link, the rest in Jo
   const bad = homeFacts(DEFS, { fZillow: 'javascript:alert(1)' });
   assert.equal(bad.links.length, 0, 'only web links open');
   assert.deepEqual(bad.rest.map(x => [x.name, x.text, x.href]), [['Zillow URL', 'javascript:alert(1)', null]], 'anything else in a link field shows as typed, never dropped');
-  const bare = homeFacts(DEFS, { fZillow: 'www.zillow.com/homedetails/1314/10000001_zpid/' });
-  assert.deepEqual(bare.links.map(l => [l.text, l.href]), [['Zillow', 'https://www.zillow.com/homedetails/1314/10000001_zpid/']], 'a link typed without https still opens');
+  const bare = homeFacts(DEFS, { fZillow: 'www.zillow.com/homedetails/88/10000001_zpid/' });
+  assert.deepEqual(bare.links.map(l => [l.text, l.href]), [['Zillow', 'https://www.zillow.com/homedetails/88/10000001_zpid/']], 'a link typed without https still opens');
   assert.equal(homeFacts(DEFS, { fSale: 90000 }).lead, null, 'only the home’s value leads, never a sale price or anything else');
   // A field staff add later shows up by itself, where JobTread puts it
   const more = homeFacts([...DEFS, { id: 'fRoof', name: 'Roof Replaced', type: 'date', position: 'aF' }], { ...LIZZIE, fRoof: '2019-06-01' });
