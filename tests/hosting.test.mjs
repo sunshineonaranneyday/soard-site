@@ -139,7 +139,7 @@ test('keys: a count, and the names nothing reads; never a value, never a binding
 });
 
 // Bindings (not keys), and names only a computer or Cloudflare's build sets, never a key in Cloudflare
-const BINDINGS = new Set(['AI', 'ASSETS', 'BROWSER', 'DB', 'FILES', 'VENDOR_FILES', 'APPLICANT_FILES', 'BOARD_FILES', 'LIVE_HUB', 'PRINT_HUB']);
+const BINDINGS = new Set(['AI', 'ASSETS', 'BROWSER', 'DB', 'FILES', 'VENDOR_FILES', 'APPLICANT_FILES', 'BOARD_FILES', 'LIVE_HUB', 'PRINT_HUB', 'BACKUP']);
 const NOT_KEYS = new Set(['POPUP_AUDIT_STRICT', 'BOOK_FIXTURE', 'SOARD_OG_SPEC_DIR', 'NODE_ENV', 'SITE', 'R2_PUBLIC_URL', 'CF_PAGES', 'CF_PAGES_COMMIT_SHA']);
 // These only check whether a key is set, for this map (a key only they read is one nothing uses)
 const PRESENCE_ONLY = new Set(['functions/api/automations-admin.js', 'functions/api/_hosting.js']);

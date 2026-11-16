@@ -35,6 +35,17 @@ const FACTS = {
   checkedAt: iso(0),
   env: { slack: false, twilio: false, youtube: false, kit: true, resend: true, calendar: true, jobtread: true, facebook: true, stream: true, images: true, deployHook: true, github: true, access: true, constantContact: true, turnstile: true, zeffyWebhook: true, zeffyApi: true, slackBot: true },
   bindings: { db: true, files: true, vendorFiles: true, ai: true, hub: true },
+  // The backup Worker's report after a healthy run (functions/api/_backup.js → soard-backup's BackupAPI status())
+  backup: {
+    connected: true,
+    reachable: true,
+    setup: { at: iso(3600e3), ready: true, google: { account: 'soard-backup@soard-test.iam.gserviceaccount.com', ok: true, drive: 'Website backup', canDelete: false }, cloudflare: { ok: true, link: 'https://dash.cloudflare.com/?to=/:account/api-tokens&name=SOARD%20backup%20(read%20only)', extras: ['Single Redirect Read', 'Email Routing Rules Read'] }, b2: { ok: true, bucket: 'soard-backup', lock: { on: true, mode: 'compliance', days: 90 }, canDelete: false }, github: { ok: true, repos: {} }, watchdog: { at: iso(4 * 3600e3) }, stream: { key: true }, recovery: { printed: { by: 'staff@example.org', at: iso(9 * 24 * 3600e3) } }, problems: [] },
+    night: { run: '2026-11-14', started: iso(10 * 3600e3), finished: iso(8 * 3600e3), databases: [{ name: 'soard-db', tables: 249, rows: 50261, bytes: 6100000, attempts: 1 }, { name: 'sunnyandranney-db', tables: 26, rows: 1100, bytes: 90000, attempts: 1 }], settings: { zones: 4, records: 61, notRead: [] }, code: [{ repo: 'sunshineonaranneyday/soard-site', full: false, bytes: 120000 }, { repo: 'sunshineonaranneyday/sunnyandranney-site', unchanged: true }, { repo: 'sunshineonaranneyday/sunnyandranney-medusa', unchanged: true }], listed: { images: { found: 6918, todo: 0 }, videos: { found: 26, todo: 0 }, 'r2:soard-files': { found: 894, todo: 0 }, 'r2:soard-vendor-docs': { found: 116, todo: 0 } }, files: { copied: 3, failed: 0, steps: 1, left: 0 }, errors: [], failures: [], problems: [], notes: [], waitingToShip: 0, homes: { drive: true, b2: true }, ok: true },
+    drill: { run: '2026-11-09', at: iso(5 * 24 * 3600e3), ok: true, databases: [{ name: 'soard-db', tables: 249, different: [] }, { name: 'sunnyandranney-db', tables: 26, different: [] }], files: [{}, {}, {}], code: [{}], problems: [] },
+    counts: { database: { copies: 8, bytes: 49e6 }, file: { copies: 7954, bytes: 7.3e9 } },
+    databases: ['soard-db', 'sunnyandranney-db'], repos: ['sunshineonaranneyday/soard-site', 'sunshineonaranneyday/sunnyandranney-site', 'sunshineonaranneyday/sunnyandranney-medusa'],
+    key: { fingerprint: 'A1B2-C3D4-E5F6-0718' }, needs: {}, recovery: { printed: { by: 'staff@example.org', at: iso(9 * 24 * 3600e3) }, shown: [{ by: 'staff@example.org', at: iso(9 * 24 * 3600e3) }] }, problems: [], chores: { at: iso(5 * 60e3), done: [], open: false, error: null, reached: true },
+  },
   // Shaped like production on November 12, 2026 (_hosting.js)
   hosting: {
     keys: { set: 48, unused: ['CC_CLIENT_ID', 'CC_CLIENT_SECRET', 'CC_REFRESH_TOKEN', 'MEDUSA_ADMIN_KEY', 'MEDUSA_BACKEND_URL'] },
@@ -99,6 +110,7 @@ async function open(browser, base, viewport, { facts = FACTS } = {}) {
     const url = new URL(req.url());
     const json = (obj, status = 200) => req.respond({ status, contentType: 'application/json', body: JSON.stringify(obj) });
     if (url.origin !== base) return req.abort();
+    if (url.pathname === '/api/backup-admin' && req.method() === 'POST') return json({ success: true, identity: 'AGE-SECRET-KEY-PQ-1TESTKEYTESTKEY', fingerprint: 'A1B2-C3D4-E5F6-0718', made: iso(30 * 24 * 3600e3) });
     if (url.pathname === '/api/automations-admin') return facts ? json({ ...facts, checkedAt: iso(0) }) : json({ success: false, error: 'JobTread timed out' }, 500);
     if (url.pathname === '/api/live-ws') return req.abort();
     if (url.pathname.startsWith('/api/list-content')) return json({ success: true, items: [], total: 0, hasMore: false });
@@ -196,7 +208,7 @@ try {
   // go / no-go, alerts, reminders, the connection itself, gift alert problems, a Denied kid, a staff text that didn't arrive,
   // the application limit's notices, Resend's own reports on each email, the board packet, a vendor or sponsor with no logo,
   // the insurance audits' asks, the board's next four meetings when an invite breaks, and the minutes' action item reminders
-  const RESEND = ['Invite problem alerts', 'Save and finish later', 'Tell me when applications open', 'Applications-open email', 'Staff heads-up', 'Application sweep',
+  const RESEND = ['Reveal design import', 'Invite problem alerts', 'Save and finish later', 'Tell me when applications open', 'Applications-open email', 'Staff heads-up', 'Application sweep',
     'Invite email drafted in Kit', 'Project emails drafted in Kit', 'Newsletter emails drafted in Kit', 'Who an email written in Kit goes to', 'Signed copies and receipts', 'Remind by email', 'AI spending watch',
     'Status change summary', 'Go / no-go', 'Alert emails', 'Reminder emails', 'Resend', 'Gift alerts in Slack', 'Donors join the newsletter', 'Kid and project status follow JobTread', 'Text delivery reports',
     'Application limit', 'Email delivery reports', 'Advisory Board application', 'A family replied → staff alert', 'The packet email',
@@ -537,10 +549,50 @@ try {
   const saveText = await hostPanel(healthy, 'Save in the admin');
   ok(!/GitHub/.test(saveText.replace('aren’t copied to GitHub', '')) && saveText.includes('aren’t copied to GitHub'), 'saving in the admin no longer claims a GitHub backup, and says why');
   const ghDeps = await healthy.page.evaluate(() => [...document.querySelectorAll('#am-svc option')].find((o) => o.value === 'GitHub')?.textContent);
-  ok(ghDeps === 'GitHub (3)', `only what really uses GitHub depends on it (${ghDeps})`);
+  ok(ghDeps === 'GitHub (5)', `only what really uses GitHub depends on it, the backup’s setup and code copy among them (${ghDeps})`);
   await healthy.page.screenshot({ path: join(OUT, 'hosting.png'), fullPage: false });
   ok(healthy.errors.length === 0, `no console errors${healthy.errors.length ? ': ' + healthy.errors.slice(0, 3).join(' | ') : ''}`);
   await healthy.page.close();
+
+  // Backup: every entry live on a healthy night, the panel's buttons, and the recovery sheet printed and gone again
+  const bk = await open(browser, base, { width: 1440, height: 1000 });
+  for (const [title, want] of [['Setup and the key', 'Live'], ['Databases, every night', 'Live'], ['Cloudflare settings, every night', 'Live'], ['Code, when it changes', 'Live'], ['Photos, videos and files', 'Live'], ['Google Drive and Backblaze', 'Live'], ['Restore drill, every week', 'Live']]) ok(await statusOf(bk.page, title) === want, `Backup → ${title}: ${want}`);
+  const setupText = await hostPanel(bk, 'Setup and the key');
+  ok(setupText.includes('Everything is set up.') && setupText.includes('Check the setup now') && setupText.includes('Back up now') && setupText.includes('Print the recovery sheet') && setupText.includes('A1B2-C3D4-E5F6-0718'), 'the setup panel says it’s all set up, with the check, the run and the recovery sheet');
+  ok(!setupText.includes('I’ve printed it'), 'a sheet already printed isn’t asked for again');
+  ok(setupText.includes('Last opened by staff@example.org') && setupText.includes('tells the admins in Slack') && setupText.includes('never save it as a PDF'), 'it says who last opened the key, that opening it is told in Slack, and never to keep it as a PDF');
+  await bk.page.evaluate(() => { window.__printed = []; window.confirm = () => true; window.print = () => { window.__printed.push(document.getElementById('bk-print-root')?.textContent || ''); window.dispatchEvent(new Event('afterprint')); }; });
+  await clickButton(bk.page, '.am-panel', 'Print the recovery sheet');
+  await pause(400);
+  const printed = await bk.page.evaluate(() => window.__printed);
+  ok(printed.length === 1 && (printed[0].match(/AGE-SECRET-KEY-PQ-1TESTKEYTESTKEY/g) || []).length === 2 && printed[0].includes('Copy 1 of 2') && printed[0].includes('Copy 2 of 2') && printed[0].includes('Never save it as a PDF'), 'the recovery sheet prints the key twice, one copy per page, saying paper only');
+  ok(await bk.page.evaluate(() => (document.getElementById('bk-print-root')?.textContent || '') === ''), 'and the key leaves the page as soon as it has printed');
+  const dbText = await hostPanel(bk, 'Databases, every night');
+  ok(dbText.includes('soard-db 249 tables, 50,261 rows') && dbText.includes('at one moment'), 'the databases entry says what was copied and that it was read at one moment');
+  const drillText = await hostPanel(bk, 'Restore drill, every week');
+  ok(drillText.includes('every one back exactly') && drillText.includes('Backblaze’s copies match'), 'the drill entry says the restore came back exactly from both homes');
+  await bk.page.screenshot({ path: join(OUT, 'backup.png'), fullPage: false });
+  ok(bk.errors.length === 0, `no console errors on the backup${bk.errors.length ? ': ' + bk.errors.slice(0, 3).join(' | ') : ''}`);
+  await bk.page.close();
+  // Before the Worker is on Cloudflare (no binding yet, or a binding to a Worker not deployed), gone after it ran, and half set up
+  for (const [label, backup] of [['no binding yet', { connected: false, reachable: false, chores: {} }], ['bound, not deployed', { connected: true, reachable: false, error: 'the backup didn’t answer: Worker not found', chores: {} }]]) {
+    const off = await open(browser, base, { width: 1440, height: 1000 }, { facts: { ...FACTS, backup } });
+    ok(await statusOf(off.page, 'Setup and the key') === 'Off' && await statusOf(off.page, 'Databases, every night') === 'Off', `before the Worker is deployed (${label}) the backup is off, not broken`);
+    const offText = await hostPanel(off, 'Setup and the key');
+    ok(offText.includes('Put the backup Worker on Cloudflare first') && offText.includes('wrangler r2 bucket create soard-backup-staging') && !offText.includes('Back up now'), `and the panel says the first step, with nothing to press yet (${label})`);
+    await off.page.close();
+  }
+  const gone = await open(browser, base, { width: 1440, height: 1000 }, { facts: { ...FACTS, backup: { connected: true, reachable: false, error: 'the backup didn’t answer: Worker not found', chores: { reached: true } } } });
+  ok(await statusOf(gone.page, 'Setup and the key') === 'Needs attention' && await statusOf(gone.page, 'Databases, every night') === 'Needs attention', 'a backup the site reached before and can’t now needs attention');
+  ok((await hostPanel(gone, 'Setup and the key')).includes('can’t reach the backup right now'), 'and says so');
+  await gone.page.close();
+  const half = await open(browser, base, { width: 1440, height: 1000 }, { facts: { ...FACTS, backup: { ...FACTS.backup, night: null, drill: null, recovery: {}, setup: { ...FACTS.backup.setup, ready: false, recovery: {}, watchdog: { at: null }, problems: [{ home: 'cloudflare', why: 'the read-only backup key (CF_BACKUP_TOKEN) isn’t set yet' }, { home: 'key', why: 'the recovery sheet hasn’t been printed yet' }] } } } });
+  ok(await statusOf(half.page, 'Setup and the key') === 'Needs attention', 'half set up needs attention');
+  const halfText = await hostPanel(half, 'Setup and the key');
+  const halfLinks = await half.page.$$eval('.am-panel .bk-panel a', (a) => a.map((x) => x.textContent.trim()));
+  ok(halfText.includes('CF_BACKUP_TOKEN') && halfText.includes('watchdog') && halfText.includes('I’ve printed it') && halfLinks.includes('Make the read-only key ↗') && halfLinks.includes('Open Apps Script ↗'), `and the panel lists each step left, with its link (${halfLinks.join(', ')})`);
+  await half.page.screenshot({ path: join(OUT, 'backup-setup.png'), fullPage: false });
+  await half.page.close();
 
   const broke = { ...FACTS.hosting,
     pages: { ...FACTS.hosting.pages, failed: { at: iso(9 * 60e3), endedAt: iso(6 * 60e3), commit: 'cccccccc', by: 'push' } },
