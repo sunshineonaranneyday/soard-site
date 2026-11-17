@@ -33,7 +33,7 @@ import {
 } from './_advisory-applications.js';
 import { logAudit } from './_audit.js';
 import { getSettings as getBoardSettings } from './_advisory.js';
-import { addPlan, addToBoard } from './_advisory-add.js';
+import { addPlan, addBusy, addToBoard } from './_advisory-add.js';
 import { personStatus, personName } from './_team.js';
 
 const ok = (body = {}) => Response.json({ success: true, ...body }, { headers: { 'Cache-Control': 'no-store' } });
@@ -66,7 +66,9 @@ async function withPerson(DB, application) {
     const row = await DB.prepare('SELECT data FROM team WHERE slug = ?').bind(application.personSlug).first();
     if (!row) return { ...application, person: null, ...(application.status === 'joined' ? { left: true } : {}) };
     const d = JSON.parse(row.data || '{}');
-    const person = { slug: application.personSlug, name: personName(d) || application.name, group: d.group || null, status: personStatus(d), publishStatus: d.publishStatus || null };
+    // (hasEmail: a sign-in email on file, which is what their sign-in, reveal invites and advisory@ follow)
+    const email = await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(application.personSlug).first().catch((e) => { if (/no such table/i.test(e?.message || '')) return null; throw e; });
+    const person = { slug: application.personSlug, name: personName(d) || application.name, group: d.group || null, status: personStatus(d), publishStatus: d.publishStatus || null, hasEmail: !!email?.email };
     const on = person.group === 'advisory' && person.status === 'active';
     return { ...application, person, ...(application.status === 'joined' && !on ? { left: true } : {}) };
   } catch (e) {
@@ -86,7 +88,10 @@ async function get(context) {
   const planFor = url.searchParams.get('plan');
   if (planFor) {
     if (!isApplicationId(planFor)) return fail('Bad id');
-    try { return ok({ plan: await addPlan(env, planFor) }); } catch (e) { return failed(e); }
+    try {
+      const plan = await addPlan(env, planFor);
+      return ok({ plan: { ...plan, busy: await addBusy(env.DB, plan) } });
+    } catch (e) { return failed(e); }
   }
   const id = url.searchParams.get('id');
   if (id) {

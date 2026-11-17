@@ -21,7 +21,7 @@
  */
 
 import { submitApplication, notifyNew, readHeadshot } from './_advisory-applications.js';
-import { checkAnswers, greetName, HEADSHOT_MAX_BYTES, PHOTO_ADDED } from './_advisory-form.js';
+import { checkAnswers, greetName, HEADSHOT_MAX_BYTES, PHOTO_ADDED, problemsSaid } from './_advisory-form.js';
 import { turnstileOn, turnstileSiteKey, verifyTurnstile, clientIp } from './_secure.js';
 
 const MAX_BODY = 64 * 1024; // the answers
@@ -112,7 +112,7 @@ export async function onRequestPost(context) {
   const shot = await readHeadshot(file);
   const { problems: early } = checkAnswers({ ...(body?.answers || {}), headshot: shot.headshot ? PHOTO_ADDED : '' });
   if (shot.problem) early.headshot = shot.problem;
-  if (Object.keys(early).length) return json({ ok: false, problems: early, error: 'A few answers need a look.' }, 422);
+  if (Object.keys(early).length) return json({ ok: false, problems: early, error: problemsSaid(early) }, 422);
   const ip = clientIp(request);
   if (turnstileOn(env) && !(await verifyTurnstile(env, body?.turnstileToken, ip))) {
     return json({ ok: false, code: 'turnstile', error: 'Please confirm you’re not a robot, then send it again.' }, 400);
@@ -132,13 +132,13 @@ export async function onRequestPost(context) {
   } catch (e) {
     // Cloudflare refused the picture itself: a photo to choose again
     // (spent: the robot check was used by this send, so the page gets a fresh one before the next)
-    if (e?.status === 422 && e.field === 'headshot') return json({ ok: false, problems: { headshot: e.message }, error: 'A few answers need a look.', spent: true }, 422);
+    if (e?.status === 422 && e.field === 'headshot') return json({ ok: false, problems: { headshot: e.message }, error: problemsSaid({ headshot: e.message }), spent: true }, 422);
     // The headshot couldn't be saved (Cloudflare Images busy): nothing was kept, and Send again works
     if (e?.status === 503) return json({ ok: false, error: e.message }, 503);
     throw e;
   }
   const { app, problems, repeat, limited } = stored;
-  if (problems) return json({ ok: false, problems, error: 'A few answers need a look.' }, 422);
+  if (problems) return json({ ok: false, problems, error: problemsSaid(problems) }, 422);
   if (limited) return json({ ok: false, error: LIMITED }, 429);
   if (!repeat) {
     const send = notifyNew(env, app, { now });

@@ -174,7 +174,7 @@ body.ava-drawer-open .toast-container { z-index: 1350; }
 .ava-a { margin: 0; font-size: var(--fs-sm); line-height: 1.55; white-space: pre-line; overflow-wrap: anywhere; }
 .ava-a.is-flag { color: var(--tone-warn-fg); background: var(--tone-warn-surface); border: 1px solid var(--tone-warn-line-strong); border-radius: 8px; padding: .35rem .55rem; justify-self: start; }
 .ava-notes { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
-.ava-notes li { border-left: 3px solid var(--color-border-strong); padding: .1rem 0 .1rem .7rem; font-size: var(--fs-sm); white-space: pre-line; }
+.ava-notes li { border-left: 3px solid var(--color-border-strong); padding: .1rem 0 .1rem .7rem; font-size: var(--fs-sm); white-space: pre-line; overflow-wrap: anywhere; }
 .ava-notes small { display: block; color: var(--color-text-muted); font-size: var(--fs-2xs); margin-top: .15rem; }
 .ava-note-form { display: grid; gap: .45rem; }
 .ava-note-form textarea { min-height: 70px; }
@@ -333,8 +333,8 @@ export function AdvisoryApplications({ addToast, kit = {} }) {
         <button class="is-all" aria-pressed=${!filter} onClick=${() => setFilter('')}>All <b>${apps.length}</b></button>
         ${(data.statuses || []).map((s) => html`<button key=${s.id} style=${`--c:${STATUS_COLOR[s.id]}`} aria-pressed=${filter === s.id} title=${STATUS_HINT[s.id]}
           onClick=${() => setFilter((f) => (f === s.id ? '' : s.id))}><span class="ava-dot"></span>${s.label} <b>${counts[s.id] || 0}</b></button>`)}
-        ${EXTRA.filter((x) => counts[x.id]).map((x) => html`<button key=${x.id} style="--c:#7C7D84" aria-pressed=${filter === x.id} title=${x.hint}
-          onClick=${() => setFilter((f) => (f === x.id ? '' : x.id))}><span class="ava-dot"></span>${x.label} <b>${counts[x.id]}</b></button>`)}
+        ${EXTRA.filter((x) => counts[x.id] || filter === x.id).map((x) => html`<button key=${x.id} style="--c:#7C7D84" aria-pressed=${filter === x.id} title=${x.hint}
+          onClick=${() => setFilter((f) => (f === x.id ? '' : x.id))}><span class="ava-dot"></span>${x.label} <b>${counts[x.id] || 0}</b></button>`)}
       </div>
       <label class="ava-search"><input class="form-input" type="search" placeholder="Search name, company, email" aria-label="Search applications" value=${q} onInput=${(e) => setQ(e.target.value)} /></label>
     </div>`}
@@ -396,7 +396,8 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
   const face = (src, name) => html`<span class="ava-face">${initials(name)}${src ? html`<img src=${src} alt="" width="40" height="40" loading="lazy" onError=${(e) => { e.currentTarget.hidden = true; }} />` : null}</span>`;
   const press = (as) => () => { if (!busy) onAdd(as); };
   const wait = busy ? 'true' : null;
-  const cancel = html`<button class="btn btn-ghost" data-autofocus onClick=${() => { if (!busy) onClose(); }} aria-disabled=${wait}>${plan.kind === 'blocked' || plan.kind === 'joined' ? 'Close' : 'Cancel'}</button>`;
+  const cancel = html`<button class="btn btn-ghost" data-autofocus onClick=${() => { if (!busy) onClose(); }} aria-disabled=${wait}>${plan.busy || plan.kind === 'blocked' || plan.kind === 'joined' ? 'Close' : 'Cancel'}</button>`;
+  const statusLine = app.status === 'not-now' ? html`<p class="ava-note">This application is marked Not now${app.statusBy ? `, by ${app.statusBy}` : ''}.</p>` : null;
   const who = (x) => [x.where, x.email || 'no email on file', x.organization, x.status === 'alumni' ? 'a former member' : null].filter(Boolean).join(' · ');
   // A box opened again with a different answer (a press that stopped partway): the keys back on Cancel
   const firstPlan = useRef(true);
@@ -405,6 +406,12 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     requestAnimationFrame(() => document.querySelector('.ava-dialog [data-autofocus]')?.focus());
   }, [plan]);
 
+  if (plan.busy) {
+    return html`<${Dialog} title=${`Someone is adding ${app.name} right now`} onClose=${onClose} footer=${cancel}>
+      <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and press Add to Advisory Board again in a minute: it finishes whatever stopped partway, and never adds them twice.'
+        : 'Another press (in another tab, or by someone else) is adding them. This box shows what’s left as soon as it’s done.'}</p>
+    <//>`;
+  }
   if (plan.kind === 'blocked' && plan.why === 'memorial') {
     return html`<${Dialog} title=${`${app.name} can’t be added`} onClose=${onClose} footer=${cancel}>
       <p>${p.name} is In memoriam on People → Advisory, so nobody can be added from this application.</p>
@@ -454,7 +461,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     return html`<${Dialog} title=${`Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${html`${cancel}
         <button class="btn btn-ghost" onClick=${press('new')} aria-disabled=${wait}>${busy ? 'Adding…' : 'A different person'}</button>
         <button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Adding…' : 'The same person'}</button>`}>
-      ${testLine}
+      ${testLine}${statusLine}
       <p>Someone on People → Advisory has ${p.name === app.name ? 'this name' : 'a name like this one'}. ${theirs}, so say who this is.</p>
       <dl class="ava-compare">
         <dt>On People</dt><dd>${face(p.photo, p.name)}<span><strong>${p.name}</strong><br />${who(p)}</span></dd>
@@ -473,7 +480,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     const parts = sameParts();
     return html`<${Dialog} title=${`Link ${app.name}`} busy=${busy} onClose=${onClose} footer=${html`${cancel}
         <button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Linking…' : 'Link them'}</button>`}>
-      ${testLine}
+      ${testLine}${statusLine}
       <p>${p.name} is on People → Advisory${plan.why === 'email' ? ', with the same email' : ''}. This:</p>
       <ul>
         ${parts.map((t) => html`<li>${t},</li>`)}
@@ -487,7 +494,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
   // new
   return html`<${Dialog} title=${`Add ${app.name} to the Advisory Board`} busy=${busy} onClose=${onClose} footer=${html`${cancel}
       <button class="btn btn-primary" onClick=${press('new')} aria-disabled=${wait}>${busy ? 'Adding…' : 'Add them'}</button>`}>
-    ${testLine}
+    ${testLine}${statusLine}
     <p>This:</p>
     <ul>
       <li>adds them to People → Advisory${app.company ? `, at ${app.company}` : ''}${shot ? ', with their headshot as their photo' : ''},</li>
@@ -603,6 +610,26 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
   const shot = app?.headshot?.url ? app.headshot : null;
   const soft = !!shot && shot.width && shot.height && Math.min(shot.width, shot.height) < PHOTO_GOOD;
   const [plan, setPlan] = useState(null);
+  // (a note's length as it's saved: the server trims it, so blank lines at its end never count)
+  const noteLen = note.trim().length;
+  // Another press adding them right now (another tab, someone else): the box waits and asks again until it's done,
+  // never showing what's true halfway through it
+  const busyTries = useRef(0);
+  useEffect(() => {
+    if (confirm !== 'add' || !plan?.busy) { busyTries.current = 0; return undefined; }
+    if (plan.stuck) return undefined;
+    const t = setTimeout(async () => {
+      busyTries.current += 1;
+      const again = await call(`${API}?plan=${encodeURIComponent(id)}`);
+      if (!again.success) { setPlan((was) => (was ? { ...was } : was)); return; } // (asked again in a moment)
+      setPlan(again.plan.busy && busyTries.current >= 40 ? { ...again.plan, stuck: true } : again.plan);
+      if (!again.plan.busy) {
+        const fresh = await call(`${API}?id=${encodeURIComponent(id)}`);
+        if (fresh.success) { setApp(fresh.application); onChanged(fresh.application); }
+      }
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [plan, confirm]);
   // (the box: the headshot as the server read it for the box, a newer one sent since the panel opened included)
   const planShot = plan?.application?.headshot?.url ? plan.application.headshot : shot;
   const planSoft = !!planShot && planShot.width && planShot.height && Math.min(planShot.width, planShot.height) < PHOTO_GOOD;
@@ -740,9 +767,9 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
             <div class="ava-note-form">
               <label class="sr-only" for="ava-note" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Add a note</label>
               <textarea id="ava-note" class="form-input" placeholder="A note for staff: a call, next steps…" value=${note} onInput=${(e) => setNote(e.target.value)}
-                aria-describedby="ava-note-count" onKeyDown=${(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && note.trim() && note.length <= NOTE_MAX) addNote(); }}></textarea>
-              ${note.length > NOTE_MAX - 400 ? html`<p id="ava-note-count" class=${`ava-note-count ${note.length > NOTE_MAX ? 'is-over' : ''}`} aria-live="polite">${note.length.toLocaleString('en-US')} of ${NOTE_MAX.toLocaleString('en-US')} characters${note.length > NOTE_MAX ? ': shorten it, or split it in two' : ''}</p>` : null}
-              <button class="btn btn-primary btn-sm" aria-disabled=${!note.trim() || note.length > NOTE_MAX || busy ? 'true' : null} onClick=${() => { if (note.trim() && note.length <= NOTE_MAX && !busy) addNote(); }}>${busy === 'note' ? 'Saving…' : 'Add note'}</button>
+                aria-describedby="ava-note-count" onKeyDown=${(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && noteLen && noteLen <= NOTE_MAX) addNote(); }}></textarea>
+              ${noteLen > NOTE_MAX - 400 ? html`<p id="ava-note-count" class=${`ava-note-count ${noteLen > NOTE_MAX ? 'is-over' : ''}`} aria-live="polite">${noteLen.toLocaleString('en-US')} of ${NOTE_MAX.toLocaleString('en-US')} characters${noteLen > NOTE_MAX ? ': shorten it, or split it in two' : ''}</p>` : null}
+              <button class="btn btn-primary btn-sm" aria-disabled=${!noteLen || noteLen > NOTE_MAX || busy ? 'true' : null} onClick=${() => { if (noteLen && noteLen <= NOTE_MAX && !busy) addNote(); }}>${busy === 'note' ? 'Saving…' : 'Add note'}</button>
             </div>
           </section>
 
@@ -759,7 +786,7 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       footer=${html`
         <button class="btn btn-ghost" data-autofocus onClick=${() => setLeaving(null)}>Keep it Joined</button>
         <button class="btn btn-primary" onClick=${async () => { const to = leaving; setLeaving(null); await setStatus(to, { sure: true }); }}>Mark it ${statuses.find((s) => s.id === leaving)?.label}</button>`}>
-      <p>This only changes the application. ${linked ? `${linked.name} stays on the Advisory Board, with their sign-in, reveal invites and advisory@: Move to alumni on their People page is how someone leaves.` : 'Whoever it’s linked to on People isn’t changed.'}</p>
+      <p>This only changes the application. ${linked ? `${linked.name} stays on the Advisory Board${linked.hasEmail ? ', with their sign-in, reveal invites and advisory@' : ''}: Move to alumni on their People page is how someone leaves.${linked.hasEmail === false ? ' They have no sign-in email on their People page, so they can’t sign in or get reveal invites until one is added.' : ''}` : 'Whoever it’s linked to on People isn’t changed.'}</p>
     <//>`}
     ${confirm === 'remove' && app && html`<${Dialog} title=${`Delete ${app.name}’s application?`} size="sm" busy=${busy === 'remove'} onClose=${() => setConfirm(null)}
       footer=${html`

@@ -333,7 +333,7 @@ test('letters with no accent to take off become plain ones in an address', async
 test('the panel’s answer about who it’s linked to is People now, read by the server (never the admin’s older copy)', async () => {
   const app = await applied('Gil Gone', 'gil@example.org');
   const r = await add(app.id, 'new');
-  assert.deepEqual(r.application.person, { slug: 'gil-gone', name: 'Gil Gone', group: 'advisory', status: 'active', publishStatus: 'draft' }, 'right after Add: them');
+  assert.deepEqual(r.application.person, { slug: 'gil-gone', name: 'Gil Gone', group: 'advisory', status: 'active', publishStatus: 'draft', hasEmail: true }, 'right after Add: them');
   const get = async () => (await (await adminApi.onRequestGet(ctx('GET', undefined, `?id=${app.id}`))).json()).application;
   assert.equal((await get()).person.slug, 'gil-gone');
   const row = await env.DB.prepare('SELECT data FROM team WHERE slug = ?').bind('gil-gone').first();
@@ -805,4 +805,90 @@ test('a note longer than notes take is refused in words (never cut mid-word)', a
   assert.equal(r.success, false);
   assert.match(r.error, /Notes take up to 4,000/);
   assert.equal((await getAdvisoryApplication(env.DB, app.id)).notes.length, 0);
+});
+
+test('an application marked Not now in another tab after the box opened: the press is refused and says so, and nothing is added (a note added meanwhile changes nothing)', async () => {
+  const app = await applied('Nora Quinn', 'nora@example.org');
+  const box = await plan(app.id);
+  const st = await (await adminApi.onRequestPost(ctx('POST', { status: { id: app.id, status: 'not-now', from: 'new' } }))).json();
+  assert.equal(st.success, true, st.error);
+  const r = await add(app.id, 'new', box.key);
+  assert.equal(r.success, false, 'a box opened before it was marked Not now is never pressed into adding them');
+  assert.match(r.error, /^This application was marked Not now by .+ since the box opened\. Look at the box again before pressing\.$/);
+  assert.equal((await env.DB.prepare('SELECT count(*) AS n FROM team').first()).n, 0);
+  assert.equal(emailsSent.length, 0);
+  assert.equal((await getAdvisoryApplication(env.DB, app.id)).status, 'not-now');
+  // A box opened now (it knows): that press goes. A note added after it opened doesn't make it out of date
+  const now = await plan(app.id);
+  assert.equal((await adminApi.onRequestPost(ctx('POST', { note: { id: app.id, text: 'Called them back.' } }))).status, 200);
+  const ok = await add(app.id, 'new', now.key);
+  assert.equal(ok.success, true, ok.error);
+});
+
+test('the box’s welcome line is about the address they’ll sign in with: welcomed at an old one, that email cleared, applying with a new one, the box says it emails the new one', async () => {
+  const { writeState } = await import('../functions/api/_board-roles.js');
+  const { sendWelcome } = await import('../functions/api/_advisory-mail.js');
+  await writeState(env.DB, 'advisory', { emails: true });
+  await person('iris-lane', { name: 'Iris Lane', group: 'advisory' }, 'iris.old@example.org');
+  assert.equal((await sendWelcome(env, { slugs: ['iris-lane'] })).sent, 1);
+  await env.DB.prepare('DELETE FROM reveal_board_emails WHERE slug = ?').bind('iris-lane').run();
+  const fresh = await applied('Iris Lane', 'iris.new@example.org');
+  const p = await plan(fresh.id);
+  assert.equal(p.kind, 'choose');
+  assert.equal(p.person.email, '');
+  assert.equal(p.person.welcomed, false, 'iris.new@ hasn’t had it, so the box says it emails her (as the press then does)');
+  // Her old address again: had it there, so the box never says it emails her
+  const same = await applied('Iris Lane', 'iris.old@example.org', { why: 'Again.' });
+  assert.equal((await plan(same.id)).person.welcomed, true);
+});
+
+test('while another press is adding them, the box says so and waits (never what’s true halfway); a welcome on its way counts as theirs', async () => {
+  const { writeState } = await import('../functions/api/_board-roles.js');
+  const app = await applied('Taylor Bay', 'taylor@example.org');
+  assert.equal((await plan(app.id)).busy, false);
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?)').bind('email:taylor@example.org', Date.now()).run();
+  assert.equal((await plan(app.id)).busy, true, 'their email held by another press');
+  await env.DB.prepare('UPDATE advisory_add_holds SET at = ?').bind(Date.now() - 3 * 60 * 1000).run();
+  assert.equal((await plan(app.id)).busy, false, 'a hold from a press that died long ago never makes it wait');
+  await env.DB.prepare('DELETE FROM advisory_add_holds').run();
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?)').bind(`app:${app.id}`, Date.now()).run();
+  assert.equal((await plan(app.id)).busy, true, 'the application held');
+  await env.DB.prepare('DELETE FROM advisory_add_holds').run();
+  // Their welcome being sent this minute (by the other press): the box never says it emails them again
+  await person('taylor-bay', { name: 'Taylor Bay', group: 'advisory' }, 'taylor@example.org');
+  await writeState(env.DB, 'advisory-mail', { welcomed: { 'taylor-bay': { sending: new Date().toISOString() } } });
+  const p = await plan(app.id);
+  assert.equal(p.kind, 'same');
+  assert.equal(p.person.welcomed, true);
+});
+
+test('a first initial, and a name in any alphabet, is asked about, never added as someone new without a word', async () => {
+  await person('jordan-ames', { name: 'Jordan Ames', group: 'advisory' }, 'jordan@ames.org');
+  for (const [n, e] of [['J. Ames', 'j1@x.org'], ['J Ames', 'j2@x.org']]) {
+    const p = await plan((await applied(n, e)).id);
+    assert.equal(p.kind, 'choose', n);
+    assert.equal(p.person.slug, 'jordan-ames', n);
+  }
+  assert.equal((await plan((await applied('K. Ames', 'k1@x.org')).id)).kind, 'new', 'another initial isn’t them');
+  assert.equal((await plan((await applied('Jordan A. Ames', 'j3@x.org')).id)).kind, 'choose', 'a middle initial still doesn’t count');
+  await person('advisory-board-member', { name: '王小明', group: 'advisory' }, 'wang@x.org');
+  await person('advisory-board-member-2', { name: 'Владимир Петров', group: 'advisory' }, 'vlad@x.org');
+  await person('advisory-board-member-3', { name: '김민준', group: 'advisory' }, 'kim@x.org');
+  for (const [n, slug] of [['王小明', 'advisory-board-member'], ['Владимир Петров', 'advisory-board-member-2'], ['김민준', 'advisory-board-member-3']]) {
+    const p = await plan((await applied(n, `${slug}.new@x.org`)).id);
+    assert.equal(p.kind, 'choose', n);
+    assert.equal(p.person.slug, slug, n);
+  }
+  // Different names in the same alphabet are different people
+  assert.equal((await plan((await applied('李小龙', 'li@x.org')).id)).kind, 'new');
+  assert.equal((await plan((await applied('Иван Петров', 'ivan@x.org')).id)).kind, 'new');
+});
+
+test('the panel knows whether the person it’s linked to has a sign-in email, so the leaving box says only what’s so', async () => {
+  const app = await applied('Gail Moss', 'gail@example.org');
+  assert.equal((await add(app.id, 'new')).success, true);
+  const linked = async () => (await (await adminApi.onRequestGet(ctx('GET', undefined, `?id=${app.id}`))).json()).application.person;
+  assert.equal((await linked()).hasEmail, true);
+  await env.DB.prepare('DELETE FROM reveal_board_emails WHERE slug = ?').bind('gail-moss').run();
+  assert.equal((await linked()).hasEmail, false);
 });

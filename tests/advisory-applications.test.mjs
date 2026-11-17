@@ -420,6 +420,11 @@ test('a headshot problem never spends the Turnstile check, and comes back with a
   const both = await apply({ ...GOOD, email: 'jordan@' }, { turnstileToken: 'tok' }, { photo: await picture(200, 200) });
   assert.equal(both.res.status, 422);
   assert.deepEqual(Object.keys(both.body.problems).sort(), ['email', 'headshot']);
+  assert.equal(both.body.error, '2 answers need a look.', 'how many, in one line');
+  // Only the headshot: its own words, never "a few answers" (a screen reader hears this line)
+  const one = await apply(GOOD, { turnstileToken: 'tok' }, { photo: await picture(200, 200) });
+  assert.equal(one.body.error, one.body.problems.headshot);
+  assert.match(one.body.error, /^This photo is too small/);
   assert.equal(verifies, 0);
   delete env.TURNSTILE_SECRET_KEY;
 });

@@ -321,8 +321,18 @@ await clickText(page, '.ava-note-form button', /Add note/);
 await page.waitForFunction(() => /Coffee next week/.test(document.querySelector('.ava-notes')?.textContent || ''), { timeout: 5000 }).catch(() => null);
 ok((await getAdvisoryApplication(DB, jordan.id)).notes[0]?.by === 'linzi@soardcharity.com', 'a note, with who wrote it');
 await page.screenshot({ path: join(OUT, 'admin-drawer-1440.png') });
+// Another press adding them right now (another tab): the box says so and waits, then shows what's so once it's done
+await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+await DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?)').bind(`app:${jordan.id}`, Date.now()).run();
 await clickText(page, '.ava-drawer button', /^Add to Advisory Board$/);
 await page.waitForSelector('.ava-dialog', { timeout: 4000 });
+{
+  const waiting = await text(page, '.ava-dialog');
+  ok(/Someone is adding Jordan Avery right now/.test(waiting) && !/\bAdd them\b/.test(await text(page, '.ava-dialog footer, .ava-dialog .ava-dfoot, .ava-dialog')), `a press already adding them: the box says so, with nothing to press but Close (${waiting})`);
+  await DB.prepare('DELETE FROM advisory_add_holds').run();
+  const moved = await page.waitForFunction(() => /sign in to the Advisory Board page with/.test(document.querySelector('.ava-dialog')?.textContent || ''), { timeout: 6000 }).then(() => true).catch(() => false);
+  ok(moved, `and once it's done, the box shows what Add does now, by itself (${await text(page, '.ava-dialog h2')})`);
+}
 {
   const said = await text(page, '.ava-dialog');
   ok(/sign in to the Advisory Board page with jordan@example\.org/.test(said) && /every reveal invite/.test(said) && /advisory@soardcharity\.com once Advisory Board emails are on/.test(said) && /Show on the site/.test(said), 'it says what Add does first: the page, reveal invites, advisory@, and off the public site till shown');
@@ -363,9 +373,24 @@ await clickText(page, '.ava-status button', /In conversation/);
 await page.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
 {
   const asked = await text(page, '.ava-dialog');
-  ok(/Mark Jordan Avery’s application In conversation\?/.test(asked) && /stays on the Advisory Board.*Move to alumni on their People page is how someone leaves/.test(asked), `moving off Joined asks first, and says how someone leaves (${asked})`);
+  ok(/Mark Jordan Avery’s application In conversation\?/.test(asked) && /stays on the Advisory Board, with their sign-in, reveal invites and advisory@: Move to alumni on their People page is how someone leaves/.test(asked), `moving off Joined asks first, and says how someone leaves (${asked})`);
   await clickText(page, '.ava-dialog button', /^Keep it Joined$/); await sleep(300);
   ok((await getAdvisoryApplication(DB, jordan.id)).status === 'joined', 'Keep it Joined changes nothing');
+  // Their sign-in email taken off People: the box never says they have a sign-in
+  const kept = await DB.prepare('SELECT slug, email FROM reveal_board_emails WHERE slug = ?').bind('jordan-avery').first();
+  await DB.prepare('DELETE FROM reveal_board_emails WHERE slug = ?').bind('jordan-avery').run();
+  await page.keyboard.press('Escape'); await sleep(300);
+  await clickText(page, '.ava-row', /Jordan Avery/);
+  await page.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 }); await sleep(300);
+  await clickText(page, '.ava-status button', /In conversation/);
+  await page.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+  const none = await text(page, '.ava-dialog');
+  ok(/stays on the Advisory Board: Move to alumni/.test(none) && !/with their sign-in/.test(none) && /no sign-in email on their People page, so they can’t sign in or get reveal invites/.test(none), `with no sign-in email on People, the box says so, never "their sign-in" (${none})`);
+  await clickText(page, '.ava-dialog button', /^Keep it Joined$/); await sleep(300);
+  await DB.prepare('INSERT INTO reveal_board_emails (slug, email) VALUES (?, ?)').bind(kept.slug, kept.email).run();
+  await page.keyboard.press('Escape'); await sleep(300);
+  await clickText(page, '.ava-row', /Jordan Avery/);
+  await page.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 }); await sleep(300);
   await clickText(page, '.ava-status button', /In conversation/);
   await page.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
   await clickText(page, '.ava-dialog button', /^Mark it In conversation$/);
@@ -475,6 +500,43 @@ await phone.screenshot({ path: join(OUT, 'admin-drawer-390.png') });
   await phone.keyboard.press('Escape'); await sleep(300);
   ok(await phone.evaluate(() => !!document.activeElement?.closest?.('.ava-list, .ava-search, .ava-zero')), `and Escape puts the keys on the list (${await phone.evaluate(() => document.activeElement?.outerHTML.slice(0, 60))})`);
   await clickText(phone, '.ava-strip button', /^All/); await sleep(200);
+}
+{
+  // A long link pasted into a note wraps in the panel, never pushing it sideways
+  await clickText(phone, '.ava-row', /Morgan Ellis/);
+  await phone.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  const link = `https://docs.google.com/document/d/${'1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'.repeat(3)}/edit?usp=sharing`;
+  await phone.$eval('#ava-note', (e, v) => { e.value = v; e.dispatchEvent(new Event('input', { bubbles: true })); }, `Their deck: ${link}`);
+  await clickText(phone, '.ava-note-form button', /Add note/);
+  await phone.waitForFunction(() => /docs\.google\.com/.test(document.querySelector('.ava-notes')?.textContent || ''), { timeout: 5000 }).catch(() => null);
+  const fit = await phone.evaluate(() => { const b = document.querySelector('.ava-dbody'); const btn = document.querySelector('.ava-note-form button'); return { scroll: b.scrollWidth, width: b.clientWidth, button: Math.round(btn.getBoundingClientRect().right) }; });
+  ok(fit.scroll <= fit.width + 1 && fit.button <= 390, `a ${link.length}-character link in a note wraps: the panel never goes sideways (${JSON.stringify(fit)})`);
+  // The counter counts a note as it's saved: blank lines at its end don't count
+  await phone.$eval('#ava-note', (e) => { e.value = `${'x'.repeat(3999)}\n\n`; e.dispatchEvent(new Event('input', { bubbles: true })); });
+  const count = { words: await text(phone, '#ava-note-count'), off: await phone.$eval('.ava-note-form button', (b) => b.getAttribute('aria-disabled')) };
+  ok(/^3,999 of 4,000 characters$/.test(count.words) && count.off === null, `blank lines at a note’s end aren’t counted, as the server trims them (${JSON.stringify(count)})`);
+  await phone.$eval('#ava-note', (e) => { e.value = ''; e.dispatchEvent(new Event('input', { bubbles: true })); });
+  await phone.keyboard.press('Escape'); await sleep(300);
+  // Left, while it's the filter on: still there after its last one is brought back, so the list says why it's empty
+  const team = JSON.parse((await DB.prepare('SELECT data FROM team WHERE slug = ?').bind('jordan-avery').first()).data);
+  await DB.prepare('UPDATE team SET data = ? WHERE slug = ?').bind(JSON.stringify({ ...team, status: 'alumni', until: 2026 }), 'jordan-avery').run();
+  await DB.prepare("UPDATE advisory_applications SET status = 'joined' WHERE id = ?").bind(jordan.id).run();
+  await phone.reload({ waitUntil: 'networkidle0' });
+  await phone.waitForSelector('.ava-strip', { timeout: 8000 }); await sleep(300);
+  ok(await clickText(phone, '.ava-strip button', /^Left/), 'someone who left: the Left filter shows');
+  await sleep(200);
+  await clickText(phone, '.ava-row', /Jordan Avery/);
+  await phone.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(phone, '.ava-drawer button', /^Add to Advisory Board$/);
+  await phone.waitForSelector('.ava-dialog', { timeout: 4000 });
+  await clickText(phone, '.ava-dialog button', /^Link them$/);
+  await phone.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).catch(() => null);
+  await phone.keyboard.press('Escape'); await sleep(300);
+  const strip = await phone.$$eval('.ava-strip button', (bs) => bs.map((b) => ({ t: b.textContent.replace(/\s+/g, ' ').trim(), on: b.getAttribute('aria-pressed') })));
+  const leftNow = strip.find((b) => /^Left/.test(b.t));
+  ok(!!leftNow && leftNow.on === 'true' && /\b0$/.test(leftNow.t) && /Nobody matches/.test(await text(phone, '.ava')), `brought back, the Left filter stays (pressed, 0) while it’s on, so the empty list makes sense (${JSON.stringify(strip)})`);
+  await clickText(phone, '.ava-strip button', /^All/); await sleep(200);
+  ok(!(await phone.$$eval('.ava-strip button', (bs) => bs.some((b) => /^Left/.test(b.textContent.trim())))), 'and off it, with nobody left, it goes');
 }
 ok(!(await sideways(phone)), 'phone: nothing past the edge');
 await phone.screenshot({ path: join(OUT, 'admin-list-390.png') });
@@ -736,6 +798,8 @@ if (DIST) {
       await p.click('#adv-next');
       await p.waitForFunction(() => /couldn’t use that photo/.test(document.querySelector('#adv-headshot-err')?.textContent || ''), { timeout: 8000 }).catch(() => null);
       const said = await text(p, '#adv-headshot-err');
+      await sleep(150);
+      ok((await text(p, '#adv-live')) === said, `and a screen reader hears that reason, never "a few answers need a look" (${await text(p, '#adv-live')})`);
       await p.keyboard.press('Tab'); await sleep(250); await p.keyboard.press('Tab'); await sleep(250);
       ok(/We couldn’t use that photo/.test(said) && (await text(p, '#adv-headshot-err')) === said, `a photo the server turned down: its reason stays after Tab (${said} → ${await text(p, '#adv-headshot-err')})`);
       await p.goBack({ timeout: 3000 }).catch(() => null); await sleep(700);
@@ -895,6 +959,40 @@ if (DIST) {
         `at 390 × ${height}: Back walks every screen of About you, the headshot’s first, down to Part 1 (${JSON.stringify({ laid: laid.map((l) => `${l.part} ${l.with.join('+')}`), walked: walked.map((x) => `${x.part} ${x.with.join('+')}`) })})`);
       await w.close();
     }
+  }
+  for (const [w, hgt] of [[740, 360], [667, 375], [844, 390]]) {
+    // A phone held sideways: Continue with no headshot brings "Please add a headshot." into sight above Back / Continue
+    // (the card is taller than the room between the bars)
+    const m = await browser.newPage();
+    await m.setViewport({ width: w, height: hgt, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await m.setRequestInterception(true);
+    m.on('request', async (req) => { try { if (await answer(req, '198.51.100.98') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    // (a clean start: answers and any photo an earlier check kept on this browser gone before the page reads them)
+    await m.evaluateOnNewDocument(() => { if (!sessionStorage.getItem('ls')) { localStorage.clear(); indexedDB.deleteDatabase('soard-advisory'); sessionStorage.setItem('ls', '1'); } });
+    await m.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await m.evaluate(() => indexedDB.deleteDatabase('soard-advisory'));
+    if (w === 740) {
+      // The hero's link back to the Advisory Board page: a finger's room (44px) on a touch screen, and it looks like a link
+      const link = await m.$eval('.hero-eyebrow a', (a) => ({ h: Math.round(a.getBoundingClientRect().height), line: getComputedStyle(a).textDecorationLine }));
+      ok(link.h >= 44 && /underline/.test(link.line), `the hero’s Advisory Board link is 44px to tap and underlined (${JSON.stringify(link)})`);
+      // Follow-ups read on their own, wherever they land (a screen to themselves, the review, the emails)
+      const labels = await m.evaluate(() => ['involvedHow', 'networksMore', 'conflictMore'].map((id) => document.querySelector(`[data-field="${id}"] label, [data-field="${id}"] .adv-label`)?.textContent.replace(/\s+/g, ' ').trim()));
+      ok(/How have you been involved with SOARD\?/.test(labels[0]) && /relationships that may want to learn about SOARD/.test(labels[1]) && /explain the possible conflict of interest/.test(labels[2]), `each follow-up says what it’s about on its own (${labels.join(' | ')})`);
+    }
+    await m.click('#adv-go'); await sleep(600);
+    const fill = { fullName: 'Land Tester', email: 'land@example.org', phone: '404 555 0167', address: '3167 Main St, Duluth, GA 30096' };
+    for (let k = 0; k < 8; k++) {
+      const here = await m.evaluate(() => [...document.querySelectorAll('.adv-page:not([hidden]) [data-field]')].filter((f) => !f.closest('[data-off]') && f.getClientRects().length).map((f) => f.dataset.field));
+      if (here.includes('headshot')) break;
+      for (const id of here) if (fill[id]) { await m.click(`#adv-${id}`, { clickCount: 3 }); await m.type(`#adv-${id}`, fill[id]); await m.keyboard.press('Escape'); }
+      await m.click('#adv-next'); await sleep(700);
+    }
+    await m.click('#adv-next');
+    await m.waitForFunction(() => /Please add a headshot/.test(document.getElementById('adv-headshot-err')?.textContent || ''), { timeout: 5000 }).catch(() => null);
+    await sleep(900);
+    const at = await m.evaluate(() => { const n = document.getElementById('adv-headshot-err').getBoundingClientRect(); return { top: Math.round(n.top), bottom: Math.round(n.bottom), bar: Math.round(document.querySelector('.adv-nav').getBoundingClientRect().top), head: Math.round(document.querySelector('[data-adv-top]')?.getBoundingClientRect().bottom || 0), text: document.getElementById('adv-headshot-err').textContent, focus: document.activeElement?.id }; });
+    ok(/Please add a headshot/.test(at.text) && at.top >= at.head && at.bottom <= at.bar && at.focus === 'adv-headshot', `${w} × ${hgt}, held sideways: "Please add a headshot." in sight between the bars, the cursor on the photo (${JSON.stringify(at)})`);
+    await m.close();
   }
   {
     // Reduced motion on a 320 × 568 phone: a refusal while a photo is in, its whole warning above Back / Continue

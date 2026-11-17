@@ -53,7 +53,7 @@ export const ADVISORY_STEPS = [
       { id: 'why', label: 'Why are you interested in serving on the Advisory Board?', type: 'textarea', required: true, max: 3000 },
       { id: 'connection', label: 'What connects you to SOARD’s mission?', type: 'textarea', required: true, max: 3000 },
       { id: 'involved', brief: 'Involved before', label: 'Have you supported, volunteered with, attended an event for, or been involved with SOARD before?', type: 'choice', options: YES_NO, required: true },
-      { id: 'involvedHow', label: 'Tell us about it', type: 'textarea', showIf: { involved: ['Yes'] }, max: 2000 },
+      { id: 'involvedHow', label: 'How have you been involved with SOARD?', type: 'textarea', showIf: { involved: ['Yes'] }, max: 2000 },
     ],
   },
   {
@@ -66,9 +66,9 @@ export const ADVISORY_STEPS = [
       { id: 'fundraising', label: 'How could you help the board reach its shared fundraising goal of $25,000?', type: 'textarea', required: true, max: 3000 },
       { id: 'introductions', brief: 'Introductions', label: 'Are you comfortable making introductions to potential donors, sponsors, partners, vendors, or volunteers?', type: 'choice', options: YES_MAYBE_NO, required: true },
       { id: 'networks', brief: 'Networks', label: 'Do you have relationships with people, businesses, foundations, community groups, or professional networks that may want to learn about SOARD?', type: 'choice', options: YES_MAYBE_NO, required: true },
-      { id: 'networksMore', label: 'Share anything you feel comfortable sharing', type: 'textarea', showIf: { networks: ['Yes', 'Maybe'] }, max: 2000 },
+      { id: 'networksMore', label: 'Tell us about the relationships that may want to learn about SOARD', hint: 'Share only what you’re comfortable sharing.', type: 'textarea', showIf: { networks: ['Yes', 'Maybe'] }, max: 2000 },
       { id: 'conflict', brief: 'Conflict of interest', label: 'Do you have any relationship that could create a real or perceived conflict of interest with your service on the Advisory Board?', hint: 'Personal, professional, financial, or organizational: for example with vendors, contractors, donors, sponsors, partner organizations, grantmakers, board members, staff, or families SOARD serves.', type: 'choice', options: YES_NO, required: true },
-      { id: 'conflictMore', label: 'Please explain briefly', type: 'textarea', required: true, showIf: { conflict: ['Yes'] }, max: 2000 },
+      { id: 'conflictMore', label: 'Please briefly explain the possible conflict of interest', type: 'textarea', required: true, showIf: { conflict: ['Yes'] }, max: 2000 },
     ],
   },
   {
@@ -204,6 +204,12 @@ export function fieldProblem(field, value) {
  * apply are left out. Returns { answers, problems } where problems maps a
  * field id to its message; `step` limits the check to one step's fields.
  */
+/** A send turned back, in one line: the one answer's own words, or how many need a look (heard, and shown) */
+export function problemsSaid(problems) {
+  const all = Object.values(problems || {}).filter(Boolean);
+  return all.length === 1 ? String(all[0]) : `${all.length} answers need a look.`;
+}
+
 export function checkAnswers(raw, { step = null } = {}) {
   const answers = {};
   for (const f of ADVISORY_FIELDS) answers[f.id] = clean(f, raw?.[f.id]);

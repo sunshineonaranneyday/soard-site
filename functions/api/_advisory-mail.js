@@ -171,7 +171,10 @@ async function preferredNames(DB) {
 }
 const greetingFor = (a, preferred) => preferred[a.slug] || firstOf(a.name);
 /** Had their welcome, or one is on its way right now (a claim left by a request that died doesn't count) */
-const hasOrGoing = (v, now, email) => hadIt(v, email) || (!!v?.sending && Date.parse(v.sending) > now - SENDING_STALE_MS);
+/** Had it at this address, or it's on its way now (a press or the heartbeat sending it this minute) */
+export const hasOrGoing = (v, now, email) => hadIt(v, email) || (!!v?.sending && Date.parse(v.sending) > now - SENDING_STALE_MS);
+/** Each address's welcome record as it is ({ slug: { at, to } | { sending } }), for a check against an address it'll have */
+export const welcomeRecords = async (DB) => (await readState(DB, LOG)).welcomed || {};
 
 const para = (text) => shell.paragraphs(text);
 

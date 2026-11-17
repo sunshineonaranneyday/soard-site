@@ -38,10 +38,10 @@
  * already points at (someone deleted from People), so nothing of theirs is mixed up with someone else's.
  */
 
-import { getAdvisoryApplication, linkAdvisor, ensureAdvisorySchema } from './_advisory-applications.js';
+import { getAdvisoryApplication, linkAdvisor, ensureAdvisorySchema, STATUSES } from './_advisory-applications.js';
 import { onRequestPost as saveContent } from './save-content.js';
 import { setBoardEmail, refreshForBoardChange, isEmail, normEmail } from './_reveal-invites.js';
-import { welcomeOnJoin, welcomedSlugs, mailSlugs } from './_advisory-mail.js';
+import { welcomeOnJoin, welcomeRecords, hasOrGoing, mailSlugs } from './_advisory-mail.js';
 import { logAudit } from './_audit.js';
 import { generateSha } from './_collections.js';
 import { slugOf, ADVISORY_TITLE, normalizeLinkedIn, photoUrl } from '../../public/admin/team-shared.js';
@@ -73,21 +73,26 @@ async function peopleAndEmails(DB) {
   return { people, emails };
 }
 
-/** Someone on People, as the confirm box shows them (welcomed: they've had "Your Advisory Board page is ready") */
-const card = (p, emails, welcomed = {}) => ({
+/**
+ * Someone on People, as the confirm box shows them (welcomed: they've had "Your Advisory Board page is ready", or it's
+ * on its way, at the address they'll sign in with once added: the one on file, else this application's)
+ */
+const card = (p, emails, welcomedAt = () => false) => ({
   slug: p.slug, name: personName(p) || p.slug, group: p.group || 'team', where: GROUPS[p.group] || 'People',
   status: personStatus(p), hidden: p.publishStatus === 'draft', organization: p.organization || '',
-  email: emails[p.slug] || '', hasPhoto: !!p.photo, photo: p.photo ? photoUrl(p, 96) : '', welcomed: !!welcomed[p.slug],
+  email: emails[p.slug] || '', hasPhoto: !!p.photo, photo: p.photo ? photoUrl(p, 96) : '', welcomed: !!welcomedAt(p),
 });
 /**
- * A name as people would match it: no accents, no case, one space, no title or middle initial, no "In memoriam"
- * ("Dr. José  A. Núñez" is "jose nunez")
+ * A name as people would match it: no accents, no case, one space, no title, middle initial or "Jr", no "In memoriam"
+ * ("Dr. José  A. Núñez" is "jose nunez"). A first initial stays ("J. Ames" is "j ames"), and every alphabet counts
+ * ("王小明", "Владимир Петров"), as letters, never dropped as not a-z.
  */
+const wordOf = (w) => w.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 const nameWords = (n) => {
   const words = String(personName({ name: n }) || '').split(/\s+/).filter(Boolean);
   let i = 0;
   while (i < words.length - 1 && TITLE.test(words[i])) i++;
-  return words.slice(i).map((w) => slugOf(w)).filter((w) => w && !/^[a-z]$/.test(w) && !/^(jr|sr|ii|iii|iv)$/.test(w));
+  return words.slice(i).map(wordOf).filter((w, k) => w && (k === 0 || !/^[a-z]$/.test(w)) && !/^(jr|sr|ii|iii|iv)$/.test(w));
 };
 const nameKey = (n) => nameWords(n).join(' ');
 /**
@@ -101,6 +106,8 @@ function mightBe(a, b) {
   if (x.join(' ') === y.join(' ')) return true;
   if (x.length < 2 || y.length < 2 || x[x.length - 1] !== y[y.length - 1]) return false;
   const [f, g] = [x[0], y[0]];
+  // (a first initial: "J. Ames" might be Jordan Ames)
+  if (f.length === 1 || g.length === 1) return f[0] === g[0];
   return f.slice(0, 3) === g.slice(0, 3) || (Math.min(f.length, g.length) >= 2 && (f.startsWith(g) || g.startsWith(f)));
 }
 
@@ -164,23 +171,36 @@ async function freeSlug(DB, name, people, appId) {
  *        'new'      a new record at `slug` (namesake: someone elsewhere on People with their name)
  *        'blocked'  their email is someone's elsewhere on People: nobody is added
  */
-export async function addPlan(env, id) {
-  const plan = await planOf(env, id);
-  // What the box shows, as one key: a press with any other (a box opened before something changed) is refused
+export async function addPlan(env, id, { now = Date.now() } = {}) {
+  const plan = await planOf(env, id, now);
+  // What the box shows, as one key: a press with any other (a box opened before something changed) is refused. The
+  // application's own part first (marked Not now in another tab since, say), then who it matches on People
   const p = plan.person || {};
-  plan.key = [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
+  const app = plan.application || {};
+  plan.key = `${[app.status || '', app.statusAt || ''].join('|')}#${[plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
     plan.slug || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.slug || '', plan.namesake?.status || '',
-    plan.emailsOn ? 1 : 0, plan.application?.headshot?.url || ''].join('|');
+    plan.emailsOn ? 1 : 0, app.headshot?.url || ''].join('|')}`;
   return plan;
 }
 
-async function planOf(env, id) {
+/**
+ * Whether a press is adding them right now (this application, their email, or the address a new record would take):
+ * the box says so and waits, never showing what's true halfway through someone else's press
+ */
+export async function addBusy(DB, plan, now = Date.now()) {
+  const app = plan.application || {};
+  const keys = [`app:${app.id}`, ...(app.email ? [`email:${normEmail(app.email)}`] : []), ...(plan.slug ? [`slug:${plan.slug}`] : [])];
+  await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  const row = await DB.prepare(`SELECT key FROM advisory_add_holds WHERE at >= ? AND key IN (${keys.map(() => '?').join(', ')}) LIMIT 1`).bind(now - HOLD_MS, ...keys).first();
+  return !!row;
+}
+
+async function planOf(env, id, now = Date.now()) {
   const { DB } = env;
   await ensureAdvisorySchema(DB);
   const app = await getAdvisoryApplication(DB, id);
   if (!app) throw err('That application isn’t here any more', 404);
-  const [{ people, emails }, welcomed, intent, settings] = await Promise.all([peopleAndEmails(DB), welcomedSlugs(DB), intentOf(DB, app.id), advisorySettings(DB)]);
-  const show = (p) => card(p, emails, welcomed);
+  const [{ people, emails }, welcomes, intent, settings] = await Promise.all([peopleAndEmails(DB), welcomeRecords(DB), intentOf(DB, app.id), advisorySettings(DB)]);
   const email = normEmail(app.email);
   // An email the sign-in can't use (one an old application came with), or SOARD's own group inbox (everyone in the
   // group would read their sign-in codes), is never saved as theirs
@@ -188,6 +208,8 @@ async function planOf(env, id) {
   // (a soardcharity.com address signs in as staff, never as an Advisory Board member: it can't be theirs either)
   const staffAddress = !!email && !groupInbox && isStaffEmail(email);
   const emailUsable = !email || (isEmail(email) && !groupInbox && !staffAddress);
+  // (had their welcome, or it's going now, at the address Add leaves them with: theirs on file, else this one)
+  const show = (p) => card(p, emails, (x) => hasOrGoing(welcomes[x.slug], now, emails[x.slug] || (emailUsable ? email : '')));
   // (emailsOn: the Advisory Board's emails switch as it is now; emailAs: the address it signs in as, when that's
   // another of theirs, as peter@ranneyblair.com is peter@soardcharity.com)
   const typed = String(app.email || '').trim().toLowerCase();
@@ -321,6 +343,12 @@ async function addHeld(env, ctx, { id, as, seen, by, now, fetchImpl }) {
   // The box pressed must say what's true now, all of it (a namesake added since, the person moved to alumni, their
   // email changed, another tab added them): if not, nothing is done and the box is asked again
   if (seen !== plan.key) {
+    // (the application itself changed: said as what it is now, and who did it)
+    const [was] = String(seen || '').split('#');
+    if (was !== plan.key.split('#')[0] && app.status !== 'joined') {
+      const label = STATUSES.find((s) => s.id === app.status)?.label || app.status;
+      throw err(`This application was marked ${label}${app.statusBy ? ` by ${app.statusBy}` : ''} since the box opened. Look at the box again before pressing.`);
+    }
     throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
   }
   if (plan.kind === 'blocked' && plan.why === 'memorial') {

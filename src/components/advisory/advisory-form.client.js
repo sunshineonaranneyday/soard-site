@@ -17,7 +17,7 @@
  * Send sends it with the answers as one multipart request.
  */
 import { trapValue } from '../../../functions/api/_bot-trap.js';
-import { ADVISORY_STEPS, ADVISORY_FIELDS, PHOTO_FIELDS, checkAnswers, isShown } from '../../../functions/api/_advisory-form.js';
+import { ADVISORY_STEPS, ADVISORY_FIELDS, PHOTO_FIELDS, checkAnswers, isShown, problemsSaid } from '../../../functions/api/_advisory-form.js';
 import { mailFix } from '../apply/mail-fix.js';
 import { photoField, PHOTO_PING } from './advisory-photo.js';
 
@@ -419,12 +419,26 @@ export function initAdvisoryForm() {
     }
     // (a choice: the one picked, as a screen reader and Space find it, else the first)
     const input = el.querySelector('input[type="radio"]:checked') || el.querySelector('input:not([type="hidden"]), textarea');
-    // In view already, between the bar across the top and Back / Continue: left where it is (the step's line stays
-    // in sight), else brought just into view
-    const r = el.getBoundingClientRect();
-    const seen = r.top >= (ui.top?.getBoundingClientRect().bottom || 0) + 4 && r.bottom <= (form.querySelector('.adv-nav')?.getBoundingClientRect().top ?? innerHeight) - 4;
-    if (!seen) el.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' });
+    bringIn(el);
     input?.focus({ preventScroll: true });
+    // (and again once its note's look has settled: with reduced motion its padding comes a moment late)
+    setTimeout(() => requestAnimationFrame(() => bringIn(el)), 180);
+  }
+  /**
+   * A question into the room between the bar across the top and Back / Continue: left where it is if it's all in
+   * view (the step's line stays in sight), else brought just into view. One taller than the room (the headshot's
+   * card on a phone held sideways): its note, what's wrong, brought into sight, never left behind the bar
+   */
+  function bringIn(el) {
+    const top = (ui.top?.getBoundingClientRect().bottom || 0) + 4;
+    const bottom = (form.querySelector('.adv-nav')?.getBoundingClientRect().top ?? innerHeight) - 4;
+    const r = el.getBoundingClientRect();
+    const note = [...el.querySelectorAll('.adv-error')].find((n) => !n.hidden && n.textContent.trim() && n.getClientRects().length);
+    let by = 0;
+    if (r.height <= bottom - top) by = r.top < top ? r.top - top : r.bottom > bottom ? r.bottom - bottom : 0;
+    else if (note) { const n = note.getBoundingClientRect(); by = n.bottom > bottom ? n.bottom - bottom + 8 : n.top < top ? n.top - top - 8 : 0; }
+    else by = r.top < top || r.top > bottom ? r.top - top : 0;
+    if (Math.abs(by) >= 1) window.scrollBy({ top: by, behavior: reducedMotion() ? 'auto' : 'smooth' });
   }
   /** Once someone fixes an answer, its message goes as they type */
   function recheck(id) {
@@ -1415,7 +1429,7 @@ export function initAdvisoryForm() {
         for (const [pid, ph] of Object.entries(photos)) if (d.problems[pid]) await ph.refuse();
         const at = ADVISORY_STEPS.findIndex((s) => s.fields.some((f) => d.problems[f.id]));
         if (at !== -1) { fromReview = 'answer'; await go(at, { dir: -1 }).then(pushLoc); showProblems(d.problems); } // (Back returns to the review)
-        throw Object.assign(new Error(d.error || 'A few answers need a look.'), { sentBack: at !== -1 });
+        throw Object.assign(new Error(problemsSaid(d.problems)), { sentBack: at !== -1 });
       }
       if (!res.ok || !d.ok) {
         if (d.code === 'turnstile') {
