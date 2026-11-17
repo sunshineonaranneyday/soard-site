@@ -13,13 +13,13 @@
 # ─── Kid blog post redirects (132 posts) ─────────────────────
 # WordPress: /blog/YYYY/MM/DD/slug → New: /kids/slug/
 /blog/2017/01/27/dylan  /kids/dylan/  301
-/blog/2017/04/15/shawn  /kids/shawn/  301
+/blog/2017/04/15/shawn  /kids/kyle/  301
 /blog/2017/05/16/zyah  /kids/zyah/  301
 /blog/2017/07/15/kyle  /kids/kyle/  301
 /blog/2017/07/16/ben  /kids/ben/  301
-/blog/2017/08/21/jacob-2  /kids/jacob/  301
+/blog/2017/08/21/jacob-2  /kids/jacob-2017/  301
 /blog/2017/08/26/hawk  /kids/hawk/  301
-/blog/2017/10/09/andrew  /kids/andrew/  301
+/blog/2017/10/09/andrew  /kids/andrew-2017/  301
 /blog/2018/01/20/shawn-2  /kids/shawn-2018/  301
 /blog/2018/03/20/ally  /kids/ally/  301
 /blog/2018/03/20/ethan-2  /kids/ethan/  301
@@ -32,7 +32,7 @@
 /blog/2018/04/10/breanna  /kids/breanna/  301
 /blog/2018/04/16/georgia  /kids/georgia/  301
 /blog/2018/04/18/lainey-2  /kids/lainey/  301
-/blog/2018/05/13/angel-2  /kids/angel/  301
+/blog/2018/05/13/angel-2  /kids/angel-2018/  301
 /blog/2018/05/14/lyric  /kids/lyric/  301
 /blog/2018/05/14/mason  /kids/mason/  301
 /blog/2018/05/15/caleb  /kids/caleb/  301
@@ -41,7 +41,7 @@
 /blog/2021/06/14/abby  /kids/abby/  301
 /blog/2021/06/15/caliyah  /kids/caliyah/  301
 /blog/2021/06/16/gabrielle  /kids/gabrielle/  301
-/blog/2021/06/18/eli  /kids/eli/  301
+/blog/2021/06/18/eli  /kids/eli-2019/  301
 /blog/2021/06/19/bristol  /kids/bristol/  301
 /blog/2021/06/25/noah  /kids/noah/  301
 /blog/2021/06/25/devon  /kids/devon/  301
@@ -49,7 +49,7 @@
 /blog/2021/06/25/joseph  /kids/joseph/  301
 /blog/2021/06/26/christian-b  /kids/christian-b/  301
 /blog/2021/06/26/bennett-lacey  /kids/bennett-and-lacey/  301
-/blog/2021/06/26/matthew  /kids/matthew/  301
+/blog/2021/06/26/matthew  /kids/matthew-2019/  301
 /blog/2021/06/26/sophia  /kids/sophia/  301
 /blog/2021/06/26/landon  /kids/landon/  301
 /blog/2021/06/26/preston  /kids/preston/  301
@@ -69,19 +69,20 @@
 /blog/2021/06/26/nygil  /kids/nygil/  301
 /blog/2021/06/26/samantha  /kids/samantha/  301
 /blog/2021/06/26/amir  /kids/amir/  301
-/blog/2021/06/26/callie  /kids/callie/  301
+/blog/2021/06/26/callie  /kids/callie-2021/  301
 /blog/2021/06/26/carson  /kids/carson/  301
 /blog/2021/06/26/helen  /kids/helen/  301
 /blog/2021/06/26/juan  /kids/juan/  301
 /blog/2021/06/26/raynel  /kids/raynel/  301
 /blog/2021/06/26/rheagan  /kids/rheagan/  301
 /blog/2021/06/26/eliavah  /kids/eliavah/  301
+/blog/2021/06/26/jacob  /kids/jacob/  301
 /blog/2021/09/15/aidan-brendan  /kids/aidan-and-brendan/  301
 /blog/2021/09/20/alex  /kids/alex/  301
 /blog/2021/10/18/kennedy  /kids/kennedy/  301
 /blog/2022/01/07/cyrus  /kids/cyrus/  301
 /blog/2022/01/07/anthony_jr_and_lyric  /kids/anthony-jr-and-lyric/  301
-/blog/2022/01/24/reid  /kids/reid/  301
+/blog/2022/01/24/reid  /kids/reid-2022/  301
 /blog/2022/01/26/ethan  /kids/ethan-2022/  301
 /blog/2022/02/14/madison  /kids/madison/  301
 /blog/2022/02/16/kaitlyn  /kids/kaitlyn/  301
@@ -97,16 +98,16 @@
 /blog/2022/05/27/mariah  /kids/mariah/  301
 /blog/2022/05/31/marquis  /kids/marquis/  301
 /blog/2022/11/28/cade  /kids/cade/  301
-/blog/2022/12/08/jason  /kids/jason/  301
+/blog/2022/12/08/jason  /kids/jason-2023/  301
 /blog/2022/12/08/noah-2  /kids/noah-2023/  301
 /blog/2022/12/08/ellie-2  /kids/ellie-2023/  301
 /blog/2022/12/08/levi  /kids/levi/  301
 /blog/2022/12/08/bryce  /kids/bryce/  301
 /blog/2022/12/08/ciaran-geordan  /kids/ciaran-and-geordan/  301
 /blog/2022/12/08/hudson-2  /kids/hudson/  301
-/blog/2022/12/08/peyton  /kids/peyton/  301
+/blog/2022/12/08/peyton  /kids/peyton-2023/  301
 /blog/2023/06/30/lyra  /kids/lyra/  301
-/blog/2023/06/30/logan  /kids/logan/  301
+/blog/2023/06/30/logan  /kids/logan-2023/  301
 /blog/2023/07/03/marilyn  /kids/marilyn/  301
 /blog/2023/07/03/damon-dj  /kids/damon-dj/  301
 /blog/2023/07/03/adam  /kids/adam/  301
@@ -118,6 +119,8 @@
 /blog/2023/12/12/marie-alondra  /kids/marie-and-alondra/  301
 /blog/2023/12/12/liam  /kids/liam/  301
 /blog/2023/12/12/istvan  /kids/istvan/  301
+/blog/2023/12/12/emery  /kids/emery/  301
+/blog/2023/12/12/naji  /kids/naji/  301
 /blog/2024/03/12/emery  /kids/emery/  301
 /blog/2024/04/03/nicolas-maddox  /kids/nicolas-and-maddox/  301
 /blog/2024/04/09/hudson  /kids/hudson-2024/  301
