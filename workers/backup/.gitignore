@@ -1,0 +1,10 @@
+# Never in the code: the backup key, and anything the restore tool opens (it's plain). The tool refuses to run inside
+# this folder anyway; this is the second lock.
+key.txt
+*.age
+restore.sql
+* ready.json
+* ready [0-9]*.json
+* for the API.json
+restored/
+worker.code

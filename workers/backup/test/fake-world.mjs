@@ -1,7 +1,10 @@
 /**
  * Everything outside Cloudflare that soard-backup talks to, faked for its tests (./worker.test.mjs), strictly:
  *   - Cloudflare's API: D1 (real SQLite behind /raw, a bookmark that moves on every write), Images, Stream,
- *     R2 objects, and the settings it reads
+ *     R2 objects, KV (values as bytes, keys a page at a time), Vectorize (at most 20 ids per get_by_ids), each
+ *     Worker's code (one multipart file of its modules, as Cloudflare gives it), the account's listings (databases,
+ *     buckets, Durable Objects and the rest) and the settings it reads; a listing can be refused, as Cloudflare
+ *     refuses a key without the permission
  *   - Google: sign-in, shared drives, folders, resumable uploads (pieces must be whole 256 KiB, start where Google
  *     is, and Google's MD5 is of what it really kept); never a delete or trash
  *   - Backblaze B2: a bucket with Object Lock, uploads checked against their SHA-1, large files in parts; never a delete
@@ -26,6 +29,7 @@ const cfError = (status, message) => json({ success: false, errors: [{ code: sta
 
 export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk }) {
   const w = {
+    repo,
     calls: [],
     deletes: [],
     siteDeletes: [],
@@ -37,9 +41,22 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
     buckets: {}, // name → Map(key → { bytes, etag, last_modified })
     drive: { drives: [{ id: 'shared1', name: 'Website backup', capabilities: { canAddChildren: true, canTrashChildren: false, canDeleteChildren: false } }], files: new Map(), sessions: new Map(), n: 0 },
     b2: { bucket: { id: 'bk1', name: 'soard-backup-test' }, lock: { isFileLockEnabled: true, defaultRetention: { mode: 'compliance', period: { duration: 90, unit: 'days' } } }, files: [], large: new Map(), n: 0, caps: ['listBuckets', 'listFiles', 'readFiles', 'writeFiles', 'readBucketRetentions', 'readFileRetentions'] },
-    faults: { loseDrivePieces: 0, corruptDriveOnce: false, failB2Parts: 0, writeDuringRead: null },
+    faults: { loseDrivePieces: 0, corruptDriveOnce: false, failB2Parts: 0, writeDuringRead: null, denied: [] },
+    kv: [], // { id, title, keys: Map(name → { value: Buffer, expiration, metadata }) }
+    vectorize: [], // { name, dimensions, metric, mutation, vectors: Map(id → { values, metadata, namespace }) }
+    workers: [], // { name, modified, files: [{ name, type, bytes }] }
+    durableObjects: [], // { script, class, id }
+    mutationN: 0,
+    page: 2, // KV keys and Vectorize ids come this many to a page, so the backup must follow the cursor
   };
-  w.addDb = (id) => { const db = new DatabaseSync(':memory:'); w.dbs[id] = { db, bookmark: 1 }; return db; };
+  w.addDb = (id, name = id) => { const db = new DatabaseSync(':memory:'); w.dbs[id] = { db, bookmark: 1, name }; return db; };
+  w.setVector = (ix, id, v) => { ix.vectors.set(id, v); ix.mutation = `mutation-${++w.mutationN}`; };
+  // A Worker's code exactly as Cloudflare's content/v2 gives it: multipart, one part per module
+  w.workerBody = (wk) => {
+    const boundary = `----cf-${wk.name}-boundary`;
+    const parts = wk.files.map((f) => Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${f.name}"; filename="${f.name}"\r\nContent-Type: ${f.type}\r\n\r\n`), f.bytes, Buffer.from('\r\n')]));
+    return { boundary, body: Buffer.concat([...parts, Buffer.from(`--${boundary}--\r\n`)]) };
+  };
   // A write the site makes: the database's bookmark moves, as D1's does
   w.write = (id, sql) => { w.dbs[id].db.exec(sql); w.dbs[id].bookmark++; };
   // Every file at `path`, through every folder of each name on the way (a folder in the trash and its new twin)
@@ -92,6 +109,107 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
       if (auth !== 'Bearer cf-read-key') return cfError(403, 'Authentication error');
       const p = u.pathname.replace(`/client/v4/accounts/${ACCT}`, '');
       let m;
+      // A permission the key doesn't have: Cloudflare refuses the listing
+      if (w.faults.denied.some((d) => p.startsWith(d) || u.pathname.includes(d))) return cfError(403, 'Authentication error');
+      // Stream switched off on Cloudflare's side (Sept and Nov 2026): every Stream listing answers so, for any key
+      if (w.faults.streamListDown && /^\/stream(\/webhook|\/watermarks|\/live_inputs(\/[^/]+)?|\/storage-usage)?$/.test(p)) return json({ success: false, errors: [{ code: 10002, message: 'Authorization Failure' }], messages: [{ code: 10002, message: 'Cloudflare Stream not enabled' }], result: null }, 403);
+      if (method === 'GET' && p === '/stream/storage-usage') return cf({ totalStorageMinutes: 1 });
+      const pageOf = (items) => { const n = Number(u.searchParams.get('page') || 1); return cf(n === 1 ? items : [], { result_info: { page: n, per_page: Number(u.searchParams.get('per_page') || 20), count: n === 1 ? items.length : 0, total_count: items.length, total_pages: 1 } }); };
+      // The account's listings
+      if (method === 'GET' && p === '/d1/database') return pageOf(Object.entries(w.dbs).map(([id, d]) => ({ uuid: id, name: d.name, file_size: 1000, created_at: '2026-01-01T00:00:00Z', num_tables: 1 })));
+      const region = request.headers.get('cf-r2-jurisdiction');
+      if (method === 'GET' && p === '/r2/buckets' && region && region !== 'default') return cf({ buckets: (w.regionBuckets?.[region] || []).map((name) => ({ name, jurisdiction: region })) }, { result_info: {} });
+      if (method === 'GET' && p === '/r2/buckets') return cf({ buckets: [...Object.keys(w.buckets), 'backup-staging'].map((name) => ({ name, creation_date: '2026-01-01T00:00:00Z', location: 'ENAM' })) }, { result_info: {} });
+      if ((m = /^\/r2\/buckets\/([^/]+)\/domains\/custom$/.exec(p))) return cf({ domains: [] });
+      if ((m = /^\/r2\/buckets\/([^/]+)\/domains\/managed$/.exec(p))) return cf({ enabled: false, bucketId: m[1], domain: `pub-${m[1]}.r2.dev` });
+      if ((m = /^\/r2\/buckets\/([^/]+)\/lifecycle$/.exec(p))) return cf({ rules: [] });
+      // A bucket with no CORS set: Cloudflare answers 404 (as it does for every SOARD bucket, Nov 16 2026)
+      if ((m = /^\/r2\/buckets\/([^/]+)\/cors$/.exec(p))) return w.cors?.[m[1]] ? cf(w.cors[m[1]]) : json({ success: false, errors: [{ code: 10059, message: 'The CORS configuration does not exist.' }], messages: [], result: null }, 404);
+      if (method === 'GET' && p === '/storage/kv/namespaces') return pageOf(w.kv.map((n) => ({ id: n.id, title: n.title, supports_url_encoding: true })));
+      if ((m = /^\/storage\/kv\/namespaces\/([^/]+)\/keys$/.exec(p))) {
+        const ns = w.kv.find((n) => n.id === m[1]);
+        if (!ns) return cfError(404, 'namespace not found');
+        const limit = Number(u.searchParams.get('limit') || 1000);
+        if (limit < 10 || limit > 1000) return cfError(400, 'limit must be 10 to 1000');
+        const prefix = u.searchParams.get('prefix') || '';
+        const names = [...ns.keys.keys()].filter((n) => n.startsWith(prefix)).sort();
+        const from = Number(u.searchParams.get('cursor') || 0);
+        const take = names.slice(from, from + Math.min(limit, w.page));
+        const next = from + take.length < names.length ? String(from + take.length) : '';
+        return cf(take.map((name) => { const k = ns.keys.get(name); return { name, ...(k.expiration ? { expiration: k.expiration } : {}), ...(k.metadata != null ? { metadata: k.metadata } : {}) }; }), { result_info: { count: take.length, cursor: next } });
+      }
+      if ((m = /^\/storage\/kv\/namespaces\/([^/]+)\/values\/(.+)$/.exec(p))) {
+        if (method !== 'GET') throw new Error('the backup only ever reads KV');
+        const name = decodeURIComponent(m[2]);
+        const k = w.kv.find((n) => n.id === m[1])?.keys.get(name);
+        // (a key Cloudflare lists but won't give, as for a key name an old namespace can't read on the URL)
+        return k && w.faults.kvUnreadable !== name ? new Response(k.value) : json({ success: false, errors: [{ code: 10009, message: 'get: \'key not found\'' }], result: null }, 404);
+      }
+      if (method === 'GET' && p === '/vectorize/v2/indexes') return cf(w.vectorize.map((x) => ({ name: x.name, config: { dimensions: x.dimensions, metric: x.metric } })));
+      if ((m = /^\/vectorize\/v2\/indexes\/([^/]+)\/metadata_index\/list$/.exec(p))) return cf({ metadataIndexes: w.vectorize.find((x) => x.name === m[1])?.metadataIndexes || [] });
+      if ((m = /^\/vectorize\/v2\/indexes\/([^/]+)\/(info|list|get_by_ids)$/.exec(p))) {
+        const ix = w.vectorize.find((x) => x.name === m[1]);
+        if (!ix) return cfError(404, 'index not found');
+        if (m[2] === 'info') return cf({ dimensions: ix.dimensions, vectorCount: ix.vectors.size, processedUpToMutation: ix.mutation, processedUpToDatetime: '2026-11-16T00:00:00Z' });
+        if (m[2] === 'list') {
+          const count = Number(u.searchParams.get('count') || 100);
+          if (count < 1 || count > 1000) return cfError(400, 'count must be 1 to 1000');
+          const ids = [...ix.vectors.keys()].sort();
+          const from = Number(u.searchParams.get('cursor') || 0);
+          const take = ids.slice(from, from + Math.min(count, w.page));
+          const more = from + take.length < ids.length;
+          return cf({ count: take.length, totalCount: ids.length, isTruncated: more, nextCursor: more ? String(from + take.length) : null, vectors: take.map((id) => ({ id })) });
+        }
+        if (method !== 'POST') return cfError(405, 'POST');
+        const { ids } = await request.json();
+        if (!Array.isArray(ids) || ids.length > 20) return cfError(400, 'at most 20 ids');
+        return cf(ids.filter((id) => ix.vectors.has(id) && id !== w.faults.vectorWithheld).map((id) => ({ id, ...ix.vectors.get(id) })));
+      }
+      if (method === 'GET' && p === '/workers/scripts') return cf(w.workers.map((x) => ({ id: x.name, created_on: '2026-01-01T00:00:00Z', modified_on: x.modified, has_assets: !!x.assets })));
+      if ((m = /^\/workers\/scripts\/([^/]+)\/(content\/v2|settings|schedules|subdomain)$/.exec(p))) {
+        const wk = w.workers.find((x) => x.name === decodeURIComponent(m[1]));
+        if (!wk) return cfError(404, 'no such Worker');
+        if (m[2] === 'settings') return cf({ bindings: [{ type: 'secret_text', name: 'A_KEY' }, { type: 'plain_text', name: 'A_VAR', text: 'shown' }], compatibility_date: '2026-01-01' });
+        if (m[2] === 'schedules') return cf({ schedules: [{ cron: '*/5 * * * *' }] });
+        if (m[2] === 'subdomain') return cf({ enabled: false, previews_enabled: false });
+        // As Cloudflare gives it: 204 for a Worker with no code (static files only), one plain file for the older form,
+        // otherwise multipart with the main module named in cf-entrypoint
+        if (!wk.files) return new Response(null, { status: 204 });
+        if (wk.oneFile) return new Response(wk.files[0].bytes, { headers: { 'content-type': 'application/javascript' } });
+        const { boundary, body } = w.workerBody(wk);
+        return new Response(body, { headers: { 'content-type': `multipart/form-data; boundary=${boundary}`, 'cf-entrypoint': wk.main || wk.files[0].name } });
+      }
+      if (method === 'GET' && p === '/workers/durable_objects/namespaces') return pageOf(w.durableObjects.map((d) => ({ id: d.id, name: `${d.script}_${d.class}`, script: d.script, class: d.class, use_sqlite: true })));
+      if (w.faults.listingDown && p === w.faults.listingDown) return cfError(500, 'Internal Server Error');
+      if (method === 'GET' && ['/queues', '/hyperdrive/configs', '/pipelines', '/pipelines/v1/pipelines', '/workers/domains', '/workflows', '/ai-gateway/gateways', '/email/routing/addresses', '/images/v1/variants', '/stream/watermarks'].includes(p)) return cf([]);
+      if (method === 'GET' && p === '/challenges/widgets') return cf([{ sitekey: '0xTEST', name: 'site', domains: ['example.org'], secret: 'never-copied-widget-secret' }]);
+      if (method === 'GET' && p === '/images/v1/stats') return cf({ count: { current: w.images.length, allowed: 100000 } });
+      // No webhook set: 404, as on SOARD's account
+      if (method === 'GET' && p === '/stream/webhook') return json({ result: null, success: false, errors: [{ code: 10003, message: 'Not Found: The requested resource or operation was not found.' }], messages: [{ code: 10003, message: 'No active webhook found' }] }, 404);
+      if (method === 'GET' && p === '/stream/live_inputs') return cf([{ uid: 'li1', created: '2026-01-01T00:00:00Z', modified: '2026-01-01T00:00:00Z', meta: { name: 'Reveals' }, deleteRecordingAfterDays: null }]);
+      if (method === 'GET' && p === '/stream/live_inputs/li1') return cf({ uid: 'li1', created: '2026-01-01T00:00:00Z', modified: '2026-01-01T00:00:00Z', meta: { name: 'Reveals' }, enabled: true, recording: { mode: 'automatic', timeoutSeconds: 0, requireSignedURLs: false, allowedOrigins: null, hideLiveViewerCount: false }, rtmps: { url: 'rtmps://live.example/live/', streamKey: 'never-copied-stream-key' }, srt: { url: 'srt://live.example:778', streamId: 'never-copied-srt-id', passphrase: 'never-copied-srt-pass' }, webRTC: { url: 'https://live.example/never-copied-webrtc/webRTC/publish' }, deleteRecordingAfterDays: null });
+      if (method === 'GET' && p === '/pages/projects') return cf([{ name: 'site', subdomain: 'site.pages.dev', source: { type: 'github', config: { owner: w.repo.split('/')[0], repo_name: w.repo.split('/')[1] } }, deployment_configs: { production: { env_vars: { A_KEY: { type: 'secret_text', value: 'never-copied-env-secret' } } } } }]);
+      // The account's own rules, its lists, its notifications and its domains as registered
+      // (two pages by cursor, the cursor already percent-encoded as Cloudflare's is: sent encoded twice, it's refused)
+      if (method === 'GET' && p === '/rulesets') {
+        const c = u.searchParams.get('cursor');
+        if (!c) return cf([{ id: 'rs-managed', kind: 'managed', phase: 'http_request_firewall_managed', name: 'Managed' }], { result_info: { cursors: { after: 'next%2Fpage%2B1' } } });
+        if (c !== 'next/page+1') return cfError(400, 'cursor is invalid');
+        return cf([{ id: 'rs-root', kind: 'root', phase: 'http_request_redirect', name: 'default' }], { result_info: { cursors: {} } });
+      }
+      if (method === 'GET' && p === '/rulesets/rs-root') return cf({ id: 'rs-root', kind: 'root', phase: 'http_request_redirect', rules: [{ action: 'redirect', action_parameters: { from_list: { name: 'www_to_apex', key: 'http.request.full_uri' } }, expression: 'http.request.full_uri in $www_to_apex' }] });
+      if (method === 'GET' && p === '/rules/lists') return cf([{ id: 'list1', name: 'www_to_apex', kind: 'redirect', num_items: 3 }]);
+      if (method === 'GET' && p === '/rules/lists/list1/items') {
+        const all = ['a', 'b', 'c'].map((x) => ({ id: x, redirect: { source_url: `https://www.example.org/${x}`, target_url: 'https://example.org', status_code: 301 } }));
+        const at = u.searchParams.get('cursor') ? Number(u.searchParams.get('cursor')) : 0;
+        return cf(all.slice(at, at + 2), { result_info: { cursors: at + 2 < all.length ? { after: String(at + 2) } : {} } });
+      }
+      if (method === 'GET' && p === '/alerting/v3/policies') return cf([{ id: 'pol1', name: 'Live input events', alert_type: 'stream_live_notifications', enabled: true, mechanisms: { webhooks: [{ id: 'wh1' }] } }]);
+      if (method === 'GET' && p === '/alerting/v3/destinations/webhooks') return cf([{ id: 'wh1', name: 'site', url: 'https://example.org/api/stream-webhook', type: 'generic' }]);
+      if (method === 'GET' && p === '/registrar/registrations' && w.faults.registrations) return cfError(w.faults.registrations, w.faults.registrations === 403 ? 'Authentication error' : 'Service Unavailable');
+      // (it pages by cursor and ignores page numbers: an empty cursor is the end, even on a full page)
+      if (method === 'GET' && p === '/registrar/registrations') return cf([{ domain_name: 'example.org', status: 'active', created_at: '2012-03-14T00:00:00Z', expires_at: '2029-03-14T00:00:00Z', auto_renew: true, privacy_mode: 'redaction', locked: true }], { result_info: { cursor: '', per_page: 1, count: 1 } });
+      if (method === 'GET' && p === '/pages/projects/site/domains') return cf([{ name: 'example.org', status: 'active' }]);
       if ((m = /^\/d1\/database\/([^/]+)\/time_travel\/bookmark$/.exec(p))) return cf({ bookmark: `bm-${w.dbs[m[1]].bookmark}` });
       if ((m = /^\/d1\/database\/([^/]+)\/raw$/.exec(p))) {
         if (method !== 'POST') return cfError(405, 'no');
@@ -124,11 +242,14 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
         return o ? new Response(o.bytes) : cfError(404, 'no such object');
       }
       // The account settings the backup copies (./settings.js): one can be refused on purpose
-      if (method === 'GET' && ['/members', '/access/apps', '/access/policies', '/access/groups', '/access/identity_providers', '/pages/projects', '/workers/scripts', '/r2/buckets', '/d1/database'].includes(p)) {
-        return w.faults.settingsDenied === p ? cfError(403, 'Authentication error') : cf(p === '/r2/buckets' ? { buckets: [] } : []);
+      if (method === 'GET' && ['/members', '/access/apps', '/access/policies', '/access/groups', '/access/identity_providers'].includes(p)) {
+        return w.faults.settingsDenied === p ? cfError(403, 'Authentication error') : cf([]);
       }
       if (u.pathname === '/client/v4/zones') return cf([{ id: 'zone1', name: 'example.org', status: 'active', plan: { name: 'Free' }, name_servers: ['a.ns', 'b.ns'] }]);
       if (u.pathname === '/client/v4/zones/zone1/dns_records/export') return new Response('example.org. 300 IN A 192.0.2.1\nwww 300 IN CNAME example.org.\n');
+      // The domain's own rule sets: each kind is read with its own permission
+      if (u.pathname === '/client/v4/zones/zone1/rulesets') return cf([{ id: 'zr-redirect', kind: 'zone', phase: 'http_request_dynamic_redirect' }, { id: 'zr-waf', kind: 'zone', phase: 'http_request_firewall_custom' }, { id: 'managed', kind: 'managed', phase: 'http_request_firewall_managed' }]);
+      if ((m = /^\/client\/v4\/zones\/zone1\/rulesets\/(zr-[a-z]+)$/.exec(u.pathname))) return cf({ id: m[1], kind: 'zone', rules: [{ expression: 'true', action: 'skip' }] });
       if (u.pathname.startsWith('/client/v4/zones/zone1/')) return cf([]);
       return cfError(403, 'not allowed for this test key');
     }

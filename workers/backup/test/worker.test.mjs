@@ -80,6 +80,65 @@ const site = async (path, body = {}) => {
 };
 const call = async (method, arg) => (await site('/call', { method, arg })).value;
 
+const gz = async (path) => gunzipSync(await open(only(path).bytes));
+// The newest manifest in a folder of the homes, as a person restoring would pick it
+const newestManifest = (folder) => {
+  // (the one written last, as the READ ME says: not the last by name, as a by-hand run's sorts before its night's)
+  const all = [...world.drive.files.values()].filter((f) => !f.trashed && / manifest( \d+)?\.json$/.test(f.name) && world.driveFile(`${folder}/${f.name}`)).map((f) => JSON.parse(f.bytes));
+  assert.ok(all.length, `a manifest in ${folder}`);
+  return all.sort((a, b) => a.written.localeCompare(b.written)).at(-1);
+};
+// The KV namespace, the search index and the Workers' code as the run left them: each put back the way the READ ME
+// says (the KV parts through the restore tool), and compared with the account
+async function checkAccount(run, s) {
+  // KV: the manifest names the file of each part; together they're every key, as `wrangler kv bulk put` takes them
+  const ns = world.kv[0];
+  const manifest = newestManifest('KV/DEVICES/2026');
+  assert.equal(manifest.run, run);
+  noNames('the KV manifest', JSON.stringify(manifest));
+  assert.equal(manifest.parts.length, Math.ceil(ns.keys.size / 3));
+  assert.equal(manifest.keys, ns.keys.size);
+  const put = [];
+  for (const p of manifest.parts) {
+    const local = join(tmp, p.file.split('/').pop());
+    writeFileSync(local, only(p.file).bytes);
+    execFileSync('node', [join(here, '../scripts/restore.mjs'), 'kv', local, '--key', join(tmp, 'key.txt')], { stdio: 'ignore' });
+    const ready = JSON.parse(readFileSync(local.replace(/\.json\.gz\.age$/, ' ready.json')));
+    assert.equal(createHash('sha256').update(await open(only(p.file).bytes)).digest('hex'), p.openedSha256, 'the part is the one the manifest names');
+    put.push(...ready);
+  }
+  assert.deepEqual(put.map((x) => x.key), [...ns.keys.keys()].sort(), 'every key, in order');
+  for (const x of put) {
+    const k = ns.keys.get(x.key);
+    assert.equal(x.base64, true);
+    assert.ok(Buffer.from(x.value, 'base64').equals(k.value), `${x.key}: its value, byte for byte`);
+    assert.equal(x.expiration ?? null, k.expiration ?? null);
+    assert.deepEqual(x.metadata ?? null, k.metadata ?? null);
+  }
+  // Vectorize: the manifest names the index's size, measure, metadata indexes and every file; every vector, whole
+  const ix = world.vectorize[0];
+  const vm = newestManifest('Vectorize/product-catalog/2026');
+  assert.deepEqual([vm.dimensions, vm.metric, vm.vectors], [ix.dimensions, ix.metric, ix.vectors.size]);
+  assert.deepEqual(vm.metadataIndexes, ix.metadataIndexes || []);
+  const lines = [];
+  for (const p of vm.parts) lines.push(...(await gz(p.file)).toString().trim().split('\n').map((l) => JSON.parse(l)));
+  assert.deepEqual(lines, [...ix.vectors.keys()].sort().map((id) => ({ id, ...ix.vectors.get(id) })), 'every vector exactly');
+  // Workers: the restore tool splits the code back into each file, as it ran; the .json beside it names the main module
+  for (const wk of world.workers) {
+    const newest = [...world.drive.files.values()].filter((f) => f.name.includes(` ${wk.name} code (`) && f.name.endsWith(').age') && !f.trashed).map((f) => f.name).sort().at(-1);
+    if (!wk.files) { assert.equal(newest, undefined, `${wk.name} has no code of its own to copy`); continue; }
+    assert.ok(newest, `${wk.name}’s code is copied`);
+    const info = JSON.parse(only(`Workers/${wk.name}/2026/${newest.replace(/\.age$/, '.json')}`).bytes);
+    assert.equal(info.mainModule, wk.oneFile ? 'index.js' : wk.main || wk.files[0].name);
+    const code = join(tmp, `${wk.name}-${run}.code`);
+    writeFileSync(code, await open(only(`Workers/${wk.name}/2026/${newest}`).bytes));
+    const back = join(tmp, `${wk.name}-${run}`);
+    execFileSync('node', [join(here, '../scripts/restore.mjs'), 'worker', code, back], { stdio: 'ignore' });
+    for (const f of wk.files) assert.ok(readFileSync(join(back, wk.oneFile ? 'index.js' : f.name)).equals(f.bytes), `${wk.name}/${f.name} back exactly`);
+  }
+  assert.ok(s.night.kv.every((k) => k.ok) && s.night.vectorize.every((v) => v.ok), JSON.stringify([s.night.kv, s.night.vectorize]));
+}
+
 async function runNight(run) {
   const r = await call('run', { by: 'test', run, drill: true });
   assert.ok(r.started, JSON.stringify(r));
@@ -150,6 +209,27 @@ before(async () => {
     { uid: 'v3', name: 'No MP4 yet', private: false, download: null, bytes: randomBytes(1000) },
     { uid: 'v4', name: 'Still processing', private: false, download: null, state: 'inprogress', bytes: randomBytes(1000) },
   ];
+  // The rest of the account, shaped like SOARD's: the backup's own spare database (never copied), a KV namespace,
+  // the store's search index, Workers (one with a binary module) and the Durable Objects on the list
+  world.addDb('drill-db');
+  world.kv.push({ id: 'kv1', title: 'DEVICES', keys: new Map([
+    ['a/b c ü', { value: Buffer.from('plain text') }],
+    ['binary', { value: randomBytes(2000) }],
+    ['with-meta', { value: Buffer.from('{"x":1}'), metadata: { by: 'test', n: 2 } }],
+    ['expiring', { value: Buffer.from('soon'), expiration: 4102444800 }],
+    ['sample-kid-session', { value: Buffer.from('a session') }],
+  ]) });
+  const ix = { name: 'product-catalog', dimensions: 4, metric: 'cosine', mutation: null, vectors: new Map(), metadataIndexes: [{ propertyName: 'price', indexType: 'number' }] };
+  world.vectorize.push(ix);
+  for (let i = 1; i <= 5; i++) world.setVector(ix, `prod-${i}`, { values: [i / 10, -0.5, 1e-7, 0.123456789], ...(i === 2 ? { metadata: { title: 'Plush', price: 25 } } : {}), ...(i === 3 ? { namespace: 'store' } : {}) });
+  world.workers.push(
+    { name: 'soard-live-hub', modified: '2026-11-01T00:00:00Z', files: [{ name: 'index.js', type: 'application/javascript+module', bytes: Buffer.from('export default { fetch() { return new Response("hub"); } };\n') }, { name: 'lib/codec.wasm', type: 'application/wasm', bytes: randomBytes(3000) }] },
+    { name: 'shop-redirect', modified: '2026-10-01T00:00:00Z', main: 'worker.js', files: [{ name: 'worker.js', type: 'application/javascript+module', bytes: Buffer.from('export default {};\n') }] },
+    { name: 'static-site', modified: '2026-10-01T00:00:00Z', files: null },
+    { name: 'old-style', modified: '2026-09-01T00:00:00Z', oneFile: true, files: [{ name: 'index.js', type: 'application/javascript', bytes: Buffer.from('addEventListener("fetch", (e) => e.respondWith(new Response("old")));\n') }] },
+  );
+  world.cors = { 'soard-files': { rules: [{ allowed: { origins: ['https://example.org'], methods: ['GET'] } }] } };
+  world.durableObjects.push({ script: 'soard-backup', class: 'BackupState', id: 'do1' }, { script: 'soard-live-hub', class: 'LiveHub', id: 'do2' });
   const obj = (bytes) => ({ bytes, etag: md5(bytes), last_modified: '2026-01-01T00:00:00Z' });
   world.buckets['soard-files'] = new Map([['a.txt', obj(Buffer.from('first'))], ['kids/photo one.jpg', obj(randomBytes(100_000))], ['big/video.mov', obj(randomBytes(20 * 1024 * 1024 + 123))]]);
   world.buckets['soard-vendor-docs'] = new Map([['w9/vendor.pdf', obj(randomBytes(10_000))]]);
@@ -189,6 +269,7 @@ export default {
         d1Databases: { DRILL: 'drill-db' },
         bindings: {
           TEST_MODE: '1', CF_ACCOUNT_ID: ACCT, API_PACE_MS: '0', STEP_DELAY: '1 second', AUDIT_SETTLE_MS: '0',
+          DRILL_DATABASE: 'drill-db', STAGING_BUCKET: 'backup-staging', KV_PART_KEYS: '3', VECTORIZE_PART: '3',
           DATABASES: JSON.stringify([{ name: 'site-db', id: 'site-db', label: 'Test site', quiet: false }, { name: 'store-db', id: 'store-db', label: 'Test store', quiet: false }]),
           REPOS: JSON.stringify([REPO]), R2_BUCKETS: JSON.stringify(['soard-files', 'soard-vendor-docs']),
           CF_BACKUP_TOKEN: 'cf-read-key', B2_KEY_ID: 'b2-key-id', B2_APPLICATION_KEY: 'b2-app-key', GITHUB_BACKUP_TOKEN: 'gh-read-key',
@@ -325,7 +406,22 @@ test('night 1: everything is in both homes, and every copy opens to exactly what
   // Settings, the files list, the run's summary (no names in it), the drill
   const settings = JSON.parse(await open(only(`Cloudflare settings/2026/${N1} cloudflare-settings.json.age`).bytes));
   assert.equal(settings.zones[0].name, 'example.org');
-  assert.deepEqual(settings.notRead, [], 'the key read every setting');
+  assert.deepEqual(settings.notRead, [], 'the key read every setting (a bucket with no CORS and no Stream webhook are “none”, not unread)');
+  assert.deepEqual(settings.stream.webhook, { none: true });
+  assert.deepEqual(settings.r2.find((b) => b.name === 'soard-vendor-docs').cors, { none: true });
+  assert.equal(settings.r2.find((b) => b.name === 'soard-files').cors.rules.length, 1);
+  assert.deepEqual(settings.stream.liveInputs.map((x) => [x.name, x.recording.mode]), [['Reveals', 'automatic']]);
+  assert.deepEqual(settings.pagesDomains, [{ project: 'site', domains: [{ name: 'example.org', status: 'active' }] }]);
+  assert.deepEqual(settings.vectorize[0].metadataIndexes, [{ propertyName: 'price', indexType: 'number' }]);
+  assert.equal(settings.lists[0].items.length, 3, 'every item of the redirect list, page by page');
+  assert.equal(settings.accountRulesets.length, 1, 'the account’s own rule (not Cloudflare’s managed one)');
+  assert.deepEqual(settings.notifications.webhooks.map((x) => x.url), ['https://example.org/api/stream-webhook']);
+  assert.deepEqual(settings.registrar.map((d) => [d.name, d.expiresAt, d.autoRenew]), [['example.org', '2029-03-14T00:00:00Z', true]]);
+  assert.deepEqual(settings.registrar[0], { name: 'example.org', status: 'active', createdAt: '2012-03-14T00:00:00Z', expiresAt: '2029-03-14T00:00:00Z', autoRenew: true, privacyMode: 'redaction', locked: true }, 'only these, never a contact');
+  assert.equal(JSON.stringify(settings).includes('never-copied'), false, 'no key, secret or stream key in the settings copy');
+  const hub = settings.workers.find((x) => x.name === 'soard-live-hub');
+  assert.deepEqual(hub.settings.bindings, [{ type: 'secret_text', name: 'A_KEY' }, { type: 'plain_text', name: 'A_VAR', text: 'shown' }], 'a plain variable keeps its value (to put the Worker back exactly), a key never has one');
+  assert.deepEqual(hub.workersDev, { enabled: false, previews_enabled: false });
   assert.match((await open(only(`Cloudflare settings/2026/${N1} example.org DNS records.txt.age`).bytes)).toString(), /192\.0\.2\.1/);
   const list = JSON.parse(gunzipSync(await open(only(`Files/Lists/2026/${N1} files.json.gz.age`).bytes)));
   assert.equal(list.files.filter((f) => f.path).length, 3 + 1 + 4);
@@ -337,6 +433,14 @@ test('night 1: everything is in both homes, and every copy opens to exactly what
   for (const im of world.images) assert.equal(nightFile.includes(im.id), false, 'the run’s summary names no image');
   noNames('the drill report', only(`Restore drills/2026/${N1} drill.json`).bytes.toString());
   for (const db of ['site-db', 'store-db']) noNames('a manifest', only(`Database/${db}/2026/${N1} ${db} manifest.json`).bytes.toString());
+  // The rest of the account, each as the tool that puts it back takes it
+  await checkAccount(N1, s);
+  const night = JSON.parse(nightFile);
+  assert.deepEqual(night.account && { databases: night.account.databases, buckets: night.account.buckets, kv: night.account.kv, vectorize: night.account.vectorize, workers: night.account.workers }, { databases: 2, buckets: 2, kv: 1, vectorize: 1, workers: 4 }, 'the summary says what the account held (the spare database and staging bucket aside)');
+  assert.deepEqual(night.workers, { copied: 3, unchanged: 0, noCode: ['static-site'], failed: [] });
+  assert.deepEqual(night.notCopied.map((x) => x.what), ['Durable Object BackupState (Worker soard-backup)', 'Durable Object LiveHub (Worker soard-live-hub)'], 'and what needs no copy of its own, each with why');
+  assert.ok(night.notCopied.every((x) => x.why.length > 20));
+  assert.equal(world.driveFile(`Database/drill-db/2026/${N1} drill-db.sql.gz.age`), null, 'the drill’s spare database isn’t copied');
   const drill = JSON.parse(only(`Restore drills/2026/${N1} drill.json`).bytes);
   assert.equal(drill.ok, true, JSON.stringify(drill.problems));
   assert.deepEqual(drill.databases.map((d) => [d.name, d.different, d.ok]), [['site-db', 0, true], ['store-db', 0, true]]);
@@ -452,11 +556,11 @@ process.stdout.write(Buffer.from(await d.decrypt(readFileSync(a[3]))));
 test('night 3: a signing key Stream no longer takes is replaced (the old one removed), and a setting the key can’t read is trouble', async () => {
   world.streamKeys = []; // someone revoked the key in Stream
   world.videos.push({ uid: 'v5', name: 'Another private one', private: true, download: 'ready', bytes: randomBytes(150_000) });
-  world.faults.settingsDenied = '/access/apps';
+  world.faults.settingsDenied = '/members';
   const s = await runNight(N3);
   assert.equal(s.night.ok, false);
   assert.deepEqual(s.night.problemKinds, ['settings-not-read'], JSON.stringify(s.night.problems));
-  assert.match(s.night.problems[0], /couldn’t read 1 of Cloudflare’s settings \(Admin sign-in: Access applications\)/);
+  assert.match(s.night.problems[0], /couldn’t read 1 of Cloudflare’s settings \(Who can sign in to Cloudflare\)/);
   assert.ok(s.night.notes.includes('video v5 is waiting for a Stream signing key'));
   assert.ok(s.streamKey.refused, 'the refused key is set aside');
   assert.deepEqual(await call('needs'), { streamKey: true, videos: [] });
@@ -521,6 +625,74 @@ test('night 5: everything well again, an all-clear, and the photos put back unde
   assert.equal(readdirSync(join(dir, 'restored', 'images')).some((n) => n.endsWith('.part')), false, 'nothing half-written left behind');
 });
 
+test('the whole account: nothing unchanged is copied again, a change is, what’s made later is found, and what can’t be copied is named', async () => {
+  const R1 = `${N5} 1200`;
+  const R2 = `${N5} 1300`;
+  const R3 = `${N5} 1400`;
+  const R4 = `${N5} 1500`;
+  // Nothing changed: no KV part, index or Worker code is sent again
+  const s1 = await runNight(R1);
+  assert.equal(s1.night.ok, true, JSON.stringify([s1.night.problems, s1.drill?.problems]));
+  const names = () => [...world.drive.files.values()].map((f) => f.name);
+  assert.deepEqual(names().filter((n) => n.startsWith(`${R1} `) && /DEVICES|product-catalog| code \(/.test(n)), [], 'unchanged since the last copy');
+  assert.equal(s1.night.workers.unchanged, 4);
+  assert.ok(s1.night.vectorize[0].unchanged);
+
+  // Then: one KV value changes (in the second part), a vector is added, a Worker is changed, and someone makes a new
+  // database, a new bucket and a Worker with a Durable Object nobody has checked
+  world.kv[0].keys.get('with-meta').value = Buffer.from('{"x":2}');
+  world.setVector(world.vectorize[0], 'prod-6', { values: [0, 0, 0, 1] });
+  world.workers[1].modified = '2026-11-18T00:00:00Z';
+  world.workers[1].files[0].bytes = Buffer.from('export default { changed: true };\n');
+  world.addDb('later-db').exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT); INSERT INTO notes VALUES (1, 'made later');");
+  const later = randomBytes(4000);
+  world.buckets['store-email-photos'] = new Map([['photo.jpg', { bytes: later, etag: md5(later), last_modified: '2026-11-18T00:00:00Z' }]]);
+  world.durableObjects.push({ script: 'new-worker', class: 'Mystery', id: 'do9' });
+  const s2 = await runNight(R2);
+  assert.deepEqual(s2.night.problemKinds, ['coverage:do:new-worker:Mystery'], JSON.stringify([s2.night.problems, s2.drill?.problems]));
+  assert.match(s2.night.problems[0], /Durable Object Mystery in the Worker new-worker .*needs checking/);
+  // KV: only the changed part is new, and the new manifest says which file holds each part
+  const m2 = newestManifest('KV/DEVICES/2026');
+  assert.deepEqual(m2.parts.map((p) => [p.part, p.copiedIn]), [[1, N1], [2, R2]]);
+  assert.equal(names().some((n) => n.startsWith(`${R2} DEVICES part 1 of 2`)), false, 'the unchanged part wasn’t sent again');
+  await checkAccount(R2, s2);
+  // The new database and bucket: found, copied, and the database restored exactly in the drill
+  const sql = gunzipSync(await open(only(`Database/later-db/2026/${R2} later-db.sql.gz.age`).bytes));
+  const restored = new DatabaseSync(':memory:');
+  restored.exec(sql.toString('utf8'));
+  assert.equal(restored.prepare('SELECT body FROM notes').get().body, 'made later');
+  assert.ok((await open(only(`Files/store-email-photos/${codeOf('r2:store-email-photos', 'photo.jpg', md5(later))}.age`).bytes)).equals(later));
+  const drill = JSON.parse(only(`Restore drills/2026/${R2} drill.json`).bytes);
+  assert.ok(drill.databases.some((d) => d.name === 'later-db' && d.ok), JSON.stringify(drill.databases));
+  // The site tells the admins, once
+  const { alerts } = await site('/chores', { now: Date.now() + 80 * 60_000 });
+  assert.equal(alerts.length, 1);
+  assert.match(alerts[0].detail, /Durable Object Mystery/);
+
+  // Next: the Durable Object is checked and gone, but the read-only key loses a permission: the setup check names it,
+  // once, and the run says it once (not again as a listing or a setting it couldn't read)
+  world.durableObjects.pop();
+  world.faults.denied = ['/storage/kv'];
+  const s3 = await runNight(R3);
+  // Said as the setup step, and as what that night didn't copy (so the night is never taken for a well one)
+  assert.deepEqual(s3.night.problemKinds.sort(), ['coverage:list:kv', 'settings-not-read', 'setup:cloudflare:needs Workers KV Storage Read'], JSON.stringify(s3.night.problems));
+  assert.match(s3.night.problems.join(' '), /KV namespaces? weren’t copied tonight: the read-only key needs “Workers KV Storage Read” \(as the setup check says\)/);
+  assert.deepEqual(s3.setup.cloudflare.missing, ['Workers KV Storage Read']);
+  // Stream switched off on Cloudflare's side (as in Sept and Nov 2026) is not a permission to add
+  world.faults.streamListDown = true;
+  const checked = await call('check');
+  assert.deepEqual(checked.cloudflare.missing, ['Workers KV Storage Read']);
+  world.faults.streamListDown = false;
+
+  // All well again
+  world.faults.denied = [];
+  const s4 = await runNight(R4);
+  assert.equal(s4.night.ok, true, JSON.stringify([s4.night.problems, s4.drill?.problems]));
+  const after = await site('/chores', { now: Date.now() + 96 * 60_000 });
+  assert.equal(after.alerts.at(-1)?.resolves, 'backup', JSON.stringify(after.alerts));
+  assert.equal(world.deletes.length, 0);
+});
+
 test('nights 6 to 8: a copy that reached only Drive while Backblaze was down is never stranded; a night Stream can’t be listed still names every video', async () => {
   // Night 6: Backblaze is down all night; a new file reaches Drive only, and waits, staged
   world.faults.b2Down = true;
@@ -537,6 +709,9 @@ test('nights 6 to 8: a copy that reached only Drive while Backblaze was down is 
   world.faults.streamListDown = true;
   const s7 = await runNight(N7);
   assert.ok(s7.night.problemKinds.includes('list:videos'), JSON.stringify(s7.night.problems));
+  // Stream switched off on Cloudflare's side is said once, as the videos not listed: not as settings the key can't read
+  assert.equal(s7.night.problemKinds.includes('settings-not-read'), false, JSON.stringify(s7.night.problems));
+  assert.ok(s7.night.notes.some((x) => /switched off on Cloudflare’s side/.test(x)), JSON.stringify(s7.night.notes));
   assert.ok((await open(twin(path).bytes)).equals(bytes), 'its staged bytes were kept, and reached Backblaze');
   // The night's list still names every video (as Stream was last listed), the one map from codes back to names
   const list7 = JSON.parse(gunzipSync(await open(only(`Files/Lists/2026/${N7} files.json.gz.age`).bytes)));

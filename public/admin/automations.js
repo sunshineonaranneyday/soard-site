@@ -248,7 +248,8 @@ const backupDbLive = (f) => {
   if (off) return off;
   const n = f.backup.night;
   const dbs = (n.databases || []).filter(Boolean);
-  const missing = f.backup.databases.filter((d) => !dbs.some((x) => x.name === d));
+  // Every database the run set out to copy (a database found on the account later too), or the set ones before that
+  const missing = (n.targets?.databases || f.backup.databases).filter((d) => !dbs.some((x) => x.name === d));
   const what = dbs.map((d) => `${d.name} ${plural(d.tables, 'table')}, ${d.rows.toLocaleString('en-US')} rows, ${size(d.bytes)}${d.attempts > 1 ? ` (read again ${plural(d.attempts - 1, 'time')} for a quiet moment)` : ''}`).join('; ');
   if (missing.length) return ATTN(`${missing.join(' and ')} wasn’t copied on ${n.run}: ${errorsOf(n, /^database/).join('; ') || 'see the run’s errors'}.${what ? ` Copied: ${what}.` : ''}`, n.finished);
   return ON(`${n.run}: ${what}. Each read exactly, at one moment.`, n.finished);
@@ -298,6 +299,38 @@ const backupFilesLive = (f) => {
   if (n.files?.left && RUN_GOING.has(f.backup.started?.status)) return ON(`Copying: ${n.files.left.toLocaleString('en-US')} still to go of ${found.toLocaleString('en-US')} after the run of ${n.run}, and a run is going now. The first runs copy everything, so they take hours; after that only what’s new.${later}`, n.finished);
   if (n.files?.left) return ATTN(`${n.files.left.toLocaleString('en-US')} of ${found.toLocaleString('en-US')} were still to copy when the run of ${n.run} ended; the next run carries on.${later}`, n.finished);
   return ON(`${n.run}: all ${found.toLocaleString('en-US')} in both homes${n.files?.copied ? `, ${n.files.copied.toLocaleString('en-US')} new this run` : ''}.${later}`, n.finished);
+};
+// Everything else on the account: found fresh every run, copied, or named with why it needs no copy of its own
+const LISTED = { databases: 'databases', buckets: 'R2 buckets', kv: 'KV namespaces', vectorize: 'Vectorize indexes', workers: 'Workers', durableObjects: 'Durable Objects', queues: 'queues', hyperdrive: 'Hyperdrive connections', pipelines: 'pipelines' };
+const backupAccountLive = (f) => {
+  const off = backupNotYet(f);
+  if (off) return off;
+  const n = f.backup.night;
+  if (!('inventory' in n)) return OFF('Starts with the next run.');
+  const inv = n.inventory;
+  if (!inv) return ATTN(`The account couldn’t be looked over in the run of ${n.run}: ${errorsOf(n, /^inventory$/).join('; ') || 'see the run’s errors'}. Only the databases and buckets set in the backup were copied.`, n.finished);
+  // Whatever the key couldn't list isn't copied, whatever else says so
+  const unlisted = (inv.notListed || []).map((x) => (typeof x === 'string' ? { type: x } : x));
+  const refused = unlisted.filter((x) => x.permission);
+  const down = unlisted.filter((x) => !x.permission);
+  const said = [
+    refused.length && `the read-only key isn’t allowed to list the account’s ${refused.map((x) => LISTED[x.type] || x.type).join(', ')}: add ${[...new Set(refused.map((x) => x.permission))].join(', ')} to it (see Setup and the key)`,
+    down.length && `Cloudflare couldn’t list the account’s ${down.map((x) => `${LISTED[x.type] || x.type}${x.why ? ` (${x.why})` : ''}`).join(', ')}; the next run tries again`,
+  ].filter(Boolean);
+  if (unlisted.length) return ATTN(`Not copied on ${n.run}: ${said.join('; ')}.`, n.finished);
+  const trouble = (n.problems || []).filter((_, i) => /^(coverage:|kv:|vectorize:|worker-code:)/.test(n.problemKinds?.[i] || ''));
+  const errs = errorsOf(n, /^(kv |vectorize |workers code)/);
+  if (trouble.length || errs.length) return ATTN(`${[...trouble, ...errs].slice(0, 3).join('; ')}${trouble.length + errs.length > 3 ? '…' : ''}.`, n.finished);
+  const kv = n.kv || [];
+  const vec = n.vectorize || [];
+  const keys = kv.reduce((t, k) => t + (k.keys || 0), 0);
+  const what = [
+    kv.length && `${plural(kv.length, 'KV namespace')} (${plural(keys, 'key')})`,
+    vec.length && vec.map((v) => `the ${v.index} search index (${(v.vectors || 0).toLocaleString('en-US')} vectors${v.unchanged ? ', unchanged since its last copy' : ''})`).join(', '),
+    n.workers && `the code of ${plural(inv.workers, 'Worker')} (${n.workers.copied ? `${n.workers.copied} changed` : 'none changed'})`,
+  ].filter(Boolean);
+  const none = (n.notCopied || []).length;
+  return ON(`${n.run}: ${what.join('; ') || 'nothing else on the account to copy'}. ${plural(inv.databases, 'database')} and ${plural(inv.buckets, 'bucket')} found; how their copies went shows under Databases and Photos, videos and files.${none ? ` ${plural(none, 'piece needs', 'pieces need')} no copy of ${none === 1 ? 'its' : 'their'} own (each is in the night’s summary with why).` : ''}`, n.finished);
 };
 const backupDrillLive = (f) => {
   const off = backupNotYet(f);
@@ -1191,9 +1224,9 @@ const MAP = { t: 'SOARD', children: [
           links: [{ label: 'Shared drives', href: 'https://drive.google.com/drive/shared-drives' }, { label: 'Backblaze', href: 'https://secure.backblaze.com/b2_buckets.htm' }, { label: 'soard-backup', href: CF('/workers/services/view/soard-backup/production') }], live: (f) => backupSetupLive(f) },
         { t: 'Databases, every night', s: 'live', k: 'schedule',
           when: 'Every night from 2 AM Eastern; the website’s database is read in a quiet second, just after the site’s minute jobs.',
-          does: 'Reads every table of the website’s database (soard-db) and the store’s (sunnyandranney-db) exactly, every value as its bytes, all at one moment: D1’s bookmark is read before and after, and if anything was written in between, it reads again. Writes it as SQL D1 itself runs into an empty database, with a manifest of every table’s rows and fingerprint. Cloudflare’s own export was tested on Nov 13, 2026 and isn’t exact (it rounds large numbers and loses some text), so it isn’t used.',
+          does: 'Reads every table of the website’s database (soard-db), the store’s (sunnyandranney-db) and any database made on the account later, exactly, every value as its bytes, all at one moment: D1’s bookmark is read before and after, and if anything was written in between, it reads again. Writes it as SQL D1 itself runs into an empty database, with a manifest of every table’s rows and fingerprint. Cloudflare’s own export was tested on Nov 13, 2026 and isn’t exact (it rounds large numbers and loses some text), so it isn’t used.',
           touches: ['D1', 'Google Drive', 'Backblaze'], where: 'Database → name → year · workers/backup/src/db.js, sql.js',
-          info: 'To put one back: the READ ME FIRST at the top of the backup drive, or the restore tool (in workers/backup: npm ci, then node scripts/restore.mjs database <the downloaded folder> --key key.txt --check). For undoing a mistake while Cloudflare is fine, D1’s own Time Travel is quicker.',
+          info: 'To put one back: the READ ME FIRST at the top of the backup drive, or the restore tool (in workers/backup: npm ci, then node scripts/restore.mjs database "<the download folder>" --key "<the download folder>/key.txt" --check, with key.txt kept in the download folder, never in the code’s folder). For undoing a mistake while Cloudflare is fine, D1’s own Time Travel is quicker.',
           live: (f) => backupDbLive(f) },
         { t: 'Cloudflare settings, every night', s: 'live', k: 'schedule',
           when: 'Every night after the databases.',
@@ -1207,9 +1240,15 @@ const MAP = { t: 'SOARD', children: [
           live: (f) => backupCodeLive(f) },
         { t: 'Photos, videos and files', s: 'live', k: 'schedule',
           when: 'Every night after the code: a look at what’s on Cloudflare, then whatever is new or changed.',
-          does: 'Copies every photo in Cloudflare Images (the original, under its id), every video in Stream (its MP4; when a video has none the site asks Stream to make one, and it stays: an MP4 is as public or private as its video) and every file in the files and vendor papers buckets, once each. In the homes a file is named by its id or a code, never by a name that could say whose it is; each run’s list, encrypted like the rest, maps every code to its name and says which copy is current. A changed file is copied again beside the old one, never over it.',
+          does: 'Copies every photo in Cloudflare Images (the original, under its id), every video in Stream (its MP4; when a video has none the site asks Stream to make one, and it stays: an MP4 is as public or private as its video) and every file in every R2 bucket on the account (the website’s files and vendor papers, the store’s email photos, and any made later), once each. In the homes a file is named by its id or a code, never by a name that could say whose it is; each run’s list, encrypted like the rest, maps every code to its name and says which copy is current. A changed file is copied again beside the old one, never over it.',
           touches: ['Cloudflare Images', 'Cloudflare Stream', 'Cloudflare R2', 'Google Drive', 'Backblaze'], where: 'Files · workers/backup/src/sources.js',
           live: (f) => backupFilesLive(f) },
+        { t: 'Everything else on Cloudflare', s: 'live', k: 'schedule',
+          when: 'Every night, after the photos, videos and files: a fresh look over the whole account first.',
+          does: 'Each run first lists everything on SOARD’s Cloudflare account, so nothing made later is ever left out: every database and R2 bucket found is copied (not only the ones named when the backup was built), every KV namespace (as the file wrangler kv bulk put takes back), the store’s product search index in Vectorize (when it changes) and the code each Worker runs (when it changes, whether or not it’s in a repository). A few Workers keep working memory only they can read (Durable Objects); each one is on a list with where its data really lives, and one that isn’t is an alert. So is anything the read-only key isn’t allowed to list.',
+          touches: ['Cloudflare', 'Google Drive', 'Backblaze'], where: 'KV, Vectorize, Workers · workers/backup/src/inventory.js, extra.js',
+          info: 'Keys and passwords are never copied, by design: the Cloudflare settings copy names each one, and each is made again at the service it belongs to. How to put each kind back is in the READ ME FIRST at the top of the backup drive.',
+          live: (f) => backupAccountLive(f) },
         { t: 'Google Drive and Backblaze', s: 'live', k: 'link',
           does: 'The two homes. Each copy is made once, encrypted, and the same bytes go to both, each home on its own (one that’s down never holds up the other); each home’s own checksum of what it kept (Google’s MD5, Backblaze’s SHA-1) must match before the copy counts as safe. An upload cut off part way carries on where it stopped. Every run also looks at what Google Drive still holds: a copy someone deleted or put in the trash there is sent again from Backblaze’s locked copy, and that’s an alert.',
           touches: ['Google Drive', 'Backblaze'], where: 'workers/backup/src/ship.js, drive.js, b2.js',

@@ -66,7 +66,7 @@ async function stream(env, method, path, fetchImpl) {
 
 const sentence = (s) => { const t = String(s).trim(); return t.charAt(0).toUpperCase() + t.slice(1) + (/[.!?]$/.test(t) ? '' : '.'); };
 // The same as the backup's own (workers/backup/src/jobs.js setupKind), so a run's setup problem and the setup checked since are one
-const setupKind = (p) => `setup:${p.home}:${String(p.why).split(':')[0].replace(/\d+/g, '#')}`;
+const setupKind = (p) => (p.missing?.length ? `setup:${p.home}:needs ${[...p.missing].sort().join(', ')}` : `setup:${p.home}:${String(p.why).split(':')[0].replace(/\d+/g, '#')}`);
 
 /**
  * Whether the backup's trouble is alerted yet: once every piece of its setup is in place (`setUpAt`), or a week

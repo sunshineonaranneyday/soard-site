@@ -254,3 +254,325 @@ test('a busy moment at Backblaze’s sign-in is asked again, not taken for a hom
   const c = await b2Client({ B2_KEY_ID: 'b2-key-id', B2_APPLICATION_KEY: 'b2-app-key' }, { fetchImpl, wait: async () => {} });
   assert.equal(c.bucket.name, 'soard-backup-test');
 });
+
+test('the account’s inventory: every Durable Object is on the list with its reason or it’s a problem, and a listing the key may not read is named once', async () => {
+  const { inventory, coverage, NOT_COPIED } = await import('../src/inventory.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  world.addDb('db-1', 'main-db');
+  world.addDb('spare', 'spare-db');
+  world.buckets.files = new Map();
+  world.kv.push({ id: 'k1', title: 'DEVICES', keys: new Map() });
+  world.durableObjects.push({ script: 'soard-live-hub', class: 'LiveHub', id: 'a' }, { script: 'soard-live-hub', class: 'PrintHub', id: 'b' }, { script: 'deploy-coordinator', class: 'DeployCoordinator', id: 'c' }, { script: 'soard-backup', class: 'BackupState', id: 'd' }, { script: 'x', class: 'Unknown', id: 'e' });
+  const { cfApi } = await import('../src/sources.js');
+  const api = cfApi({ CF_ACCOUNT_ID: ACCT, CF_BACKUP_TOKEN: 'cf-read-key' }, { fetchImpl: (url, init) => world.handle(new Request(url, init)), pace: 0, retryMs: 0 });
+  const inv = await inventory(api, { skip: { database: 'spare-db', bucket: 'backup-staging' } });
+  assert.deepEqual(inv.databases.map((d) => d.name), ['main-db'], 'the spare drill database is left out');
+  assert.deepEqual(inv.buckets, ['files'], 'and so is the staging bucket');
+  assert.deepEqual(inv.kv, [{ id: 'k1', title: 'DEVICES' }]);
+  assert.deepEqual(inv.notListed, []);
+  const cov = coverage(inv);
+  assert.deepEqual(cov.problems.map((p) => p.kind), ['coverage:do:x:Unknown']);
+  assert.equal(cov.notCopied.length, 4, 'the four on the list, each with why');
+  assert.ok(Object.values(NOT_COPIED).every((why) => why.length > 20));
+  // The key can't list KV: a problem naming the permission, unless the setup check already names it
+  world.faults.denied = ['/storage/kv'];
+  const inv2 = await inventory(api, {});
+  assert.deepEqual(inv2.notListed.map((n) => [n.type, n.permission]), [['kv', 'Workers KV Storage Read']]);
+  assert.deepEqual(coverage(inv2).problems.map((p) => p.kind), ['coverage:list:kv', 'coverage:do:x:Unknown']);
+  const named = coverage(inv2, { permissionsNamed: ['Workers KV Storage Read'] }).problems;
+  assert.deepEqual(named.map((p) => p.kind), ['coverage:list:kv', 'coverage:do:x:Unknown'], 'still said: that night copied less');
+  assert.match(named[0].text, /KV namespaces weren’t copied tonight: the read-only key needs “Workers KV Storage Read” \(as the setup check says\)/);
+  assert.deepEqual(coverage(null).problems.map((p) => p.kind), ['coverage:inventory']);
+});
+
+test('what a run copies: every database and bucket found (the set ones keep their labels), and the set ones if nothing could be listed', async () => {
+  const { targets } = await import('../src/extra.js');
+  const env = { DATABASES: JSON.stringify([{ name: 'soard-db', id: 'id-1', label: 'SOARD website' }, { name: 'gone-db', id: 'id-9', label: 'Gone' }]), R2_BUCKETS: '["soard-files"]' };
+  const inv = { databases: [{ name: 'soard-db', id: 'id-1' }, { name: 'new-db', id: 'id-2' }], buckets: ['soard-files', 'store-photos'], kv: [], vectorize: [], workers: [], notListed: [] };
+  const t = targets(env, inv);
+  assert.deepEqual(t.databases.map((d) => [d.name, d.label]), [['soard-db', 'SOARD website'], ['new-db', 'new-db'], ['gone-db', 'Gone']], 'one set but no longer listed is still tried, so its trouble is said');
+  assert.equal(t.databases[1].quiet, false, 'a database found later has no quiet second to wait for');
+  assert.deepEqual(t.buckets, ['soard-files', 'store-photos']);
+  assert.deepEqual(targets(env, null).databases.map((d) => d.name), ['soard-db', 'gone-db']);
+  assert.deepEqual(targets(env, { ...inv, notListed: [{ type: 'buckets' }] }).buckets, ['soard-files']);
+});
+
+test('the setup check names each permission the key lacks, and never takes Stream switched off on Cloudflare’s side for one', async () => {
+  const { missingPermissions } = await import('../src/jobs.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  const env = { CF_ACCOUNT_ID: ACCT, CF_BACKUP_TOKEN: 'cf-read-key' };
+  const fetchImpl = (url, init) => world.handle(new Request(url, init));
+  assert.deepEqual(await missingPermissions(env, { fetchImpl }), []);
+  world.faults.streamListDown = true;
+  assert.deepEqual(await missingPermissions(env, { fetchImpl }), [], 'Stream’s lapse answers 403 too, saying it isn’t enabled');
+  world.faults.denied = ['/vectorize', '/workers/routes'];
+  assert.deepEqual(await missingPermissions(env, { fetchImpl }), ['Vectorize Read', 'Workers Routes Read']);
+  // A domain's firewall rules the key may not read: named as the permission that kind of rule needs
+  world.faults.denied = ['/rulesets/zr-waf'];
+  assert.deepEqual(await missingPermissions(env, { fetchImpl }), ['Zone WAF Read']);
+});
+
+test('the restore tool splits a Worker’s code back into its files, leaves out (and says so) a name that would land outside the folder, and takes the older one-file form', async () => {
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  const wasm = Buffer.from([0, 0x61, 0x73, 0x6d, 13, 10, 45, 45, 1, 0]);
+  const { body } = world.workerBody({ name: 'w', files: [{ name: 'index.js', type: 'application/javascript+module', bytes: Buffer.from('export default {};\r\n--not a boundary\r\n') }, { name: 'lib/x..y.wasm', type: 'application/wasm', bytes: wasm }, { name: '../escape.js', type: 'application/javascript', bytes: Buffer.from('no') }] });
+  const dir = mkdtempSync(join(tmpdir(), 'restore-worker-'));
+  const tool = join(dirname(fileURLToPath(import.meta.url)), '../scripts/restore.mjs');
+  const { spawnSync } = await import('node:child_process');
+  const { readFileSync, existsSync } = await import('node:fs');
+  try {
+    writeFileSync(join(dir, 'code'), body);
+    const r = spawnSync('node', [tool, 'worker', join(dir, 'code'), join(dir, 'out')], { encoding: 'utf8' });
+    assert.equal(r.status, 1, 'a part left out ends with an error');
+    assert.match(r.stdout, /Wrote 2 files/);
+    assert.match(r.stderr, /1 part was left out.*\.\.\/escape\.js/);
+    assert.equal(readFileSync(join(dir, 'out', 'index.js'), 'utf8'), 'export default {};\r\n--not a boundary\r\n');
+    assert.ok(readFileSync(join(dir, 'out', 'lib', 'x..y.wasm')).equals(wasm), 'a name with two dots in it is fine');
+    assert.equal(existsSync(join(dir, 'escape.js')) || existsSync(join(dir, 'out', 'escape.js')), false);
+    writeFileSync(join(dir, 'old'), 'addEventListener("fetch", () => {});\n');
+    const o = spawnSync('node', [tool, 'worker', join(dir, 'old'), join(dir, 'old-out')], { encoding: 'utf8' });
+    assert.equal(o.status, 0, o.stderr);
+    assert.equal(readFileSync(join(dir, 'old-out', 'index.js'), 'utf8'), 'addEventListener("fetch", () => {});\n');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('the restore tool opens a KV part ready for wrangler, leaving out a key whose expiry has passed', async () => {
+  const { encrypt } = await import('../src/stage.js');
+  const { gzipSync } = await import('node:zlib');
+  const { spawnSync } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+  const key = await newIdentity();
+  const now = Math.floor(Date.now() / 1000);
+  const items = [{ key: 'a', value: 'eA==', base64: true }, { key: 'old', value: 'eQ==', base64: true, expiration: now - 10 }, { key: 'later', value: 'eg==', base64: true, expiration: now + 86400, metadata: { n: 1 } }];
+  const cipher = await encrypt(key.recipient, new Response(gzipSync(Buffer.from(JSON.stringify(items)))).body);
+  const dir = mkdtempSync(join(tmpdir(), 'restore-kv-'));
+  try {
+    const file = join(dir, '2026-11-17 DEVICES part 1 of 1 (abc).json.gz.age');
+    writeFileSync(file, Buffer.from(await new Response(cipher).arrayBuffer()));
+    writeFileSync(join(dir, 'key.txt'), `${key.identity}\n`);
+    const r = spawnSync('node', [join(dirname(fileURLToPath(import.meta.url)), '../scripts/restore.mjs'), 'kv', file, '--key', join(dir, 'key.txt')], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /Wrote 2 keys .*1 left out: expired/);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, '2026-11-17 DEVICES part 1 of 1 (abc) ready.json'))).map((x) => x.key), ['a', 'later']);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** A small staging bucket and backup records in memory, for the KV jobs on their own */
+function memoryBackup(world, extra = {}) {
+  const objects = new Map();
+  const STAGING = {
+    put: async (k, v) => { objects.set(k, Buffer.from(typeof v === 'string' ? v : v instanceof Uint8Array ? v : await new Response(v).arrayBuffer())); },
+    head: async (k) => (objects.has(k) ? { size: objects.get(k).length } : null),
+    get: async (k) => (objects.has(k) ? { text: async () => objects.get(k).toString('utf8'), arrayBuffer: async () => objects.get(k) } : null),
+    delete: async (k) => { for (const x of [].concat(k)) objects.delete(x); },
+    createMultipartUpload: async () => { throw new Error('parts are small here'); },
+  };
+  const kv = new Map();
+  const copies = new Map();
+  let keyPair;
+  const state = {
+    get: async (k) => kv.get(k) ?? null, set: async (k, v) => { kv.set(k, v); },
+    copy: async (id) => copies.get(id) || null,
+    addCopy: async (c) => { if (!copies.has(id(c))) copies.set(id(c), c); return copies.get(id(c)); },
+    publicKey: async () => (keyPair ||= await newIdentity()),
+  };
+  const id = (c) => c.id;
+  const env = { STAGING, CF_ACCOUNT_ID: ACCT, CF_BACKUP_TOKEN: 'cf-read-key', API_PACE_MS: '0', API_RETRY_MS: '0', KV_PART_KEYS: '3', ...extra };
+  const fetchImpl = (url, init) => world.handle(new Request(url, init));
+  return { env, state, objects, copies, fetchImpl, open: async (c) => { const { decrypt } = await import('../src/stage.js'); const { gunzipSync } = await import('node:zlib'); return JSON.parse(gunzipSync(Buffer.from(await new Response(await decrypt(keyPair.identity, new Response(objects.get(c.staged)).body)).arrayBuffer()))); } };
+}
+
+test('KV: a night started again goes on from its own listing, so its manifest is of one listing; a key gone since is said, one listed but unreadable is trouble', async () => {
+  const { kvListJob, kvPartJob, kvDoneJob } = await import('../src/extra.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  const ns = { id: 'k1', title: 'DEVICES', keys: new Map('abcdefg'.split('').map((c) => [c, { value: Buffer.from(c.repeat(3)) }])) };
+  world.kv.push(ns);
+  const b = memoryBackup(world);
+  const run = '2026-11-17';
+  const l1 = await kvListJob(b.env, b.state, ns, run, { fetchImpl: b.fetchImpl });
+  assert.deepEqual([l1.count, l1.parts], [7, 3]);
+  await kvPartJob(b.env, b.state, {}, ns, run, 1, l1, { fetchImpl: b.fetchImpl });
+  // The night breaks here; before it starts again, 'b' and 'e' are removed and 'a0' added
+  ns.keys.delete('b'); ns.keys.delete('e'); ns.keys.set('a0', { value: Buffer.from('new') });
+  const l2 = await kvListJob(b.env, b.state, ns, run, { fetchImpl: b.fetchImpl });
+  assert.deepEqual(l2, l1, 'the night started again keeps its own listing');
+  const r2 = await kvPartJob(b.env, b.state, {}, ns, run, 2, l2, { fetchImpl: b.fetchImpl });
+  assert.equal(r2.gone, 1, 'e went between the listing and its part');
+  await kvPartJob(b.env, b.state, {}, ns, run, 3, l2, { fetchImpl: b.fetchImpl });
+  const done = await kvDoneJob(b.env, b.state, {}, ns, run, l2);
+  assert.equal(done.keys, 6, 'every key of the listing that still existed: none dropped at a part’s edge');
+  const man = JSON.parse([...b.copies.values()].find((c) => c.kind === 'manifest').path ? b.objects.get([...b.copies.values()].find((c) => c.kind === 'manifest').staged).toString() : '{}');
+  const got = [];
+  for (const p of man.parts) got.push(...(await b.open([...b.copies.values()].find((c) => c.path === p.file))).map((x) => x.key));
+  assert.deepEqual(got, ['a', 'b', 'c', 'd', 'f', 'g'], 'one listing, part by part (b was copied before it went)');
+  // A listing that isn't the one the parts were counted from is refused, never mixed in
+  const stale = { ...l2, list: 'not-this-one' };
+  await assert.rejects(kvPartJob(b.env, b.state, {}, ns, run, 1, stale, { fetchImpl: b.fetchImpl }), /changed under this run/);
+  await assert.rejects(kvDoneJob(b.env, b.state, {}, ns, run, stale), /no copy from this run’s listing/);
+  // The next night: a key Cloudflare lists but won't give is trouble, never a key quietly left out
+  world.faults.kvUnreadable = 'c';
+  const l3 = await kvListJob(b.env, b.state, ns, '2026-11-18', { fetchImpl: b.fetchImpl });
+  await assert.rejects(kvPartJob(b.env, b.state, {}, ns, '2026-11-18', 1, l3, { fetchImpl: b.fetchImpl }), /listed but Cloudflare won’t give its value/);
+});
+
+test('the inventory tells Cloudflare being down from a permission the key lacks, and a Worker’s static files no one has checked are a problem', async () => {
+  const { inventory, coverage } = await import('../src/inventory.js');
+  const { cfApi } = await import('../src/sources.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  world.workers.push({ name: 'site', modified: '2026-01-01T00:00:00Z', assets: true, files: null });
+  world.faults.listingDown = '/queues';
+  const api = cfApi({ CF_ACCOUNT_ID: ACCT, CF_BACKUP_TOKEN: 'cf-read-key' }, { fetchImpl: (url, init) => world.handle(new Request(url, init)), pace: 0, retryMs: 0, wait: async () => {} });
+  const inv = await inventory(api, {});
+  assert.deepEqual(inv.notListed.map((n) => [n.type, n.permission]), [['queues', null]], 'Cloudflare failing is never taken for a permission');
+  assert.match(inv.notListed[0].why, /Cloudflare 500/);
+  const cov = coverage(inv, { permissionsNamed: ['Workers Scripts Read'] });
+  assert.deepEqual(cov.problems.map((p) => p.kind), ['coverage:list:queues', 'coverage:assets:site'], 'said even while a permission is named: it isn’t one');
+  assert.doesNotMatch(cov.problems[0].text, /give the read-only key/);
+});
+
+test('settings keep a plain variable’s value and never a key’s, nor a plain one whose name looks like a key', () => {
+  const out = redact({ script: { bindings: [{ name: 'MEDUSA_URL', type: 'plain_text', text: 'https://store.example' }, { name: 'K', type: 'secret_text', text: 'shh' }, { name: 'MY_TOKEN', type: 'plain_text', text: 'shh' }, { name: 'CONF', type: 'json', json: { a: 1 } }], env_vars: { ORIGIN: { type: 'plain_text', value: 'https://example.org' }, S: { type: 'secret_text', value: 'shh' } } } });
+  assert.equal(JSON.stringify(out).includes('shh'), false);
+  assert.equal(out.script.bindings[0].text, 'https://store.example');
+  assert.deepEqual(out.script.bindings[3].json, { a: 1 });
+  assert.deepEqual(out.script.env_vars, { ORIGIN: { type: 'plain_text', value: 'https://example.org' }, S: { type: 'secret_text' } });
+});
+
+test('the restore tool sets aside, with the command that sends it, a KV key whose metadata wrangler won’t take', async () => {
+  const { encrypt } = await import('../src/stage.js');
+  const { gzipSync } = await import('node:zlib');
+  const { spawnSync } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+  const key = await newIdentity();
+  const items = [{ key: 'a', value: 'eA==', base64: true, metadata: { n: 1 } }, { key: 'b', value: 'eQ==', base64: true, metadata: 'reader-1' }, { key: 'c', value: 'eg==', base64: true, metadata: 7 }, { key: 'd', value: 'eg==', base64: true }];
+  const cipher = await encrypt(key.recipient, new Response(gzipSync(Buffer.from(JSON.stringify(items)))).body);
+  const dir = mkdtempSync(join(tmpdir(), 'restore-kv2-'));
+  try {
+    const file = join(dir, 'p.json.gz.age');
+    writeFileSync(file, Buffer.from(await new Response(cipher).arrayBuffer()));
+    writeFileSync(join(dir, 'key.txt'), key.identity);
+    const r = spawnSync('node', [join(dirname(fileURLToPath(import.meta.url)), '../scripts/restore.mjs'), 'kv', file, '--key', join(dir, 'key.txt')], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'p ready.json'))).map((x) => x.key), ['a', 'd']);
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, 'p for the API.json'))).map((x) => [x.key, x.metadata]), [['b', 'reader-1'], ['c', 7]]);
+    assert.match(r.stdout, /curl -X PUT .*\/storage\/kv\/namespaces\/.*\/bulk.*--data-binary @/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Vectorize: a vector the index listed but doesn’t give back, with the index unchanged, is trouble; once the index has changed it was removed', async () => {
+  const { vectorizeListJob, vectorizePartJob } = await import('../src/extra.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  const ix = { name: 'idx', dimensions: 2, metric: 'cosine', mutation: null, vectors: new Map() };
+  world.vectorize.push(ix);
+  for (let i = 1; i <= 4; i++) world.setVector(ix, `v${i}`, { values: [i, 0] });
+  const b = memoryBackup(world, { VECTORIZE_PART: '10' });
+  const l = await vectorizeListJob(b.env, b.state, ix, '2026-11-17', { fetchImpl: b.fetchImpl });
+  world.faults.vectorWithheld = 'v3';
+  await assert.rejects(vectorizePartJob(b.env, b.state, {}, ix, '2026-11-17', 1, l, { fetchImpl: b.fetchImpl }), /didn’t give back 1 vector/);
+  // Removed since the listing: the index changed, so it's gone, and the next night copies the index again
+  world.faults.vectorWithheld = null;
+  ix.vectors.delete('v3'); ix.mutation = 'after-a-delete';
+  const r = await vectorizePartJob(b.env, b.state, {}, ix, '2026-11-17', 1, l, { fetchImpl: b.fetchImpl });
+  assert.equal(r.vectors, 3);
+});
+
+test('a permission lost later is an alert of its own; a Pages project or a regional bucket the backup doesn’t copy is named', async () => {
+  const { setupKind } = await import('../src/jobs.js');
+  const { coverage } = await import('../src/inventory.js');
+  const one = setupKind({ home: 'cloudflare', why: 'the read-only key needs these added: AI Gateway Read (…)', missing: ['AI Gateway Read'] });
+  const two = setupKind({ home: 'cloudflare', why: 'the read-only key needs these added: AI Gateway Read, Workers KV Storage Read (…)', missing: ['Workers KV Storage Read', 'AI Gateway Read'] });
+  assert.notEqual(one, two);
+  assert.equal(two, 'setup:cloudflare:needs AI Gateway Read, Workers KV Storage Read');
+  assert.equal(setupKind({ home: 'b2', why: 'the Backblaze key can delete: make a key with read and write only' }), 'setup:b2:the Backblaze key can delete');
+  const inv = { databases: [], buckets: [], regionBuckets: [{ name: 'eu-files', region: 'eu' }], kv: [], vectorize: [], workers: [], durableObjects: [], queues: [], hyperdrive: [], pipelines: [], notListed: [], pages: [{ name: 'soard-site', repo: 'org/soard-site' }, { name: 'other', repo: 'org/other' }, { name: 'upload', repo: null }] };
+  assert.deepEqual(coverage(inv, { repos: ['org/soard-site'] }).problems.map((p) => p.kind), ['coverage:region:eu-files', 'coverage:pages:other', 'coverage:pages:upload']);
+});
+
+test('Vectorize: a listing shorter than the index, with the index unchanged, is trouble', async () => {
+  const { vectorizeListJob } = await import('../src/extra.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  const ix = { name: 'idx', dimensions: 2, metric: 'cosine', mutation: null, vectors: new Map() };
+  world.vectorize.push(ix);
+  for (let i = 1; i <= 3; i++) world.setVector(ix, `v${i}`, { values: [i, 0] });
+  const b = memoryBackup(world);
+  // The index says it holds one more than its listing names
+  const real = world.handle;
+  world.handle = async (req) => { const res = await real(req); if (new URL(req.url).pathname.endsWith('/info')) { const j = await res.json(); j.result.vectorCount += 1; return Response.json(j); } return res; };
+  await assert.rejects(vectorizeListJob(b.env, b.state, ix, '2026-11-17', { fetchImpl: (url, init) => world.handle(new Request(url, init)) }), /listed 3 vectors, though it holds 4/);
+});
+
+test('the restore tool splits a big KV part into requests Cloudflare takes, and won’t open anything inside a synced folder', async () => {
+  const { encrypt } = await import('../src/stage.js');
+  const { gzipSync } = await import('node:zlib');
+  const { spawnSync } = await import('node:child_process');
+  const { readFileSync } = await import('node:fs');
+  const tool = join(dirname(fileURLToPath(import.meta.url)), '../scripts/restore.mjs');
+  const key = await newIdentity();
+  const items = Array.from({ length: 1500 }, (_, i) => ({ key: `k${String(i).padStart(4, '0')}`, value: 'eA==', base64: true }));
+  const cipher = await encrypt(key.recipient, new Response(gzipSync(Buffer.from(JSON.stringify(items)))).body);
+  const dir = mkdtempSync(join(tmpdir(), 'restore-kv3-'));
+  try {
+    const file = join(dir, 'big.json.gz.age');
+    writeFileSync(file, Buffer.from(await new Response(cipher).arrayBuffer()));
+    writeFileSync(join(dir, 'key.txt'), key.identity);
+    const r = spawnSync('node', [tool, 'kv', file, '--key', join(dir, 'key.txt')], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.deepEqual([JSON.parse(readFileSync(join(dir, 'big ready 1.json'))).length, JSON.parse(readFileSync(join(dir, 'big ready 2.json'))).length], [1000, 500]);
+    assert.equal((r.stdout.match(/kv bulk put/g) || []).length, 2);
+    const synced = spawnSync('node', [tool, 'kv', join(dir, 'Library', 'CloudStorage', 'GoogleDrive-x', 'Shared drives', 'Website backup', 'p.json.gz.age'), '--key', join(dir, 'key.txt')], { encoding: 'utf8' });
+    assert.equal(synced.status, 2);
+    assert.match(synced.stderr, /syncs to the cloud/);
+    // The key read from a synced folder is refused too, and a Windows OneDrive path
+    assert.equal(spawnSync('node', [tool, 'kv', file, '--key', join(dir, 'Dropbox', 'key.txt')], { encoding: 'utf8' }).status, 2);
+    assert.equal(spawnSync('node', [tool, 'kv', 'C:\\Users\\x\\OneDrive\\Desktop\\p.json.gz.age', '--key', join(dir, 'key.txt')], { encoding: 'utf8' }).status, 2);
+    for (const team of ['C:\\Users\\x\\Dropbox (Sunshine on a Ranney Day)\\p.json.gz.age', '/Users/x/SOARD Dropbox/p.json.gz.age', 'C:\\Users\\x\\Box\\p.json.gz.age']) assert.equal(spawnSync('node', [tool, 'kv', team, '--key', join(dir, 'key.txt')], { encoding: 'utf8' }).status, 2, team);
+    // A link into a synced folder is followed
+    const { symlinkSync, mkdirSync } = await import('node:fs');
+    mkdirSync(join(dir, 'Dropbox'), { recursive: true });
+    symlinkSync(join(dir, 'Dropbox'), join(dir, 'looks-local'));
+    assert.equal(spawnSync('node', [tool, 'kv', join(dir, 'looks-local', 'p.json.gz.age'), '--key', join(dir, 'key.txt')], { encoding: 'utf8' }).status, 2);
+    // On a Mac, a folder iCloud syncs (marked by the Mac itself), as this Mac's Desktop is
+    const { homedir } = await import('node:os');
+    if (process.platform === 'darwin' && spawnSync('xattr', ['-p', 'com.apple.file-provider-domain-id', join(homedir(), 'Desktop')]).status === 0) {
+      assert.equal(spawnSync('node', [tool, 'kv', join(homedir(), 'Desktop', 'never-made', 'p.json.gz.age'), '--key', join(dir, 'key.txt')], { encoding: 'utf8' }).status, 2);
+    }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('settings: a cursor is sent as Cloudflare gave it, an empty one ends a listing, and only a refusal of the domain registrations is a note', async () => {
+  const { readSettings } = await import('../src/settings.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  const env = { CF_ACCOUNT_ID: ACCT, CF_BACKUP_TOKEN: 'cf-read-key' };
+  let calls = 0;
+  const fetchImpl = (url, init) => { if (String(url).includes('/registrar/')) calls++; return world.handle(new Request(url, init)); };
+  const r = await readSettings(env, { fetchImpl });
+  assert.deepEqual(r.problems, [], JSON.stringify(r.problems));
+  assert.deepEqual(r.json.accountRulesets.map((x) => x.id), ['rs-root'], 'the second page, by its cursor');
+  assert.equal(calls, 1, 'a full page with an empty cursor is the end, not a reason to ask again');
+  world.faults.registrations = 503;
+  const down = await readSettings(env, { fetchImpl });
+  assert.deepEqual(down.problems.map((p) => p.what), ['Domain registrations'], 'Cloudflare down is trouble');
+  world.faults.registrations = 403;
+  const refused = await readSettings(env, { fetchImpl });
+  assert.deepEqual(refused.problems, []);
+  assert.match(refused.off.map((o) => o.what).join(' '), /domain registrations \(the key isn’t allowed/);
+});
+
+test('the restore tool won’t open anything, nor read the key, inside a folder of code', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const { mkdirSync } = await import('node:fs');
+  const dir = mkdtempSync(join(tmpdir(), 'restore-repo-'));
+  try {
+    mkdirSync(join(dir, 'site', '.git'), { recursive: true });
+    mkdirSync(join(dir, 'site', 'workers', 'backup'), { recursive: true });
+    writeFileSync(join(dir, 'site', 'workers', 'backup', 'key.txt'), 'AGE-SECRET-KEY-PQ-1X');
+    mkdirSync(join(dir, 'download'), { recursive: true });
+    const tool = join(dirname(fileURLToPath(import.meta.url)), '../scripts/restore.mjs');
+    const r = spawnSync('node', [tool, 'kv', join(dir, 'download', 'p.json.gz.age'), '--key', join(dir, 'site', 'workers', 'backup', 'key.txt')], { encoding: 'utf8' });
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /inside a folder of code/);
+    const missing = spawnSync('node', [tool, 'kv', join(dir, 'download', 'p.json.gz.age'), '--key', join(dir, 'download', 'key.txt')], { encoding: 'utf8' });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /There's no key file at/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

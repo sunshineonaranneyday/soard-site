@@ -54,7 +54,7 @@ export class SourceError extends Error {
 /** Cloudflare's API with the read-only key, one call at a time and never faster than PACE_MS */
 export function cfApi(env, { fetchImpl = fetch, wait = (ms) => new Promise((r) => setTimeout(r, ms)), pace = PACE_MS, retryMs = 2000 } = {}) {
   let last = 0;
-  const call = async (path, { raw = false, query } = {}) => {
+  const call = async (path, { raw = false, query, method = 'GET', body: payload = undefined, headers: extraHeaders = {} } = {}) => {
     if (!env.CF_BACKUP_TOKEN) throw new SourceError('the read-only backup key (CF_BACKUP_TOKEN) isn’t set', 0);
     const qs = query ? `?${new URLSearchParams(Object.entries(query).filter(([, v]) => v != null && v !== ''))}` : '';
     for (let attempt = 0; ; attempt++) {
@@ -63,7 +63,7 @@ export function cfApi(env, { fetchImpl = fetch, wait = (ms) => new Promise((r) =
       last = Date.now();
       let res;
       try {
-        res = await fetchStarted(fetchImpl, `${API}/accounts/${env.CF_ACCOUNT_ID}${path}${qs}`, { headers: { Authorization: `Bearer ${env.CF_BACKUP_TOKEN}` } });
+        res = await fetchStarted(fetchImpl, `${API}/accounts/${env.CF_ACCOUNT_ID}${path}${qs}`, { method, headers: { Authorization: `Bearer ${env.CF_BACKUP_TOKEN}`, ...extraHeaders, ...(payload !== undefined ? { 'Content-Type': 'application/json' } : {}) }, ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}) });
       } catch (e) {
         if (attempt < 4) { await wait(retryMs * (attempt + 1)); continue; }
         throw e;

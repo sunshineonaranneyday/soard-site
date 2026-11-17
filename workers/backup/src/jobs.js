@@ -23,8 +23,9 @@ import { driveToken, listDrives, pickDrive, download as driveDownload, uploadSma
 import { b2Client, B2Error } from './b2.js';
 import { cfApi, listImages, listVideos, listBucket, openItem, pathFor, SourceError } from './sources.js';
 import { listRefs, bundleStream } from './github.js';
-import { readSettings, KEY_LINK, KEY_EXTRAS } from './settings.js';
+import { readSettings, KEY_LINK, KEY_EXTRAS, PHASE_PERMISSION, boxOf } from './settings.js';
 import { readme, README_NAME, README_VERSION } from './readme.js';
+import { coverage } from './inventory.js';
 import { createHash } from 'node:crypto';
 
 const enc = new TextEncoder();
@@ -39,12 +40,12 @@ export const config = (env) => ({
   pace: env.API_PACE_MS != null ? Number(env.API_PACE_MS) : undefined,
   retryMs: env.API_RETRY_MS != null ? Number(env.API_RETRY_MS) : undefined,
 });
-const year = (run) => run.slice(0, 4);
+export const year = (run) => run.slice(0, 4);
 const short = (repo) => repo.split('/').pop();
 const sha256Hex = (s) => createHash('sha256').update(s).digest('hex');
 // Each staging attempt has its own file: a second run never overwrites the bytes another run's copy points at
-const stageKey = (id) => `stage/${encodeURIComponent(id)}/${crypto.randomUUID()}`;
-const errText = (e) => String(e?.message || e).slice(0, 300);
+export const stageKey = (id) => `stage/${encodeURIComponent(id)}/${crypto.randomUUID()}`;
+export const errText = (e) => String(e?.message || e).slice(0, 300);
 
 /** The homes that are set up, ready to use: { drive, b2, problems } */
 export async function homes(env, state, { fetchImpl = fetch } = {}) {
@@ -64,6 +65,45 @@ export async function homes(env, state, { fetchImpl = fetch } = {}) {
     try { b2 = await b2Client(env, { fetchImpl }); } catch (e) { problems.push({ home: 'b2', why: errText(e) }); }
   } else problems.push({ home: 'b2', why: 'the Backblaze key (B2_KEY_ID, B2_APPLICATION_KEY) isn’t set yet' });
   return { drive, b2, problems };
+}
+
+// What the backup reads with its key, and the permission each needs (as Cloudflare's token page names it)
+const PROBES = [
+  ['D1 Read', '/d1/database?per_page=1'], ['Workers R2 Storage Read', '/r2/buckets?per_page=1'], ['Workers KV Storage Read', '/storage/kv/namespaces?per_page=1'],
+  ['Vectorize Read', '/vectorize/v2/indexes'], ['Workers Scripts Read', '/workers/scripts'], ['Images Read', '/images/v1/stats'], ['Stream Read', '/stream/storage-usage'],
+  ['Hyperdrive Read', '/hyperdrive/configs'], ['Pipelines Read', '/pipelines'], ['AI Gateway Read', '/ai-gateway/gateways'],
+  ['Email Routing Addresses Read', '/email/routing/addresses'], ['Account Settings Read', '/challenges/widgets'], ['Access: Apps and Policies Read', '/access/apps'],
+  ['Pages Read', '/pages/projects'], ['Account Rulesets Read', '/rulesets'], ['Account Filter Lists Read', '/rules/lists'], ['Notifications Read', '/alerting/v3/policies'],
+];
+/** The permissions the key lacks: a listing Cloudflare refuses for want of permission (a product that's off, like Stream lapsed, isn't one) */
+export async function missingPermissions(env, { fetchImpl = fetch } = {}) {
+  const missing = [];
+  const refused = async (url) => {
+    try {
+      const res = await fetchImpl(url, { headers: { Authorization: `Bearer ${env.CF_BACKUP_TOKEN}` } });
+      if (res.status !== 401 && res.status !== 403) return false;
+      const body = await res.json().catch(() => null);
+      // Stream's lapse answers 403 "Authorization Failure" for any key, saying "Cloudflare Stream not enabled" (seen Sept and Nov 2026)
+      const words = [...(body?.errors || []), ...(body?.messages || [])].map((e) => `${e?.code ?? ''} ${e?.message ?? e}`).join(' ');
+      return !/not enabled|not entitled|subscription|purchase/i.test(words);
+    } catch { return false; }
+  };
+  const A = `https://api.cloudflare.com/client/v4/accounts/${env.CF_ACCOUNT_ID}`;
+  for (const [name, path] of PROBES) if (await refused(`${A}${path}`)) missing.push(name);
+  // Zone-level: the Workers routes, and each domain's own rule sets (each kind of rule needs its own permission)
+  try {
+    const H = { headers: { Authorization: `Bearer ${env.CF_BACKUP_TOKEN}` } };
+    const zones = (await (await fetchImpl(`https://api.cloudflare.com/client/v4/zones?account.id=${env.CF_ACCOUNT_ID}&per_page=50`, H)).json())?.result || [];
+    if (zones[0] && await refused(`https://api.cloudflare.com/client/v4/zones/${zones[0].id}/workers/routes`)) missing.push('Workers Routes Read');
+    for (const z of zones) {
+      const sets = (await (await fetchImpl(`https://api.cloudflare.com/client/v4/zones/${z.id}/rulesets`, H)).json())?.result || [];
+      for (const r of sets.filter((x) => x.kind === 'zone')) {
+        const need = PHASE_PERMISSION[r.phase];
+        if (need && !missing.includes(need) && await refused(`https://api.cloudflare.com/client/v4/zones/${z.id}/rulesets/${r.id}`)) missing.push(need);
+      }
+    }
+  } catch { /* the zone settings say so in the run */ }
+  return missing;
 }
 
 /** Everything the backup needs, checked now: what the admin shows under Automations → Hosting → Backup */
@@ -95,6 +135,12 @@ export async function checkSetup(env, state, { fetchImpl = fetch } = {}) {
       await d1Http({ accountId: env.CF_ACCOUNT_ID, databaseId: cfg.databases[0].id, token: env.CF_BACKUP_TOKEN, fetchImpl }).bookmark();
       out.cloudflare.ok = true;
     } catch (e) { out.cloudflare.ok = false; out.problems.push({ home: 'cloudflare', why: `the read-only key can’t read the database: ${errText(e)}` }); }
+    // Every kind of thing the backup reads with the key, one listing each: a permission it lacks is named here, at setup
+    const missing = await missingPermissions(env, { fetchImpl });
+    out.cloudflare.missing = missing;
+    // Where each is on Cloudflare's token page, for the admin's step
+    out.cloudflare.missingHow = missing.map((name) => { const [scope, box] = boxOf(name); return { name, scope, box }; });
+    if (missing.length) out.problems.push({ home: 'cloudflare', why: `the read-only key needs these added: ${missing.join(', ')} (Cloudflare → Manage Account → Account API Tokens → SOARD backup (read only) → Edit)`, missing });
   }
   if (!env.GITHUB_BACKUP_TOKEN) out.problems.push({ home: 'github', why: 'the GitHub read-only key (GITHUB_BACKUP_TOKEN) isn’t set yet' });
   else {
@@ -149,14 +195,14 @@ export async function checkSetup(env, state, { fetchImpl = fetch } = {}) {
 }
 
 // The recorded copy wins; a staged file that lost (another run recorded the copy first) is removed
-async function record(env, state, copy) {
+export async function record(env, state, copy) {
   const got = await state.addCopy(copy);
   if (got.staged !== copy.staged) await env.STAGING.delete(copy.staged);
   return got;
 }
 
 /** A plain (unencrypted) file staged as a copy: manifests, summaries, drill reports */
-async function stagePlain(env, state, { id, kind, run, path, bytes, meta = null }) {
+export async function stagePlain(env, state, { id, kind, run, path, bytes, meta = null }) {
   const have = await state.copy(id);
   if (have) return have;
   const key = stageKey(id);
@@ -170,7 +216,7 @@ async function stagePlain(env, state, { id, kind, run, path, bytes, meta = null 
  * Encrypts and stages a stream (made by `open()`, only if the copy isn't already there) as a copy. `expect` is
  * what the source said it is ({ size, md5 }): bytes that don't match were cut short or changed on the way.
  */
-async function stageCopy(env, state, { id, kind, run, path, open, gzip = false, meta = null, expect = null }) {
+export async function stageCopy(env, state, { id, kind, run, path, open, gzip = false, meta = null, expect = null }) {
   const have = await state.copy(id);
   if (have) return have;
   const { recipient } = await state.publicKey();
@@ -269,11 +315,11 @@ export async function settingsJob(env, state, h, run, { by, fetchImpl = fetch } 
       await stageCopy(env, state, { id: zid, kind: 'settings', run, path: `Cloudflare settings/${year(run)}/${run} ${z.name}.age`, open: async () => enc.encode(z.text) });
       zoneIds.push(zid);
     }
-    c = await stageCopy(env, state, { id, kind: 'settings', run, path: `Cloudflare settings/${year(run)}/${run} cloudflare-settings.json.age`, open: async () => enc.encode(JSON.stringify(read.json, null, 1)), meta: { zones: read.zones, records: read.records, notRead: read.problems.map((p) => p.what), zoneIds } });
+    c = await stageCopy(env, state, { id, kind: 'settings', run, path: `Cloudflare settings/${year(run)}/${run} cloudflare-settings.json.age`, open: async () => enc.encode(JSON.stringify(read.json, null, 1)), meta: { zones: read.zones, records: read.records, notRead: read.problems.map((p) => p.what), needs: read.problems.map((p) => p.permission || null), off: read.off.map((p) => p.what), zoneIds } });
   }
   for (const zid of c.meta.zoneIds) await ship(env, h, state, zid, by);
   c = await ship(env, h, state, id, by);
-  return { zones: c.meta.zones, records: c.meta.records, notRead: c.meta.notRead, shipped: !!c.shipped_at };
+  return { zones: c.meta.zones, records: c.meta.records, notRead: c.meta.notRead, needs: c.meta.needs || [], off: c.meta.off || [], shipped: !!c.shipped_at };
 }
 
 /** One repo, as a git bundle: all of it on the month's first copy, otherwise only what's new (and nothing if nothing changed) */
@@ -305,10 +351,10 @@ export async function codeJob(env, state, h, repo, run, { by, fetchImpl = fetch 
 }
 
 /** The run's listing of every photo, video and R2 file, recorded; a source that couldn't be listed is in `error` */
-export async function listJob(env, state, run, { fetchImpl = fetch, pace = config(env).pace } = {}) {
+export async function listJob(env, state, run, { fetchImpl = fetch, pace = config(env).pace, buckets = config(env).buckets } = {}) {
   const api = cfApi(env, { fetchImpl, pace });
   const out = {};
-  const sources = [['images', () => listImages(api)], ['videos', () => listVideos(api)], ...config(env).buckets.map((b) => [`r2:${b}`, () => listBucket(api, b)])];
+  const sources = [['images', () => listImages(api)], ['videos', () => listVideos(api)], ...buckets.map((b) => [`r2:${b}`, () => listBucket(api, b)])];
   for (const [source, list] of sources) {
     try {
       let items = await list();
@@ -519,7 +565,9 @@ export async function drillFilesJob(env, state, h, run) {
   const parts = [];
   if (homesUp(h).length === 2) {
     const identity = await state.secretKey();
-    for (const c of await state.sampleCopies('file', 3)) {
+    // A few files, and one each of the key-value, search-index and Worker-code copies there are
+    const sample = [...(await state.sampleCopies('file', 3)), ...(await state.sampleCopies('kv', 1)), ...(await state.sampleCopies('vectorize', 1)), ...(await state.sampleCopies('worker', 1))];
+    for (const c of sample) {
       for (const w of homesUp(h)) {
         try {
           const plain = await decrypt(identity, checked(await fromHome(h, c, w), c.sha256, `the copy in ${w}`));
@@ -595,12 +643,12 @@ export async function drillCodeJob(env, state, h, repo, run) {
 }
 
 /** The drill's report: ok, failed, or skipped (nothing to drill yet), written beside the run */
-export async function drillReportJob(env, state, h, run, { by } = {}) {
+export async function drillReportJob(env, state, h, run, { by, databases = config(env).databases.map((d) => d.name) } = {}) {
   const d = (await state.get(drillKey(run))) || {};
   const problems = [...(d.databases || []), ...(d.files || []), ...(d.code || [])].filter((p) => p.ok === false).map((p) => p.problem);
   // Passed only when every database was restored and came back exactly: one skipped (its copy not in both homes)
   // leaves the drill to run again with the next run
-  const skipped = config(env).databases.map((db) => db.name).filter((name) => !(d.databases || []).some((x) => x.name === name && x.ok === true));
+  const skipped = databases.filter((name) => !(d.databases || []).some((x) => x.name === name && x.ok === true));
   const report = { run, at: new Date().toISOString(), databases: d.databases || [], files: d.files || [], code: d.code || [], problems, ok: problems.length ? false : skipped.length ? null : true };
   if (report.ok === null) report.skipped = `not drilled yet (not in both homes): ${skipped.join(', ')}`;
   await state.set('drill', report);
@@ -627,6 +675,12 @@ const forHomes = (s, plainProblems) => ({
   code: (s.code || []).filter(Boolean).map((c) => ({ repo: c.repo, full: c.full ?? null, unchanged: !!c.unchanged })),
   listed: Object.fromEntries(Object.entries(s.listed || {}).map(([k, v]) => [k, { found: v?.found ?? null, listed: !v?.error }])),
   files: s.files || null, failures: s.failures.length, waitingToShip: s.waitingToShip, homes: s.homes, drill: s.drill && typeof s.drill === 'object' ? { ok: s.drill.ok } : null, counts: s.counts,
+  // What the account held, and what of it has no copy of its own and why (names of Cloudflare's own pieces, never data)
+  account: s.inventory || null,
+  kv: (s.kv || []).map((k) => ({ namespace: k.namespace, keys: k.keys ?? null, gone: k.gone || 0, parts: k.parts ?? null, changed: !!k.changed, ok: k.ok })),
+  vectorize: (s.vectorize || []).map((v) => ({ index: v.index, vectors: v.vectors ?? null, unchanged: !!v.unchanged, ok: v.ok })),
+  workers: s.workers ? { copied: s.workers.copied, unchanged: s.workers.unchanged, noCode: s.workers.noCode || [], failed: (s.workers.failed || []).map((f) => f.worker) } : null,
+  notCopied: s.notCopied || [],
 });
 
 /**
@@ -634,7 +688,8 @@ const forHomes = (s, plainProblems) => ({
  * are none. It's kept first (Automations, the site's alert), then written to the homes as the run's last file.
  */
 /** A setup problem's kind: its home and what's wrong, without the details or numbers that change from day to day */
-export const setupKind = (p) => `setup:${p.home}:${String(p.why).split(':')[0].replace(/\d+/g, '#')}`;
+// (permissions the key lacks: one kind per set, so a permission lost later is a new alert, not hidden in an old one)
+export const setupKind = (p) => (p.missing?.length ? `setup:${p.home}:needs ${[...p.missing].sort().join(', ')}` : `setup:${p.home}:${String(p.why).split(':')[0].replace(/\d+/g, '#')}`);
 
 export async function finishJob(env, state, h, run, sections, { by, now = Date.now() } = {}) {
   // Each problem has a kind that stays the same while the trouble does (the site alerts once per kind)
@@ -680,7 +735,34 @@ export async function finishJob(env, state, h, run, sections, { by, now = Date.n
   if (sections.audit?.lost) add('drive-lost', `${sections.audit.lost} cop${sections.audit.lost === 1 ? 'y was' : 'ies were'} gone from Google Drive (deleted, or put in the trash) and ${sections.audit.lost === 1 ? 'is' : 'are'} being sent there again from Backblaze`);
   const setup = (await state.get('setup')) || {};
   for (const p of setup.problems || []) add(setupKind(p), p.why);
-  if (sections.settings?.notRead?.length) add('settings-not-read', `the read-only key couldn’t read ${sections.settings.notRead.length} of Cloudflare’s settings (${sections.settings.notRead.slice(0, 3).join('; ')}): add those permissions to it`);
+  // Everything on the account is copied, or it's said what isn't (a permission the setup check names is said once, there)
+  const named = (setup.problems || []).flatMap((p) => p.missing || []);
+  if ('inventory' in sections) {
+    const cov = coverage(sections.inventory ? await state.get('inventory') : null, { permissionsNamed: named, repos: config(env).repos });
+    for (const p of cov.problems) add(p.kind, p.text, p.plain);
+    notes.push(...cov.notes);
+    sections.notCopied = cov.notCopied;
+  }
+  for (const k of sections.kv || []) if (!k.ok) add(`kv:${k.namespace}`, `the KV namespace ${k.namespace} wasn’t all copied`);
+  for (const k of sections.kv || []) if (k.gone) notes.push(`${k.gone} key(s) in ${k.namespace} expired or were removed between its listing and its copy`);
+  for (const v of sections.vectorize || []) if (!v.ok) add(`vectorize:${v.index}`, `the Vectorize index ${v.index} wasn’t all copied`);
+  // A setting the key couldn't read is trouble every night it isn't in the copy, permission named or not
+  const notRead = sections.settings?.notRead || [];
+  if (notRead.length) add('settings-not-read', `the read-only key couldn’t read ${notRead.length} of Cloudflare’s settings (${notRead.slice(0, 3).join('; ')}${notRead.length > 3 ? '…' : ''}): ${notRead.some((w, i) => named.includes(sections.settings.needs?.[i])) ? 'the permissions the setup check names cover some of them; ' : ''}add those permissions to it`);
+  if (sections.settings?.off?.length) notes.push(`not in tonight’s settings copy: ${sections.settings.off.join('; ')}`);
+  // A Worker whose code couldn't be copied is its own trouble (the others are copied)
+  for (const f of sections.workers?.failed || []) add(`worker-code:${f.worker}`, `the code of the Worker ${f.worker} couldn’t be copied: ${f.error}`, `the code of the Worker ${f.worker} couldn’t be copied`);
+  if (sections.workers?.noCode?.length) notes.push(`${sections.workers.noCode.length} Worker(s) only serve static files, with no code of their own to copy`);
+  // The key and vector lists the run kept between its steps (work/…, ./extra.js) aren't needed once it's done; one
+  // run at a time, so none is another run's (if this fails, the next run's summary clears them)
+  try {
+    let cursor;
+    do {
+      const l = await env.STAGING.list({ prefix: 'work/', cursor });
+      if (l.objects.length) await env.STAGING.delete(l.objects.map((o) => o.key));
+      cursor = l.truncated ? l.cursor : undefined;
+    } while (cursor);
+  } catch { /* the next run's summary clears them */ }
   const summary = {
     run, finished: new Date(now).toISOString(), ...sections, failures, waitingToShip, counts: await state.counts(), key: (await state.publicKey()).fingerprint,
     homes: { drive: !!h.drive, b2: !!h.b2 }, problems: problems.map((p) => p.text), problemKinds: problems.map((p) => p.kind), notes,

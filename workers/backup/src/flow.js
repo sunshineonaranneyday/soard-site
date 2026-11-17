@@ -8,6 +8,7 @@
  */
 import { WorkflowEntrypoint } from 'cloudflare:workers';
 import * as jobs from './jobs.js';
+import * as extra from './extra.js';
 
 export const stateOf = (env) => env.STATE.get(env.STATE.idFromName('backup'));
 const stepOptions = (env) => ({ retries: { limit: 5, delay: env.STEP_DELAY || '2 minutes', backoff: 'exponential' }, timeout: '30 minutes' });
@@ -46,12 +47,46 @@ export class Night extends WorkflowEntrypoint {
     });
     sections.ready = !!setup?.ready;
     if (setup?.ready) {
+      // What's on the account right now: every database, bucket, KV namespace, Vectorize index and Worker is copied
+      const inv = await safe('inventory', job((state) => extra.inventoryJob(env, state)));
+      const t = extra.targets(env, inv);
+      // What this run copies by name (the admin checks each database against it, found later or not)
+      sections.targets = { databases: t.databases.map((d) => d.name), buckets: t.buckets };
+      sections.inventory = inv ? { pages: inv.pages.length, databases: inv.databases.length, buckets: inv.buckets.length, kv: inv.kv.length, vectorize: inv.vectorize.length, workers: inv.workers.length, durableObjects: inv.durableObjects.length, notListed: inv.notListed.map((n) => ({ type: n.type, permission: n.permission, why: n.permission ? null : n.why })) } : null;
       sections.databases = [];
-      for (const db of cfg.databases) sections.databases.push(await safe(`database ${db.name}`, job((state, h, by) => jobs.databaseJob(env, state, h, db, run, { by }))));
+      for (const db of t.databases) sections.databases.push(await safe(`database ${db.name}`, job((state, h, by) => jobs.databaseJob(env, state, h, db, run, { by }))));
       sections.settings = await safe('cloudflare settings', job((state, h, by) => jobs.settingsJob(env, state, h, run, { by })));
       sections.code = [];
       for (const repo of cfg.repos) sections.code.push(await safe(`code ${repo}`, job((state, h, by) => jobs.codeJob(env, state, h, repo, run, { by }))));
-      sections.listed = await safe('list files', async () => jobs.listJob(env, stateOf(env), run));
+      // KV namespaces, a part a step; a part unchanged since its last copy isn't sent again, and the manifest says
+      // which file holds each part
+      sections.kv = [];
+      for (const ns of t.kv) {
+        const l = await safe(`kv ${ns.title} list`, job((state) => extra.kvListJob(env, state, ns, run)));
+        if (!l) { sections.kv.push({ namespace: ns.title, ok: false }); continue; }
+        let ok = true;
+        let changed = false;
+        let gone = 0;
+        for (let p = 1; p <= l.parts; p++) {
+          const r = await safe(`kv ${ns.title} part ${p}`, job((state, h, by) => extra.kvPartJob(env, state, h, ns, run, p, l, { by })));
+          if (!r) ok = false; else { if (!r.unchanged) changed = true; gone += r.gone || 0; }
+        }
+        const done = ok ? await safe(`kv ${ns.title} manifest`, job((state, h, by) => extra.kvDoneJob(env, state, h, ns, run, l, { by }))) : null;
+        sections.kv.push({ namespace: ns.title, listed: l.count, keys: done?.keys ?? null, gone, parts: l.parts, changed, ok: ok && !!done });
+      }
+      // Vectorize indexes, a part a step, when the index has changed; the manifest names every file of the copy
+      sections.vectorize = [];
+      for (const ix of t.vectorize) {
+        const l = await safe(`vectorize ${ix.name} list`, job((state) => extra.vectorizeListJob(env, state, ix, run)));
+        if (!l) { sections.vectorize.push({ index: ix.name, ok: false }); continue; }
+        let ok = true;
+        if (!l.unchanged) for (let p = 1; p <= l.parts; p++) if (!(await safe(`vectorize ${ix.name} part ${p}`, job((state, h, by) => extra.vectorizePartJob(env, state, h, ix, run, p, l, { by }))))) ok = false;
+        const done = ok ? await safe(`vectorize ${ix.name} manifest`, job((state, h, by) => extra.vectorizeDoneJob(env, state, h, ix, run, l, { by }))) : null;
+        sections.vectorize.push({ index: ix.name, vectors: l.unchanged ? l.count : done?.vectors ?? null, parts: l.parts ?? null, unchanged: !!l.unchanged, ok: ok && !!done });
+      }
+      // Every Worker's deployed code, when it has changed
+      sections.workers = await safe('workers code', job((state, h, by) => extra.workersCodeJob(env, state, h, t.workers, run, { by })));
+      sections.listed = await safe('list files', async () => jobs.listJob(env, stateOf(env), run, { buckets: t.buckets }));
       sections.files = { copied: 0, failed: 0, steps: 0, left: null };
       // A step that fails (all its tries) charges what it was on and the next step carries on with the rest; three
       // in a row means a home or Cloudflare is down, and the next run carries on
@@ -84,10 +119,10 @@ export class Night extends WorkflowEntrypoint {
       }
       sections.list = await safe('files list', job((state, h, by) => jobs.fileListJob(env, state, h, run, { by })));
       if (drill) {
-        for (const db of cfg.databases) await safe(`drill ${db.name}`, job((state, h, by) => jobs.drillDatabaseJob(env, state, h, db, run)), drillOptions(env));
+        for (const db of t.databases) await safe(`drill ${db.name}`, job((state, h, by) => jobs.drillDatabaseJob(env, state, h, db, run)), drillOptions(env));
         await safe('drill files', job((state, h, by) => jobs.drillFilesJob(env, state, h, run)), drillOptions(env));
         for (const repo of cfg.repos) await safe(`drill code ${repo}`, job((state, h, by) => jobs.drillCodeJob(env, state, h, repo, run)), drillOptions(env));
-        sections.drill = await safe('drill report', job((state, h, by) => jobs.drillReportJob(env, state, h, run, { by })), drillOptions(env)) || { ok: false, problems: 'its report couldn’t be written' };
+        sections.drill = await safe('drill report', job((state, h, by) => jobs.drillReportJob(env, state, h, run, { by, databases: t.databases.map((d) => d.name) })), drillOptions(env)) || { ok: false, problems: 'its report couldn’t be written' };
       }
     }
     sections.errors = errors;
