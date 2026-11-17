@@ -199,6 +199,8 @@ export function wireRemindForm(form: HTMLFormElement, { checkBox, kid, source, t
 
   /** POST to /api/reminders → [ok, data, status], with the kid, the source and (when needed) the check's token */
   async function send(payload: Record<string, string>, again = false): Promise<[boolean, Record<string, any>, number]> {
+    // A staff rehearsal of the live page signs nobody up (live-client.ts rehearsal: nothing of it is real)
+    if (location.pathname.startsWith('/live/') && new URLSearchParams(location.search).has('rehearsal')) return [false, { error: 'This is a rehearsal, so nothing was signed up.' }, 0];
     const body: Record<string, unknown> = { ...payload, kidSlug: kid() || undefined, source: source() };
     const token = await checkTokenFor();
     if (calledOff) return [false, { calledOff: true }, 0];

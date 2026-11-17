@@ -1125,6 +1125,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const label = bq<HTMLElement>('push-label');
       const key = client.reminders?.pushKey;
       if (!key) return;
+      // A staff rehearsal turns no alerts on (nothing of it is real)
+      if (rehearsal) { if (label) label.textContent = 'A rehearsal: no alerts were turned on'; return; }
       try {
         pushBtn.disabled = true; if (label) label.textContent = 'Asking your browser…';
         const reg = await navigator.serviceWorker.register('/sw.js');

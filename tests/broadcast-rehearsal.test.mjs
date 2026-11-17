@@ -250,3 +250,10 @@ test('only signed-in staff: the rehearsal endpoint and a rehearsal\'s messages r
   assert.equal((await ep.onRequestGet({ env, request: new Request('https://sunshineonaranneyday.com/api/live-messages') })).status, 200);
   await r.endRehearsal(env);
 });
+
+test('a link shared from a rehearsal is the public page\'s, never the rehearsal\'s', async () => {
+  const { shareable } = await import('../src/utils/live-stats.ts');
+  assert.equal(shareable('https://sunshineonaranneyday.com/live/dylan-2026/?rehearsal'), 'https://sunshineonaranneyday.com/live/dylan-2026/');
+  assert.equal(shareable('https://sunshineonaranneyday.com/live/dylan-2026/?rehearsal&src=qr&utm_source=fb'), 'https://sunshineonaranneyday.com/live/dylan-2026/');
+  assert.equal(shareable('https://sunshineonaranneyday.com/live/dylan-2026/?x=1'), 'https://sunshineonaranneyday.com/live/dylan-2026/?x=1');
+});

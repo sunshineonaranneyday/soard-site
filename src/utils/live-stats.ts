@@ -102,7 +102,8 @@ export function noteArrival(): void {
 export function shareable(href: string): string {
   try {
     const url = new URL(href);
-    for (const k of [...url.searchParams.keys()]) if (k === 'src' || k.startsWith('utm_')) url.searchParams.delete(k);
+    // (and a staff rehearsal's mark, live-client.ts rehearsal: a shared rehearsal link would send people to sign in)
+    for (const k of [...url.searchParams.keys()]) if (k === 'src' || k === 'rehearsal' || k.startsWith('utm_')) url.searchParams.delete(k);
     return url.toString();
   } catch { return href; }
 }
