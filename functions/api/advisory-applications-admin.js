@@ -33,7 +33,7 @@ import {
 } from './_advisory-applications.js';
 import { logAudit } from './_audit.js';
 import { getSettings as getBoardSettings } from './_advisory.js';
-import { addPlan, addBusy, addToBoard } from './_advisory-add.js';
+import { addPlan, addBusy, addToBoard, deleteWhenFree } from './_advisory-add.js';
 import { personStatus, personName } from './_team.js';
 import { signInWhy } from './_board-roles.js';
 
@@ -92,7 +92,9 @@ async function get(context) {
     if (!isApplicationId(planFor)) return fail('Bad id');
     try {
       const plan = await addPlan(env, planFor);
-      return ok({ plan: { ...plan, busy: await addBusy(env.DB, plan) } });
+      // (busyName and busyOther: who that press is adding, and whether it's from another application)
+      const busy = await addBusy(env.DB, plan);
+      return ok({ plan: { ...plan, busy: !!busy, ...(busy ? { busyName: busy.name, busyOther: busy.other } : {}) } });
     } catch (e) { return failed(e); }
   }
   const id = url.searchParams.get('id');
@@ -171,7 +173,8 @@ export async function onRequestPost(context) {
       if (!id) return fail('Bad id');
       const app = await getAdvisoryApplication(env.DB, id);
       if (!app) return fail(GONE, 404);
-      await deleteAdvisoryApplication(env, id);
+      // (never while a press is adding from it: refused in words, and the press told it's gone if it comes meanwhile)
+      await deleteWhenFree(env.DB, app, () => deleteAdvisoryApplication(env, id));
       await logAudit(env.DB, { userEmail: by, action: 'deleted', entityType: 'advisory-application', entitySlug: id, entityName: `Advisory Board application: ${app.name}`, changes: null, path: null, gitStatus: 'runtime' }).catch(() => {});
       return ok({ removed: id });
     }

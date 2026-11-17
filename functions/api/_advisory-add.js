@@ -33,9 +33,11 @@
  * welcome (./_advisory-mail.js welcomeOnJoin). A press after a failure picks up where it stopped:
  * before a new record is made, the address it's made at is written down for the application
  * (advisory_add_intents), so the next press finds that record, whichever way it was asked, and never
- * makes a second. Two presses at once (two tabs, two staff) can't both add: the application and the
- * email are held while one does. A new person never gets an address an application or a welcome
- * already points at (someone deleted from People), so nothing of theirs is mixed up with someone else's.
+ * makes a second. Two presses at once (two tabs, two staff, two applications from one person) can't
+ * both add: the application, the email and the People record it adds to are held while one does, and
+ * the application isn't deleted meanwhile. A new person never gets an address an application or a
+ * welcome already points at (someone deleted from People), so nothing of theirs is mixed up with
+ * someone else's.
  */
 
 import { getAdvisoryApplication, linkAdvisor, ensureAdvisorySchema, STATUSES } from './_advisory-applications.js';
@@ -90,18 +92,37 @@ const card = (p, emails, welcomedAt = () => false) => ({
  * ("Dr. José  A. Núñez" is "jose nunez"). A first initial stays ("J. Ames" is "j ames"), and every alphabet counts
  * ("王小明", "Владимир Петров"), as letters, never dropped as not a-z.
  */
-const wordOf = (w) => w.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-// After a name, never part of it: a generation, or letters for a degree or credential ("Dana Price, CPA", "Jordan Ames
-// M.D.", "Pat Lee PhD")
-// (never letters that are also a family name: Do, Ra, Pa stay a name)
-const AFTER_NAME = /^(jr|sr|ii|iii|iv|cpa|phd|md|dds|dmd|dvm|jd|esq|mba|mpa|mph|msw|lcsw|lpc|psyd|edd|rn|aia|cfp|cfa|cfre|cae|pmp|shrm|cpcu|leed)$/;
+// (letters no accent comes off, as they're written without them: Strauß is Strauss, Søren is Soren, Łukasz is Lukasz)
+const PLAIN = { ß: 'ss', æ: 'ae', œ: 'oe', ø: 'o', ł: 'l', đ: 'd', ð: 'd', þ: 'th', ı: 'i' };
+const wordOf = (w) => w.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[ßæœøłđðþı]/g, (c) => PLAIN[c]).replace(/[^\p{L}\p{N}]+/gu, '');
+// After a name, never part of it: a generation, or letters for a degree or credential ("Jordan Ames Jr", "Pat Lee
+// PhD", "Dana Price CCIM")
+const AFTER_NAME = /^(jr|sr|ii|iii|iv|cpa|phd|dds|dmd|dvm|jd|esq|mpa|mph|msw|lcsw|lpc|lmft|psyd|edd|dnp|rn|bsn|msn|np|pt|ot|aia|faia|cfp|cfa|cfre|cae|pmp|shrm|sphr|phr|cpcu|leed|cgma|ccim|cma|cisa|cissp|mfa|llm|mdiv)$/;
+// Letters for a degree that are also family names (Chioma Mba, Jack Ma, Minh Do): letters only as written for one,
+// after a comma, with dots, or in capitals in a name written in small letters ("Dana Price, MA", "Jordan Ames M.D.",
+// "Dana Price MBA"), and never the only word left after the first
+const ALSO_A_NAME = /^(mba|ma|ms|md|do|pa|ra|pe|ba|bs)$/;
+const afterName = (raw, { comma = false, caps = false } = {}) => {
+  const w = wordOf(raw);
+  if (AFTER_NAME.test(w)) return true;
+  return ALSO_A_NAME.test(w) && (comma || raw.includes('.') || (caps && raw === raw.toUpperCase()));
+};
 const nameWords = (n) => {
-  const words = String(personName({ name: n }) || '').split(/\s+/).filter(Boolean);
+  const full = String(personName({ name: n }) || '').replace(/\s+/g, ' ').trim();
+  // A comma: what follows a whole name is letters after it ("Dana Price, PE, CCIM", "Jordan Ames, Jr."); after one
+  // word, the name was written last name first ("Ames, Jordan"), unless only letters follow ("Cher, MA")
+  const parts = full.split(',').map((x) => x.trim()).filter(Boolean);
+  let s = parts[0] || '';
+  if (parts.length > 1 && !s.includes(' ') && !parts[1].split(' ').every((t) => afterName(t, { comma: true }))) s = `${parts[1]} ${s}`;
+  const words = s.split(' ').filter((x) => wordOf(x));
   let i = 0;
   while (i < words.length - 1 && TITLE.test(words[i])) i++;
-  const w = words.slice(i).map(wordOf).filter(Boolean);
-  while (w.length > 1 && AFTER_NAME.test(w[w.length - 1])) w.pop();
-  return w.filter((x, k) => (k === 0 || !/^[a-z]$/.test(x)) && !/^(jr|sr|ii|iii|iv)$/.test(x));
+  const raw = words.slice(i);
+  // (capitals mean letters only in a name that has small letters: "CHIOMA MBA" is all name)
+  const caps = /\p{Ll}/u.test(s);
+  const last = () => raw[raw.length - 1];
+  while (raw.length > 1 && afterName(last(), { caps }) && (raw.length > 2 || AFTER_NAME.test(wordOf(last())))) raw.pop();
+  return raw.map(wordOf).filter((x, k) => (k === 0 || !/^[a-z]$/.test(x)) && !/^(jr|sr|ii|iii|iv)$/.test(x));
 };
 const nameKey = (n) => nameWords(n).join(' ');
 /**
@@ -193,11 +214,12 @@ export async function addPlan(env, id, { now = Date.now() } = {}) {
   // application's own part first (marked Not now in another tab since, say), then who it matches on People
   const p = plan.person || {};
   const app = plan.application || {};
-  // (in parts, so a press refused can say which changed: the application, its headshot, the emails switch, People)
+  // (in parts, so a press refused can say which changed: the application, its headshot, the emails switch, People. The
+  // headshot and the switch only where the box says something that rests on them: never refused for what it doesn't say)
   plan.key = [
     [app.status || '', app.statusAt || ''].join('|'),
-    app.headshot?.url || '',
-    plan.emailsOn ? 'on' : 'off',
+    shotSaid(plan) ? app.headshot?.url || '' : '',
+    switchSaid(plan) ? (plan.emailsOn ? 'on' : 'off') : '',
     [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
       plan.slug || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.slug || '', plan.namesake?.status || '',
       (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.welcomed ? 1 : 0}:${o.hasPhoto ? 1 : 0}`).join(',')].join('|'),
@@ -206,15 +228,48 @@ export async function addPlan(env, id, { now = Date.now() } = {}) {
 }
 
 /**
- * Whether a press is adding them right now (this application, their email, or the address a new record would take):
- * the box says so and waits, never showing what's true halfway through someone else's press
+ * What the box says that rests on their headshot, or on the Advisory Board's emails switch, as AddDialog in
+ * public/admin/advisory-applications.js words it (sameParts, newParts: a change to one is a change to the other):
+ *   the headshot: someone new (their photo), the choice (its picture of them), the same person with no photo
+ *   the switch: a sign-in email still to send ("emails X how to sign in", now or once emails are on), or advisory@
+ *   newly theirs ("puts them on advisory@… once Advisory Board emails are on")
+ */
+const shotSaid = (plan) => plan.kind === 'new' || plan.kind === 'choose' || (plan.kind === 'same' && !plan.person?.hasPhoto);
+function switchSaid(plan) {
+  const mail = plan.emailUsable === false ? '' : String(plan.application?.email || '').trim();
+  const says = (x) => {
+    const signIn = x.email ? (x.emailOk !== false ? x.email : '') : mail;
+    return !!signIn && (!x.welcomed || x.status === 'alumni' || !x.email);
+  };
+  if (plan.kind === 'new') return !!mail;
+  if (plan.kind === 'same') return says(plan.person || {});
+  if (plan.kind === 'choose') return !!mail || [plan.person, ...(plan.others || [])].some((x) => x && says(x));
+  return false;
+}
+
+/** The People records a press could add to (the one found, the others it could be) and the address a new one takes */
+const peopleKeys = (plan) => [
+  ...(plan.slug ? [`slug:${plan.slug}`] : []),
+  // (none for a box with nothing to press: blocked, or already done)
+  ...(['blocked', 'joined'].includes(plan.kind) ? [] : [plan.person, ...(plan.others || [])].filter(Boolean).map((x) => `slug:${x.slug}`)),
+];
+/**
+ * Whether a press is adding them right now (this application, their email, or someone on People this application could
+ * be, from this application or another): the box says so and waits, never showing what's true halfway through someone
+ * else's press → null, or { name, other } (other: a press from another application, adding that person on People, by
+ * name, or someone new with this name, name '')
  */
 export async function addBusy(DB, plan, now = Date.now()) {
   const app = plan.application || {};
-  const keys = [`app:${app.id}`, ...(app.email ? [`email:${normEmail(app.email)}`] : []), ...(plan.slug ? [`slug:${plan.slug}`] : [])];
+  const mine = [`app:${app.id}`, ...(app.email ? [`email:${normEmail(app.email)}`] : [])];
+  const keys = [...mine, ...peopleKeys(plan)];
   await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
-  const row = await DB.prepare(`SELECT key FROM advisory_add_holds WHERE at >= ? AND key IN (${keys.map(() => '?').join(', ')}) LIMIT 1`).bind(now - HOLD_MS, ...keys).first();
-  return !!row;
+  const rows = (await DB.prepare(`SELECT key FROM advisory_add_holds WHERE at >= ? AND key IN (${keys.map(() => '?').join(', ')})`).bind(now - HOLD_MS, ...keys).all()).results || [];
+  if (!rows.length) return null;
+  // (a press from this application holds its People record too: said as this one)
+  if (rows.some((r) => mine.includes(r.key))) return { name: app.name || '', other: false };
+  const someone = [plan.person, ...(plan.others || [])].find((x) => x && rows.some((r) => r.key === `slug:${x.slug}`));
+  return { name: someone?.name || '', other: true };
 }
 
 async function planOf(env, id, now = Date.now()) {
@@ -343,15 +398,28 @@ async function hold(DB, keys, now) {
 }
 const release = async (DB, keys) => { for (const key of keys || []) await DB.prepare('DELETE FROM advisory_add_holds WHERE key = ?').bind(key).run().catch(() => {}); };
 
+const held = async (DB, key, now) => !!(await DB.prepare('SELECT key FROM advisory_add_holds WHERE key = ? AND at >= ?').bind(key, now - HOLD_MS).first());
+
 export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by = '', now = Date.now(), fetchImpl = fetch } = {}) {
   const { DB } = env;
-  let keys = null;
+  const keys = [];
   try {
     const first = await getAdvisoryApplication(DB, id);
     if (!first) throw err(GONE, 404);
-    keys = await hold(DB, [`app:${id}`, ...(first.email ? [`email:${normEmail(first.email)}`] : [])], now);
-    if (!keys) throw err('Someone is adding them right now. Give it a moment, then look again.');
-    return await addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl });
+    const got = await hold(DB, [`app:${id}`, ...(first.email ? [`email:${normEmail(first.email)}`] : [])], now);
+    if (!got) {
+      // (held by a delete, not a press: it's going, so said as gone)
+      if (await held(DB, `del:${id}`, now)) throw err(GONE, 404);
+      throw err('Someone is adding them right now. Give it a moment, then look again.');
+    }
+    keys.push(...got);
+    // (more held as it goes, and let go with the rest at the end: the People record it adds to)
+    const holdAlso = async (more) => {
+      const g = await hold(DB, more.filter((k) => !keys.includes(k)), now);
+      if (g) keys.push(...g);
+      return !!g;
+    };
+    return await addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAlso });
   } catch (e) {
     if (e?.status) throw e;
     // D1 or a save that didn't answer: words for staff (never "D1_ERROR: …"), and the next press finishes it
@@ -362,27 +430,71 @@ export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by 
   }
 }
 
-async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl }) {
-  const { DB } = env;
-  const plan = await addPlan(env, id);
+/**
+ * Delete an application, never while a press is adding from it (a person half made from it, its headshot about to be
+ * their photo): refused in words, and a press that comes while it's deleting is told the application is gone
+ */
+export async function deleteWhenFree(DB, app, remove, now = Date.now()) {
+  const keys = await hold(DB, [`app:${app.id}`, `del:${app.id}`], now);
+  if (!keys) throw err(`Someone is adding ${app.name} to the Advisory Board right now, so the application wasn’t deleted. Look again in a moment.`);
+  try {
+    const out = await remove();
+    // (the address a press that stopped partway wrote down for it: nobody's now, so it's free for someone else)
+    await DB.prepare(INTENTS).run();
+    await DB.prepare('DELETE FROM advisory_add_intents WHERE app_id = ?').bind(app.id).run();
+    return out;
+  } finally {
+    await release(DB, keys);
+  }
+}
+
+/** A press refused because its box is out of date, said as what changed */
+function outOfDate(seen, plan) {
   const app = plan.application;
+  const was = String(seen || '').split('#');
+  const now = plan.key.split('#');
+  if (was[0] !== now[0]) {
+    // (added since, in another tab or by someone else: said so, never as a change on People)
+    if (app.status === 'joined') return err(`${app.name} was added to the Advisory Board${app.statusBy ? ` by ${app.statusBy}` : ''} since the box opened, so nothing more was done.`);
+    const label = STATUSES.find((s) => s.id === app.status)?.label || app.status;
+    return err(`This application was marked ${label}${app.statusBy ? ` by ${app.statusBy}` : ''} since the box opened. Look at the box again before pressing.`);
+  }
+  if (was.length === now.length && was[3] === now[3]) {
+    if (was[1] !== now[1]) return err('They sent a newer headshot since the box opened. Look at the box again before pressing: it shows the one that’s used.');
+    if (was[2] !== now[2]) return err(`Advisory Board emails were turned ${plan.emailsOn ? 'on' : 'off'} since the box opened. Look at the box again before pressing: it says what’s emailed now.`);
+  }
+  return err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
+}
+
+/** The People record a press adds to: someone new at plan.slug, or the person staff said it is (null: nothing to add) */
+function targetOf(plan, as, to) {
+  if (plan.kind === 'joined') return plan.person;
+  if (plan.kind === 'blocked') return null;
+  // (a press after one that stopped partway goes on with its person, whichever button)
+  if (plan.why !== 'linked' && as === 'new') return ['new', 'choose'].includes(plan.kind) ? { slug: plan.slug, name: plan.application.name, made: true } : null;
+  if (!['same', 'choose'].includes(plan.kind)) return null;
+  return to ? [plan.person, ...(plan.others || [])].find((x) => x?.slug === to) || null : plan.person;
+}
+
+async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAlso }) {
+  const { DB } = env;
   // The box pressed must say what's true now, all of it (a namesake added since, the person moved to alumni, their
   // email changed, another tab added them): if not, nothing is done and the box is asked again
-  if (seen !== plan.key) {
-    // Said as what changed: the application (marked something else, by whom), a newer headshot, the emails switch, or
-    // who it matches on People
-    const was = String(seen || '').split('#');
-    const now = plan.key.split('#');
-    if (was[0] !== now[0] && app.status !== 'joined') {
-      const label = STATUSES.find((s) => s.id === app.status)?.label || app.status;
-      throw err(`This application was marked ${label}${app.statusBy ? ` by ${app.statusBy}` : ''} since the box opened. Look at the box again before pressing.`);
+  let plan = await addPlan(env, id);
+  if (seen !== plan.key) throw outOfDate(seen, plan);
+  // The People record it adds to (or makes) is held too: a press from another application adding to the same person
+  // (their work and home emails, say) waits its turn, so one email is saved and one welcome goes. Then the box is
+  // checked again inside every hold: what's done is what's true now, never what was true a moment before
+  const target = targetOf(plan, as, to);
+  if (target) {
+    if (!(await holdAlso([`slug:${target.slug}`]))) {
+      throw err(target.made ? 'Someone is adding a person with this name right now. Give it a moment, then look at the box again.'
+        : `Someone is adding ${target.name} right now, from another application. Give it a moment, then look at the box again.`);
     }
-    if (was.length === now.length && was[3] === now[3]) {
-      if (was[1] !== now[1]) throw err('They sent a newer headshot since the box opened. Look at the box again before pressing: it shows the one that’s used.');
-      if (was[2] !== now[2]) throw err(`Advisory Board emails were turned ${plan.emailsOn ? 'on' : 'off'} since the box opened. Look at the box again before pressing: it says what’s emailed now.`);
-    }
-    throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
+    plan = await addPlan(env, id);
+    if (seen !== plan.key) throw outOfDate(seen, plan);
   }
+  const app = plan.application;
   if (plan.kind === 'blocked' && plan.why === 'memorial') {
     throw err(`${plan.person.name} is In memoriam on People → Advisory, so nobody was added. If this is someone else, add them by hand on People → Advisory.`);
   }
@@ -411,31 +523,25 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl }) {
       name: app.name, slug: plan.slug, title: ADVISORY_TITLE, organization: app.company || '', group: 'advisory', order, status: 'active',
       publishStatus: 'draft', since: new Date(now).getFullYear(), ...(linkedin ? { linkedin } : {}), ...photoOf(app.headshot),
     });
-    // The address held while this press makes the record there (two different people with one name, pressed at
-    // once: one gets it, the other is asked again), and checked free inside the hold
-    const slugHold = await hold(DB, [`slug:${plan.slug}`], now);
-    if (!slugHold) throw err('Someone is adding a person with this name right now. Give it a moment, then look at the box again.');
+    // (its address held since the box was checked, above: two different people with one name, pressed at once, one
+    // gets it and the other is asked again) and checked free inside the hold
+    if (await DB.prepare('SELECT slug FROM team WHERE slug = ?').bind(plan.slug).first()) {
+      throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
+    }
+    // Written down first: a press after a failure from here on finds this record (see the top)
+    await DB.prepare(INTENTS).run();
+    await DB.prepare('INSERT OR REPLACE INTO advisory_add_intents (app_id, slug, at) VALUES (?, ?, ?)').bind(app.id, plan.slug, now).run();
     try {
-      if (await DB.prepare('SELECT slug FROM team WHERE slug = ?').bind(plan.slug).first()) {
-        throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
-      }
-      // Written down first: a press after a failure from here on finds this record (see the top)
-      await DB.prepare(INTENTS).run();
-      await DB.prepare('INSERT OR REPLACE INTO advisory_add_intents (app_id, slug, at) VALUES (?, ?, ?)').bind(app.id, plan.slug, now).run();
-      try {
-        await save(ctxSave, `src/content/team/${plan.slug}.json`, record, `Add to the Advisory Board: ${app.name}`, { create: true });
-      } catch (e) {
-        // Refused (the address someone else's): no note of it left, so nothing later takes their record for this one's
-        if (e?.status === 409 || e?.status === 400) await DB.prepare('DELETE FROM advisory_add_intents WHERE app_id = ?').bind(app.id).run().catch(() => {});
-        throw e;
-      }
-    } finally {
-      await release(DB, slugHold);
+      await save(ctxSave, `src/content/team/${plan.slug}.json`, record, `Add to the Advisory Board: ${app.name}`, { create: true });
+    } catch (e) {
+      // Refused (the address someone else's): no note of it left, so nothing later takes their record for this one's
+      if (e?.status === 409 || e?.status === 400) await DB.prepare('DELETE FROM advisory_add_intents WHERE app_id = ?').bind(app.id).run().catch(() => {});
+      throw e;
     }
     Object.assign(out, { slug: plan.slug, name: record.name, made: true, photoAdded: !!record.photo });
   } else {
-    // (the one staff said it is: the person the box found, or another it named as maybe them)
-    const chosen = to ? [plan.person, ...(plan.others || [])].find((x) => x?.slug === to) : plan.person;
+    // (the one staff said it is: the person the box found, or another it named as maybe them; held above)
+    const chosen = targetOf(plan, as, to);
     if (!chosen) throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
     const slug = chosen.slug;
     const row = await DB.prepare('SELECT data FROM team WHERE slug = ?').bind(slug).first();

@@ -101,6 +101,13 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
   const err = el.querySelector('.adv-error');
   let held = null; // { file, width, height, sourceWidth, sourceHeight, pickedAt, seq, url }
   let busy = null; // a picked photo being got ready
+  // (anyone waiting on the picks is woken each time the one in flight changes: a newer pick, done, refused, taken off)
+  const busyWaiters = [];
+  function setBusy(next) { busy = next; for (const r of busyWaiters.splice(0)) r(); }
+  // A pick (or the photo taken off) since the page opened: what's here is known without this device's answer about
+  // the photo it kept, which would be set aside anyway (load: a photo picked meanwhile wins)
+  let pickedNow;
+  const pickedHere = new Promise((resolve) => { pickedNow = resolve; });
   let gen = 0; // the latest pick (an earlier one still drawing is dropped)
   let kept = true; // whether this device could keep the photo (IndexedDB)
   let saving = 0; // a picked photo being kept on this device right now
@@ -171,8 +178,10 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
   async function take(file) {
     if (!file) return;
     const my = ++gen;
+    pickedNow();
     const hadOne = !!held;
     const wont = (words) => {
+      setBusy(null); // (an earlier pick still being got ready is dropped with this one: never left spinning)
       if (hadOne) say(`${words} Your earlier headshot is still here.`, { warn: true });
       else { say(''); problem(words); announce(words); } // (the note under it isn't a live region: heard here)
       paint();
@@ -181,7 +190,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     };
     if (!file.size) { wont('That file is empty, or couldn’t be read. Please choose it again, or another photo.'); return; }
     if (file.size > MAX_PICK) { wont('That photo is too large. Please choose one under 25 MB.'); return; }
-    busy = photoAsJpeg(file, DRAW);
+    setBusy(photoAsJpeg(file, DRAW));
     say('Getting your photo ready…');
     paint();
     // An iPhone photo can take a few seconds in a browser that isn't Safari: said, so nobody thinks it's stuck
@@ -189,7 +198,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     let got = null;
     try { got = await busy; } catch { got = { error: 'not-photo' }; } finally { clearTimeout(slow); }
     if (my !== gen) return; // a newer pick is being got ready
-    busy = null;
+    setBusy(null);
     if (!got?.photo) { wont(WHY[got?.error] || WHY['not-photo']); return; }
     const drawn = got.photo;
     // Judged on what it really is: too small, or (drawn within Cloudflare's limits) too wide and narrow to use
@@ -215,6 +224,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     } finally { saving--; }
     if (my !== gen) return;
     if (!kept) { say(addedNote()); onChange({}); reveal(); } // (this browser couldn't keep it: said)
+    else onChange({ kept: true }); // (kept: the overview, if it's showing, says so now)
     ping();
   }
 
@@ -242,7 +252,8 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
 
   async function clear({ keep = false } = {}) {
     gen++;
-    busy = null;
+    pickedNow();
+    setBusy(null);
     setHeld(null);
     delete err.dataset.pick;
     say('');
@@ -304,12 +315,17 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     get isLoaded() { return loadedYet; },
     /** A picked photo being got ready right now (not what this device kept, being looked for) */
     get preparing() { return !!busy; },
+    /** A picked photo being kept on this device right now (whether it can be isn't known yet) */
+    get keeping() { return saving > 0; },
     /** The status line's words off (the form's own note now says what's needed) */
     quiet() { if (!busy) say(''); },
     /** Leaving the step: a warning about a photo turned down there goes (an added photo's note stays) */
     leave() { if (!busy && status.dataset.kind === 'warn') say(held ? addedNote() : ''); },
     loaded,
-    settled: () => Promise.resolve(busy).then(() => undefined, () => undefined),
+    /** What's here is known: what this device kept, brought back, or a pick made since (which wins over it) */
+    known: Promise.race([loaded, pickedHere]),
+    /** Every pick settled, one made while waiting included (never the earlier one it replaced) */
+    async settled() { while (busy) await new Promise((resolve) => { busyWaiters.push(resolve); }); },
     load,
     clear,
     /** The server turned this photo down (its own check, after the page's): taken off, so another is chosen */

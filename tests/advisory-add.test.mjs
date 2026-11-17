@@ -991,3 +991,179 @@ test('the leaving box’s flags: an email on file that signs in as staff is no s
   assert.equal(person.hasEmail, false);
   assert.equal(person.emailWhy, 'staff');
 });
+
+// ─── Round nine ─────────────────────────────────────────────────────
+
+const GONE = 'This application isn’t here any more: it was deleted, maybe in another tab.';
+// A press held at the first statement matching `re` until opened: what a slow database does while someone else acts
+const gate = (re) => {
+  const real = env.DB.prepare.bind(env.DB);
+  let open;
+  const opened = new Promise((r) => { open = r; });
+  let hit;
+  const reached = new Promise((r) => { hit = r; });
+  let armed = true;
+  env.DB.prepare = (sql) => {
+    const st = real(sql);
+    if (!armed || !re.test(sql)) return st;
+    armed = false;
+    const wait = (b, m) => async (...a) => { hit(); await opened; return b[m](...a); };
+    return { bind: (...p) => { const b = st.bind(...p); return { run: wait(b, 'run'), first: wait(b, 'first'), all: wait(b, 'all') }; } };
+  };
+  return { reached, open: () => { env.DB.prepare = real; open(); } };
+};
+const welcomesTo = () => emailsSent.filter((e) => /page is ready/.test(e.subject)).map((e) => [e.to].flat().join(','));
+
+test('an application isn’t deleted while a press is adding from it (refused in words), and a press that comes while it’s deleting is told it’s gone', async () => {
+  const { writeState } = await import('../functions/api/_board-roles.js');
+  await writeState(env.DB, 'advisory', { emails: true });
+  const f = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => (init.method === 'DELETE' ? Response.json({ success: true, result: {} }) : f(input, init));
+  const app = await applied('Del Midway', 'del.mid@example.org');
+  const g = gate(/UPDATE advisory_applications SET person_slug/);
+  const pressing = add(app.id, 'new');
+  await g.reached;
+  const del = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: app.id } }))).json();
+  assert.equal(del.success, false);
+  assert.equal(del.error, 'Someone is adding Del Midway to the Advisory Board right now, so the application wasn’t deleted. Look again in a moment.');
+  g.open();
+  const r = await pressing;
+  assert.equal(r.success, true, r.error);
+  assert.equal((await getAdvisoryApplication(env.DB, app.id)).status, 'joined', 'added, and its application still here saying so');
+  // A press that comes while a delete holds it: told it's gone (it is a moment later), never "someone is adding them"
+  const two = await applied('Del Second', 'del.two@example.org');
+  const box = await plan(two.id);
+  const now = Date.now();
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind(`app:${two.id}`, now, `del:${two.id}`, now).run();
+  const res = await adminApi.onRequestPost(ctx('POST', { add: { id: two.id, as: 'new', seen: box.key } }));
+  assert.equal(res.status, 404);
+  assert.equal((await res.json()).error, GONE);
+  await env.DB.prepare('DELETE FROM advisory_add_holds').run();
+  // Deleted with nothing adding: it goes, and so does the address a press that stopped partway wrote down for it
+  await env.DB.prepare('INSERT OR REPLACE INTO advisory_add_intents (app_id, slug, at) VALUES (?, ?, ?)').bind(two.id, 'del-second', now).run();
+  assert.equal((await (await adminApi.onRequestPost(ctx('POST', { remove: { id: two.id } }))).json()).success, true);
+  assert.equal(await getAdvisoryApplication(env.DB, two.id), null);
+  assert.equal(await env.DB.prepare('SELECT slug FROM advisory_add_intents WHERE app_id = ?').bind(two.id).first(), null);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM advisory_add_holds').first()).n, 0, 'nothing left held');
+});
+
+test('two applications for one person on People, pressed at once: one press adds them (one email saved, one welcome), the other waits its turn, then keeps what’s there', async () => {
+  const { writeState } = await import('../functions/api/_board-roles.js');
+  await writeState(env.DB, 'advisory', { emails: true });
+  await person('jo-ames', { name: 'Jo Ames', group: 'advisory', photo: 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/team/jo/public' });
+  const work = await applied('Jo Ames', 'jo.work@example.org');
+  const home = await applied('Jo Ames', 'jo.home@example.org', { why: 'Again.' });
+  const [pw, ph] = [await plan(work.id), await plan(home.id)];
+  assert.deepEqual([pw.kind, ph.kind, pw.person.slug, ph.person.slug], ['choose', 'choose', 'jo-ames', 'jo-ames']);
+  const g = gate(/INSERT OR REPLACE INTO reveal_board_emails/);
+  const first = add(work.id, 'same', pw.key);
+  await g.reached;
+  // The other application's box, opened now: it waits, and says who's being added, from another application
+  const waiting = await plan(home.id);
+  assert.deepEqual([waiting.busy, waiting.busyOther, waiting.busyName], [true, true, 'Jo Ames']);
+  const second = await add(home.id, 'same', ph.key);
+  assert.equal(second.success, false);
+  assert.equal(second.error, 'Someone is adding Jo Ames right now, from another application. Give it a moment, then look at the box again.');
+  // (while it holds them, this application's own box isn't "another application")
+  assert.equal((await plan(work.id)).busyOther, false);
+  g.open();
+  const r = await first;
+  assert.equal(r.success, true, r.error);
+  assert.equal(await emailOf('jo-ames'), 'jo.work@example.org');
+  // The second box opened before: out of date (their email is on file now). Asked again, it keeps that one
+  const stale = await add(home.id, 'same', ph.key);
+  assert.equal(stale.success, false);
+  assert.match(stale.error, /changed since the box opened/);
+  const again = await plan(home.id);
+  assert.equal(again.person.email, 'jo.work@example.org');
+  const r2 = await add(home.id, 'same', again.key);
+  assert.equal(r2.success, true, r2.error);
+  assert.equal(r2.person.email, 'jo.work@example.org');
+  assert.equal(await emailOf('jo-ames'), 'jo.work@example.org', 'kept, never replaced by the second application’s');
+  assert.ok(welcomesTo().every((to) => to === 'jo.work@example.org') && welcomesTo().length <= 1, `one welcome at most, to the email they sign in with (${welcomesTo()})`);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM team').first()).n, 1, 'one person');
+});
+
+test('a press is never refused for what its box doesn’t say: a newer headshot for someone keeping their own photo, the switch for someone already welcomed', async () => {
+  const { writeState } = await import('../functions/api/_board-roles.js');
+  const { sendWelcome } = await import('../functions/api/_advisory-mail.js');
+  await writeState(env.DB, 'advisory', { emails: true });
+  const own = 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/team/kim/public';
+  await person('kim-kept', { name: 'Kim Kept', group: 'advisory', photo: own }, 'kim@example.org');
+  assert.equal((await sendWelcome(env, { slugs: ['kim-kept'] })).sent, 1);
+  const app = await applied('Kim Kept', 'kim@example.org');
+  const box = await plan(app.id);
+  assert.deepEqual([box.kind, box.person.hasPhoto, box.person.welcomed], ['same', true, true]);
+  const newer = JSON.stringify({ id: 'advisory-applications/x/y', url: 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/advisory-applications/x/y/public', width: 700, height: 700 });
+  await env.DB.prepare('UPDATE advisory_applications SET headshot = ? WHERE id = ?').bind(newer, app.id).run();
+  await writeState(env.DB, 'advisory', { emails: false });
+  assert.equal((await plan(app.id)).key, box.key, 'the box would say the same words');
+  const r = await add(app.id, 'same', box.key);
+  assert.equal(r.success, true, r.error);
+  assert.equal((await rec('kim-kept')).photo, own, 'their own photo kept');
+  // The same person with no photo: the box says the headshot becomes it, so a newer one makes it out of date
+  await person('nan-nophoto', { name: 'Nan Nophoto', group: 'advisory' }, 'nan@example.org');
+  const a2 = await applied('Nan Nophoto', 'nan@example.org');
+  const b2 = await plan(a2.id);
+  await env.DB.prepare('UPDATE advisory_applications SET headshot = ? WHERE id = ?').bind(newer, a2.id).run();
+  assert.equal((await add(a2.id, 'same', b2.key)).error, 'They sent a newer headshot since the box opened. Look at the box again before pressing: it shows the one that’s used.');
+  // And one whose welcome is still to go: the box says when it goes, so the switch makes it out of date
+  const b3 = await plan(a2.id);
+  assert.equal(b3.person.welcomed, false);
+  await writeState(env.DB, 'advisory', { emails: true });
+  assert.equal((await add(a2.id, 'same', b3.key)).error, 'Advisory Board emails were turned on since the box opened. Look at the box again before pressing: it says what’s emailed now.');
+});
+
+test('added in another tab since the box opened: the press says so, and nothing more is done', async () => {
+  const app = await applied('Two Tabs', 'two.tabs@example.org');
+  const [a, b] = [await plan(app.id), await plan(app.id)];
+  assert.equal((await add(app.id, 'new', a.key)).success, true);
+  const r = await add(app.id, 'new', b.key);
+  assert.equal(r.success, false);
+  assert.equal(r.error, 'Two Tabs was added to the Advisory Board by linzi@soardcharity.com since the box opened, so nothing more was done.');
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM team WHERE name = 'Two Tabs'").first()).n, 1);
+});
+
+test('names, round nine: family names that are also letters (Mba, Ma, Do) stay names unless written as letters; more letters after a name; Hon and Gen are names without their dot; last name first', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  const among = (p) => [p.person?.slug, ...(p.others || []).map((o) => o.slug)];
+  await person('chioma-mba', { name: 'Chioma Mba', group: 'advisory' }, 'cm@x.org');
+  await person('leonard-mba', { name: 'Leonard Mba', group: 'advisory' }, 'lm@x.org');
+  for (const [n, e, slug] of [['Chi Mba', 'c1@x.org', 'chioma-mba'], ['C. Mba', 'c2@x.org', 'chioma-mba'], ['Leon Mba', 'c3@x.org', 'leonard-mba'], ['CHIOMA MBA', 'c4@x.org', 'chioma-mba']]) {
+    const p = await plan((await applied(n, e)).id);
+    assert.equal(p.kind, 'choose', n);
+    assert.ok(among(p).includes(slug), `${n}: ${among(p)}`);
+  }
+  await person('dana-price', { name: 'Dana Price', group: 'advisory' }, 'dana.work@x.org');
+  const letters = ['Dana Price, PE', 'Dana Price, MA', 'Dana Price, MS', 'Dana Price, CCIM', 'Dana Price, CPA, CGMA', 'Dana Price MBA', 'Dana Price M.B.A.', 'Dana Price, Ph.D.'];
+  for (const [k, n] of letters.entries()) {
+    const p = await plan((await applied(n, `dp${k}@x.org`)).id);
+    assert.deepEqual([p.kind, p.person?.slug], ['choose', 'dana-price'], n);
+  }
+  // A last name that's also letters: hers, never dropped
+  assert.equal((await plan((await applied('Dana Ma', 'dm@x.org')).id)).kind, 'new');
+  await person('jack-ma', { name: 'Jack Ma', group: 'advisory' }, 'jm@x.org');
+  for (const [n, e] of [['Jack Ma', 'jm1@x.org'], ['Jack MA', 'jm2@x.org'], ['JACK MA', 'jm3@x.org']]) assert.deepEqual(among(await plan((await applied(n, e)).id)), ['jack-ma'], n);
+  // Hon and Gen: first names too, titles only with their dot
+  await person('hon-lam', { name: 'Hon Lam', group: 'advisory' }, 'hl@x.org');
+  const gen = await plan((await applied('Gen Lam', 'gl@x.org')).id);
+  assert.deepEqual([gen.kind, gen.namesake], ['new', undefined], 'Gen Lam is never asked about Hon Lam');
+  assert.deepEqual(among(await plan((await applied('Hon. Hon Lam', 'hl2@x.org')).id)), ['hon-lam']);
+  assert.equal(greetName({ fullName: 'Hon Lam Wong' }), 'Hon');
+  assert.equal(greetName({ fullName: 'Gen Tanaka' }), 'Gen');
+  assert.equal(greetName({ fullName: 'Hon. Jordan Smith' }), 'Jordan');
+  // Last name first, with a comma
+  await person('jordan-ames', { name: 'Jordan Ames', group: 'advisory' }, 'ja@x.org');
+  assert.deepEqual(among(await plan((await applied('Ames, Jordan', 'aj@x.org')).id)), ['jordan-ames']);
+  assert.deepEqual(among(await plan((await applied('Ames, Jordan, PhD', 'aj2@x.org')).id)), ['jordan-ames']);
+  // Minh Do, still never Minh Ra
+  await person('minh-ra', { name: 'Minh Ra', group: 'advisory' }, 'mr@x.org');
+  assert.equal((await plan((await applied('Minh Do', 'mdo@x.org')).id)).kind, 'new');
+  // Letters no accent comes off, written without them: Strauß is Strauss, Søren is Soren, Łukasz is Lukasz
+  await person('anna-strauss', { name: 'Anna Strauß', group: 'advisory' }, 'as@x.org');
+  await person('soren-lund', { name: 'Søren Lund', group: 'advisory' }, 'sl@x.org');
+  await person('lukasz-nowak', { name: 'Łukasz Nowak', group: 'advisory' }, 'ln@x.org');
+  for (const [n, e, slug] of [['Anna Strauss', 'as2@x.org', 'anna-strauss'], ['Soren Lund', 'sl2@x.org', 'soren-lund'], ['Lukasz Nowak', 'ln2@x.org', 'lukasz-nowak']]) {
+    assert.deepEqual(among(await plan((await applied(n, e)).id)), [slug], n);
+  }
+});

@@ -135,8 +135,9 @@ export function isShown(field, answers) {
   return Object.entries(field.showIf).every(([id, values]) => values.includes(answers?.[id]));
 }
 
-// A title before the name ("Dr. Jordan Smith"): not what to call them on its own
-export const TITLE = /^(?:dr|mr|mrs|ms|mx|miss|rev|prof|fr|hon|judge|sir|dame|capt|col|maj|gen|lt|sgt)\.?$/i;
+// A title before the name ("Dr. Jordan Smith"): not what to call them on its own. Hon and Gen are first names too
+// (Hon Lam, Gen Tanaka): titles only with their dot ("Hon. Jordan Smith")
+export const TITLE = /^(?:(?:dr|mr|mrs|ms|mx|miss|rev|prof|fr|judge|sir|dame|capt|col|maj|lt|sgt)\.?|(?:hon|gen)\.)$/i;
 /** What a thank-you calls them: the name they go by, else their first name past a title ("Mrs. Lee", alone, stays so) */
 export function greetName(a) {
   const pref = String(a?.preferredName || '').trim().replace(/\s+/g, ' ');

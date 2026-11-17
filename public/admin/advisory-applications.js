@@ -123,6 +123,8 @@ const CSS = `
   .ava-search input { min-height: 44px; }
   .ava .btn, .ava-drawer .btn, .ava-dialog .btn, .ava-dialog select { min-height: 44px; }
   .ava-head .page-sub a { display: inline-block; padding: 12px 0; margin: -12px 0; }
+  /* Several people it could be: each "It’s …" on a row of its own, so a name never breaks a word to a line */
+  .ava-dialog .kd-dialog__foot .ava-pick { flex: 1 1 100%; }
 }
 .ava-note-count { margin: 0; font-size: var(--fs-xs); color: var(--color-text-muted); }
 .ava-note-count.is-over { color: var(--tone-warn-fg); font-weight: 600; }
@@ -377,6 +379,19 @@ export function AdvisoryApplications({ addToast, kit = {} }) {
  *   joined   already done
  * An email the sign-in can't use (plan.emailUsable false, an old application's) is never saved: said so.
  */
+/**
+ * Someone on People as a choice says them: their name, and when another choice has the same name, what tells them apart
+ * (their organization, a former or current member, their email, else their People address), so no two buttons read alike
+ */
+function labelOf(x, list) {
+  const key = (y) => String(y.name || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  const twins = list.filter((y) => key(y) === key(x));
+  if (twins.length < 2) return x.name;
+  const ways = [(y) => y.organization, (y) => (y.status === 'alumni' ? 'a former member' : 'a current member'), (y) => y.email, (y) => y.slug];
+  const way = ways.find((f) => { const v = twins.map((y) => String(f(y) || '').trim().toLowerCase()); return v.every(Boolean) && new Set(v).size === v.length; }) || ways[3];
+  return `${x.name} (${way(x)})`;
+}
+
 function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose }) {
   const p = plan.person || {};
   const appEmail = String(app.email || '').toLowerCase();
@@ -428,9 +443,12 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
   }, [plan]);
 
   if (plan.busy) {
-    return html`<${Dialog} title=${`Someone is adding ${app.name} right now`} onClose=${onClose} footer=${cancel}>
+    // (a press from another application: adding someone on People this applicant could be, or someone with this name)
+    const other = !!plan.busyOther;
+    return html`<${Dialog} title=${`Someone is adding ${(other && plan.busyName) || app.name} right now`} onClose=${onClose} footer=${cancel}>
       <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and press Add to Advisory Board again in a minute: it finishes whatever stopped partway, and never adds them twice.'
-        : 'Another press (in another tab, or by someone else) is adding them. This box shows what’s left as soon as it’s done.'}</p>
+        : other ? `Another press is adding ${plan.busyName ? `${plan.busyName}, who this could be,` : 'someone new with this name'} to the Advisory Board from another application (in another tab, or by someone else). This box shows what’s left as soon as it’s done.`
+          : 'Another press (in another tab, or by someone else) is adding them. This box shows what’s left as soon as it’s done.'}</p>
     <//>`;
   }
   if (plan.kind === 'blocked' && plan.why === 'memorial') {
@@ -451,6 +469,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     <//>`;
   }
   // The same person, in words: what changes for them (sign-in, invites and advisory@ only when they didn't have them)
+  // (what here rests on the headshot or the emails switch is in the plan's key: _advisory-add.js shotSaid, switchSaid)
   const sameParts = (x = p) => {
     const restored = x.status === 'alumni';
     const ok = fileOkOf(x);
@@ -483,9 +502,11 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     // (more than one on People → Advisory could be them: each is shown, and staff say which, or someone new)
     const all = [p, ...(plan.others || [])];
     const many = all.length > 1;
+    // (two with one name: each said with what tells them apart, so no two buttons read the same)
+    const label = (x) => labelOf(x, all);
     return html`<${Dialog} title=${many ? `Is ${app.name} one of these people?` : `Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${html`${cancel}
         <button class="btn btn-ghost" onClick=${press('new')} aria-disabled=${wait}>${busy ? 'Adding…' : 'A different person'}</button>
-        ${many ? all.map((x) => html`<button key=${x.slug} class="btn btn-primary" onClick=${press('same', x.slug)} aria-disabled=${wait}>${busy ? 'Adding…' : `It’s ${x.name}`}</button>`)
+        ${many ? all.map((x) => html`<button key=${x.slug} class="btn btn-primary ava-pick" onClick=${press('same', x.slug)} aria-disabled=${wait}>${busy ? 'Adding…' : `It’s ${label(x)}`}</button>`)
           : html`<button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Adding…' : 'The same person'}</button>`}`}>
       ${testLine}${statusLine}
       <p>${many ? `${all.length} people on People → Advisory have a name like this one, so say who this is.` : html`Someone on People → Advisory has ${p.name === app.name ? 'this name' : 'a name like this one'}. ${theirs}, so say who this is.`}</p>
@@ -494,7 +515,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
         <dt>This application</dt><dd>${face(shot ? headshotSrc(shot, 80) : '', app.name)}<span><strong>${app.name}</strong><br />${[app.email || 'no email', app.company].filter(Boolean).join(' · ')}</span></dd>
       </dl>
       <ul>
-        ${many ? all.map((x) => html`<li><strong>It’s ${x.name}</strong> ${sentence(sameParts(x))}</li>`) : html`<li><strong>The same person</strong> ${sentence(sameParts())}</li>`}
+        ${many ? all.map((x) => html`<li><strong>It’s ${label(x)}</strong> ${sentence(sameParts(x))}</li>`) : html`<li><strong>The same person</strong> ${sentence(sameParts())}</li>`}
         <li><strong>A different person</strong> ${sentence(newParts())}</li>
       </ul>
       <p>Either way, this application is marked Joined.</p>
@@ -667,12 +688,18 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
   const planShot = plan?.application?.headshot?.url ? plan.application.headshot : shot;
   const planSoft = !!planShot && planShot.width && planShot.height && Math.min(planShot.width, planShot.height) < PHOTO_GOOD;
   const focusNext = useRef(null); // after the box: where the keys go ('done' → the panel's new note)
+  // (deleted in another tab: the box, if open, closes, and the panel says so, as for a status or a note)
+  const deletedNow = (j) => { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: j.error }); };
   const openAdd = async () => {
     if (busy) return;
     setBusy('plan');
     const j = await call(`${API}?plan=${encodeURIComponent(id)}`);
     setBusy(null);
-    if (!j.success) { addToast?.(j.error || 'Couldn’t check People just now. Try again in a moment.', 'error'); return; }
+    if (!j.success) {
+      addToast?.(j.error || 'Couldn’t check People just now. Try again in a moment.', 'error');
+      if (j.status === 404) deletedNow(j);
+      return;
+    }
     setPlan(j.plan);
     setConfirm('add');
     // (added in another tab since this panel opened: the panel says so too, not only the box)
@@ -688,7 +715,6 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       : w.off ? 'Advisory Board emails are off, so their sign-in email goes once those are turned on.'
         : w.noEmail ? 'Add a working email on their People page so they can sign in.'
           : w.error ? 'Their sign-in email didn’t go just now. The site sends it again in a few minutes.' : '');
-  const deletedNow = (j) => { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: j.error }); };
   const doAdd = async (as, to = null) => {
     if (busy) return;
     setBusy('add');

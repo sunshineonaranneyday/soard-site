@@ -153,9 +153,9 @@ export function initAdvisoryForm() {
   // The headshot: its own script holds the photo (./advisory-photo.js)
   const announce = (words) => { if (!ui.live) return; ui.live.textContent = ''; setTimeout(() => { ui.live.textContent = words; }, 40); };
   const photos = Object.fromEntries(PHOTO_FIELDS.map((f) => [f.id, photoField(fieldEl(f.id), { id: f.id, signal, announce, onChange: (o) => photoChanged(f.id, o) })]));
-  // (what this device kept, brought back, and any photo being got ready: Continue waits for both on the photos it
-  // reads, Send on every one)
-  const photosSettled = (ids = Object.keys(photos)) => Promise.all(ids.map((id) => Promise.all([photos[id].loaded, photos[id].settled()])));
+  // (what this device kept, brought back, unless a photo's been picked since, and any photo being got ready: Continue
+  // waits for both on the photos it reads, Send on every one)
+  const photosSettled = (ids = Object.keys(photos)) => Promise.all(ids.map((id) => Promise.all([photos[id].known, photos[id].settled()])));
   // Brought back (or found not kept): the review and the overview say what's so now, whether or not it changed anything
   for (const ph of Object.values(photos)) ph.loaded.then(() => { if (step === REVIEW && !sent) buildReview(); paint(); });
   function collect() {
@@ -462,7 +462,8 @@ export function initAdvisoryForm() {
    * The headshot changed (picked, removed, brought back from this device, or one that wouldn't do): its note,
    * the step's summary, Continue's words, the review and the save, as a typed answer does
    */
-  function photoChanged(id, { problem = false, silent = false } = {}) {
+  function photoChanged(id, { problem = false, silent = false, kept = false } = {}) {
+    if (kept) { paint(); return; } // (the photo kept on this device: only what says so changes)
     if (!silent) typedHere = true;
     if (problem) { if (step >= 0 && step < total && pages[step]?.contains(fieldEl(id))) paintSummary(stillWrong(), { always: true }); }
     else recheck(id);
@@ -534,7 +535,15 @@ export function initAdvisoryForm() {
     const on = was ? new Date(was.at).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }) : '';
     // (a photo this browser couldn't keep: the answers are saved, the photo isn't, so it isn't said to be)
     const photoUnkept = Object.values(photos).some((ph) => ph.file && !ph.kept);
-    ui.hubTitle.textContent = was ? 'We received your application' : started ? (canKeep && !photoUnkept ? 'Your application is saved on this device' : canKeep ? 'Your answers are saved on this device; keep this page open until you send it, since this browser can’t keep your photo' : 'Keep this page open until you send it') : 'Six steps, about 20 minutes';
+    // (one still being kept: not said to be saved until it is; the heading then says what's so, and it's heard)
+    const photoKeeping = Object.values(photos).some((ph) => ph.file && ph.keeping);
+    const wasTitle = ui.hubTitle.textContent;
+    ui.hubTitle.textContent = was ? 'We received your application' : started ? (canKeep && photoKeeping ? 'Saving your application on this device' : canKeep && !photoUnkept ? 'Your application is saved on this device' : canKeep ? 'Your answers are saved on this device; keep this page open until you send it, since this browser can’t keep your photo' : 'Keep this page open until you send it') : 'Six steps, about 20 minutes';
+    if (wasTitle === 'Saving your application on this device' && ui.hubTitle.textContent !== wasTitle && ui.hubLive) {
+      const words = ui.hubTitle.textContent;
+      ui.hubLive.textContent = '';
+      setTimeout(() => { ui.hubLive.textContent = words; }, 40);
+    }
     ui.hubLead.textContent = was ? `It arrived on ${on}, and we’ll be in touch by email.`
       : !canKeep ? (started ? 'This browser blocks saving, so your answers are only on this page until you send them.' : 'Have a reference in mind and a photo of yourself ready. This browser blocks saving, so plan to finish in one sitting.')
         : started ? (doneCount === total ? (sendingStore.get() ? MAYBE_SENT : 'Every step is done. Look it over and send it.') : `${doneCount} of ${total + 1} steps done. Pick up where you left off.`)
@@ -615,7 +624,7 @@ export function initAdvisoryForm() {
   }
   /** Put a step on screen, a screen of it (a number, 'last', or the one holding `at`) */
   function go(i, { dir = 0, screen = 0, at = null, field = null, focus = true } = {}) {
-    navSeq++;
+    moved();
     const changed = i !== step;
     if (dir) calmUntil = performance.now() + 350; // a second press of Continue mid-change (a double tap) counts once
     return swap(() => {
@@ -706,7 +715,7 @@ export function initAdvisoryForm() {
   }
   function exitFocus({ fromPop = false, keep = true } = {}) {
     if (!focused) return;
-    navSeq++;
+    moved();
     if (keep) saveNow();
     if (step >= 0 && step < total) resumeAt = { step, screen: screenNo, field: lastIdOn(step, screenNo) }; // "Continue where you left off": this screen
     // Left by the browser's Back (a screen at a time, back to the first): the furthest step they'd reached instead
@@ -825,8 +834,10 @@ export function initAdvisoryForm() {
   }
   function buildReview() {
     const a = collect();
-    // A photo this device kept, still being brought back after a reload: not "Needs an answer" for that moment
-    for (const [pid, ph] of Object.entries(photos)) if (!ph.isLoaded && !a[pid]) a[pid] = 'added';
+    // A photo this device kept, still being looked for after a reload: said as that, never "Added" before it's found,
+    // nor "Needs an answer" for that moment (a browser whose IndexedDB hangs takes seconds to say it isn't there)
+    const looking = new Set(Object.entries(photos).filter(([pid, ph]) => !ph.isLoaded && !a[pid]).map(([pid]) => pid));
+    for (const pid of looking) a[pid] = 'added';
     const all = checkAnswers(a).problems;
     const secs = ADVISORY_STEPS.map((s, i) => {
       const sec = document.createElement('section');
@@ -834,14 +845,16 @@ export function initAdvisoryForm() {
       sec.dataset.step = String(i);
       const missing = s.fields.some((f) => all[f.id]);
       if (missing) sec.dataset.missing = '1';
-      sec.innerHTML = `<div class="adv-review-head"><h3 class="adv-review-h"><button type="button" class="adv-review-toggle" aria-controls="adv-rv-${s.id}"><span class="adv-mark" aria-hidden="true">${missing ? '!' : CHECK}</span><span class="adv-review-name"><span class="adv-review-title"></span><span class="adv-review-sum"></span></span>${CHEV}</button></h3><button type="button" class="adv-linkbtn adv-review-edit" data-edit="${i}">Edit</button></div><div class="adv-review-body" id="adv-rv-${s.id}"><dl></dl></div>`;
+      const checking = !missing && s.fields.some((f) => looking.has(f.id));
+      if (checking) sec.dataset.checking = '1';
+      sec.innerHTML = `<div class="adv-review-head"><h3 class="adv-review-h"><button type="button" class="adv-review-toggle" aria-controls="adv-rv-${s.id}"><span class="adv-mark" aria-hidden="true">${missing ? '!' : checking ? '…' : CHECK}</span><span class="adv-review-name"><span class="adv-review-title"></span><span class="adv-review-sum"></span></span>${CHEV}</button></h3><button type="button" class="adv-linkbtn adv-review-edit" data-edit="${i}">Edit</button></div><div class="adv-review-body" id="adv-rv-${s.id}"><dl></dl></div>`;
       sec.querySelector('.adv-review-title').textContent = s.title;
-      sec.querySelector('.adv-review-sum').textContent = missing ? 'Needs an answer' : summaryOf(i, a);
+      sec.querySelector('.adv-review-sum').textContent = missing ? 'Needs an answer' : checking ? 'Checking this device for your photo' : summaryOf(i, a);
       sec.querySelector('.adv-review-edit').setAttribute('aria-label', `Edit ${s.title}`);
       const dl = sec.querySelector('dl');
       for (const f of s.fields) {
         if (!isShown(f, a)) continue;
-        const v = f.type === 'check' ? (a[f.id] ? 'Yes, I’ve read it' : '') : f.type === 'photo' ? (a[f.id] ? 'Added' : '') : String(a[f.id] || '').trim();
+        const v = f.type === 'check' ? (a[f.id] ? 'Yes, I’ve read it' : '') : f.type === 'photo' ? (looking.has(f.id) ? 'Checking this device for it' : a[f.id] ? 'Added' : '') : String(a[f.id] || '').trim();
         if (!v && !all[f.id]) continue;
         const row = document.createElement('div');
         row.className = `adv-review-item${all[f.id] ? ' is-missing' : ''}`;
@@ -1305,6 +1318,10 @@ export function initAdvisoryForm() {
   // Each move (Continue, Back, Save and exit, the browser's Back): a Continue still waiting on a photo when another
   // move has happened since gives way to it, never undoing it a moment later
   let navSeq = 0;
+  // (a Continue waiting on a photo is woken by any other move, and gives way at once: Continue on the screen it's
+  // moved to is free, never dimmed or deaf until the photo is ready)
+  let navWaiters = [];
+  function moved() { navSeq++; for (const r of navWaiters.splice(0)) r(); }
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (sending || moving || photoWait || performance.now() < calmUntil) return;
@@ -1324,8 +1341,13 @@ export function initAdvisoryForm() {
       const at = navSeq;
       // (said as what it is: a photo picked being got ready, or this device being looked through for one it kept)
       const picked = reads.some((id) => photos[id].preparing);
-      const slowPhoto = setTimeout(() => { ui.next.setAttribute('aria-busy', 'true'); announce(picked ? 'Getting your photo ready. One moment.' : 'Checking this device for your photo. One moment.'); }, 150);
-      try { await photosSettled(reads); } finally { clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false; }
+      const slowPhoto = setTimeout(() => { if (at !== navSeq) return; ui.next.setAttribute('aria-busy', 'true'); announce(picked ? 'Getting your photo ready. One moment.' : 'Checking this device for your photo. One moment.'); }, 150);
+      let wake;
+      const movedOn = new Promise((resolve) => { wake = resolve; navWaiters.push(resolve); });
+      try { await Promise.race([photosSettled(reads), movedOn]); } finally {
+        navWaiters = navWaiters.filter((r) => r !== wake);
+        clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false;
+      }
       if (at !== navSeq || !focused) return; // (Back or Save and exit pressed meanwhile: that stands)
     }
     ui.sendError.hidden = true;

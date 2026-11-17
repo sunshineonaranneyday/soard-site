@@ -285,6 +285,8 @@ const hero = {
   [data-state="done"] > .adv-mark, .adv-review-section:not([data-missing]) .adv-mark { background: var(--c-dark); border-color: var(--c-dark); color: var(--c-yellow); }
   [data-state="now"] > .adv-mark { background: var(--c-yellow); border-color: var(--c-dark); color: var(--c-dark); }
   .adv-review-section[data-missing] .adv-mark { background: #FFF6D6; border-color: #8A7200; color: #5C4A00; }
+  /* (a photo this device kept, still being looked for: neither done nor missing yet) */
+  .adv-review-section[data-checking] .adv-mark { background: #fff; border-color: var(--adv-line); color: var(--c-text-muted); }
 
   /* ── On its own screen (html.adv-focus): the site's header, footer and hero step aside ── */
   html.adv-focus, html.adv-focus body { background: #fff; }
