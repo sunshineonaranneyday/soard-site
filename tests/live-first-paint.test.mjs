@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { watchParty } from '../functions/live/_watch-party.js';
+import { watchParty, slateFacts } from '../functions/live/_watch-party.js';
 
 const now = Date.parse('2026-10-14T18:00:00Z');
 const at = (min) => new Date(now + min * 60e3).toISOString();
@@ -56,4 +56,18 @@ test('watch party: the starting-soon screen it puts in the frame, and running la
   assert.equal(late.mode, 'starting', 'past its time and not live yet: still the starting-soon screen');
   assert.equal(late.late, true);
   assert.equal(late.eyebrow, 'Running late', 'as the page script says it (runningLate)');
+});
+
+test('the starting-soon screen is drawn with the reveal\'s time and picked photo (slateFacts, as its script sets them)', () => {
+  const soon = slateFacts(pub({ phase: 'armed', scheduledAt: at(20), image: 'kids/axel/pick' }), 'axel', 'America/New_York');
+  assert.deepEqual(soon, { at: at(20), tz: 'America/New_York', image: 'kids/axel/pick' });
+  // Live and ending still say the time (ACTIVE in SlateScreen.astro); a replay keeps only the photo
+  assert.equal(slateFacts(pub({ phase: 'live', scheduledAt: at(-5) }), 'axel').at, at(-5));
+  assert.equal(slateFacts(pub({ phase: 'ending', scheduledAt: at(-50) }), 'axel').at, at(-50));
+  assert.deepEqual(slateFacts(pub({ phase: 'replay', scheduledAt: at(-90), image: 'kids/axel/pick' }), 'axel'), { at: '', tz: '', image: 'kids/axel/pick' });
+  // Another kid's broadcast, or nothing to add: the screen goes out as built
+  assert.equal(slateFacts(pub({ phase: 'armed', scheduledAt: at(20), kidSlug: 'bea' }), 'axel'), null);
+  assert.equal(slateFacts(pub({ phase: 'idle' }), 'axel'), null);
+  assert.equal(slateFacts(null, 'axel'), null);
+  assert.equal(slateFacts(pub({ phase: 'armed', scheduledAt: at(20) }), ''), null);
 });

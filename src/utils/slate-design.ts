@@ -48,6 +48,8 @@ interface Options {
   still: boolean;
   /** Holds scaled by this (?pace=0.2 plays the story five times as fast, for checking it; the wipe keeps its own speed) */
   pace?: number;
+  /** The design's slides as the server wrote them into the screen, when it was out as the screen went out */
+  served?: unknown[] | null;
 }
 
 interface Built { slide: DesignSlide | null; layer: HTMLElement | null; ready: boolean; failed: boolean; step?: HTMLElement | null }
@@ -85,14 +87,15 @@ export function startSlateDesign(o: Options) {
     clearTimeout(chipTimer);
     // The same words for the next slide (one before photo to the next): the chip just stays
     if (s && chip.classList.contains('is-on') && k?.textContent === s.kicker && t?.textContent === s.caption) return;
-    // The words change while it's faded, never in view
+    // The words change while it's faded, never in view (the first words have nothing to wait for)
+    const first = !chip.classList.contains('is-on') && !k?.textContent && !t?.textContent;
     chip.classList.remove('is-on');
     if (!s) return;
     chipTimer = setTimeout(() => {
       if (k) k.textContent = s.kicker;
       if (t) t.textContent = s.caption;
       chip.classList.add('is-on');
-    }, still ? 0 : 260);
+    }, still || first ? 0 : 260);
   }
 
   // One step per slide that plays: a slide whose picture can't load takes its step with it
@@ -236,6 +239,11 @@ export function startSlateDesign(o: Options) {
     };
     read();
     previewTimer = setInterval(read, 1000);
+  } else if (kidSlug && o.served?.length) {
+    // The server wrote the slides into the screen (functions/live/[[path]].js): played from the first drawing, and
+    // asked for again at the usual turn
+    void apply(o.served.filter(validSlide));
+    askTimer = setTimeout(ask, ASK_OPEN_MS);
   } else if (kidSlug) {
     void ask();
   }

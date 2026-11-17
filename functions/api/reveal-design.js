@@ -13,6 +13,7 @@
  * the rest of /live/ does. A hidden (draft) or unknown kid is a 404.
  */
 import { readState } from './_broadcast.js';
+import { nearEnv } from './_read-copy.js';
 import { cachedReveals } from './_reveals.js';
 import { revealSlides, designWindow } from '../../public/admin/reveal-design.js';
 
@@ -36,18 +37,18 @@ export async function onRequestGet({ env, request }) {
   if (!SLUG.test(slug)) return json({ error: 'Which kid?' }, 400, 300);
   if (!env.DB) return json({ error: 'Not available' }, 503, 0);
 
+  // All three at once, from the database's nearest copy (_read-copy.js): every watcher's page asks this
+  const near = nearEnv(env);
+  const [row, broadcast, schedule] = await Promise.all([
+    near.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind(slug).first().catch(() => null),
+    readState(near.DB).catch(() => null),
+    cachedReveals(near).catch(() => null),
+  ]);
   let kid = null;
-  try {
-    const row = await env.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind(slug).first();
-    kid = row?.data ? JSON.parse(row.data) : null;
-  } catch { /* unreadable reads as unknown */ }
+  try { kid = row?.data ? JSON.parse(row.data) : null; } catch { /* unreadable reads as unknown */ }
   if (!kid || kid.publishStatus === 'draft') return json({ error: 'No such reveal' }, 404, 60);
   kid.slug ||= slug;
 
-  const [broadcast, schedule] = await Promise.all([
-    readState(env.DB).catch(() => null),
-    cachedReveals(env).catch(() => null),
-  ]);
   const now = Date.now();
   const { open, after } = designWindow({ kid, reveal: revealOf(schedule, slug), broadcast, now });
   // Not confirmed yet: kept for a minute at most, so the confirm shows on the next ask

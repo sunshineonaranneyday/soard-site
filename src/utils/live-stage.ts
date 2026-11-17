@@ -22,6 +22,8 @@ export interface StageView {
   player: LivePlayer | null;
   /** Starting-soon screen address, when it should fill the frame */
   slate: string;
+  /** The starting-soon screen about to fill the frame: loaded in it unseen, so it shows drawn when its time comes */
+  soon?: string;
   /** The broadcast's setting; the picture's real shape wins once known */
   orientation: 'portrait' | 'landscape';
   /** Badge on the photo before the watch party ('' hides it) */
@@ -186,6 +188,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // fades as soon as there is something to see (endHandoff): never a blank frame between the two
     const goingLive = party && next.player?.kind === 'live';
     if (party && next.slate) { handingOff = false; showSlate(next.slate, !!next.late); }
+    else if (!party && next.soon) { if (slateShown) { handingOff = false; dropSlate(false); } warmSlate(next.soon); }
+    // (one loaded ahead and not wanted now: the reveal moved, or went live before its screen's time)
+    else if (slateEl?.hasAttribute('data-warm')) coolSlate();
     else if (slateShown && goingLive && !handingOff) {
       handingOff = true;
       clearTimeout(handoffTimer);
@@ -207,27 +212,63 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     clearTimeout(handoffTimer);
     slateEl.classList.remove('is-going');
     slateEl.hidden = false;
+    // One loaded ahead (warmSlate) shows at once, not faded in: it's already drawn
+    if (slateEl.hasAttribute('data-warm')) {
+      slateEl.style.transition = 'none';
+      slateEl.removeAttribute('data-warm');
+      void slateEl.offsetWidth;
+      slateEl.style.transition = '';
+    }
     const there = slateEl.querySelector<HTMLIFrameElement>(':scope > iframe');
     if (there && there.getAttribute('src') === src) {
       there.title = late ? 'Running late' : 'Starting soon';
+      there.removeAttribute('aria-hidden');
       if (slateShown !== src) { slateShown = src; watchSlate(there, src); }
       return;
     }
+    slateEl.replaceChildren(slateFrame(src, late ? 'Running late' : 'Starting soon'));
+    slateShown = src;
+    watchSlate(slateEl.firstElementChild as HTMLIFrameElement, src);
+  }
+  function slateFrame(src: string, title: string) {
     const f = document.createElement('iframe');
     f.src = src;
-    f.title = late ? 'Running late' : 'Starting soon';
+    f.title = title;
     f.loading = 'eager';
     f.tabIndex = -1;
+    return f;
+  }
+  /**
+   * The starting-soon screen about to fill the frame, loaded in its layer unseen (and unheard by a screen reader):
+   * when its time comes showSlate finds it there, drawn, and the page's turn into the watch party shows it at once
+   */
+  function warmSlate(src: string) {
+    if (!slateEl || slateShown) return;
+    const there = slateEl.querySelector<HTMLIFrameElement>(':scope > iframe');
+    if (there && there.getAttribute('src') === src && slateEl.hasAttribute('data-warm')) return;
+    clearTimeout(handoffTimer);
+    slateEl.classList.remove('is-going');
+    slateEl.setAttribute('data-warm', '');
+    slateEl.hidden = false;
+    const f = slateFrame(src, 'Starting soon');
+    f.setAttribute('aria-hidden', 'true');
     slateEl.replaceChildren(f);
-    slateShown = src;
+    // (one that fails is known now, so the page never turns to a frame with nothing in it)
     watchSlate(f, src);
+  }
+  /** Not so soon after all (the reveal was moved): the screen loaded ahead goes */
+  function coolSlate() {
+    if (!slateEl) return;
+    slateEl.removeAttribute('data-warm');
+    slateEl.replaceChildren();
+    slateEl.hidden = true;
   }
   /** The starting-soon screen goes: faded (handing over to the picture) or at once */
   function dropSlate(fade: boolean) {
     if (!slateEl) return;
     clearTimeout(handoffTimer);
     slateShown = '';
-    const clear = () => { slateEl.replaceChildren(); slateEl.hidden = true; slateEl.classList.remove('is-going'); };
+    const clear = () => { slateEl.replaceChildren(); slateEl.hidden = true; slateEl.classList.remove('is-going'); slateEl.removeAttribute('data-warm'); };
     if (!fade || reduced) { clear(); return; }
     slateEl.classList.add('is-going');
     handoffTimer = setTimeout(clear, SLATE_FADE_MS);

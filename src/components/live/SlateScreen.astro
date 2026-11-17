@@ -43,6 +43,7 @@
  */
 import qrcode from 'qrcode-generator';
 import { cfRaw, cfLqip } from '../../utils/cf-image';
+import { SLATE_CROP } from '../../utils/slate-photo';
 import siteSettings from '../../content/site/settings.json';
 
 interface Props { kid?: any | null }
@@ -90,12 +91,8 @@ const HOST = 'sunshineonaranneyday.com';
 // The reveals after this one, filled in from /api/reveals; the code opens the list and the calendar
 const nextQr = qr(`${SITE}/live/?src=slate-next#up-next`);
 
-/** The photo cut to the frame's shape on each screen (796 × 540 on the 1920 × 1080 one, 960 × 888 on the 1080 × 1920
-    one), at about twice that; a photo picked when the reveal was scheduled is cut the same way (setPhoto) */
-const CROP = {
-  landscape: 'w=1592,h=1080,fit=cover,gravity=face,q=88',
-  portrait: 'w=1840,h=1702,fit=cover,gravity=face,q=88',
-};
+/** The photo cut to the frame's shape on each screen (slate-photo.ts) */
+const CROP = SLATE_CROP;
 const photoSrc = { landscape: cfRaw(photo, CROP.landscape), portrait: cfRaw(photo, CROP.portrait) };
 const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
 ---
@@ -149,8 +146,10 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
       <div class="accent" aria-hidden="true"></div>
       <div class="photo" style={`background-image:url(${cfLqip(photo)})`}>
         <img id="photo" data-landscape={photoSrc.landscape} data-portrait={photoSrc.portrait} data-crop-landscape={CROP.landscape} data-crop-portrait={CROP.portrait} alt={kid?.name || 'A child in a newly built room'} />
-        {/* The picture for the screen's shape, asked for once: the portrait screen used to fetch the landscape crop first */}
-        <script is:inline>(function(){var i=document.getElementById('photo');i.src=(document.body.dataset.o==='portrait'?i.dataset.portrait:i.dataset.landscape)||i.dataset.landscape;})();</script>
+        {/* The picture for the screen's shape, asked for once: the portrait screen used to fetch the landscape crop first.
+            And the screen sized to its window here, as it's read, rather than once the page script has come (fit()): a
+            slow script left the screen drawn at full size, a zoomed-in corner, until it ran */}
+        <script is:inline>(function(){var b=document.body,i=document.getElementById('photo'),c=document.getElementById('canvas'),p=b.dataset.o==='portrait';i.src=(p?i.dataset.portrait:i.dataset.landscape)||i.dataset.landscape;c.style.transform='translate(-50%, -50%) scale('+Math.min(innerWidth/(p?1080:1920),innerHeight/(p?1920:1080))+')';})();</script>
       </div>
       {/* What's in the frame, said above it, never on the photo: the rooms, or while the design plays, what each picture
           is and where it is in the story (slate-design.ts), the rooms stepping aside for them */}
@@ -283,6 +282,12 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
 
     {
       const slideParam = params.get('slide');
+      // The design's slides, when the server wrote them in (functions/live/[[path]].js)
+      let served: unknown[] | null = null;
+      try {
+        const d = JSON.parse(document.getElementById('slate-design')?.textContent || 'null');
+        if (Array.isArray(d)) served = d;
+      } catch { served = null; }
       design = startSlateDesign({
         body,
         photoBox: document.querySelector<HTMLElement>('.photo')!,
@@ -294,12 +299,15 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
         pinned: slideParam && /^\d{1,2}$/.test(slideParam) ? Number(slideParam) : null,
         still: body.classList.contains('still'),
         pace: Number(params.get('pace')) || 1,
+        served,
       });
     }
 
     // ── Start time ──
+    // ?at= wins; else the reveal's time as the server wrote it on <body> (functions/live/[[path]].js), so the first
+    // drawing has the clock rather than "In just a few minutes" until the live state comes; the live state keeps it current
     let startAt: number | null = null;
-    let tz = 'America/New_York';
+    let tz = body.dataset.tz || 'America/New_York';
     const at = params.get('at');
     if (at) {
       if (/^\d{1,2}:\d{2}$/.test(at)) {
@@ -307,7 +315,7 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
         const d = new Date(); d.setHours(hh, mm, 0, 0);
         startAt = d.getTime();
       } else if (!Number.isNaN(Date.parse(at))) startAt = Date.parse(at);
-    }
+    } else if (body.dataset.at && !Number.isNaN(Date.parse(body.dataset.at))) startAt = Date.parse(body.dataset.at);
 
     const el = (k: string) => document.querySelector<HTMLElement>(`[data-when="${k}"]`)!;
     const fmtClock = (d: Date) => new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(d);
@@ -411,7 +419,12 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
       } catch { /* offline: stay generic */ }
       jumping = false;
     }
-    getLiveClient().subscribe((s: LiveState | null, meta) => {
+    let unhear: (() => void) | null = null;
+    unhear = getLiveClient().subscribe((s: LiveState | null, meta) => {
+      // Inside the live page this is the page's own connection (live-client.ts), which outlives the screen: once the
+      // screen's frame is gone (taken out of the page, or the screen discarded), it stops listening. A frame on
+      // another site has no frameElement to ask, and keeps listening
+      if (!window.parent || window.frameElement?.isConnected === false) { unhear?.(); return; }
       if (meta?.timezone) tz = meta.timezone;
       if (!s) return;
       if (follow && s.kidSlug && s.kidSlug !== kidSlug && ACTIVE.has(s.phase)) { jumpTo(s.kidSlug); return; }
@@ -420,6 +433,23 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
       if (!at && s.scheduledAt && ACTIVE.has(s.phase)) { startAt = Date.parse(s.scheduledAt); renderWhen(); syncMusic(); }
       if (kidSlug && !params.get('photo') && s.image) setPhoto(s.image);
     });
+
+    // ── Inside the live page: shown once, drawn ──
+    // The frame there is this screen's cream until it shows (.stage__slate, LiveStage.astro), and it fades in once,
+    // whole: its shape fitted, its clock set, its letters loaded and its picture in, never a screen putting itself
+    // together in the frame. At most READY_MAX_MS: a picture slower than that comes in on its own
+    if (embed) {
+      const READY_MAX_MS = 1500;
+      const picture = photo.complete ? null : photo.decode().catch(() => {});
+      void Promise.race([
+        Promise.all([document.fonts?.ready, picture]),
+        new Promise((r) => setTimeout(r, READY_MAX_MS)),
+      ]).then(() => requestAnimationFrame(() => {
+        // (a script that ran late finds the screen already showing by the fallback below: it lets that fade finish
+        // rather than start another from nothing)
+        if (parseFloat(getComputedStyle(canvas).opacity) === 0) body.classList.add('is-ready');
+      }));
+    }
 
     // ── Coming up next: the reveals after this one, joining the rotation once there are any ──
     loadUpcoming().then((list) => {
@@ -671,6 +701,11 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
        under about 10 px even on an iPhone SE), and the picture keeps nearly all its room. A phone held sideways gets
        the landscape screen (LivePage), drawn the same way. The stream, the crew's screen and a TV never get these. */
     body.embed .cards, body.embed .eyebrow, body.embed .title, body.embed .sub { display: none; }
+    /* It fades in once, drawn (is-ready: its script says when), so its parts are already in place, never arriving
+       one by one in a frame a quarter of its size. A screen whose script never ran still shows, a moment later */
+    body.embed .canvas { animation: fade 0.5s var(--ease) 2.5s both; }
+    body.embed.is-ready .canvas { animation: shown 0.5s var(--ease) both; }
+    body.embed :is(.logo, .when, .frame, .accent, .caption, .partners) { animation-duration: 0s; animation-delay: 0s; }
     /* The story's steps too: the strip beside the frame shows the whole set, and the line is the words' alone, so a
        picture's name is never cut short ("The new flo…") */
     body.embed .design-steps { display: none !important; }
@@ -798,6 +833,7 @@ const LOGO = cfRaw('brand-logo-light-bg-tagline-display', 'w=900,q=90');
     @keyframes slide { from { opacity: 0; transform: translateY(36px); } to { opacity: 1; transform: none; } }
     @keyframes photoIn { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: none; } }
     @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes shown { from { opacity: 0; } to { opacity: 1; } }
     body.still *, body.still *::before, body.still *::after { animation-duration: 0s !important; animation-delay: 0s !important; transition: none !important; }
     body.still .photo img { animation: none; transform: scale(1.02); }
     body.still .photo .slide img { animation: none; transform: none; }

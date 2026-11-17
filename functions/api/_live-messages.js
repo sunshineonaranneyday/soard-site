@@ -384,9 +384,18 @@ export async function listShown(env, { broadcastId = null, limit = 100 } = {}) {
   const id = broadcastId || state.broadcastId;
   const open = messagesOpen(state, config) && id === state.broadcastId;
   if (!id) return { ok: true, open: false, enabled: config.messages?.enabled !== false, broadcastId: null, messages: [] };
+  return { ok: true, open, enabled: config.messages?.enabled !== false, broadcastId: id, messages: await shownMessages(DB, id, limit) };
+}
+
+/**
+ * Just the read: a reveal's shown messages, oldest first. For a caller that has the broadcast already (the live page's
+ * first paint: functions/live/[[path]].js), so nothing is asked twice and nothing is tidied on the way
+ */
+export async function shownMessages(DB, broadcastId, limit = 100) {
+  if (!broadcastId) return [];
   const rows = await DB.prepare(`SELECT id, name, body, created_at FROM broadcast_messages WHERE broadcast_id = ? AND status = 'shown' ORDER BY created_at DESC LIMIT ?`)
-    .bind(id, Math.min(200, Math.max(1, limit))).all();
-  return { ok: true, open, enabled: config.messages?.enabled !== false, broadcastId: id, messages: (rows.results || []).reverse().map(publicMessage) };
+    .bind(broadcastId, Math.min(200, Math.max(1, limit))).all();
+  return (rows.results || []).reverse().map(publicMessage);
 }
 
 /**

@@ -282,6 +282,20 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   /* ── The room's design with the video (LiveDesignRail, in the stage's "beside" slot, which places it): down the side
      of a portrait picture, as tall as it; under a landscape one, which gives up the strip's height ── */
   .hero[data-party][data-design][data-orientation='landscape'] .hero-frame { --fh-cut: calc(var(--hds-h) + var(--hds-gap)); }
+  /* The page changing shape with it open (morph() in the script): the frame glides from its place to its new one, its
+     old picture and its new one filling it all the way, and the rest of the page crossfades. Old and new keep exactly
+     the same timing, so together they always add up to whole (the pair is blended plus-lighter): what stays the same
+     never dims, and the page never blinks to blank between them (as it did in iPhone Safari with the old going first);
+     the site's own page-to-page handover, which holds the old page whole under the new, showed both headings at once.
+     Named only while it plays: a name makes the frame a stacking context of its own */
+  :global(html[data-live-morph]) .hero-frame { view-transition-name: live-frame; }
+  :global(html[data-live-morph]::view-transition-group(live-frame)) { animation-duration: 0.55s; animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
+  :global(html[data-live-morph]::view-transition-old(live-frame)),
+  :global(html[data-live-morph]::view-transition-new(live-frame)) { height: 100%; object-fit: cover; }
+  :global(html[data-live-morph]::view-transition-old(live-frame)),
+  :global(html[data-live-morph]::view-transition-old(root)) { animation: 0.28s cubic-bezier(0.4, 0, 0.2, 1) both vt-fade-out; }
+  :global(html[data-live-morph]::view-transition-new(live-frame)),
+  :global(html[data-live-morph]::view-transition-new(root)) { animation: 0.28s cubic-bezier(0.4, 0, 0.2, 1) both vt-fade-in; }
   /* The yellow card behind the video would show between it and the strip */
   .hero[data-party][data-design] .hero-frame :global(.stage__accent) { display: none; }
 
@@ -527,7 +541,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       client,
       // The hero lays itself out around the video's real shape
       onShape: (orientation, party) => { hero.dataset.orientation = orientation; setAttr(hero, 'data-party', party); },
-      onSlateFailed: (src) => { slateFailed.add(src); if (last) render(last, lastMeta); },
+      // (redrawn after the drawing it was noticed in, never from inside it)
+      onSlateFailed: (src) => { slateFailed.add(src); queueMicrotask(() => { if (alive && last) render(last, lastMeta); }); },
     });
 
     const panel = document.querySelector<HTMLElement>('[data-msgs="panel"]');
@@ -620,19 +635,80 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     // (in the portrait one its words would be a few pixels tall); the stage lays that out beside the controls
     const sideways = matchMedia(SIDE);
     const slateShape = (s: LiveState) => (sideways.matches || s.orientation === 'landscape' ? 'landscape' : 'portrait');
-    function slateSrc(s: LiveState, view: string, kidSlug: string) {
+    /** The starting-soon screen once its hour has come (or, with ahead, that much before it: the screen is loaded unseen
+        in the frame then, so the page turning into the watch party shows it drawn rather than loading) */
+    function slateSrc(s: LiveState, view: string, kidSlug: string, ahead = 0) {
       if (view !== 'upcoming' || !kidSlug || !s.scheduledAt) return '';
-      if (Date.parse(s.scheduledAt) - Date.now() > SLATE_LEAD_MS) return '';
+      if (Date.parse(s.scheduledAt) - Date.now() > SLATE_LEAD_MS + ahead) return '';
       const shape = slateShape(s);
       const src = `/live/${kidSlug}/slate/?embed=1&music=0&o=${shape}`;
       return slateFailed.has(src) ? '' : src;
     }
 
     // Whatever a redraw moves, the field someone is typing in stays where it is on screen; and coming back to the page,
-    // its first real drawing puts back what the visitor was looking at
+    // its first real drawing puts back what the visitor was looking at. The watch party starting or ending with the
+    // page open changes its shape: that drawing morphs (below)
     function render(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
-      holdPlace(() => drawPage(state, meta));
-      restoreSpot();
+      const draw = () => { holdPlace(() => drawPage(state, meta)); restoreSpot(); };
+      if (morphDraw) { morphDraw = draw; return; }
+      if (rendered && decide(state).party !== hero.hasAttribute('data-party')) morph(draw); else draw();
+    }
+
+    // ── The page changes shape with it open ──
+    // An hour before, "Coming up" becomes the watch party; after it, the party ends. Rather than the page jumping, the
+    // frame glides from where it was to where it goes and the rest crossfades (LivePage's ::view-transition rules). Not
+    // for the first drawing (the server drew the page in its shape), with less motion asked for, behind another tab,
+    // full screen, or with the frame off screen or its picture docked in the corner. While it plays every tap lands on
+    // <html> (Chrome; the board page found it): a tap ends it and goes where it was aimed
+    let morphing: ViewTransition | null = null;
+    // The drawing the morph is about to make: a state that comes before it does is drawn in its place
+    let morphDraw: (() => void) | null = null;
+    let tapAt: { x: number; y: number } | null = null;
+    const MORPH_HIT = 'a, button, input, select, textarea, label, summary, [role="button"]';
+    const onMorphTap = (e: PointerEvent) => {
+      if (!morphing || e.target !== document.documentElement) return;
+      morphing.skipTransition();
+      tapAt = { x: e.clientX, y: e.clientY };
+    };
+    const onMorphClick = (e: MouseEvent) => {
+      const at = tapAt;
+      tapAt = null;
+      if (!at || e.target !== document.documentElement) return;
+      e.preventDefault();
+      e.stopPropagation();
+      requestAnimationFrame(() => {
+        const hit = document.elementFromPoint(at.x, at.y) as HTMLElement | null;
+        const el = hit?.closest<HTMLElement>(MORPH_HIT) || hit;
+        if (!el || el === document.documentElement) return;
+        if (el.matches('select, textarea, input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"])')) el.focus(); else el.click();
+      });
+    };
+    document.addEventListener('pointerdown', onMorphTap, true);
+    document.addEventListener('click', onMorphClick, true);
+    function morph(draw: () => void) {
+      const root = document.documentElement;
+      const frame = document.getElementById('player');
+      const box = frame?.getBoundingClientRect();
+      // (the frame glides over everything while it plays: not with its top under the header, the menu open or the
+      // give sheet up, where it would slide across them)
+      const headerLine = parseFloat(getComputedStyle(root).getPropertyValue('--header-height')) || 0;
+      const can = 'startViewTransition' in document && !matchMedia('(prefers-reduced-motion: reduce)').matches
+        && document.visibilityState === 'visible' && !document.fullscreenElement && !morphing
+        && !root.hasAttribute('data-astro-transition') && !root.classList.contains('menu-open') && !give?.isOpen
+        && !!box && box.top >= headerLine - 1 && box.top < innerHeight
+        && !frame?.querySelector('.is-docked');
+      if (!can) { draw(); return; }
+      morphDraw = draw;
+      root.dataset.liveMorph = '';
+      let t: ViewTransition;
+      try {
+        t = document.startViewTransition(() => { const d = morphDraw; morphDraw = null; if (alive) d?.(); });
+      } catch {
+        morphDraw = null; delete root.dataset.liveMorph; draw(); return;
+      }
+      morphing = t;
+      t.ready.catch(() => {});
+      t.finished.catch(() => {}).finally(() => { if (morphing === t) morphing = null; delete root.dataset.liveMorph; });
     }
 
     // ── Coming back (reload, Back, Forward) ──
@@ -686,8 +762,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const moved = el.getBoundingClientRect().top - saved.offset;
       if (Math.abs(moved) >= 1) scrollBy({ top: moved, behavior: 'instant' as ScrollBehavior });
     }
-    function drawPage(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
-      last = state; lastMeta = meta;
+    /** What the page shows for a state: the moment, and whether it's the watch party */
+    function decide(state: LiveState | null) {
       const s = state || ({ phase: 'idle' } as LiveState);
       // A stream with no kid known yet only counts as this kid's on the day of this kid's reveal
       const forThisKid = !pageKid || s.kidSlug === pageKid || (!s.kidSlug && revealIsToday(pageKid, upcoming.filter((r) => r.confirmed)));
@@ -696,8 +772,12 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const kidSlug = pageKid || (view !== 'idle' ? s.kidSlug || '' : '');
       const hasPlayer = !!(s.player && forThisKid && (view === 'live' || view === 'replay'));
       const slate = hasPlayer ? '' : slateSrc(s, view, kidSlug);
+      return { s, forThisKid, phase, view, kidSlug, hasPlayer, slate, party: !!slate || hasPlayer };
+    }
+    function drawPage(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
+      last = state; lastMeta = meta;
+      const { s, forThisKid, view, kidSlug, hasPlayer, slate, party } = decide(state);
       display = slate ? 'starting' : view;
-      const party = !!slate || hasPlayer;
       hero.dataset.phase = display;
       setAttr(hero, 'data-party', party);
       if (page) page.dataset.view = display;
@@ -792,6 +872,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         mode: display as 'idle' | 'upcoming' | 'starting' | 'live' | 'replay',
         player: hasPlayer ? s.player : null,
         slate,
+        // (the page redraws every 15 seconds before a reveal: a minute is four chances to have it ready)
+        soon: party ? '' : slateSrc(s, view, kidSlug, 60_000),
         orientation: slate ? slateShape(s) : s.orientation === 'landscape' ? 'landscape' : 'portrait',
         badge,
         late: slate && runningLate(s.scheduledAt),
@@ -1120,6 +1202,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     addEventListener('resize', onWidth);
     return () => {
       alive = false;
+      morphDraw = null;
+      morphing?.skipTransition();
+      document.removeEventListener('pointerdown', onMorphTap, true);
+      document.removeEventListener('click', onMorphClick, true);
       clearInterval(upcomingTimer);
       unsubscribe();
       remindForm?.destroy();

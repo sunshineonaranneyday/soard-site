@@ -36,7 +36,8 @@
  */
 
 import { readState, readConfig, publicState, visibleState, publicReminders } from '../api/_broadcast.js';
-import { watchParty, slateFor } from './_watch-party.js';
+import { watchParty, slateFor, slateFacts } from './_watch-party.js';
+import { SLATE_CROP } from '../../src/utils/slate-photo.ts';
 import { revealSlides, designWindow } from '../../public/admin/reveal-design.js';
 import { revealOf } from '../api/reveal-design.js';
 import { cachedReveals } from '../api/_reveals.js';
@@ -50,13 +51,16 @@ import { onBands } from '../_upcoming-band.js';
 import { heroRowsHtml, rowsSignature, afterLine } from '../../src/utils/upcoming-rows.ts';
 import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../src/utils/live-hero-text.ts';
 import { inviteData, inviteLinks } from '../../src/utils/reveals-client.ts';
-import { messagesOpen, listShown } from '../api/_live-messages.js';
+import { messagesOpen, shownMessages } from '../api/_live-messages.js';
+import { nearEnv } from '../api/_read-copy.js';
 import { emailConfigured } from '../api/_broadcast-notify.js';
 
 const ACTIVE = new Set(['scheduled', 'armed', 'live', 'ending', 'replay']);
 const SITE = 'https://sunshineonaranneyday.com';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+/** Slides as JSON inside a <script type="application/json">: no "<" in it, so nothing in a caption can close the block */
+export const slidesJson = (slides) => JSON.stringify(slides || []).replace(/</g, '\\u003c');
 
 /** A kid's saved profile ({} when unknown or unreadable) */
 async function kidData(env, slug) {
@@ -500,23 +504,58 @@ export async function onRequest(context) {
 
   // The starting-soon screen (a child's, or /live/slate/ that follows whichever is scheduled), before it goes out:
   // marked as showing the design when the design is out, so its frame is drawn where the design puts it rather than
-  // moving there once the screen has asked; and left without its music when the track isn't in the files bucket, so
-  // it never asks for a file that isn't there (SlateScreen.astro)
+  // moving there once the screen has asked; given the reveal's time and picked photo (slateFacts), so it's drawn
+  // with them rather than changing once it has asked; and left without its music when the track isn't in the files
+  // bucket, so it never asks for a file that isn't there (SlateScreen.astro)
   const slateMatch = url.pathname.match(/^\/live\/(?:([^/]+)\/)?slate\/$/);
+  // Every read on the way to the first byte is from the database's nearest copy (_read-copy.js)
+  const near = nearEnv(env);
   if (slateMatch && env.DB) {
     try {
       const slug = slateMatch[1] || '';
       const forKid = !!slug && url.searchParams.get('design') !== 'preview';
-      const [state, schedule, row, music] = await Promise.all([
-        forKid ? readState(env.DB) : null,
-        forKid ? cachedReveals(env).catch(() => null) : null,
-        forKid ? kidData(env, slug) : null,
+      const [state, config, schedule, row, music] = await Promise.all([
+        forKid ? readState(near.DB) : null,
+        forKid ? readConfig(near.DB).catch(() => null) : null,
+        forKid ? cachedReveals(near).catch(() => null) : null,
+        forKid ? kidData(near, slug) : null,
         musicThere(env),
       ]);
-      const design = forKid && state ? designFor(slug, row.data, visibleState(state), schedule) : null;
-      const res = await next(design || !music ? fresh(request) : request);
-      if ((!design && music) || res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html')) return res;
-      const out = new HTMLRewriter().on('body', setAttrs({ ...(design ? { 'data-design': '' } : {}), ...(music ? {} : { 'data-music': null }) })).transform(res);
+      // (the broadcast as /api/reveal-design reads it, which the screen asks again every few minutes: the two agree)
+      const design = forKid && state ? designFor(slug, row.data, state, schedule) : null;
+      const facts = forKid && state ? slateFacts(publicState(state, config || {}), slug, config?.timezone) : null;
+      // (a photo asked for by ?photo= wins, as it does in the screen)
+      const picked = facts?.image && !url.searchParams.get('photo') ? facts.image : '';
+      const rewrite = !!design || !music || !!facts;
+      const res = await next(rewrite ? fresh(request) : request);
+      if (!rewrite || res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html')) return res;
+      const marks = setAttrs({
+        ...(design ? { 'data-design': '' } : {}),
+        ...(music ? {} : { 'data-music': null }),
+        ...(facts?.at ? { 'data-at': facts.at } : {}),
+        ...(facts?.tz ? { 'data-tz': facts.tz } : {}),
+      });
+      let rw = new HTMLRewriter().on('body', {
+        element(e) {
+          marks.element(e);
+          // The design's slides, for the screen to play from its first drawing (startSlateDesign's served): data, not a
+          // script, so the CSP has nothing to allow
+          if (design) e.append(`<script type="application/json" id="slate-design">${slidesJson(design.slides)}</script>`, { html: true });
+        },
+      });
+      if (picked) {
+        rw = rw.on('#photo', setAttrs({ 'data-landscape': cfRaw(picked, SLATE_CROP.landscape), 'data-portrait': cfRaw(picked, SLATE_CROP.portrait) }));
+        // (and the head's early ask for it, so the screen never fetches the photo it no longer shows)
+        rw = rw.on('link[rel="preload"][as="image"]', {
+          element(e) {
+            const shape = /portrait/.test(e.getAttribute('media') || '') ? 'portrait' : 'landscape';
+            e.setAttribute('href', cfRaw(picked, SLATE_CROP[shape]));
+          },
+        });
+        const lqip = cfLqip(picked);
+        if (lqip) rw = rw.on('.frame > .photo', setAttrs({ style: `background-image:url(${lqip})` }));
+      }
+      const out = rw.transform(res);
       const headers = new Headers(out.headers);
       headers.set('Cache-Control', PAGE_REUSE);
       headers.delete('ETag');
@@ -538,14 +577,14 @@ export async function onRequest(context) {
   let broadcast = null;
   try {
     if (env.DB) {
-      const [state, config] = await Promise.all([readState(env.DB), readConfig(env.DB)]);
+      const [state, config] = await Promise.all([readState(near.DB), readConfig(near.DB)]);
       // A rehearsal (JobTread TEST job) is invisible here: the page reads as nothing scheduled
       broadcast = { state: visibleState(state), rawState: state, config, pub: publicState(state, config) };
     }
   } catch { broadcast = null; }
 
   try {
-    const kid = isIndex && broadcast ? await currentKid(env, broadcast.state) : null;
+    const kid = isIndex && broadcast ? await currentKid(near, broadcast.state) : null;
     if (kid?.published) kid.card = await cardFor(context, `/live/${kid.slug}/`);
     const party = broadcast ? watchParty(broadcast.pub, { pageKid, kidPublished: pageKid ? true : !!kid?.published }) : null;
     if (party) party.generic = !broadcast.pub.kidSlug;
@@ -571,13 +610,16 @@ export async function onRequest(context) {
     const enabled = broadcast?.config?.messages?.enabled !== false;
     const kidName = broadcast?.pub?.kidName || kid?.name || '';
     const wantMessages = enabled && ((first?.view === 'upcoming' && messagesOpen(broadcast.state, broadcast.config)) || !!party);
-    const messagesAsk = wantMessages ? listShown(env, { broadcastId: broadcast.state.broadcastId }).catch(() => null) : null;
+    // (the broadcast is in hand, so only the messages are asked for)
+    const messagesAsk = wantMessages
+      ? shownMessages(near.DB, broadcast.state.broadcastId).then((list) => ({ open: messagesOpen(broadcast.state, broadcast.config), messages: list })).catch(() => null)
+      : null;
     // The room's design: during the watch party the kid being watched (the strip beside the video and the section under
     // it); before or between reveals the page's own kid, or on /live/ the one coming up (drawPage: design.setKid)
     const designSlug = party ? pageKid || broadcast.state.kidSlug || '' : first ? pageKid || (first.view !== 'idle' ? broadcast.state.kidSlug || '' : '') : '';
-    const designAsk = designSlug ? (kid && kid.slug === designSlug ? Promise.resolve(kid.data) : kidData(env, designSlug).then((r) => r.data)).catch(() => null) : null;
+    const designAsk = designSlug ? (kid && kid.slug === designSlug ? Promise.resolve(kid.data) : kidData(near, designSlug).then((r) => r.data)).catch(() => null) : null;
     // (the same schedule /api/reveal-design reads, past reveals and all, so the page and the API open the design alike)
-    const revealsAsk = designSlug ? cachedReveals(env).catch(() => null) : null;
+    const revealsAsk = designSlug ? cachedReveals(near).catch(() => null) : null;
     const res = await next(kid || party || bar || schedule || first ? fresh(request) : request);
     if (res.status === 404 && pageKid) return Response.redirect(`${url.origin}/live/${url.search}`, 302);
     if (res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html') || !(kid || party || bar || schedule || first)) return res;
