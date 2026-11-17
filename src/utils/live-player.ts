@@ -2,8 +2,9 @@
  * live-player.ts — the video inside the live page's frame
  * ========================================================
  * Plays the Cloudflare Stream feed in a plain <video> (hls.js wherever the
- * browser has Media Source, the browser's own HLS on iPhone) instead of the
- * Stream iframe, so the page can do what an iframe can't:
+ * browser has Media Source, and for the live reveal on iPhones with Managed
+ * Media Source; the browser's own HLS for older iPhones and an iPhone's replay)
+ * instead of the Stream iframe, so the page can do what an iframe can't:
  *
  *   - start muted (browsers allow nothing else) and offer sound with one tap
  *   - size the frame to the real picture: the crew shoots portrait, but a
@@ -49,10 +50,18 @@ interface Options {
   onMuted?: (muted: boolean) => void;
 }
 
+/**
+ * Behind the live moment, how fast the picture may play to catch up (hls.js, low latency only): after a dip in the
+ * phone's signal it drifts back toward the live edge instead of staying late, too gently to notice (the sound keeps
+ * its pitch). 1: never.
+ */
+const CATCH_UP_RATE = 1.1;
 /** A stall this long reads as the feed dropping, not a hiccup */
 const STALL_MS = 4000;
 /** The browser's own HLS (iPhone) can sit silently on an empty playlist; give it this long to show a frame */
 const NATIVE_START_MS = 12_000;
+/** An iPhone on hls.js (Managed Media Source) with the feed's playlist there but no picture after this long goes back to Safari's own player */
+const MANAGED_START_MS = 20_000;
 /** Picture stuck this long while "playing": start over */
 const FROZEN_MS = 12_000;
 const RETRY_MS = 4000;
@@ -102,6 +111,17 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   let pending = false; // a retry is scheduled
   let useLl = !!urls.llhls;
   let failures = 0;
+  // An iPhone (Managed Media Source, no classic one) plays the live reveal through hls.js (start(), below). If hls.js
+  // can't get a picture going there, this page goes back to Safari's own player, which every iPhone used until
+  // Nov 17 2026 (later behind the moment, but playing): the feed's playlist is there and no picture has come in
+  // MANAGED_START_MS (hls.js can sit on a source that refuses it without ever giving up), or two fatal errors of its
+  // own before the picture ever played (decoding, packaging, anything but the network: "nothing live yet" is the
+  // network and counts for nothing)
+  const managedOnly = !('MediaSource' in window) && 'ManagedMediaSource' in window;
+  let hlsTrouble = 0;
+  let nativeOnly = false;
+  let managedTimer: ReturnType<typeof setTimeout> | undefined;
+  const toSafari = () => { nativeOnly = true; restart(0); };
   let hls: InstanceType<HlsClass> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let stallTimer: ReturnType<typeof setTimeout> | undefined;
@@ -124,6 +144,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     clearTimeout(retryTimer);
     clearTimeout(stallTimer);
     clearTimeout(nativeTimer);
+    clearTimeout(managedTimer);
     restarting = true;
     if (hls) { try { hls.destroy(); } catch { /* already gone */ } hls = null; }
     if (video.getAttribute('src')) { video.removeAttribute('src'); video.load(); }
@@ -164,6 +185,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     const h = new Hls({
       enableWorker: false, // the site CSP allows workers from 'self' only
       lowLatencyMode: live,
+      maxLiveSyncPlaybackRate: live ? CATCH_UP_RATE : 1,
       backBufferLength: 30,
       capLevelToPlayerSize: true,
       manifestLoadingMaxRetry: 1,
@@ -171,9 +193,16 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       fragLoadingMaxRetry: 4,
     });
     hls = h;
-    h.on(Hls.Events.MANIFEST_PARSED, () => { if (live) tryPlay(); });
+    h.on(Hls.Events.MANIFEST_PARSED, () => {
+      if (live) tryPlay();
+      if (managedOnly && !everPlayed) {
+        clearTimeout(managedTimer);
+        managedTimer = setTimeout(() => { if (!dead && hls === h && !everPlayed && video.readyState < 2 && status !== 'blocked') toSafari(); }, MANAGED_START_MS);
+      }
+    });
     h.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal || hls !== h) return;
+      if (managedOnly && !everPlayed && d.type !== Hls.ErrorTypes.NETWORK_ERROR && ++hlsTrouble >= 2) { toSafari(); return; }
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { h.recoverMediaError(); return; }
       const code = d.response?.code;
       // LL-HLS refused outright (not just "nothing live yet"): plain HLS from here on
@@ -190,8 +219,14 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     if (dead) return;
     set(everPlayed ? 'reconnecting' : 'connecting');
     const native = !!video.canPlayType('application/vnd.apple.mpegurl');
-    // iPhone has no classic Media Source; its own HLS is the steadier path there
-    if (native && !('MediaSource' in window)) { viaNative(); return; }
+    // An iPhone has no classic Media Source, only Managed Media Source (iOS 17.1 on). Its own HLS played the live reveal
+    // about 11 s later than iPads and computers (16 s behind the moment to their 4 to 5) and fell further behind with
+    // every dip in the phone's signal; hls.js on Managed Media Source keeps level with them (within 1 to 2 s) and
+    // catches up after a dip (measured on real broadcasts in iPhone Safari, Nov 17 2026). So the live reveal goes
+    // through hls.js there; Safari then offers no picture-in-picture or AirPlay for it (full screen works). Older
+    // iPhones, and an iPhone's replay (no moment to keep up with, and both of those kept), stay on Safari's own player.
+    const mse = 'MediaSource' in window || (live && managedOnly && !nativeOnly);
+    if (native && !mse) { viaNative(); return; }
     let Hls: HlsClass | null = null;
     try { Hls = await loadHls(); } catch { Hls = null; }
     if (dead) return;
