@@ -94,6 +94,25 @@ Bindings and env
 
 Office: nothing. Crew: open Larix, tap Start. See `docs/live-runbook.md`.
 
+## Testing on the main feed (test mode)
+
+Reveals → Now → "Test the main feed (no emails, no Facebook)". While it is on, a phone on the main feed
+shows on the website exactly as the planned reveal would (live page, banner, the kid's page) and nothing
+else happens: no sign-up or Kit emails, no Facebook or YouTube (Stream's outputs that were on are paused
+and put back after), no Instagram Reel, no staff "Live now", no History row, and the recording is never
+put on the kid's page. The test is its own broadcast (`state.quiet`, its own `broadcastId`) and carries
+what it interrupted (`state.resume`); when the phone stops (45 s grace) or "End the test" is pressed,
+that comes back as it was, so a scheduled reveal is scheduled again with its reminders untouched.
+
+The switch (site_config `broadcast-quiet`) turns itself off after 2 hours, and always 30 minutes before a
+scheduled reveal; it can't be turned on inside 35 minutes of one. A test still streaming at 30 minutes
+before becomes the reveal itself (emails, Facebook and all), since that phone is the reveal by then.
+Turning the switch off mid-test keeps that test quiet until the phone stops. "End the test" keeps the
+switch on 10 more minutes, so a phone still connected starts another test, never the reveal. If Stream
+won't pause Facebook, the switch stays off. Tests: `tests/broadcast-quiet.test.mjs`.
+
+The rehearsal feed is still the place for a private mic check: nothing on it is public.
+
 ## Control room and feed checks
 
 The control room sits on Admin → Broadcast → **Now** while a reveal is live or about to start (deep link `/admin/#broadcast/control-room`, which every Slack post uses, opens Now). It plays the feed with its own HLS player instead of Stream's iframe, so the page can hear it:

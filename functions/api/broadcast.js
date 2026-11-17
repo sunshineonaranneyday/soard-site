@@ -8,7 +8,8 @@
  *                  used for the archive sweep). Never forced: it runs only
  *                  when no tick has started anywhere in the last 20 s.
  * POST (Access)  → { action, ... }  schedule | update | cancel | goLiveManual |
- *                  endNow | clearReplay | extendReplay | setReplay | reset
+ *                  endNow | clearReplay | extendReplay | setReplay | reset |
+ *                  quietTest { on }   test mode: the main feed on the website only (_broadcast.js)
  */
 
 import { publicPayload, adminAction, runTick } from './_broadcast.js';

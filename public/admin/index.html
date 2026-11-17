@@ -5914,6 +5914,9 @@
       const P = BC_PHASES[phase] || BC_PHASES.idle;
       const live = phase === 'live' || phase === 'ending';
       const sched = phase === 'scheduled' || phase === 'armed';
+      // Test mode: the switch, and a test on the main feed streaming now (shown on the website only)
+      const qt = data.quiet || {};
+      const testing = live && !!st.quiet;
       const [editing, setEditing] = useState(false); // the Customize panel
       const [trackKey, setTrackKey] = useState(0);
       const [micCheck, setMicCheck] = useState(false);
@@ -5959,7 +5962,11 @@
       if (sched && st.test) sub.push(html`<span><strong>Rehearsal from a JobTread TEST job.</strong> The public site shows nothing, and reminders go only to the test address.</span>`);
       if (sched && st.jobId) sub.push(html`<span>From JobTread. To move or cancel it, change the Reveal task or Reveal Date Confirmed there.</span>`);
       if (kit && sched) sub.push(html`<span>Kit email at go-live: ${kitWanted ? `on (${kit.audience})` : 'off'} <button class="bc-link" type="button" disabled=${!!busy} onClick=${async () => { const d = await act('update', { kitLiveEmail: !kitWanted }, 'Kit email'); if (d.success) addToast(kitWanted ? 'No Kit email for this reveal' : `Kit email on for this reveal (${kit.audience})`, 'success'); }}>${kitWanted ? 'Turn off' : 'Turn on'}</button></span>`);
-      if (kit && live) sub.push(html`<span>Kit email: ${kitStatus}</span>`);
+      if (testing) {
+        const back = st.resume && ['scheduled', 'armed'].includes(st.resume.phase) ? `${st.resume.kidName ? `${st.resume.kidName}'s reveal` : 'The reveal'} goes back to ${bcFmt(st.resume.scheduledAt)}` : st.resume?.phase === 'replay' ? 'the replay comes back' : 'the live page goes back to waiting';
+        sub.push(html`<span><strong>Test on the main feed.</strong> It shows on the website only: nobody is emailed, and Facebook and YouTube are paused. When the phone stops, ${back}.</span>`);
+      }
+      if (kit && live && !testing) sub.push(html`<span>Kit email: ${kitStatus}</span>`);
       if (live && pub.kidName && kitVia) sub.push(html`<span>Kid: ${kitVia}</span>`);
       if (st.source === 'manual' && phase !== 'idle') sub.push(html`<span>Emergency banner (no stream)</span>`);
       const links = [];
@@ -5970,6 +5977,8 @@
 
       const actions = sched ? html`
           <button class="btn btn-ghost" type="button" aria-expanded=${editing} onClick=${() => setEditing(!editing)}>${editing ? 'Close' : 'Customize'}</button>`
+        : testing ? html`
+          <button class="btn btn-ghost" type="button" disabled=${!!busy} onClick=${() => setConfirm({ title: 'End the test now?', message: 'The test ends by itself 45 seconds after the phone stops. Use this only if it is stuck.', confirmLabel: 'End the test', cancelLabel: 'Keep going', busyLabel: 'Ending…', fn: () => act('endNow', {}, 'End test') })}>End the test</button>`
         : live ? html`
           ${kit && !kitSent ? html`<button class="btn btn-primary" type="button" disabled=${!!busy} onClick=${() => setConfirm({ title: 'Email the Kit list now?', message: `Sends "We're live" for ${pub.title || 'this reveal'} to ${kit.audience} in Kit, about a minute from now. It goes out once per reveal and can't be recalled.`, confirmLabel: 'Send the email', fn: async () => { const d = await act('sendKitLive', {}, 'Kit email'); if (d.success) addToast(`Kit email scheduled to ${kit.audience}`, 'success'); } })}>Email the list now</button>` : null}
           <button class="btn btn-danger" type="button" disabled=${!!busy} onClick=${() => setConfirm({ title: 'End the broadcast now?', message: st.source === 'stream' ? 'Normally the site ends itself when the phone stops. Use this only if the stream is stuck. The replay still gets saved.' : 'This takes the emergency banner down.', danger: true, confirmLabel: 'End now', cancelLabel: 'Keep going', busyLabel: 'Ending…', fn: () => act('endNow', {}, 'End') })}>End now</button>`
@@ -5978,7 +5987,7 @@
           <button class="btn btn-ghost" type="button" disabled=${!!busy} onClick=${() => setConfirm({ title: 'Take the replay off the live page?', message: 'The live page goes back to waiting for the next reveal. The recording stays in Stream and in History.', confirmLabel: 'Clear replay', fn: () => act('clearReplay', {}, 'Clear') })}>Clear replay</button>`
         : null;
 
-      const kidPicker = live && !pub.kidName ? html`<div class="bc-callout">
+      const kidPicker = live && !pub.kidName && !testing ? html`<div class="bc-callout">
         <label for="bc-live-kid"><strong>Which kid is this?</strong></label>
         <select class="form-select" id="bc-live-kid" style="width:auto" value=${liveKid} onChange=${(e) => setLiveKid(e.target.value)}>
           <option value="">Choose…</option>
@@ -6021,6 +6030,19 @@
       </div>` : null;
       const waiting = (phase === 'idle' || sched) ? (sch.waiting || []).map((w) => html`<div class="bc-note" role="note" key=${w.jobId}>${icons.warning}<span>${bcWaitingNote(w)} <a href=${`https://app.jobtread.com/jobs/${w.jobId}/schedule`} target="_blank" rel="noopener">Open in JobTread ↗</a></span></div>`) : null;
 
+      // Test mode switch: whenever no reveal is live (and during a test, to turn it off)
+      const toggleTest = async (on) => {
+        const d = await act('quietTest', { on }, 'Test mode');
+        if (d.success) addToast(on ? `Test mode on until ${bcFmt(d.quiet?.until)}` : testing ? 'Test mode off. This test stays quiet until the phone stops.' : 'Test mode off. Facebook and YouTube are back on.', 'success');
+      };
+      const testRow = s.inputReady && (!live || testing) ? html`<div class="bc-sub">
+        <label class="checkbox-label" style="min-height:0"><input type="checkbox" checked=${!!qt.on} disabled=${!!busy} onChange=${(e) => toggleTest(e.target.checked)} /> <strong>Test the main feed (no emails, no Facebook)</strong></label>
+        <span>${qt.on && testing ? `On until ${bcFmt(qt.until)}.`
+          : qt.on
+          ? `On until ${bcFmt(qt.until)}. A phone on the main feed shows on the website and nothing else happens: no emails, no Facebook or YouTube, no Instagram, and nothing saved to the kid's page. When it stops, the page goes back to how it was.`
+          : 'A phone on the main feed then shows on the website and nothing else happens. It turns itself off after 2 hours, and 30 minutes before a reveal.'}</span>
+      </div>` : null;
+
       const showKid = pub.kidName && phase !== 'idle' && !(pub.title || '').includes(pub.kidName);
       // The before photos this reveal plays, while it's coming up or live (a hidden profile shows none: its note says so)
       const beforesKid = pub.kidSlug && (sched || live) ? kidBySlug(pub.kidSlug) : null;
@@ -6028,11 +6050,12 @@
       const status = html`<div class="card bc-status" style=${`--phase:${P.color}`}>
         <div class="bc-status-top">
           <div class="bc-status-main">
-            <div class="bc-phase"><span class=${`bc-dot${phase === 'live' ? ' is-live' : ''}`}></span>${P.label}${showKid ? html`<span class="badge badge-accent">${pub.kidName}</span>` : null}${st.test ? html`<span class="badge badge-gray" title="From a JobTread TEST job">Rehearsal</span>` : null}</div>
+            <div class="bc-phase"><span class=${`bc-dot${phase === 'live' ? ' is-live' : ''}`}></span>${P.label}${showKid ? html`<span class="badge badge-accent">${pub.kidName}</span>` : null}${st.test ? html`<span class="badge badge-gray" title="From a JobTread TEST job">Rehearsal</span>` : null}${testing ? html`<span class="badge badge-gray" title="Test mode: on the website only">Test</span>` : null}</div>
             <div class="bc-title">${phase === 'idle' ? 'No reveal scheduled' : (pub.title || 'Untitled reveal')}</div>
             <div class="bc-meta">${meta}</div>
             ${sub.length ? html`<div class="bc-sub">${sub}</div>` : null}
             ${jtLine}
+            ${testRow}
           </div>
           ${actions ? html`<div class="bc-actions">${actions}</div>` : null}
         </div>

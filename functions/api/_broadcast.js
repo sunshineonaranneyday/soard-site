@@ -89,6 +89,10 @@ const KID_CLUE_INTERVAL_MS = 60 * 1000;
 // that, a broadcast is left alone (it ended long ago, or predates the claims).
 const EFFECTS_RETRY_MS = 10 * 60 * 1000;
 const HOOK_ENV_VARS = ['CF_PAGES_DEPLOY_HOOK', 'CF_DEPLOY_HOOK', 'DEPLOY_HOOK_URL'];
+// Test mode ("Test the main feed quietly"): how long one turn of the switch lasts, and how
+// often a tick looks at Stream's outputs while it is on (or puts them back after)
+const QUIET_HOURS = 2;
+const QUIET_OUTPUTS_CHECK_MS = 30 * 1000;
 
 // Per-isolate throttles (cheap; D1 stamps back them up)
 let _lastTickAt = 0;
@@ -239,6 +243,68 @@ export const readConfig = (DB) => readJson(DB, CONFIG_KEY, defaultConfig);
 export const writeConfig = (DB, c) => writeJson(DB, CONFIG_KEY, { ...c, updatedAt: nowIso() });
 export const readState = (DB) => readJson(DB, STATE_KEY, defaultState);
 export const readHealth = (DB) => readJson(DB, HEALTH_KEY, defaultHealth);
+
+// ─── Test mode ──────────────────────────────────────────────────────
+
+/**
+ * Test mode: one switch in Admin → Broadcast. While it is on, a phone on the
+ * main feed shows on the website exactly as a reveal would (the live page, the
+ * banner, the kid's page) and nothing else happens: nobody is emailed (sign-ups
+ * or Kit), Facebook and YouTube get nothing (Stream's outputs are paused while
+ * it is on), no Instagram Reel, no staff "Live now", no History row, and the
+ * recording is never put on a kid's page.
+ *
+ * A test is its own broadcast (state.quiet, a fresh broadcastId, so none of the
+ * planned reveal's claims are touched) and carries the state it interrupted
+ * (state.resume). When the phone stops, that comes back as it was: a scheduled
+ * reveal is scheduled again. The switch turns itself off QUIET_HOURS after it
+ * was turned on, and always ARM_WINDOW_MS before a scheduled reveal; a test
+ * still streaming at that point becomes the reveal itself.
+ *
+ * Kept apart from the config (key broadcast-quiet), so a tick writing it never
+ * races an admin saving Settings.
+ */
+export const QUIET_KEY = 'broadcast-quiet';
+export function defaultQuiet() {
+  return { until: null, by: null, at: null, paused: [], checkedAt: null };
+}
+export const readQuiet = (DB) => readJson(DB, QUIET_KEY, defaultQuiet);
+const writeQuiet = (DB, q) => writeJson(DB, QUIET_KEY, q);
+
+/** When the reveal that `state` plans (or that a running test interrupted) starts, in ms; null when none */
+function plannedAt(state) {
+  const s = state?.quiet ? state.resume : state;
+  if (!s || s.test || !['scheduled', 'armed'].includes(s.phase)) return null;
+  const at = Date.parse(s.scheduledAt || '');
+  return Number.isFinite(at) ? at : null;
+}
+
+/** When the switch really goes off: its own timer, or the planned reveal's arm window if that comes first. ms or null */
+export function quietUntil(q, state) {
+  const own = Date.parse(q?.until || '');
+  if (!Number.isFinite(own)) return null;
+  const at = plannedAt(state);
+  return at != null ? Math.min(own, at - ARM_WINDOW_MS) : own;
+}
+
+/** Is the switch on (a phone going live now starts a test)? */
+export function quietOn(q, state, now = Date.now()) {
+  const until = quietUntil(q, state);
+  return until != null && now < until;
+}
+
+/** A running test has reached its reveal's arm window: the phone streaming now is the reveal */
+function quietReachedReveal(state, now = Date.now()) {
+  const at = plannedAt(state);
+  return !!state?.quiet && at != null && now >= at - ARM_WINDOW_MS;
+}
+
+/** For the admin: the switch, when it goes off, and how many Stream outputs it is holding paused */
+export function quietStatus(q, state, now = Date.now()) {
+  const on = quietOn(q, state, now);
+  const until = quietUntil(q, state);
+  return { on, until: on ? new Date(until).toISOString() : null, by: q?.by || null, paused: Array.isArray(q?.paused) ? q.paused.length : 0 };
+}
 
 // A field of the stored row, NULL when the row isn't JSON (the readers then fall back to defaults)
 const stored = (col, path) => `(CASE WHEN json_valid(${col}) THEN json_extract(${col}, '${path}') END)`;
@@ -483,7 +549,8 @@ export async function hubTick(env) {
 // ─── Rows / events ──────────────────────────────────────────────────
 
 async function upsertBroadcastRow(DB, s) {
-  if (!s.broadcastId) return;
+  // A test on the main feed is not a reveal: History never lists it
+  if (!s.broadcastId || s.quiet) return;
   await DB.prepare(`INSERT INTO broadcasts (id, kid_slug, kid_name, title, message, image, scheduled_at, live_at, ended_at, phase,
       live_video_uid, replay_uid, fb_live_video_id, fb_permalink, source, data, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -502,7 +569,7 @@ async function upsertBroadcastRow(DB, s) {
  * update the row afterwards, and History would keep calling it "Coming up".
  */
 async function closeBroadcastRow(DB, s, phase, { endedNow = true } = {}) {
-  if (!s.broadcastId) return;
+  if (!s.broadcastId || s.quiet) return;
   // One that had gone live gets its end time too (when it really ended now), so History doesn't call it live and
   // reveal stats read its totals. An emergency banner that ran out on its timer ended some time before: no end time
   await DB.prepare(`UPDATE broadcasts SET phase = ?, updated_at = ?, ended_at = CASE WHEN live_at IS NOT NULL AND ? THEN COALESCE(ended_at, ?) ELSE ended_at END WHERE id = ?`)
@@ -694,6 +761,36 @@ export function tEnd(state, config, { by } = {}) {
 
 export function tClear(state, note, by) {
   return { ...defaultState(), note: note || null, updatedBy: by || null };
+}
+
+/**
+ * A phone on the main feed while test mode is on: a test, shown on the website
+ * as the planned reveal would be (same kid, title and picture), under its own
+ * broadcastId, carrying the state it interrupted so the end can put that back.
+ */
+export function tStartQuiet(state, { videoUid, by } = {}, config) {
+  const { rev, quiet, resume, ...before } = state;
+  const planned = !before.test && ['scheduled', 'armed'].includes(before.phase);
+  const look = planned ? before : { ...defaultState(), title: config.defaults.title, message: config.defaults.message };
+  const blank = defaultState();
+  const at = nowIso();
+  return {
+    ...look,
+    broadcastId: newBroadcastId(), createdAt: at,
+    phase: 'live', source: 'stream', test: false,
+    liveAt: at, segmentAt: at, endedAt: null, disconnectedAt: null,
+    liveVideoUid: videoUid || null, replayUid: null, replayReadyAt: null, replayUntil: null, replayStartedAt: null,
+    reel: null, fb: blank.fb, kit: blank.kit, kidCheckAt: null, kidAlertAt: null, manual: null, clicks: 0, note: null,
+    quiet: { at },
+    resume: before.phase === 'idle' || !before.phase ? null : before,
+    updatedBy: by || null,
+  };
+}
+
+/** The test is over: whatever it interrupted comes back as it was (nothing → idle) */
+export function tEndQuiet(state, by) {
+  const back = state.resume ? { ...state.resume } : { ...defaultState(), note: 'test-ended' };
+  return { ...back, updatedBy: by || back.updatedBy || null };
 }
 
 // ─── Reminders ──────────────────────────────────────────────────────
@@ -896,7 +993,8 @@ async function signupsCovered(env, config, state, kind) {
 export async function sendReminders(env, config, state, kind, work, { budgetMs = REMINDER_TICK_BUDGET_MS } = {}) {
   const { DB } = env;
   const summary = { kind, email: null, push: null };
-  if (!config.reminders?.enabled || !state.broadcastId) return summary;
+  // A test on the main feed (test mode) emails nobody
+  if (!config.reminders?.enabled || !state.broadcastId || state.quiet) return summary;
   // A rehearsal follows the same switches as a real reveal, but only the test address hears it
   if (state.test) return sendTestReminder(env, state, kind, config, work, summary);
   let open;
@@ -1007,7 +1105,7 @@ function stillOnTime(kind, state, now = Date.now()) {
 }
 
 async function dueReminderKinds(DB, state, config, { kit = true } = {}) {
-  if (!state.broadcastId) return [];
+  if (!state.broadcastId || state.quiet) return [];
   // Sends with people still waiting carry on every tick (sendReminders drops them once they're old news)
   const carrying = (await openReminderKinds(DB, state.broadcastId).catch(() => []))
     .filter(k => Date.now() - (_reminderSentAt.get(`${state.broadcastId}:${k}`) || 0) >= REMINDER_TICK_BUDGET_MS);
@@ -1092,7 +1190,7 @@ export function reminderArgs(state, kind, config = {}) {
  * claim so the admin's "Email the list now" button can retry. Never throws.
  */
 export async function sendKitLive(env, config, state, work, { by = 'live-broadcast' } = {}) {
-  if (!kitConfigured(env) || !state.broadcastId) return state;
+  if (!kitConfigured(env) || !state.broadcastId || state.quiet) return state;
   if (!await claimSend(env.DB, state.broadcastId, 'live', 'kit')) return state;
   // Always the whole list, less who asked for less: the one audience Kit can take with the sign-ups left out
   // (Kit takes one rule per email, so "a group, but not the sign-ups" can't be sent; no screen ever picked one)
@@ -1146,7 +1244,7 @@ async function tickReel(env, config, state, work, opts) {
 }
 
 async function checkReplayReady(env, config, state, health, work) {
-  if (state.phase !== 'replay' || state.replayUid || state.source !== 'stream') return state;
+  if (state.phase !== 'replay' || state.replayUid || state.source !== 'stream' || state.quiet) return state;
   const last = health.replayCheckAt ? Date.parse(health.replayCheckAt) : 0;
   if (Date.now() - last < REPLAY_CHECK_INTERVAL_MS) return state;
   health.replayCheckAt = nowIso();
@@ -1208,7 +1306,7 @@ async function checkReplayReady(env, config, state, health, work) {
  * admin covers every held case.
  */
 async function kitAutoLive(env, config, state, work) {
-  if (state.phase !== 'live' || !kitConfigured(env) || state.kit?.live || !kitLiveWanted(state, config)) return state;
+  if (state.phase !== 'live' || state.quiet || !kitConfigured(env) || state.kit?.live || !kitLiveWanted(state, config)) return state;
   if (state.source === 'manual' && !state.scheduledAt) return state; // emergency banner: humans decide
   const now = Date.now();
   const hold = async (error, title, detail) => {
@@ -1287,7 +1385,7 @@ function applyKid(state, kid, via, work) {
 
 async function fbOnLive(env, config, state, work) {
   const s = { ...state, fb: { ...(state.fb || {}) } };
-  if (!fb.fbConfigured(env)) return s;
+  if (!fb.fbConfigured(env) || state.quiet) return s;
   if (config.facebook?.mode === 'api' && !s.fb.liveVideoId && !s.fb.needsReview && config.liveInput?.uid) {
     // One Facebook live post per broadcast, however many ticks race here; the claim keeps its ids
     if (!(await claimOnce(env.DB, s.broadcastId, 'fb-live-post'))) {
@@ -1404,7 +1502,8 @@ const recent = (iso) => !!iso && Date.now() - Date.parse(iso) <= EFFECTS_RETRY_M
  */
 async function goLiveEffects(env, config, state, work, by) {
   const { DB } = env;
-  if (!['live', 'ending'].includes(state.phase) || state.source !== 'stream' || !state.broadcastId || !recent(state.liveAt)) return state;
+  // A test on the main feed sets off none of it (test mode)
+  if (!['live', 'ending'].includes(state.phase) || state.source !== 'stream' || !state.broadcastId || state.quiet || !recent(state.liveAt)) return state;
   const done = await claimedKeys(DB, state.broadcastId);
   if (!done.has('live-row')) { await upsertBroadcastRow(DB, state); await claimOnce(DB, state.broadcastId, 'live-row'); }
   // Also when the post was claimed but this state lacks its id (the tick that made it lost its save): fbOnLive reads it back
@@ -1446,6 +1545,50 @@ async function endedEffects(env, config, state, health, work, by) {
     work.push('announced-end');
   }
   return state;
+}
+
+/**
+ * Test mode keeps Facebook and YouTube out of it by pausing every Stream output
+ * on the main feed that is on, while the switch is on or a test is still
+ * streaming, and putting back exactly those once neither is true. An output
+ * someone paused in Settings is left as it is. Looked at every
+ * QUIET_OUTPUTS_CHECK_MS (`force` for the admin's switch). → the record as saved
+ */
+export async function syncQuietOutputs(env, config, q, state, work, { force = false } = {}) {
+  const inputUid = config.liveInput?.uid;
+  if (!inputUid || !stream.streamConfigured(env)) return q;
+  const testLive = !!state.quiet && ['live', 'ending'].includes(state.phase);
+  const want = testLive || quietOn(q, state);
+  const paused = Array.isArray(q.paused) ? q.paused : [];
+  if (!want && !paused.length) return q;
+  if (!force && q.checkedAt && Date.now() - Date.parse(q.checkedAt) < QUIET_OUTPUTS_CHECK_MS) return q;
+  const next = { ...q, paused: [...paused], checkedAt: nowIso() };
+  if (want) {
+    const list = await stream.listOutputs(env, inputUid).catch(() => null);
+    if (!list?.ok) work.push('test-outputs-unread');
+    for (const o of (list?.ok ? list.result || [] : [])) {
+      if (!o?.uid || o.enabled === false) continue;
+      const r = await stream.updateOutput(env, inputUid, o.uid, { enabled: false }).catch(() => null);
+      if (r?.ok) { if (!next.paused.includes(o.uid)) next.paused.push(o.uid); work.push('test-output-paused'); }
+      else work.push('test-output-pause-failed');
+    }
+  } else {
+    const left = [];
+    for (const uid of paused) {
+      const r = await stream.updateOutput(env, inputUid, uid, { enabled: true }).catch(() => null);
+      // One removed in Settings meanwhile has nothing left to put back
+      if (r?.ok || r?.status === 404) work.push('test-output-resumed');
+      else left.push(uid);
+    }
+    next.paused = left;
+    // Still paused with a reveal under an hour away: someone has to know (once per reveal)
+    const at = plannedAt(state);
+    if (left.length && at != null && at - Date.now() < 60 * 60e3 && await claimOnce(env.DB, state.broadcastId, 'test-outputs-stuck')) {
+      await notify.alertAdmins(env, config, { level: 'error', title: 'Facebook is still paused after a test', detail: `Test mode paused Stream's Facebook/YouTube outputs and they could not be turned back on. Turn them on in Admin → Broadcast → Settings before ${state.kidName ? `${state.kidName}'s reveal` : 'the reveal'}.`, url: `${SITE_ORIGIN}/admin/#broadcast`, urgent: true });
+    }
+  }
+  await writeQuiet(env.DB, next);
+  return next;
 }
 
 // ─── The tick ───────────────────────────────────────────────────────
@@ -1499,6 +1642,7 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   const { DB } = env;
   const now = Date.now();
   const [config, health] = await Promise.all([readConfig(DB), readHealth(DB)]);
+  let quiet = await readQuiet(DB);
   const healthBefore = JSON.stringify(health);
   const read = await readState(DB);
   let rev = Number(read.rev) || 0;
@@ -1516,16 +1660,24 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
     if (lc) {
       health.lifecycle = { at: nowIso(), live: lc.live, videoUID: lc.videoUID, inputUid };
       if (lc.live) {
-        if (state.phase === 'live') {
+        if (quietReachedReveal(state, now)) {
+          // A test still streaming when its reveal is 30 minutes off: that phone is the reveal now
+          state = tStartLive(tEndQuiet(state), { videoUid: lc.videoUID, source: 'stream' }, config); work.push('test-became-reveal');
+        } else if (state.phase === 'live') {
           if (lc.videoUID && state.liveVideoUid !== lc.videoUID) state = { ...state, liveVideoUid: lc.videoUID };
         } else if (state.phase === 'ending') {
           state = tReconnected(state); work.push('reconnected');
         } else if (state.source !== 'manual') {
-          state = tStartLive(state, { videoUid: lc.videoUID, source: 'stream' }, config); work.push('auto-start');
+          if (quietOn(quiet, state, now)) { state = tStartQuiet(state, { videoUid: lc.videoUID }, config); work.push('test-start'); }
+          else { state = tStartLive(state, { videoUid: lc.videoUID, source: 'stream' }, config); work.push('auto-start'); }
         }
       } else if (state.source === 'stream') {
         if (state.phase === 'live') { state = tDisconnected(state); work.push('disconnected'); }
-        else if (state.phase === 'ending' && now - Date.parse(state.disconnectedAt || 0) >= ENDING_GRACE_MS) { state = tEnd(state, config); work.push('ended'); }
+        else if (state.phase === 'ending' && now - Date.parse(state.disconnectedAt || 0) >= ENDING_GRACE_MS) {
+          // A test puts back what it interrupted; a reveal goes to its replay
+          if (state.quiet) { state = tEndQuiet(state); work.push('test-ended'); }
+          else { state = tEnd(state, config); work.push('ended'); }
+        }
       }
     }
   }
@@ -1544,7 +1696,7 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
     state = tClear(state, 'manual-expired'); work.push('manual-expired');
   }
   if (state.phase === 'live' && state.source === 'stream' && state.liveAt && now - Date.parse(state.liveAt) > MAX_LIVE_HOURS * 3600e3) {
-    state = tEnd(state, config); work.push('max-hours');
+    state = state.quiet ? tEndQuiet(state) : tEnd(state, config); work.push('max-hours');
   }
   if (state.phase === 'replay' && state.replayUntil && now >= Date.parse(state.replayUntil)) {
     state = tClear(state, 'replay-expired'); work.push('replay-expired');
@@ -1554,7 +1706,8 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   //    the copy this tick read. A tick that lost the race stops here; the next
   //    one starts from whatever won. The side effects (step 4) are claimed, so
   //    each happens once, on this tick or, if this one is cut off, a later one.
-  if (state.phase !== prevPhase) {
+  // (A test starting, ending or turning into the reveal changes the broadcast too, sometimes not the phase)
+  if (state.phase !== prevPhase || (state.broadcastId ?? null) !== (read.broadcastId ?? null)) {
     state = { ...state, updatedAt: nowIso() };
     if (!(await writeStateIf(DB, state, rev))) {
       work.push('conflict');
@@ -1579,13 +1732,16 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   //    and saves what it has (over the copy it read, as always)
   const live = () => state.phase === 'live' || state.phase === 'ending';
   const steps = [
+    // Test mode: Facebook and YouTube paused while it is on or a test streams, put back after
+    // (at once when a test has just started, ended or become the reveal)
+    async () => { quiet = await syncQuietOutputs(env, config, quiet, state, work, { force: !!read.quiet !== !!state.quiet }).catch((e) => { work.push(`test-outputs-error: ${e.message}`); return quiet; }); },
     async () => { state = await goLiveEffects(env, config, state, work, by); },
     async () => { state = await endedEffects(env, config, state, health, work, by); },
-    async () => { if (live()) state = await fbRefreshPermalink(env, state, work); },
-    // Feed watch, go/no-go and mic checks only report; nothing they do may stop the state machine
-    async () => { if (live() && state.source === 'stream') await monitor.watch(env, config, state, health, work, recordEvent).catch((e) => work.push(`monitor-error: ${e.message}`)); },
+    async () => { if (live() && !state.quiet) state = await fbRefreshPermalink(env, state, work); },
+    // Feed watch, go/no-go and mic checks only report; nothing they do may stop the state machine (a test pings nobody)
+    async () => { if (live() && state.source === 'stream' && !state.quiet) await monitor.watch(env, config, state, health, work, recordEvent).catch((e) => work.push(`monitor-error: ${e.message}`)); },
     // Every 30 s: how many watch at once on the site, Facebook and YouTube, and the hearts so far (History's reveal stats)
-    async () => { if (live() && state.source === 'stream') await revealStats.sampleLive(env, state, health, { hubStatus: () => hubStatus(env) }).catch((e) => work.push(`stats-error: ${e.message}`)); },
+    async () => { if (live() && state.source === 'stream' && !state.quiet) await revealStats.sampleLive(env, state, health, { hubStatus: () => hubStatus(env) }).catch((e) => work.push(`stats-error: ${e.message}`)); },
     async () => { if (state.phase === 'scheduled' || state.phase === 'armed') await preflight.auto(env, config, state, health, work, { hubStatus }).catch((e) => work.push(`preflight-error: ${e.message}`)); },
     async () => { if (!live() && await monitor.watchRehearsal(env, config, health).catch(() => false)) work.push('mic-check'); },
     async () => { state = await kitAutoLive(env, config, state, work); },
@@ -1763,6 +1919,7 @@ async function runAdminAction(env, action, body, userEmail) {
     case 'sendKitLive': {
       // By hand: an unplanned go-live, an early start the automatic send held back, or a retry
       if (!['live', 'ending'].includes(state.phase)) return fail('Only while live');
+      if (state.quiet) return fail('This is a test on the main feed: nobody is emailed');
       if (!kitConfigured(env)) return fail('Kit is not connected (KIT_API_KEY)');
       const work = [];
       state = await sendKitLive(env, config, state, work, { by: userEmail });
@@ -1773,6 +1930,17 @@ async function runAdminAction(env, action, body, userEmail) {
     case 'endNow': {
       if (!['live', 'ending'].includes(state.phase)) return fail('Nothing is live');
       const work = [];
+      if (state.quiet) {
+        // Ending a test by hand puts back what it interrupted. The switch stays on 10 more minutes, so a
+        // phone still connected starts another test, never the reveal (inside the reveal's own window it is the reveal)
+        const q = await readQuiet(DB);
+        const keep = Date.now() + 10 * 60e3;
+        if (!(Date.parse(q.until || '') > keep)) await writeQuiet(DB, { ...q, until: new Date(keep).toISOString() });
+        await recordEvent(DB, state.broadcastId, 'test_end', { by: userEmail });
+        state = tEndQuiet(state, userEmail);
+        await logAudit(DB, { userEmail, action: 'updated', entityType: 'live-status', entitySlug: 'test-mode', entityName: 'Test on the main feed ended by admin', gitStatus: 'ok' });
+        break;
+      }
       if (state.source === 'manual') { await closeBroadcastRow(DB, state, 'ended'); state = tClear(state, 'ended-manually', userEmail); }
       else {
         // This command ends Facebook's video and records the end itself, so the tick's ended effects skip both
@@ -1827,6 +1995,35 @@ async function runAdminAction(env, action, body, userEmail) {
       await writeState(DB, state); await upsertBroadcastRow(DB, state);
       break;
     }
+    case 'quietTest': {
+      // Test mode: a phone on the main feed shows on the website and nothing else happens (see tStartQuiet)
+      const on = body.on === true;
+      let q = await readQuiet(DB);
+      const work = [];
+      if (on) {
+        if (['live', 'ending'].includes(state.phase) && !state.quiet) return fail('A reveal is live right now. Test mode can wait until it ends.');
+        const at = plannedAt(state);
+        const end = Math.min(Date.now() + QUIET_HOURS * 3600e3, at != null ? at - ARM_WINDOW_MS : Infinity);
+        if (end - Date.now() < 5 * 60e3) return fail(`${state.kidName ? `${state.kidName}'s reveal` : 'The reveal'} is less than 35 minutes away, so a phone on the main feed now is the reveal. Test on the rehearsal feed instead.`);
+        q = { ...q, until: new Date(end).toISOString(), by: userEmail, at: nowIso() };
+        await writeQuiet(DB, q);
+        q = await syncQuietOutputs(env, config, q, state, work, { force: true });
+        if (work.includes('test-output-pause-failed') || work.includes('test-outputs-unread')) {
+          // Facebook would get the test: the switch doesn't stay on
+          q = { ...q, until: null };
+          await writeQuiet(DB, q);
+          await syncQuietOutputs(env, config, q, state, [], { force: true });
+          return fail('Stream did not pause the Facebook output, so test mode stayed off. Try again in a minute.');
+        }
+      } else {
+        q = { ...q, until: null, by: userEmail, at: nowIso() };
+        await writeQuiet(DB, q);
+        // Facebook and YouTube come back now, or when a test still streaming stops
+        q = await syncQuietOutputs(env, config, q, state, work, { force: true });
+      }
+      await logAudit(DB, { userEmail, action: 'updated', entityType: 'live-status', entitySlug: 'test-mode', entityName: on ? `Test mode on until ${notify.formatWhen(q.until, config.timezone)}` : 'Test mode off', gitStatus: 'ok' });
+      break;
+    }
     case 'reset': {
       // A reset mid-reveal still ends that reveal's row (cancelled if it never went live)
       if (state.broadcastId) await closeBroadcastRow(DB, state, state.liveAt ? 'ended' : 'cancelled');
@@ -1844,7 +2041,7 @@ async function runAdminAction(env, action, body, userEmail) {
   _lastTickResult = null; // next tick must recompute
   _lastBusyResult = null;
   await publishToHub(env, state, config, `admin:${action}`);
-  return { success: true, state: publicState(state, config, { includeTest: true }), legacy: legacyState(state, config, { includeTest: true }) };
+  return { success: true, state: publicState(state, config, { includeTest: true }), legacy: legacyState(state, config, { includeTest: true }), quiet: quietStatus(await readQuiet(DB), state) };
 }
 
 // ─── Public read ────────────────────────────────────────────────────
