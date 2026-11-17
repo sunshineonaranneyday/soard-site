@@ -75,6 +75,19 @@ export function focusOf(s: DesignSlide | null | undefined): { x: number; y: numb
 export const isWholeSheet = (s: DesignSlide | null | undefined): boolean =>
   !!s && (s.kind === 'as-built' || s.kind === 'proposed') && (!!focusOf(s) || /-sheet\./i.test(s.url || ''));
 
+/**
+ * height ÷ width of a plan's picture as it shows, when its stored size says it: a whole sheet as it is, a plan still to
+ * be cropped above its title block (slideSrc). null when only the picture can tell (one trimmed of its white edges,
+ * read off a tiny copy). The server draws the card this shape (live-design-html.ts) and the page keeps it
+ */
+export function knownRatio(s: DesignSlide | null | undefined): number | null {
+  const w = Number(s?.w) || 0, h = Number(s?.h) || 0;
+  if (!s || !(w > 0 && h > 0)) return null;
+  if (focusOf(s)) return h / w;
+  if (s.crop) return (h / w) * (1 - TITLE_BLOCK);
+  return null;
+}
+
 /** Same slides, same order: nothing to redraw */
 export const designSignature = (slides: DesignSlide[]) => slides.map((s) => `${s.kind}|${s.url}|${s.crop ? 1 : 0}|${s.caption}|${focusOf(s) ? Object.values(focusOf(s)!).join(',') : ''}`).join('\n');
 

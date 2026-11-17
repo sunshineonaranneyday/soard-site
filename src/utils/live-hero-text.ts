@@ -10,7 +10,7 @@
  * takes over. tz left out: the browser's own zone.
  */
 import { formatWhen, relativeUntil, revealLabel } from './live-when';
-import { runningLate, remindersUsable, remindPromise } from './live-banner';
+import { runningLate, replayOverdue, remindersUsable, remindPromise } from './live-banner';
 import { revealWhen, type UpcomingReveal } from './reveals-client';
 import type { ReminderOptions } from './live-client';
 
@@ -26,6 +26,55 @@ export function plannedText(scheduledAt: string | null, tz?: string, now = Date.
       : Date.parse(scheduledAt) > now ? `We go live ${formatWhen(scheduledAt, tz, now)}${rel ? `, ${rel}` : ''}.`
       : runningLate(scheduledAt, now) ? 'We’re running a little late. Stay right here.' : 'Any moment now. Stay right here.',
   };
+}
+
+export interface MomentFacts {
+  /** The broadcast's own view of this page: upcoming, live, replay */
+  view: 'upcoming' | 'live' | 'replay';
+  /** The starting-soon screen is in the frame (the last hour before a reveal) */
+  starting: boolean;
+  scheduledAt: string | null;
+  hasPlayer: boolean;
+  /** 'stream' when the reveal went out through our own stream (a replay is on its way) */
+  source?: string | null;
+  endedAt?: string | null;
+  tz?: string;
+  now?: number;
+}
+
+/**
+ * The hero's eyebrow and status line and the frame's badge, from a planned reveal to its replay: drawPage in
+ * LivePage.astro draws them, and functions/live/[[path]].js writes the same into the page before it goes out
+ * (starting soon, live and replay included), so the first paint is already what the script draws. Between reveals
+ * the status line comes from the schedule instead (betweenText).
+ */
+export function momentWords(f: MomentFacts): { eyebrow: string; status: string; badge: string } {
+  const now = f.now ?? Date.now();
+  if (f.view === 'live') {
+    // The video says it all; without one (a Facebook-only broadcast) point people there
+    return { eyebrow: 'Live now', status: f.hasPlayer ? '' : 'We are live on Facebook right now.', badge: 'Live' };
+  }
+  if (f.view === 'replay') {
+    // A recording is only on its way from our own stream, and only for a few hours
+    const waiting = f.source === 'stream' && !replayOverdue(f.endedAt, now);
+    return {
+      eyebrow: f.hasPlayer || waiting ? 'Replay' : 'Ended',
+      status: f.hasPlayer ? '' : waiting ? 'The reveal just ended. The replay will appear here soon.' : 'This reveal has ended.',
+      badge: f.hasPlayer || waiting ? 'Processing' : 'Ended',
+    };
+  }
+  const rel = relativeUntil(f.scheduledAt, now, f.tz);
+  const badge = rel ? `Live ${rel}` : 'Coming up';
+  if (f.starting) {
+    const late = runningLate(f.scheduledAt, now);
+    return {
+      eyebrow: late ? 'Running late' : 'Starting soon',
+      status: f.scheduledAt && Date.parse(f.scheduledAt) > now ? `We go live ${formatWhen(f.scheduledAt, f.tz, now)}. Stay right here.`
+        : late ? 'We’re running a little late. Stay right here.' : 'Any moment now. Stay right here.',
+      badge,
+    };
+  }
+  return { ...plannedText(f.scheduledAt, f.tz, now), badge };
 }
 
 /** Between reveals: a child's page names their own reveal, /live/ the next one ('' when the schedule has nothing to say) */

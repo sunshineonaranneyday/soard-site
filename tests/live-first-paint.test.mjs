@@ -12,7 +12,7 @@ const pub = (extra) => ({ phase: 'idle', kidSlug: 'axel', player: null, schedule
 const live = pub({ phase: 'live', player: { kind: 'live', uid: 'in1', customerCode: 'c' } });
 
 test('live with a video: watch party on /live/ and on that kid\'s page', () => {
-  assert.deepEqual(watchParty(live, { now }), { mode: 'live', orientation: 'portrait', eyebrow: 'Live now' });
+  assert.deepEqual(watchParty(live, { now }), { mode: 'live', orientation: 'portrait', eyebrow: 'Live now', late: false, slate: '' });
   assert.equal(watchParty(live, { pageKid: 'axel', now }).mode, 'live');
   assert.equal(watchParty({ ...live, phase: 'ending' }, { now }).mode, 'live', 'a dropped camera is still the live reveal');
 });
@@ -27,7 +27,7 @@ test('a Facebook-only broadcast keeps the photo hero', () => {
 
 test('replay with a video', () => {
   const r = watchParty(pub({ phase: 'replay', player: { kind: 'replay', uid: 'v1', customerCode: 'c' }, orientation: 'landscape' }), { now });
-  assert.deepEqual(r, { mode: 'replay', orientation: 'landscape', eyebrow: 'Replay' });
+  assert.deepEqual(r, { mode: 'replay', orientation: 'landscape', eyebrow: 'Replay', late: false, slate: '' });
 });
 
 test('starting soon only in the last hour (as the page has it), and only for a published kid', () => {
@@ -41,4 +41,19 @@ test('starting soon only in the last hour (as the page has it), and only for a p
 test('idle is the plain hero', () => {
   assert.equal(watchParty(pub({}), { now }), null);
   assert.equal(watchParty(null, { now }), null);
+});
+
+test('watch party: the starting-soon screen it puts in the frame, and running late', () => {
+  const soon = watchParty(pub({ phase: 'armed', scheduledAt: at(10) }), { kidPublished: true, now });
+  assert.equal(soon.slate, '/live/axel/slate/?embed=1&music=0&o=portrait', 'the frame plays the kid\'s own starting-soon screen');
+  assert.equal(soon.late, false);
+  assert.equal(soon.eyebrow, 'Starting soon');
+  const sideways = watchParty(pub({ phase: 'armed', scheduledAt: at(10), orientation: 'landscape' }), { pageKid: 'axel', kidPublished: true, now });
+  assert.equal(sideways.slate, '/live/axel/slate/?embed=1&music=0&o=landscape');
+  const moment = watchParty(pub({ phase: 'armed', scheduledAt: at(-6) }), { kidPublished: true, now });
+  assert.equal(moment.late, false, 'a few minutes past is "any moment now", not late');
+  const late = watchParty(pub({ phase: 'armed', scheduledAt: at(-35) }), { kidPublished: true, now });
+  assert.equal(late.mode, 'starting', 'past its time and not live yet: still the starting-soon screen');
+  assert.equal(late.late, true);
+  assert.equal(late.eyebrow, 'Running late', 'as the page script says it (runningLate)');
 });

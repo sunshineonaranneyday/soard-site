@@ -353,9 +353,11 @@ const trustBadges = getTrustBadges(site);
     justify-content: space-between;
     gap: 48px;
   }
+  /* Side by side, the words and the form share the row: neither runs past it on a narrow screen (an iPad held
+     upright, 769-900px, had the form 70px off the right edge) */
   .footer-newsletter-text {
-    max-width: 420px;
-    flex-shrink: 0;
+    flex: 0 1 420px;
+    min-width: 0;
   }
   .footer-newsletter-text h2 {
     font-size: clamp(1.4rem, 2.5vw, 1.75rem);
@@ -367,7 +369,8 @@ const trustBadges = getTrustBadges(site);
     color: var(--c-text-muted);
   }
   .newsletter-form {
-    flex: 1;
+    flex: 1 1 340px;
+    min-width: 0;
     max-width: 480px;
   }
   .newsletter-fields {
@@ -376,6 +379,7 @@ const trustBadges = getTrustBadges(site);
   }
   .newsletter-input {
     flex: 1;
+    min-width: 0;
     min-height: 48px;
     padding: 14px 20px;
     border: 2px solid var(--c-border);
@@ -455,8 +459,8 @@ const trustBadges = getTrustBadges(site);
   @media (max-width: 768px) {
     .footer-newsletter { padding: 56px 0; }
     .footer-newsletter-inner { flex-direction: column; gap: 28px; text-align: center; }
-    .footer-newsletter-text { max-width: 100%; }
-    .newsletter-form { max-width: 100%; width: 100%; }
+    .footer-newsletter-text { flex: none; max-width: 100%; }
+    .newsletter-form { flex: none; max-width: 100%; width: 100%; }
     .newsletter-fields { flex-direction: column; }
     .newsletter-note { text-align: center; padding-left: 0; }
   }

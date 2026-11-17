@@ -62,6 +62,7 @@ const ICON = {
           data-live="photo"
         />
         <div class="stage__player" data-s="player" hidden></div>
+        <div class="stage__slate" data-s="slate" hidden></div>
         <div class="stage__note" data-s="note" role="status" hidden>
           <p class="stage__note-title" data-s="note-title"></p>
           <p class="stage__note-text" data-s="note-text"></p>
@@ -142,6 +143,12 @@ const ICON = {
   /* :global: the video and iframes are created at runtime, so they have no Astro scope attribute */
   .stage__player :global(iframe) { width: 100%; height: 100%; border: 0; display: block; }
   .stage__player :global(video) { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
+  /* The starting-soon screen, over the frame in a layer of its own: going live it stays while the picture connects and
+     fades as the picture shows (live-stage.ts endHandoff). Nothing to tap on it: taps reach the picture under it */
+  .stage__slate { position: absolute; inset: 0; z-index: 1; pointer-events: none; transition: opacity 0.6s ease; }
+  .stage__slate[hidden] { display: none; }
+  .stage__slate.is-going { opacity: 0; }
+  .stage__slate :global(iframe) { width: 100%; height: 100%; border: 0; display: block; }
   .stage[data-pkind='replay'] .stage__player :global(video) { cursor: pointer; }
 
   .stage__badge {
@@ -298,14 +305,16 @@ const ICON = {
   .bar__icon-pause, .stage[data-playing] .bar__icon-play { display: none; }
   .stage[data-playing] .bar__icon-pause { display: grid; }
   .bar__icon-play { display: grid; }
-  /* Under the progress line, at its end. When there isn't room for all of it, the length steps aside first, then
-     the time: each wraps onto a second line that is never shown, so nothing runs into the buttons */
+  /* Under the progress line: the time played under its start and the length under its end, lined up with the line's
+     ends (8px in, as the slider's track is), so the length arrives in a place of its own and nothing moves when it
+     does (Peter, Nov 16 2026). Short of room, the length steps aside: it wraps onto a second line that is never shown */
   .bar__time {
-    align-self: end; display: flex; flex-wrap: wrap; column-gap: 0.3em; height: 14px; line-height: 14px; overflow: hidden;
+    align-self: end; display: flex; flex-wrap: wrap; column-gap: 0.3em; height: 14px; line-height: 14px; overflow: hidden; padding-inline: 8px;
     font-size: 12px; font-weight: 600; color: var(--c-text-muted); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
   }
-  /* Pushes the time to the end; as tall as a line, so a first line holding only this still hides what wrapped */
-  .bar__time::before { content: ''; flex: 1 0 0; height: 14px; }
+  /* Between the two, taking the room; as tall as a line, so a first line holding only this still hides what wrapped */
+  .bar__time::before { content: ''; flex: 1 0 0; height: 14px; order: 1; }
+  .bar__total { order: 2; }
   .bar__total:empty { display: none; }
 
   /* The line sits in the top of its cell (--seek-pad leaves the bottom for the time); the whole cell still seeks */
@@ -539,6 +548,6 @@ const ICON = {
     .stage__accent { animation: none; opacity: 0.35; }
     .bar__sound, .bar__heart.is-beat, .stage[data-party] .stage__picture.is-docked { animation: none; }
     .stage[data-onair][data-mode='live'] .bar__dot::after { animation: none; }
-    .stage__player, .bar__btn { transition: none; }
+    .stage__player, .stage__slate, .bar__btn { transition: none; }
   }
 </style>

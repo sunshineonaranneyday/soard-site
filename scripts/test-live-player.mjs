@@ -377,7 +377,13 @@ try {
     // Leave captions as a new visitor has them
     if ((await barFit()).ccOn) { await page.click('[data-s="cc-toggle"]'); await sleep(300); }
   }
-  ok((await page.evaluate(() => document.querySelector('[data-s="time-total"]')?.textContent || '')).startsWith('/ '), 'the length reads "/ 0:08" beside the time');
+  // The time played under the line's start, the length under its end: the length arrives in its own place, nothing moves
+  const times = await page.evaluate(() => {
+    const box = (s) => document.querySelector(`[data-s="${s}"]`)?.getBoundingClientRect();
+    const seek = document.querySelector('.seek')?.getBoundingClientRect(), now = box('time-now'), total = box('time-total');
+    return { text: document.querySelector('[data-s="time-total"]')?.textContent || '', startGap: now && seek ? Math.round(now.left - seek.left) : null, endGap: total && seek ? Math.round(seek.right - total.right) : null };
+  });
+  ok(/^\d+:\d\d$/.test(times.text) && times.startGap >= 0 && times.startGap <= 12 && times.endGap >= 0 && times.endGap <= 12, `the time sits under the line's start and the length under its end (${JSON.stringify(times)})`);
 
   // A phone held sideways: the picture as tall as the screen allows and the controls beside it (under it, they left a
   // picture a few dozen pixels wide); nothing off the screen, nothing sideways

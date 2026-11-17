@@ -36,17 +36,19 @@
  */
 
 import { readState, readConfig, publicState, visibleState, publicReminders } from '../api/_broadcast.js';
-import { watchParty } from './_watch-party.js';
+import { watchParty, slateFor } from './_watch-party.js';
 import { revealSlides, designWindow } from '../../public/admin/reveal-design.js';
 import { revealOf } from '../api/reveal-design.js';
 import { cachedReveals } from '../api/_reveals.js';
 import { cfRaw, cfSrcset, cfLqip } from '../../src/utils/cf-image.ts';
+import { designSignature, validSlide } from '../../src/utils/reveal-design-client.ts';
+import { designPartsHtml, designName, designLead } from '../../src/utils/live-design-html.ts';
 import { barFor, addBar, PAGE_REUSE } from '../_apply-bar.js';
 import { cardFor } from '../_og-cards.js';
 import { edgeSchedule, scheduleAttr } from '../_kid-reveal.js';
 import { onBands } from '../_upcoming-band.js';
 import { heroRowsHtml, rowsSignature, afterLine } from '../../src/utils/upcoming-rows.ts';
-import { plannedText, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../src/utils/live-hero-text.ts';
+import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../src/utils/live-hero-text.ts';
 import { inviteData, inviteLinks } from '../../src/utils/reveals-client.ts';
 import { messagesOpen, listShown } from '../api/_live-messages.js';
 import { emailConfigured } from '../api/_broadcast-notify.js';
@@ -87,11 +89,39 @@ async function currentKid(env, state) {
  * The same rules as /api/reveal-design, which fills it.
  */
 function designFor(slug, data, state, schedule = null) {
+  try { return designOf(slug, data, state, schedule); } catch { return null; }
+}
+function designOf(slug, data, state, schedule) {
   if (!slug || !data || data.publishStatus === 'draft') return null;
   const kid = { ...data, slug: data.slug || slug };
   // JobTread's schedule too, when it's at hand, exactly as /api/reveal-design decides
   const { open, after } = designWindow({ kid, reveal: schedule ? revealOf(schedule, slug) : null, broadcast: state });
-  return open && revealSlides(kid, { after }).length ? { slug, name: String(data.name || '').trim() } : null;
+  if (!open) return null;
+  // The slides as the page script reads them from /api/reveal-design (fetchDesign keeps the valid ones)
+  const slides = revealSlides(kid, { after }).filter(validSlide);
+  return slides.length ? { slug, name: String(data.name || '').trim(), apiName: data.name || '', after: !!after, slides } : null;
+}
+
+/**
+ * "The design" under the hero, in the page from the first paint (live-design-html.ts, which the page script draws it
+ * from too): the room as it is and the plan, its cards already their pictures' shapes, so nothing below the hero
+ * moves when the pictures come. The parts carry the slides' signature, so the page script keeps them as they are
+ */
+export function addDesign(res, design) {
+  if (!design || res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html')) return res;
+  const sig = designSignature(design.slides) + (design.after ? '|after' : '');
+  const out = new HTMLRewriter()
+    .on('[data-live-design]', setAttrs({ hidden: null }))
+    .on('[data-live-design] [data-ldz="name"]', { element(e) { e.setInnerContent(designName(design.apiName)); } })
+    .on('[data-live-design] [data-ldz="lead"]', { element(e) { e.setInnerContent(designLead(design.slides, design.after)); } })
+    .on('[data-live-design] [data-ldz="parts"]', { element(e) { e.setAttribute('data-sig', sig); e.setAttribute('data-kid', design.slug); e.setInnerContent(designPartsHtml(design.slides, design.after), { html: true }); } })
+    .transform(res);
+  const headers = new Headers(out.headers);
+  if (!/no-store/i.test(headers.get('Cache-Control') || '')) headers.set('Cache-Control', PAGE_REUSE);
+  headers.delete('ETag');
+  headers.delete('Last-Modified');
+  headers.delete('Content-Length');
+  return new Response(out.body, { status: out.status, headers });
 }
 
 /** The starting-soon track (docs/live-runbook.md: live/starting-soon.mp3 in the files bucket) is there: asked of R2 at
@@ -110,6 +140,43 @@ export async function musicThere(env, now = Date.now()) {
 const setAttrs = (attrs) => ({
   element(e) { for (const [k, v] of Object.entries(attrs)) { if (v === null) e.removeAttribute(k); else e.setAttribute(k, v); } },
 });
+
+/**
+ * The hero's buttons as the page script shows them (ctasThatApply, ctaPicks: src/utils/live-hero-text.ts): each says
+ * whether it applies (hidden), and the first two for the moment show in their order (data-capped holds the rest back).
+ * extra: buttons whose showing is decided elsewhere (the message box's own), as the page has them
+ */
+function ctaFirstPaint(rw, facts, extra = {}) {
+  const applies = { ...ctasThatApply(facts), ...extra };
+  const picks = ctaPicks(facts.display, (k) => !!applies[k]);
+  for (const key of Object.keys(applies)) {
+    const at = picks.indexOf(key);
+    rw = rw.on(`#live-hero [data-live="${key}"]`, setAttrs({ hidden: applies[key] ? null : '', 'data-capped': at < 0 ? '' : null, style: at < 0 ? null : `order:${at}` }));
+  }
+  return rw;
+}
+
+/**
+ * The messages box in the hero during the watch party, as live-messages.ts paints it there: the family's name in its
+ * heading and placeholder, the messages so far (newest at the end, where the box opens), and the form or the closed
+ * note. msgs: { enabled, open, kidName, list }
+ */
+function heroMessages(rw, msgs) {
+  const name = String(msgs.kidName || '').trim();
+  const count = msgs.list.length;
+  const show = msgs.enabled && (msgs.open || count > 0);
+  rw = rw
+    .on('#live-hero [data-slot="hero"]', setAttrs({ hidden: show ? null : '' }))
+    .on('[data-live-msgs]', setAttrs({ hidden: '' }))
+    .on('[data-msgs="panel"]', setAttrs({ 'data-place': 'hero', 'data-open': msgs.open ? '1' : null }))
+    .on('[data-msgs="heading"]', { element(e) { e.setInnerContent(name ? `Messages for ${name}'s family` : 'Messages for the family'); } })
+    .on('#msg-body', setAttrs({ placeholder: name ? `${name}, we are so happy for you!` : 'We are so happy for you!' }))
+    .on('[data-msgs="form"]', setAttrs({ hidden: msgs.open ? null : '' }))
+    .on('[data-msgs="closed"]', setAttrs({ hidden: msgs.open || !count ? '' : null }))
+    .on('[data-msgs="empty"]', setAttrs({ hidden: count || !msgs.open ? '' : null }));
+  if (count) rw = rw.on('[data-msgs="list"]', { element(e) { e.setInnerContent(msgs.list.map(messageHtml).join(''), { html: true }); } });
+  return rw;
+}
 
 function rewrite(res, { kid, party, messages, design }) {
   let rw = new HTMLRewriter();
@@ -147,13 +214,32 @@ function rewrite(res, { kid, party, messages, design }) {
   }
   if (party) {
     const shape = { 'data-party': '', 'data-orientation': party.orientation };
+    const starting = party.mode === 'starting';
+    const words = party.words;
     rw = rw
       .on('.live-page', setAttrs({ 'data-view': party.mode, 'data-next': null }))
       .on('#live-hero', setAttrs({ 'data-phase': party.mode, ...shape }))
-      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape }))
+      // (on air from the start while the starting-soon screen plays: its dot is lit, as live-stage.ts paints it)
+      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': starting ? '' : null }))
       .on('#live-hero [data-s="bar"]', setAttrs({ hidden: null }))
-      .on('#live-hero [data-live="eyebrow"]', { element(e) { e.setInnerContent(party.eyebrow); } });
-    if (messages) rw = rw.on('#live-hero [data-slot="hero"]', setAttrs({ hidden: null }));
+      .on('#live-hero [data-live="eyebrow"]', { element(e) { e.setInnerContent(words.eyebrow); } })
+      // The status line: the starting-soon countdown's words; the video says it all once it plays
+      .on('#live-hero [data-live="status"]', { element(e) { e.setInnerContent(words.status); e.setAttribute('aria-live', starting ? 'off' : 'polite'); } })
+      // The bar under the frame: the replay's own controls, or the live bar's words (a heart from the start before the
+      // reveal; live, the sound and heart come once the picture plays)
+      .on('#live-hero [data-s="livebar"]', setAttrs({ hidden: party.mode === 'replay' ? '' : null }))
+      .on('#live-hero [data-s="replaybar"]', setAttrs({ hidden: party.mode === 'replay' ? null : '' }))
+      .on('#live-hero [data-s="status"]', { element(e) { e.setInnerContent(starting ? (party.late ? 'Running late' : 'Starting soon') : party.mode === 'replay' ? 'Replay' : 'Connecting'); } })
+      .on('#live-hero [data-s="heart"]', setAttrs({ hidden: starting ? null : '' }))
+      // Full screen, live: there from the moment the player is in the frame (until it plays muted: then "Tap for sound")
+      .on('#live-hero [data-s="livebar"] [data-full]', setAttrs({ hidden: party.mode === 'live' ? null : '' }));
+    // The starting-soon screen is in the frame from the first paint (live-stage.ts keeps it rather than load it again)
+    if (starting && party.slate) {
+      const title = party.late ? 'Running late' : 'Starting soon';
+      rw = rw.on('#live-hero [data-s="slate"]', { element(e) { e.removeAttribute('hidden'); e.setInnerContent(`<iframe src="${esc(party.slate)}" title="${title}" loading="eager" tabindex="-1"></iframe>`, { html: true }); } });
+    }
+    if (party.ctas) rw = ctaFirstPaint(rw, party.ctas, { 'cta-messages': false });
+    if (messages) rw = heroMessages(rw, messages);
     if (!kid && party.mode === 'live' && party.generic) rw = rw.on('#live-hero h1', { element(e) { e.setInnerContent("Today's <em>room reveal</em>", { html: true }); } });
     if (design) {
       rw = rw.on('#live-hero', setAttrs({ 'data-design': design.slug }));
@@ -282,9 +368,9 @@ export function firstView({ state, pub, pageKid = '', party = null, rows = null,
   if (party || !state) return null;
   const ours = !pageKid || pub?.kidSlug === pageKid;
   const phase = ours ? state.phase : 'idle';
-  if (phase === 'scheduled' || phase === 'armed') return { view: 'upcoming', ...plannedText(state.scheduledAt || null, tz, now) };
+  if (phase === 'scheduled' || phase === 'armed') return { view: 'upcoming', ...momentWords({ view: 'upcoming', starting: false, scheduledAt: state.scheduledAt || null, hasPlayer: false, tz, now }) };
   if (phase === 'live' || phase === 'ending' || phase === 'replay') return null;
-  return { view: 'idle', eyebrow: null, status: rows ? betweenText(rows, pageKid, tz) : '' };
+  return { view: 'idle', eyebrow: null, status: rows ? betweenText(rows, pageKid, tz) : '', badge: '' };
 }
 
 /** The messages box (between its markers) moved out of the hero into its section below → the page, or null when it can't be */
@@ -337,6 +423,9 @@ export async function addFirstView(res, first, messages = null, ctaFacts = null)
     .on('.live-page', setAttrs({ 'data-view': first.view }))
     .on('#live-hero', setAttrs({ 'data-phase': first.view }));
   if (first.eyebrow) rw = rw.on('#live-hero [data-live="eyebrow"]', text(first.eyebrow));
+  // The photo's badge ("Live in 2 days"), as live-stage.ts paints it before the watch party
+  rw = rw.on('#live-hero [data-s="badge"]', setAttrs({ hidden: first.badge ? null : '' }));
+  if (first.badge) rw = rw.on('#live-hero [data-s="badge-text"]', text(first.badge));
   // The hero's two buttons, by the page script's own rule (the message box's button is its own business)
   if (ctaFacts) {
     const applies = ctasThatApply({ ...ctaFacts, pastOnPage });
@@ -451,7 +540,7 @@ export async function onRequest(context) {
     if (env.DB) {
       const [state, config] = await Promise.all([readState(env.DB), readConfig(env.DB)]);
       // A rehearsal (JobTread TEST job) is invisible here: the page reads as nothing scheduled
-      broadcast = { state: visibleState(state), config, pub: publicState(state, config) };
+      broadcast = { state: visibleState(state), rawState: state, config, pub: publicState(state, config) };
     }
   } catch { broadcast = null; }
 
@@ -477,30 +566,48 @@ export async function onRequest(context) {
     const line = rows && lineKid ? afterLine(rows, lineKid, kid?.name || '', visitorZone(request)) : '';
     // The hero as the page script will draw it before a reveal or between reveals, and the messages box with it
     const first = broadcast ? firstView({ state: broadcast.state, pub: broadcast.pub, pageKid, party, rows, tz: visitorZone(request) }) : null;
-    let messages = null;
-    if (first?.view === 'upcoming' && messagesOpen(broadcast.state, broadcast.config)) {
-      try { messages = { kidName: broadcast.pub?.kidName || kid?.name || '', list: (await listShown(env, { broadcastId: broadcast.state.broadcastId })).messages || [] }; } catch { messages = null; }
-    }
+    // The messages so far: before the reveal, for the box in its section; during the watch party, for the box in the
+    // hero (live-messages.ts shows it there while it's open or has messages). Asked for alongside the page, not after
+    const enabled = broadcast?.config?.messages?.enabled !== false;
+    const kidName = broadcast?.pub?.kidName || kid?.name || '';
+    const wantMessages = enabled && ((first?.view === 'upcoming' && messagesOpen(broadcast.state, broadcast.config)) || !!party);
+    const messagesAsk = wantMessages ? listShown(env, { broadcastId: broadcast.state.broadcastId }).catch(() => null) : null;
+    // The room's design: during the watch party the kid being watched (the strip beside the video and the section under
+    // it); before or between reveals the page's own kid, or on /live/ the one coming up (drawPage: design.setKid)
+    const designSlug = party ? pageKid || broadcast.state.kidSlug || '' : first ? pageKid || (first.view !== 'idle' ? broadcast.state.kidSlug || '' : '') : '';
+    const designAsk = designSlug ? (kid && kid.slug === designSlug ? Promise.resolve(kid.data) : kidData(env, designSlug).then((r) => r.data)).catch(() => null) : null;
+    // (the same schedule /api/reveal-design reads, past reveals and all, so the page and the API open the design alike)
+    const revealsAsk = designSlug ? cachedReveals(env).catch(() => null) : null;
     const res = await next(kid || party || bar || schedule || first ? fresh(request) : request);
     if (res.status === 404 && pageKid) return Response.redirect(`${url.origin}/live/${url.search}`, 302);
     if (res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html') || !(kid || party || bar || schedule || first)) return res;
-    let design = null;
+    const [shown, designData, reveals] = await Promise.all([messagesAsk, designAsk, revealsAsk]);
+    let messages = null;
+    let heroMsgs = null;
+    if (shown && first?.view === 'upcoming') messages = { kidName, list: shown.messages || [] };
+    else if (party && enabled) heroMsgs = { enabled, open: !!shown?.open, kidName, list: shown?.messages || [] };
+    const design = designSlug ? designFor(designSlug, designData, broadcast.rawState, reveals) : null;
+    const reminders = broadcast?.config?.reminders || {};
+    const remindUsable = !!reminders.enabled && (emailConfigured(env) || (!!reminders.push && !!broadcast?.config?.vapid?.publicKey));
     if (party) {
-      const slug = pageKid || broadcast.state.kidSlug || '';
-      const data = kid && kid.slug === slug ? kid.data : slug ? (await kidData(env, slug)).data : null;
-      design = designFor(slug, data, broadcast.state);
+      // The hero's words and buttons for the watch party, by the page script's rules (momentWords, ctasThatApply)
+      const pub = broadcast.pub;
+      const view = party.mode === 'starting' ? 'upcoming' : party.mode;
+      const hasPlayer = party.mode !== 'starting';
+      party.words = momentWords({ view, starting: party.mode === 'starting', scheduledAt: pub.scheduledAt || null, hasPlayer, source: pub.source, endedAt: pub.endedAt, tz: visitorZone(request) });
+      party.ctas = { display: party.mode, view, scheduledAt: pub.scheduledAt || null, remindUsable, pageKid, inSchedule: false, pastOnPage: false, hasPlayer };
     }
     // The messages box moves first (it needs the page's text); the rest are streamed rewrites
-    const reminders = broadcast?.config?.reminders || {};
     const ctaFacts = first ? {
       display: first.view, view: first.view, scheduledAt: broadcast.state.scheduledAt || null,
       // As the page has it: emails, or this browser's alerts (taken as possible here; the browser knows for sure)
-      remindUsable: !!reminders.enabled && (emailConfigured(env) || (!!reminders.push && !!broadcast.config?.vapid?.publicKey)),
+      remindUsable,
       pageKid, inSchedule: !!(rows || []).some((r) => r.slug === (pageKid || (first.view !== 'idle' ? broadcast.state.kidSlug : ''))),
       hasPlayer: false,
     } : null;
     let page = first ? await addFirstView(res, first, messages, ctaFacts) : res;
-    page = kid || party ? rewrite(page, { kid, party, messages: broadcast.config?.messages?.enabled !== false, design }) : page;
+    page = kid || party ? rewrite(page, { kid, party, messages: heroMsgs, design: party ? design : null }) : page;
+    page = addDesign(page, design);
     if (rows && isIndex) page = addHeroRows(page, { list: rows, zone: visitorZone(request), between: !!broadcast && !kid && !ACTIVE.has(broadcast.state?.phase) });
     if (line) page = addAfterLine(page, line);
     if (schedule) page = addSchedule(page, schedule, { zone: visitorZone(request), current: showingKid(broadcast?.pub, pageKid) });

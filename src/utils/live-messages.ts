@@ -58,13 +58,28 @@ export function createMessages(opts: Options) {
   let relayed = false; // the hub relays messages, so no polling
   const ids = new Set<string>([...panel.querySelectorAll<HTMLElement>('[data-msgs="list"] > li[data-id]')].map((li) => li.dataset.id || '').filter(Boolean));
 
-  const nearEnd = () => !wall || wall.scrollHeight - wall.scrollTop - wall.clientHeight < 80;
+  // The wall is laid out from its end (column-reverse, LiveMessages.astro): its end, the newest message, is scrollTop 0
+  // and scrolling back is negative. Read from the page, so a wall drawn the other way still works
+  const reversed = () => !!wall && getComputedStyle(wall).flexDirection === 'column-reverse';
+  const fromEnd = () => (!wall ? 0 : reversed() ? Math.abs(wall.scrollTop) : wall.scrollHeight - wall.scrollTop - wall.clientHeight);
+  const endTop = () => (!wall || reversed() ? 0 : wall.scrollHeight);
+  const nearEnd = () => fromEnd() < 80;
   function toEnd() {
-    if (wall) { wall.style.scrollBehavior = 'auto'; wall.scrollTop = wall.scrollHeight; wall.style.scrollBehavior = ''; }
+    if (wall) { wall.style.scrollBehavior = 'auto'; wall.scrollTop = endTop(); wall.style.scrollBehavior = ''; }
     setHidden($('jump'), true);
   }
+  /** A change at the end of the list (a message in or out) keeps what someone scrolled back to read where it is */
+  function holdReading(change: () => void, atEnd: boolean) {
+    if (!wall || atEnd || !reversed()) { change(); return; }
+    const before = wall.scrollHeight;
+    change();
+    // (at once: the wall scrolls smoothly otherwise, and the message would jump and glide back)
+    wall.style.scrollBehavior = 'auto';
+    wall.scrollTop -= wall.scrollHeight - before;
+    wall.style.scrollBehavior = '';
+  }
   wall?.addEventListener('scroll', () => { if (nearEnd()) setHidden($('jump'), true); }, { passive: true });
-  $('jump')?.addEventListener('click', () => { wall?.scrollTo({ top: wall.scrollHeight, behavior: reduced ? 'auto' : 'smooth' }); setHidden($('jump'), true); });
+  $('jump')?.addEventListener('click', () => { wall?.scrollTo({ top: endTop(), behavior: reduced ? 'auto' : 'smooth' }); setHidden($('jump'), true); });
 
   function place() {
     const target = view.party ? heroSlot : sectionSlot;
@@ -104,14 +119,17 @@ export function createMessages(opts: Options) {
     text.className = 'msg__body';
     text.textContent = m.body;
     li.append(who, text);
-    list.append(li);
+    holdReading(() => list.append(li), stick);
     while (list.children.length > MAX) list.firstElementChild?.remove();
     setHidden($('empty'), true);
     if (stick) toEnd(); else setHidden($('jump'), false);
   }
   function remove(id: string) {
     ids.delete(id);
-    list?.querySelector(`[data-id="${CSS.escape(id)}"]`)?.remove();
+    const li = list?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
+    // One under what's on screen (between it and the end) moves the rest; one above it doesn't
+    const under = !!li && !!wall && li.getBoundingClientRect().top >= wall.getBoundingClientRect().bottom;
+    if (li) holdReading(() => li.remove(), !under);
     setHidden($('empty'), !!list?.children.length);
   }
 

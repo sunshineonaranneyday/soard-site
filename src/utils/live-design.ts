@@ -41,7 +41,8 @@
  * player in its top corner (a tap on it goes back). Otherwise it's a plain
  * full-screen viewer. The page holds still behind it either way.
  */
-import { fetchDesign, slideSrc, designSignature, focusOf, isWholeSheet, type DesignSlide } from './reveal-design-client';
+import { fetchDesign, slideSrc, designSignature, focusOf, isWholeSheet, knownRatio, type DesignSlide } from './reveal-design-client';
+import { designPartsHtml, designPartsOf, designName, designLead, gridClass, partNote, possessive, straight, type PartKey } from './live-design-html';
 import { holdPlace } from './hold-place';
 import type { Stage } from './live-stage';
 import { DESK } from './live-media';
@@ -51,9 +52,6 @@ const ASK_CLOSED_MS = 10 * 60_000;
 const ASK_FAILED_MS = 2 * 60_000;
 /** The viewer opens beside the video only with at least this much room to its left */
 const SIDE_MIN_W = 420;
-// The rest of /live/ writes names with a straight apostrophe ("Don't miss Dylan's reveal")
-const straight = (s: string) => s.replace(/’/g, "'");
-const possessive = (name: string) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
 
 /** The widths a card's picture is offered at; the browser takes the one it needs (sizes, set from the card) */
 const WIDTHS = [320, 480, 640, 800, 960, 1200, 1600, 1800];
@@ -100,6 +98,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   const laptop = matchMedia(DESK);
   let kid = '';
   let moment = '';
+  let firstAsk = true;
   let sig = '';
   let slides: DesignSlide[] = [];
   let askTimer: ReturnType<typeof setTimeout> | undefined;
@@ -136,6 +135,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     holdPlace(() => {
       section.hidden = true;
       parts.replaceChildren();
+      delete parts.dataset.sig;
+      delete parts.dataset.kid;
       railScroll?.replaceChildren();
     });
     cards.clear();
@@ -176,36 +177,30 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   /** What a picture is, on it ('Before', 'Existing', 'Proposed'): the same badge in the section, the strip and the viewer */
   const badge = (s: DesignSlide, cls: string) => (s.badge ? el('span', `${cls} ${cls}--${s.kind}`, s.badge) : null);
 
-  /** One picture card in the section, opening the viewer at its place among the pictures that loaded */
-  function item(s: DesignSlide, width: number, label: string) {
-    const li = el('li');
-    // (A whole plan sheet is its own paper: ldz-sheet, edge to edge in the card)
-    const b = el('button', `ldz-item${s.kind === 'before' ? '' : ' ldz-paper'}${isWholeSheet(s) ? ' ldz-sheet' : ''}`);
-    b.type = 'button';
-    b.setAttribute('aria-label', `Enlarge: ${s.badge ? `${s.badge}, ` : ''}${label}`);
-    const tag = badge(s, 'ldz-badge');
-    if (tag) b.append(tag);
-    const pic = el('span', 'ldz-pic');
-    const img = el('img');
-    img.alt = straight(s.alt);
-    img.decoding = 'async';
-    // (before its src: a lazy picture waits until it's near the screen)
-    img.loading = 'lazy';
-    pic.append(img);
-    b.append(pic);
+  /**
+   * One card in the section (drawn by designPartsHtml, here or by the server), wired up: it opens the viewer at its
+   * place among the pictures that loaded, and its picture comes at the size the card shows
+   */
+  function wireCard(li: HTMLElement, s: DesignSlide, width: number) {
+    const b = li.querySelector<HTMLButtonElement>('.ldz-item');
+    const pic = li.querySelector<HTMLElement>('.ldz-pic');
+    const img = pic?.querySelector('img');
+    if (!b || !pic || !img) { li.remove(); return; }
     const gone = () => drop(s);
     img.addEventListener('error', gone, { once: true });
+    // The card already has the picture's shape when its stored size says it (knownRatio, the same the server drew)
+    const known = s.kind === 'before' ? null : knownRatio(s);
     // A tiny copy first: the card takes the picture's shape (a photo's card is always 4:3; its shape says how much
     // the card crops off), and one that can't load leaves now, not when it's scrolled to. Then the picture comes
     void shapeOf(s).then((r) => {
       if (!cards.get(s)?.includes(li)) return; // redrawn or dropped meanwhile
       if (!r) { gone(); return; }
-      if (s.kind !== 'before') pic.style.aspectRatio = `1 / ${r.toFixed(4)}`;
+      if (s.kind !== 'before' && !known) pic.style.aspectRatio = `1 / ${r.toFixed(4)}`;
       return pictureSet(s, width).then((set) => {
         if (!set) { gone(); return; }
         if (!cards.get(s)?.includes(li)) return;
-        // sizes before srcset and src (the card is in the page by now: holdPlace puts it in at once). Not laid out
-        // yet: the screen's width, never more than the card always took
+        // sizes before srcset and src (the card is in the page by now). Not laid out yet: the screen's width, never
+        // more than the card always took
         fits.set(pic, { img, cover: s.kind === 'before' ? r : null, px: 0 });
         fit(pic);
         if (!img.sizes) img.sizes = '100vw';
@@ -215,20 +210,33 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       });
     });
     b.addEventListener('click', () => open(s));
-    li.append(b);
     track(s, li);
-    return li;
   }
 
-  function part(title: string, list: HTMLElement, note = '') {
-    const wrap = el('div', 'ldz-part');
-    const head = el('div', 'ldz-part__head');
-    head.append(el('h3', 'ldz-part__title', title));
-    const noteEl = el('p', 'ldz-part__note', note);
-    noteEl.hidden = !note;
-    head.append(noteEl);
-    wrap.append(head, list);
-    return { wrap, noteEl };
+  /** Every part's cards wired, and each part recounted as pictures that can't load leave it */
+  function wireParts(next: DesignSlide[]) {
+    const byKey = new Map(designPartsOf(next).map((p) => [p.key, p.slides]));
+    for (const wrap of parts.querySelectorAll<HTMLElement>(':scope > .ldz-part[data-part]')) {
+      const key = wrap.dataset.part as PartKey;
+      const mine = byKey.get(key) || [];
+      const ul = wrap.querySelector<HTMLElement>('ul');
+      if (!ul) continue;
+      const noteEl = wrap.querySelector<HTMLElement>('.ldz-part__note');
+      const width = key === 'photos' ? (mine.length === 1 ? 1600 : 900) : mine.length === 1 ? 1800 : 1200;
+      for (const li of ul.querySelectorAll<HTMLElement>(':scope > li[data-i]')) {
+        const s = next[Number(li.dataset.i)];
+        if (s && mine.includes(s)) wireCard(li, s, width); else li.remove();
+      }
+      const recount = () => {
+        const left = slides.filter((y) => mine.includes(y));
+        if (key === 'photos') ul.dataset.n = String(ul.children.length); else ul.className = gridClass(key, left);
+        const note = partNote(key, left);
+        if (noteEl) { noteEl.textContent = note; noteEl.hidden = !note; }
+        if (!ul.children.length) wrap.remove();
+      };
+      recount();
+      recounts.push(recount);
+    }
   }
 
   /** One picture in the strip beside the video: a small card with its badge */
@@ -300,75 +308,23 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     if (!next.length) { hide(); return; }
     // Someone looking at a picture keeps it when the design is redrawn (the reveal starting turns "today" into "before")
     const looking = viewer?.open && shown ? `${shown.kind}|${shown.url}` : '';
+    // The server drew these same cards into the page (functions/live/[[path]].js): they're kept, not drawn again
+    const served = !sig && parts.dataset.sig === s && !!parts.firstElementChild;
     sig = s;
     slides = next.slice();
     cards.clear();
     railCards.clear();
     recounts = [];
     sizeWatch?.disconnect();
-    if (nameEl) nameEl.textContent = name ? possessive(name) : 'The';
-    // The line under the heading says what's here, as it is now: "looks today" until the reveal starts, then "looked"
-    // (Peter, Nov 16 2026: the design boards don't show here, so it no longer promises "the look they chose")
-    const lead = () => {
-      if (!leadEl) return;
-      const room = isAfter ? 'How the room looked' : 'How the room looks today';
-      const hasBefores = slides.some((x) => x.kind === 'before');
-      const hasPlans = slides.some((x) => x.kind === 'as-built' || x.kind === 'proposed');
-      const said = hasBefores && hasPlans ? `${room} and the plan the designers drew.` : hasBefores ? `${room}.` : hasPlans ? 'The plan the designers drew.' : '';
-      leadEl.textContent = `${said}${said ? ' ' : ''}Watch the reveal to see it finished.`;
-    };
+    if (nameEl) nameEl.textContent = designName(name);
+    // The line under the heading says what's here, as it is now (designLead), and again as pictures leave
+    const lead = () => { if (leadEl) leadEl.textContent = designLead(slides, isAfter); };
     lead();
     recounts.push(lead);
     if (railName) railName.textContent = name ? `${possessive(name)} design` : 'The design';
-    const befores = next.filter((x) => x.kind === 'before');
-    const plans = next.filter((x) => x.kind === 'as-built' || x.kind === 'proposed');
-    const boards = next.filter((x) => x.kind === 'board');
-    const out: HTMLElement[] = [];
-    if (befores.length) {
-      const ul = el('ul', 'ldz-grid ldz-grid--photos');
-      const { wrap } = part(isAfter ? 'The room before' : 'The room today', ul);
-      ul.append(...befores.map((x, i) => item(x, befores.length === 1 ? 1600 : 900, `photo ${i + 1} of ${befores.length}`)));
-      const recount = () => { ul.dataset.n = String(ul.children.length); if (!ul.children.length) wrap.remove(); };
-      recount();
-      recounts.push(recount);
-      out.push(wrap);
-    }
-    if (plans.length) {
-      const ul = el('ul', 'ldz-grid');
-      const both = 'Before and after, from above';
-      const { wrap, noteEl } = part('The plan', ul);
-      const recount = () => {
-        const left = slides.filter((y) => plans.includes(y));
-        ul.className = `ldz-grid ${left.length === 1 ? 'ldz-grid--one' : 'ldz-grid--plans'}`;
-        const pair = left.some((y) => y.kind === 'as-built') && left.some((y) => y.kind === 'proposed');
-        noteEl.textContent = pair ? both : '';
-        noteEl.hidden = !pair;
-        if (!ul.children.length) wrap.remove();
-      };
-      // The badge on the drawing says which plan it is; its caption sits under it, as a board's does
-      ul.append(...plans.map((x) => {
-        const li = item(x, plans.length === 1 ? 1800 : 1200, straight(x.caption));
-        li.append(el('p', 'ldz-cap', straight(x.caption)));
-        return li;
-      }));
-      recount();
-      recounts.push(recount);
-      out.push(wrap);
-    }
-    if (boards.length) {
-      const ul = el('ul', `ldz-grid ldz-boards ${boards.length === 1 ? 'ldz-grid--one' : 'ldz-grid--boards'}`);
-      const { wrap } = part('The look', ul);
-      ul.append(...boards.map((x) => {
-        const li = item(x, boards.length === 1 ? 1800 : 1200, straight(x.caption));
-        // A board's caption sits under it, outside the picture
-        li.append(el('p', 'ldz-cap', straight(x.caption)));
-        return li;
-      }));
-      recounts.push(() => { if (!ul.children.length) wrap.remove(); });
-      out.push(wrap);
-    }
     holdPlace(() => {
-      parts.replaceChildren(...out);
+      if (!served) { parts.innerHTML = designPartsHtml(next, isAfter); parts.dataset.sig = s; parts.dataset.kid = kid; }
+      wireParts(next);
       drawRail(next);
       section.hidden = false;
     });
@@ -621,14 +577,19 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   return {
     /** The kid the page is showing now ('' for none), and its moment (upcoming, starting, live…): a change asks again */
     setKid(slug: string, now = '') {
+      // The first time: the server may have drawn a kid's design into the page (functions/live/[[path]].js, data-kid on
+      // its parts). This kid's stays, as it is, while it's asked for again (draw keeps the same cards); anyone else's,
+      // or one for a page now showing no kid, goes
+      const servedFor = firstAsk ? parts.dataset.kid || '' : null;
+      firstAsk = false;
       const sameKid = slug === kid;
-      if (sameKid && now === moment) return;
+      if (sameKid && now === moment && !servedFor) return;
       kid = slug;
       moment = now;
       asking?.abort();
       clearTimeout(askTimer);
       // A place the server kept for this kid's pictures stays while they're asked for
-      if (!sameKid) hide(!!slug && hero?.dataset.design === slug);
+      if (servedFor ? servedFor !== slug : !sameKid) hide(!!slug && hero?.dataset.design === slug);
       if (kid) void ask();
     },
     destroy() {

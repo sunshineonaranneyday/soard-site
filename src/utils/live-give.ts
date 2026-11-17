@@ -22,6 +22,8 @@ export function createGive(root: HTMLElement, opts: Options) {
   const phones = matchMedia(PHONE);
   let previous: HTMLElement | null = null;
   let isOpen = false;
+  // The form shows once it has loaded (until then the sheet says it's coming: LiveGive.astro)
+  frame?.addEventListener('load', () => { if (frame.getAttribute('src')) root.setAttribute('data-ready', ''); });
 
   function open(where: string) {
     if (!frame) return;

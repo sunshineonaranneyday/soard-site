@@ -62,7 +62,9 @@ test('which view the server draws first: as the page script will', () => {
   assert.equal(firstView({ state, pub, pageKid: '', tz, now: NOW }).status, 'We go live Wednesday, November 18 at 4:00 PM EST, in 8 days.');
   // Max's page while Dylan's is scheduled: between reveals, naming Max's
   const rows = [{ slug: 'max', name: 'Max', confirmed: true, date: '2026-11-20', time: '16:00', startsAt: '2026-11-20T21:00:00.000Z' }];
-  assert.deepEqual(firstView({ state, pub, pageKid: 'max', rows, tz, now: NOW }), { view: 'idle', eyebrow: null, status: "Max's reveal is Friday, November 20 at 4:00 PM EST." });
+  assert.deepEqual(firstView({ state, pub, pageKid: 'max', rows, tz, now: NOW }), { view: 'idle', eyebrow: null, status: "Max's reveal is Friday, November 20 at 4:00 PM EST.", badge: '' });
+  // The photo's badge, as the stage paints it before the watch party (none between reveals)
+  assert.equal(firstView({ state, pub, pageKid: 'dylan-2026', tz, now: NOW }).badge, 'Live in 8 days');
   // The watch party has its own first paint; a live reveal without a video is the script's
   assert.equal(firstView({ state, pub, pageKid: 'dylan-2026', party: { mode: 'starting' }, tz, now: NOW }), null);
   assert.equal(firstView({ state: { ...state, phase: 'live' }, pub, pageKid: 'dylan-2026', tz, now: NOW }), null);

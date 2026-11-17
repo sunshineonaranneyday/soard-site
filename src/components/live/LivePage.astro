@@ -428,9 +428,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 </style>
 
 <script>
-  import { getLiveClient, formatWhen, relativeUntil, type LiveState, type ReminderOptions } from '../../utils/live-client';
+  import { getLiveClient, type LiveState, type ReminderOptions } from '../../utils/live-client';
   import { shareable } from '../../utils/live-stats';
-  import { remindersUsable, browserCanPush, revealIsToday, replayOverdue, runningLate } from '../../utils/live-banner';
+  import { remindersUsable, browserCanPush, revealIsToday, runningLate } from '../../utils/live-banner';
   import { holdPlace, keepFocus } from '../../utils/hold-place';
   import { upcomingAtBuild } from '../../utils/reveals-copy';
   import { wireRemindForm } from '../../utils/remind-signup';
@@ -443,7 +443,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   import { cfRaw } from '../../utils/cf-image';
   import { readUpcoming, loadSignup, inviteData, inviteLinks, scheduleOnPage, type UpcomingReveal } from '../../utils/reveals-client';
   import { heroRowsHtml, rowsSignature, afterLine } from '../../utils/upcoming-rows';
-  import { plannedText, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../utils/live-hero-text';
+  import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../utils/live-hero-text';
   import { onPageLoad } from '../../utils/page-load';
 
   /** The starting-soon screen fills the frame for the last hour: it carries the room's design for people waiting (the crew may start streaming up to 30 minutes early, per the runbook) */
@@ -508,6 +508,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       : null;
     if (nextWrap) bandSeen?.observe(nextWrap);
     let display = 'loading';
+    // The status line folding away (setStatus in drawPage)
+    let statusFold: Animation | null = null;
     let shownKid = pageKid || followKid;
     let viewed = false;
     let rendered = false;
@@ -714,32 +716,34 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const eyebrow = q<HTMLElement>('eyebrow');
       const status = q<HTMLElement>('status');
       // Written only when it changes, and a ticking countdown isn't read aloud every minute
-      const setStatus = (text: string) => { if (status && status.textContent !== text) status.textContent = text; };
+      const setStatus = (text: string) => {
+        if (!status) return;
+        if (statusFold) { if (!text) return; statusFold.cancel(); statusFold = null; }
+        if (status.textContent === text) return;
+        // During the watch party a line that ends (going live: the video says it all) folds away, and what's under it
+        // glides up, rather than jump the moment the reveal starts
+        if (!text && hero.hasAttribute('data-party') && !matchMedia('(prefers-reduced-motion: reduce)').matches && status.getBoundingClientRect().height > 0) {
+          const cs = getComputedStyle(status);
+          const fold = status.animate(
+            [{ height: `${status.getBoundingClientRect().height}px`, marginTop: cs.marginTop, marginBottom: cs.marginBottom, opacity: 1, overflow: 'hidden' },
+              { height: '0px', marginTop: '0px', marginBottom: '0px', opacity: 0, overflow: 'hidden' }],
+            { duration: 320, easing: 'cubic-bezier(0.2, 0, 0, 1)', fill: 'forwards' },
+          );
+          statusFold = fold;
+          fold.onfinish = () => { if (statusFold !== fold) return; statusFold = null; status.textContent = ''; fold.cancel(); };
+          return;
+        }
+        status.textContent = text;
+      };
       status?.setAttribute('aria-live', view === 'upcoming' ? 'off' : 'polite');
       let badge = '';
-      if (view === 'live') {
-        if (eyebrow) eyebrow.textContent = 'Live now';
-        // The video says it all; without one (a Facebook-only broadcast) point people there
-        setStatus(hasPlayer ? '' : 'We are live on Facebook right now.');
-        badge = 'Live';
-      } else if (view === 'replay') {
-        // A recording is only on its way from our own stream, and only for a few hours
-        const waiting = s.source === 'stream' && !replayOverdue(s.endedAt);
-        if (eyebrow) eyebrow.textContent = hasPlayer || waiting ? 'Replay' : 'Ended';
-        setStatus(hasPlayer ? '' : waiting ? 'The reveal just ended. The replay will appear here soon.' : 'This reveal has ended.');
-        badge = hasPlayer || waiting ? 'Processing' : 'Ended';
-      } else if (view === 'upcoming') {
-        const rel = relativeUntil(s.scheduledAt);
-        if (slate) {
-          if (eyebrow) eyebrow.textContent = runningLate(s.scheduledAt) ? 'Running late' : 'Starting soon';
-          setStatus(s.scheduledAt && Date.parse(s.scheduledAt) > Date.now() ? `We go live ${formatWhen(s.scheduledAt)}. Stay right here.` : runningLate(s.scheduledAt) ? 'We’re running a little late. Stay right here.' : 'Any moment now. Stay right here.');
-        } else {
-          // The server wrote the same (plannedText), so normally nothing changes here
-          const said = plannedText(s.scheduledAt);
-          if (eyebrow) eyebrow.textContent = said.eyebrow;
-          setStatus(said.status);
-        }
-        badge = rel ? `Live ${rel}` : 'Coming up';
+      if (view !== 'idle') {
+        // The server wrote the same words (momentWords), starting soon, live and replay included, so normally nothing
+        // changes here
+        const said = momentWords({ view, starting: !!slate, scheduledAt: s.scheduledAt || null, hasPlayer, source: s.source, endedAt: s.endedAt });
+        if (eyebrow) eyebrow.textContent = said.eyebrow;
+        setStatus(said.status);
+        badge = said.badge;
       } else {
         if (eyebrow) eyebrow.textContent = 'Live reveal';
         setStatus(idleStatus());

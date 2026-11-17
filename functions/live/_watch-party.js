@@ -9,9 +9,13 @@
  *
  * Mirrors render() in src/components/live/LivePage.astro: keep them in step.
  */
+import { runningLate } from '../../src/utils/live-banner.ts';
 
 /** Starting-soon screen fills the frame for the last hour (SLATE_LEAD_MS in LivePage) */
 export const SLATE_LEAD_MS = 60 * 60 * 1000;
+
+/** The starting-soon screen the frame plays (slateSrc in LivePage.astro; a phone held sideways asks for its landscape one there) */
+export const slateFor = (kidSlug, orientation) => `/live/${kidSlug}/slate/?embed=1&music=0&o=${orientation === 'landscape' ? 'landscape' : 'portrait'}`;
 
 /**
  * How the page should look at first paint, or null when it is the plain hero.
@@ -30,9 +34,13 @@ export function watchParty(pub, { pageKid = '', kidPublished = false, now = Date
   const starting = !hasPlayer && view === 'upcoming' && !!(pageKid || pub.kidSlug) && kidPublished && startsIn <= SLATE_LEAD_MS;
   if (!hasPlayer && !starting) return null;
   const mode = starting ? 'starting' : view;
+  const orientation = pub.orientation === 'landscape' ? 'landscape' : 'portrait';
+  const late = starting && runningLate(pub.scheduledAt, now);
   return {
     mode,
-    orientation: pub.orientation === 'landscape' ? 'landscape' : 'portrait',
-    eyebrow: mode === 'live' ? 'Live now' : mode === 'replay' ? 'Replay' : 'Starting soon',
+    orientation,
+    eyebrow: mode === 'live' ? 'Live now' : mode === 'replay' ? 'Replay' : late ? 'Running late' : 'Starting soon',
+    late,
+    slate: starting ? slateFor(pageKid || pub.kidSlug, orientation) : '',
   };
 }

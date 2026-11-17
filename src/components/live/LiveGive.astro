@@ -26,7 +26,11 @@ const ZEFFY_EMBED = formLinks(requireSiteForm(siteSettings, 'liveUrl'))!.embed;
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
       </button>
     </div>
-    <iframe class="give__frame" title="Donation form powered by Zeffy" allow="payment" allowpaymentrequest loading="lazy"></iframe>
+    {/* Zeffy's form takes a few seconds to arrive: the sheet says so meanwhile, and the form fades in once it has */}
+    <div class="give__body">
+      <p class="give__wait" aria-hidden="true"><span class="give__pulse"></span>Loading the donation form…</p>
+      <iframe class="give__frame" title="Donation form powered by Zeffy" allow="payment" allowpaymentrequest loading="lazy"></iframe>
+    </div>
   </div>
 </div>
 
@@ -47,7 +51,17 @@ const ZEFFY_EMBED = formLinks(requireSiteForm(siteSettings, 'liveUrl'))!.embed;
   .give__close svg { width: 20px; height: 20px; }
   .give__close:hover { background: var(--c-yellow-soft); }
   .give__close:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
-  .give__frame { flex: 1 1 auto; width: 100%; border: 0; display: block; background: #fff; }
+  .give__body { position: relative; flex: 1 1 auto; min-height: 0; }
+  .give__wait {
+    position: absolute; inset: 0; margin: 0; display: flex; align-items: center; justify-content: center; gap: 10px;
+    font-size: 14px; font-weight: 600; color: var(--c-text-muted);
+  }
+  .give__pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--c-yellow); animation: givePulse 1.2s ease-in-out infinite; }
+  @keyframes givePulse { 0%, 100% { transform: scale(0.7); opacity: 0.5; } 50% { transform: scale(1); opacity: 1; } }
+  .give__frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #fff; opacity: 0; transition: opacity 0.3s ease; }
+  .give[data-ready] .give__frame { opacity: 1; }
+  .give[data-ready] .give__wait { visibility: hidden; }
+  @media (prefers-reduced-motion: reduce) { .give__pulse { animation: none; } .give__frame { transition: none; } }
 
   /* Desktop: down the left side, over the messages; the video on the right keeps playing */
   /* (PHONE, DESK and SIDE: word for word as in src/utils/live-media.ts) */
