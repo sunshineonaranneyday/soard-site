@@ -23,6 +23,8 @@
  *     or under a small pinned player (phone) while the reveal keeps playing
  *   - leaving the page and coming back with the Back button (client-side
  *     navigation) brings the video back
+ *   - the reveal starting with the page open further down brings the page up to
+ *     the video (unless someone is typing)
  *   - the sound plays on a computer when it comes as its own track, the way
  *     Cloudflare Stream sends it (tests/fixtures/live-hls/split: the portrait
  *     fixture's picture and sound as separate fMP4 renditions)
@@ -629,6 +631,44 @@ try {
   ok(g.pstatus === 'playing' && g.picture > 0, `the picture plays (${g.pstatus}, ${g.picture} bytes of picture decoded)`);
   ok(g.muted === false && g.audio > 0, `after Tap for sound, the sound plays on a computer (${g.audio} bytes of sound decoded)`);
   feed.split = false;
+
+  // Peter, Nov 17 2026: "it seemed to start the video, then it went away and showed the before and plans". Someone
+  // further down the page when the reveal started stayed there, with the reveal only in the corner player. Going live
+  // now brings the page up to the video; someone typing is left where they are (the corner player shows it)
+  console.log('\n▶ the reveal starting with the page open further down');
+  const soon = () => ({ ...base, phase: 'scheduled', upcoming: true, scheduledAt: new Date(Date.now() + 26 * 3600e3).toISOString(), liveAt: null, player: null });
+  const goLive = async () => { state = STATES.live; await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange'))); await waitFor(page, ['playing']); await sleep(1500); };
+  for (const [name, vp] of [['phone', { width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }], ['desktop', { width: 1424, height: 830 }]]) {
+    state = soon(); feed.shape = 'portrait';
+    await page.setViewport(vp);
+    await open(page);
+    await sleep(2500);
+    await page.evaluate(() => document.querySelector('#past-reveals')?.scrollIntoView({ block: 'start', behavior: 'instant' }));
+    await sleep(400);
+    const down = await page.evaluate(() => Math.round(scrollY));
+    await goLive();
+    g = await probe(page);
+    const y = await page.evaluate(() => Math.round(scrollY));
+    ok(down > 300 && y === 0 && g.stage.y >= 0 && g.stage.b <= g.vh && !g.docked && g.pstatus === 'playing',
+      `${name}: the reveal starting brings the page up to the video (scrolled ${down} → ${y}, stage ${g.stage.y}-${g.stage.b} of ${g.vh}, docked ${g.docked})`);
+  }
+  state = soon();
+  await page.setViewport({ width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  await open(page);
+  await sleep(2500);
+  const field = await page.evaluate(() => {
+    const f = [...document.querySelectorAll('input[type="email"], textarea')].find((el) => el.getBoundingClientRect().height > 0 && !el.closest('[hidden]'));
+    if (!f) return null;
+    f.scrollIntoView({ block: 'center', behavior: 'instant' });
+    f.focus();
+    return f.id || f.name || f.tagName;
+  });
+  await sleep(400);
+  const typedAt = await page.evaluate(() => Math.round(scrollY));
+  await goLive();
+  const stayed = await page.evaluate(() => ({ y: Math.round(scrollY), focused: document.activeElement?.matches('input[type="email"], textarea') || false }));
+  ok(!!field && typedAt > 300 && stayed.y > 300 && stayed.focused, `someone typing (${field}) is left where they are when it starts (scrolled ${typedAt} → ${stayed.y}, still in the field: ${stayed.focused})`);
+  await page.evaluate(() => document.activeElement?.blur());
 
   console.log('\n▶ leave the page and come back');
   state = STATES.live; feed.shape = 'portrait';

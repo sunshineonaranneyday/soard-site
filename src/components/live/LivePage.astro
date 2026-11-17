@@ -649,9 +649,34 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     // its first real drawing puts back what the visitor was looking at. The watch party starting or ending with the
     // page open changes its shape: that drawing morphs (below)
     function render(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
-      const draw = () => { holdPlace(() => drawPage(state, meta)); restoreSpot(); };
+      const draw = () => {
+        const was = display;
+        holdPlace(() => drawPage(state, meta));
+        restoreSpot();
+        // (a change seen with the page open, not its first drawing: coming back to a page puts back where they were)
+        if (was !== 'loading' && was !== 'live' && display === 'live') toTheReveal();
+      };
       if (morphDraw) { morphDraw = draw; return; }
       if (rendered && decide(state).party !== hero.hasAttribute('data-party')) morph(draw); else draw();
+    }
+
+    // ── The reveal starts with the page open: everyone is brought up to the video ──
+    // Peter, Nov 17 2026 test: "it seemed to start the video, then it went away and showed the before and plans".
+    // Someone further down the page (reading the design, the messages) stayed where they were, the reveal played only in
+    // the small player in the corner, and one tap on its × put it away. Going live now brings the page up to the video,
+    // unless they're typing, giving, in the menu or full screen (where the corner player still shows it)
+    function toTheReveal() {
+      const go = () => {
+        if (!alive || display !== 'live') return;
+        if (typingIn(document.activeElement) || give?.isOpen || document.documentElement.classList.contains('menu-open') || document.fullscreenElement) return;
+        // Already in full view: nothing moves
+        const top = hero.querySelector<HTMLElement>('[data-stage]') || hero;
+        const r = top.getBoundingClientRect();
+        if (r.top >= headerLine() - 1 && r.bottom <= innerHeight) return;
+        scrollTo({ top: 0, behavior: (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth') as ScrollBehavior });
+      };
+      // (after the morph, which only plays with the frame in view: it would carry a scroll along with its pictures)
+      if (morphing) morphing.finished.catch(() => {}).finally(() => requestAnimationFrame(go)); else requestAnimationFrame(go);
     }
 
     // ── The page changes shape with it open ──
