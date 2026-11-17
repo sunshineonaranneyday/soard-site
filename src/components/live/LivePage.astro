@@ -707,7 +707,17 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         morphDraw = null; delete root.dataset.liveMorph; draw(); return;
       }
       morphing = t;
-      t.ready.catch(() => {});
+      // Safari draws the morph's first frame (the new page, with the screen in the frame) slowly, 80 to 170 ms in iPhone
+      // Safari, and the animations' clock ran on meanwhile: the frame sat still, then leapt more than half way. Held on
+      // their first frame until that frame has been drawn, the old page simply stays a moment longer and the whole
+      // morph plays
+      t.ready.then(() => {
+        const held = document.getAnimations().filter((a) => (a.effect as KeyframeEffect | null)?.pseudoElement?.startsWith('::view-transition'));
+        for (const a of held) a.pause();
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (morphing === t) for (const a of held) if (a.playState === 'paused') a.play();
+        }));
+      }, () => {});
       t.finished.catch(() => {}).finally(() => { if (morphing === t) morphing = null; delete root.dataset.liveMorph; });
     }
 

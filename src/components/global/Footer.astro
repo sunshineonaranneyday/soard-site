@@ -235,6 +235,20 @@ const trustBadges = getTrustBadges(site);
     import { signupCheck, postPlainly } from '../../utils/signup-check';
     import { onPageLoad } from '../../utils/page-load';
 
+    // While a view transition plays, iPhone Safari colours the strip under its toolbar the page's cream (global.css,
+    // html:active-view-transition), or the footer's dark while that reaches the bottom of the screen: from the main
+    // footer to the page's end everything is dark, so it does once the main footer's top is above the screen's bottom.
+    // (The router swaps in the next page's root attributes, which clears the mark; the next page sets its own.)
+    onPageLoad(() => {
+      const band = document.querySelector('.footer-main');
+      if (!band || typeof IntersectionObserver === 'undefined') return;
+      const root = document.documentElement;
+      // The screen stretched far upward: the band meets it once its top passes the bottom edge, and stays met below
+      const seen = new IntersectionObserver(([e]) => root.toggleAttribute('data-dark-bottom', e.isIntersecting), { rootMargin: '100000px 0px 0px 0px' });
+      seen.observe(band);
+      document.addEventListener('astro:before-swap', () => seen.disconnect(), { once: true });
+    });
+
     onPageLoad(() => {
       const form = document.getElementById('newsletter-form') as HTMLFormElement | null;
       if (!form) return;

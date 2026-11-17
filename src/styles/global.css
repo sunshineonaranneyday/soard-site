@@ -110,6 +110,19 @@ html {
      intended customization point for this exact issue. */
   background-color: var(--c-cream);
 }
+/* While a transition plays, iPhone Safari fills the strip under its toolbar with one colour instead of the page:
+   WebKit's colour for the document (the body's over the root's; colours only, never images), here the footer's dark
+   (above, for overscroll). Every transition turned the toolbar dark for its length: the live page's morph, a move
+   between pages, a form's next step. For a transition's length that colour is what the bottom of the screen shows,
+   the page's cream unless the footer's dark reaches it (Footer.astro marks that), and the body goes on painting its
+   dark as an image, so nothing on the page itself changes. */
+html:active-view-transition:not([data-dark-bottom]) {
+  background-color: var(--c-cream);
+}
+html:active-view-transition:not([data-dark-bottom]) body {
+  background-color: transparent;
+  background-image: linear-gradient(var(--c-dark-deep), var(--c-dark-deep));
+}
 ::view-transition-old(root) {
   animation: none;
 }
