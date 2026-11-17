@@ -1,7 +1,7 @@
 /** The READ ME FIRST at the top of each backup home: what's there and how to put it back, for whoever needs it */
 
 export const README_NAME = 'READ ME FIRST - how to restore.txt';
-export const README_VERSION = 6;
+export const README_VERSION = 7;
 
 /** The commands that put the code back, exactly as the READ ME gives them (the tests run these very lines) */
 export const CODE_STEPS = [
@@ -53,9 +53,13 @@ WHAT ISN'T HERE, AND WHERE IT IS
 
   The domains          Registered at Cloudflare (Registrar) on the very account this backup copies. If the account is
                        lost, getting it back through Cloudflare's support comes first: the domains (and so the
-                       website's address and staff email) can only be pointed anywhere from there. The settings
-                       copy lists each registration (when it ends, auto-renew, its lock) whenever Cloudflare lets
-                       the backup's key read them.
+                       website's address and staff email) can only be pointed anywhere from there. Cloudflare
+                       doesn't let the backup's key read the registrations (it is the account's own key, so it
+                       belongs to no one person, and Cloudflare's table of what such keys can use leaves Registrar
+                       out), so see when each ends, and whether it renews, on Cloudflare: Domain Registration.
+  Page rules           Cloudflare's older kind of rule, which the same table leaves out: the key can't read them.
+                       Cloudflare is moving them into Rules, which are copied (each domain's redirects and the
+                       rest). Make any new rule a Rule, not a page rule, and it is in the copy.
   Anything kept as a   Cloudflare never gives back the value of anything stored as a secret, so no backup can hold
   secret               it: the keys and passwords, and also some settings kept that way though they are not
                        passwords (email addresses the store's admin lets in, where alerts go, IDs). The settings copy
@@ -163,8 +167,8 @@ PUT CLOUDFLARE'S SETTINGS BACK
   In the order that matters:
   1. The domains (registrar): the account has to be back first (see WHAT ISN'T HERE).
   2. DNS: for each domain, its "<domain> DNS records.txt" zone file: Cloudflare, the domain, DNS, Records, Import.
-  3. Each domain's own rules (zones, rulesets), page rules and email forwarding (emailRouting, emailRules,
-     emailCatchAll); the account's rules (accountRulesets) and the lists they use (lists: the www redirect is one).
+  3. Each domain's own rules (zones, rulesets) and email forwarding (emailRouting, emailRules, emailCatchAll); the
+     account's rules (accountRulesets) and the lists they use (lists: the www redirect is one).
   4. The admin's sign-in (access: applications, policies, groups, sign-in methods).
   5. The R2 buckets (r2: their addresses, r2.dev, CORS, lifecycle rules), then their files (PUT FILES BACK).
   6. The Pages projects (pages: each one's repository, build and variables; pagesDomains: its own domains).

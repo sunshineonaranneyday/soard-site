@@ -586,6 +586,21 @@ try {
   ok(await statusOf(gone.page, 'Setup and the key') === 'Needs attention' && await statusOf(gone.page, 'Databases, every night') === 'Needs attention', 'a backup the site reached before and can’t now needs attention');
   ok((await hostPanel(gone, 'Setup and the key')).includes('can’t reach the backup right now'), 'and says so');
   await gone.page.close();
+  // Settings the key couldn't read: each with Cloudflare's answer, and a permission named only where one is the answer
+  const unreadSettings = { zones: 4, records: 61, notRead: ['R2 soard-files: lifecycle rules', 'soardcharity.com: rules'], needs: ['Workers R2 Storage Read', null], refused: [true, false], why: ['the key isn’t allowed to read it', 'Cloudflare 500: Internal error'], off: [] };
+  const unread = await open(browser, base, { width: 1440, height: 1000 }, { facts: { ...FACTS, backup: { ...FACTS.backup, night: { ...FACTS.backup.night, settings: unreadSettings } } } });
+  ok(await statusOf(unread.page, 'Cloudflare settings, every night') === 'Needs attention', 'a setting not read needs attention');
+  const unreadText = await hostPanel(unread, 'Cloudflare settings, every night');
+  ok(unreadText.includes('the key couldn’t read 2 things: R2 soard-files: lifecycle rules (the key isn’t allowed to read it); soardcharity.com: rules (Cloudflare 500: Internal error). CF_BACKUP_TOKEN needs Workers R2 Storage Read.') && !unreadText.includes('Give CF_BACKUP_TOKEN'), `each unread setting says Cloudflare’s answer, and only the permission that is the answer is asked for (${unreadText.slice(0, 400)})`);
+  await unread.page.close();
+  const failedOnly = await open(browser, base, { width: 1440, height: 1000 }, { facts: { ...FACTS, backup: { ...FACTS.backup, night: { ...FACTS.backup.night, settings: { ...unreadSettings, notRead: ['soardcharity.com: rules'], needs: [null], refused: [false], why: ['Cloudflare 500: Internal error'] } } } } });
+  const failedText = await hostPanel(failedOnly, 'Cloudflare settings, every night');
+  ok(failedText.includes('soardcharity.com: rules (Cloudflare 500: Internal error).') && !failedText.includes('CF_BACKUP_TOKEN'), `Cloudflare failing asks for no permission (${failedText.slice(0, 300)})`);
+  await failedOnly.page.close();
+  const unnamedOnly = await open(browser, base, { width: 1440, height: 1000 }, { facts: { ...FACTS, backup: { ...FACTS.backup, night: { ...FACTS.backup.night, settings: { ...unreadSettings, notRead: ['Who can sign in to Cloudflare'], needs: [null], refused: [true], why: ['the key isn’t allowed to read it'] } } } } });
+  const unnamedText = await hostPanel(unnamedOnly, 'Cloudflare settings, every night');
+  ok(unnamedText.includes('Who can sign in to Cloudflare (the key isn’t allowed to read it). Give CF_BACKUP_TOKEN the Read permission for what it was refused.'), `a refusal with no permission to name still says what to do (${unnamedText.slice(0, 300)})`);
+  await unnamedOnly.page.close();
   const half = await open(browser, base, { width: 1440, height: 1000 }, { facts: { ...FACTS, backup: { ...FACTS.backup, night: null, drill: null, recovery: {}, setup: { ...FACTS.backup.setup, ready: false, recovery: {}, watchdog: { at: null }, problems: [{ home: 'cloudflare', why: 'the read-only backup key (CF_BACKUP_TOKEN) isn’t set yet' }, { home: 'key', why: 'the recovery sheet hasn’t been printed yet' }] } } } });
   ok(await statusOf(half.page, 'Setup and the key') === 'Needs attention', 'half set up needs attention');
   const halfText = await hostPanel(half, 'Setup and the key');

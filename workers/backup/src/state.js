@@ -241,8 +241,30 @@ export class BackupState extends DurableObject {
     }
     return out;
   }
-  failures(run, limit = 20) {
-    return this.sql.exec('SELECT source, key, name, error, tries, first_failed FROM sources WHERE seen = ? AND copy_id IS NULL AND error IS NOT NULL ORDER BY tries DESC LIMIT ?', run, limit).toArray();
+  /**
+   * The run as it stands (status() in ./index.js): its files only once one of its listings is in (before that, every
+   * count would read 0), and a home's refusal only while a copy it refused still lacks it (as the run's summary says)
+   */
+  progress(run) {
+    const listed = this.sql.exec("SELECT COUNT(*) AS n FROM kv WHERE key LIKE 'listed:%' AND json_extract(value, '$.run') = ?", run).one().n;
+    const trouble = this.get('shipTrouble') || {};
+    const refused = {};
+    for (const home of ['drive', 'b2']) {
+      const t = trouble[home];
+      if (t && this.missingHome(home, t.ids || [])) refused[home] = { at: t.at || null, error: t.error || null };
+    }
+    // Backblaze couldn't give back a copy to send to Drive again: only while that copy still lacks Drive
+    const r = trouble.restage;
+    return {
+      // (only what this run has given up on, as files.failed counts: a file being tried, or one that failed last
+      // night and isn't tried yet tonight, still carries its old words)
+      run, files: listed ? this.todoCount(run) : null, failures: listed ? this.failures(run, 10, 5) : [], refused,
+      restage: r && this.missingHome('drive', r.ids || []) ? { at: r.at || null, error: r.error || null } : null,
+      waitingFor: { drive: this.waitingFor('drive'), b2: this.waitingFor('b2') },
+    };
+  }
+  failures(run, limit = 20, minTries = 0) {
+    return this.sql.exec('SELECT source, key, name, error, tries, first_failed FROM sources WHERE seen = ? AND copy_id IS NULL AND error IS NOT NULL AND tries >= ? ORDER BY tries DESC LIMIT ?', run, minTries, limit).toArray();
   }
   /** Videos in the newest listing with no copy yet because Stream has no MP4 of them (the site asks Stream for one) */
   videosWaitingForMp4(limit = 500) {

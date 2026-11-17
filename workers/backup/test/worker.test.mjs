@@ -146,9 +146,28 @@ async function runNight(run) {
   const again = await call('run', { by: 'test' });
   assert.equal(again.started, false);
   assert.match(again.why, /running now/);
+  // While it goes, the run as it stands is readable, and never says what it can't know yet
+  let going = 0;
   for (let i = 0; i < 1500; i++) {
     const s = await call('status');
-    if (s.started?.id === r.id && ['complete', 'errored', 'terminated'].includes(s.started.status)) return s;
+    if (s.started?.id === r.id && ['complete', 'errored', 'terminated'].includes(s.started.status)) {
+      assert.ok(going > 0, 'the run was seen going');
+      return s;
+    }
+    if (s.started?.id === r.id) {
+      going++;
+      const p = s.progress;
+      assert.equal(p.run, run);
+      // Before its listing is in, no count of files (every one would read 0); after, the counts
+      if (p.files === null) assert.deepEqual(p.failures, []);
+      else {
+        assert.ok(Number.isInteger(p.files.left) && Number.isInteger(p.files.failed), JSON.stringify(p.files));
+        // Only what this run gave up on, as many as it counts
+        assert.ok(p.failures.every((f) => f.tries >= 5) && p.failures.length === Math.min(10, p.files.failed), JSON.stringify(p));
+      }
+      for (const [home, t] of Object.entries(p.refused)) assert.ok(['drive', 'b2'].includes(home) && t.error, JSON.stringify(p.refused));
+      assert.ok(Number.isInteger(p.waitingFor.drive) && Number.isInteger(p.waitingFor.b2));
+    }
     await sleep(200);
   }
   throw new Error('the run never finished');
@@ -338,6 +357,20 @@ test('night 1: everything is in both homes, and every copy opens to exactly what
   assert.deepEqual(s.needs.notReady, ['v4']);
   assert.ok(s.night.notes.includes('video v3 is waiting for Stream’s MP4') && s.night.notes.includes('video v2 is waiting for a Stream signing key'), JSON.stringify(s.night.notes));
   assert.deepEqual(await call('needs'), { streamKey: true, videos: ['v3'] }, 'the site is asked for exactly what’s missing');
+  // The page rules the key can never read are a note, never trouble (Cloudflare refuses them to an account's own key)
+  assert.ok(s.night.notes.some((x) => /^not in tonight’s settings copy: .*the page rules of example\.org \(Cloudflare doesn’t let an account’s own key read them/.test(x)), JSON.stringify(s.night.notes));
+  assert.deepEqual(s.night.settings.notRead, []);
+  // The run as it stands, readable while it goes (and after): what couldn't be copied and why, what waits for each home
+  assert.equal(s.progress.run, N1);
+  assert.deepEqual(s.progress.files, { left: 0, failed: 2 }, 'the two videos waiting were tried all their times (the next run tries them again)');
+  assert.deepEqual(s.progress.failures.map((f) => [f.key, f.error]).sort(), [['v2', 'a private video needs the Stream signing key the site hands over'], ['v3', 'Stream has no MP4 of it yet']]);
+  assert.deepEqual(s.progress.refused, {});
+  assert.equal(s.progress.restage, null);
+  // A run whose listing isn't in yet counts no files (each count would read 0), whatever else is there
+  const state = (await mf.getDurableObjectNamespace('STATE', 'backup'));
+  const early = await state.get(state.idFromName('backup')).progress('2099-01-01');
+  assert.deepEqual([early.files, early.failures], [null, []]);
+  assert.deepEqual(s.progress.waitingFor, { drive: 0, b2: 0 });
   assert.equal(s.night.waitingToShip, 0);
   assert.equal(world.deletes.length, 0, 'the backup never deletes anything');
   assert.equal((await (await mf.getR2Bucket('STAGING', 'backup')).list()).objects.length, 0, 'every staged copy left once it was in both homes');
@@ -560,7 +593,12 @@ test('night 3: a signing key Stream no longer takes is replaced (the old one rem
   const s = await runNight(N3);
   assert.equal(s.night.ok, false);
   assert.deepEqual(s.night.problemKinds, ['settings-not-read'], JSON.stringify(s.night.problems));
-  assert.match(s.night.problems[0], /couldn’t read 1 of Cloudflare’s settings \(Who can sign in to Cloudflare\)/);
+  // With Cloudflare's answer, and what to do though there's no permission to name for it
+  assert.equal(s.night.problems[0], 'the read-only key couldn’t read 1 of Cloudflare’s settings: Who can sign in to Cloudflare (the key isn’t allowed to read it). Give it the Read permission for what it was refused');
+  assert.deepEqual([s.night.settings.why, s.night.settings.refused, s.night.settings.needs], [['the key isn’t allowed to read it'], [true], [null]]);
+  // The summary in the homes is plain: the name and what to do, never Cloudflare's words
+  const plain = JSON.parse(only(`Nights/2026/${N3}.json`).bytes.toString());
+  assert.equal(plain.problems[plain.problemKinds.indexOf('settings-not-read')], 'the read-only key couldn’t read 1 of Cloudflare’s settings: Who can sign in to Cloudflare. Give it the Read permission for what it was refused');
   assert.ok(s.night.notes.includes('video v5 is waiting for a Stream signing key'));
   assert.ok(s.streamKey.refused, 'the refused key is set aside');
   assert.deepEqual(await call('needs'), { streamKey: true, videos: [] });
@@ -677,6 +715,8 @@ test('the whole account: nothing unchanged is copied again, a change is, what’
   // Said as the setup step, and as what that night didn't copy (so the night is never taken for a well one)
   assert.deepEqual(s3.night.problemKinds.sort(), ['coverage:list:kv', 'settings-not-read', 'setup:cloudflare:needs Workers KV Storage Read'], JSON.stringify(s3.night.problems));
   assert.match(s3.night.problems.join(' '), /KV namespaces? weren’t copied tonight: the read-only key needs “Workers KV Storage Read” \(as the setup check says\)/);
+  // (found by its words: problemKinds was sorted in place above)
+  assert.match(s3.night.problems.find((x) => x.startsWith('the read-only key couldn’t read')), /: KV namespaces \(the key isn’t allowed to read it\)\. It needs Workers KV Storage Read, as the setup check says$/);
   assert.deepEqual(s3.setup.cloudflare.missing, ['Workers KV Storage Read']);
   // Stream switched off on Cloudflare's side (as in Sept and Nov 2026) is not a permission to add
   world.faults.streamListDown = true;
@@ -742,6 +782,10 @@ test('nights 9 and 10: Backblaze answers but refuses every upload, and a file is
   const s9 = await runNight(N9);
   assert.ok(s9.night.problemKinds.includes('ship:b2'), JSON.stringify(s9.night.problems));
   assert.match(s9.night.problems[s9.night.problemKinds.indexOf('ship:b2')], /^Backblaze refused copies this run: .*storage cap exceeded/);
+  // Readable by home, in Backblaze's own words, without waiting for the summary
+  assert.match(s9.progress.refused.b2.error, /storage cap exceeded/);
+  assert.equal(s9.progress.refused.drive, undefined, 'Drive isn’t blamed');
+  assert.ok(s9.progress.waitingFor.b2 > 0 && s9.progress.waitingFor.drive === 0, JSON.stringify(s9.progress.waitingFor));
   assert.ok(s9.night.problemKinds.includes('drive-lost'), 'the moved copy counts as gone from the backup drive');
   assert.deepEqual(s9.night.errors, [], 'no step failed: the databases, settings and code were all made and reached Drive');
   for (const db of ['site-db', 'store-db']) assert.ok(world.driveFile(`Database/${db}/2026/${N9} ${db}.sql.gz.age`)?.length, `${db} reached Drive`);

@@ -99,8 +99,13 @@ export async function status(env) {
   ]);
   const running = started?.id ? await runStatus(env, started.id) : null;
   const cfg = config(env);
+  // The newest run as it stands, going or done: the files it has left and those it couldn't copy (each with why),
+  // each home's refusal in its own words, and how many copies still wait for each home. A first run takes hours, and
+  // its summary says all this only once it ends.
+  // (never at the cost of the rest: the site takes a status that fails for the backup being unreachable)
+  const progress = started?.run ? await state.progress(started.run).catch(() => null) : null;
   return {
-    setup, night, drill, started: started ? { ...started, status: running } : null, firstStarted, setUpAt, counts, needs: needs || {},
+    setup, night, drill, started: started ? { ...started, status: running } : null, progress, firstStarted, setUpAt, counts, needs: needs || {},
     recovery: recovery || {}, key: { fingerprint: key.fingerprint, made: key.made }, streamKey: streamKey ? { id: streamKey.id, at: streamKey.at, refused: streamKey.refused || null } : null,
     databases: cfg.databases.map((d) => d.name), repos: cfg.repos,
   };

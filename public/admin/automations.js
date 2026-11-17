@@ -263,7 +263,15 @@ const backupSettingsLive = (f) => {
   const x = n.settings;
   if (!x) return ATTN(`Not copied on ${n.run}: ${errorsOf(n, /settings/).join('; ') || 'see the run’s errors'}.`, n.finished);
   const what = `${plural(x.zones, 'domain')} (${(x.records || 0).toLocaleString('en-US')} DNS records) and the rest`;
-  if (x.notRead?.length) return ATTN(`Copied ${what}, but the key couldn’t read ${plural(x.notRead.length, 'thing')}: ${x.notRead.slice(0, 3).join('; ')}${x.notRead.length > 3 ? '…' : ''}. Add those permissions to CF_BACKUP_TOKEN.`, n.finished);
+  if (x.notRead?.length) {
+    // Each with Cloudflare's answer; a permission is named where one is the answer, a refusal with none to name still
+    // says what to do, and Cloudflare failing asks for nothing
+    const each = x.notRead.map((w, i) => (x.why?.[i] ? `${w} (${x.why[i]})` : w));
+    const perms = [...new Set((x.needs || []).filter(Boolean))];
+    const unnamed = x.notRead.some((_, i) => x.refused?.[i] && !x.needs?.[i]);
+    const fix = `${perms.length ? ` CF_BACKUP_TOKEN needs ${perms.join(', ')}.` : ''}${unnamed ? ' Give CF_BACKUP_TOKEN the Read permission for what it was refused.' : ''}`;
+    return ATTN(`Copied ${what}, but the key couldn’t read ${plural(x.notRead.length, 'thing')}: ${each.slice(0, 3).join('; ')}${x.notRead.length > 3 ? '…' : ''}.${fix}`, n.finished);
+  }
   return ON(`${n.run}: ${what}.`, n.finished);
 };
 const backupCodeLive = (f) => {

@@ -111,6 +111,8 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
       let m;
       // A permission the key doesn't have: Cloudflare refuses the listing
       if (w.faults.denied.some((d) => p.startsWith(d) || u.pathname.includes(d))) return cfError(403, 'Authentication error');
+      // Cloudflare failing one read (not a refusal)
+      if (w.faults.settingsFail && u.pathname.endsWith(w.faults.settingsFail)) return cfError(500, 'Internal error');
       // Stream switched off on Cloudflare's side (Sept and Nov 2026): every Stream listing answers so, for any key
       if (w.faults.streamListDown && /^\/stream(\/webhook|\/watermarks|\/live_inputs(\/[^/]+)?|\/storage-usage)?$/.test(p)) return json({ success: false, errors: [{ code: 10002, message: 'Authorization Failure' }], messages: [{ code: 10002, message: 'Cloudflare Stream not enabled' }], result: null }, 403);
       if (method === 'GET' && p === '/stream/storage-usage') return cf({ totalStorageMinutes: 1 });
@@ -250,6 +252,12 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
       // The domain's own rule sets: each kind is read with its own permission
       if (u.pathname === '/client/v4/zones/zone1/rulesets') return cf([{ id: 'zr-redirect', kind: 'zone', phase: 'http_request_dynamic_redirect' }, { id: 'zr-waf', kind: 'zone', phase: 'http_request_firewall_custom' }, { id: 'managed', kind: 'managed', phase: 'http_request_firewall_managed' }]);
       if ((m = /^\/client\/v4\/zones\/zone1\/rulesets\/(zr-[a-z]+)$/.exec(u.pathname))) return cf({ id: m[1], kind: 'zone', rules: [{ expression: 'true', action: 'skip' }] });
+      // Page rules, as Cloudflare answers an account's own key, whatever its permissions (Page Rules isn't on its list of
+      // what such keys can use): refused, unless a test lets them be read (faults.pagerules 'ok') or Cloudflare fail
+      if (u.pathname === '/client/v4/zones/zone1/pagerules') {
+        if (w.faults.pagerules === 'ok') return cf([{ id: 'pr1', targets: [{ target: 'url', constraint: { operator: 'matches', value: 'example.org/old*' } }], actions: [{ id: 'forwarding_url', value: { url: 'https://example.org/', status_code: 301 } }], status: 'active' }]);
+        return w.faults.pagerules ? cfError(w.faults.pagerules, 'Service Unavailable') : cfError(403, 'Authentication error');
+      }
       if (u.pathname.startsWith('/client/v4/zones/zone1/')) return cf([]);
       return cfError(403, 'not allowed for this test key');
     }

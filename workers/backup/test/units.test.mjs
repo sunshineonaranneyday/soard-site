@@ -555,7 +555,61 @@ test('settings: a cursor is sent as Cloudflare gave it, an empty one ends a list
   world.faults.registrations = 403;
   const refused = await readSettings(env, { fetchImpl });
   assert.deepEqual(refused.problems, []);
-  assert.match(refused.off.map((o) => o.what).join(' '), /domain registrations \(the key isn’t allowed/);
+  assert.match(refused.off.map((o) => o.what).join(' '), /the domain registrations \(Cloudflare doesn’t let an account’s own key read them\)/);
+});
+
+test('settings: page rules, which Cloudflare never lets an account’s own key read, are one note and never trouble, refused or failing; read, they’re in the copy', async () => {
+  const { readSettings, settingsSection, unreadOf } = await import('../src/settings.js');
+  const world = createWorld({ gitDir: '/nowhere', repo: 'x/y', streamPublicJwk: null });
+  const env = { CF_ACCOUNT_ID: ACCT, CF_BACKUP_TOKEN: 'cf-read-key' };
+  const fetchImpl = (url, init) => world.handle(new Request(url, init));
+  const note = 'the page rules of example.org (Cloudflare doesn’t let an account’s own key read them, so any page rules these domains have aren’t in the backup; a rule made under Rules instead is)';
+  // As Cloudflare answers the backup's key: refused
+  const refused = await readSettings(env, { fetchImpl });
+  assert.deepEqual(refused.problems, [], JSON.stringify(refused.problems));
+  assert.deepEqual(refused.off.map((o) => o.what), [note]);
+  assert.deepEqual(refused.json.notRead, []);
+  assert.deepEqual(refused.json.switchedOff.map((o) => o.what), [note], 'the copy says so too');
+  assert.equal(refused.json.zones[0].pageRules, null);
+  // Cloudflare failing them is the same: the key can't read them anyway
+  world.faults.pagerules = 503;
+  const failing = await readSettings(env, { fetchImpl });
+  assert.deepEqual(failing.problems, []);
+  assert.deepEqual(failing.off.map((o) => o.what), [note]);
+  // Should Cloudflare ever let the key read them, they're in the copy and nothing is said
+  world.faults.pagerules = 'ok';
+  const read = await readSettings(env, { fetchImpl });
+  assert.deepEqual(read.off, []);
+  assert.equal(read.json.zones[0].pageRules[0].id, 'pr1');
+  // Another setting refused is still trouble, its reason kept
+  world.faults.pagerules = undefined;
+  world.faults.settingsDenied = '/members';
+  const other = await readSettings(env, { fetchImpl });
+  assert.deepEqual(other.problems.map((p) => [p.what, p.why, p.refused]), [['Who can sign in to Cloudflare', 'the key isn’t allowed to read it', true]]);
+  assert.deepEqual(other.off.map((o) => o.what), [note]);
+  // As the run keeps it: a permission only for a refusal; Cloudflare failing a read that has one asks for none
+  world.faults.settingsDenied = undefined;
+  world.faults.denied = ['/zones/zone1/workers/routes'];
+  assert.deepEqual(unreadOf((await readSettings(env, { fetchImpl })).problems), { notRead: ['example.org: Workers routes'], why: ['the key isn’t allowed to read it'], refused: [true], needs: ['Workers Routes Read'] });
+  world.faults.denied = [];
+  world.faults.settingsFail = '/zones/zone1/workers/routes';
+  assert.deepEqual(unreadOf((await readSettings(env, { fetchImpl })).problems), { notRead: ['example.org: Workers routes'], why: ['Cloudflare 500: Internal error'], refused: [false], needs: [null] });
+  world.faults.settingsFail = undefined;
+
+  // A run's settings from before this was known (its page rules listed as not read, without reasons) is said the same way
+  const old = { zones: 4, records: 141, notRead: ['a.org: page rules', 'Who can sign in to Cloudflare', 'b.org: page rules'], needs: [null, 'Account Settings Read', null], off: ['the domain registrations (x)'], shipped: true };
+  assert.deepEqual(settingsSection(old), {
+    zones: 4, records: 141, shipped: true, notRead: ['Who can sign in to Cloudflare'], needs: ['Account Settings Read'], why: [null], refused: [null],
+    off: ['the domain registrations (x)', 'the page rules of a.org, b.org (Cloudflare doesn’t let an account’s own key read them, so any page rules these domains have aren’t in the backup; a rule made under Rules instead is)'],
+  });
+  // A run's own (reasons kept): each stays with its reason
+  const own = { zones: 1, notRead: ['a.org: page rules', 'x: settings'], needs: [null, null], why: ['the key isn’t allowed to read it', 'Cloudflare 500'], refused: [true, false], off: [] };
+  assert.deepEqual(settingsSection(own), { zones: 1, notRead: ['x: settings'], needs: [null], why: ['Cloudflare 500'], refused: [false], off: ['the page rules of a.org (Cloudflare doesn’t let an account’s own key read them, so any page rules these domains have aren’t in the backup; a rule made under Rules instead is)'] });
+  assert.deepEqual(settingsSection(settingsSection(own)), settingsSection(own), 'the same however often it runs (a retried finish)');
+  // Nothing to move: the very same section
+  const clean = { zones: 1, notRead: ['x: settings'], needs: [null], why: ['Cloudflare 500'] };
+  assert.equal(settingsSection(clean), clean);
+  assert.equal(settingsSection(null), null);
 });
 
 test('the restore tool won’t open anything, nor read the key, inside a folder of code', async () => {

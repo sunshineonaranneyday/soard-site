@@ -23,7 +23,7 @@ import { driveToken, listDrives, pickDrive, download as driveDownload, uploadSma
 import { b2Client, B2Error } from './b2.js';
 import { cfApi, listImages, listVideos, listBucket, openItem, pathFor, SourceError } from './sources.js';
 import { listRefs, bundleStream } from './github.js';
-import { readSettings, KEY_LINK, KEY_EXTRAS, PHASE_PERMISSION, boxOf } from './settings.js';
+import { readSettings, settingsSection, unreadOf, KEY_LINK, KEY_EXTRAS, PHASE_PERMISSION, boxOf } from './settings.js';
 import { readme, README_NAME, README_VERSION } from './readme.js';
 import { coverage } from './inventory.js';
 import { createHash } from 'node:crypto';
@@ -315,11 +315,11 @@ export async function settingsJob(env, state, h, run, { by, fetchImpl = fetch } 
       await stageCopy(env, state, { id: zid, kind: 'settings', run, path: `Cloudflare settings/${year(run)}/${run} ${z.name}.age`, open: async () => enc.encode(z.text) });
       zoneIds.push(zid);
     }
-    c = await stageCopy(env, state, { id, kind: 'settings', run, path: `Cloudflare settings/${year(run)}/${run} cloudflare-settings.json.age`, open: async () => enc.encode(JSON.stringify(read.json, null, 1)), meta: { zones: read.zones, records: read.records, notRead: read.problems.map((p) => p.what), needs: read.problems.map((p) => p.permission || null), off: read.off.map((p) => p.what), zoneIds } });
+    c = await stageCopy(env, state, { id, kind: 'settings', run, path: `Cloudflare settings/${year(run)}/${run} cloudflare-settings.json.age`, open: async () => enc.encode(JSON.stringify(read.json, null, 1)), meta: { zones: read.zones, records: read.records, ...unreadOf(read.problems), off: read.off.map((p) => p.what), zoneIds } });
   }
   for (const zid of c.meta.zoneIds) await ship(env, h, state, zid, by);
   c = await ship(env, h, state, id, by);
-  return { zones: c.meta.zones, records: c.meta.records, notRead: c.meta.notRead, needs: c.meta.needs || [], off: c.meta.off || [], shipped: !!c.shipped_at };
+  return { zones: c.meta.zones, records: c.meta.records, notRead: c.meta.notRead, needs: c.meta.needs || [], why: c.meta.why || [], refused: c.meta.refused || [], off: c.meta.off || [], shipped: !!c.shipped_at };
 }
 
 /** One repo, as a git bundle: all of it on the month's first copy, otherwise only what's new (and nothing if nothing changed) */
@@ -746,9 +746,23 @@ export async function finishJob(env, state, h, run, sections, { by, now = Date.n
   for (const k of sections.kv || []) if (!k.ok) add(`kv:${k.namespace}`, `the KV namespace ${k.namespace} wasn’t all copied`);
   for (const k of sections.kv || []) if (k.gone) notes.push(`${k.gone} key(s) in ${k.namespace} expired or were removed between its listing and its copy`);
   for (const v of sections.vectorize || []) if (!v.ok) add(`vectorize:${v.index}`, `the Vectorize index ${v.index} wasn’t all copied`);
-  // A setting the key couldn't read is trouble every night it isn't in the copy, permission named or not
-  const notRead = sections.settings?.notRead || [];
-  if (notRead.length) add('settings-not-read', `the read-only key couldn’t read ${notRead.length} of Cloudflare’s settings (${notRead.slice(0, 3).join('; ')}${notRead.length > 3 ? '…' : ''}): ${notRead.some((w, i) => named.includes(sections.settings.needs?.[i])) ? 'the permissions the setup check names cover some of them; ' : ''}add those permissions to it`);
+  // A setting the key couldn't read is trouble every night it isn't in the copy, permission named or not, each with
+  // Cloudflare's answer; what an account's own key can never read (page rules) is a note, as it is in the copy (a run
+  // from before that was known is said the same way)
+  if (sections.settings) sections.settings = settingsSection(sections.settings);
+  const st = sections.settings;
+  const notRead = st?.notRead || [];
+  if (notRead.length) {
+    const each = notRead.map((w, i) => (st.why?.[i] ? `${w} (${st.why[i]})` : w));
+    // A permission is named where one is known to be the answer; a refusal with none to name still says what to do;
+    // Cloudflare failing is said as Cloudflare said it
+    const perms = [...new Set(notRead.map((_, i) => st.needs?.[i]).filter(Boolean))];
+    const unnamed = notRead.some((_, i) => st.refused?.[i] && !st.needs?.[i]);
+    const fix = [perms.length ? `it needs ${perms.join(', ')}${perms.some((p) => named.includes(p)) ? ', as the setup check says' : ''}` : '', unnamed ? 'give it the Read permission for what it was refused' : ''].filter(Boolean).join('; ');
+    const names = `${notRead.slice(0, 3).join('; ')}${notRead.length > 3 ? '…' : ''}`;
+    // (the summary in the homes is plain: the names and what to do, never Cloudflare's words, which can carry an id)
+    add('settings-not-read', `the read-only key couldn’t read ${notRead.length} of Cloudflare’s settings: ${each.slice(0, 3).join('; ')}${notRead.length > 3 ? '…' : ''}${fix ? `. ${fix[0].toUpperCase()}${fix.slice(1)}` : ''}`, `the read-only key couldn’t read ${notRead.length} of Cloudflare’s settings: ${names}${fix ? `. ${fix[0].toUpperCase()}${fix.slice(1)}` : ''}`);
+  }
   if (sections.settings?.off?.length) notes.push(`not in tonight’s settings copy: ${sections.settings.off.join('; ')}`);
   // A Worker whose code couldn't be copied is its own trouble (the others are copied)
   for (const f of sections.workers?.failed || []) add(`worker-code:${f.worker}`, `the code of the Worker ${f.worker} couldn’t be copied: ${f.error}`, `the code of the Worker ${f.worker} couldn’t be copied`);

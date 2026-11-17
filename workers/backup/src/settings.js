@@ -3,7 +3,8 @@
  * ever lost (for the website and the Sunny & Ranney store alike, as they share the account). Read only, never a
  * key or password:
  *   - each domain's DNS records as a zone file (any DNS host imports it, Cloudflare too), its settings, its rules
- *     (redirects and the rest), page rules and email forwarding
+ *     (redirects and the rest) and email forwarding (and its page rules, if Cloudflare ever lets the key read them:
+ *     ACCOUNT_KEY_CANT below)
  *   - the admin's sign-in (Access apps, policies, groups, sign-in methods), the Pages projects, the Workers and
  *     their bindings, the R2 buckets with their addresses and CORS, and who can sign in to Cloudflare
  * The backup's one read-only key, CF_BACKUP_TOKEN, reads all of it (KEY_LINK makes it in a click); anything it
@@ -13,7 +14,8 @@
 const API = 'https://api.cloudflare.com/client/v4';
 // The backup's whole key: read-only, and nothing else (Cloudflare's short keys for an account token). The
 // databases, photos, videos and R2 files are read with it too (./db.js, ./sources.js).
-const KEYS = ['d1', 'images', 'stream', 'workers_r2', 'dns', 'zone', 'zone_settings', 'page_rules', 'access', 'access_acct', 'page', 'workers_scripts', 'account_settings'].map((key) => ({ key, type: 'read' }));
+// (no Page Rules: Cloudflare doesn't let an account's own key use them at all, ACCOUNT_KEY_CANT below)
+const KEYS = ['d1', 'images', 'stream', 'workers_r2', 'dns', 'zone', 'zone_settings', 'access', 'access_acct', 'page', 'workers_scripts', 'account_settings'].map((key) => ({ key, type: 'read' }));
 export const KEY_NAME = 'SOARD backup (read only)';
 export const KEY_LINK = `https://dash.cloudflare.com/?to=/:account/api-tokens&permissionGroupKeys=${encodeURIComponent(JSON.stringify(KEYS))}&name=${encodeURIComponent(KEY_NAME)}`;
 // The ones the link can't fill in: the dashboard's checkboxes for them
@@ -67,6 +69,39 @@ export const PERMISSION_BOX = {
   'Origin Read': ['Zone', 'Origin Rules'], 'Custom Errors Read': ['Zone', 'Custom Error Rules'], 'Response Compression Read': ['Zone', 'Response Compression'],
 };
 export const boxOf = (name) => PERMISSION_BOX[name] || ['Account', name.replace(/ Read$/, '')];
+
+// What Cloudflare never lets an account's own key read, whatever permissions it has: its table of what account keys
+// work with (developers.cloudflare.com/fundamentals/api/get-started/account-owned-tokens, Compatibility matrix) marks
+// Page Rules and Registrar not supported. The backup's key is an account's own so that it belongs to no one person.
+// Page rules are still asked for (were Cloudflare to add them, they'd be in the copy); not getting them is a note in
+// the summary, never trouble every night. Any trouble at all, not only a refusal: the key can't read them either way,
+// and Cloudflare being down shows on every other setting too. (The registrations: further down, where they're read.)
+const PAGE_RULES = /^(.+): page rules$/;
+export const ACCOUNT_KEY_CANT = 'Cloudflare doesn’t let an account’s own key read them';
+/** `list` ({ what, … }) without the page rules not read, and the one note that says so */
+export function accountKeyLimits(list) {
+  const domains = list.map((p) => PAGE_RULES.exec(p.what)?.[1]).filter(Boolean);
+  if (!domains.length) return { problems: list, off: [] };
+  return { problems: list.filter((p) => !PAGE_RULES.test(p.what)), off: [{ what: `the page rules of ${domains.join(', ')} (${ACCOUNT_KEY_CANT}, so any page rules these domains have aren’t in the backup; a rule made under Rules instead is)` }] };
+}
+/**
+ * What wasn't read, as a run's settings step keeps it: each one's name, Cloudflare's answer, whether the key was
+ * refused, and the permission that would let it read it (only for a refusal: a read Cloudflare failed needs none)
+ */
+export function unreadOf(problems) {
+  return { notRead: problems.map((p) => p.what), why: problems.map((p) => p.why || null), refused: problems.map((p) => !!p.refused), needs: problems.map((p) => (p.refused && p.permission) || null) };
+}
+/**
+ * A run's settings as its step returned them, with what an account's own key can't read moved from `notRead` to
+ * `off`: a run's own, or one from before this was known (its page rules listed as not read, with no reasons)
+ */
+export function settingsSection(s) {
+  if (!s?.notRead?.length) return s;
+  const lim = accountKeyLimits(s.notRead.map((what, i) => ({ what, permission: s.needs?.[i] ?? null, why: s.why?.[i] ?? null, refused: s.refused?.[i] ?? null })));
+  if (!lim.off.length) return s;
+  const keep = lim.problems;
+  return { ...s, notRead: keep.map((p) => p.what), needs: keep.map((p) => p.permission), why: keep.map((p) => p.why), refused: keep.map((p) => p.refused), off: [...(s.off || []), ...lim.off.map((o) => o.what)] };
+}
 // A Stream live input, without its keys: what it's called and how it records, to make it again (a new one gets new keys)
 const liveInput = (x) => (x ? { uid: x.uid, name: x.meta?.name ?? null, created: x.created, modified: x.modified, enabled: x.enabled ?? null, recording: x.recording ? { mode: x.recording.mode, timeoutSeconds: x.recording.timeoutSeconds, requireSignedURLs: x.recording.requireSignedURLs, allowedOrigins: x.recording.allowedOrigins ?? null, hideLiveViewerCount: x.recording.hideLiveViewerCount ?? null } : null, deleteRecordingAfterDays: x.deleteRecordingAfterDays ?? null } : null);
 
@@ -203,14 +238,15 @@ export async function readSettings(env, { fetchImpl = fetch, now = Date.now() } 
     get('Notification webhooks', main, `${a}/alerting/v3/destinations/webhooks`, { perm: PERM.notifications }),
   ]);
   // The domains as registered at Cloudflare (when each ends, auto-renew, its name servers): no contact details, only ids
-  // (the newer listing, paged by cursor; Cloudflare names no permission for it, so one the key may not read is a note
-  // in the summary, not trouble every night: the READ ME says the domains come first either way)
+  // (the newer listing, paged by cursor). Registrar is on Cloudflare's list of what an account's own key can't use
+  // (ACCOUNT_KEY_CANT), so the key being refused is a note in the summary, not trouble every night: the READ ME says
+  // the domains come first either way. Still asked for, in case Cloudflare ever allows it.
   const before = problems.length;
   const registrations = await getAll('Domain registrations', main, `${a}/registrar/registrations`);
   // Only the key being refused is a note; any other trouble (Cloudflare down, a listing too long) stays a problem
   const refusedRegistrar = problems.slice(before).filter((p) => p.refused && p.what.startsWith('Domain registrations'));
   for (const p of refusedRegistrar) problems.splice(problems.indexOf(p), 1);
-  if (refusedRegistrar.length) off.push({ what: 'the domain registrations (the key isn’t allowed to read them, and Cloudflare names no permission for it)' });
+  if (refusedRegistrar.length) off.push({ what: `the domain registrations (${ACCOUNT_KEY_CANT})` });
   const registrar = Array.isArray(registrations) ? registrations.map((d) => ({ name: d.domain_name, status: d.status ?? null, createdAt: d.created_at ?? null, expiresAt: d.expires_at ?? null, autoRenew: d.auto_renew ?? null, privacyMode: d.privacy_mode ?? null, locked: d.locked ?? null })) : null;
   // Each index's metadata indexes: made again before any vector goes back in
   const vectorizeOut = await Promise.all((vectorize || []).map(async (x) => ({ ...x, metadataIndexes: (await get(`Vectorize ${x.name}: metadata indexes`, main, `${a}/vectorize/v2/indexes/${encodeURIComponent(x.name)}/metadata_index/list`, { perm: PERM.vectorize }))?.metadataIndexes ?? null })));
@@ -244,6 +280,10 @@ export async function readSettings(env, { fetchImpl = fetch, now = Date.now() } 
     const rules = await Promise.all(own.map((r) => get(`${z.name}: ${r.phase} rules`, main, `/zones/${z.id}/rulesets/${r.id}`, { perm: PHASE_PERMISSION[r.phase] || null })));
     return { name: z.name, id: z.id, status: z.status, plan: z.plan?.name || null, nameServers: z.name_servers || [], settings, rulesets: rules.filter(Boolean), pageRules: pagerules, emailRouting: email, emailRules, emailCatchAll: catchAll, dnssec, workerRoutes };
   }));
+  // The page rules the key can't read: one note, not a problem per domain
+  const limits = accountKeyLimits(problems);
+  problems.splice(0, problems.length, ...limits.problems);
+  off.push(...limits.off);
   const json = redact({
     what: 'SOARD’s Cloudflare settings, the website’s and the store’s (read only; no keys or passwords). DNS records are beside this file as zone files any DNS host imports.',
     made: new Date(now).toISOString(), account: acct,
