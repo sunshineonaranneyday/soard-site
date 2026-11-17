@@ -216,9 +216,11 @@ const backupNotYet = (f) => {
   if (b.error && b.connected === undefined) return ATTN(`The site couldn’t read the backup: ${b.error}`);
   const away = backupAway(b);
   if (away) return away;
-  if (!b.night) {
+  // (the same rule as the alert: a run that finished before the setup was complete says nothing about now)
+  const early = b.night && b.setUpAt && Date.parse(b.night.finished) < Date.parse(b.setUpAt);
+  if (!b.night || early) {
     // The same rule as the alert: a first run that started a day and a half ago and hasn't finished is trouble
-    const first = b.firstStarted || b.started?.at;
+    const first = early ? b.setUpAt : b.firstStarted || b.started?.at;
     if (first && stale(first, 36 * HOUR)) return ATTN(`The first backup run, started ${dateOf(first)}, hasn’t finished.`, first);
     return OFF(b.setup?.ready ? 'Set up; the first run hasn’t finished yet.' : 'Starts once it’s set up (see Setup and the key).');
   }

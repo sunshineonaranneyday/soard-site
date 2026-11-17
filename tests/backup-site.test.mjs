@@ -221,6 +221,11 @@ test('a backup that stops answering: one miss is a blip; two in a row is an aler
 
 test('what counts as trouble, in words', () => {
   assert.deepEqual(backupProblems({ night: null }, NOW), [], 'nothing to say before the first run');
+  // A run that finished before the setup was complete says nothing now: its "isn't set up" lines aren't alerted,
+  // and a day and a half after the setup with no run since, that's what's said
+  const pre = { setUpAt: '2026-11-14T03:05:00Z', firstStarted: '2026-11-13T20:15:00Z', night: { run: '2026-11-13', finished: '2026-11-13T20:16:00Z', ok: false, problems: ['Google Drive isn’t set up or can’t be reached'], problemKinds: ['home:drive'] }, started: { run: '2026-11-14 0413', at: '2026-11-14T04:13:00Z', status: 'running' } };
+  assert.deepEqual(backupProblems(pre, Date.parse('2026-11-14T05:00:00Z')), []);
+  assert.deepEqual(backupProblems(pre, Date.parse('2026-11-15T16:00:00Z')).map((p) => p.kind), ['first-run']);
   assert.deepEqual(backupProblems({ night: null, setUpAt: '2026-11-11T00:00:00Z', firstStarted: '2026-11-12T07:00:00Z', started: { run: '2026-11-14', at: '2026-11-14T07:00:00Z', status: 'running' } }, NOW).map((p) => p.text), ['The backup’s first run, started 2026-11-12, hasn’t finished.'], 'counted from the very first start, not the newest');
   // Before it has been set up once, nothing is trouble: the setup steps say what's left
   const early = fine();

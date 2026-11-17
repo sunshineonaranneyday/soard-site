@@ -576,3 +576,19 @@ test('the restore tool won’t open anything, nor read the key, inside a folder 
     assert.match(missing.stderr, /There's no key file at/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('GitHub busy (429, or a 5xx) is asked again, as long as GitHub says, before it’s trouble', async () => {
+  const { githubFetch } = await import('../src/github.js');
+  const waits = [];
+  let n = 0;
+  const fetchImpl = async () => (++n < 3 ? new Response('slow down', { status: 429, headers: { 'retry-after': n === 1 ? '7' : '' } }) : new Response('ok'));
+  const res = await githubFetch(fetchImpl, 'https://github.com/x/y.git/info/refs', {}, { wait: async (ms) => { waits.push(ms); } });
+  assert.equal(res.status, 200);
+  assert.deepEqual(waits, [7000, 10000], 'Retry-After first, then a little longer each time');
+  let m = 0;
+  const always = await githubFetch(async () => { m++; return new Response('no', { status: 503 }); }, 'u', {}, { wait: async () => {} });
+  assert.equal(always.status, 503);
+  assert.equal(m, 5, 'four more tries, then it’s said');
+  const notFound = await githubFetch(async () => new Response('no', { status: 404 }), 'u', {}, { wait: async () => { throw new Error('a 404 is never waited on'); } });
+  assert.equal(notFound.status, 404);
+});

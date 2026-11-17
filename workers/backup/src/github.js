@@ -20,9 +20,23 @@ const dec = new TextDecoder();
 const pkt = (s) => { const b = enc.encode(s); return `${(b.length + 4).toString(16).padStart(4, '0')}${s}`; };
 const auth = (token) => `Basic ${btoa(`x-access-token:${token}`)}`;
 
+/**
+ * GitHub, asked again when it's busy: a 429 (too many requests) or a 5xx waits as long as GitHub says (Retry-After,
+ * at most a minute) or a little longer each time, up to four more tries, before it's trouble
+ */
+export async function githubFetch(fetchImpl, url, init, { wait = (ms) => new Promise((r) => setTimeout(r, ms)), tries = 5 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    const res = await fetchImpl(url, init);
+    if ((res.status !== 429 && res.status < 500) || attempt >= tries) return res;
+    await res.body?.cancel();
+    const after = Number(res.headers.get('retry-after'));
+    await wait(Math.min(60, Number.isFinite(after) && after > 0 ? after : 5 * attempt) * 1000);
+  }
+}
+
 /** The repo's refs: { head, refs: { 'refs/heads/main': sha, … } } (branches and tags) */
-export async function listRefs(env, repo, { fetchImpl = fetch } = {}) {
-  const res = await fetchImpl(`https://github.com/${repo}.git/info/refs?service=git-upload-pack`, { headers: { Authorization: auth(env.GITHUB_BACKUP_TOKEN), 'User-Agent': 'soard-backup' } });
+export async function listRefs(env, repo, { fetchImpl = fetch, wait } = {}) {
+  const res = await githubFetch(fetchImpl, `https://github.com/${repo}.git/info/refs?service=git-upload-pack`, { headers: { Authorization: auth(env.GITHUB_BACKUP_TOKEN), 'User-Agent': 'soard-backup' } }, { wait });
   if (!res.ok) throw new GitError(`GitHub ${res.status} listing ${repo}${res.status === 401 || res.status === 404 ? ' (the key can’t read it)' : ''}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   const refs = {};
@@ -57,7 +71,7 @@ function* pktLines(b) {
  * tips, which become the bundle's prerequisites). Returns { stream, done } where done() resolves to the pack's
  * object count once the stream has been read through and its checksum has matched.
  */
-export async function bundleStream(env, repo, { refs, head, have = [], fetchImpl = fetch }) {
+export async function bundleStream(env, repo, { refs, head, have = [], fetchImpl = fetch, wait }) {
   const wants = [...new Set(Object.values(refs))];
   if (!wants.length) throw new GitError(`${repo} has no branches`);
   const haves = [...new Set(have)].filter((h) => /^[0-9a-f]{40}$/.test(h));
@@ -66,11 +80,11 @@ export async function bundleStream(env, repo, { refs, head, have = [], fetchImpl
   body += '0000';
   for (const h of haves) body += pkt(`have ${h}\n`);
   body += pkt('done\n');
-  const res = await fetchImpl(`https://github.com/${repo}.git/git-upload-pack`, {
+  const res = await githubFetch(fetchImpl, `https://github.com/${repo}.git/git-upload-pack`, {
     method: 'POST',
     headers: { Authorization: auth(env.GITHUB_BACKUP_TOKEN), 'Content-Type': 'application/x-git-upload-pack-request', Accept: 'application/x-git-upload-pack-result', 'User-Agent': 'soard-backup' },
     body,
-  });
+  }, { wait });
   if (!res.ok) throw new GitError(`GitHub ${res.status} fetching ${repo}`);
 
   // The bundle's header: prerequisites first, then the refs it brings (HEAD so a clone checks out main)

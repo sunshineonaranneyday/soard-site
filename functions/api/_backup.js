@@ -80,13 +80,16 @@ export function backupProblems(status, now = Date.now(), { siteStream = null } =
   const out = new Map();
   const add = (kind, text) => { if (!out.has(kind)) out.set(kind, { kind, text: sentence(text) }); };
   if (!alerting(status, now)) return [];
-  const n = status.night;
+  // A run that finished before the setup was complete says nothing about the backup now: its lines ("Google Drive
+  // isn't set up") were true then. Until a run after it finishes, the clock runs from the setup.
+  const early = status.night && status.setUpAt && Date.parse(status.night.finished) < Date.parse(status.setUpAt);
+  const n = early ? null : status.night;
   // The newest run ended (or broke for good) three hours ago without writing its summary: its last step never ran
   const s = status.started;
   if (s && ['complete', 'errored', 'terminated'].includes(s.status) && n?.run !== s.run && now - Date.parse(s.at) > 3 * 3600_000) add('no-summary', `The run of ${s.run} ${s.status === 'complete' ? 'ended' : 'broke'} without writing its summary, so what it copied can’t be told`);
   if (!n) {
     // Never finished a run: worth saying only once its first run started a day and a half ago
-    const first = status.firstStarted || s?.at;
+    const first = early ? status.setUpAt : status.firstStarted || s?.at;
     if (first && now - Date.parse(first) > STALE_MS) add('first-run', `The backup’s first run, started ${first.slice(0, 10)}, hasn’t finished`);
   } else {
     if (now - Date.parse(n.finished) > STALE_MS) add('stale', `No backup run has finished since ${n.run}${ACTIVE.has(s?.status) ? ' (one is going now)' : ''}`);
