@@ -111,17 +111,14 @@ html {
   background-color: var(--c-cream);
 }
 /* While a transition plays, iPhone Safari fills the strip under its toolbar with one colour instead of the page:
-   WebKit's colour for the document (the body's over the root's; colours only, never images), here the footer's dark
-   (above, for overscroll). Every transition turned the toolbar dark for its length: the live page's morph, a move
-   between pages, a form's next step. For a transition's length that colour is what the bottom of the screen shows,
-   the page's cream unless the footer's dark reaches it (Footer.astro marks that), and the body goes on painting its
-   dark as an image, so nothing on the page itself changes. */
-html:active-view-transition:not([data-dark-bottom]) {
-  background-color: var(--c-cream);
-}
+   WebKit's colour for the document (the body's over the root's), here the footer's dark (below, kept for the bounce
+   past the page's ends). Every transition turned the toolbar dark for its length: the live page's morph, a move
+   between pages, a form's next step. For a transition's length both are the page's cream, unless the footer's dark
+   reaches the bottom of the screen (Footer.astro marks that). The body itself shows only under the footer, so nothing
+   on the page changes. */
+html:active-view-transition:not([data-dark-bottom]),
 html:active-view-transition:not([data-dark-bottom]) body {
-  background-color: transparent;
-  background-image: linear-gradient(var(--c-dark-deep), var(--c-dark-deep));
+  background-color: var(--c-cream);
 }
 ::view-transition-old(root) {
   animation: none;
@@ -216,6 +213,14 @@ body {
   flex-direction: column;
   min-height: 100vh;
   min-height: 100dvh;
+}
+
+/* A page still arriving shows the page's cream below what has been drawn, not the dark: the body's dark is the
+   footer's (for the bounce past the page's ends, and the space kept under a phone's bottom bar), so until the footer
+   has been read in, the body is cream. iPhone Safari drew pages dark under the header for a moment as they arrived.
+   (Pages of BaseLayout, which opens with the skip link.) */
+body:has(> .skip-link):not(:has(> .site-footer)) {
+  background-color: var(--c-cream);
 }
 
 main {
