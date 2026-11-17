@@ -1657,8 +1657,18 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   if (inputUid && (force || now - _lastLifecycleAt >= LIFECYCLE_MIN_INTERVAL_MS)) {
     const lc = await stream.lifecycle(config.customerCode, inputUid);
     _lastLifecycleAt = Date.now();
+    // The public lifecycle can keep saying "live" for minutes after the phone stops (until Stream closes the
+    // recording: over 4 minutes on Nov 17). The input's own status records the disconnect the second it
+    // happens, so while the lifecycle says live, an input Stream calls disconnected wins. The usual grace
+    // still applies before a reveal ends, and nothing starts on a lifecycle that is only catching up
+    let inputState = null;
+    if (lc?.live && stream.streamConfigured(env)) {
+      const inp = await stream.getLiveInput(env, inputUid).catch(() => null);
+      inputState = inp?.ok ? inp.result?.status?.current?.state || null : null;
+      if (inputState === 'disconnected') lc.live = false;
+    }
     if (lc) {
-      health.lifecycle = { at: nowIso(), live: lc.live, videoUID: lc.videoUID, inputUid };
+      health.lifecycle = { at: nowIso(), live: lc.live, videoUID: lc.videoUID, inputUid, ...(inputState ? { inputState } : {}) };
       if (lc.live) {
         if (quietReachedReveal(state, now)) {
           // A test still streaming when its reveal is 30 minutes off: that phone is the reveal now
