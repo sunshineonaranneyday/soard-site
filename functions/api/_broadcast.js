@@ -59,8 +59,8 @@ export const HEALTH_KEY = 'broadcast-health';
 export const SITE_ORIGIN = 'https://sunshineonaranneyday.com';
 export const PHASES = ['idle', 'scheduled', 'armed', 'live', 'ending', 'replay'];
 
-const ARM_WINDOW_MS = 30 * 60 * 1000;
-const ENDING_GRACE_MS = 45 * 1000;
+export const ARM_WINDOW_MS = 30 * 60 * 1000;
+export const ENDING_GRACE_MS = 45 * 1000;
 const SCHEDULED_EXPIRE_MS = 4 * 60 * 60 * 1000;
 const MAX_LIVE_HOURS = 8;
 const DEFAULT_REPLAY_HOURS = 72;
@@ -1778,7 +1778,7 @@ function isoOrNull(v) {
   return Number.isFinite(t) ? new Date(t).toISOString() : null;
 }
 
-function sanitizeImage(val) {
+export function sanitizeImage(val) {
   if (val === undefined || val === null || val === '') return null;
   const img = String(val).trim();
   if (img.length > 300) return undefined;
@@ -1794,7 +1794,7 @@ function dayIn(iso, tz) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: tz || 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
 }
 
-async function kidByName(DB, slug) {
+export async function kidByName(DB, slug) {
   if (!slug) return null;
   const row = await DB.prepare('SELECT slug, name, data FROM kids WHERE slug = ?').bind(slug).first();
   if (!row) return null;

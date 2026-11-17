@@ -1389,6 +1389,11 @@
     .bc-mini p, .bc-family p { margin: 0 0 .75rem; }
     .bc-family { display: flex; gap: 1.25rem; align-items: center; }
     .bc-family-body { min-width: 0; flex: 1; }
+    /* The staff rehearsal of the live page, under the mic check's preview (BcRehearsal) */
+    .bc-rehearse { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+    .bc-rehearse h4 { font-size: var(--fs-base); }
+    .bc-rehearse label { display: flex; flex-direction: column; gap: .25rem; }
+    .bc-rehearse-open { display: flex; gap: 1.25rem; align-items: center; margin: .75rem 0; flex-wrap: wrap; }
     .bc-inline { display: flex; gap: .5rem; flex-wrap: wrap; align-items: center; }
     .bc-inline > .form-input { flex: 1 1 220px; max-width: 360px; }
     .bc-thumb { width: 40px; height: 40px; border-radius: 50%; object-fit: cover; border: 2px solid var(--color-primary); flex: none; }
@@ -5503,6 +5508,87 @@
       </div>`;
     }
 
+    // A staff rehearsal of the live page (functions/api/_broadcast-rehearsal.js): the real live page, driven by the
+    // rehearsal feed, that only signed-in staff can open (from the countdown through going live to the replay).
+    // Opened through /admin/rehearsal, which signs a phone in first. Peter, Nov 17 2026: "i need a way to do real live
+    // testing right!?"
+    const BC_REHEARSE_URL = `${location.origin}/admin/rehearsal`;
+    const bcRehearsePost = async (body) => {
+      const r = await fetch('/api/broadcast-rehearsal', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const j = await apiJson(r, '/api/broadcast-rehearsal');
+      if (!j.success) throw new Error(j.error || 'That did not work. Please try again.');
+      return j;
+    };
+    function BcRehearsal({ addToast }) {
+      const [d, setD] = useState(null);
+      const [kid, setKid] = useState('');
+      const [mins, setMins] = useState(10);
+      const [busy, setBusy] = useState(false);
+      const [, tick] = useState(0);
+      const load = async (options) => {
+        try {
+          const r = await fetch(`/api/broadcast-rehearsal${options ? '?options' : ''}`, { cache: 'no-store' });
+          const j = await apiJson(r, '/api/broadcast-rehearsal');
+          if (j.nonJson || j.error) return;
+          setD((prev) => ({ ...j, options: j.options || prev?.options }));
+          if (j.options?.kids?.length) setKid((k) => k || j.rehearsal?.kidSlug || j.options.kids[0].slug);
+        } catch { /* the next ask tries again */ }
+      };
+      // Asked every few seconds while open, which also moves the rehearsal along (the live page does the same)
+      useEffect(() => {
+        load(true);
+        const t = setInterval(() => load(false), 4000);
+        const c = setInterval(() => tick((n) => n + 1), 1000);
+        return () => { clearInterval(t); clearInterval(c); };
+      }, []);
+      const start = async () => {
+        if (!kid) return;
+        setBusy(true);
+        try { const j = await bcRehearsePost({ action: 'start', kidSlug: kid, minutes: Number(mins) }); setD((p) => ({ ...j, options: p?.options })); }
+        catch (e) { addToast(e.message, 'error'); }
+        setBusy(false);
+      };
+      const end = async () => {
+        setBusy(true);
+        try { await bcRehearsePost({ action: 'end' }); setD((p) => ({ ...p, rehearsal: null, state: null })); }
+        catch (e) { addToast(e.message, 'error'); }
+        setBusy(false);
+      };
+      const kids = d?.options?.kids || [];
+      const r = d?.rehearsal;
+      const pub = d?.state;
+      const phase = r ? pub?.phase : null;
+      const status = !r ? null
+        : phase === 'live' ? html`<strong class="ink-ok">Live</strong> for ${bcClock(Date.now() - Date.parse(pub.liveAt))}. The live page is playing the rehearsal feed.`
+        : phase === 'ending' ? html`<strong>The feed dropped.</strong> The page says "Reconnecting" for 45 seconds before it ends, as it will on the day.`
+        : phase === 'replay' ? (pub.player ? html`<strong>Ended.</strong> The replay is on the live page.` : html`<strong>Ended.</strong> Stream is finishing the recording; the replay shows up on the live page in about a minute.`)
+        : html`<strong>Starting soon</strong> on the live page, counting down to ${bcTime(pub?.scheduledAt)}. Start streaming on the SOARD Rehearsal profile whenever you're ready.`;
+      return html`<div class="bc-rehearse">
+        <h4 class="u-m-0">See the live page as viewers will</h4>
+        <p class="text-sm text-muted" style="margin:.25rem 0 .75rem">Start a rehearsal, then stream on the SOARD Rehearsal profile. The real live page runs with it, for staff only: the countdown, going live, the end and the replay. Nothing goes to Facebook, YouTube, emails or texts, and the public live page doesn't change.</p>
+        ${!r ? html`<div class="bc-btns" style="align-items:flex-end">
+          <label class="text-sm">Whose reveal<select class="form-select" value=${kid} onChange=${(e) => setKid(e.currentTarget.value)} disabled=${!kids.length || busy}>
+            ${kids.length ? kids.map((k) => html`<option value=${k.slug}>${k.name}${k.note ? ` (${k.note})` : ''}</option>`) : html`<option value="">Loading…</option>`}
+          </select></label>
+          <label class="text-sm">Starts in<select class="form-select" value=${mins} onChange=${(e) => setMins(Number(e.currentTarget.value))} disabled=${busy}>
+            ${(d?.options?.minutes || [0, 2, 5, 10, 15, 30, 60, 90]).map((m) => html`<option value=${m}>${m === 0 ? 'Now' : `${m} minutes`}</option>`)}
+          </select></label>
+          <button class="btn btn-primary btn-sm" type="button" onClick=${start} disabled=${!kid || busy}>Start rehearsal</button>
+        </div>` : html`<div>
+          <p class="text-sm u-m-0">Rehearsing <strong>${r.kidName}'s</strong> reveal. ${status}</p>
+          <div class="bc-rehearse-open">
+            <${QrCode} value=${BC_REHEARSE_URL} size=${120} ecc="M" label="Open it on a phone" />
+            <div class="bc-btns" style="flex-direction:column;align-items:flex-start">
+              <a class="btn btn-primary btn-sm" href="/admin/rehearsal" target="_blank" rel="noopener">Open the live page</a>
+              <${CopyBtn} text=${BC_REHEARSE_URL} label="Copy link" />
+              <button class="btn btn-ghost btn-sm" type="button" onClick=${end} disabled=${busy}>End rehearsal</button>
+            </div>
+          </div>
+          <p class="text-xs text-muted u-m-0">Only staff signed in to the admin can open it; a phone asks for the emailed code the first time.</p>
+        </div>`}
+      </div>`;
+    }
+
     const BC_MSG_STATUS = {
       held: { label: 'Waiting for review', cls: 'badge-yellow' },
       shown: { label: 'Shown', cls: 'badge-green' },
@@ -6085,6 +6171,7 @@
         <p class="text-sm text-muted" style="margin:-.25rem 0 .75rem">On the phone, open Larix on the <strong>SOARD Rehearsal</strong> profile and start streaming, then talk the way you will on the day. "Sound is good" means you're set. Nothing here reaches the public.</p>
         ${hasRehearsal ? html`<details class="bc-more u-m-0 u-mb-2" onToggle=${(e) => { if (e.currentTarget.open && !data.larix?.rehearsal) load({ reveal: true }); }}><summary>Rehearsal profile not on the phone yet? Show its setup code</summary><div style="margin-top:.75rem">${data.larix?.rehearsal ? html`<${QrCode} value=${data.larix.rehearsal} size=${160} label="Scan with the phone's camera" />` : html`<p class="text-sm text-muted u-m-0">Getting the setup code…</p>`}</div></details>` : null}
         <${ControlRoomLazy} key="room-rehearsal" feed="rehearsal" phase=${phase} refreshKey=${roomKey} />
+        ${hasRehearsal ? html`<${BcRehearsal} addToast=${addToast} />` : null}
       </section>` : null;
       const liveRoom = showRoom && !micPanel ? html`<section class="bc-room" id="bc-room" aria-label="Control room"><${ControlRoomLazy} key="room-live" feed="live" phase=${phase} refreshKey=${roomKey} /></section>` : null;
 

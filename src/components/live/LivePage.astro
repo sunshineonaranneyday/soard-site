@@ -442,7 +442,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 </style>
 
 <script>
-  import { getLiveClient, type LiveState, type ReminderOptions } from '../../utils/live-client';
+  import { getLiveClient, rehearsal, type LiveState, type ReminderOptions } from '../../utils/live-client';
   import { shareable } from '../../utils/live-stats';
   import { remindersUsable, browserCanPush, revealIsToday, runningLate } from '../../utils/live-banner';
   import { holdPlace, keepFocus } from '../../utils/hold-place';
@@ -467,6 +467,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   // with the server, which shows the same two from the first paint
 
   const client = getLiveClient();
+  // A staff rehearsal looks exactly as viewers will see it; only its tab says what it is (live-client.ts rehearsal)
+  if (rehearsal && !document.title.startsWith('Rehearsal')) document.title = `Rehearsal · ${document.title}`;
 
   /**
    * The site navigates client-side (Astro ClientRouter), which runs this
@@ -641,7 +643,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       if (view !== 'upcoming' || !kidSlug || !s.scheduledAt) return '';
       if (Date.parse(s.scheduledAt) - Date.now() > SLATE_LEAD_MS + ahead) return '';
       const shape = slateShape(s);
-      const src = `/live/${kidSlug}/slate/?embed=1&music=0&o=${shape}`;
+      // (slateFor in functions/live/_watch-party.js builds the same address for the first paint: a staff rehearsal's
+      // screen is the rehearsal's)
+      const src = `/live/${kidSlug}/slate/?embed=1&music=0&o=${shape}${rehearsal ? '&rehearsal' : ''}`;
       return slateFailed.has(src) ? '' : src;
     }
 

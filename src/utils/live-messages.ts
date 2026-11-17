@@ -13,7 +13,7 @@
  * panel polls every 20 seconds.
  */
 import { trapValue } from '../../functions/api/_bot-trap.js';
-import type { LiveClient, LiveMessage } from './live-client';
+import { rehearsal, type LiveClient, type LiveMessage } from './live-client';
 
 export interface MessagesView {
   /** A broadcast is on (scheduled, live or replay) and it is this page's kid */
@@ -36,6 +36,8 @@ interface Options {
 }
 
 const POLL_MS = 20_000;
+// A staff rehearsal's messages are its own (functions/api/live-messages.js ?rehearsal): never the reveal's
+const MESSAGES_URL = rehearsal ? '/api/live-messages?rehearsal' : '/api/live-messages';
 const MAX = 120;
 
 export function createMessages(opts: Options) {
@@ -137,7 +139,7 @@ export function createMessages(opts: Options) {
     if (loading) return;
     loading = true;
     try {
-      const res = await fetch('/api/live-messages', { cache: 'no-store' });
+      const res = await fetch(MESSAGES_URL, { cache: 'no-store' });
       const data = await res.json().catch(() => null);
       if (!data || !res.ok) return;
       enabled = !!data.enabled;
@@ -187,7 +189,7 @@ export function createMessages(opts: Options) {
       if (text.length < 2) { say('Write a little more.', true); bodyInput?.focus(); return; }
       btn.disabled = true; say('Posting…');
       try {
-        const res = await fetch('/api/live-messages', {
+        const res = await fetch(MESSAGES_URL, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
           body: JSON.stringify({ name, body: text, website: trapValue(form) }),
         });

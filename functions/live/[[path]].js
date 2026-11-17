@@ -52,6 +52,8 @@ import { heroRowsHtml, rowsSignature, afterLine } from '../../src/utils/upcoming
 import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../src/utils/live-hero-text.ts';
 import { inviteData, inviteLinks } from '../../src/utils/reveals-client.ts';
 import { messagesOpen, shownMessages } from '../api/_live-messages.js';
+import { isAuthenticated } from '../api/_middleware.js';
+import { rehearsalFor } from '../api/_broadcast-rehearsal.js';
 import { nearEnv } from '../api/_read-copy.js';
 import { emailConfigured } from '../api/_broadcast-notify.js';
 
@@ -510,25 +512,31 @@ export async function onRequest(context) {
   const slateMatch = url.pathname.match(/^\/live\/(?:([^/]+)\/)?slate\/$/);
   // Every read on the way to the first byte is from the database's nearest copy (_read-copy.js)
   const near = nearEnv(env);
+  // A staff rehearsal (?rehearsal, _broadcast-rehearsal.js): signed-in staff get the page drawn from the rehearsal, as
+  // the public gets it from the reveal; anyone else the public page (its script sends them to sign in). Never kept.
+  const wantsRehearsal = url.searchParams.has('rehearsal');
+  const rehearsal = wantsRehearsal && env.DB && (await isAuthenticated(request, env).catch(() => false))
+    ? await rehearsalFor(env.DB).catch(() => null) : null;
+  const ours = (res) => (wantsRehearsal ? unkept(res) : res);
   if (slateMatch && env.DB) {
     try {
       const slug = slateMatch[1] || '';
       const forKid = !!slug && url.searchParams.get('design') !== 'preview';
       const [state, config, schedule, row, music] = await Promise.all([
-        forKid ? readState(near.DB) : null,
-        forKid ? readConfig(near.DB).catch(() => null) : null,
+        forKid ? (rehearsal ? rehearsal.state : readState(near.DB)) : null,
+        forKid ? (rehearsal ? rehearsal.config : readConfig(near.DB).catch(() => null)) : null,
         forKid ? cachedReveals(near).catch(() => null) : null,
         forKid ? kidData(near, slug) : null,
         musicThere(env),
       ]);
       // (the broadcast as /api/reveal-design reads it, which the screen asks again every few minutes: the two agree)
       const design = forKid && state ? designFor(slug, row.data, state, schedule) : null;
-      const facts = forKid && state ? slateFacts(publicState(state, config || {}), slug, config?.timezone) : null;
+      const facts = forKid && state ? slateFacts(publicState(state, config || {}, { includeTest: !!rehearsal }), slug, config?.timezone) : null;
       // (a photo asked for by ?photo= wins, as it does in the screen)
       const picked = facts?.image && !url.searchParams.get('photo') ? facts.image : '';
       const rewrite = !!design || !music || !!facts;
       const res = await next(rewrite ? fresh(request) : request);
-      if (!rewrite || res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html')) return res;
+      if (!rewrite || res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html')) return ours(res);
       const marks = setAttrs({
         ...(design ? { 'data-design': '' } : {}),
         ...(music ? {} : { 'data-music': null }),
@@ -557,13 +565,13 @@ export async function onRequest(context) {
       }
       const out = rw.transform(res);
       const headers = new Headers(out.headers);
-      headers.set('Cache-Control', PAGE_REUSE);
+      headers.set('Cache-Control', wantsRehearsal ? 'no-store' : PAGE_REUSE);
       headers.delete('ETag');
       headers.delete('Last-Modified');
       headers.delete('Content-Length');
       return new Response(out.body, { status: out.status, headers });
     } catch {
-      return next();
+      return ours(await next());
     }
   }
 
@@ -577,16 +585,20 @@ export async function onRequest(context) {
   let broadcast = null;
   try {
     if (env.DB) {
-      const [state, config] = await Promise.all([readState(near.DB), readConfig(near.DB)]);
-      // A rehearsal (JobTread TEST job) is invisible here: the page reads as nothing scheduled
-      broadcast = { state: visibleState(state), rawState: state, config, pub: publicState(state, config) };
+      if (rehearsal) {
+        broadcast = { state: rehearsal.state, rawState: rehearsal.state, config: rehearsal.config, pub: publicState(rehearsal.state, rehearsal.config, { includeTest: true }) };
+      } else {
+        const [state, config] = await Promise.all([readState(near.DB), readConfig(near.DB)]);
+        // A rehearsal (JobTread TEST job) is invisible here: the page reads as nothing scheduled
+        broadcast = { state: visibleState(state), rawState: state, config, pub: publicState(state, config) };
+      }
     }
   } catch { broadcast = null; }
 
   try {
     const kid = isIndex && broadcast ? await currentKid(near, broadcast.state) : null;
     if (kid?.published) kid.card = await cardFor(context, `/live/${kid.slug}/`);
-    const party = broadcast ? watchParty(broadcast.pub, { pageKid, kidPublished: pageKid ? true : !!kid?.published }) : null;
+    const party = broadcast ? watchParty(broadcast.pub, { pageKid, kidPublished: pageKid ? true : !!kid?.published, rehearsal: wantsRehearsal }) : null;
     if (party) party.generic = !broadcast.pub.kidSlug;
     let bar = null;
     const liveNow = !!broadcast?.pub?.live || party?.mode === 'starting' || party?.mode === 'live';
@@ -622,7 +634,7 @@ export async function onRequest(context) {
     const revealsAsk = designSlug ? cachedReveals(near).catch(() => null) : null;
     const res = await next(kid || party || bar || schedule || first ? fresh(request) : request);
     if (res.status === 404 && pageKid) return Response.redirect(`${url.origin}/live/${url.search}`, 302);
-    if (res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html') || !(kid || party || bar || schedule || first)) return res;
+    if (res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html') || !(kid || party || bar || schedule || first)) return ours(res);
     const [shown, designData, reveals] = await Promise.all([messagesAsk, designAsk, revealsAsk]);
     let messages = null;
     let heroMsgs = null;
@@ -663,8 +675,16 @@ export async function onRequest(context) {
         inviteFor: inviteKid ? schedule.upcoming.find((r) => r.slug === inviteKid) : undefined,
       }));
     }
-    return addBar(page, bar);
+    return ours(addBar(page, bar));
   } catch {
-    return next();
+    return ours(await next());
   }
+}
+
+/** A rehearsal's page: never kept by a browser, its offline copy or a search engine */
+function unkept(res) {
+  const headers = new Headers(res.headers);
+  headers.set('Cache-Control', 'no-store');
+  headers.set('X-Robots-Tag', 'noindex');
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }

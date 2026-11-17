@@ -14,8 +14,11 @@ import { runningLate } from '../../src/utils/live-banner.ts';
 /** Starting-soon screen fills the frame for the last hour (SLATE_LEAD_MS in LivePage) */
 export const SLATE_LEAD_MS = 60 * 60 * 1000;
 
-/** The starting-soon screen the frame plays (slateSrc in LivePage.astro; a phone held sideways asks for its landscape one there) */
-export const slateFor = (kidSlug, orientation) => `/live/${kidSlug}/slate/?embed=1&music=0&o=${orientation === 'landscape' ? 'landscape' : 'portrait'}`;
+/**
+ * The starting-soon screen the frame plays (slateSrc in LivePage.astro, which builds the same address: a phone held
+ * sideways asks for its landscape one there). A staff rehearsal's screen is the rehearsal's (_broadcast-rehearsal.js).
+ */
+export const slateFor = (kidSlug, orientation, rehearsal = false) => `/live/${kidSlug}/slate/?embed=1&music=0&o=${orientation === 'landscape' ? 'landscape' : 'portrait'}${rehearsal ? '&rehearsal' : ''}`;
 
 /** The phases a starting-soon screen takes its start time from (ACTIVE in SlateScreen.astro) */
 const SLATE_ACTIVE = new Set(['scheduled', 'armed', 'live', 'ending']);
@@ -40,9 +43,10 @@ export function slateFacts(pub, slug, timezone = '') {
 /**
  * How the page should look at first paint, or null when it is the plain hero.
  * @param pub   publicState() of the broadcast
- * @param opts  { pageKid: kid slug of the page ('' for /live/), kidPublished: the kid's pages are built, now }
+ * @param opts  { pageKid: kid slug of the page ('' for /live/), kidPublished: the kid's pages are built, now,
+ *                rehearsal: a staff rehearsal's page (its starting-soon screen is the rehearsal's) }
  */
-export function watchParty(pub, { pageKid = '', kidPublished = false, now = Date.now() } = {}) {
+export function watchParty(pub, { pageKid = '', kidPublished = false, now = Date.now(), rehearsal = false } = {}) {
   if (!pub) return null;
   // A stream with no kid named yet is decided in the browser, which has the schedule
   const forThisKid = !pageKid || pub.kidSlug === pageKid;
@@ -61,6 +65,6 @@ export function watchParty(pub, { pageKid = '', kidPublished = false, now = Date
     orientation,
     eyebrow: mode === 'live' ? 'Live now' : mode === 'replay' ? 'Replay' : late ? 'Running late' : 'Starting soon',
     late,
-    slate: starting ? slateFor(pageKid || pub.kidSlug, orientation) : '',
+    slate: starting ? slateFor(pageKid || pub.kidSlug, orientation, rehearsal) : '',
   };
 }

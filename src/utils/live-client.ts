@@ -49,6 +49,18 @@ type EventListener<K extends keyof LiveEvents> = (data: LiveEvents[K]) => void;
 
 const KEY = '__soardLiveClient';
 
+/**
+ * A staff rehearsal of the live page (/live/…?rehearsal, opened from the admin's mic check through /admin/rehearsal):
+ * the state comes from /api/broadcast-rehearsal (the private rehearsal feed, functions/api/_broadcast-rehearsal.js),
+ * asked for every few seconds since the real-time hub carries only the real reveal; nothing is counted (reveal stats,
+ * viewers, hearts), and leaving the page is a full page load, so no other page goes on reading the rehearsal. Decided
+ * once, when the page is opened; the starting-soon screen inside it borrows this client.
+ */
+export const rehearsal = (() => {
+  try { return location.pathname.startsWith('/live/') && new URLSearchParams(location.search).has('rehearsal'); } catch { return false; }
+})();
+const STATE_URL = rehearsal ? '/api/broadcast-rehearsal' : '/api/broadcast';
+
 function createClient() {
   let state: LiveState | null = null;
   let reminders: ReminderOptions | null = null;
@@ -78,7 +90,9 @@ function createClient() {
   const failed = () => { settled = true; if (state) { emit(); return; } unreachable = true; fire('unreachable', {}); };
   async function fetchState() {
     try {
-      const res = await fetch('/api/broadcast', { cache: 'no-store' });
+      const res = await fetch(STATE_URL, { cache: 'no-store' });
+      // A rehearsal for someone not signed in (or signed out since): the admin signs them in and brings them back
+      if (rehearsal && (res.status === 401 || res.status === 403) && window.top === window) { location.replace('/admin/rehearsal'); return; }
       if (!res.ok) { failed(); return; }
       const data = await res.json();
       if (data?.state) {
@@ -95,6 +109,8 @@ function createClient() {
 
   function pollDelay() {
     const p = state?.phase;
+    // A rehearsal has no hub to hear changes from: asked often enough to change about when the reveal's pages would
+    if (rehearsal) return p === 'live' || p === 'ending' || p === 'armed' ? 2500 : 5000;
     if (p === 'live' || p === 'ending' || p === 'armed') return 10_000;
     if (p === 'scheduled') return 30_000;
     return 60_000;
@@ -110,7 +126,7 @@ function createClient() {
   }
 
   function connect() {
-    if (!('WebSocket' in window)) { schedulePoll(); return; }
+    if (rehearsal || !('WebSocket' in window)) { schedulePoll(); return; }
     try {
       ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/live-ws`);
     } catch { schedulePoll(); return; }
@@ -150,7 +166,14 @@ function createClient() {
   }
 
   // How this tab arrived, for Reveal stats' "where viewers came from" (once per session)
-  noteArrival();
+  if (!rehearsal) noteArrival();
+  else {
+    // Leaving a rehearsal is a full page load (the router would keep this client, still reading the rehearsal)
+    document.addEventListener('click', (e) => {
+      const a = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      try { if (a && !new URL(a.href, location.href).searchParams.has('rehearsal')) a.setAttribute('data-astro-reload', ''); } catch { /* not a link we follow */ }
+    }, true);
+  }
   fetchState();
   connect();
   document.addEventListener('visibilitychange', () => {
@@ -164,7 +187,7 @@ function createClient() {
       return () => listeners.delete(l);
     },
     /** Count this page as a viewer (live pages only). Re-sent after reconnects. */
-    watch() { watching = true; send({ t: 'watch' }); },
+    watch() { if (rehearsal) return; watching = true; send({ t: 'watch' }); },
     /** Stop counting this tab as a viewer (it navigated away from the live page). */
     unwatch() { if (!watching) return; watching = false; send({ t: 'unwatch' }); },
     /** Send a reaction to everyone watching. False when there is no real-time connection. */
@@ -181,6 +204,7 @@ function createClient() {
     get timezone() { return timezone; },
     refresh: fetchState,
     beacon(type: string, meta?: Record<string, string>) {
+      if (rehearsal) return;
       try {
         const body = JSON.stringify({ type, broadcastId: state?.id || undefined, meta, ...sender() });
         const blob = new Blob([body], { type: 'application/json' });
@@ -191,7 +215,7 @@ function createClient() {
     },
     /** Reveal stats: this browser watched `sec` more seconds of the reveal (live) or its replay */
     watched(kind: 'live' | 'replay', sec: number, broadcastId: string | null) {
-      if (!broadcastId || !(sec > 0)) return;
+      if (rehearsal || !broadcastId || !(sec > 0)) return;
       try {
         const body = JSON.stringify({ broadcastId, kind, sec, ...sender() });
         if (!(navigator.sendBeacon && navigator.sendBeacon('/api/live-watch', new Blob([body], { type: 'application/json' })))) {

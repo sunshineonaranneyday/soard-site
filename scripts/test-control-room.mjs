@@ -128,6 +128,15 @@ const monitorFixture = (feed, phoneLive) => ({
   preflight: null,
 });
 
+// The staff rehearsal of the live page (Reveals → Mic check → "See the live page as viewers will"): started, shown, ended
+const rehearsalMock = { on: null, posts: [] };
+const rehearsalPayload = () => {
+  const r = rehearsalMock.on;
+  if (!r) return { state: { phase: 'idle', player: null }, rehearsal: null, hub: false };
+  const name = r.kidSlug === 'max' ? 'Max' : 'Axel';
+  return { state: { phase: 'armed', kidSlug: r.kidSlug, kidName: name, scheduledAt: new Date(Date.now() + r.minutes * 60e3).toISOString(), player: null }, rehearsal: { kidSlug: r.kidSlug, kidName: name, startedAt: new Date().toISOString(), startedBy: 'peter@soardcharity.com' }, hub: false };
+};
+
 async function mock(page, { phase, live, rehearsalLive = false }) {
   await page.setRequestInterception(true);
   page.removeAllListeners('request');
@@ -150,6 +159,15 @@ async function mock(page, { phase, live, rehearsalLive = false }) {
       return json({ success: true });
     }
     if (url.pathname === '/api/broadcast-admin') return json(adminFixture(phase));
+    if (url.pathname === '/api/broadcast-rehearsal') {
+      if (req.method() === 'POST') {
+        const body = JSON.parse(req.postData() || '{}');
+        rehearsalMock.posts.push(body);
+        rehearsalMock.on = body.action === 'start' ? { kidSlug: body.kidSlug, minutes: body.minutes } : null;
+        return json({ success: true, ...rehearsalPayload() });
+      }
+      return json({ ...rehearsalPayload(), ...(url.searchParams.has('options') ? { options: { kids: [{ slug: 'axel', name: 'Axel', note: 'on the site now' }, { slug: 'max', name: 'Max', note: '2026-11-20' }], minutes: [0, 2, 5, 10, 15, 30, 60, 90] } } : {}) });
+    }
     if (url.pathname === '/api/live-ws') return req.abort();
     if (url.pathname.startsWith('/api/list-content')) return json({ success: true, items: [], total: 0, hasMore: false });
     if (url.pathname.startsWith('/api/pending-changes')) return json({ success: true, changes: [], since: null });
@@ -245,6 +263,27 @@ try {
   await page.waitForFunction(() => /Rehearsal feed is idle/.test(document.querySelector('.cr-over')?.textContent || ''), { timeout: 8000 }).catch(() => {});
   ok(/Rehearsal feed is idle/.test(await page.$eval('.cr-over', (e) => e.textContent).catch(() => '')), 'rehearsal idle overlay');
   ok((await page.$$('.cr-dest')).length === 0, 'no destination cards on the private feed');
+
+  console.log('\n▶ Rehearse the live page (staff only)');
+  await page.waitForFunction(() => document.querySelector('.bc-rehearse select option[value="max"]'), { timeout: 8000 }).catch(() => {});
+  const rh = await page.$eval('.bc-rehearse', (e) => ({ text: e.innerText, kids: [...e.querySelectorAll('select')[0].options].map((o) => o.textContent), starts: [...e.querySelectorAll('select')[1].options].map((o) => o.textContent) })).catch(() => null);
+  ok(!!rh && /See the live page as viewers will/.test(rh.text) && /Nothing goes to Facebook, YouTube, emails or texts/.test(rh.text), 'the rehearsal block sits under the mic check, saying what it is');
+  ok(!!rh && rh.kids.join('|') === 'Axel (on the site now)|Max (2026-11-20)', `the kids to pick: the reveal on the site first, then what's coming (${rh?.kids})`);
+  ok(!!rh && rh.starts[0] === 'Now' && rh.starts.includes('10 minutes'), 'starts in: now, or minutes ahead');
+  await page.select('.bc-rehearse select', 'max');
+  await page.evaluate(() => { const sel = document.querySelectorAll('.bc-rehearse select')[1]; sel.value = '5'; sel.dispatchEvent(new Event('change', { bubbles: true })); });
+  ok(await clickText(page, '.bc-rehearse button', /^Start rehearsal$/), 'Start rehearsal');
+  await page.waitForFunction(() => /Rehearsing Max/.test(document.querySelector('.bc-rehearse')?.innerText || ''), { timeout: 8000 }).catch(() => {});
+  const started = rehearsalMock.posts.at(-1);
+  ok(started?.action === 'start' && started.kidSlug === 'max' && started.minutes === 5, `asked for Max, 5 minutes (${JSON.stringify(started)})`);
+  const on = await page.$eval('.bc-rehearse', (e) => ({ text: e.innerText, link: e.querySelector('a.btn')?.getAttribute('href'), target: e.querySelector('a.btn')?.getAttribute('target'), qr: !!e.querySelector('svg, canvas, img') })).catch(() => null);
+  ok(!!on && /Rehearsing Max's reveal\. Starting soon on the live page/.test(on.text), `status: starting soon (${on?.text.split('\n')[1]})`);
+  ok(on?.link === '/admin/rehearsal' && on.target === '_blank', 'Open the live page goes through the admin sign-in, in a new tab');
+  ok(!!on?.qr && /Open it on a phone/.test(on.text), 'a code to open it on a phone');
+  await new Promise((r) => setTimeout(r, 400)); await page.screenshot({ path: `${OUT}rehearsal-on.png`, fullPage: true });
+  ok(await clickText(page, '.bc-rehearse button', /^End rehearsal$/), 'End rehearsal');
+  await page.waitForFunction(() => /Start rehearsal/.test(document.querySelector('.bc-rehearse')?.innerText || ''), { timeout: 8000 }).catch(() => {});
+  ok(rehearsalMock.posts.at(-1)?.action === 'end' && /Start rehearsal/.test(await page.$eval('.bc-rehearse', (e) => e.innerText).catch(() => '')), 'ended: back to the form');
 
   console.log('\n▶ Mic check live, mono mic');
   await mock(page, { phase: 'scheduled', live: false, rehearsalLive: true });

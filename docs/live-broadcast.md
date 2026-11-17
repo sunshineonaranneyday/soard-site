@@ -113,6 +113,23 @@ won't pause Facebook, the switch stays off. Tests: `tests/broadcast-quiet.test.m
 
 The rehearsal feed is still the place for a private mic check: nothing on it is public.
 
+## Rehearsing the live page (staff only)
+
+Reveals → Mic check → "See the live page as viewers will": pick whose reveal and when it starts, Start rehearsal,
+then stream on the SOARD Rehearsal profile. The real live page runs with the rehearsal feed for signed-in staff only:
+the countdown and starting-soon screen, going live, "Reconnecting" and the 45-second grace, the end and the replay.
+Open it with "Open the live page" or the code for phones; both go through `/admin/rehearsal`, so Access signs a phone
+in first, then on to `/live/<kid>/?rehearsal`. Its tab says "Rehearsal"; the page itself looks exactly as viewers'.
+
+It is its own record (site_config `broadcast-rehearsal`, `functions/api/_broadcast-rehearsal.js`), moved by the
+reveal's own transitions from the rehearsal input's lifecycle, with its recording found as `checkReplayReady` finds
+the reveal's. The page asks `/api/broadcast-rehearsal` (staff only) every 2.5 s while it's live, since the hub carries
+only the reveal. Nothing reaches anyone else: the reveal's state, its hub and the public page are untouched; messages
+on a rehearsal are its own (`/api/live-messages?rehearsal`, never relayed); nothing is counted; no Facebook, Kit,
+emails, texts or push; its pages are `no-store`, `noindex`; leaving it is a full page load. A second stream after the
+end is a second take. End rehearsal clears it; one left on is taken down after 12 hours.
+Tests: `tests/broadcast-rehearsal.test.mjs`, and the admin block in `scripts/test-control-room.mjs`.
+
 ## Control room and feed checks
 
 The control room sits on Admin → Broadcast → **Now** while a reveal is live or about to start (deep link `/admin/#broadcast/control-room`, which every Slack post uses, opens Now). It plays the feed with its own HLS player instead of Stream's iframe, so the page can hear it:

@@ -116,6 +116,8 @@
   const COPY_HELP = 'Link copied. In your calendar app, choose Add calendar or Subscribe, then paste it.';
 
   function beacon(how: string, kid: string, where: string) {
+    // (nothing counted from a staff rehearsal of the live page: live-client.ts rehearsal)
+    if (location.pathname.startsWith('/live/') && new URLSearchParams(location.search).has('rehearsal')) return;
     try {
       const body = JSON.stringify({ type: 'click_calendar', meta: { how, kid, where } });
       if (!(navigator.sendBeacon && navigator.sendBeacon('/api/broadcast-event', new Blob([body], { type: 'application/json' })))) {

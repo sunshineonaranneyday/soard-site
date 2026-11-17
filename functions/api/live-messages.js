@@ -12,12 +12,16 @@
  * Who posted is a random id this endpoint sets as an HttpOnly cookie on the
  * first post (a clientId the browser sends is ignored), plus the address.
  * Screening, limits and the hub relay live in _live-messages.js.
+ * ?rehearsal (GET and POST): a staff rehearsal's own messages (_broadcast-rehearsal.js), for signed-in staff only:
+ * 403 for anyone else, 409 when no rehearsal is on.
  */
 
 import { listShown, postMessage } from './_live-messages.js';
 import { crossSiteChange } from './_origin-guard.js';
 import { clientIp } from './_secure.js';
 import { b64u, SITE_ORIGIN } from './_broadcast-notify.js';
+import { isAuthenticated } from './_middleware.js';
+import { rehearsalFor } from './_broadcast-rehearsal.js';
 
 const noStore = { 'Cache-Control': 'no-store' };
 const VISITOR_COOKIE = 'soard_live_visitor';
@@ -33,9 +37,23 @@ export function visitorCookie(id) {
   return `${VISITOR_COOKIE}=${id}; Path=/api/live-messages; Max-Age=${VISITOR_MAX_AGE}; HttpOnly; Secure; SameSite=Lax`;
 }
 
+/**
+ * ?rehearsal: a staff rehearsal's messages (_broadcast-rehearsal.js), for signed-in staff only. Undefined when the
+ * request isn't one; a Response when it is but can't be (not signed in, or no rehearsal on).
+ */
+async function rehearsalOf(context) {
+  const url = context.request?.url;
+  if (!url || !new URL(url).searchParams.has('rehearsal')) return undefined;
+  if (!(await isAuthenticated(context.request, context.env))) return Response.json({ ok: false, error: 'Sign in to the admin to see the rehearsal.' }, { status: 403, headers: noStore });
+  const r = await rehearsalFor(context.env.DB);
+  return r || Response.json({ ok: false, error: 'No rehearsal is on.' }, { status: 409, headers: noStore });
+}
+
 export async function onRequestGet(context) {
   try {
-    const r = await listShown(context.env);
+    const rehearsal = await rehearsalOf(context);
+    if (rehearsal instanceof Response) return rehearsal;
+    const r = await listShown(context.env, { rehearsal: rehearsal || null });
     return Response.json(r, { headers: noStore });
   } catch (err) {
     return Response.json({ ok: false, messages: [], error: err.message }, { status: 500, headers: noStore });
@@ -48,6 +66,8 @@ export async function onRequestPost(context) {
   if (crossSiteChange(request, [SITE_ORIGIN])) {
     return Response.json({ ok: false, error: 'Please post from the reveal page on our site.' }, { status: 403, headers: noStore });
   }
+  const rehearsal = await rehearsalOf(context);
+  if (rehearsal instanceof Response) return rehearsal;
   let body = {};
   try { body = await request.json(); } catch { /* empty */ }
   if (!body || typeof body !== 'object') body = {};
@@ -62,6 +82,7 @@ export async function onRequestPost(context) {
       newVisitor: !known,
       hp: body.website,
       ip: request.headers.get('CF-Connecting-IP') ? clientIp(request) : '',
+      rehearsal: rehearsal || null,
     });
     const { httpStatus, ...out } = r;
     return Response.json(out, { status: httpStatus || 200, headers });

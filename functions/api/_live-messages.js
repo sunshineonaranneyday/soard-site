@@ -375,12 +375,15 @@ export function messagesOpen(state, config) {
   return config?.messages?.enabled !== false && !!state?.broadcastId && OPEN_PHASES.has(state.phase);
 }
 
-/** Shown messages for the current (or given) reveal, oldest first. */
-export async function listShown(env, { broadcastId = null, limit = 100 } = {}) {
+/**
+ * Shown messages for the current (or given) reveal, oldest first. `rehearsal` ({ state, config }, _broadcast-rehearsal.js
+ * rehearsalFor) reads a staff rehearsal's own messages instead.
+ */
+export async function listShown(env, { broadcastId = null, limit = 100, rehearsal = null } = {}) {
   const { DB } = env;
   await ensureMessagesSchema(DB);
   await purgeOldMessages(DB); // every live page polls this, so the 30-day tidy rides along
-  const [state, config] = await Promise.all([readState(DB), readConfig(DB)]);
+  const [state, config] = rehearsal ? [rehearsal.state, rehearsal.config] : await Promise.all([readState(DB), readConfig(DB)]);
   const id = broadcastId || state.broadcastId;
   const open = messagesOpen(state, config) && id === state.broadcastId;
   if (!id) return { ok: true, open: false, enabled: config.messages?.enabled !== false, broadcastId: null, messages: [] };
@@ -402,12 +405,14 @@ export async function shownMessages(DB, broadcastId, limit = 100) {
  * Post a message. Returns { ok, status?, message?, error?, httpStatus }.
  * `visitorId` is the server-set cookie's id (`newVisitor` when it was just
  * minted); `ip` is only ever stored hashed with the broadcast id.
+ * `rehearsal` ({ state, config }): a staff rehearsal's message, kept under the rehearsal's id, with no event row for the
+ * reveal stats and never relayed (the hub carries the real reveal to everyone's pages).
  */
-export async function postMessage(env, { name, body, visitorId, newVisitor = false, hp, ip }) {
+export async function postMessage(env, { name, body, visitorId, newVisitor = false, hp, ip, rehearsal = null }) {
   const { DB } = env;
   await ensureMessagesSchema(DB);
   if (hp) return { ok: true, status: 'held', httpStatus: 200 }; // honeypot: look successful, store nothing
-  const [state, config] = await Promise.all([readState(DB), readConfig(DB)]);
+  const [state, config] = rehearsal ? [rehearsal.state, rehearsal.config] : await Promise.all([readState(DB), readConfig(DB)]);
   if (!messagesOpen(state, config)) return { ok: false, error: 'Messages are closed for this reveal.', code: 'closed', httpStatus: 409 };
   await purgeOldMessages(DB);
 
@@ -465,12 +470,12 @@ export async function postMessage(env, { name, body, visitorId, newVisitor = fal
   if (cleanBody.length >= LIMITS.bodyMin) {
     await DB.prepare(`INSERT INTO broadcast_messages (id, broadcast_id, kid_slug, name, body, status, reason, client_id, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(row.id, row.broadcast_id, row.kid_slug, row.name, row.body, row.status, row.reason, row.client_id, row.ip_hash, row.created_at).run();
-    await recordEvent(DB, state.broadcastId, 'message', { status });
+    if (!rehearsal) await recordEvent(DB, state.broadcastId, 'message', { status });
   }
 
   if (status === 'shown') {
     const message = publicMessage(row);
-    await relay(env, { type: 'msg', message });
+    if (!rehearsal) await relay(env, { type: 'msg', message });
     return { ok: true, status, message, httpStatus: 200 };
   }
   if (status === 'held') return { ok: true, status, httpStatus: 202 };
