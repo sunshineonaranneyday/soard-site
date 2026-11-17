@@ -328,10 +328,12 @@ test('broadcast ids are checked and meta is kept small and flat', async () => {
 
 // ─── The tick: lease, rev check, claims ─────────────────────────────
 
+// Each time a phone connects Stream starts a new recording (the site never restarts on one that ended)
+let recordings = 0;
 async function apiModeLive() {
   const cfg = await b.readConfig(DB);
   await b.writeConfig(DB, { ...cfg, facebook: { ...cfg.facebook, mode: 'api' } });
-  sim.live = true; sim.videoUID = 'vid1'; sim.lifecycleDelay = 40;
+  sim.live = true; sim.videoUID = `vid${++recordings}`; sim.lifecycleDelay = 40;
 }
 
 async function liveSideEffects(since) {
@@ -400,8 +402,9 @@ test('a claimed side effect hands its result to a tick that runs it again', asyn
   await freshBroadcast('scheduled');
   await apiModeLive();
   const s = await b.readState(DB);
+  // Taken by that tick, in this stretch on air (a claim from before it began is an earlier stretch's: never read back)
   await DB.prepare(`INSERT INTO broadcast_claims (broadcast_id, key, result, created_at) VALUES (?, 'fb-live-post', ?, ?)`)
-    .bind(s.broadcastId, JSON.stringify({ liveVideoId: 'fbv-earlier', outputUid: 'out-earlier' }), new Date().toISOString()).run();
+    .bind(s.broadcastId, JSON.stringify({ liveVideoId: 'fbv-earlier', outputUid: 'out-earlier' }), new Date(Date.now() + 1000).toISOString()).run();
   calls = [];
   await b.runTick(env, { source: 'test', force: true });
   await flush();
@@ -646,7 +649,8 @@ test('a tick cut off right after saving the go-live loses none of its side effec
 });
 
 test('a tick cut off right after saving the end still ends Facebook and announces it once', async () => {
-  // Carries on from the live broadcast above
+  // Carries on from the live broadcast above, past its scheduled start (a stop before it is a framing check)
+  sim.live = true; travel(21 * M); await b.runTick(env, { source: 'hub' });
   sim.live = false;
   travel(9 * S);
   await b.runTick(env, { source: 'hub' }); // ending
@@ -656,7 +660,8 @@ test('a tick cut off right after saving the end still ends Facebook and announce
   const s = await b.readState(DB);
   assert.equal(s.phase, 'replay');
   assert.equal(alerts(/Ended/).length, 0);
-  travel(9 * S);
+  // Over for good once no phone has come back for 15 minutes: only then is Facebook's video ended and the end announced
+  travel(15 * M);
   await b.runTick(env, { source: 'hub' });
   await flush();
   assert.equal(alerts(/Ended/).length, 1);

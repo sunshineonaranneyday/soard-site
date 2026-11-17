@@ -390,10 +390,11 @@ export async function watch(env, config, state, health, work, record = async () 
     m.lastSegmentAt = state.segmentAt;
   }
 
-  if (state.phase === 'ending') {
+  // The phone away: a drop the site is riding out (state.gapSince, still live) or the reveal ending
+  if (state.phase === 'ending' || state.gapSince) {
     // Facebook and YouTube aren't read while the phone is away: not known (a short gap carries the last reading)
     m.fbViewers = null; m.ytViewers = null;
-    await c.raise('disconnected', { level: 'error', after: RULES.disconnectedAfter, title: 'The phone lost its connection', detail: 'The site shows "reconnecting" and waits up to 45 seconds before ending the reveal.', fix: 'Check that Larix is still streaming. If it stopped, tap Start: the reveal picks up where it left off.' });
+    await c.raise('disconnected', { level: 'error', after: RULES.disconnectedAfter, title: 'The phone lost its connection', detail: 'The site keeps the reveal live for 2 minutes. After that it shows the reveal ended, and a phone back within 15 more minutes still picks the same reveal up again.', fix: 'Check that Larix is still streaming. If it stopped, tap Start: the reveal picks up where it left off.' });
     return;
   }
   await c.clear('disconnected');

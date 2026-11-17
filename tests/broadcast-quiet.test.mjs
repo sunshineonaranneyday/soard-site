@@ -17,7 +17,7 @@ const travel = (ms) => { offset += ms; };
 const H = 3600e3, M = 60e3, S = 1000;
 
 // ─── Fake network ───────────────────────────────────────────────────
-const sim = { live: false, videoUID: null, videoState: 'live-inprogress', inputState: null };
+const sim = { live: false, videoUID: null, videoState: 'live-inprogress', inputState: null, inputSince: null };
 // Stream's outputs on the main feed: Facebook's persistent key (on) and an old YouTube one someone paused in Settings
 const outputs = new Map([['fbout', { uid: 'fbout', url: 'rtmps://live-api-s.facebook.com:443/rtmp/', enabled: true }], ['ytout', { uid: 'ytout', url: 'rtmp://a.rtmp.youtube.com/live2', enabled: false }]]);
 let outputsFail = false;
@@ -48,7 +48,7 @@ globalThis.fetch = async (input, init = {}) => {
   if (url.includes('/stream/live_inputs/in1/videos')) return json({ success: true, result: [] });
   if (url.includes('/stream?per_page=1')) return json({ success: true, result: [] });
   // The input's own status: Stream records a disconnect at once (the public lifecycle can lag minutes behind)
-  if (url.includes('/stream/live_inputs/in1')) return json({ success: true, result: { uid: 'in1', status: { current: { state: sim.inputState || (sim.live ? 'connected' : 'disconnected') } } } });
+  if (url.includes('/stream/live_inputs/in1')) return json({ success: true, result: { uid: 'in1', status: { current: { state: sim.inputState || (sim.live ? 'connected' : 'disconnected'), statusEnteredAt: sim.inputSince || undefined } } } });
   if (/\/stream\/vid\d\/captions\//.test(url)) return json({ success: true, result: {} });
   if (/\/stream\/vid\d$/.test(url)) return json({ success: true, result: { uid: url.split('/').pop(), status: { state: sim.videoState } } });
   if (url.startsWith('https://graph.facebook.com/')) {
@@ -296,28 +296,39 @@ test('with nothing planned, a test goes back to idle; a Stream failure keeps the
 });
 
 test('the phone stopping ends it 45 seconds later even while Stream\'s public status still says live', async () => {
-  // Nov 17: the phone stopped at 2:21:42 and Stream's lifecycle said live for over 4 minutes more
-  sim.live = true; sim.videoUID = 'vid5'; sim.inputState = 'connected';
+  // Nov 17: the phone stopped at 2:21:42 and Stream's lifecycle said live for 18 minutes more
+  const stop = () => { sim.inputState = 'disconnected'; sim.inputSince = new Date(Date.now()).toISOString(); };
+  const back = () => { sim.inputState = 'connected'; sim.inputSince = new Date(Date.now()).toISOString(); };
+  sim.live = true; sim.videoUID = 'vid5'; back();
   travel(5 * S);
   let r = await tick();
   assert.ok(r.work.includes('test-start'), r.work.join(','));
-  sim.inputState = 'disconnected'; // the lifecycle (sim.live) still says live
+  const segment = (await b.readState(env.DB)).segmentAt;
+  // A weak-signal blip: disconnected for 8 seconds, then back. The lifecycle (sim.live) never noticed
+  stop(); travel(8 * S);
   r = await tick();
-  assert.equal(r.state.phase, 'ending', 'the disconnect is seen at once');
-  sim.inputState = 'connected'; // a cell hiccup: back within the grace
+  assert.equal(r.state.phase, 'live', 'a few seconds off is not a stop');
+  back(); travel(2 * S);
   r = await tick();
-  assert.equal(r.state.phase, 'live', 'reconnects as usual');
-  sim.inputState = 'disconnected';
+  assert.equal(r.state.phase, 'live');
+  assert.ok(Date.parse((await b.readState(env.DB)).segmentAt) > Date.parse(segment), 'a gap breaks the unbroken stretch: the Kit list email\'s 3 minutes start again');
+  // The phone really stops; the lifecycle keeps saying live
+  stop(); const stoppedAt = Date.now();
+  travel(5 * S);
   r = await tick();
-  assert.equal(r.state.phase, 'ending');
-  travel(50 * S);
+  assert.equal(r.state.phase, 'live', 'not yet: could still be a blip');
+  travel(11 * S);
+  r = await tick();
+  assert.equal(r.state.phase, 'ending', 'seen once it has lasted 15 seconds');
+  assert.equal(Date.parse((await b.readState(env.DB)).disconnectedAt), stoppedAt, 'the grace runs from the real stop');
+  travel(30 * S); // 46 s after the stop
   r = await tick();
   assert.ok(r.work.includes('test-ended'), r.work.join(','));
   assert.equal(r.state.phase, 'idle');
   travel(5 * S);
   r = await tick();
   assert.equal(r.state.phase, 'idle', 'a lifecycle that is only catching up starts nothing');
-  sim.live = false; sim.inputState = null;
+  sim.live = false; sim.inputState = null; sim.inputSince = null;
   travel(5 * S);
   r = await tick();
   assert.equal(r.state.phase, 'idle');

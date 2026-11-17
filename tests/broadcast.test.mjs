@@ -230,6 +230,8 @@ test('drop + reconnect stays live; drop past grace ends it', async () => {
   sim.live = true;
   r = await b.runTick(env, { source: 'test', force: true });
   assert.equal(r.state.phase, 'live');
+  // The reveal runs past its scheduled start, then the phone stops (before the start it would be a framing check)
+  travel(16 * 60 * S); await b.runTick(env, { source: 'test', force: true });
   sim.live = false;
   r = await b.runTick(env, { source: 'test', force: true });
   assert.equal(r.state.phase, 'ending');
@@ -238,21 +240,30 @@ test('drop + reconnect stays live; drop past grace ends it', async () => {
   assert.equal(r.state.phase, 'replay');
   assert.equal(r.state.replay, true);
   assert.ok(r.state.replayUntil);
-  const ev = await env.DB.prepare(`SELECT * FROM broadcast_events WHERE type = 'live_end'`).first();
-  assert.ok(ev);
+  // Ended by its phone stopping: a phone back within 15 minutes picks it up again, so nothing final happens yet
+  const st = await b.readState(env.DB);
+  assert.ok(Date.parse(st.rejoinUntil) > Date.now(), 'open to the phone coming back');
+  assert.equal(await env.DB.prepare(`SELECT * FROM broadcast_events WHERE type = 'live_end'`).first(), null, 'not announced yet');
 });
 
-test('replay ready → attached to kid, captions, deploy, replay email', async () => {
+test('replay ready → on the live page at once; attached to kid, captions, deploy, replay email once the reveal is over for good', async () => {
   sim.videoState = 'ready';
   travel(31 * S);
   calls.length = 0;
-  const r = await b.runTick(env, { source: 'test', force: true });
+  let r = await b.runTick(env, { source: 'test', force: true });
   assert.ok(r.work.includes('replay-ready'), r.work.join(','));
   assert.equal(r.state.player.kind, 'replay');
   assert.equal(r.state.player.uid, 'vid1');
+  assert.ok(calls.some(c => c.url.includes('/captions/en/generate')), 'captions requested');
+  assert.equal(JSON.parse((await env.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind('remi').first()).data).revealVideoUrl, undefined, 'not on the kid page while a phone may still come back');
+  assert.equal(await env.DB.prepare(`SELECT * FROM broadcast_sends WHERE kind = 'replay'`).first(), null, 'no replay email yet');
+  travel(15 * 60 * S);
+  r = await b.runTick(env, { source: 'test', force: true });
+  assert.ok(r.work.includes('closed'), r.work.join(','));
+  assert.ok(r.work.includes('announced-end'), r.work.join(','));
+  assert.ok(await env.DB.prepare(`SELECT * FROM broadcast_events WHERE type = 'live_end'`).first(), 'the end is announced once it is over for good');
   const kid = JSON.parse((await env.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind('remi').first()).data);
   assert.equal(kid.revealVideoUrl, 'https://watch.cloudflarestream.com/vid1');
-  assert.ok(calls.some(c => c.url.includes('/captions/en/generate')), 'captions requested');
   assert.ok(calls.some(c => c.url === 'https://hook.test/deploy'), 'deploy hook fired');
   const replay = await env.DB.prepare(`SELECT * FROM broadcast_sends WHERE kind = 'replay'`).first();
   assert.equal(replay.sent, 1);

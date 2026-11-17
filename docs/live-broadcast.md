@@ -113,6 +113,42 @@ won't pause Facebook, the switch stays off. Tests: `tests/broadcast-quiet.test.m
 
 The rehearsal feed is still the place for a private mic check: nothing on it is public.
 
+## When the phone stops (or drops)
+
+Stream answers "is a phone sending?" two ways: the public lifecycle (says live once the video plays, and
+can keep saying so long after the phone stops: 18 minutes on Nov 17 2026) and the input's own status (API),
+which changes the moment the phone connects or disconnects. `sensePhone()` in `_broadcast.js` decides:
+
+- Off air, a reveal starts when the lifecycle says live, unless the input says the phone is gone, or the
+  lifecycle is still reporting a recording that already ended (`state.endedVideoUid`, kept in the state).
+- Off air, a phone that connected after a recording ended is a new one, even while the lifecycle still
+  names the old recording; the same connection carries on only as a test or as the same reveal coming back.
+- On air, the input decides. A drop under 2 minutes (15 s for a test) is a gap (`state.gapSince`): still
+  live, one reveal, nothing sent twice, but nothing new is set off during it either: the Kit list email's
+  unbroken 3 minutes start again from the reconnect, and a test doesn't become the reveal. After 2 minutes
+  the site shows the reveal ended (the 45 s grace counts from the real stop). If Stream's API doesn't
+  answer, nothing changes on a guess; a status the site doesn't know leaves it to the lifecycle.
+- A reveal ended by its phone stopping stays open for 15 minutes (`state.rejoinUntil`). A phone back in
+  that time picks the same reveal up again (`tRejoin`: same broadcast, kid and page; no second "we're live"
+  or "Live now"). Until it closes, the "Ended" note, the kid's page, the replay email, the Kit replay draft
+  and the Reel wait; the replay can already play on the live page. An API-mode Facebook post closes when
+  the site ends the reveal (Facebook keeps a dropped stream's post open only 2–3 minutes), and a phone back
+  opens a new one for the rest. Clear replay, Reset, a new schedule, Set replay or turning test mode on
+  close the window at once.
+- A scheduled reveal whose phone stops before the scheduled start, after under 10 minutes on air, was a
+  framing check (`tPreShowOver`): back to waiting (countdown up), nothing final happens, and that clip is
+  never its replay. What was already sent stays sent (no second "we're live" or "Live now"); a Kit list
+  email held for going live early can still go at the real start; an API-mode Facebook post the framing
+  check opened is released and closed, so the reveal opens its own. Staff get a "Back to waiting" note.
+  Longer than 10 minutes, ending within the hour before the start, is the reveal itself, run early: it ends
+  as a reveal does. Ending more than an hour before the start is always a framing check.
+- End now wraps up at once, as before.
+- The replay is the recording with the most footage after the scheduled start (`replayScore`; unscheduled:
+  the longest), not the last piece. With more than one piece, staff are told which went out.
+- The office still hears "The phone lost its connection" during a drop the site is riding out.
+
+Tests: `tests/broadcast-lag.test.mjs`, `tests/broadcast-rejoin.test.mjs`.
+
 ## Rehearsing the live page (staff only)
 
 Reveals → Mic check → "See the live page as viewers will": pick whose reveal and when it starts, Start rehearsal,

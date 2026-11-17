@@ -93,6 +93,21 @@ const HOOK_ENV_VARS = ['CF_PAGES_DEPLOY_HOOK', 'CF_DEPLOY_HOOK', 'DEPLOY_HOOK_UR
 // often a tick looks at Stream's outputs while it is on (or puts them back after)
 const QUIET_HOURS = 2;
 const QUIET_OUTPUTS_CHECK_MS = 30 * 1000;
+// While a broadcast is on air, the phone counts as gone once Stream has had it disconnected this long
+// (sensePhone). A test ends quickly; a reveal waits 2 minutes, so a phone on weak signal that drops and
+// reconnects stays one reveal (one "we're live", and the 3-minute wait before the Kit list email doesn't
+// start over on every blip). The 45 s grace counts from the real stop, so a reveal ends 2 minutes after it.
+const INPUT_DROP_TEST_MS = 15 * 1000;
+const INPUT_DROP_REVEAL_MS = 2 * 60 * 1000;
+// While on air, a failed read of the input changes nothing for this long after the last good one; past
+// that (Stream's API down), the lifecycle decides, as it always did, so a reveal can still end
+const INPUT_HOLD_MS = 2 * 60 * 1000;
+// A reveal whose phone went quiet is over only if no phone comes back this long after the site ended it.
+// Until then a reconnecting phone picks the same reveal up again (tRejoin), and what can't be undone waits:
+// Facebook's post closing, the "Ended" announcement, the recording on the kid's page, the replay email
+const REJOIN_MS = 15 * 60 * 1000;
+// Recordings a reveal keeps track of (each reconnect after Stream's recording timeout starts a new one)
+const MAX_RECORDINGS = 20;
 
 // Per-isolate throttles (cheap; D1 stamps back them up)
 let _lastTickAt = 0;
@@ -196,6 +211,19 @@ export function defaultState() {
     title: null, message: null, image: null,
     scheduledAt: null, armedAt: null, liveAt: null, endedAt: null, disconnectedAt: null,
     liveVideoUid: null, replayUid: null, replayReadyAt: null, replayUntil: null,
+    endedVideoUid: null,   // the last recording that ended: a lifecycle still reporting it live starts nothing (sensePhone)
+    endedVideoAt: null,    // when it ended: a phone connected after that is a new one
+    gapSince: null,        // on air, the phone has been disconnected since (a drop shorter than INPUT_DROP_*_MS)
+    recordings: [],        // every Stream recording of this broadcast, in order (the replay is the longest)
+    rejoinUntil: null,     // a reveal ended by its phone stopping: a phone back before this picks it up again (REJOIN_MS)
+    closedAt: null,        // when that window closed and the reveal was over for good (the final effects run from then)
+    replayPieces: null,    // { count, minutes } when the reveal was recorded in more than one piece
+    preShowFb: null,       // the Facebook live post a framing check opened, to release and close (preShowEffects)
+    preShowNote: null,     // a framing check just ended: staff are told once (preShowEffects)
+    fbReopen: false,       // picked up again (tRejoin): open a new Facebook post (preShowEffects)
+    fbReleaseKey: null,    // which framing check or pick-up the Facebook release belongs to (done once each)
+    fbSessionAt: null,     // when this stretch on air began: its Facebook post and closing claims date from then
+    replayOut: null,       // false once a reveal ends, true when its replay has gone out (kid's page, replay email, Kit draft, Reel); null: a state from before
     replayStartedAt: null, // when the replay's recording began (after a long reconnect, later than liveAt): reveal stats line its moment up with the live minutes
     revealAtSeconds: null, // admin override for where the reveal happens in the recording
     reel: null,            // Instagram Reel pipeline (functions/api/_broadcast-reel.js)
@@ -289,6 +317,8 @@ export function quietUntil(q, state) {
 
 /** Is the switch on (a phone going live now starts a test)? */
 export function quietOn(q, state, now = Date.now()) {
+  // A reveal on air is never a test, and Facebook stays on for it whatever the switch's timer says
+  if (state && !state.quiet && ['live', 'ending'].includes(state.phase)) return false;
   const until = quietUntil(q, state);
   return until != null && now < until;
 }
@@ -699,14 +729,50 @@ async function claimResult(DB, broadcastId, key) {
   try { return row?.result ? JSON.parse(row.result) : null; } catch { return null; }
 }
 
+/** claimOnce that tells "taken already" (false) from "D1 didn't answer" (null), for a step that must not be skipped */
+async function claimTry(DB, broadcastId, key) {
+  try {
+    const r = await DB.prepare('INSERT OR IGNORE INTO broadcast_claims (broadcast_id, key, created_at) VALUES (?, ?, ?)')
+      .bind(broadcastId, key, nowIso()).run();
+    return (r?.meta?.changes || 0) > 0;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * claimOnce for a claim that belongs to one stretch on air (a Facebook post and its closing): one taken
+ * before `since` (an earlier stretch whose release didn't finish) is not this stretch's, so it gives way
+ */
+async function claimFresh(DB, broadcastId, key, since) {
+  if (await claimOnce(DB, broadcastId, key)) return true;
+  if (!since) return false;
+  const old = await DB.prepare('DELETE FROM broadcast_claims WHERE broadcast_id = ? AND key = ? AND created_at < ?').bind(broadcastId, key, since).run().catch(() => null);
+  return (old?.meta?.changes || 0) > 0 && claimOnce(DB, broadcastId, key);
+}
+
+/** A claim's result, only if it was taken in this stretch on air (from `since`) */
+async function freshResult(DB, broadcastId, key, since) {
+  const row = await DB.prepare('SELECT result, created_at FROM broadcast_claims WHERE broadcast_id = ? AND key = ?').bind(broadcastId, key).first().catch(() => null);
+  if (!row?.result || (since && String(row.created_at || '') < since)) return null;
+  try { return JSON.parse(row.result); } catch { return null; }
+}
+
 // ─── Transitions (pure; return a new state) ─────────────────────────
 
 function newBroadcastId() {
   return `live-${Date.now()}`;
 }
 
+/** The recording a state leaves behind when it moves on, and when: the one on air (a stream, not the emergency banner), else the last one that ended */
+function endedFields(state) {
+  const onAir = (state?.phase === 'live' || state?.phase === 'ending') && state.source === 'stream';
+  if (onAir && state.liveVideoUid) return { endedVideoUid: state.liveVideoUid, endedVideoAt: nowIso() };
+  return { endedVideoUid: state?.endedVideoUid || null, endedVideoAt: state?.endedVideoAt || null };
+}
+
 export function tSchedule(state, { kidSlug, kidName, jobId, test, scheduledAt, title, message, image, kitLiveEmail, by }, config) {
-  const s = { ...defaultState(), broadcastId: newBroadcastId(), createdAt: nowIso() };
+  const s = { ...defaultState(), broadcastId: newBroadcastId(), createdAt: nowIso(), ...endedFields(state) };
   s.kidSlug = kidSlug || null;
   s.kidName = kidName || null;
   s.jobId = jobId || null;
@@ -729,18 +795,48 @@ export function tStartLive(state, { videoUid, source = 'stream', by }, config) {
   const reusable = !state.test && (['scheduled', 'armed', 'ending'].includes(state.phase) || (state.phase === 'live'));
   if (!reusable) {
     // idle or replay: a fresh, unplanned broadcast
-    s = { ...defaultState(), broadcastId: newBroadcastId(), createdAt: nowIso() };
+    s = { ...defaultState(), broadcastId: newBroadcastId(), createdAt: nowIso(), ...endedFields(state) };
     s.title = config.defaults.title;
     s.message = config.defaults.message;
   }
   if (s.phase !== 'live') s.segmentAt = nowIso();
+  // A new stretch on air (not a reconnect within one): its own Facebook post and closing (claimFresh)
+  if (!['live', 'ending'].includes(state.phase) || !reusable) s.fbSessionAt = nowIso();
   s.phase = 'live';
   s.source = source;
   s.liveAt = s.liveAt || nowIso();
   s.disconnectedAt = null;
   if (videoUid) s.liveVideoUid = videoUid;
+  s.recordings = withRecording(s.recordings, videoUid);
   s.updatedBy = by || null;
   return s;
+}
+
+/** The recordings list with `uid` added (once, in order, capped) */
+function withRecording(list, uid) {
+  const have = Array.isArray(list) ? list : [];
+  if (!uid || have.includes(uid)) return have;
+  return [...have, uid].slice(-MAX_RECORDINGS);
+}
+
+/** Is a reveal that ended by its phone stopping still waiting to see whether a phone comes back? */
+export function rejoinOpen(state, now = Date.now()) {
+  return state?.phase === 'replay' && !!state.rejoinUntil && now < Date.parse(state.rejoinUntil);
+}
+
+/**
+ * A phone back within REJOIN_MS of a reveal ending: the same reveal goes on (same broadcast, kid, page,
+ * claims, so nobody hears "we're live" or "Live now" twice). The replay shown meanwhile steps aside.
+ */
+export function tRejoin(state, { videoUid } = {}) {
+  return {
+    ...state, phase: 'live', segmentAt: nowIso(), disconnectedAt: null, endedAt: null,
+    replayUntil: null, replayUid: null, replayReadyAt: null, replayStartedAt: null,
+    rejoinUntil: null, closedAt: null, replayOut: false, gapSince: null,
+    // Its Facebook post was closed when the site ended it: a new one opens for the rest (preShowEffects, once)
+    fb: { ...defaultState().fb }, fbReopen: true, fbReleaseKey: `rejoin:${nowIso()}`, fbSessionAt: nowIso(),
+    liveVideoUid: videoUid || state.liveVideoUid, recordings: withRecording(state.recordings, videoUid),
+  };
 }
 
 export function tDisconnected(state) {
@@ -751,16 +847,22 @@ export function tReconnected(state) {
   return { ...state, phase: 'live', disconnectedAt: null, segmentAt: nowIso() };
 }
 
-export function tEnd(state, config, { by } = {}) {
+export function tEnd(state, config, { by, rejoin = false } = {}) {
   const hours = Number(config?.replayHours) || DEFAULT_REPLAY_HOURS;
-  const s = { ...state, phase: 'replay', endedAt: state.endedAt || nowIso(), disconnectedAt: null, updatedBy: by || null };
+  const s = { ...state, phase: 'replay', endedAt: state.endedAt || nowIso(), disconnectedAt: null, gapSince: null, ...endedFields(state), updatedBy: by || null };
+  // Ended by its phone stopping: open to a phone coming back. Ended any other way (End now, 8 hours): over now
+  // Stopped before its start time: open at least until 15 minutes after the start, so the real start is the same reveal
+  const at = Date.parse(state.scheduledAt || '');
+  s.rejoinUntil = rejoin ? new Date(Math.max(Date.now() + REJOIN_MS, Number.isFinite(at) ? at + REJOIN_MS : 0)).toISOString() : null;
+  s.closedAt = rejoin ? null : nowIso();
+  s.replayOut = false;
   s.replayUntil = new Date(Date.now() + hours * 3600e3).toISOString();
   s.manual = null;
   return s;
 }
 
 export function tClear(state, note, by) {
-  return { ...defaultState(), note: note || null, updatedBy: by || null };
+  return { ...defaultState(), ...endedFields(state), note: note || null, updatedBy: by || null };
 }
 
 /**
@@ -781,16 +883,59 @@ export function tStartQuiet(state, { videoUid, by } = {}, config) {
     liveAt: at, segmentAt: at, endedAt: null, disconnectedAt: null,
     liveVideoUid: videoUid || null, replayUid: null, replayReadyAt: null, replayUntil: null, replayStartedAt: null,
     reel: null, fb: blank.fb, kit: blank.kit, kidCheckAt: null, kidAlertAt: null, manual: null, clicks: 0, note: null,
+    endedVideoUid: before.endedVideoUid || null, endedVideoAt: before.endedVideoAt || null, gapSince: null,
     quiet: { at },
     resume: before.phase === 'idle' || !before.phase ? null : before,
     updatedBy: by || null,
   };
 }
 
+/**
+ * A scheduled reveal's phone stopped before the scheduled start (a framing check, a phone test without
+ * test mode): that wasn't the reveal. It goes back to waiting for its phone, nothing final happens, and
+ * that recording is never its replay. What was already said stays said (claims): no second "we're live"
+ * or "Live now" when it really starts. A Kit list email held for going live early can still go then, and
+ * an API-mode Facebook post opened by the framing check is closed (preShowEffects) so the reveal gets its own.
+ */
+export function tPreShowOver(state) {
+  const at = Date.parse(state.scheduledAt);
+  const kit = state.kit?.live?.held ? { ...state.kit, live: null } : state.kit;
+  const minutes = Math.max(1, Math.round((Date.parse(state.disconnectedAt || nowIso()) - Date.parse(state.liveAt || nowIso())) / 60000));
+  return {
+    ...state, ...endedFields(state),
+    phase: Date.now() >= at - ARM_WINDOW_MS ? 'armed' : 'scheduled',
+    liveAt: null, segmentAt: null, disconnectedAt: null, gapSince: null, liveVideoUid: null, recordings: [],
+    kit, kidCheckAt: null, kidAlertAt: null,
+    // Its Facebook post is released at once (preShowEffects closes it): the reveal opens its own when it starts
+    fb: { ...defaultState().fb },
+    // Always: even a Facebook post that failed to open took the claim the reveal needs for its own
+    preShowFb: { liveVideoId: state.fb?.liveVideoId || null, outputUid: state.fb?.outputUid || null },
+    fbReleaseKey: `pre-show:${nowIso()}`,
+    preShowNote: { at: nowIso(), minutes, kitSent: !!(state.kit?.live?.sendAt && !state.kit.live.error) },
+  };
+}
+
+/**
+ * A framing check (tPreShowOver): a phone that stopped before a scheduled reveal's start time after less
+ * than PRE_SHOW_MAX_MS on air. Longer is the reveal itself, run early (or JobTread's time was late): it
+ * ends as a reveal does.
+ */
+const PRE_SHOW_MAX_MS = 10 * 60 * 1000;
+const PRE_SHOW_ALWAYS_MS = 60 * 60 * 1000;
+function preShow(state) {
+  const at = Date.parse(state.scheduledAt || '');
+  const stopped = Date.parse(state.disconnectedAt || '');
+  const began = Date.parse(state.liveAt || '');
+  if (state.quiet || state.test || !Number.isFinite(at) || !Number.isFinite(stopped) || stopped >= at) return false;
+  // Over an hour before the start it is never the reveal (a phone test, the day before, without test mode)
+  if (at - stopped >= PRE_SHOW_ALWAYS_MS) return true;
+  return Number.isFinite(began) && stopped - began < PRE_SHOW_MAX_MS;
+}
+
 /** The test is over: whatever it interrupted comes back as it was (nothing → idle) */
 export function tEndQuiet(state, by) {
   const back = state.resume ? { ...state.resume } : { ...defaultState(), note: 'test-ended' };
-  return { ...back, updatedBy: by || back.updatedBy || null };
+  return { ...back, ...endedFields(state), updatedBy: by || back.updatedBy || null };
 }
 
 // ─── Reminders ──────────────────────────────────────────────────────
@@ -1243,33 +1388,81 @@ async function tickReel(env, config, state, work, opts) {
   return r.state;
 }
 
+/**
+ * The replay. First the recording: the longest one this broadcast made (a reconnect after Stream's
+ * recording timeout starts a new one, and the last piece can be a short tail), once Stream has
+ * finished them all (or 30 minutes after the end, whatever is ready by then). That goes on the live
+ * page straight away. What reaches people (the kid's page and a deploy, the replay email, the Kit
+ * draft, the Reel) waits until the reveal is over for good: not while a phone may still pick it up
+ * again (rejoinOpen).
+ */
 async function checkReplayReady(env, config, state, health, work) {
-  if (state.phase !== 'replay' || state.replayUid || state.source !== 'stream' || state.quiet) return state;
+  if (state.phase !== 'replay' || state.source !== 'stream' || state.quiet) return state;
+  // A replay already showing from before replayOut existed went out back then (its claims say so too)
+  if (state.replayOut == null && state.replayUid) return state;
+  if (!state.replayUid) state = await findReplay(env, config, state, health, work);
+  if (!state.replayUid || rejoinOpen(state) || state.replayOut === true) return state;
+  return replayOutward(env, config, state, health, work);
+}
+
+const REPLAY_WAIT_ALL_MS = 30 * 60 * 1000;
+
+/**
+ * Which piece is the replay: the one with the most footage from the scheduled start on (a phone started
+ * early films the wait; the reveal itself is after the start). Unscheduled, or no times: the longest.
+ */
+export function replayScore(video, state) {
+  const duration = Math.max(0, Number(video?.duration) || 0);
+  const start = Date.parse(video?.created || '');
+  const at = Date.parse(state?.scheduledAt || '');
+  if (!Number.isFinite(start) || !Number.isFinite(at)) return duration;
+  const end = start + duration * 1000;
+  return Math.max(0, end - Math.max(start, at)) / 1000 + duration / 1e6; // ties: the longer piece
+}
+
+async function findReplay(env, config, state, health, work) {
   const last = health.replayCheckAt ? Date.parse(health.replayCheckAt) : 0;
   if (Date.now() - last < REPLAY_CHECK_INTERVAL_MS) return state;
   health.replayCheckAt = nowIso();
   if (!stream.streamConfigured(env)) return state;
 
-  let uid = state.liveVideoUid;
-  let ready = false;
-  let created = null;
-  if (uid) {
-    const v = await stream.getVideo(env, uid);
-    ready = v.ok && v.result?.status?.state === 'ready';
-    created = v.result?.created || null;
+  const uids = withRecording(state.recordings, state.liveVideoUid);
+  let pick = null;
+  if (uids.length) {
+    const vids = await Promise.all(uids.map((uid) => stream.getVideo(env, uid).catch(() => null)));
+    const ready = vids.filter((v) => v?.ok && v.result?.status?.state === 'ready').map((v) => v.result);
+    // A piece that failed, or that Stream no longer has (404), isn't waited for
+    const failed = vids.filter((v) => (v?.ok && v.result?.status?.state === 'error') || (v && !v.ok && v.status === 404)).length;
+    const waiting = uids.length - ready.length - failed;
+    const waitedEnough = Date.now() - Date.parse(state.endedAt || 0) >= REPLAY_WAIT_ALL_MS;
+    if (!ready.length || (waiting && !waitedEnough)) return state;
+    pick = ready.reduce((a, b) => (replayScore(b, state) > replayScore(a, state) ? b : a));
   } else if (config.liveInput?.uid) {
     const vids = await stream.listInputVideos(env, config.liveInput.uid);
     const liveAt = state.liveAt ? Date.parse(state.liveAt) - 10 * 60e3 : 0;
-    const v = (vids.result || []).find(x => x.status?.state === 'ready' && Date.parse(x.created) >= liveAt);
-    if (v) { uid = v.uid; ready = true; created = v.created || null; }
+    pick = (vids.result || []).find(x => x.status?.state === 'ready' && Date.parse(x.created) >= liveAt) || null;
   }
-  if (!ready) return state;
-
-  // When this recording began: after a long reconnect the replay is the last piece, not the whole reveal
+  if (!pick?.uid) return state;
+  const uid = pick.uid;
+  const created = pick.created || null;
+  // When this recording began, so the reveal stats line its moment up with the live minutes
   const s = { ...state, replayUid: uid, replayReadyAt: nowIso(), replayStartedAt: Number.isFinite(Date.parse(created || '')) ? new Date(Date.parse(created)).toISOString() : null };
+  s.replayPieces = uids.length > 1 ? { count: uids.length, minutes: Math.round((Number(pick.duration) || 0) / 60) } : null;
   work.push('replay-ready');
   await stream.updateVideo(env, uid, { meta: { name: `${s.kidName ? `${s.kidName}'s` : 'Live'} reveal (${(s.liveAt || nowIso()).slice(0, 10)})` } }).catch(() => {});
   await stream.requestCaptions(env, uid);
+  return s;
+}
+
+async function replayOutward(env, config, state, health, work) {
+  const s = { ...state, replayOut: true };
+  const uid = s.replayUid;
+  // Recorded in pieces (the phone reconnected): say which one went out, and where to change it
+  if (s.replayPieces?.count > 1 && await claimOnce(env.DB, s.broadcastId, 'replay-pieces')) {
+    await notify.alertAdmins(env, config, { level: 'info', kind: 'news', icon: '🎞️', title: `Replay chosen: ${s.title || 'the reveal'}`,
+      detail: `The phone reconnected, so Stream recorded this reveal in ${s.replayPieces.count} pieces. The replay and the kid's page use the ${s.replayPieces.minutes}-minute piece with the most of the reveal after its start time. To show another piece, use Set replay under Reveals → History; the kid's page link is under Kids.`,
+      url: `${SITE_ORIGIN}/admin/#broadcast` });
+  }
   if (s.kidSlug) {
     try {
       const attached = await attachToKid(env, s.kidSlug, uid, s.title, 'live-broadcast');
@@ -1289,7 +1482,7 @@ async function checkReplayReady(env, config, state, health, work) {
     draft = (await claimResult(env.DB, s.broadcastId, 'kit-replay-draft'))?.id || null;
   }
   if (draft) s.kit = { ...(s.kit || {}), replayDraftId: draft };
-  if (reels.reelEnabled(config)) { s.reel = reels.startReel(s, uid, s.revealAtSeconds); work.push('reel:start'); }
+  if (reels.reelEnabled(config) && !s.reel) { s.reel = reels.startReel(s, uid, s.revealAtSeconds); work.push('reel:start'); }
   if (await claimOnce(env.DB, s.broadcastId, 'replay-ready')) {
     await recordEvent(env.DB, s.broadcastId, 'replay_ready', { uid });
     await logAudit(env.DB, { userEmail: 'live-broadcast', action: 'created', entityType: 'stream-video', entitySlug: uid, entityName: `Reveal recording ready: ${s.title || s.broadcastId}`, gitStatus: 'ok' });
@@ -1306,12 +1499,14 @@ async function checkReplayReady(env, config, state, health, work) {
  * admin covers every held case.
  */
 async function kitAutoLive(env, config, state, work) {
-  if (state.phase !== 'live' || state.quiet || !kitConfigured(env) || state.kit?.live || !kitLiveWanted(state, config)) return state;
+  // Nothing during a gap (the phone dropped and may be gone): the unbroken stretch starts again when it is back
+  if (state.phase !== 'live' || state.quiet || state.gapSince || !kitConfigured(env) || state.kit?.live || !kitLiveWanted(state, config)) return state;
   if (state.source === 'manual' && !state.scheduledAt) return state; // emergency banner: humans decide
   const now = Date.now();
   const hold = async (error, title, detail) => {
     work.push('kit-live-held');
-    if (await claimOnce(env.DB, state.broadcastId, 'kit-live-held')) await notify.alertAdmins(env, config, { level: 'warn', title, detail, url: `${SITE_ORIGIN}/admin/` });
+    // Once per time on air (a framing check and the real start each get their own note)
+    if (await claimOnce(env.DB, state.broadcastId, `kit-live-held:${state.liveAt || ''}`)) await notify.alertAdmins(env, config, { level: 'warn', title, detail, url: `${SITE_ORIGIN}/admin/` });
     return { ...state, kit: { ...(state.kit || {}), live: { id: null, held: true, error } } };
   };
   if (state.scheduledAt && Date.parse(state.liveAt) < Date.parse(state.scheduledAt) - KIT_LIVE_EARLY_MS) {
@@ -1387,9 +1582,10 @@ async function fbOnLive(env, config, state, work) {
   const s = { ...state, fb: { ...(state.fb || {}) } };
   if (!fb.fbConfigured(env) || state.quiet) return s;
   if (config.facebook?.mode === 'api' && !s.fb.liveVideoId && !s.fb.needsReview && config.liveInput?.uid) {
-    // One Facebook live post per broadcast, however many ticks race here; the claim keeps its ids
-    if (!(await claimOnce(env.DB, s.broadcastId, 'fb-live-post'))) {
-      const made = await claimResult(env.DB, s.broadcastId, 'fb-live-post');
+    // One Facebook live post per stretch on air, however many ticks race here; the claim keeps its ids. One
+    // from an earlier stretch (fbSessionAt) is never this one's: it gives way, and is never read back
+    if (!(await claimFresh(env.DB, s.broadcastId, 'fb-live-post', s.fbSessionAt))) {
+      const made = await freshResult(env.DB, s.broadcastId, 'fb-live-post', s.fbSessionAt);
       if (made?.liveVideoId) { s.fb.liveVideoId = made.liveVideoId; s.fb.outputUid = made.outputUid || null; }
       return s;
     }
@@ -1506,8 +1702,9 @@ async function goLiveEffects(env, config, state, work, by) {
   if (!['live', 'ending'].includes(state.phase) || state.source !== 'stream' || !state.broadcastId || state.quiet || !recent(state.liveAt)) return state;
   const done = await claimedKeys(DB, state.broadcastId);
   if (!done.has('live-row')) { await upsertBroadcastRow(DB, state); await claimOnce(DB, state.broadcastId, 'live-row'); }
-  // Also when the post was claimed but this state lacks its id (the tick that made it lost its save): fbOnLive reads it back
-  if (!done.has('fb-live-post') || (config.facebook?.mode === 'api' && !state.fb?.liveVideoId)) state = await fbOnLive(env, config, state, work);
+  // Also when the post was claimed but this state lacks its id (the tick that made it lost its save): fbOnLive reads it back.
+  // Not while a Facebook release is still pending (preShowEffects opens the post once it is done)
+  if (!state.fbReopen && !state.preShowFb && (!done.has('fb-live-post') || (config.facebook?.mode === 'api' && !state.fb?.liveVideoId))) state = await fbOnLive(env, config, state, work);
   if (!done.has('live-announce') && await claimOnce(DB, state.broadcastId, 'live-announce')) {
     await recordEvent(DB, state.broadcastId, 'live_start', { source: state.source, videoUid: state.liveVideoUid });
     await logAudit(DB, { userEmail: by || 'live-broadcast', action: 'published', entityType: 'live-status', entitySlug: state.broadcastId, entityName: state.title || 'Live broadcast', gitStatus: 'ok' });
@@ -1525,16 +1722,77 @@ async function goLiveEffects(env, config, state, work, by) {
 }
 
 /**
+ * After a framing check (tPreShowOver): release its Facebook live post so the reveal opens its own (the
+ * claim goes; the post is closed when Facebook answers, best effort, and its Stream output removed), and
+ * tell staff the reveal is waiting for its phone again. Runs before the go-live effects, in whatever phase
+ * the next tick finds (the phone may already be back). Each part once.
+ */
+async function preShowEffects(env, config, state, work, health = null) {
+  if (!state.preShowFb && !state.preShowNote && !state.fbReopen) return state;
+  const { DB } = env;
+  let s = state;
+  if (s.preShowFb || s.fbReopen) {
+    // Once per framing check or pick-up (fbReleaseKey), however many ticks get here: close the old post, and
+    // free the broadcast to open a new one and to close that one when it ends
+    const won = await claimTry(DB, s.broadcastId, `fb-release:${s.fbReleaseKey || ''}`);
+    if (won === null) { work.push('fb-release-retry'); return s; } // D1 didn't answer: the next tick tries again
+    if (won) {
+      // The claims go first, before any slow call, so no other tick can adopt the old post meanwhile. On air
+      // (picked up again) only the earlier stretch's: a post this stretch already opened is kept
+      if (['live', 'ending'].includes(s.phase) && s.fbSessionAt) {
+        await DB.prepare("DELETE FROM broadcast_claims WHERE broadcast_id = ? AND key IN ('fb-live-post', 'fb-ended') AND created_at < ?").bind(s.broadcastId, s.fbSessionAt).run();
+      } else {
+        await DB.prepare("DELETE FROM broadcast_claims WHERE broadcast_id = ? AND key IN ('fb-live-post', 'fb-ended')").bind(s.broadcastId).run();
+      }
+      if (s.preShowFb) {
+        if (config.facebook?.mode === 'api' && fb.fbConfigured(env) && s.preShowFb.liveVideoId) {
+          const r = await fb.endFbLiveVideo(env, s.preShowFb.liveVideoId).catch(() => ({ ok: false }));
+          work.push(r.ok ? 'pre-show-fb-ended' : 'pre-show-fb-end-failed');
+        }
+        if (s.preShowFb.outputUid && config.liveInput?.uid && stream.streamConfigured(env)) {
+          await stream.deleteOutput(env, config.liveInput.uid, s.preShowFb.outputUid).catch(() => {});
+        }
+      }
+    }
+    const reopen = !!s.fbReopen && ['live', 'ending'].includes(s.phase);
+    s = { ...s, preShowFb: null, fbReopen: false, fbReleaseKey: null };
+    // A reveal picked up again: its new post opens now (the go-live effects are long past for it). The
+    // fb-live-post claim makes it one post: a tick that lost the race reads the other's post back
+    if (reopen) s = await fbOnLive(env, config, s, work);
+  }
+  if (s.preShowNote) {
+    const n = s.preShowNote;
+    if (await claimOnce(DB, s.broadcastId, `pre-show:${n.at}`)) {
+      await recordEvent(DB, s.broadcastId, 'pre_show', { minutes: n.minutes });
+      // The feed watch and the viewer counts start again with the reveal: a framing check's issues and peak aren't its
+      if (health?.monitor?.broadcastId === s.broadcastId) health.monitor = null;
+      await DB.prepare('DELETE FROM broadcast_stats WHERE broadcast_id = ?').bind(s.broadcastId).run().catch(() => {});
+      await notify.alertAdmins(env, config, { level: 'info', kind: 'news', icon: '🎬', title: `Back to waiting: ${s.title || 'the reveal'}`,
+        detail: `The phone stopped after ${n.minutes} minute${n.minutes === 1 ? '' : 's'}, before the ${notify.formatWhen(s.scheduledAt, config.timezone)} start, so that was a framing check, not the reveal. The countdown is back up and the reveal starts when a phone streams again.${n.kitSent ? ' The Kit list was already emailed "we\'re live" during it; it won\'t be emailed again.' : ''}`,
+        url: `${SITE_ORIGIN}/admin/#broadcast` });
+    }
+    s = { ...s, preShowNote: null };
+  }
+  return s;
+}
+
+/**
  * What a stream ending sets off, by the same rule: the row, ending the
  * Facebook live video (API mode), and the "Ended" announcement with the feed
  * monitor's health report. "End now" in the admin claims the last two itself.
  */
 async function endedEffects(env, config, state, health, work, by) {
   const { DB } = env;
-  if (state.phase !== 'replay' || state.source !== 'stream' || !state.broadcastId || !recent(state.endedAt)) return state;
+  if (state.phase !== 'replay' || state.source !== 'stream' || !state.broadcastId) return state;
+  const fresh = recent(state.endedAt) || recent(state.closedAt);
+  if (!fresh) return state;
   const done = await claimedKeys(DB, state.broadcastId);
   if (!done.has('ended-row')) { await upsertBroadcastRow(DB, state); await claimOnce(DB, state.broadcastId, 'ended-row'); }
-  if (!done.has('fb-ended') && await claimOnce(DB, state.broadcastId, 'fb-ended')) state = await fbOnEnd(env, config, state, work);
+  // Facebook's post closes when the site ends the reveal: Facebook keeps a dropped stream's post open only
+  // 2–3 minutes, and a phone back later (tRejoin) opens a new one
+  if ((!done.has('fb-ended') || (state.fb?.liveVideoId && !state.fb?.ended)) && await claimFresh(DB, state.broadcastId, 'fb-ended', state.fbSessionAt)) state = await fbOnEnd(env, config, state, work);
+  // The "Ended" announcement and its health report wait while a phone may still pick the reveal up again
+  if (rejoinOpen(state) || !recent(state.closedAt || state.endedAt)) return state;
   if (!done.has('ended-announce') && await claimOnce(DB, state.broadcastId, 'ended-announce')) {
     const mins = state.liveAt ? Math.round((Date.parse(state.endedAt || nowIso()) - Date.parse(state.liveAt)) / 60000) : null;
     await recordEvent(DB, state.broadcastId, 'live_end', { minutes: mins });
@@ -1589,6 +1847,62 @@ export async function syncQuietOutputs(env, config, q, state, work, { force = fa
   }
   await writeQuiet(env.DB, next);
   return next;
+}
+
+/**
+ * Is a phone sending to the main feed? Stream answers two ways, and they can disagree:
+ *  - the public lifecycle says live once the video can play, and can keep saying so long after the phone
+ *    has stopped (it waits for the recording to close: 18 minutes on Nov 17), still naming that recording;
+ *  - the input's own status (API) says 'connected' or 'disconnected' the moment it happens, and since when.
+ * Off air: a phone goes live when the lifecycle says so and the input doesn't say it's gone. A lifecycle
+ * still naming a recording that ended (state.endedVideoUid) is only catching up; a phone that connected
+ * after that end is a new one, and the phone still on that same connection carries on only as a test
+ * (test mode) or as the same reveal coming back (rejoinOpen).
+ * On air: the input decides. A disconnect shorter than INPUT_DROP_*_MS is a gap (weak signal): still on
+ * air, one reveal, but nothing new is set off during it (the Kit list email's unbroken 3 minutes start
+ * again after it; a test doesn't become the reveal). Longer, the phone is gone, from when it stopped.
+ * When the API doesn't answer, nothing changes on a guess: on air the phase holds; off air the lifecycle
+ * alone may start a new recording, never one that ended. A status the site doesn't know (none, another
+ * state, a disconnect with no time) leaves it to the lifecycle, as before.
+ * → { phone: 'on' | 'off' | 'hold', gapSince, stoppedAt (ms), sameRecording, input }
+ */
+export async function sensePhone(env, inputUid, lc, state, quiet, now = Date.now(), { lastInputOkAt = null } = {}) {
+  const onAir = (state.phase === 'live' || state.phase === 'ending') && state.source === 'stream';
+  const ended = !!lc.videoUID && lc.videoUID === state.endedVideoUid;
+  // On air, a lifecycle naming the recording that ended is never this broadcast's (a new phone's recording follows)
+  const out = (phone, extra = {}) => ({ phone, gapSince: null, stoppedAt: null, sameRecording: ended && !onAir, input: null, inputOk: false, ...extra });
+  if (!onAir && !lc.live) return out('off');
+  if (!stream.streamConfigured(env)) return out(lc.live && !(ended && !onAir) ? 'on' : 'off');
+  const inp = await stream.getLiveInput(env, inputUid).catch(() => null);
+  if (!inp?.ok) {
+    if (!onAir) return out(ended ? 'off' : 'on');
+    const lastOk = Date.parse(lastInputOkAt || '');
+    if (Number.isFinite(lastOk) && now - lastOk < INPUT_HOLD_MS) return out('hold');
+    return out(lc.live ? 'on' : 'off');
+  }
+  const cur = inp.result?.status?.current || null;
+  const input = cur?.state || null;
+  const since = Date.parse(cur?.statusEnteredAt || '');
+  const known = Number.isFinite(since) && since <= now;
+  const ok = (phone, extra = {}) => out(phone, { inputOk: true, ...extra });
+  if (input === 'disconnected' && known) {
+    if (!onAir) return ok('off', { input });
+    const wait = state.quiet ? INPUT_DROP_TEST_MS : INPUT_DROP_REVEAL_MS;
+    if (now - since >= wait) return ok('off', { input, stoppedAt: since });
+    return ok('on', { input, gapSince: since });
+  }
+  if (input === 'connected') {
+    if (!onAir && !lc.live) return ok('off', { input }); // connected, but the video can't play yet: the lifecycle says when
+    if (!onAir && ended) {
+      // A phone that connected after the end is a new one; the same connection carries on only as a test or the same reveal
+      const endedAt = Date.parse(state.endedVideoAt || '');
+      if (known && Number.isFinite(endedAt) && since > endedAt) return ok('on', { input, sameRecording: false });
+      if (!quietOn(quiet, state, now) && !rejoinOpen(state, now)) return ok('off', { input });
+    }
+    return ok('on', { input, connectedSince: known ? since : null });
+  }
+  if (!onAir && ended) return ok('off', { input });
+  return ok(lc.live ? 'on' : 'off', { input });
 }
 
 // ─── The tick ───────────────────────────────────────────────────────
@@ -1652,43 +1966,58 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   const work = [];
   let missed = null;        // a scheduled reveal that never streamed, announced once the clear is saved
 
-  // 1. Stream is the authority on "is video arriving"
+  // 1. Is a phone sending to the main feed? Stream is the authority (sensePhone)
   const inputUid = config.liveInput?.uid;
   if (inputUid && (force || now - _lastLifecycleAt >= LIFECYCLE_MIN_INTERVAL_MS)) {
     const lc = await stream.lifecycle(config.customerCode, inputUid);
     _lastLifecycleAt = Date.now();
-    // The public lifecycle can keep saying "live" for minutes after the phone stops (until Stream closes the
-    // recording: over 4 minutes on Nov 17). The input's own status records the disconnect the second it
-    // happens, so while the lifecycle says live, an input Stream calls disconnected wins. The usual grace
-    // still applies before a reveal ends, and nothing starts on a lifecycle that is only catching up
-    let inputState = null;
-    if (lc?.live && stream.streamConfigured(env)) {
-      const inp = await stream.getLiveInput(env, inputUid).catch(() => null);
-      inputState = inp?.ok ? inp.result?.status?.current?.state || null : null;
-      if (inputState === 'disconnected') lc.live = false;
-    }
     if (lc) {
-      health.lifecycle = { at: nowIso(), live: lc.live, videoUID: lc.videoUID, inputUid, ...(inputState ? { inputState } : {}) };
-      if (lc.live) {
-        if (quietReachedReveal(state, now)) {
+      const sensed = await sensePhone(env, inputUid, lc, state, quiet, now, { lastInputOkAt: health.lifecycle?.inputOkAt });
+      health.lifecycle = { at: nowIso(), live: sensed.phone === 'on', lifecycleLive: lc.live, videoUID: lc.videoUID, inputUid, phone: sensed.phone, ...(sensed.input ? { input: sensed.input } : {}),
+        inputOkAt: sensed.inputOk ? nowIso() : (health.lifecycle?.inputOkAt || null) };
+      // The recording the lifecycle names, unless it is one that ended and this phone is a new connection (it names the new one soon)
+      const vid = lc.videoUID && !(lc.videoUID === state.endedVideoUid && !sensed.sameRecording) ? lc.videoUID : null;
+      const gap = !!sensed.gapSince;
+      if (sensed.phone === 'on') {
+        const startOff = (s2) => (sensed.sameRecording && vid ? { ...s2, endedVideoUid: null, endedVideoAt: null } : s2);
+        if (rejoinOpen(state, now) && state.source === 'stream' && !state.quiet) {
+          // The phone is back within REJOIN_MS: the same reveal goes on
+          state = startOff(tRejoin(state, { videoUid: vid })); work.push('rejoined');
+        } else if (quietReachedReveal(state, now) && !gap) {
           // A test still streaming when its reveal is 30 minutes off: that phone is the reveal now
-          state = tStartLive(tEndQuiet(state), { videoUid: lc.videoUID, source: 'stream' }, config); work.push('test-became-reveal');
+          state = tStartLive(tEndQuiet(state), { videoUid: vid, source: 'stream' }, config); work.push('test-became-reveal');
+          state = { ...state, endedVideoUid: null, endedVideoAt: null };
         } else if (state.phase === 'live') {
-          if (lc.videoUID && state.liveVideoUid !== lc.videoUID) state = { ...state, liveVideoUid: lc.videoUID };
+          if (vid && state.liveVideoUid !== vid) state = { ...state, liveVideoUid: vid, recordings: withRecording(state.recordings, vid) };
         } else if (state.phase === 'ending') {
           state = tReconnected(state); work.push('reconnected');
         } else if (state.source !== 'manual') {
-          if (quietOn(quiet, state, now)) { state = tStartQuiet(state, { videoUid: lc.videoUID }, config); work.push('test-start'); }
-          else { state = tStartLive(state, { videoUid: lc.videoUID, source: 'stream' }, config); work.push('auto-start'); }
+          if (quietOn(quiet, state, now)) { state = startOff(tStartQuiet(state, { videoUid: vid }, config)); work.push('test-start'); }
+          else { state = startOff(tStartLive(state, { videoUid: vid, source: 'stream' }, config)); work.push('auto-start'); }
         }
-      } else if (state.source === 'stream') {
-        if (state.phase === 'live') { state = tDisconnected(state); work.push('disconnected'); }
-        else if (state.phase === 'ending' && now - Date.parse(state.disconnectedAt || 0) >= ENDING_GRACE_MS) {
-          // A test puts back what it interrupted; a reveal goes to its replay
+        // A gap (a short drop) breaks the unbroken stretch the Kit list email waits for; it starts again when the phone is back
+        if (state.phase === 'live' && state.source === 'stream') {
+          if (gap) { if (!state.gapSince) state = { ...state, gapSince: new Date(sensed.gapSince).toISOString() }; }
+          else if (state.gapSince) state = { ...state, gapSince: null, segmentAt: new Date(sensed.connectedSince && sensed.connectedSince > Date.parse(state.gapSince) ? sensed.connectedSince : now).toISOString() };
+        }
+        // A reveal on air ends the switch: once it is over, a phone reconnecting is never taken for a test
+        if (['live', 'ending'].includes(state.phase) && !state.quiet && quiet.until) {
+          quiet = { ...quiet, until: null };
+          await writeQuiet(DB, quiet);
+        }
+      } else if (sensed.phone === 'off' && state.source === 'stream') {
+        if (state.phase === 'live') {
+          state = { ...tDisconnected(state), gapSince: null }; work.push('disconnected');
+          // Known from the input's status: the grace runs from the real stop, so the end isn't later for the wait
+          if (sensed.stoppedAt && sensed.stoppedAt >= Date.parse(state.segmentAt || state.liveAt || 0)) state = { ...state, disconnectedAt: new Date(sensed.stoppedAt).toISOString() };
+        } else if (state.phase === 'ending' && now - Date.parse(state.disconnectedAt || 0) >= ENDING_GRACE_MS) {
+          // A test puts back what it interrupted; a reveal goes to its replay (open REJOIN_MS to its phone coming back)
           if (state.quiet) { state = tEndQuiet(state); work.push('test-ended'); }
-          else { state = tEnd(state, config); work.push('ended'); }
+          else if (preShow(state)) { state = tPreShowOver(state); work.push('pre-show-ended'); }
+          else { state = tEnd(state, config, { rejoin: true }); work.push('ended'); }
         }
       }
+      // 'hold': Stream's API didn't answer while a broadcast is on air: nothing changes on a guess
     }
   }
 
@@ -1707,6 +2036,10 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   }
   if (state.phase === 'live' && state.source === 'stream' && state.liveAt && now - Date.parse(state.liveAt) > MAX_LIVE_HOURS * 3600e3) {
     state = state.quiet ? tEndQuiet(state) : tEnd(state, config); work.push('max-hours');
+  }
+  if (state.phase === 'replay' && state.rejoinUntil && now >= Date.parse(state.rejoinUntil)) {
+    // No phone came back: the reveal is over for good, and its final effects run (endedEffects, the replay's)
+    state = { ...state, rejoinUntil: null, closedAt: nowIso() }; work.push('closed');
   }
   if (state.phase === 'replay' && state.replayUntil && now >= Date.parse(state.replayUntil)) {
     state = tClear(state, 'replay-expired'); work.push('replay-expired');
@@ -1745,6 +2078,16 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
     // Test mode: Facebook and YouTube paused while it is on or a test streams, put back after
     // (at once when a test has just started, ended or become the reveal)
     async () => { quiet = await syncQuietOutputs(env, config, quiet, state, work, { force: !!read.quiet !== !!state.quiet }).catch((e) => { work.push(`test-outputs-error: ${e.message}`); return quiet; }); },
+    // A framing check's Facebook post is released before a go-live opens the reveal's own
+    async () => { state = await preShowEffects(env, config, state, work, health); },
+    // A Facebook post opened by a tick whose save didn't land (it lost the lease, or was cut off): read it back from
+    // its claim, so the site knows which post to close at the end
+    async () => {
+      if (live() && !state.quiet && config.facebook?.mode === 'api' && !state.fb?.liveVideoId && !state.fbReopen) {
+        const made = await freshResult(env.DB, state.broadcastId, 'fb-live-post', state.fbSessionAt);
+        if (made?.liveVideoId) { state = { ...state, fb: { ...(state.fb || {}), liveVideoId: made.liveVideoId, outputUid: made.outputUid || null } }; work.push('fb-read-back'); }
+      }
+    },
     async () => { state = await goLiveEffects(env, config, state, work, by); },
     async () => { state = await endedEffects(env, config, state, health, work, by); },
     async () => { if (live() && !state.quiet) state = await fbRefreshPermalink(env, state, work); },
@@ -1778,6 +2121,20 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   if (healthAfter !== JSON.stringify({ ...JSON.parse(healthBefore), lastTick: null }) || work.length) await writeHealth(DB, health);
 
   return { state: publicState(state, config), reason: work.length ? work.join(',') : source, work, changed: stateSig(state) !== stateSig(read) };
+}
+
+/**
+ * An admin moving on (clearing the replay, resetting, a new reveal scheduled, picking the replay by hand)
+ * from a reveal that could still pick up again: it is over now, and its final effects run first
+ * (Facebook's post closed, the "Ended" announcement), as they would have when the window closed.
+ */
+async function closeNow(env, config, state, by) {
+  if (!rejoinOpen(state)) return state;
+  const health = await readHealth(env.DB);
+  let s = await endedEffects(env, config, { ...state, rejoinUntil: null, closedAt: nowIso() }, health, [], by);
+  // Its replay goes out too, if the recording is ready (the kid's page, the replay email): the state may move on next
+  if (s.replayUid && s.replayOut === false) s = await replayOutward(env, config, s, health, []);
+  return s;
 }
 
 // ─── Admin commands ─────────────────────────────────────────────────
@@ -1840,6 +2197,7 @@ async function runAdminAction(env, action, body, userEmail) {
       const scheduledAt = isoOrNull(body.scheduledAt);
       if (!scheduledAt) return fail('scheduledAt is not a valid date');
       if (['live', 'ending'].includes(state.phase)) return fail('A broadcast is live right now; end it before scheduling another');
+      state = await closeNow(env, config, state, userEmail);
       const kid = await kidByName(DB, body.kidSlug);
       const image = sanitizeImage(body.image ?? kid?.image ?? null);
       if (image === undefined) return fail('image must be a Cloudflare image id or imagedelivery.net URL');
@@ -1914,6 +2272,8 @@ async function runAdminAction(env, action, body, userEmail) {
       if (!/^https:\/\//.test(url)) return fail('url must be https');
       const image = sanitizeImage(body.image); if (image === undefined) return fail('bad image');
       const kid = await kidByName(DB, body.kidSlug);
+      // A reveal that ended minutes ago is wrapped up first (Ended, its replay), as every other move-on does
+      state = await closeNow(env, config, state, userEmail);
       state = tStartLive(state, { source: 'manual', by: userEmail }, config);
       state.kidSlug = kid?.slug || state.kidSlug; state.kidName = kid?.name || state.kidName;
       if (body.message) state.message = String(body.message).slice(0, 200);
@@ -1965,6 +2325,7 @@ async function runAdminAction(env, action, body, userEmail) {
     }
     case 'clearReplay': {
       if (state.phase !== 'replay') return fail('No replay showing');
+      state = await closeNow(env, config, state, userEmail);
       state = tClear(state, 'replay-cleared', userEmail);
       await writeState(DB, state);
       break;
@@ -1980,6 +2341,7 @@ async function runAdminAction(env, action, body, userEmail) {
       const uid = String(body.uid || '').trim();
       if (!/^[a-f0-9]{32}$/i.test(uid)) return fail('uid must be a Stream video id');
       if (state.phase !== 'replay') return fail('Only while a replay is showing');
+      state = await closeNow(env, config, state, userEmail);
       // When that recording began, so the reveal stats line its moment up with the live minutes
       const picked = stream.streamConfigured(env) ? await Promise.race([stream.getVideo(env, uid).catch(() => null), new Promise((r) => setTimeout(() => r(null), 5000))]) : null;
       const began = Date.parse(picked?.result?.created || '');
@@ -2012,6 +2374,11 @@ async function runAdminAction(env, action, body, userEmail) {
       const work = [];
       if (on) {
         if (['live', 'ending'].includes(state.phase) && !state.quiet) return fail('A reveal is live right now. Test mode can wait until it ends.');
+        if (rejoinOpen(state)) {
+          // A reveal that just ended could still pick up again on the next phone: testing means it is over
+          state = { ...(await closeNow(env, config, state, userEmail)), updatedAt: nowIso() };
+          await writeState(DB, state);
+        }
         const at = plannedAt(state);
         const end = Math.min(Date.now() + QUIET_HOURS * 3600e3, at != null ? at - ARM_WINDOW_MS : Infinity);
         if (end - Date.now() < 5 * 60e3) return fail(`${state.kidName ? `${state.kidName}'s reveal` : 'The reveal'} is less than 35 minutes away, so a phone on the main feed now is the reveal. Test on the rehearsal feed instead.`);
@@ -2032,9 +2399,11 @@ async function runAdminAction(env, action, body, userEmail) {
         q = await syncQuietOutputs(env, config, q, state, work, { force: true });
       }
       await logAudit(DB, { userEmail, action: 'updated', entityType: 'live-status', entitySlug: 'test-mode', entityName: on ? `Test mode on until ${notify.formatWhen(q.until, config.timezone)}` : 'Test mode off', gitStatus: 'ok' });
-      break;
+      // The switch changes no broadcast: nothing is saved over the state (a tick may have moved it while Stream answered)
+      return { success: true, state: publicState(state, config, { includeTest: true }), legacy: legacyState(state, config, { includeTest: true }), quiet: quietStatus(q, state) };
     }
     case 'reset': {
+      state = await closeNow(env, config, state, userEmail);
       // A reset mid-reveal still ends that reveal's row (cancelled if it never went live)
       if (state.broadcastId) await closeBroadcastRow(DB, state, state.liveAt ? 'ended' : 'cancelled');
       state = tClear(state, 'reset', userEmail);

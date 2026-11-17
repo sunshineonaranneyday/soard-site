@@ -43,8 +43,10 @@ let env, b;
 const liveKitPosts = () => kitPosts.filter(p => p.send_at && !/reveal sign-ups · /.test(p.description || ''));
 const signupPosts = () => kitPosts.filter(p => p.send_at && /reveal sign-ups · /.test(p.description || ''));
 
+// Each time the phone connects Stream starts a new recording (the site never restarts on one that ended)
+let recordings = 0;
 async function goLive() {
-  sim.live = true; sim.videoUID = 'vid1';
+  sim.live = true; sim.videoUID = `vid${++recordings}`;
   return b.runTick(env, { source: 'test', force: true });
 }
 const tick = () => b.runTick(env, { source: 'test', force: true });

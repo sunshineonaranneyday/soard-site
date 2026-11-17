@@ -124,11 +124,15 @@ export function confirmedReveals(jobs, kids, now = Date.now(), projects = []) {
   return out.sort((a, b) => a.startsAt.localeCompare(b.startsAt));
 }
 
-/** The replay's own work (saving the recording, the Instagram Reel) is finished */
+/**
+ * The replay's own work is finished: the reveal is over for good (no phone can still pick it up again),
+ * the replay has gone out (kid's page, replay email: replayOut, where the state has it) and the Reel is done
+ */
 function replayDone(state, now) {
   if (state.source !== 'stream') return true;
+  if (state.rejoinUntil && now < Date.parse(state.rejoinUntil)) return false;
   if (state.endedAt && now - Date.parse(state.endedAt) > REPLAY_WORK_MAX_MS) return true;
-  if (!state.replayUid) return false;
+  if (!state.replayUid || state.replayOut === false) return false;
   return !state.reel || REEL_FINISHED.has(state.reel.stage);
 }
 
