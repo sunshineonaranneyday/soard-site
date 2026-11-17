@@ -111,6 +111,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
   let gen = 0; // the latest pick (an earlier one still drawing is dropped)
   let kept = true; // whether this device could keep the photo (IndexedDB)
   let saving = 0; // a picked photo being kept on this device right now
+  let refused = 0; // picks turned down so far (a Continue waiting on one sees it was)
 
   /** The status line (a live region: heard as it changes) */
   function say(words, { warn = false } = {}) {
@@ -181,6 +182,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     pickedNow();
     const hadOne = !!held;
     const wont = (words) => {
+      refused++;
       setBusy(null); // (an earlier pick still being got ready is dropped with this one: never left spinning)
       if (hadOne) say(`${words} Your earlier headshot is still here.`, { warn: true });
       else { say(''); problem(words); announce(words); } // (the note under it isn't a live region: heard here)
@@ -210,16 +212,16 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     const seq = nextSeq(held?.seq || 0);
     setHeld({ file: drawn.file, width: drawn.width, height: drawn.height, sourceWidth: real.width, sourceHeight: real.height, pickedAt, seq });
     // Added at once; kept on the device meanwhile (a slow IndexedDB never holds the note up). While it's being kept,
-    // another tab's word never puts the photo it's replacing back (load waits)
+    // another tab's word never puts the photo it's replacing back (load waits), and nothing says it's saved
     kept = true;
-    unproblem();
-    say(addedNote());
-    announce(''); // (an earlier refusal said there isn't left for a screen reader: this note says it's added)
-    paint();
-    onChange({});
-    reveal();
     saving++;
     try {
+      unproblem();
+      say(addedNote());
+      announce(''); // (an earlier refusal said there isn't left for a screen reader: this note says it's added)
+      paint();
+      onChange({});
+      reveal();
       kept = !!(await photoStore.put(id, { blob: drawn.file, name: drawn.file.name, width: drawn.width, height: drawn.height, sourceWidth: real.width, sourceHeight: real.height, at: pickedAt, seq }));
     } finally { saving--; }
     if (my !== gen) return;
@@ -315,8 +317,10 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     get isLoaded() { return loadedYet; },
     /** A picked photo being got ready right now (not what this device kept, being looked for) */
     get preparing() { return !!busy; },
-    /** A picked photo being kept on this device right now (whether it can be isn't known yet) */
-    get keeping() { return saving > 0; },
+    /** A picked photo being got ready or kept on this device right now: not saved yet (whether it can be isn't known) */
+    get keeping() { return saving > 0 || !!busy; },
+    /** Picks turned down so far */
+    get refused() { return refused; },
     /** The status line's words off (the form's own note now says what's needed) */
     quiet() { if (!busy) say(''); },
     /** Leaving the step: a warning about a photo turned down there goes (an added photo's note stays) */

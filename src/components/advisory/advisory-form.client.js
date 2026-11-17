@@ -410,6 +410,7 @@ export function initAdvisoryForm() {
   function focusField(id) {
     const el = fieldEl(id);
     if (!el) return;
+    moved(); // (to an answer, by a summary's link or a press: a Continue still waiting on a photo gives way)
     if (packs[step] && el.closest('[data-off]')) {
       screenNo = screenOf(step, id);
       paintScreen();
@@ -466,7 +467,11 @@ export function initAdvisoryForm() {
     if (kept) { paint(); return; } // (the photo kept on this device: only what says so changes)
     if (!silent) typedHere = true;
     if (problem) { if (step >= 0 && step < total && pages[step]?.contains(fieldEl(id))) paintSummary(stillWrong(), { always: true }); }
-    else recheck(id);
+    else {
+      recheck(id);
+      // (the photo takes its own note off as it goes in, so the step's summary, if it's up, is told: "A headshot" goes)
+      if (step >= 0 && step < total && !pages[step]?.querySelector('[data-summary]')?.hidden) paintSummary(stillWrong(), { always: true });
+    }
     paint();
     if (step === REVIEW) buildReview();
     if (!silent) save();
@@ -535,8 +540,8 @@ export function initAdvisoryForm() {
     const on = was ? new Date(was.at).toLocaleDateString('en-US', { month: 'long', day: 'numeric' }) : '';
     // (a photo this browser couldn't keep: the answers are saved, the photo isn't, so it isn't said to be)
     const photoUnkept = Object.values(photos).some((ph) => ph.file && !ph.kept);
-    // (one still being kept: not said to be saved until it is; the heading then says what's so, and it's heard)
-    const photoKeeping = Object.values(photos).some((ph) => ph.file && ph.keeping);
+    // (one still being got ready or kept: not said to be saved until it is; the heading then says what's so, and it's heard)
+    const photoKeeping = Object.values(photos).some((ph) => ph.keeping);
     const wasTitle = ui.hubTitle.textContent;
     ui.hubTitle.textContent = was ? 'We received your application' : started ? (canKeep && photoKeeping ? 'Saving your application on this device' : canKeep && !photoUnkept ? 'Your application is saved on this device' : canKeep ? 'Your answers are saved on this device; keep this page open until you send it, since this browser can’t keep your photo' : 'Keep this page open until you send it') : 'Six steps, about 20 minutes';
     if (wasTitle === 'Saving your application on this device' && ui.hubTitle.textContent !== wasTitle && ui.hubLive) {
@@ -767,7 +772,7 @@ export function initAdvisoryForm() {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || !focused || step < 0 || document.querySelector('dialog[open]')) return;
     const t = e.target;
-    if (t?.matches?.('input:not([type=radio]):not([type=checkbox]), textarea, select')) return; // a box being typed in keeps its Escape
+    if (t?.matches?.('input:not([type=radio]):not([type=checkbox]):not([type=file]), textarea, select')) return; // a box being typed in keeps its Escape
     if (back()) e.preventDefault();
   }, { signal: keys.signal });
   /** A screen back; false at the very start */
@@ -837,7 +842,9 @@ export function initAdvisoryForm() {
     // A photo this device kept, still being looked for after a reload: said as that, never "Added" before it's found,
     // nor "Needs an answer" for that moment (a browser whose IndexedDB hangs takes seconds to say it isn't there)
     const looking = new Set(Object.entries(photos).filter(([pid, ph]) => !ph.isLoaded && !a[pid]).map(([pid]) => pid));
-    for (const pid of looking) a[pid] = 'added';
+    // (and one picked being got ready, with none before it: said as that, never "Please add a headshot" meanwhile)
+    const readying = new Set(Object.entries(photos).filter(([pid, ph]) => ph.preparing && !a[pid]).map(([pid]) => pid));
+    for (const pid of [...looking, ...readying]) a[pid] = 'added';
     const all = checkAnswers(a).problems;
     const secs = ADVISORY_STEPS.map((s, i) => {
       const sec = document.createElement('section');
@@ -845,16 +852,17 @@ export function initAdvisoryForm() {
       sec.dataset.step = String(i);
       const missing = s.fields.some((f) => all[f.id]);
       if (missing) sec.dataset.missing = '1';
-      const checking = !missing && s.fields.some((f) => looking.has(f.id));
+      const getting = !missing && s.fields.some((f) => readying.has(f.id));
+      const checking = !missing && (getting || s.fields.some((f) => looking.has(f.id)));
       if (checking) sec.dataset.checking = '1';
       sec.innerHTML = `<div class="adv-review-head"><h3 class="adv-review-h"><button type="button" class="adv-review-toggle" aria-controls="adv-rv-${s.id}"><span class="adv-mark" aria-hidden="true">${missing ? '!' : checking ? '…' : CHECK}</span><span class="adv-review-name"><span class="adv-review-title"></span><span class="adv-review-sum"></span></span>${CHEV}</button></h3><button type="button" class="adv-linkbtn adv-review-edit" data-edit="${i}">Edit</button></div><div class="adv-review-body" id="adv-rv-${s.id}"><dl></dl></div>`;
       sec.querySelector('.adv-review-title').textContent = s.title;
-      sec.querySelector('.adv-review-sum').textContent = missing ? 'Needs an answer' : checking ? 'Checking this device for your photo' : summaryOf(i, a);
+      sec.querySelector('.adv-review-sum').textContent = missing ? 'Needs an answer' : getting ? 'Getting your photo ready' : checking ? 'Checking this device for your photo' : summaryOf(i, a);
       sec.querySelector('.adv-review-edit').setAttribute('aria-label', `Edit ${s.title}`);
       const dl = sec.querySelector('dl');
       for (const f of s.fields) {
         if (!isShown(f, a)) continue;
-        const v = f.type === 'check' ? (a[f.id] ? 'Yes, I’ve read it' : '') : f.type === 'photo' ? (looking.has(f.id) ? 'Checking this device for it' : a[f.id] ? 'Added' : '') : String(a[f.id] || '').trim();
+        const v = f.type === 'check' ? (a[f.id] ? 'Yes, I’ve read it' : '') : f.type === 'photo' ? (readying.has(f.id) ? 'Getting it ready' : looking.has(f.id) ? 'Checking this device for it' : a[f.id] ? 'Added' : '') : String(a[f.id] || '').trim();
         if (!v && !all[f.id]) continue;
         const row = document.createElement('div');
         row.className = `adv-review-item${all[f.id] ? ' is-missing' : ''}`;
@@ -1322,6 +1330,9 @@ export function initAdvisoryForm() {
   // moved to is free, never dimmed or deaf until the photo is ready)
   let navWaiters = [];
   function moved() { navSeq++; for (const r of navWaiters.splice(0)) r(); }
+  // (an answer typed or changed while Continue waits on a photo: they're still working on this screen, so it gives way,
+  // never moving them on mid-word once the photo's ready; a photo picked is waited for instead)
+  form.addEventListener('input', (e) => { if (photoWait && e.target?.type !== 'file') moved(); });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (sending || moving || photoWait || performance.now() < calmUntil) return;
@@ -1341,6 +1352,7 @@ export function initAdvisoryForm() {
       const at = navSeq;
       // (said as what it is: a photo picked being got ready, or this device being looked through for one it kept)
       const picked = reads.some((id) => photos[id].preparing);
+      const refusedWere = reads.map((id) => photos[id].refused);
       const slowPhoto = setTimeout(() => { if (at !== navSeq) return; ui.next.setAttribute('aria-busy', 'true'); announce(picked ? 'Getting your photo ready. One moment.' : 'Checking this device for your photo. One moment.'); }, 150);
       let wake;
       const movedOn = new Promise((resolve) => { wake = resolve; navWaiters.push(resolve); });
@@ -1349,6 +1361,8 @@ export function initAdvisoryForm() {
         clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false;
       }
       if (at !== navSeq || !focused) return; // (Back or Save and exit pressed meanwhile: that stands)
+      // (a photo picked meanwhile and turned down: Continue stops there, its words in sight, never on with the earlier one)
+      if (reads.some((id, k) => photos[id].refused !== refusedWere[k])) return;
     }
     ui.sendError.hidden = true;
     if (step === REVIEW) { await send(); return; }
@@ -1684,7 +1698,13 @@ export function initAdvisoryForm() {
   if (restored && session.get() && entry && entry.step <= furthest) { step = entry.step; resumeAt = { step, screen: Math.max(0, Number(entry.screen) || 0), field: typeof entry.field === 'string' ? entry.field : null }; if (entry.fromReview && step < total) fromReview = entry.fromReview; }
   let fresh = false;
   try { fresh = sessionStorage.getItem(AGAIN) === '1'; sessionStorage.removeItem(AGAIN); } catch { /* storage off */ }
-  if (restored && session.get()) begin(step);
+  if (restored && session.get()) {
+    // (straight back into the review: what this device kept looked for first, a moment at most, so the review comes up
+    // saying what's so, never "checking" for a photo found an instant later)
+    const looking = step >= REVIEW && Object.values(photos).some((ph) => !ph.isLoaded);
+    if (!looking) begin(step);
+    else Promise.race([Promise.all(Object.values(photos).map((ph) => ph.known)), new Promise((r) => { setTimeout(r, 300); })]).then(() => { if (!focused) begin(step); });
+  }
   // In the application with only a photo picked so far (no answer typed yet), then a reload: back in it, as with any answer
   else if (session.get()) {
     Promise.all(Object.values(photos).map((ph) => ph.loaded)).then(() => {

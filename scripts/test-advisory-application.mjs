@@ -591,10 +591,13 @@ await phone.close();
   await pq.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
   await clickText(pq, '.ava-drawer button', /^Add to Advisory Board$/);
   await pq.waitForSelector('.ava-dialog', { timeout: 4000 });
-  const box = { title: await text(pq, '.ava-dialog h2'), buttons: await pq.$$eval('.ava-dialog .kd-dialog__foot button', (bs) => bs.map((b) => b.textContent.trim())), words: await text(pq, '.ava-dialog') };
-  ok(box.title === 'Is Q. Ames one of these people?' && box.buttons.includes('It’s Quinn Ames') && box.buttons.includes('It’s Quincy Ames') && box.buttons.includes('A different person')
-    && /It’s Quincy Ames links this application to Quincy Ames/.test(box.words), `two members the name could be: both named, each with its own button and words (${JSON.stringify(box.buttons)})`);
-  await clickText(pq, '.ava-dialog .kd-dialog__foot button', /^It’s Quincy Ames$/);
+  const box = await pq.evaluate(() => ({ title: document.querySelector('.ava-dialog h2')?.textContent.trim(),
+    picks: [...document.querySelectorAll('.ava-dialog .ava-picks li')].map((li) => ({ button: li.querySelector('button').textContent.trim(), does: li.querySelector('p').textContent.trim(), described: li.querySelector('button').getAttribute('aria-describedby') === li.querySelector('p').id })),
+    foot: [...document.querySelectorAll('.ava-dialog .kd-dialog__foot button')].map((b) => b.textContent.trim()) }));
+  const quincy = box.picks.find((x) => x.button === 'It’s Quincy Ames');
+  ok(box.title === 'Is Q. Ames one of these people?' && box.picks.some((x) => x.button === 'It’s Quinn Ames') && quincy && /^Links this application to Quincy Ames/.test(quincy.does) && box.picks.some((x) => x.button === 'A different person')
+    && box.picks.every((x) => x.described) && box.foot.join('|') === 'Cancel', `two members the name could be: each choice in the box, with what it does under it (and read with it), Cancel below (${JSON.stringify(box)})`);
+  await clickText(pq, '.ava-dialog .ava-picks button', /^It’s Quincy Ames$/);
   await pq.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).catch(() => null);
   ok((await getAdvisoryApplication(DB, qa.id)).personSlug === 'quincy-ames', 'and the one pressed is the one linked');
   // Moving it off Joined: their email on file signs in as staff, so it never says "their sign-in"
@@ -632,6 +635,12 @@ await phone.close();
   await pd.waitForFunction(() => document.querySelector('.ava-drawer h2')?.textContent.trim() === 'Application not found', { timeout: 6000 }).catch(() => null);
   const after = { dialog: !!(await pd.$('.ava-dialog')), head: await text(pd, '.ava-drawer h2'), callout: await text(pd, '.ava-drawer .ava-callout'), add: !!(await pd.$$eval('.ava-drawer button', (bs) => bs.some((b) => /^Add to Advisory Board$/.test(b.textContent.trim())))) };
   ok(!after.dialog && after.head === 'Application not found' && /deleted, maybe in another tab/.test(after.callout) && !after.add, `deleted elsewhere, then Add pressed: the panel says it's gone, with no Add left (${JSON.stringify(after)})`);
+  // Closed: its row is off the list, and the count with it
+  const allNow = Number((await text(pd, '.ava-strip button.is-all b')) || NaN);
+  await pd.keyboard.press('Escape');
+  await pd.waitForFunction(() => !document.querySelector('.ava-drawer'), { timeout: 4000 }).catch(() => null);
+  const list = { row: await pd.$(`.ava-row[data-id="${del.id}"]`).then((r) => !!r), all: Number((await text(pd, '.ava-strip button.is-all b')) || NaN), rows: (await DB.prepare('SELECT COUNT(*) AS n FROM advisory_applications').first()).n };
+  ok(!list.row && list.all === allNow && list.all === list.rows, `and once the panel closes, its row is off the list and the count says so (${JSON.stringify(list)})`);
   await pd.close();
 }
 {
@@ -649,23 +658,79 @@ await phone.close();
     await pu.waitForSelector('.ava-dialog', { timeout: 4000 });
     await sleep(500);
     const box = await pu.evaluate(() => {
-      const foot = [...document.querySelectorAll('.ava-dialog .kd-dialog__foot button')];
-      return { buttons: foot.map((b) => b.textContent.trim()), lines: [...document.querySelectorAll('.ava-dialog li strong')].map((s) => s.textContent.trim()),
-        inside: foot.every((b) => { const r = b.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 0.5; }), wide: document.documentElement.scrollWidth > innerWidth + 1,
+      const picks = [...document.querySelectorAll('.ava-dialog .ava-picks button')];
+      return { buttons: picks.map((b) => b.textContent.trim()),
+        inside: picks.every((b) => { const r = b.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 0.5; }), wide: document.documentElement.scrollWidth > innerWidth + 1,
         // (each label on one line: never a name broken a word to a line)
-        tallest: Math.max(...foot.map((b) => Math.round(b.getBoundingClientRect().height))) };
+        tallest: Math.max(...picks.map((b) => Math.round(b.getBoundingClientRect().height))) };
     });
     const its = box.buttons.filter((b) => b.startsWith('It’s'));
-    ok(its.length === 2 && new Set(its).size === 2 && its.includes('It’s Uma Same (Acme)') && its.includes('It’s Uma Same (Beta)') && box.lines.includes('It’s Uma Same (Beta)') && box.inside && !box.wide && box.tallest <= 52,
+    ok(its.length === 2 && new Set(its).size === 2 && its.includes('It’s Uma Same (Acme)') && its.includes('It’s Uma Same (Beta)') && box.inside && !box.wide && box.tallest <= 52,
       `${width}px, two members named Uma Same: each button says which, and they fit (${JSON.stringify(box)})`);
     if (width === 390) await pu.screenshot({ path: join(OUT, 'admin-two-same-name-390.png') });
     if (width === 1280) {
-      await clickText(pu, '.ava-dialog .kd-dialog__foot button', /^It’s Uma Same \(Beta\)$/);
+      await clickText(pu, '.ava-dialog .ava-picks button', /^It’s Uma Same \(Beta\)$/);
       await pu.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).catch(() => null);
       ok((await getAdvisoryApplication(DB, um.id)).personSlug === 'uma-same-2', 'and the one pressed (Beta, the former member) is the one linked');
     }
     await pu.close();
   }
+}
+{
+  // Four members with one name and long organizations, on a small phone (320 × 568): every choice can be reached, the
+  // box scrolling to it, none cut off below the screen
+  const orgs = ['Atlanta Community Foundation for Children and Families', 'Georgia Pediatric Healthcare Partners International', 'North Fulton Construction and Restoration Services', 'Southeast Regional Philanthropy Collaborative'];
+  for (const [k, org] of orgs.entries()) await onPeople(`tia-twin${k ? `-${k + 1}` : ''}`, { name: 'Tia Twin', group: 'advisory', organization: org, publishStatus: 'published' });
+  const tt = (await submitApplication(env, { ...base, fullName: 'Tia Twin', email: 'tia.new@example.org', signature: 'Tia Twin' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pt = await open(320, `/admin/__advisory.html#advisory-applications/${tt.id}`, 568);
+  await pt.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pt, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pt.waitForSelector('.ava-dialog .ava-picks', { timeout: 4000 });
+  await sleep(600);
+  const reach = [];
+  for (const label of await pt.$$eval('.ava-dialog .ava-picks button', (bs) => bs.map((b) => b.textContent.trim()))) {
+    reach.push(await pt.evaluate((l) => {
+      const b = [...document.querySelectorAll('.ava-dialog .ava-picks button')].find((x) => x.textContent.trim() === l);
+      b.scrollIntoView({ block: 'nearest' });
+      const r = b.getBoundingClientRect();
+      const body = document.querySelector('.ava-dialog .kd-dialog__body').getBoundingClientRect();
+      const foot = document.querySelector('.ava-dialog .kd-dialog__foot').getBoundingClientRect();
+      return { l: l.slice(0, 24), seen: r.top >= body.top - 0.5 && r.bottom <= Math.min(body.bottom, foot.top, innerHeight) + 0.5 && r.right <= innerWidth + 0.5 };
+    }, label));
+  }
+  const room = await pt.evaluate(() => Math.round(document.querySelector('.ava-dialog .kd-dialog__body').getBoundingClientRect().height));
+  await pt.screenshot({ path: join(OUT, 'admin-four-same-name-320.png') });
+  ok(reach.length === 5 && reach.every((x) => x.seen) && room >= 200, `320 × 568, four members named Tia Twin with long organizations: every choice can be reached in the box, none cut off (${JSON.stringify({ room, reach })})`);
+  await pt.close();
+}
+{
+  // Being deleted in another tab: the box says that, never that someone is adding them, and shows the box once it isn't
+  const dd = (await submitApplication(env, { ...base, fullName: 'Dot Deleting', email: 'dot.deleting@example.org', signature: 'Dot Deleting' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  await DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind(`del:${dd.id}`, Date.now(), `app:${dd.id}`, Date.now()).run();
+  const pd = await open(1280, `/admin/__advisory.html#advisory-applications/${dd.id}`, 900);
+  await pd.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pd, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pd.waitForSelector('.ava-dialog', { timeout: 4000 });
+  const said = await text(pd, '.ava-dialog');
+  ok(/^This application is being deleted/.test(said) && /being deleted in another tab, or by someone else/.test(said) && !/Someone is adding/.test(said), `being deleted elsewhere: the box says so, never that someone is adding them (${said})`);
+  await DB.prepare('DELETE FROM advisory_add_holds').run(); // (the delete didn't go through)
+  const back = await pd.waitForFunction(() => /Add Dot Deleting to the Advisory Board/.test(document.querySelector('.ava-dialog')?.textContent || ''), { timeout: 6000 }).then(() => true).catch(() => false);
+  ok(back, `and when it isn't deleted after all, the box shows what Add does (${await text(pd, '.ava-dialog h2')})`);
+  await clickText(pd, '.ava-dialog button', /^Cancel$/);
+  await pd.close();
+}
+{
+  // Written last name first: the box says the name they're added as, first name first
+  const lf = (await submitApplication(env, { ...base, fullName: 'Lastfirst, Lena', email: 'lena.lf@example.org', signature: 'Lastfirst, Lena' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pl = await open(1280, `/admin/__advisory.html#advisory-applications/${lf.id}`, 900);
+  await pl.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pl, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pl.waitForSelector('.ava-dialog', { timeout: 4000 });
+  const said = await text(pl, '.ava-dialog');
+  ok(/adds them to People → Advisory as Lena Lastfirst/.test(said), `written last name first: the box says they're added as Lena Lastfirst (${said.slice(0, 160)})`);
+  await clickText(pl, '.ava-dialog button', /^Cancel$/);
+  await pl.close();
 }
 {
   // A press from another application adding someone on People this applicant could be: the box names them and waits
@@ -1112,6 +1177,62 @@ if (DIST) {
     await r.close();
   }
   {
+    // A reload straight back into the review, a photo kept on this device (a browser that answers): the review comes up
+    // saying it's there, never "checking" for an instant
+    const r = await browser.newPage();
+    await r.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await r.setRequestInterception(true);
+    r.on('request', async (req) => { try { if (await answer(req, '198.51.100.73') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    // (watched from the document's first moment: the page's script builds the review before DOMContentLoaded)
+    await r.evaluateOnNewDocument(() => { window.__rv = []; new MutationObserver(() => { const rv = document.getElementById('adv-review'); if (rv) window.__rv.push(rv.textContent); }).observe(document, { childList: true, subtree: true, characterData: true }); });
+    await r.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await r.evaluate(async (answers, b64) => {
+      localStorage.clear();
+      await new Promise((res) => { const d = indexedDB.deleteDatabase('soard-advisory'); d.onsuccess = d.onerror = d.onblocked = () => res(); });
+      localStorage.setItem('soard-advisory-application', JSON.stringify({ answers, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      await new Promise((res) => { const o = indexedDB.open('soard-advisory', 1); o.onupgradeneeded = () => o.result.createObjectStore('photos'); o.onsuccess = () => { const tx = o.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new File([bytes], 'h.jpg', { type: 'image/jpeg' }), name: 'h.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { o.result.close(); res(); }; }; });
+      localStorage.setItem('soard-advisory-photo-seq', '1');
+    }, { ...base, fullName: 'Rae Load', email: 'rae.load@example.org', signature: 'Rae Load' }, readFileSync(GOOD_JPG).toString('base64'));
+    await r.reload({ waitUntil: 'networkidle0' }); await sleep(500);
+    await r.click('#adv-go');
+    await r.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 5000 }).catch(() => null);
+    const flashes = [];
+    for (let k = 0; k < 3; k++) {
+      await r.reload({ waitUntil: 'networkidle0' }); await sleep(800);
+      const at = await r.evaluate(() => ({ title: document.getElementById('adv-title')?.textContent.trim(), checking: window.__rv.some((t) => /Checking this device/.test(t)), done: !document.querySelector('.adv-review-section[data-step="0"]')?.dataset.missing }));
+      flashes.push(at);
+    }
+    ok(flashes.every((x) => x.title === 'Review and send' && !x.checking && x.done), `a reload straight back into the review, a photo kept: never "checking" for an instant (${JSON.stringify(flashes)})`);
+    await r.close();
+  }
+  {
+    // IndexedDB that never answers: Save and exit while the photo just picked is still being got ready (an iPhone photo
+    // on a slow connection): never "saved", and what it says once this browser gives up is heard
+    const x = await browser.newPage();
+    await x.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await x.setCacheEnabled(false);
+    await x.setRequestInterception(true);
+    x.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) await sleep(3000); if (await answer(req, '198.51.100.74') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    await x.evaluateOnNewDocument(() => { indexedDB.open = () => ({}); localStorage.clear(); localStorage.setItem('soard-advisory-application', JSON.stringify({ answers: { fullName: 'Exit Early', email: 'exit.early@example.org', phone: '404 555 0174' }, step: 0, screen: 0, field: null, furthest: 0, startedAt: Date.now() - 60000, session: crypto.randomUUID(), savedAt: Date.now() })); });
+    await x.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await x.click('#adv-go'); await sleep(700);
+    for (let i = 0; i < 6 && await x.evaluate(() => !!document.querySelector('[data-field="headshot"]').closest('[data-off]')); i++) { await x.click('#adv-next'); await sleep(700); }
+    await x.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
+    await sleep(400);
+    await x.evaluate(() => { const t = document.getElementById('adv-hub-title'); window.__titles = []; new MutationObserver(() => window.__titles.push(t.textContent)).observe(t, { childList: true, characterData: true, subtree: true }); });
+    await (await x.$('#adv-headshot')).uploadFile(heicMade ? HEIC : GOOD_JPG);
+    await sleep(150);
+    await x.click('#adv-exit');
+    await x.waitForFunction(() => /can’t keep your photo/.test(document.getElementById('adv-hub-title').textContent), { timeout: 20000 }).catch(() => null);
+    await sleep(300);
+    const titles = [...new Set(await x.evaluate(() => window.__titles))];
+    const heard = await text(x, '#adv-hub-live');
+    ok(!titles.includes('Your application is saved on this device') && titles.includes('Saving your application on this device') && /can’t keep your photo/.test(heard),
+      `Save and exit the moment a photo is picked, IndexedDB never answering: never "saved", and what it says then is heard (${JSON.stringify({ titles, heard })})`);
+    await x.close();
+  }
+  {
     // IndexedDB that never answers, a photo picked here before: a photo picked right after the page opens is what
     // Continue goes by, never a wait of seconds for the one this device can't say it kept
     const q = await browser.newPage();
@@ -1262,6 +1383,92 @@ if (DIST) {
       await sleep(500);
       const pleaseAdd = await sp.evaluate(() => window.__pleaseAdd);
       ok(on && !pleaseAdd, `the same iPhone photo picked again while Continue waits: it waits for that one and moves on, never "Please add a headshot." meanwhile (${JSON.stringify({ on, pleaseAdd, title: await text(sp, '#adv-title') })})`);
+      await sp.close();
+    }
+    // Answers put in as the page keeps them, every step reached, then into the application (on a slow connection)
+    const slowSeeded = async (ip, answers) => {
+      const sp = await browser.newPage();
+      await sp.setViewport({ width: 1280, height: 800 });
+      await sp.setCacheEnabled(false);
+      await sp.setRequestInterception(true);
+      sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) await sleep(SLOW_MS); if (await answer(req, ip) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await sp.evaluateOnNewDocument((a) => {
+        if (sessionStorage.getItem('seeded')) return;
+        sessionStorage.setItem('seeded', '1');
+        localStorage.clear(); indexedDB.deleteDatabase('soard-advisory');
+        localStorage.setItem('soard-advisory-application', JSON.stringify({ answers: a, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+      }, answers);
+      await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      await sp.click('#adv-go'); await sleep(1000);
+      for (let i = 0; i < 6 && (await text(sp, '#adv-title')) !== 'Review and send'; i++) { await sp.evaluate(() => document.querySelector('.adv-hub-row[data-goto="5"]')?.click()); await sleep(700); }
+      return sp;
+    };
+    const summaryLink = (sp, re) => sp.evaluate((src) => { const a = [...document.querySelectorAll('.adv-page:not([hidden]) [data-summary] a')].find((x) => new RegExp(src, 'i').test(x.textContent)); a?.click(); return !!a; }, re.source);
+    {
+      // Sent back with two answers to look at: the summary's link to one while Continue waits on a photo is a move, so
+      // Continue there is free, and nothing moves them on (or judges a half-typed answer) once the photo is ready
+      const sp = await slowSeeded('198.51.100.95', { ...base, fullName: 'Sum Mary', email: '', signature: 'Sum Mary' });
+      await sp.click('#adv-next'); await sleep(1500);
+      const toPhoto = await summaryLink(sp, /headshot/); await sleep(900);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-next'); await sleep(700);
+      const toEmail = await summaryLink(sp, /email/); await sleep(800);
+      const busyThen = await sp.$eval('#adv-next', (b) => b.getAttribute('aria-busy'));
+      await sp.keyboard.type('sum.mary@exam', { delay: 60 });
+      await sleep(SLOW_MS + 2500);
+      const after = await sp.evaluate(() => ({ title: document.getElementById('adv-title').textContent.trim(), email: document.querySelector('[name="email"]').value, err: (() => { const e = document.querySelector('[data-field="email"] .adv-error'); return e && !e.hidden ? e.textContent : ''; })(), busy: document.getElementById('adv-next').getAttribute('aria-busy'),
+        summary: (() => { const x = document.querySelector('.adv-page:not([hidden]) [data-summary]'); return x && !x.hidden ? x.textContent.replace(/\s+/g, ' ').trim() : ''; })() }));
+      // (the note Send left under the empty email stays until it's fixed, as every answer's does: what never comes is a
+      // verdict on the half-typed one, which a Continue going ahead would give)
+      ok(toPhoto && toEmail && busyThen === null && after.title === 'About you' && after.email === 'sum.mary@exam' && !/look like an email/.test(after.err) && after.busy === null && !/headshot/i.test(after.summary),
+        `the summary’s link while Continue waits on a photo: Continue there is free, and once the photo is ready nothing moves them on or judges what they’re typing (${JSON.stringify({ toPhoto, toEmail, busyThen, ...after })})`);
+      await sp.close();
+    }
+    {
+      // A photo being got ready, with none before it: the overview never says it's saved, and the review never says
+      // "Please add a headshot" meanwhile; once it's ready and kept, both say so (the overview's words heard)
+      const sp = await slowSeeded('198.51.100.94', { ...base, fullName: 'Rev Ready', email: 'rev.ready@example.org', signature: 'Rev Ready' });
+      const all = await sp.$('#adv-review-all'); if (all) { await all.click(); await sleep(300); }
+      await sp.evaluate(() => document.querySelector('#adv-review [data-answer="headshot"]')?.click()); await sleep(900);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-exit'); await sleep(600);
+      const hub1 = await text(sp, '#adv-hub-title');
+      await sp.evaluate(() => document.querySelector('.adv-hub-row[data-goto="5"]')?.click());
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 4000 }).catch(() => null);
+      await sleep(300);
+      const sec = () => sp.evaluate(() => { const x = document.querySelector('.adv-review-section[data-step="0"]'); return { missing: x?.dataset.missing || null, sum: x?.querySelector('.adv-review-sum')?.textContent, row: (() => { const it = [...(x?.querySelectorAll('.adv-review-item') || [])].find((i) => /headshot/i.test(i.querySelector('dt')?.textContent || '')); return !it ? '' : it.querySelector('dd img') ? 'photo' : it.querySelector('dd')?.textContent || ''; })() }; });
+      const during = await sec();
+      await sp.waitForFunction(() => document.querySelector('[data-photo="headshot"]')?.dataset.state === 'done', { timeout: SLOW_MS + 20000 }).catch(() => null);
+      await sleep(1200);
+      const later = await sec();
+      await sp.click('#adv-exit'); await sleep(800);
+      const hub2 = { title: await text(sp, '#adv-hub-title'), heard: await text(sp, '#adv-hub-live') };
+      ok(hub1 === 'Saving your application on this device' && during.missing === null && during.sum === 'Getting your photo ready' && during.row === 'Getting it ready' && later.missing === null && later.row === 'photo' && hub2.title === 'Your application is saved on this device',
+        `a photo being got ready: the overview says it’s saving, the review that it’s being got ready (never "Please add a headshot"), then both say what’s so (${JSON.stringify({ hub1, during, later, hub2 })})`);
+      await sp.close();
+    }
+    {
+      // A photo in, then a slow iPhone photo, Continue (waiting), then a file that isn't a photo: Continue stops, with
+      // the words about that file in sight, never on with the earlier photo as if nothing was said
+      const sp = await slowPage('198.51.100.93');
+      const input = await sp.$('#adv-headshot');
+      await input.uploadFile(GOOD_JPG);
+      await sp.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 15000 }).catch(() => null);
+      await input.uploadFile(HEIC); await sleep(200);
+      await sp.click('#adv-next'); await sleep(500);
+      await input.uploadFile(FAKE_JPG);
+      await sleep(1500);
+      const now = { title: await text(sp, '#adv-title'), status: await text(sp, '#adv-headshot-status'), busy: await sp.$eval('#adv-next', (b) => b.getAttribute('aria-busy')) };
+      await sleep(SLOW_MS);
+      const later = await text(sp, '#adv-title');
+      ok(now.title === 'About you' && /Your earlier headshot is still here/.test(now.status) && now.busy === null && later === 'About you',
+        `a file that isn’t a photo picked while Continue waits: Continue stops there, the words about it in sight (${JSON.stringify({ ...now, later })})`);
+      // Escape on the photo's own button: a screen back, as from anywhere but a box being typed in
+      const was = await text(sp, '#adv-part');
+      await sp.focus('#adv-headshot');
+      await sp.keyboard.press('Escape'); await sleep(900);
+      const nowAt = await text(sp, '#adv-part');
+      ok(nowAt !== was, `Escape on the photo’s button goes a screen back (${was} → ${nowAt})`);
       await sp.close();
     }
   }

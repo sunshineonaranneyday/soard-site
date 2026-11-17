@@ -374,11 +374,13 @@ test('the thank-you calls them by their name, never a title ("Dr. Jordan Smith" 
   assert.equal(greetName({ fullName: 'Prof. Dr. Ana Ruiz' }), 'Ana');
   assert.equal(greetName({ fullName: 'Mrs. Lee' }), 'Mrs. Lee');
   assert.equal(greetName({ fullName: 'Jordan Avery' }), 'Jordan');
-  assert.equal(greetName({ fullName: 'Smith, John' }), 'Smith');
+  assert.equal(greetName({ fullName: 'Smith, John' }), 'John', 'written last name first: their first name');
   assert.equal(greetName({ fullName: 'Dr. Jordan Smith', preferredName: 'Mary Beth' }), 'Mary Beth');
   assert.equal(greetName({}), '');
   const mail = applicantEmail({ id: 'x', answers: { ...GOOD, preferredName: '', fullName: 'Dr. Jordan Smith' } });
   assert.match(String(mail.text), /^Thank you, Jordan\./);
+  // (written last name first: their copy thanks them by their first name)
+  assert.match(String(applicantEmail({ id: 'x', answers: { ...GOOD, preferredName: '', fullName: 'Ames, Jordan' } }).text), /^Thank you, Jordan\./);
 });
 
 // ─── The headshot ──────────────────────────────────────────────────────

@@ -92,9 +92,10 @@ async function get(context) {
     if (!isApplicationId(planFor)) return fail('Bad id');
     try {
       const plan = await addPlan(env, planFor);
-      // (busyName and busyOther: who that press is adding, and whether it's from another application)
+      // (busyName and busyOther: who that press is adding, and whether it's from another application; busyDeleting: it's
+      // this application being deleted, not anyone being added)
       const busy = await addBusy(env.DB, plan);
-      return ok({ plan: { ...plan, busy: !!busy, ...(busy ? { busyName: busy.name, busyOther: busy.other } : {}) } });
+      return ok({ plan: { ...plan, busy: !!busy, ...(busy ? { busyName: busy.name, busyOther: busy.other, ...(busy.deleting ? { busyDeleting: true } : {}) } : {}) } });
     } catch (e) { return failed(e); }
   }
   const id = url.searchParams.get('id');

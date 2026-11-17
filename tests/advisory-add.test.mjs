@@ -90,13 +90,16 @@ test('someone new: a hidden record at an address from their name (accents as pla
   assert.equal((await env.DB.prepare("SELECT count(*) AS n FROM team WHERE \"group\" = 'advisory'").first()).n, 1);
 });
 
-test('a name with no letters a to z gets "advisory-board-member", then -2', async () => {
+test('a name with no letters a to z gets an address of its own, "advisory-board-member-…" from its application, never one another such name is after', async () => {
   const one = await applied('李小龙', 'li@example.org');
-  assert.equal((await plan(one.id)).slug, 'advisory-board-member');
-  assert.equal((await add(one.id, 'new')).person.slug, 'advisory-board-member');
+  const own = `advisory-board-member-${one.id.slice(-6)}`;
+  assert.equal((await plan(one.id)).slug, own);
+  assert.equal((await add(one.id, 'new')).person.slug, own);
   const two = await applied('张伟', 'zhang@example.org');
-  assert.equal((await add(two.id, 'new')).person.slug, 'advisory-board-member-2');
-  assert.equal((await rec('advisory-board-member-2')).name, '张伟');
+  const theirs = (await add(two.id, 'new')).person.slug;
+  assert.equal(theirs, `advisory-board-member-${two.id.slice(-6)}`);
+  assert.notEqual(theirs, own);
+  assert.equal((await rec(theirs)).name, '张伟');
 });
 
 test('their email is already a member’s on People → Advisory: that’s them, linked, and nothing of theirs is replaced', async () => {
@@ -1014,7 +1017,7 @@ const gate = (re) => {
 };
 const welcomesTo = () => emailsSent.filter((e) => /page is ready/.test(e.subject)).map((e) => [e.to].flat().join(','));
 
-test('an application isn’t deleted while a press is adding from it (refused in words), and a press that comes while it’s deleting is told it’s gone', async () => {
+test('an application isn’t deleted while a press is adding from it (refused in words), and a press that comes while it’s deleting is told so', async () => {
   const { writeState } = await import('../functions/api/_board-roles.js');
   await writeState(env.DB, 'advisory', { emails: true });
   const f = globalThis.fetch;
@@ -1030,14 +1033,21 @@ test('an application isn’t deleted while a press is adding from it (refused in
   const r = await pressing;
   assert.equal(r.success, true, r.error);
   assert.equal((await getAdvisoryApplication(env.DB, app.id)).status, 'joined', 'added, and its application still here saying so');
-  // A press that comes while a delete holds it: told it's gone (it is a moment later), never "someone is adding them"
+  // A press that comes while a delete holds it: told it's being deleted (never "gone" before it is: a delete can fail),
+  // never "someone is adding them"
   const two = await applied('Del Second', 'del.two@example.org');
   const box = await plan(two.id);
   const now = Date.now();
   await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind(`app:${two.id}`, now, `del:${two.id}`, now).run();
   const res = await adminApi.onRequestPost(ctx('POST', { add: { id: two.id, as: 'new', seen: box.key } }));
-  assert.equal(res.status, 404);
-  assert.equal((await res.json()).error, GONE);
+  assert.equal(res.status, 409);
+  assert.equal((await res.json()).error, 'This application is being deleted right now, in another tab or by someone else, so nobody was added. Look again in a moment.');
+  // and its box, opened meanwhile, says that too, never "someone is adding"
+  const meanwhile = await plan(two.id);
+  assert.deepEqual([meanwhile.busy, meanwhile.busyDeleting], [true, true]);
+  // a second delete meanwhile: told it's being deleted, never that someone's adding them
+  const again = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: two.id } }))).json();
+  assert.equal(again.error, 'This application is being deleted right now, in another tab or by someone else. Look again in a moment.');
   await env.DB.prepare('DELETE FROM advisory_add_holds').run();
   // Deleted with nothing adding: it goes, and so does the address a press that stopped partway wrote down for it
   await env.DB.prepare('INSERT OR REPLACE INTO advisory_add_intents (app_id, slug, at) VALUES (?, ?, ?)').bind(two.id, 'del-second', now).run();
@@ -1165,5 +1175,116 @@ test('names, round nine: family names that are also letters (Mba, Ma, Do) stay n
   await person('lukasz-nowak', { name: 'Łukasz Nowak', group: 'advisory' }, 'ln@x.org');
   for (const [n, e, slug] of [['Anna Strauss', 'as2@x.org', 'anna-strauss'], ['Soren Lund', 'sl2@x.org', 'soren-lund'], ['Lukasz Nowak', 'ln2@x.org', 'lukasz-nowak']]) {
     assert.deepEqual(among(await plan((await applied(n, e)).id)), [slug], n);
+  }
+});
+
+// ─── Round ten ──────────────────────────────────────────────────────
+
+test('written last name first ("Ames, Jordan"): greeted by their first name, in their copy and their welcome, and added as Jordan Ames at jordan-ames', async () => {
+  const { writeState } = await import('../functions/api/_board-roles.js');
+  const { sendWelcome } = await import('../functions/api/_advisory-mail.js');
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  await writeState(env.DB, 'advisory', { emails: true });
+  const app = await applied('Ames, Jordan', 'ames.jordan@example.org');
+  const box = await plan(app.id);
+  assert.deepEqual([box.kind, box.asName, box.slug], ['new', 'Jordan Ames', 'jordan-ames']);
+  const r = await add(app.id, 'new', box.key);
+  assert.equal(r.success, true, r.error);
+  assert.equal((await rec('jordan-ames')).name, 'Jordan Ames');
+  await sendWelcome(env, { slugs: ['jordan-ames'] });
+  const welcome = emailsSent.find((e) => /page is ready/.test(e.subject));
+  assert.match(String(welcome?.text || ''), /^Hi Jordan,/);
+  for (const [n, g] of [['De La Cruz, Maria', 'Maria'], ['AMES, JORDAN', 'Jordan'], ['Price, Dana, MBA', 'Dana'], ['Dr. Ames, Jordan', 'Jordan'], ['The Honorable Jordan Ames', 'Jordan'], ['Mrs. Lee', 'Mrs. Lee']]) {
+    assert.equal(greetName({ fullName: n }), g, n);
+  }
+});
+
+test('one person’s second application while the first is being added (their record not made yet): its box waits, its press is refused, then it asks whether it’s them', async () => {
+  const a1 = await applied('Jo Window', 'jo.work@example.org');
+  const a2 = await applied('Jo Window', 'jo.home@example.org', { why: 'Again.' });
+  const [p1, p2] = [await plan(a1.id), await plan(a2.id)];
+  assert.deepEqual([p1.kind, p2.kind], ['new', 'new']);
+  // (held where the first press reads the record it's making: its address written down, the record not there yet)
+  const g = gate(/^SELECT data FROM team WHERE slug = \?$/);
+  const first = add(a1.id, 'new', p1.key);
+  await g.reached;
+  const waiting = await plan(a2.id);
+  assert.deepEqual([waiting.busy, waiting.busyOther], [true, true], 'the other application’s box waits');
+  const second = await add(a2.id, 'new', p2.key);
+  assert.equal(second.success, false);
+  assert.equal(second.error, 'Someone is adding a person with this name right now. Give it a moment, then look at the box again.');
+  g.open();
+  assert.equal((await first).success, true);
+  const after = await plan(a2.id);
+  assert.deepEqual([after.kind, after.person?.slug], ['choose', 'jo-window'], 'then it asks whether it’s them');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM team').first()).n, 1, 'one person');
+});
+
+test('names with no letters a to z: one being added never makes another’s box wait, nor its press out of date', async () => {
+  const wang = await applied('王小明', 'wang@example.org');
+  const vlad = await applied('Владимир Петров', 'vlad@example.org');
+  const vbox = await plan(vlad.id);
+  const g = gate(/^SELECT data FROM team WHERE slug = \?$/);
+  const adding = add(wang.id, 'new');
+  await g.reached;
+  assert.equal((await plan(vlad.id)).busy, false, 'someone else being added: nothing to wait for');
+  g.open();
+  const w = await adding;
+  assert.equal(w.success, true, w.error);
+  const r = await add(vlad.id, 'new', vbox.key);
+  assert.equal(r.success, true, r.error);
+  assert.notEqual(r.person.slug, w.person.slug);
+});
+
+test('a delete that fails leaves the application as it was, its press said "being deleted" meanwhile (never "gone"), and nothing held after', async () => {
+  const app = await applied('Dee Fails', 'dee.fails@example.org');
+  const box = await plan(app.id);
+  const f = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => (init.method === 'DELETE' ? new Response('no', { status: 500 }) : f(input, init));
+  const del = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: app.id } }))).json();
+  assert.equal(del.success, false);
+  assert.ok(await getAdvisoryApplication(env.DB, app.id), 'still here');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM advisory_add_holds').first()).n, 0, 'nothing left held');
+  assert.equal((await plan(app.id)).busy, false);
+  globalThis.fetch = f;
+  assert.equal((await add(app.id, 'new', box.key)).success, true);
+});
+
+test('a press is never refused for what the box doesn’t show: a photo put on People when there’s no headshot to give, a namesake elsewhere moved to alumni', async () => {
+  await person('nell-nophoto', { name: 'Nell Nophoto', group: 'advisory' }, 'nell@example.org');
+  const a = await applied('Nell Nophoto', 'nell@example.org');
+  await env.DB.prepare('UPDATE advisory_applications SET headshot = NULL WHERE id = ?').bind(a.id).run();
+  const box = await plan(a.id);
+  assert.equal(box.kind, 'same');
+  await env.DB.prepare('UPDATE team SET data = ? WHERE slug = ?').bind(JSON.stringify({ ...(await rec('nell-nophoto')), photo: 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/team/nell/public' }), 'nell-nophoto').run();
+  const r = await add(a.id, 'same', box.key);
+  assert.equal(r.success, true, r.error);
+  await person('kai-namesake', { name: 'Kai Namesake', group: 'board' }, 'kai.board@example.org');
+  const k = await applied('Kai Namesake', 'kai.new@example.org');
+  const kbox = await plan(k.id);
+  assert.deepEqual([kbox.kind, kbox.namesake?.slug], ['new', 'kai-namesake']);
+  await env.DB.prepare('UPDATE team SET data = ? WHERE slug = ?').bind(JSON.stringify({ ...(await rec('kai-namesake')), status: 'alumni' }), 'kai-namesake').run();
+  const r2 = await add(k.id, 'new', kbox.key);
+  assert.equal(r2.success, true, r2.error);
+  // (but moved In memoriam, which the box would say: out of date)
+  await person('mo-namesake', { name: 'Mo Namesake', group: 'team' }, 'mo.team@example.org');
+  const m = await applied('Mo Namesake', 'mo.new@example.org');
+  const mbox = await plan(m.id);
+  await env.DB.prepare('UPDATE team SET data = ? WHERE slug = ?').bind(JSON.stringify({ ...(await rec('mo-namesake')), name: 'In memoriam: Mo Namesake', status: 'memorial' }), 'mo-namesake').run();
+  assert.equal((await add(m.id, 'new', mbox.key)).success, false);
+});
+
+test('names, round ten: last name first with a family name of two words, more letters after a name, a family name in capitals, "The Honorable", and every plain letter', async () => {
+  const among = (p) => [p.person?.slug, ...(p.others || []).map((o) => o.slug)];
+  for (const [slug, name, applying] of [['martin-van-buren', 'Martin Van Buren', 'Van Buren, Martin'], ['maria-de-la-cruz', 'Maria De La Cruz', 'De La Cruz, Maria'], ['maria-garcia-lopez', 'Maria Garcia Lopez', 'Garcia Lopez, Maria'],
+    ['anh-van-do', 'Anh Van Do', 'Anh Van DO'], ['amadou-hampate-ba', 'Amadou Hampâté Ba', 'Amadou Hampâté BA'], ['jordan-ames', 'Jordan Ames', 'The Honorable Jordan Ames'], ['gorg-hili', 'Ġorġ Ħili', 'Gorg Hili'],
+    ['anna-muller', 'Anna Müller', 'Anna Mueller'], ['jorg-schroder', 'Jörg Schröder', 'Joerg Schroeder']]) {
+    await person(slug, { name, group: 'advisory' }, `${slug}@x.org`);
+    assert.deepEqual(among(await plan((await applied(applying, `a.${slug}@x.org`)).id)), [slug], applying);
+  }
+  await person('dana-price', { name: 'Dana Price', group: 'advisory' }, 'dana.work@x.org');
+  const letters = ['M.Ed.', 'MEd', 'SHRM-CP', 'SHRM-SCP', 'LEED AP', 'ChFC', 'CLU', 'MSc', 'EA', 'CFE', 'SIOR', 'MHA'];
+  for (const [k, l] of letters.entries()) {
+    assert.deepEqual(among(await plan((await applied(`Dana Price ${l}`, `dl${k}@x.org`)).id)), ['dana-price'], l);
   }
 });

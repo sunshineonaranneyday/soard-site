@@ -19,7 +19,8 @@
  *     is, "jordan-lee" or "jlee-2"): staff say which ('choose': the same person, or a different one, who
  *     gets their own address)
  *   - else a new record ('new'), at an address made from their name (one already used, or a
- *     former board member's, gets -2, -3, …; a name with no letters a to z gets "advisory-board-member")
+ *     former board member's, gets -2, -3, …; a name with no letters a to z gets its own "advisory-board-member-…",
+ *     so two such people are never after one address)
  *
  * The same person: their sign-in email is never changed (one they have stays; none on file, this
  * application's is saved), their photo stays (none, the headshot becomes it), and a former member
@@ -46,10 +47,10 @@ import { setBoardEmail, refreshForBoardChange, isEmail, normEmail } from './_rev
 import { welcomeOnJoin, welcomeRecords, hasOrGoing, mailSlugs } from './_advisory-mail.js';
 import { logAudit } from './_audit.js';
 import { generateSha } from './_collections.js';
-import { slugOf, ADVISORY_TITLE, normalizeLinkedIn, photoUrl } from '../../public/admin/team-shared.js';
+import { slugOf, PLAIN, ADVISORY_TITLE, normalizeLinkedIn, photoUrl } from '../../public/admin/team-shared.js';
 import { personStatus, personName } from './_team.js';
 import { isGroupInbox, isStaffEmail, signInWhy } from './_board-roles.js';
-import { TITLE, greetName } from './_advisory-form.js';
+import { readName, greetName } from './_advisory-form.js';
 import { getSettings as advisorySettings } from './_advisory.js';
 import { queueWelcome } from './_advisory-mail.js';
 
@@ -92,37 +93,21 @@ const card = (p, emails, welcomedAt = () => false) => ({
  * ("Dr. José  A. Núñez" is "jose nunez"). A first initial stays ("J. Ames" is "j ames"), and every alphabet counts
  * ("王小明", "Владимир Петров"), as letters, never dropped as not a-z.
  */
-// (letters no accent comes off, as they're written without them: Strauß is Strauss, Søren is Soren, Łukasz is Lukasz)
-const PLAIN = { ß: 'ss', æ: 'ae', œ: 'oe', ø: 'o', ł: 'l', đ: 'd', ð: 'd', þ: 'th', ı: 'i' };
-const wordOf = (w) => w.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[ßæœøłđðþı]/g, (c) => PLAIN[c]).replace(/[^\p{L}\p{N}]+/gu, '');
-// After a name, never part of it: a generation, or letters for a degree or credential ("Jordan Ames Jr", "Pat Lee
-// PhD", "Dana Price CCIM")
-const AFTER_NAME = /^(jr|sr|ii|iii|iv|cpa|phd|dds|dmd|dvm|jd|esq|mpa|mph|msw|lcsw|lpc|lmft|psyd|edd|dnp|rn|bsn|msn|np|pt|ot|aia|faia|cfp|cfa|cfre|cae|pmp|shrm|sphr|phr|cpcu|leed|cgma|ccim|cma|cisa|cissp|mfa|llm|mdiv)$/;
-// Letters for a degree that are also family names (Chioma Mba, Jack Ma, Minh Do): letters only as written for one,
-// after a comma, with dots, or in capitals in a name written in small letters ("Dana Price, MA", "Jordan Ames M.D.",
-// "Dana Price MBA"), and never the only word left after the first
-const ALSO_A_NAME = /^(mba|ma|ms|md|do|pa|ra|pe|ba|bs)$/;
-const afterName = (raw, { comma = false, caps = false } = {}) => {
-  const w = wordOf(raw);
-  if (AFTER_NAME.test(w)) return true;
-  return ALSO_A_NAME.test(w) && (comma || raw.includes('.') || (caps && raw === raw.toUpperCase()));
-};
-const nameWords = (n) => {
-  const full = String(personName({ name: n }) || '').replace(/\s+/g, ' ').trim();
-  // A comma: what follows a whole name is letters after it ("Dana Price, PE, CCIM", "Jordan Ames, Jr."); after one
-  // word, the name was written last name first ("Ames, Jordan"), unless only letters follow ("Cher, MA")
-  const parts = full.split(',').map((x) => x.trim()).filter(Boolean);
-  let s = parts[0] || '';
-  if (parts.length > 1 && !s.includes(' ') && !parts[1].split(' ').every((t) => afterName(t, { comma: true }))) s = `${parts[1]} ${s}`;
-  const words = s.split(' ').filter((x) => wordOf(x));
-  let i = 0;
-  while (i < words.length - 1 && TITLE.test(words[i])) i++;
-  const raw = words.slice(i);
-  // (capitals mean letters only in a name that has small letters: "CHIOMA MBA" is all name)
-  const caps = /\p{Ll}/u.test(s);
-  const last = () => raw[raw.length - 1];
-  while (raw.length > 1 && afterName(last(), { caps }) && (raw.length > 2 || AFTER_NAME.test(wordOf(last())))) raw.pop();
-  return raw.map(wordOf).filter((x, k) => (k === 0 || !/^[a-z]$/.test(x)) && !/^(jr|sr|ii|iii|iv)$/.test(x));
+// (letters no accent comes off, as they're written without one: team-shared.js PLAIN, as People's addresses read them)
+const wordOf = (w) => w.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[øłđðæœßþıħŋĸ]/g, (c) => PLAIN[c]).replace(/[^\p{L}\p{N}]+/gu, '');
+// (a middle initial and a generation never count; a first initial does: "J. Ames" might be Jordan Ames)
+const keyWords = (words) => words.map(wordOf).filter((x, k) => x && (k === 0 || !/^[a-z]$/.test(x)) && !/^(jr|sr|ii|iii|iv)$/.test(x));
+/** A name as people would match it, first name first, without titles or letters after it (_advisory-form.js readName) */
+const nameWords = (n) => keyWords(readName(personName({ name: n })).words);
+/**
+ * Each way the name might be read: also with a last word that may be a family name in capitals kept ("Anh Van DO"),
+ * and ä, ö, ü as German writes them without the dots ("Müller" is Mueller as well as Muller)
+ */
+const GERMAN = { ä: 'ae', ö: 'oe', ü: 'ue' };
+const nameWays = (n) => {
+  const name = personName({ name: n }).normalize('NFC');
+  const dotless = /[äöü]/i.test(name) ? [name.replace(/[äöü]/gi, (c) => { const p = GERMAN[c.toLowerCase()]; return c === c.toLowerCase() ? p : p[0].toUpperCase() + p[1]; })] : [];
+  return [name, ...dotless].map(readName).flatMap((r) => [keyWords(r.words), ...(r.could ? [keyWords(r.could)] : [])]);
 };
 const nameKey = (n) => nameWords(n).join(' ');
 /**
@@ -130,8 +115,10 @@ const nameKey = (n) => nameWords(n).join(' ');
  * ("Katie" and "Katherine", "Jo" and "Jordan"). Only ever asked about ("Is this the same?"), never taken as them.
  */
 function mightBe(a, b) {
-  const x = nameWords(a);
-  const y = nameWords(b);
+  // (each way either name might be read: a last word in capitals as letters or as their family name)
+  return nameWays(a).some((x) => nameWays(b).some((y) => mightBeWords(x, y)));
+}
+function mightBeWords(x, y) {
   if (!x.length || !y.length) return false;
   // (the same letters with or without a space: "山田太郎" and "山田 太郎")
   if (x.join('') === y.join('')) return true;
@@ -182,7 +169,8 @@ async function usedSlugs(DB, appId) {
 
 /** An address for a new person from their name: free on People, never a former board member's, never one in use above */
 async function freeSlug(DB, name, people, appId) {
-  const base = shortSlug(slugOf(name) || FALLBACK_SLUG);
+  // (a name with no letters a to z: an address of its own, from its application's, never one another such name is after)
+  const base = shortSlug(slugOf(name) || `${FALLBACK_SLUG}-${String(appId).slice(-6)}`);
   const taken = new Set([...people.map((p) => p.slug), ...(await usedSlugs(DB, appId))]);
   for (let n = 1; n < 100; n++) {
     const slug = n === 1 ? base : `${base}-${n}`;
@@ -216,13 +204,17 @@ export async function addPlan(env, id, { now = Date.now() } = {}) {
   const app = plan.application || {};
   // (in parts, so a press refused can say which changed: the application, its headshot, the emails switch, People. The
   // headshot and the switch only where the box says something that rests on them: never refused for what it doesn't say)
+  // (who it matches, as the box shows them: whether someone has a photo only when there's a headshot to give them; a
+  // namesake by where they are and whether they're In memoriam; never the web address a new record would take)
+  const shot = !!app.headshot?.url;
   plan.key = [
     [app.status || '', app.statusAt || ''].join('|'),
     shotSaid(plan) ? app.headshot?.url || '' : '',
     switchSaid(plan) ? (plan.emailsOn ? 'on' : 'off') : '',
-    [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
-      plan.slug || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.slug || '', plan.namesake?.status || '',
-      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.welcomed ? 1 : 0}:${o.hasPhoto ? 1 : 0}`).join(',')].join('|'),
+    [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', shot && p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
+      plan.asName || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.slug || '', plan.namesake?.where || '',
+      plan.namesake?.status === 'memorial' ? 1 : 0,
+      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.welcomed ? 1 : 0}:${shot && o.hasPhoto ? 1 : 0}`).join(',')].join('|'),
   ].join('#');
   return plan;
 }
@@ -250,6 +242,8 @@ function switchSaid(plan) {
 /** The People records a press could add to (the one found, the others it could be) and the address a new one takes */
 const peopleKeys = (plan) => [
   ...(plan.slug ? [`slug:${plan.slug}`] : []),
+  // (someone with this name being made from another application right now: not on People yet)
+  ...(plan.pending || []).map((x) => `slug:${x}`),
   // (none for a box with nothing to press: blocked, or already done)
   ...(['blocked', 'joined'].includes(plan.kind) ? [] : [plan.person, ...(plan.others || [])].filter(Boolean).map((x) => `slug:${x.slug}`)),
 ];
@@ -264,8 +258,11 @@ export async function addBusy(DB, plan, now = Date.now()) {
   const mine = [`app:${app.id}`, ...(app.email ? [`email:${normEmail(app.email)}`] : [])];
   const keys = [...mine, ...peopleKeys(plan)];
   await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
-  const rows = (await DB.prepare(`SELECT key FROM advisory_add_holds WHERE at >= ? AND key IN (${keys.map(() => '?').join(', ')})`).bind(now - HOLD_MS, ...keys).all()).results || [];
+  const asked = [`del:${app.id}`, ...keys];
+  const rows = (await DB.prepare(`SELECT key FROM advisory_add_holds WHERE at >= ? AND key IN (${asked.map(() => '?').join(', ')})`).bind(now - HOLD_MS, ...asked).all()).results || [];
   if (!rows.length) return null;
+  // (being deleted, not added: said as that)
+  if (rows.some((r) => r.key === `del:${app.id}`)) return { name: '', other: false, deleting: true };
   // (a press from this application holds its People record too: said as this one)
   if (rows.some((r) => mine.includes(r.key))) return { name: app.name || '', other: false };
   const someone = [plan.person, ...(plan.others || [])].find((x) => x && rows.some((r) => r.key === `slug:${x.slug}`));
@@ -318,18 +315,32 @@ async function planOf(env, id, now = Date.now()) {
   // Their name: on People → Advisory under any address (an active member before a former one; never someone In
   // memoriam), else elsewhere on People
   const key = nameKey(app.name);
-  const same = people.filter((p) => key && (p.slug === slugOf(app.name) || mightBe(p.name, app.name)));
+  // (the name a new record takes: first name first, as they'd be shown: "Ames, Jordan" is Jordan Ames)
+  const asName = readName(app.name).shown || String(app.name || '').trim();
+  const same = people.filter((p) => key && (p.slug === slugOf(asName) || mightBe(p.name, app.name)));
   const exact = (p) => (nameKey(p.name) === key ? 0 : 1);
   const named = same.filter((p) => p.group === 'advisory' && !memorial(p))
     .sort((a, b) => exact(a) - exact(b) || (personStatus(a) === 'active' ? 0 : 1) - (personStatus(b) === 'active' ? 0 : 1))[0]
-    || same.find((p) => p.slug === slugOf(app.name)) || same.sort((a, b) => exact(a) - exact(b))[0] || null;
-  const slug = await freeSlug(DB, app.name, people, app.id);
+    || same.find((p) => p.slug === slugOf(asName)) || same.sort((a, b) => exact(a) - exact(b))[0] || null;
+  const slug = await freeSlug(DB, asName, people, app.id);
+  // Someone with this name being added right now from another application, their record not made yet (their address
+  // written down): held against too, so this box waits for it, and then asks whether it's them
+  const pending = await pendingNamed(DB, app, people);
+  const extra = { ...(asName !== String(app.name || '').trim() ? { asName } : {}), ...(pending.length ? { pending } : {}) };
   if (named && named.group === 'advisory' && !memorial(named)) {
     // (anyone else on People → Advisory their name could be: "J. Ames" with Jordan and Jamie Ames both there)
     const others = same.filter((p) => p !== named && p.group === 'advisory' && !memorial(p)).slice(0, 3).map(show);
-    return { kind: 'choose', why: 'name', ...base, person: show(named), slug, ...(others.length ? { others } : {}) };
+    return { kind: 'choose', why: 'name', ...base, person: show(named), slug, ...extra, ...(others.length ? { others } : {}) };
   }
-  return { kind: 'new', ...base, slug, ...(named ? { namesake: show(named) } : {}) };
+  return { kind: 'new', ...base, slug, ...extra, ...(named ? { namesake: show(named) } : {}) };
+}
+
+/** Addresses other applications wrote down for someone with this name, whose record isn't made yet */
+async function pendingNamed(DB, app, people) {
+  await DB.prepare(INTENTS).run();
+  const rows = (await DB.prepare('SELECT i.slug AS slug, a.name AS name FROM advisory_add_intents i JOIN advisory_applications a ON a.id = i.app_id WHERE i.app_id != ?').bind(app.id).all()).results || [];
+  const on = new Set(people.map((p) => p.slug));
+  return rows.filter((r) => !on.has(r.slug) && mightBe(r.name, app.name)).map((r) => r.slug);
 }
 
 /** The admin's own save (./save-content.js), as staff pressing Save would: its checks, History and GitHub copy */
@@ -408,8 +419,8 @@ export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by 
     if (!first) throw err(GONE, 404);
     const got = await hold(DB, [`app:${id}`, ...(first.email ? [`email:${normEmail(first.email)}`] : [])], now);
     if (!got) {
-      // (held by a delete, not a press: it's going, so said as gone)
-      if (await held(DB, `del:${id}`, now)) throw err(GONE, 404);
+      // (held by a delete, not a press: said as that, never "gone" until it is, since a delete can fail)
+      if (await held(DB, `del:${id}`, now)) throw err('This application is being deleted right now, in another tab or by someone else, so nobody was added. Look again in a moment.');
       throw err('Someone is adding them right now. Give it a moment, then look again.');
     }
     keys.push(...got);
@@ -435,8 +446,15 @@ export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by 
  * their photo): refused in words, and a press that comes while it's deleting is told the application is gone
  */
 export async function deleteWhenFree(DB, app, remove, now = Date.now()) {
-  const keys = await hold(DB, [`app:${app.id}`, `del:${app.id}`], now);
-  if (!keys) throw err(`Someone is adding ${app.name} to the Advisory Board right now, so the application wasn’t deleted. Look again in a moment.`);
+  // (a delete's own hold first: another delete of it is told so; then the application's, which a press takes)
+  const del = await hold(DB, [`del:${app.id}`], now);
+  if (!del) throw err('This application is being deleted right now, in another tab or by someone else. Look again in a moment.');
+  const mine = await hold(DB, [`app:${app.id}`], now).catch(async (e) => { await release(DB, del); throw e; });
+  if (!mine) {
+    await release(DB, del);
+    throw err(`Someone is adding ${app.name} to the Advisory Board right now, so the application wasn’t deleted. Look again in a moment.`);
+  }
+  const keys = [...del, ...mine];
   try {
     const out = await remove();
     // (the address a press that stopped partway wrote down for it: nobody's now, so it's free for someone else)
@@ -471,7 +489,8 @@ function targetOf(plan, as, to) {
   if (plan.kind === 'joined') return plan.person;
   if (plan.kind === 'blocked') return null;
   // (a press after one that stopped partway goes on with its person, whichever button)
-  if (plan.why !== 'linked' && as === 'new') return ['new', 'choose'].includes(plan.kind) ? { slug: plan.slug, name: plan.application.name, made: true } : null;
+  // (someone new: their address, and any another application is making for someone with this name right now)
+  if (plan.why !== 'linked' && as === 'new') return ['new', 'choose'].includes(plan.kind) ? { slug: plan.slug, name: plan.application.name, made: true, also: plan.pending || [] } : null;
   if (!['same', 'choose'].includes(plan.kind)) return null;
   return to ? [plan.person, ...(plan.others || [])].find((x) => x?.slug === to) || null : plan.person;
 }
@@ -487,7 +506,7 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
   // checked again inside every hold: what's done is what's true now, never what was true a moment before
   const target = targetOf(plan, as, to);
   if (target) {
-    if (!(await holdAlso([`slug:${target.slug}`]))) {
+    if (!(await holdAlso([`slug:${target.slug}`, ...(target.also || []).map((x) => `slug:${x}`)]))) {
       throw err(target.made ? 'Someone is adding a person with this name right now. Give it a moment, then look at the box again.'
         : `Someone is adding ${target.name} right now, from another application. Give it a moment, then look at the box again.`);
     }
@@ -520,7 +539,7 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
     const order = people.filter((p) => p.group === 'advisory').reduce((m, p) => Math.max(m, Number(p.order) || 0), -1) + 1;
     const linkedin = normalizeLinkedIn(app.link || '');
     const record = personRecord({
-      name: app.name, slug: plan.slug, title: ADVISORY_TITLE, organization: app.company || '', group: 'advisory', order, status: 'active',
+      name: plan.asName || app.name, slug: plan.slug, title: ADVISORY_TITLE, organization: app.company || '', group: 'advisory', order, status: 'active',
       publishStatus: 'draft', since: new Date(now).getFullYear(), ...(linkedin ? { linkedin } : {}), ...photoOf(app.headshot),
     });
     // (its address held since the box was checked, above: two different people with one name, pressed at once, one

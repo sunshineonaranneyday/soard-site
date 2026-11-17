@@ -123,8 +123,7 @@ const CSS = `
   .ava-search input { min-height: 44px; }
   .ava .btn, .ava-drawer .btn, .ava-dialog .btn, .ava-dialog select { min-height: 44px; }
   .ava-head .page-sub a { display: inline-block; padding: 12px 0; margin: -12px 0; }
-  /* Several people it could be: each "It’s …" on a row of its own, so a name never breaks a word to a line */
-  .ava-dialog .kd-dialog__foot .ava-pick { flex: 1 1 100%; }
+  .ava-picks .ava-pick { width: 100%; justify-content: center; }
 }
 .ava-note-count { margin: 0; font-size: var(--fs-xs); color: var(--color-text-muted); }
 .ava-note-count.is-over { color: var(--tone-warn-fg); font-weight: 600; }
@@ -188,6 +187,10 @@ body.ava-drawer-open .toast-container { z-index: 1350; }
 .ava-dialog .kd-dialog__body > p { margin: 0 0 .75rem; font-size: var(--fs-sm); line-height: 1.55; color: var(--color-text-secondary); }
 .ava-dialog .kd-dialog__body > p:last-child { margin-bottom: 0; }
 .ava-dialog ul { margin: .25rem 0 .75rem 1.1rem; font-size: var(--fs-sm); line-height: 1.55; }
+/* Several people it could be: each choice in the box with what it does, the box scrolling, never cut off below */
+.ava-dialog ul.ava-picks { list-style: none; margin: .25rem 0 .75rem; padding: 0; display: grid; gap: .85rem; }
+.ava-picks .ava-pick { white-space: normal; text-align: left; min-height: 44px; }
+.ava-picks p { margin: .35rem 0 0; color: var(--color-text-secondary); }
 @media (max-width: 640px) {
   .ava-row { grid-template-columns: 40px minmax(0, 1fr); }
   .ava-meta { grid-column: 2; justify-items: start; grid-auto-flow: column; justify-content: start; align-items: center; gap: .5rem; }
@@ -318,7 +321,14 @@ export function AdvisoryApplications({ addToast, kit = {} }) {
   const idx = list.findIndex((a) => a.id === openId);
   const hears = whoHears(data.settings);
   // Closed: the keys back on its row, or (a filter took it off the list) on the list
-  const backToList = (was) => requestAnimationFrame(() => (document.querySelector(`.ava-row[data-id="${was}"]`) || document.querySelector('.ava-list .ava-row') || document.querySelector('.ava-search input') || document.querySelector('.ava-head-actions button'))?.focus());
+  // (an application found deleted while its panel was open: where its row was, for the keys once the panel closes)
+  const goneAt = useRef(null);
+  const backToList = (was) => requestAnimationFrame(() => {
+    const rows = document.querySelectorAll('.ava-list .ava-row');
+    const at = goneAt.current?.id === was ? goneAt.current.at : null;
+    goneAt.current = null;
+    (document.querySelector(`.ava-row[data-id="${was}"]`) || (at != null ? rows[Math.min(at, rows.length - 1)] : null) || document.querySelector('.ava-list .ava-row') || document.querySelector('.ava-search input') || document.querySelector('.ava-head-actions button'))?.focus();
+  });
   return html`<div class="ava">
     <div class="page-header ava-head">
       <div>
@@ -362,7 +372,8 @@ export function AdvisoryApplications({ addToast, kit = {} }) {
       onClose=${() => { const was = openId; navFrom.current = null; open(null); backToList(was); }}
       onPrev=${idx > 0 ? () => { navFrom.current = 'prev'; open(list[idx - 1].id); } : null}
       onNext=${idx >= 0 && idx < list.length - 1 ? () => { navFrom.current = 'next'; open(list[idx + 1].id); } : null}
-      onChanged=${replace} onRemoved=${(rid) => { refocus.current = Math.max(0, list.findIndex((a) => a.id === rid)); drop(rid); open(null); }} />`}
+      onChanged=${replace} onRemoved=${(rid) => { refocus.current = Math.max(0, list.findIndex((a) => a.id === rid)); drop(rid); open(null); }}
+      onGone=${(rid) => { goneAt.current = { id: rid, at: Math.max(0, list.findIndex((a) => a.id === rid)) }; drop(rid); }} />`}
     ${settingsOpen && html`<${SettingsDialog} settings=${data.settings} addToast=${addToast} onClose=${() => setSettingsOpen(false)}
       onSaved=${(s) => { setData((d) => ({ ...d, settings: s })); setSettingsOpen(false); }} />`}
   </div>`;
@@ -445,6 +456,12 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
   if (plan.busy) {
     // (a press from another application: adding someone on People this applicant could be, or someone with this name)
     const other = !!plan.busyOther;
+    if (plan.busyDeleting) {
+      return html`<${Dialog} title="This application is being deleted" onClose=${onClose} footer=${cancel}>
+        <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and look again in a minute.'
+          : 'It’s being deleted in another tab, or by someone else. This box closes if it goes, and shows what Add does if it doesn’t.'}</p>
+      <//>`;
+    }
     return html`<${Dialog} title=${`Someone is adding ${(other && plan.busyName) || app.name} right now`} onClose=${onClose} footer=${cancel}>
       <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and press Add to Advisory Board again in a minute: it finishes whatever stopped partway, and never adds them twice.'
         : other ? `Another press is adding ${plan.busyName ? `${plan.busyName}, who this could be,` : 'someone new with this name'} to the Advisory Board from another application (in another tab, or by someone else). This box shows what’s left as soon as it’s done.`
@@ -487,7 +504,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     ].filter(Boolean);
   };
   const newParts = () => [
-    `adds ${app.name} to People → Advisory as someone new${app.company ? `, at ${app.company}` : ''}${shot ? ', with this headshot as their photo' : ''}`,
+    `adds ${plan.asName || app.name} to People → Advisory as someone new${app.company ? `, at ${app.company}` : ''}${shot ? ', with this headshot as their photo' : ''}`,
     email ? `lets them sign in to the Advisory Board page with ${email}` : 'needs a working email on their People page before they can sign in or get invites',
     welcomes(email),
     email ? 'puts them on every reveal invite' : '',
@@ -496,6 +513,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     'keeps them off the public site until you turn on Show on the site',
   ].filter(Boolean);
   const sentence = (parts) => `${parts.length > 1 ? `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}` : parts[0]}.`;
+  const firstUp = (t) => (t ? t[0].toUpperCase() + t.slice(1) : t); // (a choice's words under its button, as a sentence)
 
   if (plan.kind === 'choose') {
     const theirs = p.email && appEmail ? 'Their email on file isn’t the one on this application' : p.email ? 'This application has no email' : 'They have no email on file';
@@ -504,20 +522,25 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     const many = all.length > 1;
     // (two with one name: each said with what tells them apart, so no two buttons read the same)
     const label = (x) => labelOf(x, all);
-    return html`<${Dialog} title=${many ? `Is ${app.name} one of these people?` : `Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${html`${cancel}
+    // (one: the choice in the foot; several: each in the box with what it does, so however many and however long their
+    // names, every one can be reached, on a phone too)
+    const pick = (key, cls, onClick, words, does) => html`<li key=${key}><button class=${`btn ${cls} ava-pick`} onClick=${onClick} aria-disabled=${wait} aria-describedby=${`ava-does-${key}`}>${busy ? 'Adding…' : words}</button><p id=${`ava-does-${key}`}>${firstUp(sentence(does))}</p></li>`;
+    return html`<${Dialog} title=${many ? `Is ${app.name} one of these people?` : `Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${many ? cancel : html`${cancel}
         <button class="btn btn-ghost" onClick=${press('new')} aria-disabled=${wait}>${busy ? 'Adding…' : 'A different person'}</button>
-        ${many ? all.map((x) => html`<button key=${x.slug} class="btn btn-primary ava-pick" onClick=${press('same', x.slug)} aria-disabled=${wait}>${busy ? 'Adding…' : `It’s ${label(x)}`}</button>`)
-          : html`<button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Adding…' : 'The same person'}</button>`}`}>
+        <button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Adding…' : 'The same person'}</button>`}>
       ${testLine}${statusLine}
       <p>${many ? `${all.length} people on People → Advisory have a name like this one, so say who this is.` : html`Someone on People → Advisory has ${p.name === app.name ? 'this name' : 'a name like this one'}. ${theirs}, so say who this is.`}</p>
       <dl class="ava-compare">
         ${all.map((x) => html`<dt>On People</dt><dd>${face(x.photo, x.name)}<span><strong>${x.name}</strong><br />${who(x)}</span></dd>`)}
         <dt>This application</dt><dd>${face(shot ? headshotSrc(shot, 80) : '', app.name)}<span><strong>${app.name}</strong><br />${[app.email || 'no email', app.company].filter(Boolean).join(' · ')}</span></dd>
       </dl>
-      <ul>
-        ${many ? all.map((x) => html`<li><strong>It’s ${label(x)}</strong> ${sentence(sameParts(x))}</li>`) : html`<li><strong>The same person</strong> ${sentence(sameParts())}</li>`}
-        <li><strong>A different person</strong> ${sentence(newParts())}</li>
-      </ul>
+      ${many ? html`<ul class="ava-picks">
+          ${all.map((x) => pick(x.slug, 'btn-primary', press('same', x.slug), `It’s ${label(x)}`, sameParts(x)))}
+          ${pick('new', 'btn-ghost', press('new'), 'A different person', newParts())}
+        </ul>` : html`<ul>
+          <li><strong>The same person</strong> ${sentence(sameParts())}</li>
+          <li><strong>A different person</strong> ${sentence(newParts())}</li>
+        </ul>`}
       <p>Either way, this application is marked Joined.</p>
       ${many ? all.map((x) => onFileOf(x, true)) : onFile}
       ${unusable}
@@ -546,7 +569,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     ${testLine}${statusLine}
     <p>This:</p>
     <ul>
-      <li>adds them to People → Advisory${app.company ? `, at ${app.company}` : ''}${shot ? ', with their headshot as their photo' : ''},</li>
+      <li>adds them to People → Advisory${plan.asName ? html` as <strong>${plan.asName}</strong>` : ''}${app.company ? `, at ${app.company}` : ''}${shot ? ', with their headshot as their photo' : ''},</li>
       ${email ? html`<li>lets them sign in to the Advisory Board page with <strong>${email}</strong>,</li>
       ${welcomeLine(email)}
       <li>adds them to every reveal invite,</li>
@@ -566,7 +589,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
 // A note being written, by application: closing the panel (Escape, up or down) never throws it away
 const noteDrafts = new Map();
 
-function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChanged, onRemoved, boardEmails = false, startOn = null }) {
+function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChanged, onRemoved, onGone, boardEmails = false, startOn = null }) {
   const [app, setApp] = useState(null);
   const [err, setErr] = useState(null);
   const [tries, setTries] = useState(0);
@@ -578,7 +601,12 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
 
   useEffect(() => {
     let live = true;
-    call(`${API}?id=${encodeURIComponent(id)}`).then((j) => { if (!live) return; if (j.success) { setApp(j.application); setErr(null); } else setErr({ missing: j.status === 404, words: j.error || 'Couldn’t load it' }); });
+    call(`${API}?id=${encodeURIComponent(id)}`).then((j) => {
+      if (!live) return;
+      if (j.success) { setApp(j.application); setErr(null); return; }
+      setErr({ missing: j.status === 404, words: j.error || 'Couldn’t load it' });
+      if (j.status === 404) onGone?.(id); // (its row leaves the list, and the count with it)
+    });
     return () => { live = false; };
   }, [id, tries]);
 
@@ -606,6 +634,8 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
   }, []);
 
   const lastFail = useRef(0); // the status the last action failed with (404: deleted elsewhere)
+  // Deleted elsewhere, found out by any press here: the box closes, the panel says so, and its row leaves the list
+  const deletedNow = (j) => { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: j.error }); onGone?.(id); };
   const post = async (body, what) => {
     setBusy(what);
     const j = await call(API, body);
@@ -614,7 +644,7 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
     if (!j.success) {
       addToast?.(j.error || 'That didn’t save', 'error');
       // Deleted elsewhere: the panel says so (nothing here can change it now)
-      if (j.status === 404) { setApp(null); setErr({ missing: true, words: j.error }); }
+      if (j.status === 404) deletedNow(j);
       // Changed elsewhere since this panel opened: shown as it is now, nothing done
       else if (j.status === 409 && j.application) { setApp(j.application); onChanged(j.application); }
       return null;
@@ -672,7 +702,7 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       const again = await call(`${API}?plan=${encodeURIComponent(id)}`);
       if (!again.success) {
         // Deleted meanwhile: the box closes and the panel says so. Anything else: asked again, and "taking longer" in time
-        if (again.status === 404) { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: again.error }); return; }
+        if (again.status === 404) { deletedNow(again); return; }
         setPlan((was) => (was ? { ...was, ...(busyTries.current >= 40 ? { stuck: true } : {}) } : was));
         return;
       }
@@ -688,8 +718,6 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
   const planShot = plan?.application?.headshot?.url ? plan.application.headshot : shot;
   const planSoft = !!planShot && planShot.width && planShot.height && Math.min(planShot.width, planShot.height) < PHOTO_GOOD;
   const focusNext = useRef(null); // after the box: where the keys go ('done' → the panel's new note)
-  // (deleted in another tab: the box, if open, closes, and the panel says so, as for a status or a note)
-  const deletedNow = (j) => { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: j.error }); };
   const openAdd = async () => {
     if (busy) return;
     setBusy('plan');

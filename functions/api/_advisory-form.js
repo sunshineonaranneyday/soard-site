@@ -136,16 +136,68 @@ export function isShown(field, answers) {
 }
 
 // A title before the name ("Dr. Jordan Smith"): not what to call them on its own. Hon and Gen are first names too
-// (Hon Lam, Gen Tanaka): titles only with their dot ("Hon. Jordan Smith")
-export const TITLE = /^(?:(?:dr|mr|mrs|ms|mx|miss|rev|prof|fr|judge|sir|dame|capt|col|maj|lt|sgt)\.?|(?:hon|gen)\.)$/i;
+// (Hon Lam, Gen Tanaka): titles only with their dot ("Hon. Jordan Smith"); "The" goes with one after it ("The Honorable
+// Jordan Ames")
+export const TITLE = /^(?:(?:dr|mr|mrs|ms|mx|miss|rev|prof|fr|judge|sir|dame|capt|col|maj|lt|sgt)\.?|(?:hon|gen)\.|honorable|honourable|reverend)$/i;
+// After a name, never part of it: a generation, or letters for a degree or credential ("Jordan Ames Jr", "Pat Lee
+// PhD", "Dana Price CCIM", "Sam Roe SHRM-CP")
+export const AFTER_NAME = /^(jr|sr|ii|iii|iv|cpa|phd|dds|dmd|dvm|jd|esq|mpa|mph|mha|msw|lcsw|lpc|lmft|psyd|edd|med|msc|dnp|rn|bsn|msn|np|pt|ot|aia|faia|cfp|cfa|cfe|cfre|cae|chfc|clu|pmp|shrm|shrmcp|shrmscp|sphr|phr|cpcu|leed|cgma|ccim|sior|cma|cisa|cissp|mfa|llm|mdiv)$/;
+// Letters for a degree that are also family names (Chioma Mba, Jack Ma, Minh Do): letters only as written for one,
+// after a comma, with dots, or in capitals in a name written in small letters ("Dana Price, MA", "Jordan Ames M.D.",
+// "Dana Price MBA"), and never the only word left after the first
+export const ALSO_A_NAME = /^(mba|ma|ms|md|do|pa|ra|pe|ba|bs|ap|ea)$/;
+const bare = (w) => String(w).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+const afterName = (raw, { comma = false, caps = false } = {}) => {
+  const w = bare(raw);
+  if (AFTER_NAME.test(w)) return true;
+  return ALSO_A_NAME.test(w) && (comma || raw.includes('.') || (caps && raw === raw.toUpperCase()));
+};
+/**
+ * A name as it's said, first name first, as written: "Ames, Jordan" (and "De La Cruz, Maria") is written last name
+ * first; titles before it set apart ("Dr.", "The Honorable"), and letters after it ("Dana Price, CPA", "Jordan Ames
+ * M.D.", "Dana Price MBA"). → { words, titles, shown, could }
+ *   shown: the name to show, first name first ("Ames, Jordan, PhD" is "Jordan Ames, PhD"; anything else as written)
+ *   could: the words with a last word kept that might be a family name in capitals ("Anh Van DO"), when one was set
+ *   apart as letters: matching tries both
+ */
+export function readName(full) {
+  const s = String(full || '').replace(/\s+/g, ' ').trim();
+  const parts = s.split(',').map((x) => x.trim()).filter(Boolean);
+  const lead = (p) => {
+    const w = (p || '').split(' ').filter((x) => bare(x));
+    const t = [];
+    while (w.length > 1 && (TITLE.test(w[0]) || (/^the$/i.test(w[0]) && TITLE.test(w[1])))) t.push(w.shift());
+    return [w, t];
+  };
+  // (what follows a comma is letters after the name ("Dana Price, PE, CCIM", "Jordan Ames, Jr."), or, when it isn't,
+  // their first name: written last name first)
+  const flipped = parts.length > 1 && !parts[1].split(' ').every((t) => afterName(t, { comma: true }));
+  const [last, t1] = lead(parts[0]);
+  const [first, t2] = flipped ? lead(parts[1]) : [[], []];
+  const words = [...first, ...last];
+  const titles = [...t1, ...t2];
+  const caps = /\p{Ll}/u.test(words.join(' ')); // (capitals mean letters only in a name that has small letters)
+  let could = null;
+  const end = () => words[words.length - 1];
+  while (words.length > 1 && afterName(end(), { caps }) && (words.length > 2 || AFTER_NAME.test(bare(end())))) {
+    const w = end();
+    if (!could && !AFTER_NAME.test(bare(w)) && !w.includes('.')) could = [...words];
+    words.pop();
+  }
+  const rest = parts.slice(flipped ? 2 : 1);
+  const shown = flipped ? `${[...titles, ...words].join(' ')}${rest.length ? `, ${rest.join(', ')}` : ''}` : s;
+  return { words, titles, shown, could };
+}
 /** What a thank-you calls them: the name they go by, else their first name past a title ("Mrs. Lee", alone, stays so) */
 export function greetName(a) {
   const pref = String(a?.preferredName || '').trim().replace(/\s+/g, ' ');
   if (pref) return pref.slice(0, 60);
-  const words = String(a?.fullName || '').trim().split(/\s+/).filter(Boolean);
-  let i = 0;
-  while (i < words.length - 1 && TITLE.test(words[i])) i++;
-  return (i && i === words.length - 1 ? words.slice(i - 1) : words.slice(i, i + 1)).join(' ').replace(/[,;:]+$/, '');
+  const { words, titles } = readName(a?.fullName);
+  if (!words.length) return '';
+  // (a name typed all in capitals is greeted in ordinary ones: "AMES, JORDAN" is "Jordan", never shouted)
+  const shouted = !/\p{Ll}/u.test(String(a?.fullName || ''));
+  const calm = (w) => (shouted && w.length > 1 ? w[0] + w.slice(1).toLowerCase() : w);
+  return (titles.length && words.length === 1 ? `${calm(titles[titles.length - 1])} ${calm(words[0])}` : calm(words[0])).replace(/[,;:]+$/, '');
 }
 export const EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>"',;]+\.[a-z]{2,}$/i; // (an apostrophe is fine before the @: o'brien@)
 // The mailer's own rule (_broadcast-notify.js isEmail, the one the sign-in list and private emails use too; a test keeps
