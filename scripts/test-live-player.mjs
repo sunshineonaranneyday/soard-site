@@ -23,6 +23,9 @@
  *     or under a small pinned player (phone) while the reveal keeps playing
  *   - leaving the page and coming back with the Back button (client-side
  *     navigation) brings the video back
+ *   - the sound plays on a computer when it comes as its own track, the way
+ *     Cloudflare Stream sends it (tests/fixtures/live-hls/split: the portrait
+ *     fixture's picture and sound as separate fMP4 renditions)
  * Screenshots land in test-results/live-player/. Exits non-zero on any
  * failure or console error.
  */
@@ -40,24 +43,32 @@ const ok = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${cond ?
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── The fake broadcast ────────────────────────────────────────────
-const feed = { shape: 'portrait', down: false, t0: Date.now(), revealAt: 6, design: { open: false } };
+const feed = { shape: 'portrait', down: false, split: false, t0: Date.now(), revealAt: 6, design: { open: false } };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 /** The room's design, for the strip beside the video (a kid's page) */
 const DESIGN = {
   open: true, after: true, name: 'Axel',
   slides: [1, 2, 3].map((i) => ({ kind: 'before', url: `https://imagedelivery.net/x/before-${i}.jpg/public`, crop: false, alt: 'Axel’s room before', badge: 'Before', kicker: 'Before', caption: 'Axel’s room before' })),
 };
-/** The fixture looped forever as a live playlist, with a discontinuity at each wrap. */
-function livePlaylist() {
+/**
+ * The fixture looped forever as a live playlist, with a discontinuity at each wrap. With a track ('v' or 'a'), that
+ * track of the split fixture: fMP4 pieces after their own init segment, as Stream sends them.
+ */
+function livePlaylist(track = '') {
   const newest = Math.floor((Date.now() - feed.t0) / 2000) + 3;
   const first = newest - 3;
-  let s = `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:${first}\n#EXT-X-DISCONTINUITY-SEQUENCE:${Math.floor(first / SEGMENTS)}\n`;
+  let s = `#EXTM3U\n#EXT-X-VERSION:${track ? 7 : 3}\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:${first}\n#EXT-X-DISCONTINUITY-SEQUENCE:${Math.floor(first / SEGMENTS)}\n`;
+  if (track) s += `#EXT-X-MAP:URI="${track}-init.mp4"\n`;
   for (let i = first; i <= newest; i++) {
     if (i > first && i % SEGMENTS === 0) s += '#EXT-X-DISCONTINUITY\n';
-    s += `#EXTINF:2.000000,\nseg${i % SEGMENTS}.ts?n=${i}\n`;
+    s += `#EXTINF:2.000000,\n${track ? `${track}${i % SEGMENTS}.m4s` : `seg${i % SEGMENTS}.ts`}?n=${i}\n`;
   }
   return s;
 }
+/** Stream's own shape: a master playlist whose sound is a separate audio rendition (EXT-X-MEDIA TYPE=AUDIO) */
+const SPLIT_MASTER = '#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-INDEPENDENT-SEGMENTS\n'
+  + '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="group_audio",NAME="original",DEFAULT=YES,AUTOSELECT=YES,URI="a.m3u8"\n'
+  + '#EXT-X-STREAM-INF:RESOLUTION=144x256,CODECS="avc1.42e00b,mp4a.40.2",BANDWIDTH=200000,AUDIO="group_audio"\nv.m3u8\n';
 const VTT = 'WEBVTT\n\n00:00:01.000 --> 00:00:07.500\nOkay, open your eyes!\n';
 const base = {
   id: 'live-9', kidSlug: null, kidName: null, title: 'Live room reveal', message: null, image: null,
@@ -89,6 +100,12 @@ async function mock(page) {
       }
       // What Stream answers while no camera is connected: an empty playlist
       if (feed.down) return req.respond({ status: 204, headers: cors, body: '' });
+      if (feed.split) {
+        const name = url.pathname.split('/').pop();
+        if (name === 'video.m3u8') return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: SPLIT_MASTER });
+        if (name === 'v.m3u8' || name === 'a.m3u8') return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: livePlaylist(name[0]) });
+        return req.respond({ status: 200, contentType: 'video/mp4', headers: cors, body: readFileSync(`${FIX}split/${name}`) });
+      }
       if (url.pathname.endsWith('.m3u8')) return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: livePlaylist() });
       return req.respond({ status: 200, contentType: 'video/mp2t', headers: cors, body: readFileSync(`${FIX}${feed.shape}/${url.pathname.split('/').pop()}`) });
     }
@@ -595,6 +612,23 @@ try {
   await page.setViewport({ width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   await sleep(300);
   await page.click('[data-s="cc-toggle"]'); await sleep(300);
+
+  // Stream sends the sound as its own track. The light build of hls.js can't play one, so on every computer and iPad
+  // the reveal played in silence (Nov 17 2026 test broadcast); Safari's own player on iPhone had sound
+  console.log('\n▶ sound as its own track, as Cloudflare Stream sends it — desktop');
+  state = STATES.live; feed.shape = 'portrait'; feed.split = true;
+  await page.setViewport({ width: 1424, height: 830 });
+  await open(page);
+  await waitFor(page, ['playing']);
+  await page.click('[data-s="sound"]');
+  await sleep(3000);
+  g = await page.evaluate(() => {
+    const v = document.querySelector('.stage__player video');
+    return { muted: v?.muted, pstatus: document.querySelector('[data-stage]')?.dataset.pstatus, audio: v?.webkitAudioDecodedByteCount ?? -1, picture: v?.webkitVideoDecodedByteCount ?? -1 };
+  });
+  ok(g.pstatus === 'playing' && g.picture > 0, `the picture plays (${g.pstatus}, ${g.picture} bytes of picture decoded)`);
+  ok(g.muted === false && g.audio > 0, `after Tap for sound, the sound plays on a computer (${g.audio} bytes of sound decoded)`);
+  feed.split = false;
 
   console.log('\n▶ leave the page and come back');
   state = STATES.live; feed.shape = 'portrait';

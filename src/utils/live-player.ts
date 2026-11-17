@@ -60,8 +60,10 @@ const RETRY_SLOW_MS = 10_000;
 
 type HlsClass = typeof import('hls.js').default;
 let hlsModule: Promise<HlsClass> | null = null;
-// The light build: no captions, alternate audio or DRM, none of which a Stream feed uses
-const loadHls = () => (hlsModule ||= import('hls.js/light').then((m) => m.default));
+// The full build, never hls.js/light: Stream sends the sound as its own audio rendition (EXT-X-MEDIA TYPE=AUDIO),
+// which only the full build plays. The light build played the picture in silence wherever hls.js runs (every
+// computer, iPad); only iPhone, on Safari's own player, had sound (Nov 17 2026 test broadcast)
+const loadHls = () => (hlsModule ||= import('hls.js').then((m) => m.default));
 
 export function streamUrls(p: LivePlayer) {
   const host = `https://customer-${p.customerCode}.cloudflarestream.com/${p.uid}`;
