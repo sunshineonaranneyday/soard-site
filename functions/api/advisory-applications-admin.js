@@ -35,6 +35,7 @@ import { logAudit } from './_audit.js';
 import { getSettings as getBoardSettings } from './_advisory.js';
 import { addPlan, addBusy, addToBoard } from './_advisory-add.js';
 import { personStatus, personName } from './_team.js';
+import { signInWhy } from './_board-roles.js';
 
 const ok = (body = {}) => Response.json({ success: true, ...body }, { headers: { 'Cache-Control': 'no-store' } });
 const fail = (error, status = 400, extra = {}) => Response.json({ success: false, error, ...extra }, { status });
@@ -68,7 +69,8 @@ async function withPerson(DB, application) {
     const d = JSON.parse(row.data || '{}');
     // (hasEmail: a sign-in email on file, which is what their sign-in, reveal invites and advisory@ follow)
     const email = await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(application.personSlug).first().catch((e) => { if (/no such table/i.test(e?.message || '')) return null; throw e; });
-    const person = { slug: application.personSlug, name: personName(d) || application.name, group: d.group || null, status: personStatus(d), publishStatus: d.publishStatus || null, hasEmail: !!email?.email };
+    const why = email?.email ? signInWhy(email.email) : '';
+    const person = { slug: application.personSlug, name: personName(d) || application.name, group: d.group || null, status: personStatus(d), publishStatus: d.publishStatus || null, hasEmail: !!email?.email && !why, ...(why ? { emailWhy: why } : {}) };
     const on = person.group === 'advisory' && person.status === 'active';
     return { ...application, person, ...(application.status === 'joined' && !on ? { left: true } : {}) };
   } catch (e) {
@@ -141,7 +143,8 @@ export async function onRequestPost(context) {
       const id = idOf(body.add);
       if (!id) return fail('Bad id');
       if (!['new', 'same'].includes(body.add.as)) return fail('Say whether they’re a new person or the one found');
-      const done = await addToBoard(env, context, { id, as: body.add.as, seen: typeof body.add.seen === 'string' ? body.add.seen : null, by: by || '' });
+      const to = typeof body.add.to === 'string' && body.add.as === 'same' ? body.add.to : null;
+      const done = await addToBoard(env, context, { id, as: body.add.as, to, seen: typeof body.add.seen === 'string' ? body.add.seen : null, by: by || '' });
       await logAudit(env.DB, { userEmail: by, action: 'updated', entityType: 'advisory-application', entitySlug: id, entityName: `Advisory Board application: ${done.application.name} added to the Advisory Board as ${done.person.name}`, changes: null, path: null, gitStatus: 'runtime' }).catch(() => {});
       return ok({ ...done, application: await withPerson(env.DB, done.application) });
     }

@@ -709,7 +709,7 @@ test('the box says the emails switch as it is now: turned on or off since the pa
   assert.notEqual(on.key, off.key);
   const stale = await add(app.id, 'new', off.key);
   assert.equal(stale.success, false, 'a box that said "once emails are on" is never pressed into an email now');
-  assert.match(stale.error, /changed since the box opened/);
+  assert.equal(stale.error, 'Advisory Board emails were turned on since the box opened. Look at the box again before pressing: it says what’s emailed now.');
 });
 
 test('a newer headshot sent since the box opened makes the box out of date: asked again, never a different photo than it showed', async () => {
@@ -718,7 +718,7 @@ test('a newer headshot sent since the box opened makes the box out of date: aske
   await env.DB.prepare('UPDATE advisory_applications SET headshot = ? WHERE id = ?').bind(JSON.stringify({ id: 'advisory-applications/x/y', url: 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/advisory-applications/x/y/public', width: 700, height: 700 }), app.id).run();
   const r = await add(app.id, 'new', box.key);
   assert.equal(r.success, false);
-  assert.match(r.error, /changed since the box opened/);
+  assert.equal(r.error, 'They sent a newer headshot since the box opened. Look at the box again before pressing: it shows the one that’s used.');
 });
 
 test('had their welcome means at the address they have now: someone new at a deleted person’s web address gets their own; the same person put back doesn’t get it twice', async () => {
@@ -891,4 +891,103 @@ test('the panel knows whether the person it’s linked to has a sign-in email, s
   assert.equal((await linked()).hasEmail, true);
   await env.DB.prepare('DELETE FROM reveal_board_emails WHERE slug = ?').bind('gail-moss').run();
   assert.equal((await linked()).hasEmail, false);
+});
+
+test('an email on file that can’t sign them in as themselves (a SOARD address): the box says so, Add never emails it how to sign in, and the welcome goes once their own is on People', async () => {
+  const { writeState } = await import('../functions/api/_board-roles.js');
+  const { sendWelcome } = await import('../functions/api/_advisory-mail.js');
+  await writeState(env.DB, 'advisory', { emails: true });
+  await person('sal-staff', { name: 'Sal Staff', group: 'advisory' }, 'sal@soardcharity.com');
+  const app = await applied('Sal Staff', 'sal@soardcharity.com');
+  const p = await plan(app.id);
+  assert.equal(p.kind, 'same');
+  assert.equal(p.person.email, 'sal@soardcharity.com');
+  assert.equal(p.person.emailOk, false);
+  assert.equal(p.person.emailWhy, 'staff');
+  const r = await add(app.id, 'same');
+  assert.equal(r.success, true, r.error);
+  assert.deepEqual(r.person.emailOnFile, { email: 'sal@soardcharity.com', why: 'staff' });
+  assert.equal(r.person.emailUnusable, '', 'never "it wasn’t saved, add their own" for the address already theirs');
+  assert.equal(r.welcome.noEmail, true);
+  assert.equal(emailsSent.filter((e) => /page is ready/.test(e.subject)).length, 0, 'no "Your Advisory Board page is ready" to a staff sign-in');
+  assert.equal((await sendWelcome(env, { slugs: ['sal-staff'] })).sent, 0, 'nor later');
+  // Their own email put on People: their welcome goes, once
+  await env.DB.prepare('UPDATE reveal_board_emails SET email = ? WHERE slug = ?').bind('sal@gmail.example', 'sal-staff').run();
+  assert.equal((await sendWelcome(env, { slugs: ['sal-staff'] })).sent, 1);
+  assert.deepEqual(emailsSent.filter((e) => /page is ready/.test(e.subject)).map((e) => e.to[0]), ['sal@gmail.example']);
+});
+
+test('an application from a group inbox, linked to the same person with their own email on file: theirs is kept, and nothing says to add one', async () => {
+  await person('gil-group', { name: 'Gil Group', group: 'advisory' }, 'gil@own.example');
+  const app = await applied('Gil Group', 'advisory@soardcharity.com');
+  const p = await plan(app.id);
+  assert.equal(p.kind, 'choose');
+  assert.equal(p.emailUsable, false);
+  assert.equal(p.person.emailOk, undefined, 'their own on file signs them in');
+  const r = await add(app.id, 'same');
+  assert.equal(r.success, true, r.error);
+  assert.equal(r.person.emailKept, true);
+  assert.equal(r.person.email, 'gil@own.example');
+  assert.equal(r.person.emailUnusable, '');
+  assert.equal(r.person.emailOnFile, undefined);
+});
+
+test('a box opened before the application was deleted (another tab): the press says so, in the words used everywhere', async () => {
+  const app = await applied('Del Gone', 'del@example.org');
+  const box = await plan(app.id);
+  await env.DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(app.id).run();
+  const r = await (await adminApi.onRequestPost(ctx('POST', { add: { id: app.id, as: 'new', seen: box.key } }))).json();
+  assert.equal(r.success, false);
+  assert.equal(r.error, 'This application isn’t here any more: it was deleted, maybe in another tab.');
+});
+
+test('letters after a name (CPA, PhD, M.D., Esq.) are never taken as the last name: asked about when it’s them, never when it isn’t', async () => {
+  await person('dana-price', { name: 'Dana Price', group: 'advisory' }, 'dana.work@x.org');
+  for (const [n, e] of [['Dana Price, CPA', 'd1@x.org'], ['Dana Price PhD', 'd2@x.org'], ['Dana Price, M.D.', 'd3@x.org'], ['Dana Price Esq.', 'd4@x.org']]) {
+    const p = await plan((await applied(n, e)).id);
+    assert.equal(p.kind, 'choose', n);
+    assert.equal(p.person.slug, 'dana-price', n);
+  }
+  await person('jordan-smith', { name: 'Jordan Smith, CPA', group: 'advisory' }, 'js@x.org');
+  assert.equal((await plan((await applied('Jordan Jones, CPA', 'jj@x.org')).id)).kind, 'new', 'two different last names with the same letters after');
+  await person('pat-lee', { name: 'Pat Lee PhD', group: 'advisory' }, 'pl@x.org');
+  assert.equal((await plan((await applied('Patricia Moore PhD', 'pm@x.org')).id)).kind, 'new');
+  // Family names that look like letters after a name stay names: Minh Do is never Minh Ra
+  await person('minh-ra', { name: 'Minh Ra', group: 'advisory' }, 'mr@x.org');
+  assert.equal((await plan((await applied('Minh Do', 'md@x.org')).id)).kind, 'new');
+  // A first initial before the name they go by, and a name written with or without a space
+  await person('scott-fitzgerald', { name: 'Scott Fitzgerald', group: 'advisory' }, 'sf@x.org');
+  assert.equal((await plan((await applied('F. Scott Fitzgerald', 'fsf@x.org')).id)).person?.slug, 'scott-fitzgerald');
+  await person('yamada', { name: '山田太郎', group: 'advisory' }, 'yt@x.org');
+  assert.equal((await plan((await applied('山田 太郎', 'yt2@x.org')).id)).person?.slug, 'yamada');
+});
+
+test('an initial two members share: the box names both, and staff can say it’s either (linked to that one), or someone new', async () => {
+  await person('jordan-ames', { name: 'Jordan Ames', group: 'advisory' }, 'jordan@x.org');
+  await person('jamie-ames', { name: 'Jamie Ames', group: 'advisory' }, 'jamie@x.org');
+  const app = await applied('J. Ames', 'j.ames@x.org');
+  const p = await plan(app.id);
+  assert.equal(p.kind, 'choose');
+  assert.deepEqual([p.person.slug, ...(p.others || []).map((o) => o.slug)].sort(), ['jamie-ames', 'jordan-ames']);
+  const other = [p.person, ...p.others].find((x) => x.slug === 'jamie-ames');
+  const r = await (await adminApi.onRequestPost(ctx('POST', { add: { id: app.id, as: 'same', to: other.slug, seen: p.key } }))).json();
+  assert.equal(r.success, true, r.error);
+  assert.equal(r.person.slug, 'jamie-ames');
+  assert.equal(r.application.personSlug, 'jamie-ames');
+  assert.equal(await emailOf('jamie-ames'), 'jamie@x.org', 'their own email kept');
+  // Someone not named in the box is never linked by asking for them
+  const again = await applied('J. Ames', 'j.ames2@x.org');
+  const q = await plan(again.id);
+  const no = await (await adminApi.onRequestPost(ctx('POST', { add: { id: again.id, as: 'same', to: 'dana-price', seen: q.key } }))).json();
+  assert.equal(no.success, false);
+  assert.match(no.error, /changed since the box opened/);
+});
+
+test('the leaving box’s flags: an email on file that signs in as staff is no sign-in, said as that', async () => {
+  const app = await applied('Hal Staff', 'hal@example.org');
+  assert.equal((await add(app.id, 'new')).success, true);
+  await env.DB.prepare('UPDATE reveal_board_emails SET email = ? WHERE slug = ?').bind('hal@soardcharity.com', 'hal-staff').run();
+  const person = (await (await adminApi.onRequestGet(ctx('GET', undefined, `?id=${app.id}`))).json()).application.person;
+  assert.equal(person.hasEmail, false);
+  assert.equal(person.emailWhy, 'staff');
 });

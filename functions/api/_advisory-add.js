@@ -46,7 +46,7 @@ import { logAudit } from './_audit.js';
 import { generateSha } from './_collections.js';
 import { slugOf, ADVISORY_TITLE, normalizeLinkedIn, photoUrl } from '../../public/admin/team-shared.js';
 import { personStatus, personName } from './_team.js';
-import { isGroupInbox, isStaffEmail } from './_board-roles.js';
+import { isGroupInbox, isStaffEmail, signInWhy } from './_board-roles.js';
 import { TITLE, greetName } from './_advisory-form.js';
 import { getSettings as advisorySettings } from './_advisory.js';
 import { queueWelcome } from './_advisory-mail.js';
@@ -58,6 +58,7 @@ const FALLBACK_SLUG = 'advisory-board-member';
 // The tables a former board member's records are kept under: their address is never someone else's (./save-content.js)
 const FORMER_BOARD_TABLES = ['board_signatures', 'board_signins', 'board_activity', 'board_sign_events'];
 const err = (message, status = 409) => Object.assign(new Error(message), { status });
+const GONE = 'This application isn’t here any more: it was deleted, maybe in another tab.';
 
 /** People and their private emails. A read that fails stops the plan (never "nobody's on People"); no table yet is nobody */
 async function peopleAndEmails(DB) {
@@ -81,6 +82,8 @@ const card = (p, emails, welcomedAt = () => false) => ({
   slug: p.slug, name: personName(p) || p.slug, group: p.group || 'team', where: GROUPS[p.group] || 'People',
   status: personStatus(p), hidden: p.publishStatus === 'draft', organization: p.organization || '',
   email: emails[p.slug] || '', hasPhoto: !!p.photo, photo: p.photo ? photoUrl(p, 96) : '', welcomed: !!welcomedAt(p),
+  // (their email on file can't sign them in as themselves: a SOARD address, a group inbox. Said, never "kept as their sign-in")
+  ...(emails[p.slug] && signInWhy(emails[p.slug]) ? { emailOk: false, emailWhy: signInWhy(emails[p.slug]) } : {}),
 });
 /**
  * A name as people would match it: no accents, no case, one space, no title, middle initial or "Jr", no "In memoriam"
@@ -88,11 +91,17 @@ const card = (p, emails, welcomedAt = () => false) => ({
  * ("王小明", "Владимир Петров"), as letters, never dropped as not a-z.
  */
 const wordOf = (w) => w.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+// After a name, never part of it: a generation, or letters for a degree or credential ("Dana Price, CPA", "Jordan Ames
+// M.D.", "Pat Lee PhD")
+// (never letters that are also a family name: Do, Ra, Pa stay a name)
+const AFTER_NAME = /^(jr|sr|ii|iii|iv|cpa|phd|md|dds|dmd|dvm|jd|esq|mba|mpa|mph|msw|lcsw|lpc|psyd|edd|rn|aia|cfp|cfa|cfre|cae|pmp|shrm|cpcu|leed)$/;
 const nameWords = (n) => {
   const words = String(personName({ name: n }) || '').split(/\s+/).filter(Boolean);
   let i = 0;
   while (i < words.length - 1 && TITLE.test(words[i])) i++;
-  return words.slice(i).map(wordOf).filter((w, k) => w && (k === 0 || !/^[a-z]$/.test(w)) && !/^(jr|sr|ii|iii|iv)$/.test(w));
+  const w = words.slice(i).map(wordOf).filter(Boolean);
+  while (w.length > 1 && AFTER_NAME.test(w[w.length - 1])) w.pop();
+  return w.filter((x, k) => (k === 0 || !/^[a-z]$/.test(x)) && !/^(jr|sr|ii|iii|iv)$/.test(x));
 };
 const nameKey = (n) => nameWords(n).join(' ');
 /**
@@ -103,6 +112,13 @@ function mightBe(a, b) {
   const x = nameWords(a);
   const y = nameWords(b);
   if (!x.length || !y.length) return false;
+  // (the same letters with or without a space: "山田太郎" and "山田 太郎")
+  if (x.join('') === y.join('')) return true;
+  // (a first initial before the name they go by: "F. Scott Fitzgerald" is Scott Fitzgerald, as well as F-something)
+  const ways = (v) => (v.length >= 3 && v[0].length === 1 ? [v, v.slice(1)] : [v]);
+  return ways(x).some((p) => ways(y).some((q) => alike(p, q)));
+}
+function alike(x, y) {
   if (x.join(' ') === y.join(' ')) return true;
   if (x.length < 2 || y.length < 2 || x[x.length - 1] !== y[y.length - 1]) return false;
   const [f, g] = [x[0], y[0]];
@@ -177,9 +193,15 @@ export async function addPlan(env, id, { now = Date.now() } = {}) {
   // application's own part first (marked Not now in another tab since, say), then who it matches on People
   const p = plan.person || {};
   const app = plan.application || {};
-  plan.key = `${[app.status || '', app.statusAt || ''].join('|')}#${[plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
-    plan.slug || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.slug || '', plan.namesake?.status || '',
-    plan.emailsOn ? 1 : 0, app.headshot?.url || ''].join('|')}`;
+  // (in parts, so a press refused can say which changed: the application, its headshot, the emails switch, People)
+  plan.key = [
+    [app.status || '', app.statusAt || ''].join('|'),
+    app.headshot?.url || '',
+    plan.emailsOn ? 'on' : 'off',
+    [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
+      plan.slug || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.slug || '', plan.namesake?.status || '',
+      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.welcomed ? 1 : 0}:${o.hasPhoto ? 1 : 0}`).join(',')].join('|'),
+  ].join('#');
   return plan;
 }
 
@@ -199,7 +221,7 @@ async function planOf(env, id, now = Date.now()) {
   const { DB } = env;
   await ensureAdvisorySchema(DB);
   const app = await getAdvisoryApplication(DB, id);
-  if (!app) throw err('That application isn’t here any more', 404);
+  if (!app) throw err(GONE, 404);
   const [{ people, emails }, welcomes, intent, settings] = await Promise.all([peopleAndEmails(DB), welcomeRecords(DB), intentOf(DB, app.id), advisorySettings(DB)]);
   const email = normEmail(app.email);
   // An email the sign-in can't use (one an old application came with), or SOARD's own group inbox (everyone in the
@@ -247,7 +269,11 @@ async function planOf(env, id, now = Date.now()) {
     .sort((a, b) => exact(a) - exact(b) || (personStatus(a) === 'active' ? 0 : 1) - (personStatus(b) === 'active' ? 0 : 1))[0]
     || same.find((p) => p.slug === slugOf(app.name)) || same.sort((a, b) => exact(a) - exact(b))[0] || null;
   const slug = await freeSlug(DB, app.name, people, app.id);
-  if (named && named.group === 'advisory' && !memorial(named)) return { kind: 'choose', why: 'name', ...base, person: show(named), slug };
+  if (named && named.group === 'advisory' && !memorial(named)) {
+    // (anyone else on People → Advisory their name could be: "J. Ames" with Jordan and Jamie Ames both there)
+    const others = same.filter((p) => p !== named && p.group === 'advisory' && !memorial(p)).slice(0, 3).map(show);
+    return { kind: 'choose', why: 'name', ...base, person: show(named), slug, ...(others.length ? { others } : {}) };
+  }
   return { kind: 'new', ...base, slug, ...(named ? { namesake: show(named) } : {}) };
 }
 
@@ -317,15 +343,15 @@ async function hold(DB, keys, now) {
 }
 const release = async (DB, keys) => { for (const key of keys || []) await DB.prepare('DELETE FROM advisory_add_holds WHERE key = ?').bind(key).run().catch(() => {}); };
 
-export async function addToBoard(env, ctx, { id, as, seen = null, by = '', now = Date.now(), fetchImpl = fetch } = {}) {
+export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by = '', now = Date.now(), fetchImpl = fetch } = {}) {
   const { DB } = env;
   let keys = null;
   try {
     const first = await getAdvisoryApplication(DB, id);
-    if (!first) throw err('That application isn’t here any more', 404);
+    if (!first) throw err(GONE, 404);
     keys = await hold(DB, [`app:${id}`, ...(first.email ? [`email:${normEmail(first.email)}`] : [])], now);
     if (!keys) throw err('Someone is adding them right now. Give it a moment, then look again.');
-    return await addHeld(env, ctx, { id, as, seen, by, now, fetchImpl });
+    return await addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl });
   } catch (e) {
     if (e?.status) throw e;
     // D1 or a save that didn't answer: words for staff (never "D1_ERROR: …"), and the next press finishes it
@@ -336,18 +362,24 @@ export async function addToBoard(env, ctx, { id, as, seen = null, by = '', now =
   }
 }
 
-async function addHeld(env, ctx, { id, as, seen, by, now, fetchImpl }) {
+async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl }) {
   const { DB } = env;
   const plan = await addPlan(env, id);
   const app = plan.application;
   // The box pressed must say what's true now, all of it (a namesake added since, the person moved to alumni, their
   // email changed, another tab added them): if not, nothing is done and the box is asked again
   if (seen !== plan.key) {
-    // (the application itself changed: said as what it is now, and who did it)
-    const [was] = String(seen || '').split('#');
-    if (was !== plan.key.split('#')[0] && app.status !== 'joined') {
+    // Said as what changed: the application (marked something else, by whom), a newer headshot, the emails switch, or
+    // who it matches on People
+    const was = String(seen || '').split('#');
+    const now = plan.key.split('#');
+    if (was[0] !== now[0] && app.status !== 'joined') {
       const label = STATUSES.find((s) => s.id === app.status)?.label || app.status;
       throw err(`This application was marked ${label}${app.statusBy ? ` by ${app.statusBy}` : ''} since the box opened. Look at the box again before pressing.`);
+    }
+    if (was.length === now.length && was[3] === now[3]) {
+      if (was[1] !== now[1]) throw err('They sent a newer headshot since the box opened. Look at the box again before pressing: it shows the one that’s used.');
+      if (was[2] !== now[2]) throw err(`Advisory Board emails were turned ${plan.emailsOn ? 'on' : 'off'} since the box opened. Look at the box again before pressing: it says what’s emailed now.`);
     }
     throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
   }
@@ -402,7 +434,10 @@ async function addHeld(env, ctx, { id, as, seen, by, now, fetchImpl }) {
     }
     Object.assign(out, { slug: plan.slug, name: record.name, made: true, photoAdded: !!record.photo });
   } else {
-    const slug = plan.person.slug;
+    // (the one staff said it is: the person the box found, or another it named as maybe them)
+    const chosen = to ? [plan.person, ...(plan.others || [])].find((x) => x?.slug === to) : plan.person;
+    if (!chosen) throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
+    const slug = chosen.slug;
     const row = await DB.prepare('SELECT data FROM team WHERE slug = ?').bind(slug).first();
     const saved = parse(row?.data, null);
     if (!saved) throw err('Their People record isn’t there any more. Close this and press Add to Advisory Board again.');
@@ -423,7 +458,9 @@ async function addHeld(env, ctx, { id, as, seen, by, now, fetchImpl }) {
   // Their sign-in email: one they have stays; none on file, this application's
   // (a read that fails stops here: never taken as "none on file", which would save this one over theirs)
   const had = normEmail((await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(out.slug).first())?.email);
-  if (had) Object.assign(out, { email: had, emailKept: true });
+  // (theirs kept: the application's own email, unusable or not, is beside the point; one on file that can't sign them
+  // in as themselves is said)
+  if (had) Object.assign(out, { email: had, emailKept: true, emailUnusable: '', ...(signInWhy(had) ? { emailOnFile: { email: had, why: signInWhy(had) } } : {}) });
   else if (email && plan.emailUsable) {
     await setBoardEmail(DB, out.slug, email).catch((e) => {
       // (setBoardEmail's own words: an address someone else has, one that doesn't look right; anything else is D1)

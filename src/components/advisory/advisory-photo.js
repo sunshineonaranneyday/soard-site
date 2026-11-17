@@ -286,7 +286,10 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
 
   paint();
   let loadedYet = false;
-  const loaded = load().finally(() => { loadedYet = true; });
+  // (no photo ever picked on this device, its numbering never started: nothing kept to look for, so a browser whose
+  // IndexedDB hangs never makes anyone wait on it)
+  const pickedHereEver = (() => { try { return localStorage.getItem(SEQ) !== null; } catch { return true; } })();
+  const loaded = (pickedHereEver ? load() : Promise.resolve()).finally(() => { loadedYet = true; });
   return {
     get value() { return held ? 'added' : ''; },
     get file() { return held?.file || null; },
@@ -299,6 +302,8 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     get pickedSeq() { return held?.seq || 0; },
     /** Settled since the page opened (what this device kept, brought back) */
     get isLoaded() { return loadedYet; },
+    /** A picked photo being got ready right now (not what this device kept, being looked for) */
+    get preparing() { return !!busy; },
     /** The status line's words off (the form's own note now says what's needed) */
     quiet() { if (!busy) say(''); },
     /** Leaving the step: a warning about a photo turned down there goes (an added photo's note stays) */

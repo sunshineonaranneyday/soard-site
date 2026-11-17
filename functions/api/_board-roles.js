@@ -35,6 +35,13 @@ export const normEmail = (e) => String(e || '').trim().toLowerCase();
 const isEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e || '');
 /** A SOARD staff sign-in (a soardcharity.com address) */
 export const isStaffEmail = (email) => normEmail(email).endsWith(`@${STAFF_DOMAIN}`) && isEmail(normEmail(email));
+/**
+ * Why an address can't sign someone in as themselves (an Advisory Board member, a board member): 'group' (a SOARD
+ * group inbox: everyone in it reads the code), 'staff' (a soardcharity.com address signs in as staff), 'bad' (not an
+ * email), or '' (it can)
+ */
+export const signInWhy = (email) => (!isEmail(normEmail(email)) ? 'bad' : isGroupInbox(email) ? 'group' : isStaffEmail(email) ? 'staff' : '');
+export const memberSignIn = (email) => signInWhy(email) === '';
 
 /** People records, normalized: [{ slug, ...person }] */
 export async function peopleRows(DB) {

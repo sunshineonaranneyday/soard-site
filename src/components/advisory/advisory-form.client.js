@@ -419,17 +419,17 @@ export function initAdvisoryForm() {
     }
     // (a choice: the one picked, as a screen reader and Space find it, else the first)
     const input = el.querySelector('input[type="radio"]:checked') || el.querySelector('input:not([type="hidden"]), textarea');
-    bringIn(el);
+    bringIn(el, input);
     input?.focus({ preventScroll: true });
     // (and again once its note's look has settled: with reduced motion its padding comes a moment late)
-    setTimeout(() => requestAnimationFrame(() => bringIn(el)), 180);
+    setTimeout(() => requestAnimationFrame(() => bringIn(el, input)), 180);
   }
   /**
    * A question into the room between the bar across the top and Back / Continue: left where it is if it's all in
    * view (the step's line stays in sight), else brought just into view. One taller than the room (the headshot's
    * card on a phone held sideways): its note, what's wrong, brought into sight, never left behind the bar
    */
-  function bringIn(el) {
+  function bringIn(el, input = null) {
     const top = (ui.top?.getBoundingClientRect().bottom || 0) + 4;
     const bottom = (form.querySelector('.adv-nav')?.getBoundingClientRect().top ?? innerHeight) - 4;
     const r = el.getBoundingClientRect();
@@ -437,7 +437,15 @@ export function initAdvisoryForm() {
     let by = 0;
     if (r.height <= bottom - top) by = r.top < top ? r.top - top : r.bottom > bottom ? r.bottom - bottom : 0;
     else if (note) { const n = note.getBoundingClientRect(); by = n.bottom > bottom ? n.bottom - bottom + 8 : n.top < top ? n.top - top - 8 : 0; }
-    else by = r.top < top || r.top > bottom ? r.top - top : 0;
+    else {
+      // (no note: as much of it as fits, from its top, the box the cursor's in kept in sight)
+      by = r.top - top;
+      const i = input?.getBoundingClientRect();
+      if (i && i.height > 2 && i.width > 2) {
+        if (i.bottom - by > bottom) by = i.bottom - bottom + 8;
+        if (i.top - by < top) by = i.top - top - 8;
+      }
+    }
     if (Math.abs(by) >= 1) window.scrollBy({ top: by, behavior: reducedMotion() ? 'auto' : 'smooth' });
   }
   /** Once someone fixes an answer, its message goes as they type */
@@ -607,6 +615,7 @@ export function initAdvisoryForm() {
   }
   /** Put a step on screen, a screen of it (a number, 'last', or the one holding `at`) */
   function go(i, { dir = 0, screen = 0, at = null, field = null, focus = true } = {}) {
+    navSeq++;
     const changed = i !== step;
     if (dir) calmUntil = performance.now() + 350; // a second press of Continue mid-change (a double tap) counts once
     return swap(() => {
@@ -697,6 +706,7 @@ export function initAdvisoryForm() {
   }
   function exitFocus({ fromPop = false, keep = true } = {}) {
     if (!focused) return;
+    navSeq++;
     if (keep) saveNow();
     if (step >= 0 && step < total) resumeAt = { step, screen: screenNo, field: lastIdOn(step, screenNo) }; // "Continue where you left off": this screen
     // Left by the browser's Back (a screen at a time, back to the first): the furthest step they'd reached instead
@@ -1292,6 +1302,9 @@ export function initAdvisoryForm() {
   ui.exit.addEventListener('click', () => exitFocus());
 
   let photoWait = false;
+  // Each move (Continue, Back, Save and exit, the browser's Back): a Continue still waiting on a photo when another
+  // move has happened since gives way to it, never undoing it a moment later
+  let navSeq = 0;
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (sending || moving || photoWait || performance.now() < calmUntil) return;
@@ -1308,8 +1321,12 @@ export function initAdvisoryForm() {
     })();
     if (reads.length) {
       photoWait = true;
-      const slowPhoto = setTimeout(() => { ui.next.setAttribute('aria-busy', 'true'); announce('Getting your photo ready. One moment.'); }, 150);
+      const at = navSeq;
+      // (said as what it is: a photo picked being got ready, or this device being looked through for one it kept)
+      const picked = reads.some((id) => photos[id].preparing);
+      const slowPhoto = setTimeout(() => { ui.next.setAttribute('aria-busy', 'true'); announce(picked ? 'Getting your photo ready. One moment.' : 'Checking this device for your photo. One moment.'); }, 150);
       try { await photosSettled(reads); } finally { clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false; }
+      if (at !== navSeq || !focused) return; // (Back or Save and exit pressed meanwhile: that stands)
     }
     ui.sendError.hidden = true;
     if (step === REVIEW) { await send(); return; }

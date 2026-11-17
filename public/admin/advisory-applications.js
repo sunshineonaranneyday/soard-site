@@ -381,11 +381,22 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
   const p = plan.person || {};
   const appEmail = String(app.email || '').toLowerCase();
   const email = plan.emailUsable === false ? '' : appEmail; // the one they'd sign in with
-  const unusable = plan.emailUsable === false && appEmail
+  // Their email on file can't sign them in as themselves (a SOARD address, a group inbox): said, and it's never "kept
+  // as their sign-in" or emailed how to sign in
+  const fileOkOf = (x) => !!x.email && x.emailOk !== false;
+  const fileOk = fileOkOf(p);
+  const onFileOf = (x, many = false) => (x.email && !fileOkOf(x) ? html`<p class="ava-note">${many ? `${x.name}’s` : 'Their'} email on file, <strong>${x.email}</strong>, ${x.emailWhy === 'group'
+    ? 'is a SOARD group inbox: everyone in the group reads it, so it can’t sign them in.'
+    : x.emailWhy === 'staff' ? 'is a SOARD address, which signs in as staff, never as an Advisory Board member.' : 'can’t be used to sign in.'} Put their own on their People page: their sign-in email goes once it’s there.</p>` : null);
+  const onFile = onFileOf(p);
+  // This application's email the sign-in can't use: said where it matters (never beside one of theirs that's kept)
+  const unusable = plan.emailUsable === false && appEmail && appEmail !== p.email && !(plan.kind === 'same' && p.email)
     ? html`<p class="ava-note">${plan.emailWhy === 'group'
       ? html`<strong>${appEmail}</strong> is a SOARD group inbox: everyone in the group reads it, so it can’t be their sign-in email and isn’t saved.`
-      : plan.emailWhy === 'staff' ? html`<strong>${appEmail}</strong> ${plan.emailAs ? html`signs in as <strong>${plan.emailAs}</strong>, a SOARD address,` : 'is a SOARD address, which'} signs in as staff, never as an Advisory Board member, so it isn’t saved.`
-        : html`This application’s email, <strong>${appEmail}</strong>, can’t be used to sign in, so it isn’t saved.`} Add their own on their People page so they can sign in and get reveal invites: their sign-in email goes once it’s there.</p>` : null;
+      : plan.emailWhy === 'staff' ? html`<strong>${appEmail}</strong> ${plan.emailAs ? html`signs in as <strong>${plan.emailAs}</strong>, a SOARD address, which` : 'is a SOARD address, which'} signs in as staff, never as an Advisory Board member, so it isn’t saved.`
+        : html`This application’s email, <strong>${appEmail}</strong>, can’t be used to sign in, so it isn’t saved.`} ${plan.kind === 'choose' && p.email
+      ? 'As a different person, they’d need their own on their People page to sign in and get reveal invites.'
+      : 'Add their own on their People page so they can sign in and get reveal invites: their sign-in email goes once it’s there.'}</p>` : null;
   // A test (its name starts with Test): adding it makes a real Advisory Board member, so it's said first
   const testLine = app.isTest ? html`<p class="ava-note"><strong>This looks like a test application</strong> (its name starts with “Test”). Adding it makes a real Advisory Board member who gets reveal invites and advisory@ emails. If it was only a test, cancel and delete the application instead.</p>` : null;
   const softLine = soft && shot ? html`<p class="ava-note">Their headshot is ${shot.width} × ${shot.height} pixels, so it may look a little soft on the site.</p>` : null;
@@ -394,16 +405,26 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
   const welcomes = (to, had = false) => (!to || had ? '' : boardEmails ? `emails ${to} how to sign in to the Advisory Board page` : `emails ${to} how to sign in once Advisory Board emails are turned on (they’re off now)`);
   const welcomeLine = (to, had) => { const w = welcomes(to, had); return w ? html`<li>${w},</li>` : null; };
   const face = (src, name) => html`<span class="ava-face">${initials(name)}${src ? html`<img src=${src} alt="" width="40" height="40" loading="lazy" onError=${(e) => { e.currentTarget.hidden = true; }} />` : null}</span>`;
-  const press = (as) => () => { if (!busy) onAdd(as); };
+  const press = (as, to = null) => () => { if (!busy) onAdd(as, to); };
   const wait = busy ? 'true' : null;
   const cancel = html`<button class="btn btn-ghost" data-autofocus onClick=${() => { if (!busy) onClose(); }} aria-disabled=${wait}>${plan.busy || plan.kind === 'blocked' || plan.kind === 'joined' ? 'Close' : 'Cancel'}</button>`;
   const statusLine = app.status === 'not-now' ? html`<p class="ava-note">This application is marked Not now${app.statusBy ? `, by ${app.statusBy}` : ''}.</p>` : null;
   const who = (x) => [x.where, x.email || 'no email on file', x.organization, x.status === 'alumni' ? 'a former member' : null].filter(Boolean).join(' · ');
   // A box opened again with a different answer (a press that stopped partway): the keys back on Cancel
   const firstPlan = useRef(true);
+  const wasBusy = useRef(!!plan.busy);
   useEffect(() => {
+    const fromWait = wasBusy.current && !plan.busy;
+    const still = wasBusy.current && !!plan.busy;
+    wasBusy.current = !!plan.busy;
     if (firstPlan.current) { firstPlan.current = false; return; }
-    requestAnimationFrame(() => document.querySelector('.ava-dialog [data-autofocus]')?.focus());
+    if (still && !plan.stuck) return; // (asked again, still waiting: the keys stay put, nothing said over and over)
+    requestAnimationFrame(() => {
+      const head = document.querySelector('.ava-dialog h2');
+      // (the wait over, or taking longer: what the box says now is heard, from its heading)
+      if ((fromWait || plan.stuck) && head) { head.setAttribute('tabindex', '-1'); head.focus(); return; }
+      document.querySelector('.ava-dialog [data-autofocus]')?.focus();
+    });
   }, [plan]);
 
   if (plan.busy) {
@@ -430,19 +451,20 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     <//>`;
   }
   // The same person, in words: what changes for them (sign-in, invites and advisory@ only when they didn't have them)
-  const sameParts = () => {
-    const restored = p.status === 'alumni';
-    const signIn = p.email || email; // kept, or saved
-    const gains = restored || (!p.email && !!email); // newly on the sign-in, invites and advisory@
+  const sameParts = (x = p) => {
+    const restored = x.status === 'alumni';
+    const ok = fileOkOf(x);
+    const signIn = x.email ? (ok ? x.email : '') : email; // kept, or saved ('': none that signs them in)
+    const gains = restored || (!x.email && !!email); // newly on the sign-in, invites and advisory@
     return [
-      `links this application to ${p.name}`,
+      `links this application to ${x.name}`,
       restored ? 'makes them active on the Advisory Board again (they’re a former member): back on the Advisory Board page for the other members, and hidden from the public site until you turn on Show on the site' : '',
-      !p.hasPhoto && shot ? 'makes this headshot their photo (they have none)' : '',
-      p.email ? `keeps ${p.email} as their sign-in email` : email ? `saves ${email} as their sign-in email` : '',
+      !x.hasPhoto && shot ? 'makes this headshot their photo (they have none)' : '',
+      ok ? `keeps ${x.email} as their sign-in email` : !x.email && email ? `saves ${email} as their sign-in email` : '',
       gains && signIn ? 'lets them sign in to the Advisory Board page' : '',
       gains && signIn ? 'puts them on every reveal invite' : '',
       gains && signIn ? `puts them on ${advisoryAt}` : '',
-      welcomes(signIn, p.welcomed),
+      welcomes(signIn, x.welcomed),
     ].filter(Boolean);
   };
   const newParts = () => [
@@ -458,20 +480,25 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
 
   if (plan.kind === 'choose') {
     const theirs = p.email && appEmail ? 'Their email on file isn’t the one on this application' : p.email ? 'This application has no email' : 'They have no email on file';
-    return html`<${Dialog} title=${`Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${html`${cancel}
+    // (more than one on People → Advisory could be them: each is shown, and staff say which, or someone new)
+    const all = [p, ...(plan.others || [])];
+    const many = all.length > 1;
+    return html`<${Dialog} title=${many ? `Is ${app.name} one of these people?` : `Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${html`${cancel}
         <button class="btn btn-ghost" onClick=${press('new')} aria-disabled=${wait}>${busy ? 'Adding…' : 'A different person'}</button>
-        <button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Adding…' : 'The same person'}</button>`}>
+        ${many ? all.map((x) => html`<button key=${x.slug} class="btn btn-primary" onClick=${press('same', x.slug)} aria-disabled=${wait}>${busy ? 'Adding…' : `It’s ${x.name}`}</button>`)
+          : html`<button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Adding…' : 'The same person'}</button>`}`}>
       ${testLine}${statusLine}
-      <p>Someone on People → Advisory has ${p.name === app.name ? 'this name' : 'a name like this one'}. ${theirs}, so say who this is.</p>
+      <p>${many ? `${all.length} people on People → Advisory have a name like this one, so say who this is.` : html`Someone on People → Advisory has ${p.name === app.name ? 'this name' : 'a name like this one'}. ${theirs}, so say who this is.`}</p>
       <dl class="ava-compare">
-        <dt>On People</dt><dd>${face(p.photo, p.name)}<span><strong>${p.name}</strong><br />${who(p)}</span></dd>
+        ${all.map((x) => html`<dt>On People</dt><dd>${face(x.photo, x.name)}<span><strong>${x.name}</strong><br />${who(x)}</span></dd>`)}
         <dt>This application</dt><dd>${face(shot ? headshotSrc(shot, 80) : '', app.name)}<span><strong>${app.name}</strong><br />${[app.email || 'no email', app.company].filter(Boolean).join(' · ')}</span></dd>
       </dl>
       <ul>
-        <li><strong>The same person</strong> ${sentence(sameParts())}</li>
+        ${many ? all.map((x) => html`<li><strong>It’s ${x.name}</strong> ${sentence(sameParts(x))}</li>`) : html`<li><strong>The same person</strong> ${sentence(sameParts())}</li>`}
         <li><strong>A different person</strong> ${sentence(newParts())}</li>
       </ul>
       <p>Either way, this application is marked Joined.</p>
+      ${many ? all.map((x) => onFileOf(x, true)) : onFile}
       ${unusable}
       ${softLine}
     <//>`;
@@ -487,6 +514,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
         <li>and marks this application Joined.</li>
       </ul>
       <p>${p.status === 'alumni' ? 'The year they left is taken off their People page; nothing else on it changes.' : 'Nothing else on their People page changes.'}</p>
+      ${onFile}
       ${unusable}
       ${!p.hasPhoto && shot ? softLine : null}
     <//>`;
@@ -621,7 +649,12 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
     const t = setTimeout(async () => {
       busyTries.current += 1;
       const again = await call(`${API}?plan=${encodeURIComponent(id)}`);
-      if (!again.success) { setPlan((was) => (was ? { ...was } : was)); return; } // (asked again in a moment)
+      if (!again.success) {
+        // Deleted meanwhile: the box closes and the panel says so. Anything else: asked again, and "taking longer" in time
+        if (again.status === 404) { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: again.error }); return; }
+        setPlan((was) => (was ? { ...was, ...(busyTries.current >= 40 ? { stuck: true } : {}) } : was));
+        return;
+      }
       setPlan(again.plan.busy && busyTries.current >= 40 ? { ...again.plan, stuck: true } : again.plan);
       if (!again.plan.busy) {
         const fresh = await call(`${API}?id=${encodeURIComponent(id)}`);
@@ -655,13 +688,15 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       : w.off ? 'Advisory Board emails are off, so their sign-in email goes once those are turned on.'
         : w.noEmail ? 'Add a working email on their People page so they can sign in.'
           : w.error ? 'Their sign-in email didn’t go just now. The site sends it again in a few minutes.' : '');
-  const doAdd = async (as) => {
+  const deletedNow = (j) => { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: j.error }); };
+  const doAdd = async (as, to = null) => {
     if (busy) return;
     setBusy('add');
-    const j = await call(API, { add: { id, as, seen: plan?.key || null } });
+    const j = await call(API, { add: { id, as, seen: plan?.key || null, ...(to ? { to } : {}) } });
     setBusy(null);
     if (!j.success) {
       addToast?.(j.error || 'That didn’t go through. Try again in a moment.', 'error');
+      if (j.status === 404) { deletedNow(j); return; } // (deleted in another tab: nothing here can add it now)
       // What Add would do now (a press that stopped partway changes it): the box says it, and the next press does it
       const again = await call(`${API}?plan=${encodeURIComponent(id)}`);
       if (again.success) setPlan(again.plan);
@@ -680,8 +715,9 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       p.made ? `${p.name} is on the Advisory Board${p.photoAdded ? ', with their headshot as their photo' : ''}.`
         : `${app.name}’s application is linked to ${p.name} on People → Advisory.${p.restored ? ' They’re on the Advisory Board again, off the public site until you turn on Show on the site.' : ''}${p.photoAdded ? ' Their headshot is their photo now.' : ''}`,
       p.emailUnusable ? `${p.emailUnusable} ${p.emailWhy === 'group' ? 'is a SOARD group inbox' : p.emailWhy === 'staff' ? (p.emailAs ? `signs in as ${p.emailAs}, a SOARD address, which signs in as staff` : 'is a SOARD address, which signs in as staff') : 'can’t be used to sign in'}, so it wasn’t saved. Add their own on their People page: their sign-in email goes once it’s there.` : '',
-      p.emailKept && p.email && p.email !== String(app.email || '').toLowerCase() ? `Their sign-in email stays ${p.email}.` : '',
-      p.emailUnusable && j.welcome?.noEmail ? '' : welcomeWords(j.welcome),
+      p.emailOnFile ? `Their email on file, ${p.emailOnFile.email}, ${p.emailOnFile.why === 'group' ? 'is a SOARD group inbox, so it can’t sign them in' : p.emailOnFile.why === 'staff' ? 'is a SOARD address, which signs in as staff' : 'can’t be used to sign in'}: put their own on their People page, and their sign-in email goes once it’s there.`
+        : p.emailKept && p.email && p.email !== String(app.email || '').toLowerCase() ? `Their sign-in email stays ${p.email}.` : '',
+      (p.emailUnusable || p.emailOnFile) && j.welcome?.noEmail ? '' : welcomeWords(j.welcome),
       p.made ? (p.photoAdded ? 'They stay off the public site until you turn on Show on the site.' : 'Add a photo on their People page, then turn on Show on the site and publish.') : '',
     ].filter(Boolean).join(' '), j.welcome?.error ? 'error' : 'success');
   };
@@ -786,7 +822,8 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       footer=${html`
         <button class="btn btn-ghost" data-autofocus onClick=${() => setLeaving(null)}>Keep it Joined</button>
         <button class="btn btn-primary" onClick=${async () => { const to = leaving; setLeaving(null); await setStatus(to, { sure: true }); }}>Mark it ${statuses.find((s) => s.id === leaving)?.label}</button>`}>
-      <p>This only changes the application. ${linked ? `${linked.name} stays on the Advisory Board${linked.hasEmail ? ', with their sign-in, reveal invites and advisory@' : ''}: Move to alumni on their People page is how someone leaves.${linked.hasEmail === false ? ' They have no sign-in email on their People page, so they can’t sign in or get reveal invites until one is added.' : ''}` : 'Whoever it’s linked to on People isn’t changed.'}</p>
+      <p>This only changes the application. ${linked ? `${linked.name} stays on the Advisory Board${linked.hasEmail ? ', with their sign-in, reveal invites and advisory@' : ''}: Move to alumni on their People page is how someone leaves.${linked.emailWhy ? ` Their email on file ${linked.emailWhy === 'group' ? 'is a SOARD group inbox' : linked.emailWhy === 'staff' ? 'is a SOARD address, which signs in as staff' : 'can’t be used to sign in'}, so they can’t sign in to the Advisory Board page until their own is on their People page.`
+        : linked.hasEmail === false ? ' They have no sign-in email on their People page, so they can’t sign in or get reveal invites until one is added.' : ''}` : 'Whoever it’s linked to on People isn’t changed.'}</p>
     <//>`}
     ${confirm === 'remove' && app && html`<${Dialog} title=${`Delete ${app.name}’s application?`} size="sm" busy=${busy === 'remove'} onClose=${() => setConfirm(null)}
       footer=${html`

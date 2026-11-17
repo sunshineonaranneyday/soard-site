@@ -33,6 +33,7 @@ import * as adminApi from '../functions/api/advisory-applications-admin.js';
 import * as publicApi from '../functions/api/advisory-apply.js';
 import { submitApplication, listAdvisoryApplications, getAdvisoryApplication, readHeadshot } from '../functions/api/_advisory-applications.js';
 import sharp from 'sharp';
+import { EMAIL_ALIASES } from '../functions/api/_reveal-invites.js';
 import { execFileSync } from 'node:child_process';
 import { axeScan, axeText } from './lib/axe.mjs';
 
@@ -332,6 +333,8 @@ await page.waitForSelector('.ava-dialog', { timeout: 4000 });
   await DB.prepare('DELETE FROM advisory_add_holds').run();
   const moved = await page.waitForFunction(() => /sign in to the Advisory Board page with/.test(document.querySelector('.ava-dialog')?.textContent || ''), { timeout: 6000 }).then(() => true).catch(() => false);
   ok(moved, `and once it's done, the box shows what Add does now, by itself (${await text(page, '.ava-dialog h2')})`);
+  await sleep(300);
+  ok(await page.evaluate(() => document.activeElement?.matches('.ava-dialog h2')), `and the keys go to its heading, so a screen reader hears what it says now (${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 60))})`);
 }
 {
   const said = await text(page, '.ava-dialog');
@@ -339,7 +342,11 @@ await page.waitForSelector('.ava-dialog', { timeout: 4000 });
   ok(/with their headshot as their photo/.test(said) && /emails jordan@example\.org how to sign in once Advisory Board emails are turned on \(they’re off now\)/.test(said) && !/add a photo/.test(said), `and their headshot, and that the sign-in email waits for the Advisory Board’s emails (${said})`);
   ok(!/advisor(?!y)/i.test(said), `never "advisor" (${(said.match(/\S*advisor(?!y)\S*/gi) || []).join(', ')})`);
   await page.waitForFunction(() => document.activeElement?.closest?.('.ava-dialog'), { timeout: 2000 }).catch(() => null);
-  ok(await page.evaluate(() => document.activeElement?.textContent.trim()) === 'Cancel', `it opens on Cancel: a stray Enter adds nobody (${await page.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))})`);
+  // (here it came after a wait, so the keys are on its heading, read out; Cancel when it opens straight away, below)
+  const on = await page.evaluate(() => document.activeElement?.matches('.ava-dialog h2') ? 'heading' : document.activeElement?.textContent.trim());
+  await page.keyboard.press('Enter'); await sleep(600);
+  ok(['heading', 'Cancel'].includes(on) && !!(await page.$('.ava-dialog')) && (await getAdvisoryApplication(DB, jordan.id)).status !== 'joined',
+    `the keys start on its heading or Cancel, never Add: a stray Enter adds nobody (${on})`);
 }
 await page.screenshot({ path: join(OUT, 'admin-add-1440.png') });
 // A press that fails: said in words, the box stays (asked again of the server), and the keys go back to Cancel
@@ -541,6 +548,80 @@ await phone.screenshot({ path: join(OUT, 'admin-drawer-390.png') });
 ok(!(await sideways(phone)), 'phone: nothing past the edge');
 await phone.screenshot({ path: join(OUT, 'admin-list-390.png') });
 await phone.close();
+{
+  // Someone whose email on People is a SOARD address (it signs in as staff): the box never says it's kept as their
+  // sign-in, or that it emails them how to sign in, and says what to do
+  await onPeople('sal-staff', { name: 'Sal Staff', group: 'advisory', publishStatus: 'published' });
+  await DB.prepare("INSERT INTO reveal_board_emails VALUES ('sal-staff', 'sal@soardcharity.com', null)").run();
+  const sal = (await submitApplication(env, { ...base, fullName: 'Sal Staff', email: 'sal@soardcharity.com', signature: 'Sal Staff' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const st = await open(1280, `/admin/__advisory.html#advisory-applications/${sal.id}`, 900);
+  await st.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(st, '.ava-drawer button', /^Add to Advisory Board$/);
+  await st.waitForSelector('.ava-dialog', { timeout: 4000 });
+  const said = await text(st, '.ava-dialog');
+  ok(/Their email on file, sal@soardcharity\.com, is a SOARD address, which signs in as staff, never as an Advisory Board member\. Put their own on their People page/.test(said)
+    && !/keeps sal@soardcharity\.com as their sign-in email/.test(said) && !/emails sal@soardcharity\.com how to sign in/.test(said) && !/isn’t saved/.test(said),
+    `an email on file that signs in as staff: the box says so, never "keeps it as their sign-in" or "emails it how to sign in" (${said})`);
+  await st.waitForFunction(() => document.activeElement?.closest?.('.ava-dialog'), { timeout: 2000 }).catch(() => null);
+  ok(await st.evaluate(() => document.activeElement?.textContent.trim()) === 'Cancel', `a box opened straight away starts on Cancel: a stray Enter adds nobody (${await st.evaluate(() => document.activeElement?.outerHTML.slice(0, 80))})`);
+  await clickText(st, '.ava-dialog button', /^Cancel$/);
+  await st.close();
+}
+{
+  // Another of someone's addresses that signs in as a SOARD one: one sentence, said right
+  const [alias, as] = Object.entries(EMAIL_ALIASES)[0];
+  const al = (await submitApplication(env, { ...base, fullName: 'Al Alias', email: alias, signature: 'Al Alias' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pa = await open(1280, `/admin/__advisory.html#advisory-applications/${al.id}`, 900);
+  await pa.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pa, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pa.waitForSelector('.ava-dialog', { timeout: 4000 });
+  const said = await text(pa, '.ava-dialog');
+  ok(said.includes(`${alias} signs in as ${as}, a SOARD address, which signs in as staff, never as an Advisory Board member, so it isn’t saved.`), `an address that signs in as a SOARD one: one sentence (${said.slice(said.indexOf(alias), said.indexOf(alias) + 150)})`);
+  await clickText(pa, '.ava-dialog button', /^Cancel$/);
+  await pa.close();
+}
+{
+  // An initial two members share: both named, a button for each, and the one pressed is the one linked
+  await onPeople('quinn-ames', { name: 'Quinn Ames', group: 'advisory', publishStatus: 'published' });
+  await onPeople('quincy-ames', { name: 'Quincy Ames', group: 'advisory', publishStatus: 'published' });
+  await DB.prepare("INSERT INTO reveal_board_emails VALUES ('quinn-ames', 'quinn@example.org', null)").run();
+  await DB.prepare("INSERT INTO reveal_board_emails VALUES ('quincy-ames', 'quincy@example.org', null)").run();
+  const qa = (await submitApplication(env, { ...base, fullName: 'Q. Ames', email: 'q.ames@example.org', signature: 'Q. Ames' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pq = await open(1280, `/admin/__advisory.html#advisory-applications/${qa.id}`, 900);
+  await pq.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pq, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pq.waitForSelector('.ava-dialog', { timeout: 4000 });
+  const box = { title: await text(pq, '.ava-dialog h2'), buttons: await pq.$$eval('.ava-dialog .kd-dialog__foot button', (bs) => bs.map((b) => b.textContent.trim())), words: await text(pq, '.ava-dialog') };
+  ok(box.title === 'Is Q. Ames one of these people?' && box.buttons.includes('It’s Quinn Ames') && box.buttons.includes('It’s Quincy Ames') && box.buttons.includes('A different person')
+    && /It’s Quincy Ames links this application to Quincy Ames/.test(box.words), `two members the name could be: both named, each with its own button and words (${JSON.stringify(box.buttons)})`);
+  await clickText(pq, '.ava-dialog .kd-dialog__foot button', /^It’s Quincy Ames$/);
+  await pq.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).catch(() => null);
+  ok((await getAdvisoryApplication(DB, qa.id)).personSlug === 'quincy-ames', 'and the one pressed is the one linked');
+  // Moving it off Joined: their email on file signs in as staff, so it never says "their sign-in"
+  await DB.prepare("UPDATE reveal_board_emails SET email = 'quincy@soardcharity.com' WHERE slug = 'quincy-ames'").run();
+  await pq.reload({ waitUntil: 'networkidle0' });
+  await pq.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 }); await sleep(300);
+  await clickText(pq, '.ava-status button', /In conversation/);
+  await pq.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+  const leave = await text(pq, '.ava-dialog');
+  ok(!/with their sign-in/.test(leave) && /Their email on file is a SOARD address, which signs in as staff, so they can’t sign in to the Advisory Board page until their own is on their People page/.test(leave), `leaving Joined, a staff address on file is no sign-in, said as that (${leave})`);
+  await clickText(pq, '.ava-dialog button', /^Keep it Joined$/);
+  await pq.close();
+}
+{
+  // Deleted in another tab while the box is open: the press says so, the box closes, and the panel says it's gone
+  const del = (await submitApplication(env, { ...base, fullName: 'Dee Leted', email: 'dee@example.org', signature: 'Dee Leted' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pd = await open(1280, `/admin/__advisory.html#advisory-applications/${del.id}`, 900);
+  await pd.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pd, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pd.waitForSelector('.ava-dialog', { timeout: 4000 });
+  await DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(del.id).run();
+  await clickText(pd, '.ava-dialog button', /^Add them$/);
+  await pd.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).catch(() => null);
+  const after = { dialog: !!(await pd.$('.ava-dialog')), head: await text(pd, '.ava-drawer h2'), callout: await text(pd, '.ava-drawer .ava-callout') };
+  ok(!after.dialog && after.head === 'Application not found' && /deleted, maybe in another tab/.test(after.callout), `deleted while the box was open: the box closes and the panel says it's gone (${JSON.stringify(after)})`);
+  await pd.close();
+}
 
 if (DIST) {
   {
@@ -906,17 +987,30 @@ if (DIST) {
     ok(moved && took < 1500, `IndexedDB that never answers doesn’t hold the form: Continue on name and email moves at once, never waiting on the photo (${part} → ${await text(h, '#adv-part')}, ${took} ms)`);
     await h.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
     for (let i = 0; i < 6 && !(await h.$('#adv-headshot:not([data-off] *)')); i++) { const el = await h.evaluate(() => !document.querySelector('[data-field="headshot"]').closest('[data-off]')); if (el) break; await h.click('#adv-next'); await sleep(500); }
+    {
+      await h.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
+      await sleep(450); // (past the page's double-tap guard, 350 ms after a move)
+      await h.evaluate(() => { window.__heard = []; new MutationObserver(() => window.__heard.push(document.getElementById('adv-live').textContent)).observe(document.getElementById('adv-live'), { childList: true, characterData: true, subtree: true }); });
+      const t0 = Date.now();
+      await h.click('#adv-next');
+      await h.waitForFunction(() => /Please add a headshot/.test(document.getElementById('adv-headshot-err')?.textContent || ''), { timeout: 8000 }).catch(() => null);
+      const took = Date.now() - t0;
+      const heard = await h.evaluate(() => window.__heard.filter(Boolean));
+      ok(took < 1500 && !heard.some((x) => /Getting your photo ready|Checking this device/.test(x)), `no photo ever picked here, IndexedDB that never answers: Continue says "Please add a headshot." at once, never "getting your photo ready" (${took} ms, heard ${JSON.stringify(heard)})`);
+    }
     const input = await h.$('#adv-headshot');
+    const pickAt = Math.round(await h.evaluate(() => performance.now()));
     await input.uploadFile(GOOD_JPG);
     await h.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 15000 }).catch(() => null);
     // Save and exit straight away, while this browser is still failing to keep it: once it gives up (its first
-    // unanswered request, 4 seconds after the page opened), the overview and the photo's note both say so
+    // unanswered request, keeping the photo just picked: nothing was looked for at the start, no photo ever having
+    // been picked here), the overview and the photo's note both say so
     await h.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
     const opened = await h.evaluate(() => performance.now());
     await h.click('#adv-exit');
     const said = await h.waitForFunction(() => /can’t keep your photo/.test(document.getElementById('adv-hub-title').textContent), { timeout: 7000 }).then(() => true).catch(() => false);
     const when = Math.round(await h.evaluate(() => performance.now()));
-    ok(said && when < 5000, `and the overview says the photo can’t be kept as soon as this browser fails to keep it, by 4 seconds after the page opened (${await text(h, '#adv-hub-title')}, at ${when} ms, Save and exit at ${Math.round(opened)} ms)`);
+    ok(said && when - pickAt < 5000, `and the overview says the photo can’t be kept as soon as this browser fails to keep it, 4 seconds after the photo went in (${await text(h, '#adv-hub-title')}, ${when - pickAt} ms after it was picked, Save and exit at ${Math.round(opened - pickAt)} ms)`);
     ok(/can’t keep it if the page closes/.test(await text(h, '#adv-headshot-status')), `and the photo’s own note says so too (${await text(h, '#adv-headshot-status')})`);
     await h.close();
   }
@@ -960,6 +1054,41 @@ if (DIST) {
       await w.close();
     }
   }
+  if (heicMade) {
+    // An iPhone photo being got ready on a slow phone: Continue waits (looking busy), and Back pressed meanwhile stands
+    const sp = await browser.newPage();
+    await sp.setViewport({ width: 1280, height: 800 });
+    await sp.setRequestInterception(true);
+    sp.on('request', async (req) => { try { if (await answer(req, '198.51.100.97') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    await sp.evaluateOnNewDocument(() => { if (!sessionStorage.getItem('sp')) { localStorage.clear(); indexedDB.deleteDatabase('soard-advisory'); sessionStorage.setItem('sp', '1'); } });
+    await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await sp.click('#adv-go'); await sleep(600);
+    const fill = { fullName: 'Slow Phone', email: 'slow@example.org', phone: '404 555 0168' };
+    for (let k = 0; k < 8; k++) {
+      const here = await sp.evaluate(() => [...document.querySelectorAll('.adv-page:not([hidden]) [data-field]')].filter((f) => !f.closest('[data-off]') && f.getClientRects().length).map((f) => f.dataset.field));
+      if (here.includes('headshot')) break;
+      for (const id of here) if (fill[id]) { await sp.click(`#adv-${id}`, { clickCount: 3 }); await sp.type(`#adv-${id}`, fill[id]); await sp.keyboard.press('Escape'); }
+      await sp.click('#adv-next'); await sleep(700);
+    }
+    const onPhoto = await text(sp, '#adv-part');
+    const cdp = await sp.target().createCDPSession();
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 10 });
+    await (await sp.$('#adv-headshot')).uploadFile(HEIC);
+    await sleep(150);
+    await sp.click('#adv-next');
+    await sleep(400);
+    const busyLook = await sp.$eval('#adv-next', (b) => ({ busy: b.getAttribute('aria-busy'), cursor: getComputedStyle(b).cursor, opacity: getComputedStyle(b).opacity }));
+    await sp.click('#adv-back');
+    await sleep(900);
+    const backAt = await text(sp, '#adv-part');
+    await sp.waitForFunction(() => document.querySelector('[data-photo="headshot"]')?.dataset.state === 'done', { timeout: 60000 }).catch(() => null);
+    await sleep(1500);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+    const after = await text(sp, '#adv-part');
+    ok(busyLook.busy === 'true' && busyLook.cursor === 'progress' && Number(busyLook.opacity) < 1, `Continue looks busy while it waits on a photo being got ready (${JSON.stringify(busyLook)})`);
+    ok(backAt !== onPhoto && after === backAt, `Back pressed while Continue waits stands: never undone once the photo is ready (${onPhoto} → Back → ${backAt} → photo ready → ${after})`);
+    await sp.close();
+  }
   for (const [w, hgt] of [[740, 360], [667, 375], [844, 390]]) {
     // A phone held sideways: Continue with no headshot brings "Please add a headshot." into sight above Back / Continue
     // (the card is taller than the room between the bars)
@@ -977,7 +1106,7 @@ if (DIST) {
       ok(link.h >= 44 && /underline/.test(link.line), `the hero’s Advisory Board link is 44px to tap and underlined (${JSON.stringify(link)})`);
       // Follow-ups read on their own, wherever they land (a screen to themselves, the review, the emails)
       const labels = await m.evaluate(() => ['involvedHow', 'networksMore', 'conflictMore'].map((id) => document.querySelector(`[data-field="${id}"] label, [data-field="${id}"] .adv-label`)?.textContent.replace(/\s+/g, ' ').trim()));
-      ok(/How have you been involved with SOARD\?/.test(labels[0]) && /relationships that may want to learn about SOARD/.test(labels[1]) && /explain the possible conflict of interest/.test(labels[2]), `each follow-up says what it’s about on its own (${labels.join(' | ')})`);
+      ok(/How have you been involved with SOARD\?/.test(labels[0]) && /people or groups who may want to learn about SOARD/.test(labels[1]) && /explain the possible conflict of interest/.test(labels[2]), `each follow-up says what it’s about on its own (${labels.join(' | ')})`);
     }
     await m.click('#adv-go'); await sleep(600);
     const fill = { fullName: 'Land Tester', email: 'land@example.org', phone: '404 555 0167', address: '3167 Main St, Duluth, GA 30096' };
@@ -1029,6 +1158,9 @@ if (DIST) {
     await k.evaluate(async (b64) => {
       const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
       await new Promise((res) => { const r = indexedDB.open('soard-advisory', 1); r.onupgradeneeded = () => r.result.createObjectStore('photos'); r.onsuccess = () => { const tx = r.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new Blob([bytes], { type: 'image/jpeg' }), name: 'me.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { r.result.close(); res(); }; }; });
+      // (as the page itself does whenever it keeps a photo: its number on this device, which is how a later visit
+      // knows there's one to look for)
+      localStorage.setItem('soard-advisory-photo-seq', '1');
     }, readFileSync(GOOD_JPG).toString('base64'));
     await k.reload({ waitUntil: 'networkidle0' }); await sleep(800);
     const hub = { title: await text(k, '#adv-hub-title'), go: await text(k, '#adv-go'), over: await k.$eval('#adv-start-over', (e) => !e.hidden).catch(() => false) };

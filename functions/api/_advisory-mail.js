@@ -26,7 +26,7 @@
 
 import { sendEmails, sendEmailItems, EMAIL_FROM, SITE_ORIGIN, isEmail } from './_broadcast-notify.js';
 import * as shell from './_email-shell.js';
-import { activeAdvisors, peopleRows, privateEmails, readState, boardAdmins } from './_board-roles.js';
+import { activeAdvisors, peopleRows, privateEmails, readState, boardAdmins, memberSignIn } from './_board-roles.js';
 import { ensureAdvisory, getSettings, INTRO_STATUSES, HOSTED_STATUSES, answerAsk } from './_advisory.js';
 import { syncBoardAccess, canSignIn, accessStatus } from './_board-access.js';
 import { greetName } from './_advisory-form.js';
@@ -348,7 +348,7 @@ export async function welcomeOnJoin(env, slug, { by = '', now = Date.now(), fetc
   const settings = await getSettings(env.DB);
   const me = (await activeAdvisors(env.DB)).find((a) => a.slug === slug);
   if (hasOrGoing((await readState(env.DB, LOG)).welcomed?.[slug], now, me?.email)) return { already: true }; // (had it, or it's on its way)
-  if (!me || !isEmail(me.email)) return { noEmail: true };
+  if (!me || !memberSignIn(me.email)) return { noEmail: true }; // (none, or one that signs in as staff or a group: it waits for their own)
   const wait = () => setEntry(env.DB, 'waiting', slug, { at: new Date(now).toISOString(), by, ...(greet ? { greet } : {}) });
   if (!settings.emails) { await wait(); return { off: true, queued: true }; }
   // The sign-in list now, not at the next heartbeat: the email's link works the moment it lands
@@ -401,7 +401,8 @@ export async function sendWaitingWelcomes(env, { now = Date.now() } = {}) {
 export async function sendWelcome(env, { by = '', slugs = null, now = Date.now(), greet = {} } = {}) {
   const settings = await getSettings(env.DB);
   if (!settings.emails) return { off: true, sent: 0 };
-  const advisors = (await activeAdvisors(env.DB)).filter((a) => isEmail(a.email) && (!slugs || slugs.includes(a.slug)));
+  // (only to an address that signs them in as an Advisory Board member: never a SOARD address or group inbox)
+  const advisors = (await activeAdvisors(env.DB)).filter((a) => memberSignIn(a.email) && (!slugs || slugs.includes(a.slug)));
   const mine = [];
   for (const a of advisors) if (await claimWelcome(env.DB, a.slug, now, a.email)) mine.push(a);
   if (!mine.length) return { sent: 0, failed: 0 };
