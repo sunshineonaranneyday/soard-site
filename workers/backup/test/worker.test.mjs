@@ -268,6 +268,7 @@ export default {
       if (u.pathname === '/facts') return Response.json(await backupFacts(env));
       if (u.pathname === '/chores') { const alerts = []; const r = await maybeBackupChores(env, { now: body.now, alert: async (c) => { alerts.push(c); } }); return Response.json({ r, alerts }); }
       if (u.pathname === '/call') return Response.json({ value: (await askBackup(env, body.method, body.arg)) ?? null });
+      if (u.pathname === '/jobs') return Response.json({ value: (await env.JOBS.run(body.name, body.args || [], 'test')) ?? null });
       return Response.json({ error: 'no' }, { status: 404 });
     } catch (e) { return Response.json({ error: String(e.message) }, { status: 500 }); }
   },
@@ -277,7 +278,7 @@ export default {
   const common = { modules: true, modulesRoot: tmp, compatibilityDate: '2026-05-01', compatibilityFlags: ['nodejs_compat'], outboundService: (request) => world.handle(request) };
   mf = new Miniflare({
     workers: [
-      { ...common, name: 'site', scriptPath: siteOut, d1Databases: { DB: 'site-config' }, serviceBindings: { BACKUP: { name: 'backup', entrypoint: 'BackupAPI' } }, bindings: { CF_ACCOUNT_ID: ACCT, CF_STREAM_TOKEN: 'site-stream-key' } },
+      { ...common, name: 'site', scriptPath: siteOut, d1Databases: { DB: 'site-config' }, serviceBindings: { BACKUP: { name: 'backup', entrypoint: 'BackupAPI' }, JOBS: { name: 'backup', entrypoint: 'Jobs' } }, bindings: { CF_ACCOUNT_ID: ACCT, CF_STREAM_TOKEN: 'site-stream-key' } },
       {
         ...common,
         name: 'backup',
@@ -304,6 +305,15 @@ export default {
 after(async () => {
   await mf?.dispose();
   rmSync(tmp, { recursive: true, force: true });
+});
+
+test('each step’s work runs where the run asks for it, by name, and nothing else does', async () => {
+  // (the run reaches it through ctx.exports, so every step has an invocation and CPU time of its own; the site test
+  // Worker is bound to it here only to knock)
+  await assert.rejects(site('/jobs', { name: 'nothing' }), /no step’s work is called nothing/);
+  for (const name of ['constructor', '__proto__', 'toString', 'hasOwnProperty']) await assert.rejects(site('/jobs', { name }), /no step’s work is called/, name);
+  const inv = (await site('/jobs', { name: 'inventory' })).value;
+  assert.ok(Array.isArray(inv.databases) && inv.databases.length >= 2, JSON.stringify(inv).slice(0, 200));
 });
 
 test('one door: the site’s binding; the backup’s own address answers nothing, and who asks is always named', async () => {
@@ -349,7 +359,12 @@ test('setup check: every piece found, the READ ME written, only the recovery she
 });
 
 test('night 1: everything is in both homes, and every copy opens to exactly what it came from', async () => {
+  world.b2.calls = {};
   const s = await runNight(N1);
+  // Backblaze is asked whether a copy is already there only when an upload of it may have arrived: none on a run
+  // where every upload's answer came (a lookup is a request Backblaze caps by the day on an account with no card)
+  assert.equal(world.b2.calls.b2_list_file_versions || 0, 0, JSON.stringify(world.b2.calls));
+  assert.ok(world.b2.files.length > 20, 'and every copy reached it');
   assert.equal(s.started.status, 'complete');
   assert.equal(s.night.ok, true, JSON.stringify(s.night.problems));
   // The private video waits for a signing key, the one with no MP4 waits for it; the one Stream is still making isn't listed
@@ -883,4 +898,19 @@ test('nights 17 to 22: copies Drive refused for nights are still taken first onc
   world.faults.b2RefuseUploads = false;
   const s = await runNight('2026-12-05');
   assert.equal(s.night.waitingToShip, 0);
+});
+
+test('night 23: Backblaze keeps an upload but its answer never comes, and is too busy to be asked: the next try looks first, and the copy is kept once', async () => {
+  world.images.push({ id: 'kids/sample-kid/after-9', filename: 'After.jpg', uploaded: '2026-12-06T00:00:00Z', bytes: randomBytes(30_000) });
+  const before = world.b2.files.length;
+  // The night's first upload is kept with no answer; asking whether it arrived is refused all five times
+  world.faults.b2KeepButLose = 1;
+  world.faults.b2ListDown = 5;
+  const s = await runNight('2026-12-06');
+  assert.deepEqual([world.faults.b2KeepButLose, world.faults.b2ListDown], [0, 0], 'the answer was lost and the lookup refused');
+  const names = world.b2.files.slice(before).map((f) => f.fileName);
+  assert.equal(new Set(names).size, names.length, `no copy kept twice in the locked bucket: ${names.join(', ')}`);
+  assert.equal(s.night.ok, true, JSON.stringify(s.night.problems));
+  assert.equal(s.night.waitingToShip, 0, 'and the copy is in both homes');
+  assert.ok((await open(twin(photoPath(world.images.at(-1))).bytes)).equals(world.images.at(-1).bytes));
 });

@@ -6,14 +6,16 @@
  * It has no public address (no workers.dev, no route), and its default entrypoint answers nothing. The website
  * reaches it only through its service binding (BACKUP, entrypoint BackupAPI), from the admin (Automations →
  * Hosting → Backup) and its own minute jobs, by calling the methods of BackupAPI below. The backup key leaves only
- * through recoverySheet, which records who asked.
+ * through recoverySheet, which records who asked. Its other entrypoint, Jobs (./flow.js), is the run's own: each
+ * step's work, called through ctx.exports so every step has an invocation (and CPU time) of its own; no Worker is
+ * bound to it.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { Night, stateOf } from './flow.js';
+import { Night, Jobs, stateOf } from './flow.js';
 import { BackupState } from './state.js';
 import { checkSetup, config } from './jobs.js';
 
-export { Night, BackupState };
+export { Night, Jobs, BackupState };
 
 const START_HOUR = 2; // Eastern
 // A run in one of these is still going: another must not start beside it

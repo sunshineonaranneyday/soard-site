@@ -4,8 +4,9 @@
  *   Google Drive: a resumable upload session, saved before the first byte, filled 16 MiB at a time; on a retry
  *   Google is asked how much it has and the rest follows. Google's MD5 of what it kept must equal ours. A wrong
  *   copy can't be deleted (Contributor), so it's left with a note and a correct one is made beside it.
- *   Backblaze: one upload for a small copy (looked for first, so a retry never keeps it twice); a large one in
- *   16 MiB parts, the parts Backblaze already has listed first. Backblaze checks every part's SHA-1 itself.
+ *   Backblaze: one upload for a small copy (looked for first on any try after the first, so a retry never keeps it
+ *   twice); a large one in 16 MiB parts, the parts Backblaze already has listed first. Backblaze checks every part's
+ *   SHA-1 itself.
  *
  * A home that isn't set up yet is skipped; the copy stays staged and waiting until it is, then catches up.
  */
@@ -91,9 +92,15 @@ async function toDrive(env, home, state, c) {
 }
 
 async function toB2(env, b2, state, c) {
-  // Already there (an earlier try finished but its answer was lost): Backblaze keeps the SHA-1 of every file
-  const found = await b2.find(c.path, c.sha1);
-  if (found) { await state.updateCopy(c.id, { b2_id: found.fileId, b2_large: null }); return; }
+  // Already there (an earlier try finished but its answer was lost): Backblaze keeps the SHA-1 of every file. Looked
+  // for on every try but a copy's very first (ship_fails counts each try, before it starts: ./jobs.js ship), as no
+  // upload of it can have arrived before that: a lookup is a request Backblaze caps by the day on an account with no
+  // card, and one before every copy used up a whole day's on the first run (Nov 17, 2026)
+  const first = c.ship_fails === 1;
+  if (!first || c.b2_large) {
+    const found = await b2.find(c.path, c.sha1);
+    if (found) { await state.updateCopy(c.id, { b2_id: found.fileId, b2_large: null }); return; }
+  }
   if (c.size <= PART) {
     const got = await b2.upload(c.path, await stagedRange(env, c.staged, 0, c.size), { sha1: c.sha1 });
     await state.updateCopy(c.id, { b2_id: got.fileId });

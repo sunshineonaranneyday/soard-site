@@ -646,3 +646,36 @@ test('GitHub busy (429, or a 5xx) is asked again, as long as GitHub says, before
   const notFound = await githubFetch(async () => new Response('no', { status: 404 }), 'u', {}, { wait: async () => { throw new Error('a 404 is never waited on'); } });
   assert.equal(notFound.status, 404);
 });
+
+test('Backblaze is asked whether a copy is already there on every try but its first (an earlier try’s answer may have been lost)', async () => {
+  const { shipCopy } = await import('../src/ship.js');
+  const { createHash } = await import('node:crypto');
+  const bytes = new Uint8Array([1, 2, 3, 4, 5]);
+  const sum = createHash('sha1').update(bytes).digest('hex');
+  const env = { STAGING: { get: async (key, { range }) => ({ arrayBuffer: async () => bytes.slice(range.offset, range.offset + range.length).buffer }), delete: async () => {} } };
+  // Each case: the copy as the records keep it, what Backblaze already holds, and what happens, in order
+  const ship = async (row, have = null) => {
+    const log = [];
+    let c = { id: 'c1', path: 'Files/x.age', staged: 'stage/c1', size: bytes.length, sha1: sum, drive_id: 'd1', b2_id: null, b2_large: null, ...row };
+    const state = {
+      copy: async () => ({ ...c }),
+      updateCopy: async (id, patch) => { log.push(`record ${Object.keys(patch).filter((k) => k !== 'shipped_at' && k !== 'error' && k !== 'staged').map((k) => `${k}=${patch[k]}`).join(' ')}`.trim()); c = { ...c, ...patch }; return { ...c }; },
+    };
+    const b2 = {
+      find: async () => { log.push('look'); return have; },
+      upload: async (name, b, { sha1 }) => { log.push('upload'); return { fileId: 'up1', contentSha1: sha1, contentLength: b.length }; },
+    };
+    const out = await shipCopy(env, { drive: null, b2 }, state, 'c1');
+    return { log: log.filter((x) => x !== 'record'), b2: out.b2_id };
+  };
+  // A copy's very first try (counted as it starts): nothing of it can be there yet, so straight up
+  assert.deepEqual(await ship({ ship_fails: 1 }), { log: ['upload', 'record b2_id=up1'], b2: 'up1' });
+  // Any later try (an earlier one may have been cut off after Backblaze kept it): looked for first, never sent twice
+  assert.deepEqual(await ship({ ship_fails: 2 }, { fileId: 'there1' }), { log: ['look', 'record b2_id=there1 b2_large=null'], b2: 'there1' });
+  assert.deepEqual(await ship({ ship_fails: 7 }), { log: ['look', 'upload', 'record b2_id=up1'], b2: 'up1' });
+  // A try count it can't read, or one not counted: looked for, to be safe
+  assert.deepEqual(await ship({}), { log: ['look', 'upload', 'record b2_id=up1'], b2: 'up1' });
+  assert.deepEqual(await ship({ ship_fails: 0 }), { log: ['look', 'upload', 'record b2_id=up1'], b2: 'up1' });
+  // A large copy already begun is always looked for (its finish's answer may have been lost)
+  assert.deepEqual(await ship({ ship_fails: 1, b2_large: 'large1' }, { fileId: 'there2' }), { log: ['look', 'record b2_id=there2 b2_large=null'], b2: 'there2' });
+});

@@ -40,7 +40,7 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
     videos: [], // { uid, name, private, bytes, download: 'ready' | null, state: 'ready' | 'inprogress', siteMade }
     buckets: {}, // name → Map(key → { bytes, etag, last_modified })
     drive: { drives: [{ id: 'shared1', name: 'Website backup', capabilities: { canAddChildren: true, canTrashChildren: false, canDeleteChildren: false } }], files: new Map(), sessions: new Map(), n: 0 },
-    b2: { bucket: { id: 'bk1', name: 'soard-backup-test' }, lock: { isFileLockEnabled: true, defaultRetention: { mode: 'compliance', period: { duration: 90, unit: 'days' } } }, files: [], large: new Map(), n: 0, caps: ['listBuckets', 'listFiles', 'readFiles', 'writeFiles', 'readBucketRetentions', 'readFileRetentions'] },
+    b2: { calls: {}, bucket: { id: 'bk1', name: 'soard-backup-test' }, lock: { isFileLockEnabled: true, defaultRetention: { mode: 'compliance', period: { duration: 90, unit: 'days' } } }, files: [], large: new Map(), n: 0, caps: ['listBuckets', 'listFiles', 'readFiles', 'writeFiles', 'readBucketRetentions', 'readFileRetentions'] },
     faults: { loseDrivePieces: 0, corruptDriveOnce: false, failB2Parts: 0, writeDuringRead: null, denied: [] },
     kv: [], // { id, title, keys: Map(name → { value: Buffer, expiration, metadata }) }
     vectorize: [], // { name, dimensions, metric, mutation, vectors: Map(id → { values, metadata, namespace }) }
@@ -361,10 +361,12 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
     if (u.host === 'api001.backblaze.test') {
       if (auth !== 'b2-token') return json({ code: 'unauthorized' }, 401);
       const name = u.pathname.split('/').pop();
+      w.b2.calls[name] = (w.b2.calls[name] || 0) + 1;
       const body = await request.json();
       if (/delete|hide|cancel/.test(name)) throw new Error(`the backup must never call ${name}`);
       if (name === 'b2_list_buckets') return json({ buckets: [{ bucketId: w.b2.bucket.id, bucketName: w.b2.bucket.name, fileLockConfiguration: { isClientAuthorizedToRead: true, value: w.b2.lock } }] });
       if (name === 'b2_get_upload_url') return json({ uploadUrl: `https://pod.backblaze.test/upload/${body.bucketId}`, authorizationToken: 'up-token' });
+      if (name === 'b2_list_file_versions' && w.faults.b2ListDown > 0) { w.faults.b2ListDown--; return json({ code: 'service_unavailable', message: 'busy' }, 503); }
       if (name === 'b2_list_file_versions') return json({ files: w.b2.files.filter((f) => f.fileName.startsWith(body.prefix)).map(({ bytes, ...f }) => f), nextFileName: null });
       if (name === 'b2_start_large_file') { const fileId = `large${++w.b2.n}`; w.b2.large.set(fileId, { name: body.fileName, info: body.fileInfo, parts: new Map() }); return json({ fileId }); }
       if (name === 'b2_get_upload_part_url') return json({ uploadUrl: `https://pod.backblaze.test/part/${body.fileId}`, authorizationToken: 'part-token' });
@@ -391,6 +393,8 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
         const fileName = decodeURIComponent(request.headers.get('x-bz-file-name'));
         const f = { fileId: `small${++w.b2.n}`, fileName, contentSha1: sum, contentLength: bytes.length, action: 'upload', fileInfo: {}, bytes };
         w.b2.files.push(f);
+        // Kept, but the answer never arrives
+        if (w.faults.b2KeepButLose > 0) { w.faults.b2KeepButLose--; return json({ code: 'service_unavailable', message: 'busy' }, 503); }
         return json({ fileId: f.fileId, fileName, contentSha1: sum, contentLength: bytes.length });
       }
       if (u.pathname.startsWith('/part/')) {
