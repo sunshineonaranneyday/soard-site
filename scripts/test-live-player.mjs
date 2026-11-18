@@ -705,8 +705,11 @@ try {
   const vid = () => page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { time: v.currentTime, d: v.duration, paused: v.paused }; });
   const PLAY_D = await page.$eval('[data-s="morph"]', (el) => el.getAttribute('d'));
   // (iPhone Safari showed a sliver of the frame's dark down one side of a picture fitted inside it)
-  const fit = await page.evaluate(() => ({ exact: document.querySelector('[data-stage]').hasAttribute('data-exact'), fit: getComputedStyle(document.querySelector('.stage__player video')).objectFit }));
-  ok(fit.exact && fit.fit === 'cover', `the picture fills its frame exactly (${JSON.stringify(fit)})`);
+  const fit = await page.evaluate(() => {
+    const v = document.querySelector('.stage__player video').getBoundingClientRect(), c = document.querySelector('.stage__clip').getBoundingClientRect();
+    return { exact: document.querySelector('[data-stage]').hasAttribute('data-exact'), fit: getComputedStyle(document.querySelector('.stage__player video')).objectFit, past: Math.min(c.left - v.left, v.right - c.right, c.top - v.top, v.bottom - c.bottom) };
+  });
+  ok(fit.exact && fit.fit === 'cover' && fit.past >= 0.9, `the picture fills its frame and reaches past each edge (${JSON.stringify(fit)})`);
   // The shapes the icon takes from the moment the video says it's playing (or paused), for 400 ms
   const turnOf = () => page.evaluate(() => new Promise((res) => {
     const path = document.querySelector('[data-s="morph"]'); const v = document.querySelector('.stage__player video');
