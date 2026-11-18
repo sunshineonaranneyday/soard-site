@@ -15,6 +15,18 @@ import { revealWhen, type UpcomingReveal } from './reveals-client';
 import type { ReminderOptions } from './live-client';
 
 /** The hero's lead when no reveal is set (LivePage.astro); /live/'s share card says the same */
+/**
+ * The story under the kid's name, in its sentences (LivePage .hero-lead: each a span of its own, so the narrow story
+ * column beside a live video shows the first whole sentence, never a line cut off mid-word with "…"). A full stop,
+ * question or exclamation mark followed by a space ends one; "Dr. Smith" or "3.5" aren't split worth worrying about:
+ * the next sentence just starts later.
+ */
+export function leadSentences(text: string): string[] {
+  const t = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!t) return [];
+  return t.split(/(?<=[.!?])\s+(?=[A-Z0-9"“'‘(])/).filter(Boolean);
+}
+
 export const LIVE_GENERIC_LEAD = 'Room reveals stream live right here. Watch the moment a child sees their new room for the first time.';
 
 /** A planned reveal → { eyebrow, status } */

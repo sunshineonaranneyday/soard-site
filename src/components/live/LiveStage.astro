@@ -46,6 +46,7 @@ const ICON = {
   soundOff: svg(`${SPEAKER}<path d="M22 9l-6 6"/><path d="M16 9l6 6"/>`),
   soundOn: svg(`${SPEAKER}<path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/>`),
   full: svg('<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>'),
+  fullExit: svg('<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>'),
   heart: svg('<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>'),
   play: svg('<path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor"/>'),
   pause: svg('<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>'),
@@ -96,14 +97,16 @@ const ICON = {
       <span class="bar__count" data-s="count" hidden><span class="bar__count-n"><Fragment set:html={ICON.eye} /><span data-s="count-num"></span></span><span class="bar__count-word" data-s="count-word"></span></span>
       <span class="bar__end">
         <button class="bar__sound" type="button" data-s="sound" hidden><span class="bar__ico"><Fragment set:html={ICON.soundOff} /></span><span class="bar__txt">Tap for sound</span></button>
-        <button class="bar__btn" type="button" data-s="mute" aria-label="Mute" title="Sound (M)" hidden>
+        <button class="bar__btn" type="button" data-s="mute" aria-label="Sound" aria-pressed="true" title="Sound (M)" hidden>
           <span class="bar__ico"><span class="bar__on"><Fragment set:html={ICON.soundOn} /></span><span class="bar__off"><Fragment set:html={ICON.soundOff} /></span></span>
           <span class="bar__lbl" aria-hidden="true">Sound</span>
         </button>
-        <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)" hidden><span class="bar__ico"><Fragment set:html={ICON.full} /></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
+        <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)" hidden><span class="bar__ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
         <!-- In the rail beside a portrait picture (data-rail): the hearts everyone sends float up here, beside the picture, never on it -->
         <span class="bar__rise" data-s="rise" aria-hidden="true"></span>
         <button class="bar__btn bar__heart" type="button" data-s="heart" aria-label="Send love to the family" title="Send love" hidden><span class="bar__ico"><Fragment set:html={ICON.heart} /></span></button>
+        <!-- (said for a screen reader when love is sent: the hearts are only seen) -->
+        <span class="sr-only" data-s="said" role="status"></span>
       </span>
     </div>
     <div class="bar__replay" data-s="replaybar" hidden>
@@ -118,7 +121,7 @@ const ICON = {
       </div>
       <span class="bar__time" data-s="time"><span data-s="time-now">0:00</span><span class="bar__total" data-s="time-total"></span></span>
       <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden>CC</button>
-      <button class="bar__btn" type="button" data-full aria-label="Full screen" title="Full screen (F)"><Fragment set:html={ICON.full} /></button>
+      <button class="bar__btn" type="button" data-full aria-label="Full screen" title="Full screen (F)"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></button>
     </div>
   </div>
 
@@ -155,11 +158,12 @@ const ICON = {
   .stage__under { position: relative; z-index: 1; min-width: 0; }
   .stage:not([data-partners]) .stage__under { display: none; }
   .stage:not([data-party]) .stage__under { margin-top: 36px; }
-  .stage__player { position: absolute; inset: 0; transition: opacity 0.3s ease; }
+  .stage__player { position: absolute; inset: 0; transition: opacity 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
   .stage__player[hidden] { display: none; }
   /* :global: the video and iframes are created at runtime, so they have no Astro scope attribute */
   .stage__player :global(iframe) { width: 100%; height: 100%; border: 0; display: block; }
-  .stage__player :global(video) { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
+  /* (no black of its own: until its first picture, what's behind it shows, the frame's dark and the soft photo) */
+  .stage__player :global(video) { width: 100%; height: 100%; display: block; object-fit: contain; background: transparent; }
   .stage[data-pkind='replay'] .stage__player :global(video) { cursor: pointer; }
 
   .stage__badge {
@@ -205,11 +209,19 @@ const ICON = {
   .stage[data-party][data-cc][data-jump] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + 46px + var(--gap) + var(--under, 0px)); }
   .stage[data-party] .stage__screen { aspect-ratio: var(--ar); }
   .stage[data-party] .stage__picture { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 20px; }
-  .stage[data-party] .stage__photo { display: none; }
-  /* While the camera connects or reconnects, the kid's photo sits behind the note */
-  .stage[data-party][data-pkind='live'][data-pstatus='connecting'] .stage__photo,
+  /* While the video connects or reconnects, the kid's photo, soft and dim, sits behind the note; the video fades in
+     over it as it starts, and the photo fades away under it (a crossfade, never a cut). In the watch party the frame
+     behind them is plain dark: the small blurry stand-in photo that waits for the real one before the party isn't
+     wanted around a video */
+  .stage[data-party] .stage__picture { background-image: none !important; }
+  /* (once faded, not drawn at all: a blur under a playing video costs a phone for nothing) */
+  .stage[data-party] .stage__photo {
+    opacity: 0; visibility: hidden; filter: blur(16px) brightness(0.5); transform: scale(1.12);
+    transition: opacity 0.45s ease, visibility 0s linear 0.45s;
+  }
+  .stage[data-party][data-pstatus='connecting'] .stage__photo,
   .stage[data-party][data-pstatus='waiting'] .stage__photo,
-  .stage[data-party][data-pstatus='reconnecting'] .stage__photo { display: block; filter: blur(16px) brightness(0.45); transform: scale(1.12); }
+  .stage[data-party][data-pstatus='reconnecting'] .stage__photo { opacity: 1; visibility: visible; transition: opacity 0.45s ease, visibility 0s; }
   .stage[data-pkind='live'][data-pstatus='connecting'] .stage__player,
   .stage[data-pstatus='waiting'] .stage__player,
   .stage[data-pstatus='reconnecting'] .stage__player { opacity: 0; }
@@ -219,6 +231,8 @@ const ICON = {
     padding: 24px; color: #fff; pointer-events: none;
   }
   .stage__note[hidden] { display: none; }
+  .stage__note:not([hidden]) { animation: noteIn 0.35s ease-out both; }
+  @keyframes noteIn { from { opacity: 0; } }
   .stage__note-title { font-family: var(--font-display); font-size: clamp(1.2rem, 7cqi, 1.6rem); line-height: 1.2; margin: 0 0 8px; }
   .stage__note-text { font-size: 14px; line-height: 1.55; margin: 0 auto; max-width: 30ch; color: rgba(255, 255, 255, 0.86); }
   .stage__note-text:empty { display: none; }
@@ -308,6 +322,10 @@ const ICON = {
   .bar__cc { font-size: 12px; font-weight: 800; letter-spacing: 0.04em; border: 1.5px solid var(--c-border); width: 40px; height: 32px; border-radius: 8px; }
   /* (the icons' own boxes, and the words that go under them in the rail: none in the bar) */
   .bar__ico { display: grid; place-items: center; }
+  /* Full screen's icon: out to the corners, then, while full screen, back in (live-stage.ts names it to match) */
+  .full-in, .full-out { display: grid; place-items: center; }
+  .full-out, .stage[data-fullscreen] .full-in { display: none; }
+  .stage[data-fullscreen] .full-out { display: grid; }
   .bar__lbl, .bar__rise { display: none; }
 
   /* ── The rail: a live portrait picture has its controls in a slim column beside it, not in a bar under it (the
@@ -337,6 +355,10 @@ const ICON = {
       display: flex; flex-direction: column; align-items: center; font: inherit; color: var(--c-text-muted);
     }
     .stage[data-rail] .bar__end > [hidden] { display: none; }
+    /* One that comes (the picture starting, the sound going on, the heart once it's on air) grows in, a touch springy,
+       while the others glide to their new places (live-stage.ts railChange) */
+    .stage[data-rail] .bar__end > button { animation: railIn 420ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+    @keyframes railIn { from { opacity: 0; transform: scale(0.6); } }
     .stage[data-rail] .bar__btn:hover { background: none; }
     .stage[data-rail] .bar__ico {
       width: 46px; height: 46px; border-radius: 50%; background: #fff; border: 1px solid var(--c-border); color: var(--c-dark);
@@ -361,8 +383,15 @@ const ICON = {
       width: 52px; height: 52px; border: 0; background: var(--c-yellow); box-shadow: 0 10px 24px rgba(30, 31, 37, 0.16);
     }
     .stage[data-rail] .bar__heart :global(svg) { width: 24px; height: 24px; fill: var(--c-dark); }
-    .stage[data-rail] .bar__heart:active .bar__ico, .stage[data-rail] .bar__heart.is-pop .bar__ico { transform: scale(0.82); }
-    .stage[data-rail] .bar__heart:active, .stage[data-rail] .bar__heart.is-pop, .stage[data-rail] .bar__heart.is-beat { transform: none; animation: none; }
+    /* A tap: down under the finger, then a springy bounce back as the hearts go up; with reduced motion, it goes dark
+       for a moment instead (live-stage.ts is-sent), and "Love sent" is said */
+    .stage[data-rail] .bar__heart:active .bar__ico { transform: scale(0.88); }
+    .stage[data-rail] .bar__heart.is-pop .bar__ico { animation: heartPress 0.38s cubic-bezier(0.34, 1.56, 0.64, 1); }
+    @keyframes heartPress { 0% { transform: scale(0.88); } 45% { transform: scale(1.12); } 100% { transform: none; } }
+    .stage[data-rail] .bar__heart.is-sent .bar__ico { background: var(--c-dark); }
+    .stage[data-rail] .bar__heart.is-sent :global(svg) { fill: var(--c-yellow); }
+    /* (the round part shrinks for a tap, above, not the whole button; and its entrance never runs again for one) */
+    .stage[data-rail] .bar__heart:active, .stage[data-rail] .bar__heart.is-pop, .stage[data-rail] .bar__heart.is-beat { transform: none; }
   }
   /* One heart floating up the column: it rises from the button, sways a little and fades near the top
      (--up: the column's height, --s1..3 and --r1..2: its own sway, set by live-stage.ts) */
@@ -372,12 +401,14 @@ const ICON = {
     animation: heartRise var(--d, 2.8s) cubic-bezier(0.25, 0.6, 0.35, 1) forwards;
   }
   .bar__rise :global(.float svg) { display: block; width: 100%; height: 100%; fill: currentColor; stroke: none; filter: drop-shadow(0 2px 4px rgba(30, 31, 37, 0.18)); }
+  /* (--o: its own strength, so a stream of them reads as many people; it pops out of the button, then floats) */
   @keyframes heartRise {
-    0% { opacity: 0; transform: translate(0, 0) scale(0.4); }
-    8% { opacity: 1; transform: translate(0, -18px) scale(1); }
-    35% { transform: translate(var(--s1), calc(var(--up) * -0.33)) rotate(var(--r1)); }
-    70% { opacity: 0.9; transform: translate(var(--s2), calc(var(--up) * -0.68)) rotate(var(--r2)); }
-    100% { opacity: 0; transform: translate(var(--s3), calc(var(--up) * -1)) scale(0.9); }
+    0% { opacity: 0; transform: translate(0, 0) scale(0.3); }
+    10% { opacity: var(--o, 1); transform: translate(0, -10px) scale(1.15); }
+    18% { transform: translate(0, -16px) scale(1); }
+    45% { transform: translate(var(--s1), calc(var(--up) * -0.4)) rotate(var(--r1)); }
+    75% { opacity: var(--o, 1); transform: translate(var(--s2), calc(var(--up) * -0.75)) rotate(var(--r2)); }
+    100% { opacity: 0; transform: translate(var(--s3), calc(var(--up) * -1)) scale(0.85); }
   }
 
   .bar__cc[aria-pressed='true'] { background: var(--c-dark); color: #fff; border-color: var(--c-dark); }
@@ -553,7 +584,11 @@ const ICON = {
 
   /* ── Mini player: just the picture, with its own little bar above it ── */
   .stage[data-party] .stage__picture.is-docked {
-    position: fixed; inset: auto max(16px, env(safe-area-inset-right, 0px)) calc(16px + var(--dock-bottom, 0px) + env(safe-area-inset-bottom, 0px)) auto;
+    /* Above whatever is at the screen's foot, which keeps the home bar's room itself: the box to write a message on a
+       phone (--live-dock: its height, known to the page from the first paint, LiveMessages, so the player is above it
+       however and whenever it docks, a phone turned or not), the auction's bar (--dock-bottom, live-stage.ts); with
+       neither, above the home bar */
+    position: fixed; inset: auto max(16px, env(safe-area-inset-right, 0px)) calc(16px + max(var(--live-dock, 0px), var(--dock-bottom, 0px), env(safe-area-inset-bottom, 0px))) auto;
     width: min(260px, calc(var(--mini-h, 300px) * var(--ar))); height: auto; aspect-ratio: var(--ar);
     z-index: 950; /* over content, under the sticky header (1000) and its mobile menu (1100) */
     border-radius: 16px; cursor: pointer;
@@ -615,7 +650,8 @@ const ICON = {
   .stage__undock:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
 
   @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
-    .stage[data-party] .stage__picture.is-docked { --mini-h: 210px; }
+    /* (a little smaller on a phone: it floats over the page, the buttons and messages under it) */
+    .stage[data-party] .stage__picture.is-docked { --mini-h: 176px; }
     .stage[data-party] .stage__picture { border-radius: 16px; }
     .stage[data-party] .stage__accent { display: none; }
   }
@@ -627,7 +663,6 @@ const ICON = {
   @media (hover: none) and (pointer: coarse) {
     .stage { --bar: 56px; }
     .bar__btn, .bar__play { width: 44px; height: 44px; }
-    .stage[data-rail] .bar__btn { width: 100%; height: auto; }
     .bar__cc { height: 44px; }
     .bar__sound { height: 44px; }
     .seek, .seek__range { height: 44px; }
@@ -638,7 +673,7 @@ const ICON = {
   @media (prefers-reduced-motion: reduce) {
     .stage__accent { animation: none; opacity: 0.35; }
     .bar__sound, .bar__heart.is-beat, .stage[data-party] .stage__picture.is-docked { animation: none; }
-    .stage[data-rail] .bar__sound .bar__ico, .stage[data-rail] .bar__ico { animation: none; transition: none; }
+    .stage[data-rail] .bar__sound .bar__ico, .stage[data-rail] .bar__ico, .stage[data-rail] .bar__end > button { animation: none; transition: none; }
     .bar__rise { display: none !important; }
     .stage[data-onair][data-mode='live'] .bar__dot::after { animation: none; }
     .stage__player, .bar__btn { transition: none; }

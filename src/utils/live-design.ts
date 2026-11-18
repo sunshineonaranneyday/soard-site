@@ -51,7 +51,7 @@ const ASK_OPEN_MS = 3 * 60_000;
 const ASK_CLOSED_MS = 10 * 60_000;
 const ASK_FAILED_MS = 2 * 60_000;
 /** The viewer opens beside the video only with at least this much room to its left */
-const SIDE_MIN_W = 420;
+const SIDE_MIN_W = 320;
 
 /** The widths a card's picture is offered at; the browser takes the one it needs (sizes, set from the card) */
 const WIDTHS = [320, 480, 640, 800, 960, 1200, 1600, 1800];
@@ -373,13 +373,37 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   let roomTabsSig = '';
   let roomShown: DesignSlide | null = null;
   const roomShowing = () => !!room && !room.hidden && room.getClientRects().length > 0;
+  // Each picture's small one, once loaded: it stands in, at once, while its big one comes
+  const roomSmall = new Map<DesignSlide, string>();
+  // Every big picture is fetched the first time the room shows, so a switch never waits on the network
+  let roomWarm = '';
+  const roomWant = (big: HTMLElement) => Math.min(1600, Math.max(480, Math.round(big.clientWidth * (devicePixelRatio || 1))));
+  function warmRoom(big: HTMLElement) {
+    const want = roomWant(big);
+    const sig = `${want}|${slides.map((x) => x.url).join(',')}`;
+    if (sig === roomWarm) return;
+    roomWarm = sig;
+    for (const p of designPartsOf(slides)) for (const x of p.slides) void slideSrc(x, want).then((src) => { if (src) { const i = new Image(); i.decoding = 'async'; i.src = src; } });
+  }
   function roomPicture(s: DesignSlide) {
     const pic = rq('pic');
     const big = rq('big');
     if (!pic || !big || !roomShowing()) return;
-    if (roomShown === s && pic.querySelector('img')) return;
+    if (roomShown === s && pic.querySelector('img:not(.is-out)')) return;
     roomShown = s;
-    const want = Math.min(1600, Math.max(480, Math.round(big.clientWidth * (devicePixelRatio || 1))));
+    // What showed goes at once (a badge must never sit on the wrong picture); the new one's small picture stands in
+    for (const old of [...pic.querySelectorAll('img')]) { old.classList.remove('is-in', 'is-stand'); old.classList.add('is-out'); setTimeout(() => old.remove(), 160); }
+    const small = roomSmall.get(s);
+    if (small) {
+      const stand = el('img');
+      stand.alt = '';
+      stand.dataset.kind = s.kind;
+      stand.className = 'is-stand';
+      stand.src = small;
+      pic.append(stand);
+    }
+    const want = roomWant(big);
+    warmRoom(big);
     void slideSrc(s, want).then((src) => {
       if (roomShown !== s) return;
       if (!src) { drop(s); return; }
@@ -418,24 +442,31 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     if (nameEl2) nameEl2.textContent = roomName ? `${possessive(straight(roomName))} room` : 'The room';
     // The switch and the small pictures are drawn again only when what's in them changes (picking a part only marks
     // it), so focus stays where it was
-    const tabsSig = `${roomAfter}|${partsNow.map((p) => p.key).join(',')}`;
+    // (only which parts there are: their names change in place when the reveal starts, "today" becoming "before")
+    const tabsSig = partsNow.map((p) => p.key).join(',');
     if (tabsSig !== roomTabsSig) {
       roomTabsSig = tabsSig;
       tabs.hidden = partsNow.length < 2;
       tabs.replaceChildren(...partsNow.map((p) => {
-        const b = el('button', 'lrm-tab', partTitle(p.key, roomAfter));
+        const b = el('button', 'lrm-tab');
         b.type = 'button';
+        b.id = `lrm-tab-${p.key}`;
         b.dataset.part = p.key;
         b.setAttribute('role', 'tab');
+        b.setAttribute('aria-controls', 'lrm-stage');
         b.addEventListener('click', () => { roomPart = p.key; drawRoom(); });
         return b;
       }));
     }
     for (const b of tabs.querySelectorAll<HTMLButtonElement>('.lrm-tab')) {
-      const on = b.dataset.part === part.key;
+      const key = b.dataset.part as PartKey;
+      const on = key === part.key;
+      const words = partTitle(key, roomAfter);
+      if (b.textContent !== words) b.textContent = words;
       b.setAttribute('aria-selected', String(on));
       b.tabIndex = on ? 0 : -1;
     }
+    rq('stage')?.setAttribute('aria-labelledby', partsNow.length > 1 ? `lrm-tab-${part.key}` : 'lrm-name');
     const sig = `${part.key}|${part.slides.map((x) => x.url).join(',')}`;
     if (sig !== roomSig) {
       roomSig = sig;
@@ -463,7 +494,9 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     big.setAttribute('aria-label', `See it big: ${s.badge ? `${s.badge}, ` : ''}${title}${part.slides.length > 1 ? `, ${at + 1} of ${part.slides.length}` : ''}`);
     const b = rq('badge');
     if (b) { b.textContent = s.badge || ''; b.dataset.kind = s.kind; b.hidden = !s.badge; }
-    const cap = rq('cap'); if (cap) cap.textContent = title;
+    // (the switch above says which part this is already, and the badge on the picture what it shows: the line under it
+    // names it only when there's no switch)
+    const cap = rq('cap'); if (cap) cap.textContent = partsNow.length > 1 ? '' : title;
     const how = touchy.matches ? 'tap' : 'click';
     const count = rq('count'); if (count) count.textContent = part.slides.length > 1 ? `${at + 1} of ${part.slides.length} · ${how} to see it big` : `${how[0].toUpperCase()}${how.slice(1)} to see it big`;
     room.hidden = false;
@@ -472,7 +505,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       for (const [i, img] of [...thumbs.querySelectorAll<HTMLImageElement>('.lrm-thumb img')].entries()) {
         const x = part.slides[i];
         if (!x || img.getAttribute('src')) continue;
-        void slideSrc(x, 220).then((src) => { if (src && !img.getAttribute('src')) img.src = src; else if (!src) drop(x); });
+        void slideSrc(x, 220).then((src) => { if (src && !img.getAttribute('src')) { img.src = src; img.addEventListener('load', () => roomSmall.set(x, src), { once: true }); } else if (!src) drop(x); });
       }
     }
   }
@@ -481,13 +514,14 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     const s = part?.slides[roomAt.get(part.key) ?? 0];
     if (s) open(s);
   });
+  // A tab list's keys: the arrows go round, Home and End to the first and the last
   rq('tabs')?.addEventListener('keydown', (e) => {
-    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
     const keys = designPartsOf(slides).map((p) => p.key);
     const i = keys.indexOf(roomPart as PartKey);
     if (i < 0 || keys.length < 2) return;
     e.preventDefault();
-    roomPart = keys[(i + (e.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length];
+    roomPart = e.key === 'Home' ? keys[0] : e.key === 'End' ? keys[keys.length - 1] : keys[(i + (e.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length];
     drawRoom();
     rq('tabs')?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
   });

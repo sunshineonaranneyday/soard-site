@@ -116,6 +116,13 @@ const PUBLIC_GET_ROUTES = ['/api/live-status', '/api/fb-live-videos', '/api/broa
 // until their reveal is confirmed (it checks), and drawings only without the family's address
 PUBLIC_GET_ROUTES.push('/api/reveal-design');
 
+// live-replay is what the live page's replay player needs besides the video: the current replay's moment the child
+// sees the room ("Jump to the reveal") and its captions, for the replay that's on now only (never any other video;
+// its Stream calls happen at most once every two minutes, whoever asks). Left off this list, every public viewer got
+// a 403 and the replay played with no Jump to the reveal, no mark on its line and no captions; staff, signed in, saw
+// them all
+PUBLIC_GET_ROUTES.push('/api/live-replay');
+
 // A board or team member sending their own bio (/profile-update/): keyed by an
 // unguessable link token checked inside the handler, rate limited below, and
 // nothing goes live until someone in the admin uses it

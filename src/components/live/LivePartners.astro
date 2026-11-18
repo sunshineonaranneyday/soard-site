@@ -29,21 +29,25 @@ const { kid, inner } = Astro.props;
     text-transform: uppercase; color: var(--c-text-muted);
   }
   .lpb-label span { display: block; white-space: nowrap; }
-  /* Width 0, grown into the room left: the long row inside never widens the band, the frame or the column it sits in */
-  .lpb-window { flex: 1 1 0; width: 0; min-width: 0; height: 100%; overflow: hidden; display: flex; align-items: center; }
+  /* Width 0, grown into the room left: the long row inside never widens the band, the frame or the column it sits in.
+     The window is the one white strip, and the logos slide in and out under its clean edges, as a ticker's do (a card
+     of their own each, they were sliced through at both ends, which read as broken) */
+  .lpb-window {
+    flex: 1 1 0; width: 0; min-width: 0; height: 46px; overflow: hidden; display: flex; align-items: center;
+    background: #fff; border: 1px solid var(--c-border); border-radius: 12px; padding: 0 4px;
+  }
   .lpb-row {
-    --lpb-gap: 10px;
-    display: flex; gap: var(--lpb-gap); width: max-content; margin: 0; padding: 0; list-style: none;
-    animation: lpb-scroll calc(var(--lpb-n, 8) * 3.2s) linear infinite;
+    --lpb-gap: 4px;
+    display: flex; gap: var(--lpb-gap); width: max-content; height: 100%; margin: 0; padding: 0; list-style: none;
+    animation: lpb-scroll calc(var(--lpb-n, 8) * 4s) linear infinite;
   }
   /* The row is the list twice over: half its length (and one gap) along, the second copy sits where the first began */
   @keyframes lpb-scroll { to { transform: translateX(calc(-50% - var(--lpb-gap) / 2)); } }
   .lpb:hover .lpb-row, .lpb:focus-within .lpb-row { animation-play-state: paused; }
   .lpb-chip {
     --logo-h: 30px;
-    flex: none; height: 46px; min-width: 84px; padding: 6px 16px; box-sizing: border-box;
+    flex: none; height: 100%; min-width: 84px; padding: 6px 16px; box-sizing: border-box;
     display: flex; align-items: center; justify-content: center;
-    background: #fff; border: 1px solid var(--c-border); border-radius: 12px;
   }
   .lpb-chip img { display: block; max-height: var(--logo-h); max-width: 150px; width: auto; height: auto; object-fit: contain; }
   /* Every logo the same area, whatever its shape (as the starting-soon screen sized them): at one height for all, a
@@ -53,7 +57,8 @@ const { kid, inner } = Astro.props;
     .hero { --lpb-h: 52px; }
     .lpb { gap: 10px; }
     .lpb-label { font-size: 9.5px; letter-spacing: 0.1em; }
-    .lpb-chip { --logo-h: 26px; height: 40px; min-width: 72px; padding: 5px 12px; border-radius: 10px; }
+    .lpb-window { height: 40px; border-radius: 10px; }
+    .lpb-chip { --logo-h: 26px; min-width: 72px; padding: 5px 12px; }
     .lpb-chip img { max-width: 120px; }
   }
   @media (prefers-reduced-motion: reduce) {

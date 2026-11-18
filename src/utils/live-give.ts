@@ -25,8 +25,19 @@ export function createGive(root: HTMLElement, opts: Options) {
   // The form shows once it has loaded (until then the sheet says it's coming: LiveGive.astro)
   frame?.addEventListener('load', () => { if (frame.getAttribute('src')) root.setAttribute('data-ready', ''); });
 
+  // On a computer it opens down the left side, never over the video: as wide as the room left of the video's frame
+  // allows (the Theater layout has the video further left than the two columns did), as the design viewer does
+  const fit = () => {
+    if (phones.matches) { root.style.removeProperty('--give-max'); return; }
+    const left = document.querySelector<HTMLElement>('[data-stage] .stage__picture')?.getBoundingClientRect().left ?? 0;
+    if (left > 0) root.style.setProperty('--give-max', `${Math.max(340, Math.floor(left - 36))}px`);
+  };
+  const onResize = () => { if (isOpen) fit(); };
+  addEventListener('resize', onResize);
+
   function open(where: string) {
     if (!frame) return;
+    fit();
     if (!frame.getAttribute('src')) frame.src = root.dataset.src || '';
     previous = document.activeElement as HTMLElement | null;
     root.hidden = false;
@@ -54,6 +65,7 @@ export function createGive(root: HTMLElement, opts: Options) {
     get isOpen() { return isOpen; },
     destroy() {
       document.removeEventListener('keydown', onKey);
+      removeEventListener('resize', onResize);
       opts.stage.pin(false);
     },
   };

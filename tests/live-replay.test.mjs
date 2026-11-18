@@ -129,3 +129,10 @@ test('trust rules', () => {
   assert.equal(endpoint.trustedMoment({ seconds: 10.4, method: 'override' }), 10);
   assert.equal(endpoint.trustedMoment({ seconds: 'x', method: 'override' }), null);
 });
+
+test('every viewer can read it, not only signed-in staff (it was off the public list: a 403 left the replay with no Jump to the reveal)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync('functions/api/_middleware.js', 'utf8');
+  assert.match(src, /PUBLIC_GET_ROUTES\.push\('\/api\/live-replay'\)/);
+  assert.doesNotMatch(src, /PUBLIC_ROUTES\.push\('\/api\/live-replay'\)/, 'reads only');
+});

@@ -429,7 +429,10 @@ export async function postMessage(env, { name, body, visitorId, newVisitor = fal
     client ? count(`SELECT COUNT(*) AS n FROM broadcast_messages WHERE broadcast_id = ? AND client_id = ?`, state.broadcastId, client) : 0,
     ipHash ? count(`SELECT COUNT(*) AS n FROM broadcast_messages WHERE broadcast_id = ? AND ip_hash = ? AND created_at > ?`, state.broadcastId, ipHash, minuteAgo) : 0,
     ipHash ? count(`SELECT COUNT(*) AS n FROM broadcast_messages WHERE broadcast_id = ? AND ip_hash = ?`, state.broadcastId, ipHash) : 0,
-    DB.prepare(`SELECT id FROM broadcast_messages WHERE broadcast_id = ? AND body = ? AND (client_id = ? OR ip_hash = ?) LIMIT 1`).bind(state.broadcastId, cleanBody, client, ipHash).first(),
+    // The same words twice from the same person (their visitor id). Not by address: a family watching together on one
+    // home's Wi-Fi, or strangers behind one phone network's address, write "Congratulations Dylan!" too, and the second
+    // was turned away as a repeat. The address's own limits above still hold back anyone posting over and over
+    client ? DB.prepare(`SELECT id FROM broadcast_messages WHERE broadcast_id = ? AND body = ? AND client_id = ? LIMIT 1`).bind(state.broadcastId, cleanBody, client).first() : null,
   ]);
   const slowDown = { ok: false, error: 'One moment. You can post again in a minute.', code: 'rate', httpStatus: 429 };
   if (byClientMinute >= LIMITS.perClientPerMinute || byIpMinute >= LIMITS.perIpPerMinute) return slowDown;
