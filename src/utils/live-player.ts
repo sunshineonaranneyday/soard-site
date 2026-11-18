@@ -253,9 +253,21 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     opts.onStatus?.(s);
   };
 
+  // A play the browser called off because the video's source came (or changed) after it was asked for: asked again as
+  // soon as the new source can play. Watch the replay mounts the replay and plays it in the same tap, before hls.js has
+  // attached its source; attaching resets the element, which pauses it and refuses the ask (AbortError), and it sat at
+  // 0:00 until the bar's play was pressed (Chrome and the other Media Source browsers; Peter's test, Nov 18 2026). The
+  // tap's own play() still goes at once: that is what lets the second one play with sound
+  let playAborted = false;
   function tryPlay() {
+    playAborted = false;
     const pr = video.play();
-    pr?.catch((err: DOMException) => { if (err?.name === 'NotAllowedError' && !dead) set('blocked'); });
+    pr?.catch((err: DOMException) => {
+      if (dead) return;
+      if (err?.name === 'NotAllowedError') set('blocked');
+      // (called off by the element being reset, nothing loaded any more; not by a pause pressed while it was starting)
+      else if (err?.name === 'AbortError' && video.paused && video.readyState === 0) playAborted = true;
+    });
   }
 
   /** A seek of our own: the guard below leaves it alone */
@@ -589,8 +601,11 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   // ── Media events ──
   const size = () => { if (video.videoWidth && video.videoHeight) opts.onSize?.(video.videoWidth, video.videoHeight); };
   video.addEventListener('loadedmetadata', size);
-  // A replay that has loaded is ready and waiting for its first tap
-  video.addEventListener('loadedmetadata', () => { if (!live && status === 'connecting') set('paused'); });
+  // A replay that has loaded is ready and waiting for its first tap (or, asked for before its source came, plays now)
+  video.addEventListener('loadedmetadata', () => {
+    if (!live && status === 'connecting') set('paused');
+    if (playAborted && video.paused && !dead) tryPlay();
+  });
   video.addEventListener('resize', size);
   video.addEventListener('volumechange', () => opts.onMuted?.(video.muted));
   video.addEventListener('playing', () => {
@@ -615,6 +630,8 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     }
   });
   video.addEventListener('pause', () => {
+    // (paused on purpose: a play the browser called off earlier isn't asked again)
+    playAborted = false;
     if (restarting || video.ended || dead || holding) return;
     if (status === 'playing' || status === 'buffering') set('paused');
   });

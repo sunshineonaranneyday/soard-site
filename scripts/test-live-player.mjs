@@ -540,6 +540,11 @@ try {
     await waitFor(page, ['paused', 'playing'], 20000); await sleep(1000);
     e = await end();
     ok(!e.shown && e.pkind === 'replay', `Watch the replay: the replay, from its beginning (${e.pkind})`);
+    // ...and it plays, with its sound, from that one press (Peter, Nov 18 2026: it was left paused at 0:00 until the
+    // bar's play was pressed). Twice a second apart: its time moves on
+    await waitFor(page, ['playing'], 15000);
+    const r1 = await probe(page); await sleep(1000); const r2 = await probe(page);
+    ok(r2.pstatus === 'playing' && r2.paused === false && r2.muted === false && r2.time > r1.time + 0.5, `one press on Watch the replay plays it with sound (${r1.pstatus} ${r1.time?.toFixed(1)}s, then ${r2.pstatus} ${r2.time?.toFixed(1)}s, muted ${r2.muted})`);
 
     // The phone back on after the end (the same reveal reopened): the note goes, live again
     phoneOn(); state = { ...STATES.live, kidName: 'Axel' }; await open(page); await waitFor(page, ['playing']); await sleep(2000);
