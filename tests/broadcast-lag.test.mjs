@@ -194,7 +194,8 @@ test('"End the test" with the phone still streaming into the reveal: the test re
   assert.ok(r.work.includes('test-start'), r.work.join(','));
   travel(8 * M); // T-32
   r = await b.adminAction(env, 'endNow', {}, 'peter@test');
-  assert.equal(r.state.phase, 'scheduled');
+  assert.equal(r.state.phase, 'replay', 'the test\'s end shows on the website until 30 minutes before (tEndQuiet)');
+  assert.equal((await b.readState(env.DB)).phase, 'scheduled');
   travel(5 * S); r = await tick();
   assert.ok(r.work.includes('test-start'), `the phone is still on, so the test carries on: ${r.work.join(',')}`);
   travel(2 * M + 5 * S); r = await tick();

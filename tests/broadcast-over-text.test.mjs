@@ -787,7 +787,8 @@ test('test mode with no answer still ends on its own after 15 s and the grace, a
   phoneOff();
   let r;
   for (let i = 0; i < 8; i++) { travel(8 * S); r = await tick(); }
-  assert.equal(r.state.phase, 'idle', 'the test ended');
+  assert.equal((await b.readState(env.DB)).phase, 'idle', 'the test ended');
+  assert.equal(r.state.phase, 'replay', 'its end shows on the website as the reveal\'s will');
   const q = questions(n);
   assert.equal(q.length, 2);
   assert.match(q[0].body, /^Test: The reveal's stream stopped at /);
