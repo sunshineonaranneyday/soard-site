@@ -20,6 +20,14 @@
  * empty playlist or a 404) is retried every few seconds for as long as the
  * page keeps the player mounted, so it picks up the moment the phone
  * reconnects. If neither playback path exists, the Stream iframe takes over.
+ *
+ * A dropped feed never plays anything twice (Nov 18 2026 test broadcast: when the phone's feed stopped, the page
+ * played its last few seconds over and over, then the whole broadcast from its first second). Before any live start
+ * the feed's playlist is read (feedAhead): one Stream has closed into a recording (the phone stopped; it would play
+ * from 0:00) is waited out, and after a drop the player starts again only once the feed has gone on past the
+ * furthest moment this viewer saw (the playlist's PROGRAM-DATE-TIME), so it lands on the live moment, not on what it
+ * already showed. hls.js, on a feed that has stopped, "catches up" by moving the picture back a few seconds each
+ * time its playlist is read; any move back over what was already shown is taken as the feed stopping instead.
  */
 import type { LivePlayer } from './live-client';
 
@@ -71,6 +79,51 @@ const LIVE_MAX_BEHIND_COUNT = 10;
 const FROZEN_MS = 12_000;
 const RETRY_MS = 4000;
 const RETRY_SLOW_MS = 10_000;
+/** Live, a move of the picture back by more than this over what this player has already shown: the feed has stopped */
+const BACK_OVER_SHOWN_S = 0.5;
+/** Reading the feed's playlist before a start: past this, start anyway and let the player find out */
+const FEED_CHECK_MS = 5000;
+/** A feed whose newest date is this far before what was shown has started over on another clock */
+const CLOCK_RESET_MS = 30_000;
+
+/**
+ * The newest moment a media playlist reaches, from its EXT-X-PROGRAM-DATE-TIME: the last date plus every whole
+ * piece after it, plus the parts of the piece still coming in (low latency lists a piece's parts before the piece).
+ * Null without dates.
+ */
+export function playlistNewest(text: string): number | null {
+  let at: number | null = null;
+  let parts = 0;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    if (line.startsWith('#EXT-X-PROGRAM-DATE-TIME:')) {
+      const t = Date.parse(line.slice(25));
+      at = Number.isFinite(t) ? t : null;
+      parts = 0;
+    } else if (at != null && line.startsWith('#EXTINF:')) {
+      at += (parseFloat(line.slice(8)) || 0) * 1000;
+      parts = 0;
+    } else if (at != null && line.startsWith('#EXT-X-PART:')) {
+      const d = /DURATION=([\d.]+)/.exec(line);
+      if (d) parts += parseFloat(d[1]) * 1000;
+    }
+  }
+  return at == null ? null : at + parts;
+}
+
+/**
+ * How far behind its newest moment a player starts on this playlist, in ms: what hls.js aims for (PART-HOLD-BACK
+ * on a low-latency playlist, else HOLD-BACK, else three target durations).
+ */
+export function playlistHoldBack(text: string, lowLatency: boolean): number {
+  const num = (re: RegExp) => { const m = re.exec(text); return m ? parseFloat(m[1]) : NaN; };
+  const part = num(/PART-HOLD-BACK=([\d.]+)/);
+  if (lowLatency && Number.isFinite(part)) return part * 1000;
+  const hold = num(/[,:]HOLD-BACK=([\d.]+)/);
+  if (Number.isFinite(hold)) return hold * 1000;
+  const target = num(/#EXT-X-TARGETDURATION:([\d.]+)/);
+  return (Number.isFinite(target) ? target : 2) * 3000;
+}
 
 type HlsClass = typeof import('hls.js').default;
 let hlsModule: Promise<HlsClass> | null = null;
@@ -144,6 +197,13 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   let nativeTimer: ReturnType<typeof setTimeout> | undefined;
   let lastTime = -1;
   let lastMove = Date.now();
+  // Live: the furthest moment shown, as the playlist dates it (so it holds across starting over), and the furthest
+  // this player has played on its own timeline (since its last start)
+  let shownAt: number | null = null;
+  let furthest = 0;
+  // Live: the feed's newest moment at the last look, and how many looks in a row it moved on (feedAhead)
+  let lastNewest: number | null = null;
+  let feedMoves = 0;
 
   const set = (s: PlayerStatus) => {
     if (s === status || dead) return;
@@ -236,6 +296,11 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       if (live) tryPlay();
       if (managedOnly && !everPlayed) watchStart();
     });
+    // Stream closed the feed into a recording while this page was on it (the phone stopped): played on, it starts over
+    // from its first second. Wait for the feed instead (or for the page to move on to the replay)
+    h.on(Hls.Events.LEVEL_LOADED, (_e, d) => {
+      if (live && hls === h && !d.details.live) restart();
+    });
     h.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal || hls !== h) return;
       if (managedOnly && d.type !== Hls.ErrorTypes.NETWORK_ERROR) {
@@ -256,11 +321,58 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     h.attachMedia(video);
   }
 
+  /**
+   * Live, before a start: is there something to play? Not while the feed isn't there (Stream answers 204 or 404:
+   * the camera isn't connected), not a feed Stream has closed into a recording (EXT-X-ENDLIST: it would play from its
+   * first second), and after a drop not until the feed has gone on far enough past the furthest moment shown that
+   * the player's start (its hold-back from the newest moment) lands after it. Anything else (an error, no dates, no
+   * answer in FEED_CHECK_MS) lets the player try, as before.
+   */
+  async function feedAhead(src: string, lowLatency: boolean): Promise<boolean> {
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(), FEED_CHECK_MS);
+    try {
+      const read = async (u: string) => {
+        // (never from the browser's cache: Stream lets a closed recording's playlist be kept 10 minutes)
+        const r = await fetch(u, { signal: stop.signal, cache: 'no-store' });
+        return { status: r.status, ok: r.ok, text: r.ok ? await r.text() : '' };
+      };
+      let res = await read(src);
+      if (res.ok && res.text.includes('#EXT-X-STREAM-INF')) {
+        // A master playlist: its first picture size answers for the feed
+        const lines = res.text.split('\n').map((l) => l.trim());
+        const at = lines.findIndex((l) => l.startsWith('#EXT-X-STREAM-INF'));
+        const uri = lines.slice(at + 1).find((l) => l && !l.startsWith('#'));
+        if (!uri) return true;
+        res = await read(new URL(uri, src).href);
+      }
+      if (res.status === 204 || res.status === 404) return false;
+      if (!res.ok) return true;
+      if (!res.text.includes('#EXTM3U')) return res.text.trim() !== '';
+      if (res.text.includes('#EXT-X-ENDLIST')) return false;
+      if (shownAt == null) return true;
+      const newest = playlistNewest(res.text);
+      if (newest == null) return true;
+      // Dates far before what was shown: the feed started over on another clock, so the dates say nothing: go
+      if (newest < shownAt - CLOCK_RESET_MS) { shownAt = null; return true; }
+      if (newest - playlistHoldBack(res.text, lowLatency) > shownAt) { feedMoves = 0; return true; }
+      // A feed that keeps moving on but never past what was shown (a clock slightly behind): trust it over the dates
+      feedMoves = lastNewest != null && newest > lastNewest ? feedMoves + 1 : 0;
+      lastNewest = newest;
+      if (feedMoves >= 3) { feedMoves = 0; shownAt = null; return true; }
+      return false;
+    } catch {
+      return true;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function start() {
     pending = false;
     lastMove = Date.now();
     if (dead) return;
-    set(everPlayed ? 'reconnecting' : 'connecting');
+    furthest = 0;
     const native = !!video.canPlayType('application/vnd.apple.mpegurl');
     // An iPhone has no classic Media Source, only Managed Media Source (iOS 17.1 on). Its own HLS played the live reveal
     // about 11 s later than iPads and computers (16 s behind the moment to their 4 to 5) and fell further behind with
@@ -269,9 +381,23 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     // through hls.js there; Safari then offers no picture-in-picture or AirPlay for it (full screen works). Older
     // iPhones, and an iPhone's replay (no moment to keep up with, and both of those kept), stay on Safari's own player.
     const mse = 'MediaSource' in window || (live && managedOnly && !nativeOnly);
-    if (native && !mse) { viaNative(); return; }
-    let Hls: HlsClass | null = null;
-    try { Hls = await loadHls(); } catch { Hls = null; }
+    const onNative = native && !mse;
+    // The feed is read while hls.js loads, so a start that goes ahead waits on neither
+    const src = onNative || !(useLl && urls.llhls) ? urls.hls : urls.llhls;
+    const ahead = live ? feedAhead(src, src === urls.llhls) : null;
+    const loading = onNative ? null : loadHls().catch(() => null);
+    if (ahead && !(await ahead)) {
+      // Nothing to play yet: keep saying so and look again (a camera not connected yet, a feed that has stopped)
+      if (dead) return;
+      set(everPlayed ? 'reconnecting' : 'waiting');
+      pending = true;
+      retryTimer = setTimeout(start, RETRY_MS);
+      return;
+    }
+    if (dead) return;
+    set(everPlayed ? 'reconnecting' : 'connecting');
+    if (onNative) { viaNative(); return; }
+    const Hls: HlsClass | null = await loading;
     if (dead) return;
     if (Hls?.isSupported()) viaHls(Hls);
     else if (native) viaNative();
@@ -326,6 +452,32 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   video.addEventListener('error', () => {
     if (restarting || dead || hls) return; // hls.js reports its own errors
     if (video.getAttribute('src')) restart();
+  });
+
+  // Live: how far this viewer has seen
+  const shownMoment = (): number | null => {
+    if (hls) return hls.playingDate?.getTime() ?? null;
+    const start = (video as HTMLVideoElement & { getStartDate?: () => Date }).getStartDate?.()?.getTime();
+    return start != null && Number.isFinite(start) ? start + video.currentTime * 1000 : null;
+  };
+  video.addEventListener('timeupdate', () => {
+    if (!live || video.paused || video.seeking || !video.currentTime) return;
+    if (video.currentTime > furthest) furthest = video.currentTime;
+    const at = shownMoment();
+    if (at != null && (shownAt == null || at > shownAt)) shownAt = at;
+  });
+  // Live: the picture moved back over what this player has already shown. hls.js does that on a feed that has
+  // stopped (the picture past its playlist's end, it moves back to its hold-back, plays to the end, and again), so the
+  // same seconds played over and over: start over instead, which waits until the feed has something new
+  // Only then: stalled (hls.js moves back only with the picture short of data) at the newest piece. Anything else
+  // moving back is the viewer (Safari's full-screen scrubber) and is left alone
+  video.addEventListener('seeking', () => {
+    if (!live || dead || pending || restarting || !everPlayed) return;
+    if (video.currentTime >= furthest - BACK_OVER_SHOWN_S) return;
+    const stalled = status === 'buffering' || status === 'reconnecting' || video.readyState < 4;
+    const edge = hls?.latestLevelDetails?.edge;
+    const atNewest = edge == null || furthest >= edge - 2;
+    if (stalled && atNewest) restart(0);
   });
 
   // Live watchdog: a picture that stops moving without an error gets a fresh start
