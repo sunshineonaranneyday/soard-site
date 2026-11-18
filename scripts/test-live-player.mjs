@@ -29,7 +29,11 @@
  *   - autoplay refused (an iPhone in Low Power Mode): Tap to watch, the tap
  *     taken at once even before the picture has come in, then it plays
  *   - replay: own controls, the reveal marked on the seek bar, Jump to the
- *     reveal, captions under the picture, keyboard control
+ *     reveal, captions under the picture, keyboard control; the line and its
+ *     handle glide with the picture, play turns into pause, the buttons give
+ *     under a press, a finger scrubs anywhere on the line (the picture
+ *     following it) and a swipe up from it still scrolls; the picture fills
+ *     its frame
  *   - giving without leaving: the Zeffy form opens beside the video (desktop)
  *     or under a small pinned player (phone) while the reveal keeps playing
  *   - leaving the page and coming back with the Back button (client-side
@@ -687,6 +691,177 @@ try {
   // (The reveal's star is a marker on the line, not a stop: Jump to the reveal is the button)
   ok(tabStops.length >= 5 && tabStops.every(Boolean) && tabStops.some((t) => t.startsWith('Jump to the reveal')), `every control is a labelled tab stop (${tabStops.join(', ')})`);
 
+  // The progress line and the play button (Peter, Nov 18 2026: "top tier, best in class ... motion"): the handle and the
+  // line glide with the picture (they jumped 4 times a second), the icon turns from play into pause, the buttons give
+  // under a press; a finger anywhere on the line scrubs with the picture following it, a tap goes there, a swipe up from
+  // it still scrolls the page; the keyboard's Home, End and arrows; the picture fills its frame
+  console.log('\n▶ replay: the line glides, the icon turns, a finger scrubs');
+  await page.setViewport({ width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  await open(page);
+  await page.waitForFunction(() => document.querySelector('.stage__player video')?.duration > 0, { timeout: 15000 }).catch(() => {});
+  await sleep(500);
+  const touchCdp = await page.createCDPSession();
+  const touch = (type, x, y) => touchCdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  const vid = () => page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { time: v.currentTime, d: v.duration, paused: v.paused }; });
+  const PLAY_D = await page.$eval('[data-s="morph"]', (el) => el.getAttribute('d'));
+  // (iPhone Safari showed a sliver of the frame's dark down one side of a picture fitted inside it)
+  const fit = await page.evaluate(() => ({ exact: document.querySelector('[data-stage]').hasAttribute('data-exact'), fit: getComputedStyle(document.querySelector('.stage__player video')).objectFit }));
+  ok(fit.exact && fit.fit === 'cover', `the picture fills its frame exactly (${JSON.stringify(fit)})`);
+  // The shapes the icon takes from the moment the video says it's playing (or paused), for 400 ms
+  const turnOf = () => page.evaluate(() => new Promise((res) => {
+    const path = document.querySelector('[data-s="morph"]'); const v = document.querySelector('.stage__player video');
+    const seen = []; let t0 = 0;
+    const step = () => { seen.push(path.getAttribute('d')); if (performance.now() - t0 < 400) requestAnimationFrame(step); else res({ shapes: new Set(seen).size, end: path.getAttribute('d'), label: document.querySelector('[data-s="play"]').getAttribute('aria-label') }); };
+    v.addEventListener(v.paused ? 'play' : 'pause', () => { t0 = performance.now(); seen.push(path.getAttribute('d')); requestAnimationFrame(step); }, { once: true });
+    document.querySelector('[data-s="play"]').click();
+  }));
+  const turn = await turnOf();
+  ok(turn.shapes >= 5 && turn.end !== PLAY_D && turn.label === 'Pause', `play turns into pause through ${turn.shapes} shapes, not at once (${turn.label})`);
+  await waitFor(page, ['playing']);
+  // While it plays, the handle has a new place every frame, and never goes back
+  const glideR = await page.evaluate(() => new Promise((res) => {
+    const k = document.querySelector('.seek__knob'); const xs = []; const t0 = performance.now();
+    const step = () => { xs.push(k.getBoundingClientRect().left); if (performance.now() - t0 < 1500) requestAnimationFrame(step); else res({ frames: xs.length, moves: xs.filter((x, i) => i && x !== xs[i - 1]).length, back: xs.filter((x, i) => i && x < xs[i - 1] - 0.01).length, playing: !document.querySelector('.stage__player video').paused }); };
+    requestAnimationFrame(step);
+  }));
+  ok(glideR.playing && glideR.moves >= glideR.frames * 0.8 && glideR.back === 0, `the handle glides: it moved on ${glideR.moves} of ${glideR.frames} frames, back ${glideR.back} times`);
+  const loaded = await page.$eval('.seek', (c) => ({ buf: Number(getComputedStyle(c).getPropertyValue('--buf')), f: Number(getComputedStyle(c).getPropertyValue('--f')) }));
+  ok(loaded.buf > loaded.f, `how much has loaded shows past where it's at (${JSON.stringify(loaded)})`);
+  // A press on play: it gives, then springs back when the finger lifts (and the tap pauses it)
+  const pb = await page.$eval('[data-s="play"]', (b) => { const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+  const scaleOf = () => page.$eval('[data-s="play"]', (b) => { const t = getComputedStyle(b).transform; return { on: b.hasAttribute('data-press'), scale: t === 'none' ? 1 : new DOMMatrix(t).a }; });
+  await touch('touchStart', pb.x, pb.y); await sleep(160);
+  const pressed = await scaleOf();
+  await touch('touchEnd', pb.x, pb.y); await sleep(500);
+  const released = await scaleOf();
+  ok(pressed.on && pressed.scale < 0.95 && !released.on && Math.abs(released.scale - 1) < 0.01 && (await vid()).paused, `the play button gives under a press and springs back (${pressed.scale.toFixed(2)}, then ${released.scale.toFixed(2)})`);
+  // Scrubbing: a finger down on the line, along it from 20% to 70%, and up
+  await page.evaluate(() => { const v = document.querySelector('.stage__player video'); v.currentTime = 0.3; v.play(); });
+  await waitFor(page, ['playing']); await sleep(300);
+  const ln = await page.$eval('.seek__line', (l) => { const r = l.getBoundingClientRect(); return { l: r.left + 8, r: r.right - 8, y: r.top + r.height / 2 }; });
+  const at = (f) => ln.l + (ln.r - ln.l) * f;
+  await page.evaluate(() => { const v = document.querySelector('.stage__player video'); window.__drag = new Set(); window.__dragT = setInterval(() => window.__drag.add(v.currentTime.toFixed(2)), 40); });
+  await touch('touchStart', at(0.2), ln.y); await sleep(300);
+  const held = await page.evaluate(() => ({ scrub: document.querySelector('[data-s="replaybar"]').hasAttribute('data-scrub'), knob: document.querySelector('.seek__knob').getBoundingClientRect().width, playing: !document.querySelector('.stage__player video').paused }));
+  ok(held.scrub && held.knob >= 22 && held.playing, `a finger on the line: the handle grows at once (${held.knob.toFixed(1)}px), nothing else moves yet`);
+  for (let i = 1; i <= 15; i++) { await touch('touchMove', at(0.2 + (0.5 * i) / 15), ln.y); await sleep(40); }
+  await sleep(300);
+  const mid = await page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { paused: v.paused, time: v.currentTime, d: v.duration, icon: document.querySelector('[data-s="play"]').getAttribute('aria-label'), line: document.querySelector('.seek__line').getBoundingClientRect().height, shown: document.querySelector('[data-s="time-now"]').textContent, followed: window.__drag.size }; });
+  ok(mid.paused && mid.icon === 'Pause' && mid.line >= 9, `scrubbing, the video waits, the line thickens (${mid.line}px), and the button still says Pause`);
+  ok(Math.abs(mid.time - 0.7 * mid.d) < 0.5 && mid.followed >= 4, `the picture follows the finger (${mid.followed} places on the way, at ${mid.time.toFixed(1)}s for ${(0.7 * mid.d).toFixed(1)}s, "${mid.shown}")`);
+  await touch('touchEnd', at(0.7), ln.y); await sleep(700);
+  const lifted = { ...(await vid()), scrub: await page.$eval('[data-s="replaybar"]', (b) => b.hasAttribute('data-scrub')) };
+  await page.evaluate(() => clearInterval(window.__dragT));
+  ok(!lifted.paused && !lifted.scrub && lifted.time >= 0.7 * lifted.d - 0.3 && lifted.time < 0.7 * lifted.d + 1.2, `the finger lifted, it plays on from there (${lifted.time.toFixed(1)}s)`);
+  // A tap on the line: there, and it keeps playing
+  await page.evaluate(() => { const v = document.querySelector('.stage__player video'); v.currentTime = 0.2; });
+  await sleep(300);
+  await touch('touchStart', at(0.4), ln.y); await sleep(60); await touch('touchEnd', at(0.4), ln.y); await sleep(350);
+  const tapped = await vid();
+  ok(!tapped.paused && Math.abs(tapped.time - 0.4 * tapped.d) < 0.6, `a tap on the line goes there and plays on (${tapped.time.toFixed(1)}s for ${(0.4 * tapped.d).toFixed(1)}s)`);
+  // A swipe up that starts on the line: the page scrolls, the video doesn't jump (a little sideways drift included)
+  const swipeFrom = { ...(await vid()), y: await page.evaluate(() => scrollY) };
+  await touch('touchStart', at(0.9), ln.y);
+  for (let i = 1; i <= 10; i++) { await touch('touchMove', at(0.9) + i * 0.6, ln.y - i * 14); await sleep(16); }
+  await touch('touchEnd', at(0.9) + 6, ln.y - 140); await sleep(600);
+  const swiped = { ...(await vid()), y: await page.evaluate(() => scrollY), scrub: await page.$eval('[data-s="replaybar"]', (b) => b.hasAttribute('data-scrub')) };
+  ok(swiped.y > swipeFrom.y && !swiped.scrub && swiped.time >= swipeFrom.time - 0.05 && swiped.time - swipeFrom.time < 1.5, `a swipe up from the line scrolls the page (${swiped.y - swipeFrom.y}px) and the video doesn't jump (${swipeFrom.time.toFixed(1)}s, then ${swiped.time.toFixed(1)}s)`);
+  await page.evaluate(() => scrollTo(0, 0)); await sleep(300);
+  // The keyboard on the line: End, Home, and the arrows 5 seconds
+  await page.evaluate(() => document.querySelector('.stage__player video').pause());
+  await page.focus('[data-s="seek"]');
+  await page.keyboard.press('End'); await sleep(400);
+  const kEnd = await vid();
+  await page.keyboard.press('Home'); await sleep(400);
+  const kHome = await vid();
+  await page.keyboard.press('ArrowRight'); await sleep(400);
+  const kRight = await vid();
+  ok(kEnd.time > kEnd.d - 0.3 && kHome.time < 0.2 && Math.abs(kRight.time - 5) < 0.2, `the keyboard goes along the line: End ${kEnd.time.toFixed(1)}s, Home ${kHome.time.toFixed(1)}s, then → ${kRight.time.toFixed(1)}s`);
+  // With reduced motion the icon changes at once (no turning)
+  await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+  await open(page);
+  await page.waitForFunction(() => document.querySelector('.stage__player video')?.duration > 0, { timeout: 15000 }).catch(() => {});
+  await sleep(400);
+  const still = await turnOf();
+  ok(still.shapes === 1 && still.end !== PLAY_D, `with reduced motion the icon changes at once (${still.shapes} shape)`);
+  await page.emulateMediaFeatures([]);
+  await page.evaluate(() => document.querySelector('.stage__player video').pause());
+  // Safari reports where the video is only about 10 times a second (Chrome every frame): with the video's clock made that
+  // coarse (a quarter second at a time) wherever the page reads it in a frame (the line's glide; never for the video's
+  // own loader, which runs on timers and stalls when its clock doesn't move), the handle still has a new place every
+  // frame and never steps back
+  await open(page);
+  await page.waitForFunction(() => document.querySelector('.stage__player video')?.duration > 0, { timeout: 15000 }).catch(() => {});
+  await sleep(400);
+  await page.evaluate(() => {
+    const v = document.querySelector('.stage__player video');
+    const d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+    const raf = window.requestAnimationFrame.bind(window);
+    let inFrame = false;
+    window.requestAnimationFrame = (cb) => raf((t) => { inFrame = true; try { cb(t); } finally { inFrame = false; } });
+    Object.defineProperty(v, 'currentTime', { configurable: true, get() { const x = d.get.call(this); return inFrame ? Math.floor(x * 4) / 4 : x; }, set(x) { d.set.call(this, x); } });
+    document.querySelector('[data-s="play"]').click();
+  });
+  await waitFor(page, ['playing']); await sleep(300);
+  const coarse = await page.evaluate(() => new Promise((res) => {
+    const k = document.querySelector('.seek__knob'); const v = document.querySelector('.stage__player video'); const xs = []; const ts = new Set(); const t0 = performance.now();
+    const step = () => { xs.push(k.getBoundingClientRect().left); ts.add(v.currentTime); if (performance.now() - t0 < 1500) requestAnimationFrame(step); else res({ frames: xs.length, clock: ts.size, moves: xs.filter((x, i) => i && x !== xs[i - 1]).length, back: xs.filter((x, i) => i && x < xs[i - 1] - 0.01).length }); };
+    requestAnimationFrame(step);
+  }));
+  ok(coarse.clock >= 4 && coarse.clock <= 8 && coarse.moves >= coarse.frames * 0.8 && coarse.back === 0, `with a coarse clock (${coarse.clock} reports in 1.5 s) the handle still glides: moved on ${coarse.moves} of ${coarse.frames} frames, back ${coarse.back} times`);
+  await page.evaluate(() => document.querySelector('.stage__player video').pause());
+  await sleep(300);
+  const stopAt = await page.evaluate(() => { const v = document.querySelector('.stage__player video'); const c = document.querySelector('.seek'); return { f: Number(getComputedStyle(c).getPropertyValue('--f')), want: v.currentTime / v.duration }; });
+  ok(Math.abs(stopAt.f - stopAt.want) < 0.002, `paused, the handle is exactly where the video stopped (${stopAt.f.toFixed(4)} for ${stopAt.want.toFixed(4)})`);
+
+  // A mouse click on the line goes there, and the arrow keys then move the video (the slider keeps the focus)
+  await page.setViewport({ width: 1280, height: 720 });
+  await open(page);
+  await page.waitForFunction(() => document.querySelector('.stage__player video')?.duration > 0, { timeout: 15000 }).catch(() => {});
+  await sleep(500);
+  const lnD = await page.$eval('.seek__line', (l) => { const r = l.getBoundingClientRect(); return { l: r.left + 8, r: r.right - 8, y: r.top + r.height / 2 }; });
+  await page.mouse.click(lnD.l + (lnD.r - lnD.l) * 0.25, lnD.y);
+  await sleep(500);
+  const clicked = { ...(await vid()), focus: await page.evaluate(() => document.activeElement?.getAttribute('data-s')) };
+  const ringShown = await page.$eval('.seek__ring', (r) => getComputedStyle(r).display !== 'none');
+  await page.keyboard.press('ArrowRight'); await sleep(500);
+  const arrowed = await vid();
+  ok(Math.abs(clicked.time - 0.25 * clicked.d) < 0.5 && clicked.focus === 'seek' && Math.abs(arrowed.time - clicked.time - 5) < 0.6, `a click on the line goes there (${clicked.time.toFixed(1)}s) and → then moves 5 s (${arrowed.time.toFixed(1)}s; focus on ${clicked.focus})`);
+  await page.keyboard.press('Tab'); await page.keyboard.down('Shift'); await page.keyboard.press('Tab'); await page.keyboard.up('Shift'); await sleep(200);
+  const ringKeys = await page.evaluate(() => document.activeElement?.getAttribute('data-s') === 'seek' && getComputedStyle(document.querySelector('.seek__ring')).display !== 'none');
+  ok(!ringShown && ringKeys, `the focus ring shows round the line for the keyboard, not after a click (click ${ringShown}, keys ${ringKeys})`);
+
+  // Scrubbing while the video sits in the corner player: it stays there, playing on after the finger lifts
+  await page.setViewport({ width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  await open(page);
+  await page.waitForFunction(() => document.querySelector('.stage__player video')?.duration > 0, { timeout: 15000 }).catch(() => {});
+  await sleep(500);
+  await page.evaluate(() => { const v = document.querySelector('.stage__player video'); v.currentTime = 0.3; document.querySelector('[data-s="play"]').click(); });
+  await waitFor(page, ['playing']);
+  // (scrolled until the picture is docked while its bar is still on screen)
+  const dockedAt = await page.evaluate(async () => {
+    const bar = document.querySelector('[data-s="bar"]');
+    for (let y = 0; y < 1200; y += 20) {
+      scrollTo(0, y); await new Promise((r) => setTimeout(r, 60));
+      const b = bar.getBoundingClientRect();
+      if (document.querySelector('.stage__picture.is-docked') && b.top > 0 && b.bottom < innerHeight) return y;
+    }
+    return null;
+  });
+  if (dockedAt == null) ok(false, 'the corner player with the bar still on screen (no scroll position gives both here)');
+  else {
+    const lnK = await page.$eval('.seek__line', (l) => { const r = l.getBoundingClientRect(); return { l: r.left + 8, r: r.right - 8, y: r.top + r.height / 2 }; });
+    const atK = (f) => lnK.l + (lnK.r - lnK.l) * f;
+    await touch('touchStart', atK(0.2), lnK.y); await sleep(100);
+    for (let i = 1; i <= 8; i++) { await touch('touchMove', atK(0.2 + (0.4 * i) / 8), lnK.y); await sleep(40); }
+    await sleep(300);
+    const dockMid = await page.evaluate(() => !!document.querySelector('.stage__picture.is-docked'));
+    await touch('touchEnd', atK(0.6), lnK.y); await sleep(800);
+    const dockAfter = await page.evaluate(() => ({ docked: !!document.querySelector('.stage__picture.is-docked'), paused: document.querySelector('.stage__player video').paused }));
+    ok(dockMid && dockAfter.docked && !dockAfter.paused, `scrubbing with the video in the corner player, it stays there (during ${dockMid}, after ${dockAfter.docked}) and plays on`);
+    await page.evaluate(() => { document.querySelector('.stage__player video').pause(); scrollTo(0, 0); });
+  }
+
   // A portrait replay's bar is as narrow as the video, and on a phone the video is sized by the screen's height (narrower
   // still with captions on, which take a line of their own): every control must still sit inside the bar, the time
   // never runs into a button, and Jump to the reveal stays on one line
@@ -718,7 +893,7 @@ try {
     const starIn = !ring || (ring.l >= seek.left - 0.5 && ring.r <= seek.right + 0.5);
     // A tap on the star (and so on a handle under it) is the line's: it seeks, and the handle can be dragged off it
     const mc = seen(mark) ? { x: r(mark).left + r(mark).width / 2, y: r(mark).top + r(mark).height / 2 } : null;
-    const starTap = !mc || document.elementFromPoint(mc.x, mc.y) === range;
+    const starTap = !mc || document.elementFromPoint(mc.x, mc.y) === document.querySelector('.seek');
     const pic = r(document.querySelector('.stage__picture'));
     return { bar: Math.round(bar.width), outside, seek: Math.round(seek.width), markOff: Math.round(markOff * 10) / 10, timeOut, timeText, jumpOk, starIn, starTap, pic: Math.round(pic.width), ccShown: seen(cc), ccOn: cc?.getAttribute('aria-pressed') === 'true' };
   });

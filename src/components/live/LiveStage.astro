@@ -36,6 +36,7 @@
  * nor on a phone held sideways, where the picture needs the screen's height.
  */
 import { cfRaw, cfSrcset, cfLqip } from '../../utils/cf-image';
+import { morphPath } from '../../utils/play-morph';
 
 interface Props { photo: string; alt: string; partners?: boolean }
 const { photo, alt, partners = false } = Astro.props;
@@ -52,7 +53,6 @@ const ICON = {
   toLive: svg('<path d="M18 5v14"/><path d="M5 6.5v11a1 1 0 0 0 1.55.83l7.95-5.3a1.25 1.25 0 0 0 0-2.06L6.55 5.67A1 1 0 0 0 5 6.5Z"/>'),
   heart: svg('<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>'),
   play: svg('<path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor"/>'),
-  pause: svg('<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>'),
   close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
   eye: svg('<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>'),
   spark: svg('<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>'),
@@ -128,14 +128,19 @@ const ICON = {
       </span>
     </div>
     <div class="bar__replay" data-s="replaybar" hidden>
+      <!-- One icon that turns from play into pause and back (play-morph.ts), never one blinking out for the other -->
       <button class="bar__play" type="button" data-s="play" aria-label="Play">
-        <span class="bar__icon-play"><Fragment set:html={ICON.play} /></span>
-        <span class="bar__icon-pause"><Fragment set:html={ICON.pause} /></span>
+        <svg class="bar__morph" viewBox="0 0 24 24" aria-hidden="true"><path data-s="morph" d={morphPath(0)} /></svg>
       </button>
-      <div class="seek">
-        <span class="seek__line" aria-hidden="true"></span>
-        <span class="seek__mark" data-s="mark" aria-hidden="true" hidden><Fragment set:html={ICON.spark} /></span>
+      <!-- The progress line. A finger or the mouse works it anywhere along it (live-stage.ts): the picture follows the
+           finger, the handle grows under it. The slider is there for the keyboard and screen readers; the line, how much
+           has loaded, how far it's played and the handle are drawn, so they can glide with the picture -->
+      <div class="seek" data-s="seekcell">
         <input class="seek__range" type="range" min="0" max="1000" step="1" value="0" data-s="seek" aria-label="Seek" aria-valuetext="0:00" />
+        <span class="seek__line" aria-hidden="true"><span class="seek__loaded"></span><span class="seek__played"></span></span>
+        <span class="seek__mark" data-s="mark" aria-hidden="true" hidden><Fragment set:html={ICON.spark} /></span>
+        <span class="seek__glide" aria-hidden="true"><span class="seek__knob"></span></span>
+        <span class="seek__ring" aria-hidden="true"></span>
       </div>
       <span class="bar__time" data-s="time"><span data-s="time-now">0:00</span><span class="bar__total" data-s="time-total"></span></span>
       <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden>CC</button>
@@ -183,6 +188,10 @@ const ICON = {
   /* (no black of its own: until its first picture, what's behind it shows, the frame's dark and the soft photo) */
   .stage__player :global(video) { width: 100%; height: 100%; display: block; object-fit: contain; background: transparent; }
   .stage[data-pkind='replay'] .stage__player :global(video) { cursor: pointer; }
+  /* The frame takes the picture's own shape (--ar, data-exact: live-stage.ts), so the picture fills it, past its edge by
+     a fraction of a pixel at most. Fitted inside it instead, iPhone Safari left a sliver of the frame's dark down one
+     side of the picture (Peter's screenshot, Nov 18 2026; the recording's own edge is clean) */
+  .stage[data-exact] .stage__player :global(video) { object-fit: cover; }
 
   .stage__badge {
     position: absolute; left: 16px; bottom: 16px; z-index: 3; margin: 0;
@@ -503,16 +512,20 @@ const ICON = {
 
   .bar__cc[aria-pressed='true'] { background: var(--c-dark); color: #fff; border-color: var(--c-dark); }
 
+  /* Play and pause: one icon that turns from one into the other (live-stage.ts moves its shape, play-morph.ts), and
+     the button gives under a press and springs back, so a tap is felt as well as seen. The full screen and captions
+     buttons beside it give the same way */
   .bar__play {
     width: 40px; height: 40px; flex-shrink: 0; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
-    background: var(--c-yellow); color: var(--c-dark); margin-left: -10px;
+    background: var(--c-yellow); color: var(--c-dark); margin-left: -10px; -webkit-tap-highlight-color: transparent;
+    transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1), background-color 150ms ease;
   }
-  .bar__play :global(svg) { width: 16px; height: 16px; }
-  .bar__icon-play :global(svg) { margin-left: 2px; }
+  .bar__play[data-press], .bar__replay .bar__btn[data-press] { transform: scale(0.88); transition: transform 90ms ease-out, background-color 150ms ease; }
+  .bar__replay .bar__btn { -webkit-tap-highlight-color: transparent; transition: background-color 150ms ease, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+  @media (hover: hover) { .bar__play:hover { background-color: var(--c-yellow-hover); } }
+  .bar__morph { width: 16px; height: 16px; display: block; overflow: visible; }
+  .bar__morph path { fill: currentColor; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; }
   .bar__play:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
-  .bar__icon-pause, .stage[data-playing] .bar__icon-play { display: none; }
-  .stage[data-playing] .bar__icon-pause { display: grid; }
-  .bar__icon-play { display: grid; }
   /* Under the progress line: the time played under its start and the length under its end, lined up with the line's
      ends (8px in, as the slider's track is), so the length arrives in a place of its own and nothing moves when it
      does (Peter, Nov 16 2026). Short of room, the length steps aside: it wraps onto a second line that is never shown */
@@ -524,25 +537,37 @@ const ICON = {
   .bar__time::before { content: ''; flex: 1 0 0; height: 14px; order: 1; }
   .bar__total { order: 2; }
   .bar__total:empty { display: none; }
+  /* While a finger is on the line, the time it's at reads darker (it's the time the picture shows) */
+  .bar__time > span { transition: color 150ms ease; }
+  .bar__replay[data-scrub] .bar__time > [data-s='time-now'] { color: var(--c-dark); }
 
-  /* The line sits in the top of its cell (--seek-pad leaves the bottom for the time); the whole cell still seeks */
+  /* The line sits in the top of its cell (--seek-pad leaves the bottom for the time); the whole cell is the line's: a
+     tap anywhere on it goes there, a finger moving along it scrubs (live-stage.ts), and a finger moving up or down
+     still scrolls the page (pan-y) */
   .seek {
-    --seek-pad: 14px; position: relative; min-width: 0; height: 40px; display: flex; align-items: center;
-    /* The slider's handle (16px) runs along a track 8px in from each end of the cell, so its centre travels from 16px
-       to 16px short of the end: the reveal's star, drawn exactly where the handle is at that moment (--at, how far
-       along the reveal is), always fits in the cell with its ring, even at the very start or end */
+    --seek-pad: 14px; --lh: 6px; position: relative; min-width: 0; height: 40px; display: flex; align-items: center;
+    touch-action: pan-y; cursor: pointer; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none;
+    /* The handle (16px) runs along the line 8px in from each end of the cell, so its centre travels from 16px to 16px
+       short of the end: the reveal's star, drawn exactly where the handle is at that moment (--at, how far along the
+       reveal is), always fits in the cell with its ring, even at the very start or end */
     --mark-x: calc(16px + (100% - 32px) * var(--at, 0.5));
   }
-  /* The line you see is its own element, along the track (with how far it's played, --f on the cell, and a gap for
-     the star); the slider itself is see-through except its handle, and sits over both, so the handle is always whole
-     and on top (a gap cut in the slider's own track cut its handle too: browsers draw the handle inside the track) */
+  /* Under a finger the line thickens and the handle grows, as the best players' do, so it's plain what's held */
+  .bar__replay[data-scrub] .seek { --lh: 10px; }
+  /* The line you see is drawn (with how much has loaded, --buf, and how far it's played, --f, both on the cell, and a
+     gap for the star). The loaded and played parts slide in from the left (transform only, so they glide with the
+     picture every frame without the page laying anything out again) and the line clips them */
   .seek__line {
-    position: absolute; left: 8px; right: 8px; top: calc((100% - var(--seek-pad)) / 2 - 3px); height: 6px; border-radius: 6px; pointer-events: none;
+    position: absolute; left: 8px; right: 8px; top: calc((100% - var(--seek-pad)) / 2 - var(--lh) / 2); height: var(--lh);
+    border-radius: 99px; overflow: hidden; pointer-events: none; background: var(--c-border);
     /* (along the line itself, the handle's centre is 8px in from its ends) */
-    --played: calc(8px + (100% - 16px) * var(--f, 0));
     --star: calc(8px + (100% - 16px) * var(--at, 0.5));
-    background: linear-gradient(to right, var(--c-dark) var(--played), var(--c-border) var(--played));
+    transition: height 160ms cubic-bezier(0.2, 0.8, 0.2, 1), top 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
   }
+  /* (each part's right end is where the handle's centre is at its point: 8px in, plus the rest of the line times how far) */
+  .seek__loaded, .seek__played { position: absolute; inset: 0; border-radius: inherit; will-change: transform; }
+  .seek__loaded { background: rgba(55, 58, 54, 0.2); transform: translateX(calc((var(--buf, 0) - 1) * (100% - 16px) - 8px)); }
+  .seek__played { background: var(--c-dark); transform: translateX(calc((var(--f, 0) - 1) * (100% - 16px) - 8px)); }
   .seek[data-mark] .seek__line {
     -webkit-mask-image: linear-gradient(to right, #000 calc(var(--star) - 16px), transparent calc(var(--star) - 16px), transparent calc(var(--star) + 16px), #000 calc(var(--star) + 16px));
     mask-image: linear-gradient(to right, #000 calc(var(--star) - 16px), transparent calc(var(--star) - 16px), transparent calc(var(--star) + 16px), #000 calc(var(--star) + 16px));
@@ -557,14 +582,30 @@ const ICON = {
     -webkit-mask-image: linear-gradient(to right, #000 calc(var(--star) - 16px), transparent calc(var(--star) - 16px));
     mask-image: linear-gradient(to right, #000 calc(var(--star) - 16px), transparent calc(var(--star) - 16px));
   }
-  /* (its 8px sides: a tap there still seeks, to the very start or end) */
-  .seek__range { position: relative; z-index: 1; width: 100%; height: 40px; margin: 0; padding: 0 8px var(--seek-pad); background: transparent; cursor: pointer; -webkit-appearance: none; appearance: none; }
+  /* The handle: on top of the line and the star, its centre slid along by how far it's played (the slide's width is the
+     handle's travel, so a share of it is a share of the video) */
+  .seek__glide { position: absolute; left: 16px; right: 16px; top: calc((100% - var(--seek-pad)) / 2); height: 0; z-index: 2; pointer-events: none; transform: translateX(calc(var(--f, 0) * 100%)); will-change: transform; }
+  .seek__knob {
+    position: absolute; left: -8px; top: -8px; width: 16px; height: 16px; box-sizing: border-box; border-radius: 50%;
+    background: var(--c-dark); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+    transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .bar__replay[data-scrub] .seek__knob { transform: scale(1.5); }
+  @media (hover: hover) { .bar__replay:not([data-scrub]) .seek:hover .seek__knob { transform: scale(1.25); } }
+  /* The slider itself: the keyboard's and a screen reader's way along the line (arrows, Home, End; swipe up and down).
+     It's never seen and takes no taps (the line does: a slider's own handling differs from browser to browser). Never
+     seen at all, not even its handle: iPhone Safari drew that as a white square, whatever the styling, wherever the
+     slider last was (Nov 18 2026). Its focus ring is drawn round the line instead. (Its 8px sides: as the line's) */
+  .seek__range { position: relative; z-index: 3; width: 100%; height: 40px; margin: 0; padding: 0 8px var(--seek-pad); background: transparent; pointer-events: none; opacity: 0; -webkit-appearance: none; appearance: none; }
   .seek__range::-webkit-slider-runnable-track { height: 6px; border-radius: 6px; background: transparent; }
   .seek__range::-moz-range-track { height: 6px; border-radius: 6px; background: transparent; }
   .seek__range::-moz-range-progress { height: 6px; background: transparent; }
-  .seek__range::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 16px; height: 16px; margin-top: -5px; border-radius: 50%; background: var(--c-dark); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3); }
-  .seek__range::-moz-range-thumb { box-sizing: border-box; width: 16px; height: 16px; border-radius: 50%; background: var(--c-dark); border: 2px solid #fff; }
-  .seek__range:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; border-radius: 6px; }
+  .seek__range::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 16px; height: 16px; margin-top: -5px; border: 0; background: transparent; }
+  .seek__range::-moz-range-thumb { box-sizing: border-box; width: 16px; height: 16px; border: 0; background: transparent; }
+  /* (the slider comes first in the cell so its focus can show the ring after it, in every browser) */
+  .seek__ring { display: none; position: absolute; left: 0; right: 0; top: 0; bottom: calc(var(--seek-pad) - 6px); border-radius: 8px; outline: 2px solid var(--c-dark); pointer-events: none; z-index: 4; }
+  .seek__range:focus-visible ~ .seek__ring { display: block; }
+  .seek[data-pointer] .seek__ring { display: none; }
   .seek__mark {
     /* In the line's gap, under the handle, clear of play and captions. Drawn, not a button: every tap and drag goes to
        the line (a drag that starts on the star still drags), and a tap on the star plays from the reveal, as Jump to
@@ -781,5 +822,7 @@ const ICON = {
     .stage__end-fill { transition: none; }
     .stage[data-onair][data-mode='live'] .bar__dot::after { animation: none; }
     .stage__player, .bar__btn { transition: none; }
+    .bar__play, .bar__replay .bar__btn, .seek__line, .seek__knob, .bar__time > span { transition: none; }
+    .bar__play[data-press], .bar__replay .bar__btn[data-press] { transform: none; }
   }
 </style>

@@ -14,6 +14,7 @@ import type { LiveClient, LivePlayer } from './live-client';
 import { mountPlayer, type LiveSeek, type PlayerHandle, type PlayerStatus } from './live-player';
 import { watchMeter } from './live-stats';
 import { PHONE, SIDE, typingIn } from './live-media';
+import { morphEase, morphPath } from './play-morph';
 
 export type StageMode = 'loading' | 'idle' | 'upcoming' | 'live' | 'replay';
 export interface StageView {
@@ -136,6 +137,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const screen = root.querySelector<HTMLElement>('.stage__screen');
   const playerEl = $('player');
   const seek = $<HTMLInputElement>('seek');
+  // The replay's progress line (its cell), its bar and the play button's shape
+  const cell = $('seekcell');
+  const replaybar = $('replaybar');
+  const morph = root.querySelector<SVGPathElement>('[data-s="morph"]');
 
   let view: StageView = { mode: 'loading', player: null, orientation: 'portrait', badge: '' };
   let party = false;
@@ -323,7 +328,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     delete root.dataset.pstatus;
     delete root.dataset.pkind;
     root.style.removeProperty('--ar');
+    flag('data-exact', false);
     flag('data-playing', false);
+    resetClock();
     if (playerEl) playerEl.innerHTML = '';
     setDock(false);
   }
@@ -350,37 +357,166 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     sized = h > w ? 'portrait' : 'landscape';
     root.dataset.orientation = sized;
     root.style.setProperty('--ar', String(Math.min(2.4, Math.max(0.42, w / h))));
+    // (the frame is the picture's own shape: the picture fills it exactly, LiveStage.astro)
+    flag('data-exact', w / h >= 0.42 && w / h <= 2.4);
     told = sized;
     opts.onShape?.(sized, party);
     paint();
   }
   function onMuted(m: boolean) { muted = m; paint(); }
 
-  /** Replay clock: play state, seek bar, time, captions line */
+  /** Replay clock: play state, the progress line, time, captions line */
+  // The line, its handle and the time glide with the picture: drawn every frame while it plays (glide), not only when the
+  // video says where it is (4 times a second: the handle jumped along). Between the video's own reports (Safari's come
+  // about 10 times a second) it is where it must be by now, from the last report and the time since
+  let shownAt = 0;
+  let clock = { media: -1, wall: 0 };
+  let raf = 0;
+  let lastSec = -1;
+  // A finger (or the mouse) on the line: where it is, whether it has started moving the picture, and whether the video
+  // was playing (it pauses while scrubbing, the icon staying as it was, and plays on when the finger lifts)
+  let scrub: { id: number; x0: number; y0: number; star: boolean; on: boolean; t: number; wasPlaying: boolean; mouse: boolean } | null = null;
+  // One move of the picture at a time, always: asked for again before the last has landed, the newest place waits and
+  // goes next. Every move asked for at once, the picture landed 4 of 31 in a second's drag (Nov 18 2026), and iPhone
+  // Safari, a move asked for over one still landing, could stop playing altogether (it stuck at the place, or said
+  // Reconnecting, measured in the Simulator the same day)
+  let seekWant: { t: number; exact: boolean } | null = null;
+  let seekWatch: ReturnType<typeof setTimeout> | undefined;
+  // The finger lifted while the picture was still moving: it plays on once the exact move is under way, never first from
+  // wherever the quick move got to
+  let playAfterSeek = false;
+  function paintAt(t: number, d: number) {
+    if (!cell || !Number.isFinite(d) || d <= 0) return;
+    cell.style.setProperty('--f', Math.min(1, Math.max(0, t / d)).toFixed(5));
+    const sec = Math.floor(Math.max(0, t));
+    if (sec !== lastSec) { lastSec = sec; const now = $('time-now'); if (now) now.textContent = formatTime(t); }
+  }
+  // How much has loaded past where it's at (the part of what's loaded that it's in)
+  function paintLoaded() {
+    const v = video();
+    if (!v || !cell) return;
+    const d = v.duration;
+    if (!Number.isFinite(d) || d <= 0) return;
+    const at = scrub?.on ? scrub.t : v.currentTime;
+    let end = 0;
+    for (let i = 0; i < v.buffered.length; i++) if (v.buffered.start(i) <= at + 0.5 && v.buffered.end(i) >= at) end = v.buffered.end(i);
+    cell.style.setProperty('--buf', Math.min(1, end / d).toFixed(4));
+  }
+  function glide(now: number) {
+    raf = 0;
+    const v = video();
+    if (!v || kind !== 'replay' || scrub?.on) return;
+    if (v.paused || v.ended || v.seeking || v.readyState < 3) return; // (still: the media events paint its place)
+    const ct = v.currentTime;
+    if (ct !== clock.media) clock = { media: ct, wall: now };
+    // Never more than a third of a second past the last report (it may have stalled), and never back by a hair (a report
+    // a touch behind the estimate): a real move back is a seek, and those are drawn as they are
+    let t = Math.min(clock.media + ((now - clock.wall) / 1000) * (v.playbackRate || 1), ct + 0.35);
+    if (t < shownAt && shownAt - t < 0.3) t = shownAt;
+    shownAt = t;
+    paintAt(t, v.duration);
+    raf = requestAnimationFrame(glide);
+  }
+  const startGlide = () => { if (!raf) raf = requestAnimationFrame(glide); };
+  // The play button's shape: 0 play, 1 pause, and between while it turns (200 ms; at once with reduced motion)
+  let iconAt = 0;
+  let iconRaf = 0;
+  const setIcon = (t: number) => { cancelAnimationFrame(iconRaf); iconRaf = 0; iconAt = t; morph?.setAttribute('d', morphPath(t)); };
+  function showPlaying(on: boolean) {
+    flag('data-playing', on);
+    $('play')?.setAttribute('aria-label', on ? 'Pause' : 'Play');
+    const to = on ? 1 : 0;
+    if (!morph || (iconAt === to && !iconRaf)) return;
+    if (reduced || document.hidden) { setIcon(to); return; }
+    cancelAnimationFrame(iconRaf);
+    const from = iconAt;
+    const t0 = performance.now();
+    const ms = 200 * Math.abs(to - from);
+    const step = (now: number) => {
+      const k = Math.min(1, (now - t0) / ms);
+      iconAt = from + (to - from) * morphEase(k);
+      morph.setAttribute('d', morphPath(iconAt));
+      iconRaf = k < 1 ? requestAnimationFrame(step) : 0;
+    };
+    iconRaf = requestAnimationFrame(step);
+  }
+  function resetClock() {
+    cancelAnimationFrame(raf); raf = 0;
+    scrub = null; seekWant = null; clearTimeout(seekWatch); playAfterSeek = false;
+    replaybar?.removeAttribute('data-scrub');
+    shownAt = 0; lastSec = -1; clock = { media: -1, wall: 0 };
+    cell?.style.removeProperty('--f'); cell?.style.removeProperty('--buf');
+    setIcon(0);
+  }
+  /** Move the picture: exactly (a tap, the finger lifted, the keyboard), or quickly while scrubbing; one at a time */
+  function seekVideo(t: number, exact: boolean) {
+    const v = video();
+    if (!v) return;
+    if (v.seeking) { seekWant = { t, exact }; watchSeek(v, performance.now()); return; }
+    issueSeek(v, t, exact);
+  }
+  function issueSeek(v: HTMLVideoElement & { fastSeek?: (t: number) => void }, t: number, exact: boolean) {
+    seekWant = null;
+    clearTimeout(seekWatch);
+    // (a quick move already there: asking again is a move all the same. An exact one always goes: Safari reports a quick
+    // move's place as the one asked for, though it landed on the nearest whole picture, a second or more either side)
+    if (exact || Math.abs(v.currentTime - t) >= 0.02) {
+      if (!exact && typeof v.fastSeek === 'function') v.fastSeek(t); else v.currentTime = t;
+    }
+    if (playAfterSeek) { playAfterSeek = false; player?.play(); }
+  }
+  // A move waiting on one still landing goes as soon as that has landed (seeked, in attachMedia); this is for a browser
+  // that never says so. Still landing (a phone's network can take seconds), it waits on, up to 6 s, then goes anyway
+  function watchSeek(v: HTMLVideoElement, since: number) {
+    clearTimeout(seekWatch);
+    seekWatch = setTimeout(() => {
+      if (!seekWant || video() !== v) return;
+      if (v.seeking && performance.now() - since < 6000) { watchSeek(v, since); return; }
+      issueSeek(v, seekWant.t, seekWant.exact);
+    }, 500);
+  }
   function attachMedia() {
     detach?.(); detach = null;
     const v = video();
     if (!v) return;
+    lastSec = -1;
     const tick = () => {
       const d = v.duration;
-      const t = v.currentTime;
-      if (seek && Number.isFinite(d) && d > 0) {
-        if (document.activeElement !== seek || !seeking) seek.value = String(Math.round((t / d) * 1000));
-        // How far it's played (0 to 1), on the line's cell (the line you see is drawn there, under the slider)
-        seek.parentElement?.style.setProperty('--f', String(Math.min(1, Math.max(0, t / d))));
-        seek.setAttribute('aria-valuetext', `${formatTime(t)} of ${formatTime(d)}`);
+      const t = scrub?.on ? scrub.t : v.currentTime;
+      if (Number.isFinite(d) && d > 0) {
+        if (seek) {
+          seek.value = String(Math.round((t / d) * 1000));
+          seek.setAttribute('aria-valuetext', `${formatTime(t)} of ${formatTime(d)}`);
+        }
+        // (playing, the glide draws it; still, here)
+        if (!raf && !scrub?.on) { shownAt = t; paintAt(t, d); }
       }
       // The time and the length are two pieces, so the length can step aside when the bar is narrow
-      const now = $('time-now'); const total = $('time-total');
-      if (now) now.textContent = formatTime(t);
+      const total = $('time-total');
       if (total) total.textContent = Number.isFinite(d) && d > 0 ? formatTime(d) : '';
-      paintCaption(t);
-      paintJump(t);
+      paintLoaded();
+      paintCaption(v.currentTime);
+      paintJump(v.currentTime);
     };
-    const playing = () => { flag('data-playing', !v.paused && !v.ended); const b = $('play'); if (b) b.setAttribute('aria-label', v.paused || v.ended ? 'Play' : 'Pause'); };
-    const evs: [string, () => void][] = [['timeupdate', tick], ['durationchange', () => { tick(); paintMark(); }], ['seeked', tick], ['play', playing], ['pause', playing], ['ended', playing]];
+    // (scrubbing, the video is paused, but the button keeps saying what it will do when the finger lifts)
+    const playing = () => {
+      showPlaying(scrub?.on ? scrub.wasPlaying : (!v.paused && !v.ended) || playAfterSeek);
+      if (!v.paused && !v.ended) { startGlide(); return; }
+      // (stopped: drawn exactly where, the glide having been up to a moment ahead of the video's last report)
+      cancelAnimationFrame(raf); raf = 0;
+      if (!scrub?.on && Number.isFinite(v.duration)) { shownAt = v.ended ? v.duration : v.currentTime; paintAt(shownAt, v.duration); }
+    };
+    const seeked = () => {
+      if (seekWant && !v.seeking) issueSeek(v, seekWant.t, seekWant.exact);
+      tick();
+      if (!v.paused) startGlide();
+    };
+    const evs: [string, () => void][] = [
+      ['timeupdate', tick], ['durationchange', () => { tick(); paintMark(); }], ['seeked', seeked], ['progress', paintLoaded],
+      ['play', playing], ['playing', playing], ['pause', playing], ['ended', () => { playing(); tick(); }],
+    ];
     for (const [e, fn] of evs) v.addEventListener(e, fn);
-    detach = () => { for (const [e, fn] of evs) v.removeEventListener(e, fn); };
+    detach = () => { for (const [e, fn] of evs) v.removeEventListener(e, fn); cancelAnimationFrame(raf); raf = 0; };
     tick(); playing();
   }
 
@@ -630,7 +766,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   function jumpToReveal() {
     const v = video();
     if (!v || revealAt == null) return;
-    v.currentTime = Math.max(0, revealAt - JUMP_LEAD);
+    // (in turn, like every move: what was waiting is dropped, the reveal is where they asked to go)
+    seekWant = null; playAfterSeek = false;
+    seekVideo(Math.max(0, revealAt - JUMP_LEAD), true);
     player?.setMuted(false);
     player?.play();
     client.beacon('click_replay', { how: 'jump' });
@@ -646,6 +784,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   function togglePlay() {
     const v = video();
     if (!v || !player) return;
+    // (waiting to play on after a scrub, the button says Pause: pressed, it stays paused)
+    if (playAfterSeek) { playAfterSeek = false; showPlaying(false); updateDock(); return; }
     if (v.paused || v.ended) { player.setMuted(false); player.play(); } else v.pause();
   }
   function toggleCaptions() {
@@ -683,14 +823,14 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       if (video()?.paused) player?.play();
     } else if (kind === 'replay') togglePlay();
   });
-  let seeking = false;
-  // A tap on the reveal's star plays from the reveal, exactly, as Jump to the reveal does: the star is drawn on the
-  // line and the line takes the tap, which on its own would land wherever on the star the finger did (on a short line,
-  // a minute or more either side). A press that moves is a drag, star or not. It jumps when the finger lifts; the
-  // slider's own move to where the finger was, which for a tap in its 8px end comes after the lift, is put back
-  // (starTapped: until the next press or key, the only things that move the slider)
-  let press: { x: number; y: number; star: boolean } | null = null;
-  let starTapped = false;
+  // ── The progress line, by finger or mouse ───────────────────────
+  // Anywhere along the line: a tap goes there; a finger moving along it scrubs, the picture following it, the handle
+  // grown under it, the video paused meanwhile and playing on when the finger lifts (if it was playing). Up or down, the
+  // page scrolls as ever (touch-action: pan-y; the browser then cancels the press and nothing has moved). The slider
+  // under it takes the keyboard and screen readers only: its own touch handling differs from browser to browser.
+  // A tap on the reveal's star plays from the reveal, exactly, as Jump to the reveal does (the star is drawn on the
+  // line: on a short line a minute or more either side of it is under the finger). A press that moves is a drag, star
+  // or not
   const onStar = (e: PointerEvent) => {
     const m = $('mark');
     if (!m || m.hidden) return false;
@@ -698,24 +838,110 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // (its 3px white ring included)
     return Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) <= r.width / 2 + 3;
   };
-  seek?.addEventListener('pointerdown', (e) => { starTapped = false; press = { x: e.clientX, y: e.clientY, star: onStar(e) }; });
-  seek?.addEventListener('pointermove', (e) => { if (press?.star && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 6) press.star = false; });
-  seek?.addEventListener('pointercancel', () => { press = null; });
-  seek?.addEventListener('pointerup', () => {
-    const star = press?.star;
-    press = null;
-    if (star) { starTapped = true; seeking = false; jumpToReveal(); }
+  const durationOk = () => { const d = video()?.duration ?? NaN; return Number.isFinite(d) && d > 0; };
+  // (the handle's centre runs from 16px in to 16px short of the cell's end)
+  const fracAt = (x: number) => { const r = cell!.getBoundingClientRect(); return Math.min(1, Math.max(0, (x - r.left - 16) / Math.max(1, r.width - 32))); };
+  // Where the finger is, drawn (the handle, the line, the time), and the picture asked to follow (quickly, one move
+  // at a time); on the lift only drawn, the exact move follows
+  function aimAt(x: number) {
+    const v = video();
+    if (!v || !scrub || !durationOk()) return;
+    const f = fracAt(x);
+    scrub.t = f * v.duration;
+    shownAt = scrub.t;
+    paintAt(scrub.t, v.duration);
+    if (seek) { seek.value = String(Math.round(f * 1000)); seek.setAttribute('aria-valuetext', `${formatTime(scrub.t)} of ${formatTime(v.duration)}`); }
+    paintLoaded();
+  }
+  function scrubTo(x: number) {
+    aimAt(x);
+    if (scrub) seekVideo(scrub.t, false);
+  }
+  function beginScrub() {
+    const v = video();
+    if (!v || !scrub || scrub.on) return;
+    scrub.on = true;
+    cancelAnimationFrame(raf); raf = 0;
+    // (touched again while it waited to play on from the last scrub: it was playing, and plays on after this one)
+    if (playAfterSeek) { playAfterSeek = false; scrub.wasPlaying = true; }
+    if (!v.paused && !v.ended) { scrub.wasPlaying = true; v.pause(); }
+  }
+  function endScrub(commit: boolean) {
+    const s = scrub;
+    scrub = null;
+    replaybar?.removeAttribute('data-scrub');
+    const v = video();
+    if (!s || !v || !s.on) return;
+    if (commit) seekVideo(s.t, true);
+    if (!s.wasPlaying) { showPlaying(!v.paused && !v.ended); return; }
+    // (the exact move waiting on one still landing: playing on waits for it too; the button keeps saying Pause)
+    if (seekWant) { playAfterSeek = true; updateDock(); } else player?.play();
+  }
+  cell?.addEventListener('pointerdown', (e) => {
+    // (a press whose release never came, its pointer no longer held: over, where it was)
+    if (scrub && scrub.id !== e.pointerId && !cell.hasPointerCapture(scrub.id)) endScrub(true);
+    if (kind !== 'replay' || !durationOk() || scrub || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const v = video()!;
+    scrub = { id: e.pointerId, x0: e.clientX, y0: e.clientY, star: onStar(e), on: false, t: v.currentTime, wasPlaying: false, mouse: e.pointerType === 'mouse' };
+    try { cell.setPointerCapture(e.pointerId); } catch { /* (gone already) */ }
+    // Held: the handle grows at once, before anything moves
+    replaybar?.setAttribute('data-scrub', '');
+    // A mouse goes there at once (no page scroll to tell it from); a finger waits to see which way it goes. The slider
+    // takes the keyboard's focus from a click, so the arrows work next
+    if (scrub.mouse) { cell.dataset.pointer = ''; seek?.focus({ preventScroll: true }); if (!scrub.star) { beginScrub(); scrubTo(e.clientX); } }
   });
-  seek?.addEventListener('keydown', () => { press = null; starTapped = false; });
+  cell?.addEventListener('pointermove', (e) => {
+    if (!scrub || e.pointerId !== scrub.id) return;
+    // (a mouse moving with no button down: its release went elsewhere, another window or a menu)
+    if (scrub.mouse && e.buttons === 0) { endScrub(scrub.on); return; }
+    if (!scrub.on) {
+      // (a scrub once it goes sideways more than up or down: a swipe up that drifts a little is the page's scroll)
+      const dx = Math.abs(e.clientX - scrub.x0), dy = Math.abs(e.clientY - scrub.y0);
+      if (dx <= (scrub.star ? 6 : 4) || dx <= dy) return;
+      scrub.star = false;
+      beginScrub();
+    }
+    scrubTo(e.clientX);
+  });
+  cell?.addEventListener('pointerup', (e) => {
+    if (!scrub || e.pointerId !== scrub.id) return;
+    if (!scrub.on && scrub.star) { endScrub(false); jumpToReveal(); return; }
+    if (!scrub.on) {
+      // A tap: there, exactly, playing on if it was (nothing paused for it)
+      const v = video();
+      endScrub(false);
+      if (v && durationOk()) {
+        const t = fracAt(e.clientX) * v.duration;
+        shownAt = t; paintAt(t, v.duration);
+        if (seek) seek.value = String(Math.round((t / v.duration) * 1000));
+        seekVideo(t, true);
+      }
+      return;
+    }
+    aimAt(e.clientX);
+    endScrub(true);
+  });
+  // The browser took the press for a page scroll (nothing moved yet), or the system took it mid-drag (it ends where it is)
+  cell?.addEventListener('pointercancel', (e) => { if (scrub && e.pointerId === scrub.id) endScrub(true); });
+  cell?.addEventListener('lostpointercapture', (e) => { if (scrub && e.pointerId === scrub.id) endScrub(true); });
+  // A mouse press on the line keeps the slider's focus (taken at the press, above): the browser would otherwise move it
+  // to the stage once the press is over, and the arrows would scroll the page instead of moving the video
+  cell?.addEventListener('mousedown', (e) => e.preventDefault());
+  // (its focus ring is for the keyboard: none after a click on the line, until a key is pressed there)
+  seek?.addEventListener('keydown', () => { if (cell) delete cell.dataset.pointer; });
+  seek?.addEventListener('blur', () => { if (cell) delete cell.dataset.pointer; });
+  // The keyboard and screen readers (the slider's own Home, End, Page Up and Down; the arrows are below, 5 seconds)
   seek?.addEventListener('input', () => {
     const v = video();
-    if (!v || !Number.isFinite(v.duration) || v.duration <= 0) return;
-    // (a tap on the star goes to the reveal, never first to where it touched: the handle stays where the video is)
-    if (press?.star || starTapped) { seek.value = String(Math.round((v.currentTime / v.duration) * 1000)); return; }
-    seeking = true;
-    v.currentTime = (Number(seek.value) / 1000) * v.duration;
+    if (!v || !durationOk()) return;
+    seekVideo((Number(seek.value) / 1000) * v.duration, true);
   });
-  seek?.addEventListener('change', () => { seeking = false; });
+  // The buttons under the replay give under a press and spring back (LiveStage.astro)
+  root.querySelectorAll<HTMLElement>('[data-s="play"], [data-s="replaybar"] .bar__btn').forEach((b) => {
+    const off = () => b.removeAttribute('data-press');
+    b.addEventListener('pointerdown', (e) => { if (e.pointerType !== 'mouse' || e.button === 0) b.setAttribute('data-press', ''); });
+    for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, off);
+  });
   // Keyboard, while focus is anywhere in the stage
   root.addEventListener('keydown', (e) => {
     if (!party || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -734,7 +960,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       if (!v || !Number.isFinite(v.duration)) return;
       e.preventDefault();
       const back = e.key === 'ArrowLeft' || e.key === 'ArrowDown';
-      v.currentTime = Math.max(0, Math.min(v.duration, v.currentTime + (back ? -5 : 5)));
+      // (from where it's going: a key held down steps on from the last step, not from where the picture has got to)
+      const from = seekWant?.t ?? v.currentTime;
+      seekVideo(Math.max(0, Math.min(v.duration, from + (back ? -5 : 5))), true);
     }
   });
 
@@ -827,7 +1055,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   function updateDock() {
     const going = !!player && (kind === 'live'
       ? pstatus === 'iframe' || pstatus === 'playing' || pstatus === 'buffering' || pstatus === 'reconnecting'
-      : pstatus === 'playing' || pstatus === 'buffering');
+      : pstatus === 'playing' || pstatus === 'buffering' || (!!scrub?.on && scrub.wasPlaying) || playAfterSeek);
     const pin = pinned && party;
     setDock(pin || (party && going && !inView && !dockOff && !typing && !document.fullscreenElement));
     setPinned(pin && docked);
