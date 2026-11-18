@@ -54,6 +54,8 @@ test('the line naming the reveals after this one: written the same by the page a
   assert.equal(afterLine([dylan, max, colin], 'dylan-2026', '', 'America/New_York'), 'After Dylan: Max on Friday, November 20 and Colin in early December.');
   assert.equal(afterLine([max, colin], 'dylan-2026', 'Dylan', 'America/New_York'), 'After Dylan: Max on Friday, November 20 and Colin in early December.', 'a name the schedule doesn’t have');
   assert.equal(afterLine([dylan], 'dylan-2026', '', 'America/New_York'), '', 'nothing after it: no line');
+  assert.equal(afterLine([dylan, max, colin], 'max', '', 'America/New_York'), 'After Max: Colin in early December.', 'a reveal before it is never named as after it');
+  assert.equal(afterLine([dylan, max], 'max', '', 'America/New_York'), '', 'the last one: no line, even with one before it');
   assert.equal(afterLine([dylan, max], '', '', 'America/New_York'), '', 'no reveal on the page: no line');
   // A late reveal in the east is the day before on the west coast
   const late = { ...max, startsAt: '2026-11-21T03:30:00.000Z', date: '2026-11-20' };

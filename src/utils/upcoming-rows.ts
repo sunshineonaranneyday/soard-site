@@ -40,7 +40,10 @@ export const rowsSignature = (list: UpcomingReveal[], tz = shownZone()) => `${tz
  */
 export function afterLine(list: UpcomingReveal[], kidSlug: string, name = '', tz = shownZone()): string {
   if (!kidSlug) return '';
-  const after = list.filter((r) => r.slug !== kidSlug).slice(0, 2);
+  // Only the reveals after this one: the list runs soonest first, so one coming before it is never "after" it
+  // (Nov 18 2026: Max's page said "After Max: Dylan on Wednesday", Dylan's reveal being two days before Max's)
+  const at = list.findIndex((r) => r.slug === kidSlug);
+  const after = (at >= 0 ? list.slice(at + 1) : list).filter((r) => r.slug !== kidSlug).slice(0, 2);
   const shown = list.find((r) => r.slug === kidSlug)?.name || name;
   const words = after.map((r) => (r.confirmed ? `${r.name} on ${revealDay(r, 'long', tz)}` : `${r.name} in ${r.window.label}`)).join(' and ');
   return words ? `${shown ? `After ${shown}` : 'Next up'}: ${words}.` : '';
