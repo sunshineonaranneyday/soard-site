@@ -2,10 +2,12 @@
  * test-csp.mjs — the site under its STRICT Content-Security-Policy, enforced
  * ============================================================================
  * Serves a build (after scripts/csp-hash.mjs) with the headers from its
- * dist/_headers, except that each route's Content-Security-Policy-Report-Only
- * policy (inline scripts only by hash, no inline handlers) is sent as the
- * enforced Content-Security-Policy: what ENFORCE = true would ship. Then, in a
- * real browser:
+ * dist/_headers, each route's strict policy (inline scripts only by hash, no
+ * inline handlers) enforced. Since ENFORCE = true in csp-hash.mjs (Nov 2 2026)
+ * that policy is the route's own Content-Security-Policy line and there is no
+ * Report-Only line; with ENFORCE = false it is the Report-Only line, sent here
+ * as the enforced Content-Security-Policy (what turning ENFORCE on would
+ * ship). Then, in a real browser:
  *   - visits the key pages, scrolls them, and records every
  *     securitypolicyviolation event and console error (target: zero violations)
  *   - a client-router soft navigation (/ → /kids/ → a kid), which runs each new
@@ -31,7 +33,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, statSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, extname } from 'node:path';
-import { patternRegex, hasPlaceholder } from './csp-hash.mjs';
+import { patternRegex, hasPlaceholder, ENFORCE } from './csp-hash.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const DIST = process.argv[2] || join(ROOT, 'dist');
@@ -68,7 +70,8 @@ function headersFor(path) {
       else h.set(k, { name, values: [...(h.get(k)?.values || []), value] });
     }
   }
-  const strict = h.get('content-security-policy-report-only');
+  // The strict policy: its Report-Only line while csp-hash.mjs only reports it, else the enforced line itself (ENFORCE)
+  const strict = h.get('content-security-policy-report-only') || h.get('content-security-policy');
   if (strict) {
     // Pages name images by their absolute https://sunshineonaranneyday.com/cdn-cgi/... URL,
     // which is 'self' in production; here it's another origin, so say so
@@ -192,10 +195,12 @@ console.log('Headers');
   const raw = (path) => { const h = new Map(); for (const rule of rules) if (rule.re.test(path)) for (const [op, name, value] of rule.ops) { const k = name.toLowerCase(); if (op === 'detach') h.delete(k); else h.set(k, [...(h.get(k) || []), value]); } return h; };
   for (const [path, marker] of [['/', 'challenges.cloudflare.com'], ['/apply/form/', 'upload.videodelivery.net'], ['/admin/', 'tile.openstreetmap.org']]) {
     const h = raw(path);
-    const one = (k) => (h.get(k) || []).length === 1;
-    const ro = (h.get('content-security-policy-report-only') || [])[0] || '';
-    ok(one('content-security-policy') && one('content-security-policy-report-only') && ro.includes(marker) && /'sha256-/.test(ro) && !/script-src[^;]*'unsafe-inline'/.test(ro),
-      `${path}: one enforced and one strict Report-Only policy, the route's own (${marker}), hashed, no 'unsafe-inline'`);
+    const count = (k) => (h.get(k) || []).length;
+    // Enforced (ENFORCE in csp-hash.mjs): the strict policy is the one Content-Security-Policy, and the old line is gone
+    const strict = (h.get(ENFORCE ? 'content-security-policy' : 'content-security-policy-report-only') || [])[0] || '';
+    const shape = count('content-security-policy') === 1 && count('content-security-policy-report-only') === (ENFORCE ? 0 : 1);
+    ok(shape && strict.includes(marker) && /'sha256-/.test(strict) && !/script-src[^;]*'unsafe-inline'/.test(strict),
+      `${path}: ${ENFORCE ? 'one policy, the strict one, enforced' : 'one enforced and one strict Report-Only policy'}, the route's own (${marker}), hashed, no 'unsafe-inline'`);
   }
 }
 

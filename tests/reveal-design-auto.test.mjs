@@ -245,7 +245,7 @@ test('the first run moves before photos waiting in Before & after to Photos, onc
   assert.deepEqual(l.kids.max.befores.brought, ['M0']);
   assert.equal(Number((await claimRow()).data), NOW + MIN, 'the next run a minute on');
 
-  // Dylan: twelve, the reveal screen's six spread across the visit first, never the HEIC JobTread has no JPEG of
+  // Dylan: twelve, the live page's six spread across the visit first, never the HEIC JobTread has no JPEG of
   const r = await run(NOW + MIN);
   assert.equal(r.did.slug, 'dylan-2026');
   assert.equal(r.did.work, 'befores');
@@ -307,7 +307,7 @@ test('a minute on the site looks at those, then the rest come in and are looked 
   const byType = Object.fromEntries(d.plans.map((p) => [p.type, p]));
   assert.equal(byType['as-built'].addressCheck, 'wiped');
   assert.equal(byType['as-built'].label, 'Existing layout');
-  assert.equal(byType.proposed.addressCheck, undefined, 'street not found: held off the reveal screen');
+  assert.equal(byType.proposed.addressCheck, undefined, 'street not found: held off the live page');
   assert.equal(byType.board.source, 'jt:BRD');
   const posts = calls.slack.map((p) => JSON.stringify(p));
   assert.equal(posts.length, 1, 'the design note in Slack; the before photos go to Linzi by email, not Slack');

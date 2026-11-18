@@ -1,5 +1,5 @@
 /**
- * A kid's design on their reveal screen: when it opens (the confirmed reveal),
+ * A kid's design on their live page: when it opens (the confirmed reveal),
  * what it shows, and that nothing of it (nor the family's address) gets out early.
  * public/admin/reveal-design.js, functions/api/reveal-design.js,
  * kids-shared.js kidRecord (before-only pairs, design boards).
@@ -24,7 +24,7 @@ const DYLAN = {
   // Photos → Before photos (Peter, Nov 12 2026: "they should go into photos, not the before and after section"), each
   // looked at (staff added them)
   beforePhotos: [1, 2, 3, 4, 5, 6, 7].map((n) => ({ url: img(`before-${n}.jpg`), alt: '', room: n === 1 ? 'Bathroom' : '', looked: 'staff' })),
-  // A pair being made: never on the reveal screen
+  // A pair being made: never on the live page
   beforeAfterPhotos: [{ before: img('pair-before.jpg'), after: '', room: '', beforeAlt: '', afterAlt: '' }],
   plans: [
     { url: img('board-1.png'), label: 'Therapy room design board', type: 'board' },
@@ -99,7 +99,7 @@ test('the kid page: from the confirmed reveal every before photo and the existin
   assert.deepEqual(pagePlans(kid), [], 'nothing before the confirm');
   assert.deepEqual(pageBefores(kid), []);
   assert.deepEqual(pagePlans(kid, { confirmed: true }).map((p) => p.url), [img('e.png'), img('p.png')], 'existing first, then proposed; no board; never an unchecked drawing');
-  assert.equal(pageBefores(kid, { confirmed: true }).length, 7, 'every before photo, not just the six the reveal screen plays');
+  assert.equal(pageBefores(kid, { confirmed: true }).length, 7, 'every before photo, not just the six the live page plays');
   const done = { ...kid, status: 'completed' };
   assert.deepEqual(pagePlans(done).map((p) => p.url), [img('p.png'), img('e.png'), img('u.png'), img('b.png')], 'after the reveal, every plan staff put there, boards too');
   assert.equal(pageBefores(done).length, 7);
@@ -288,12 +288,12 @@ test('a before photo is seen only once someone has looked at it and it isn’t k
   assert.deepEqual(pageBefores(kid, { confirmed: true }).map((p) => p.url), [fine.url, staffOn.url], 'the kid page');
   assert.deepEqual(pageBefores({ ...kid, status: 'completed' }).map((p) => p.url), [fine.url, staffOn.url], 'after the reveal too');
   assert.deepEqual(beforePhotosOf(kid).map((p) => p.url), [fine.url, staffOn.url]);
-  assert.deepEqual(revealSlides(kid).filter((x) => x.kind === 'before').map((x) => x.url), [fine.url, staffOn.url], 'the reveal screen and live page');
+  assert.deepEqual(revealSlides(kid).filter((x) => x.kind === 'before').map((x) => x.url), [fine.url, staffOn.url], 'the live page');
   // None on the page: a room revealed long ago still doesn't fall back to its pairs once it has before photos of its own
   assert.deepEqual(beforePhotosOf({ status: 'completed', beforePhotos: [off], beforeAfterPhotos: [{ before: img('p.jpg'), after: img('a.jpg') }] }), []);
 });
 
-test('the reveal screen plays the first six on the page: places skip the rest, and moving one in or out goes by those places', () => {
+test('the live page plays the first six on the page: places skip the rest, and moving one in or out goes by those places', () => {
   // 0 on, 1 off, 2..7 on, 8 waiting, 9 on: the six that play are 0, 2, 3, 4, 5, 6
   const list = [look(0, { looked: 'site' }), look(1, { looked: 'site', offPage: true }), ...[2, 3, 4, 5, 6, 7].map((n) => look(n, { looked: 'staff' })), look(8), look(9, { looked: 'site' })];
   assert.deepEqual(revealPlaces(list), [0, null, 1, 2, 3, 4, 5, null, null, null]);
@@ -310,7 +310,7 @@ test('the reveal screen plays the first six on the page: places skip the rest, a
   assert.equal(revealPlaces(out)[out.findIndex((p) => p.url === list[0].url)], null);
 });
 
-test('places on the reveal screen still free: one kept off takes none, one not looked at yet does', () => {
+test('places on the live page still free: one kept off takes none, one not looked at yet does', () => {
   assert.equal(freeBeforePlaces({ beforePhotos: [look(1), look(2, { looked: 'site' }), look(3, { looked: 'site', offPage: true })] }), BEFORE_SHOWN - 2);
   assert.equal(freeBeforePlaces({ beforePhotos: [] }), BEFORE_SHOWN);
 });

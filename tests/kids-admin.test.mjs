@@ -155,7 +155,7 @@ test('the saved record: editor fields and the dead schedule dropped, uploads in 
   assert.deepEqual(rec.photos, [{ url: img('a'), alt: 'A' }]);
   assert.equal(rec.photoCount, 1);
   assert.deepEqual(rec.plans.map((p) => p.type), ['as-built', 'proposed']);
-  // A before photo waits for its after (it shows on the reveal screen); an after with no before is dropped
+  // A before photo waits for its after (it shows on the live page); an after with no before is dropped
   assert.deepEqual(rec.beforeAfterPhotos.map((p) => [p.before, p.after]), [[img('b'), img('c')], [img('d'), '']]);
   assert.equal(rec.publishStatus, 'draft');
   assert.equal(rec.streamVideoId, null);

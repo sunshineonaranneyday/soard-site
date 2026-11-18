@@ -3226,7 +3226,7 @@
     .kd-pair__empty:hover, .kd-pair__empty:focus-within { border-color: var(--color-text); color: var(--color-text); }
     /* A before photo's after, waiting for the room to be done: quieter than a missing photo */
     .kd-pair__empty--waits { aspect-ratio: auto; min-height: 5.5rem; border-style: dotted; border-color: var(--color-border); background: transparent; color: var(--color-text-muted); text-align: center; padding: 0.75rem; }
-    /* What a plan is (as-built, proposed, board): the reveal screen plays the first two, in that order; a board waits for the kid page after the reveal */
+    /* What a plan is (as-built, proposed, board): the live page shows the first two, in that order; a board waits for the kid page after the reveal */
     .kd-plan__kind { align-self: stretch; }
     .kd-plan__kind > [role="radio"] { flex: 1 1 0; justify-content: center; padding-inline: 0.35rem; font-size: var(--fs-xs); }
     .kd-design-when { margin-bottom: 0.9rem; }
@@ -4669,7 +4669,7 @@
     } from './team-shared.js';
     // Kid profile rules (gallery split, hero intro, plan crop, what's missing), shared with the kid page Preview
     import * as KS from './kids-shared.js';
-    // A kid's design on their reveal screen (what shows, in what order, from when), shared with /api/reveal-design
+    // A kid's design on their live page (what shows, in what order, from when), shared with /api/reveal-design
     import * as RD from './reveal-design.js';
     // A home's details in JobTread (Zestimate, Year Built…): the Home card beside a kid, shared with Insights
     import * as HS from './home-shared.js';
@@ -12675,7 +12675,7 @@
     /**
      * A before photo (Photos → Before photos): never in the gallery. Only one on the page (RD.onPage: the site's check,
      * or staff, has looked at it, and it isn't kept off) is ever public; before the reveal the first RD.BEFORE_SHOWN of
-     * those play on the reveal screen, so its place says whether it does; its room is said under it there
+     * those play on the live page, so its place says whether it does; its room is said with it there
      */
     function KidBeforeDialog({ kid, index, revealed, confirmed = true, onReveal, onPage, onGallery, onRoom, ...rest }) {
       const p = kid.beforePhotos[index];
@@ -12697,22 +12697,22 @@
       return html`<${KdPhotoDialog} photos=${kid.beforePhotos} index=${index} focal=${false} placeLabel="Place in Before photos"
         returnTo="#kd-before-tiles .kd-tile__open, #kd-befores .kd-sec__actions .btn"
         sub=${revealed ? (state === 'on' ? 'A before photo: in the Before section of the page, and for the Before & after pairs' : `A before photo, ${offLine}`)
-          : state !== 'on' ? `Not on the reveal screen: ${offLine}`
-          : !choice ? `On the reveal screen${once}, ${kdOrdinal(place + 1)} of ${shownCount}: every before photo on the page plays while there are ${RD.BEFORE_SHOWN} or fewer`
-          : shown ? `On the reveal screen${once}, ${kdOrdinal(place + 1)} of ${RD.BEFORE_SHOWN}` : `Not on the reveal screen: it plays the first ${RD.BEFORE_SHOWN} on the page`}
-        placeHint=${revealed ? 'Never in the gallery. A Before & after pair takes its before from here.' : `The first ${RD.BEFORE_SHOWN} on the page play on the reveal screen. Never in the gallery.`}
+          : state !== 'on' ? `Not on the live reveal page: ${offLine}`
+          : !choice ? `On the live reveal page${once}, ${kdOrdinal(place + 1)} of ${shownCount}: every before photo on the page plays while there are ${RD.BEFORE_SHOWN} or fewer`
+          : shown ? `On the live reveal page${once}, ${kdOrdinal(place + 1)} of ${RD.BEFORE_SHOWN}` : `Not on the live reveal page: it plays the first ${RD.BEFORE_SHOWN} on the page`}
+        placeHint=${revealed ? 'Never in the gallery. A Before & after pair takes its before from here.' : `The first ${RD.BEFORE_SHOWN} on the page play on the live reveal page. Never in the gallery.`}
         extra=${html`<div class="form-group">
           <label class="form-label" for="kd-before-room">Room <span class="form-optional">optional</span></label>
           <input id="kd-before-room" class="form-input" value=${p.room || ''} maxlength="60" placeholder="e.g. Bathroom" onInput=${(e) => onRoom(p._key, e.target.value)} />
-          <p class="form-hint">On its Before label on the page, and under it on the reveal screen. Without it, the screen says “${name ? kdPoss(name) : 'The'} room ${revealed ? 'before' : 'today'}”.</p>
+          <p class="form-hint">On its Before label on the page and on the live reveal page. Without it, the live page says “${name ? kdPoss(name) : 'The'} room ${revealed ? 'before' : 'today'}”.</p>
         </div>`}
         roles=${[
           { id: 'page', on: state === 'on', label: 'On the page', icon: state === 'on' ? kdIcon.eye : kdIcon.eyeOff,
-            onText: `${p.looked === 'site' ? 'The site checked it and found nothing to keep it off. ' : ''}${revealed ? 'Shows in the Before section of the page' : `Shows in the Before section of the page${once}, and can play on the reveal screen`}. Turn off to keep it off.${pairNote}`,
-            offText: state === 'off' ? `${p.looked === 'site' && why ? `The site kept it off: ${why}` : revealed ? 'Kept off the page' : 'Kept off the page and the reveal screen'}. Turn on if it’s fine to show.${pairNote}`
+            onText: `${p.looked === 'site' ? 'The site checked it and found nothing to keep it off. ' : ''}${revealed ? 'Shows in the Before section of the page' : `Shows in the Before section of the page${once}, and can play on the live reveal page`}. Turn off to keep it off.${pairNote}`,
+            offText: state === 'off' ? `${p.looked === 'site' && why ? `The site kept it off: ${why}` : revealed ? 'Kept off the page' : 'Kept off the page and the live reveal page'}. Turn on if it’s fine to show.${pairNote}`
               : `Not checked yet: the site looks at each before photo from JobTread within minutes of saving, and it shows nowhere until then. Turn on to show it now.${pairNote}`,
             toggle: () => onPage(p._key, state !== 'on') },
-          ...(!choice ? [] : [{ id: 'reveal', on: shown, label: 'On the reveal screen', onText: `Plays ${kdOrdinal(place + 1)} of ${RD.BEFORE_SHOWN}. Turn off to let the next one play`, offText: `Play it, in place of the ${kdOrdinal(RD.BEFORE_SHOWN)}`, icon: kdIcon.play, toggle: () => onReveal(p._key, shown) }]),
+          ...(!choice ? [] : [{ id: 'reveal', on: shown, label: 'On the live reveal page', onText: `Plays ${kdOrdinal(place + 1)} of ${RD.BEFORE_SHOWN}. Turn off to let the next one play`, offText: `Play it, in place of the ${kdOrdinal(RD.BEFORE_SHOWN)}`, icon: kdIcon.play, toggle: () => onReveal(p._key, shown) }]),
           // (Only one on the page: the gallery is on the page too, so one kept off is switched on first, on purpose)
           ...(state !== 'on' ? [] : [{ id: 'gallery', on: false, action: true, label: 'Move to the gallery', onText: '', offText: 'Show it in the gallery with the other photos instead', icon: kdIcon.image, toggle: () => onGallery(p._key) }]),
         ]} ...${rest} />`;
@@ -12791,7 +12791,7 @@
       const fileName = KS.looksLikeFileName(plan.label);
       const kind = RD.planKind(plan);
       const check = plan.addressCheck;
-      // Before the reveal, an as-built or proposed drawing shows on the kid page and the reveal screen only once someone
+      // Before the reveal, an as-built or proposed drawing shows on the kid page and the live page only once someone
       // has seen to the address on it; after it too, one brought in from JobTread (pagePlans): the buttons stay for it
       const needsCheck = kind !== 'board' && !RD.addressChecked(plan) && !kdLocal(plan.url) && (!revealed || !!plan.source);
       const kindIds = RD.PLAN_KINDS.map((k) => k.id);
@@ -12821,7 +12821,7 @@
           <input class="form-input" value=${plan.label || ''} list="kd-plan-captions" placeholder="Caption, e.g. Floor plan, after" aria-label=${`Caption for plan ${index + 1}`}
             onInput=${(e) => onLabel(plan._key, e.target.value)} />
           ${needsCheck ? html`<div class="kd-plan__check">
-            <p>${revealed ? 'It shows on the kid page once the family’s address on it is covered, or someone has checked there’s none.' : 'It shows on the kid page and plays on the reveal screen once the family’s address on it is covered, or someone has checked there’s none.'}</p>
+            <p>${revealed ? 'It shows on the kid page once the family’s address on it is covered, or someone has checked there’s none.' : 'It shows on the kid page and the live reveal page once the family’s address on it is covered, or someone has checked there’s none.'}</p>
             <span class="kd-btnrow">
               <button type="button" class="btn btn-secondary btn-sm" onClick=${() => onCover(plan._key)}>Cover the address</button>
               <button type="button" class="btn btn-ghost btn-sm" onClick=${() => onNoAddress(plan._key)}>No address on it</button>
@@ -13930,17 +13930,17 @@
 
       // ── Before photos (Photos → Before photos): the room before the makeover, from JobTread once the reveal is
       // confirmed (functions/api/_reveal-design-auto.js) or added here. Never in the gallery; before the reveal the
-      // first RD.BEFORE_SHOWN play on the reveal screen; a Before & after pair takes its before from here ──
+      // first RD.BEFORE_SHOWN play on the live page; a Before & after pair takes its before from here ──
       const beforeDrag = useKdReorder({
         keys: data.beforePhotos.map((p) => p._key), grid: true, disabled: beforeSelecting,
         nameOf: (k) => `Before photo ${dataRef.current.beforePhotos.findIndex((p) => p._key === k) + 1}`,
-        // Where it is, and whether that plays on the reveal screen (the first RD.BEFORE_SHOWN on the page)
+        // Where it is, and whether that plays on the live page (the first RD.BEFORE_SHOWN on the page)
         placeOf: (o, k) => {
           const byKey = new Map(dataRef.current.beforePhotos.map((p) => [p._key, p]));
           const list = o.map((x) => byKey.get(x));
           const at = o.indexOf(k);
           const once = dataRef.current.publishStatus === 'draft' ? ' once the profile is shown' : '';
-          const screen = revealed || !RD.onPage(list[at]) ? '' : RD.revealPlaces(list)[at] !== null ? `, on the reveal screen${once}` : ', not on the reveal screen';
+          const screen = revealed || !RD.onPage(list[at]) ? '' : RD.revealPlaces(list)[at] !== null ? `, on the live reveal page${once}` : ', not on the live reveal page';
           return `position ${at + 1} of ${o.length}${screen}`;
         },
         onDrop: (next) => set((d) => { const m = new Map(d.beforePhotos.map((p) => [p._key, p])); return { beforePhotos: next.map((k) => m.get(k)).filter(Boolean) }; }),
@@ -14118,7 +14118,7 @@
           }),
         });
       };
-      // On the reveal screen or not: in as the last of the first ones on the page (whose last steps off), or out just past them
+      // On the live page or not: in as the last of the first ones on the page (whose last steps off), or out just past them
       const setOnScreen = (key, shown) => {
         const list = dataRef.current.beforePhotos;
         const from = list.findIndex((p) => p._key === key);
@@ -14138,7 +14138,7 @@
         if (!imgs.length) return;
         // Drawing sheets lose their title block (the family's address) before they leave this computer
         const prepared = whole === true ? imgs.map((file) => ({ file, trimmed: false })) : await Promise.all(imgs.map(kdTrimTitleBlock));
-        // Each drawing's size goes with it: the reveal screen frames a drawing by it (./reveal-design.js)
+        // Each drawing's size goes with it: the live page frames a drawing by it (./reveal-design.js)
         const sizes = await Promise.all(prepared.map(({ file }) => kdImageSize(file)));
         const items = prepared.map(({ file, trimmed, original }, i) => ({ file, trimmed, original, ...sizes[i], key: kdNewKey(), local: URL.createObjectURL(file) }));
         const trimmedItems = items.filter((it) => it.trimmed);
@@ -14573,7 +14573,7 @@
       const befores = data.beforePhotos;
       const beforeOrder = beforeDrag.order;
       const beforeByKey = new Map(befores.map((p) => [p._key, p]));
-      // Each one's place on the reveal screen, in the order shown (while dragging too): only ones on the page play
+      // Each one's place on the live page, in the order shown (while dragging too): only ones on the page play
       const beforePlaces = RD.revealPlaces(beforeOrder.map((k) => beforeByKey.get(k)));
       const beforeCounts = { on: befores.filter(RD.onPage).length, off: befores.filter(RD.keptOff).length };
       beforeCounts.waiting = befores.length - beforeCounts.on - beforeCounts.off;
@@ -14589,7 +14589,7 @@
           class=${`kd-tile${beforeDrag.lifted?.key === key ? ' is-lifted' : ''}${isSel ? ' is-selected' : ''}${state !== 'on' ? ' is-off' : ''}`}
           onPointerDown=${(e) => { if (!beforeSelecting && !uploads[p._key] && !e.target.closest('[data-kd-grip]')) beforeDrag.tileDown(e, key); }}>
           <button type="button" class="kd-tile__open" aria-pressed=${beforeSelecting ? isSel : null}
-            aria-label=${`${beforeSelecting ? 'Select' : 'Open'} before photo ${i + 1}${onScreen ? `, on the reveal screen${hiddenKid ? ' once the profile is shown' : ''}` : ''}${state === 'off' ? `, kept off the page${p.looked === 'site' && p.offWhy ? `: ${p.offWhy.charAt(0).toLowerCase() + p.offWhy.slice(1)}` : ''}` : state === 'waiting' && !uploads[p._key] ? ', not checked yet' : ''}${p.room ? `, ${p.room}` : ''}`}
+            aria-label=${`${beforeSelecting ? 'Select' : 'Open'} before photo ${i + 1}${onScreen ? `, on the live reveal page${hiddenKid ? ' once the profile is shown' : ''}` : ''}${state === 'off' ? `, kept off the page${p.looked === 'site' && p.offWhy ? `: ${p.offWhy.charAt(0).toLowerCase() + p.offWhy.slice(1)}` : ''}` : state === 'waiting' && !uploads[p._key] ? ', not checked yet' : ''}${p.room ? `, ${p.room}` : ''}`}
             onClick=${() => {
               if (beforeDrag.justDragged() || uploads[p._key]) return;
               if (beforeSelecting) setBeforeSelected((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
@@ -14606,13 +14606,13 @@
         </li>`;
       };
       const hiddenKid = data.publishStatus === 'draft';
-      // The reveal screen plays the first RD.BEFORE_SHOWN on the page: its zone starts the list, the rest's starts just past the last of them
+      // The live page plays the first RD.BEFORE_SHOWN on the page: its zone starts the list, the rest's starts just past the last of them
       // (from the first one on the page: the ones kept off before it never play)
       const firstPlace = beforePlaces.indexOf(0);
       const lastPlace = beforePlaces.indexOf(RD.BEFORE_SHOWN - 1);
       const beforeCut = lastPlace >= 0 && lastPlace < beforeOrder.length - 1 ? lastPlace + 1 : -1;
       const beforeZone = (i) => (!revealed && ((i === firstPlace && firstPlace >= 0) || i === beforeCut)
-        ? html`<li class="kd-zone" key=${`bzone-${i}`} aria-hidden="true"><span>${i === firstPlace ? `On the reveal screen${hiddenKid ? ', once the profile is shown' : ''}` : 'Not on the reveal screen'}</span></li>` : null);
+        ? html`<li class="kd-zone" key=${`bzone-${i}`} aria-hidden="true"><span>${i === firstPlace ? `On the live reveal page${hiddenKid ? ', once the profile is shown' : ''}` : 'Not on the live reveal page'}</span></li>` : null);
       const beforeSub = revealed ? `The room before the makeover, each one on the page in the Before section of ${kdPoss(data.name || 'this kid')} page. Never in the gallery; a Before & after pair takes its before from here.`
         : `The room before the makeover, from JobTread ${reveal?.confirmed ? 'now that the reveal is confirmed' : 'once the reveal is confirmed'}. ${hiddenKid
           ? `They show nowhere while ${kdPoss(data.name || 'this kid')} profile is hidden.`
@@ -14975,9 +14975,9 @@
           ${beforeGroup}
         `)}
 
-        ${sec('plans', 'Design plans', !data.plans.length ? 'Floor plans for the Design chapter and the reveal screen, and design boards for the page after the reveal.'
+        ${sec('plans', 'Design plans', !data.plans.length ? 'Floor plans for the Design chapter and the live reveal page, and design boards for the page after the reveal.'
             : revealed ? `The first ${KS.PLANS_SHOWN} show on the page; the rest open from “View all designs”.`
-            : 'Before the reveal the page shows the as-built plan, then the proposed one, from the confirm, and the reveal screen plays them; design boards wait for the page until after the reveal.',
+            : 'Before the reveal the page shows the as-built plan, then the proposed one, from the confirm, and so does the live reveal page; design boards wait for the page until after the reveal.',
           html`${slug ? html`<button type="button" class="btn btn-ghost btn-sm" onClick=${() => setDesign('import')}>Bring in from JobTread</button>` : null}
             <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setDesign('live')}>${kdIcon.play} Preview the live page</button>
             <button type="button" class="btn btn-ghost btn-sm" onClick=${() => planInput.current?.click()}>${kdIcon.upload} Add plans</button>
@@ -14996,7 +14996,7 @@
           <p class="form-hint">A caption with Before, After, Existing, Proposed, Layout or Floor plan crops the bottom ${Math.round(KS.TITLE_BLOCK * 100)}% of the drawing on the site, so the family’s address in the title block never shows there. Each drawing says what was done about the address on it. Captions appear when someone opens a plan.</p>
         `)}
 
-        ${sec('transform', 'Before & after', revealed ? 'Pairs for the comparison slider in the Transform chapter. Each takes its before from Photos → Before photos.' : 'Pairs for the comparison slider in the Transform chapter, shown once the room is revealed. The before photos for the reveal screen are in Photos.',
+        ${sec('transform', 'Before & after', revealed ? 'Pairs for the comparison slider in the Transform chapter. Each takes its before from Photos → Before photos.' : 'Pairs for the comparison slider in the Transform chapter, shown once the room is revealed. The before photos for the live reveal page are in Photos.',
           html`<button type="button" class="btn btn-ghost btn-sm" onClick=${addPair}>${kdIcon.plus} Add a pair</button>`,
           html`
           ${data.beforeAfterPhotos.length ? html`<ol class="kd-pairs">

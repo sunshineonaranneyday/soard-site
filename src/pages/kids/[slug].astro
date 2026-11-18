@@ -232,7 +232,7 @@ const plans = Astro.props.showDesign === true ? kid.plans || []
   : confirmed ? ['as-built', 'proposed'].flatMap((k) => (kid.plans || []).filter((p: any) => p?.url && planKindOf(p) === k && addressSeenTo(p)))
   : [];
 const hasPlans = plans.length > 0;
-// Which plan it is, on the drawing, as the reveal screen says it: a plan the address check has seen is typed reliably
+// Which plan it is, on the drawing, as the live page says it: a plan the address check has seen is typed reliably
 // (older plans were all stored as one kind, so they carry none)
 const PLAN_BADGE: Record<string, string> = { 'as-built': 'Existing', proposed: 'Proposed', board: '' };
 const planBadge = (p: any) => (addressSeenTo(p) ? PLAN_BADGE[planKindOf(p)] : '');
@@ -3485,7 +3485,7 @@ const planOrientation = (() => {
   }
   .befores__item:focus-visible { outline: 2px solid var(--c-yellow); outline-offset: 4px; }
   .befores__img { display: block; width: 100%; height: 100%; object-fit: cover; }
-  /* Said on the photo, strongly enough that nobody takes the old room for the finished one (as the reveal screen does) */
+  /* Said on the photo, strongly enough that nobody takes the old room for the finished one (as the live page does) */
   .befores__badge,
   .design__badge {
     position: absolute;

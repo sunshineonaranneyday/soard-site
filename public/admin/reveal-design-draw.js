@@ -504,7 +504,7 @@ export function mainDrawing(data, w, h, box) {
 /**
  * The part of a sheet to keep: above and left of a real title block, inside
  * the sheet's border, cropped to the drawing itself (so a floor plan fills
- * the reveal screen's frame instead of sitting small on a white page).
+ * its frame on the live page instead of sitting small on a white page).
  * titleBlock: one was cut off.
  */
 export function keepBox(data, w, h) {

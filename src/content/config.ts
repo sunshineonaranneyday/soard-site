@@ -38,7 +38,7 @@ const kids = defineCollection({
     })).max(4).default([]),
     /** Admin → Kids → Photos → Before photos: the room before the makeover, from the kid's JobTread job once the
      *  reveal is confirmed (functions/api/_reveal-design-auto.js) or added by staff. Never in the gallery: the first
-     *  six on the page play on the reveal screen (public/admin/reveal-design.js), and a Before & after pair takes its
+     *  six on the page play on the live page (public/admin/reveal-design.js), and a Before & after pair takes its
      *  before here. Only one someone has looked at (looked: 'site', the site's check; 'staff') and not kept off
      *  (offPage) is ever shown (onPage in reveal-design.js) */
     beforePhotos: z.array(z.object({

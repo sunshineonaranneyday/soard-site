@@ -13,7 +13,7 @@
  *     they should go into photos, not the before and after section". So from
  *     the moment JobTread says Reveal Date Confirmed, however far ahead the
  *     reveal is, every before photo on the job comes in, a hidden profile's
- *     too: the reveal screen's places still free (it plays the first
+ *     too: the live page's places still free (it plays the first
  *     BEFORE_SHOWN, ./reveal-design.js) go to ones spread across the visit,
  *     then the rest in the order they were taken. One tagged Before later
  *     joins at the end, until the reveal. A run brings BEFORES_A_RUN at most,
@@ -25,7 +25,7 @@
  *     at each one (./_photo-screen.js; Peter, Nov 12 2026: "you can review
  *     those photos and leave off the ones you think arent good to publish?"):
  *     a person, family photos, a screen, papers, boxes, a tape measure, the
- *     panel or a close-up keeps it off the page and the reveal screen, with
+ *     panel or a close-up keeps it off the page and the live page, with
  *     why. Until it's been looked at, a photo shows nowhere (onPage in
  *     ../../public/admin/reveal-design.js), and staff can switch any one on
  *     or off (Photos → Before photos → On the page); theirs is never changed.
@@ -45,7 +45,7 @@
  * (the drawings and board), so what staff take out stays out; nothing in
  * JobTread is changed. What staff saved is never touched. A drawing whose
  * street wasn't found among its words (a scan, or the street drawn as lines)
- * is saved without an address check, so the reveal screen and live page leave
+ * is saved without an address check, so the kid page and live page leave
  * it out, and staff are asked in Slack to cover it or tick that it has none.
  * Slack hears when a kid's before photos or design come in, and 3 days and 1
  * day before each reveal whether it's ready or what's missing.
@@ -312,7 +312,7 @@ async function bringBefores(env, job, src, kid, b, ever, fetchImpl, now, deadlin
   const usable = src.befores.filter((f) => (f.big || !isHeic(f)) && !copies.has(f.id));
   const owed = usable.filter((f) => !ever.has(f.id) && !givenUp(f));
   const due = owed.filter((f) => dueAt(f) <= now);
-  // The reveal screen's places still free go to ones spread across the visit; the rest as taken
+  // The live page's places still free go to ones spread across the visit; the rest as taken
   // (Ones a service was down for last time go last, so one that never loads can't hold up the rest)
   const outsOf = (f) => b.failed[f.id]?.outs || 0;
   const fresh = due.filter((f) => !outsOf(f));
@@ -873,7 +873,7 @@ export function standing(kid) {
 /**
  * Where a kid's before photos stand, once nothing is left to bring this time and the site has looked at each one
  * (tellWhenIn): n came since the last note, waiting are to be tried again later, gaveUp were left out (each said
- * once). How many are on the page and play on the reveal screen, and what was kept off and why, for staff to look
+ * once). How many are on the page and play on the live page, and what was kept off and why, for staff to look
  * over. By email to the reviewer (BEFORE_REVIEWERS: Linzi), with a button to the profile.
  */
 async function tellBefores(env, job, kid, { n, waiting, gaveUp, unchecked = 0, looks }) {
@@ -890,7 +890,7 @@ async function tellBefores(env, job, kid, { n, waiting, gaveUp, unchecked = 0, l
   const rank = (w) => { const i = QUESTIONS.findIndex((q) => q.why === w); return i < 0 ? QUESTIONS.length : i; };
   const why = [...reasons].sort((a, b) => b[1] - a[1] || rank(a[0]) - rank(b[0]))
     .map(([w, c]) => { const said = w ? w.charAt(0).toLowerCase() + w.slice(1) : 'kept off by staff'; return c > 1 ? `${said} (${c})` : said; }).join(', ');
-  // Fewer on the page than the reveal screen plays, while some aren't: staff should look them over
+  // Fewer on the page than the live page plays, while some aren't: staff should look them over
   const low = on < BEFORE_SHOWN && (off.length > 0 || unseen > 0);
   const short = low || gaveUp.length > 0 || unchecked > 0;
   const names = (x) => `${x.slice(0, 3).map((g) => g.name).join(', ')}${x.length > 3 ? '…' : ''}`;
@@ -904,7 +904,7 @@ async function tellBefores(env, job, kid, { n, waiting, gaveUp, unchecked = 0, l
     unchecked ? `The site couldn’t check ${plural(unchecked, 'photo')} after a day of tries, so ${it(unchecked, 'it’s', 'they’re')} kept off the page.` : '',
     unseen ? `${plural(unseen, 'photo')} couldn’t be looked at, so ${it(unseen, 'it stays', 'they stay')} off the page while the site tries again over the next day; switch ${it(unseen, 'it', 'them')} on if ${it(unseen, 'it’s', 'they’re')} fine to show.` : '',
     off.length || unseen ? 'Open any one to switch it on the page if it’s fine to show, or off if it isn’t.' : '',
-    !n ? '' : !on ? 'None is on the page yet, so the reveal screen has no before photos.'
+    !n ? '' : !on ? 'None is on the page yet, so the live reveal page has no before photos.'
       : kid.publishStatus === 'draft' ? 'They show nowhere while the profile is hidden.'
       : `${shown === 1 ? 'The first one on the page plays' : `The first ${shown} on the page play`} on the live reveal page now; move another into the first ${BEFORE_SHOWN} to show it instead.`,
     waiting ? `${plural(waiting, 'more')} couldn’t be brought in yet; the site tries again later.` : '',
@@ -952,7 +952,7 @@ async function tellFilled(env, job, kid, added) {
   const s = standing(kid);
   const list = added.plans.map((p) => KIND[p.type].long.toLowerCase());
   const lines = [`Brought in from JobTread for ${possessive(job.name)} reveal on ${whenOf(job.startsAt)}: ${list.join(', ')}.`,
-    s.unchecked.length ? `${plural(s.unchecked.length, 'drawing')} didn’t show the street in its words, so it stays off ${possessive(job.name)} page and the reveal screen until someone covers the address or ticks that it has none.` : '',
+    s.unchecked.length ? `${plural(s.unchecked.length, 'drawing')} didn’t show the street in its words, so it stays off ${possessive(job.name)} page and live reveal page until someone covers the address or ticks that it has none.` : '',
     `The existing and proposed plans show on ${possessive(job.name)} page and live reveal page now; a design board waits for the page until after the reveal. Look it over in Admin → Kids.`].filter(Boolean);
   await slackPost(env, adminCard({ level: 'info', icon: '🎨', title: `${possessive(job.name)} design is in`, detail: lines.join(' '), url: adminLink(job.slug), urlLabel: `Open ${possessive(job.name)} profile` }), { kind: s.unchecked.length ? 'attention' : 'news' }).catch(() => {});
   return true;

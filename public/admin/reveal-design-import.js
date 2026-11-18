@@ -14,7 +14,7 @@
  * before photos) from JobTread, staff pick. Before photos go in Photos →
  * Before photos, never the gallery (Peter, Nov 12 2026: "they should go into
  * photos, not the before and after section"); the first ones there play on
- * the reveal screen.
+ * the live page.
  *
  * The family's address (a hard rule): a picked drawing goes up exactly as it
  * shows here. Wherever the PDF's own words have the address they're painted
@@ -624,7 +624,7 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
         const kept = !!r.whole;
         return { file: new File([r.blob], `${slugOf(label)}-${kept ? 'sheet' : 'notitle'}.png`, { type: 'image/png' }), type: p.kind, label, source: key, w: r.w, h: r.h, addressCheck: addressDone(r), ...(kept && r.focus ? { focus: r.focus } : {}) };
       });
-      // The reveal screen's places still free go to ones spread across the visit (freeBeforePlaces); the rest as taken
+      // The live page's places still free go to ones spread across the visit (freeBeforePlaces); the rest as taken
       const first = suggestBefores(pickedBefores, freeBeforePlaces({ beforePhotos: beforeList }));
       const photos = [];
       for (const f of [...first, ...pickedBefores.filter((x) => !first.includes(x))]) {
@@ -783,11 +783,11 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
       ${hasStreet ? html`<p class="notice notice--info">${icon.shield}<span class="notice__body">From <strong>${data.job.name}</strong> in JobTread. We paint out the family’s address wherever its words can be read and cut off the title block. Look over each drawing before adding it: what you see on a picked drawing is exactly what goes up.</span></p>`
         : html`<p class="notice notice--warn">${icon.alert}<span class="notice__body">From <strong>${data.job.name}</strong> in JobTread. JobTread has no address for this job, so the family’s address can’t be found by its words. Look over each drawing you pick, and cover the address or tick that there’s none.</span></p>`}
       <section class="rdi-sec" aria-labelledby="rdi-drawings">
-        <div class="rdi-sec__head"><h3 id="rdi-drawings">Drawings and design boards</h3><p>${pickedDrawings.length ? `${pickedDrawings.length} picked. ` : ''}${revealed ? 'They go in the Design chapter, as-built and proposed plans first.' : 'The as-built and proposed plans show on the kid page from the confirmed reveal and play on the reveal screen; design boards wait for the page until after the reveal.'}</p></div>
+        <div class="rdi-sec__head"><h3 id="rdi-drawings">Drawings and design boards</h3><p>${pickedDrawings.length ? `${pickedDrawings.length} picked. ` : ''}${revealed ? 'They go in the Design chapter, as-built and proposed plans first.' : 'The as-built and proposed plans show on the kid page and the live reveal page from the confirmed reveal; design boards wait for the page until after the reveal.'}</p></div>
         ${drawingsSec()}
       </section>
       <section class="rdi-sec" aria-labelledby="rdi-befores">
-        <div class="rdi-sec__head"><h3 id="rdi-befores">Before photos</h3><p>${pickedBefores.length} picked. ${revealed ? 'They go in Photos → Before photos, for the Before & after pairs.' : `They go in Photos → Before photos, never the gallery; the first ${BEFORE_SHOWN} on the page there play on the reveal screen.`} Once saved, the site checks each one within minutes and keeps off any with a person, family photos, a screen, papers or a close-up; until then they show nowhere.</p>
+        <div class="rdi-sec__head"><h3 id="rdi-befores">Before photos</h3><p>${pickedBefores.length} picked. ${revealed ? 'They go in Photos → Before photos, for the Before & after pairs.' : `They go in Photos → Before photos, never the gallery; the first ${BEFORE_SHOWN} on the page there play on the live reveal page.`} Once saved, the site checks each one within minutes and keeps off any with a person, family photos, a screen, papers or a close-up; until then they show nowhere.</p>
           ${beforesLeft ? html`<span class="rdi-sec__picks">${pickedBefores.length < beforesLeft ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${!!adding} onClick=${() => pickBefores(true)}>Pick all ${beforesLeft}</button>` : null}${pickedBefores.length ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${!!adding} onClick=${() => pickBefores(false)}>Pick none</button>` : null}</span>` : null}</div>
         ${beforesSec()}
       </section>`;
@@ -807,17 +807,14 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
   </div>` : html`<button type="button" class="btn btn-secondary" onClick=${close}>Close</button>`;
 
   return html`<${Dialog} title=${`Bring in ${possessive(name)} design from JobTread`}
-    sub=${revealed ? 'Drawings and design boards for the Design chapter, and before photos for Photos.' : 'Drawings for the kid page and the reveal screen, design boards for the page after the reveal, and before photos for Photos.'}
+    sub=${revealed ? 'Drawings and design boards for the Design chapter, and before photos for Photos.' : 'Drawings for the kid page and the live reveal page, design boards for the page after the reveal, and before photos for Photos.'}
     onClose=${close} size="lg" className="rdi" footer=${footer}>${body()}<//>`;
 }
 
 // ═══════════════════════════════════════════
-// Preview the reveal screen
-// ═══════════════════════════════════════════
-// (No design boards: they never play on the live page or stream; Peter, Nov 12 2026)
-// ═══════════════════════════════════════════
 // Preview the live page
 // ═══════════════════════════════════════════
+// (No design boards: they never play on the live page; Peter, Nov 12 2026)
 // The kid's real live page (/live/<slug>/) in a frame, at the moment staff pick: before (the kid's photo with the
 // countdown, the design under it), live (a past reveal's video standing in for the camera, the
 // messages beside it, the design under it) or the replay. BaseLayout hands the framed page to window.__soardPreview

@@ -17,13 +17,13 @@
  *   - Add: drawings go up named -sheet (whole) or -notitle with their kind, caption, size and
  *     JobTread source; before photos go in Photos → Before photos (never the
  *     gallery or Before & after), the six spread across the visit first, the
- *     first six marked as on the reveal screen; items already added show as on
+ *     first six marked as on the live reveal page; items already added show as on
  *     the profile next time
  *   - the kind picker on a plan tile; Save writes it all
  *   - Preview the live page: the kid's real live page Before / Live / Replay, reading the
  *     editor's unsaved design (the starting-soon screen and its Preview the stream are gone)
  *   - phone: the dialog fits, nothing scrolls sideways, buttons reachable
- *   - Photos → Before photos: their dialog (no crops; room; on the reveal screen or
+ *   - Photos → Before photos: their dialog (no crops; room; on the live reveal page or
  *     not), First, Move to the gallery and back, a gallery photo marked a before
  *     photo, Select (remove, Undo, to the front), files dropped on the group, a
  *     pair's before from them, Save; on a phone
@@ -278,7 +278,7 @@ async function desktop(browser, files) {
   const note = await page.$eval('#kd-sec-plans .kd-design-when', (e) => e.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
   ok(/existing and proposed plans show on Dylan’s page and live reveal page now/.test(note) && !/hour before/.test(note) && /Design boards stay off until after the reveal/.test(note), `plans note says where and when: “${note}”`);
   const tsub = await page.$eval('#kd-sec-transform .kd-sec__sub', (e) => e.textContent.trim()).catch(() => '');
-  ok(/shown once the room is revealed/.test(tsub) && /before photos for the reveal screen are in Photos/.test(tsub) && !(await page.$('#kd-sec-transform .kd-design-when')), `Before & after says where the reveal's before photos are, not the long note again: “${tsub}”`);
+  ok(/shown once the room is revealed/.test(tsub) && /before photos for the live reveal page are in Photos/.test(tsub) && !(await page.$('#kd-sec-transform .kd-design-when')), `Before & after says where the reveal's before photos are, not the long note again: “${tsub}”`);
   ok(!(await page.$('#kd-sec-transform input[type="file"][multiple]')), 'Before & after has no Add before photos');
   const bsub = await page.$eval('#kd-befores .kd-sec__sub', (e) => e.textContent.trim()).catch(() => '');
   // (Dylan's reveal is confirmed here)
@@ -318,7 +318,7 @@ async function desktop(browser, files) {
   const befores = await page.$$eval('.rdi .rdi-grid--photos > li', (lis) => lis.map((li) => li.classList.contains('is-on')));
   ok(befores.length === 8 && befores.every(Boolean), `every before photo picked: ${befores.map((b) => (b ? 1 : 0)).join('')}`);
   const beforeHead = await page.$eval('.rdi #rdi-befores', (h) => h.closest('.rdi-sec__head').textContent.replace(/\s+/g, ' ').trim());
-  ok(/They go in Photos → Before photos, never the gallery; the first 6 on the page there play on the reveal screen/.test(beforeHead) && /Once saved, the site checks each one within minutes/.test(beforeHead) && /Pick none/.test(beforeHead) && !/Pick all/.test(beforeHead), `it says where they go, and that the site checks them: “${beforeHead}”`);
+  ok(/They go in Photos → Before photos, never the gallery; the first 6 on the page there play on the live reveal page/.test(beforeHead) && /Once saved, the site checks each one within minutes/.test(beforeHead) && /Pick none/.test(beforeHead) && !/Pick all/.test(beforeHead), `it says where they go, and that the site checks them: “${beforeHead}”`);
   // Pick none, then all again
   await clickText(page, '.rdi .rdi-sec__picks .btn', 'Pick none');
   await sleep(150);
@@ -366,17 +366,17 @@ async function desktop(browser, files) {
   // Brought in from JobTread: nobody has looked at them yet, so none shows anywhere until the site has (or staff)
   const waiting = await page.$$eval('#kd-befores .kd-tile', (lis) => lis.map((li) => li.querySelector('.kd-tile__role')?.textContent.trim() || '').join());
   ok(waiting === Array(8).fill('Not checked').join(), `brought in, each waits for the site’s check: ${waiting}`);
-  ok((await page.evaluate(() => window.__soardRevealDesign?.().slides.filter((s) => s.kind === 'before').length)) === 0, 'none plays on the reveal screen until then');
+  ok((await page.evaluate(() => window.__soardRevealDesign?.().slides.filter((s) => s.kind === 'before').length)) === 0, 'none plays on the live reveal page until then');
   // Staff can say for themselves: all of them on the page, from Select
   await clickText(page, '#kd-befores .kd-sec__actions .btn', 'Select');
   await page.evaluate(() => document.querySelectorAll('#kd-befores .kd-tile__open').forEach((b) => b.click()));
   await clickText(page, '#kd-befores .kd-selectbar .btn', 'Show on the page');
   await clickText(page, '#kd-befores .kd-sec__actions .btn', 'Done selecting');
   await sleep(200);
-  const bt = await page.$$eval('#kd-befores .kd-tile', (lis) => lis.map((li) => ({ n: li.querySelector('.kd-tile__n')?.textContent.trim(), screen: /on the reveal screen/.test(li.querySelector('.kd-tile__open').getAttribute('aria-label')) })));
-  ok(bt.length === 8 && bt.map((t) => (t.screen ? 1 : 0)).join('') === '11111100', `8 before photos, the first 6 on the reveal screen: ${bt.map((t) => (t.screen ? 1 : 0)).join('')}`);
+  const bt = await page.$$eval('#kd-befores .kd-tile', (lis) => lis.map((li) => ({ n: li.querySelector('.kd-tile__n')?.textContent.trim(), screen: /on the live reveal page/.test(li.querySelector('.kd-tile__open').getAttribute('aria-label')) })));
+  ok(bt.length === 8 && bt.map((t) => (t.screen ? 1 : 0)).join('') === '11111100', `8 before photos, the first 6 on the live reveal page: ${bt.map((t) => (t.screen ? 1 : 0)).join('')}`);
   const bz = await page.$$eval('#kd-befores .kd-zone', (z) => z.map((x) => x.textContent.trim()));
-  ok(bz.join(' | ') === 'On the reveal screen | Not on the reveal screen', `zones: ${bz.join(' | ')}`);
+  ok(bz.join(' | ') === 'On the live reveal page | Not on the live reveal page', `zones: ${bz.join(' | ')}`);
   ok(ups.filter((u) => !/-(?:notitle|sheet)\./.test(u.name)).length === 8, `8 before photos went up: ${ups.filter((u) => !/-(?:notitle|sheet)\./.test(u.name)).map((u) => u.name).join(', ')}`);
   await shot(page, 'after-add-1440');
   for (const id of ['plans', 'photos', 'transform']) {
@@ -457,7 +457,7 @@ async function desktop(browser, files) {
     ok(saved.plans.map((p) => p.addressCheck).join() === 'wiped,wiped,checked', `what was done about the address is saved: ${saved.plans.map((p) => p.addressCheck).join()}`);
     ok(saved.plans.every((p) => p.source?.startsWith('jt:') && p.w > 0 && p.h > 0 && p.label), `each plan keeps its JobTread source, size and caption: ${JSON.stringify(saved.plans.map(({ source, w, h, label }) => ({ source, w, h, label })))}`);
     ok(saved.beforePhotos.length === 8 && saved.beforePhotos.every((p) => p.url && !/^blob:/.test(p.url) && /^jt:B\d$/.test(p.source) && p.alt === 'Dylan’s room before the makeover' && p.room === '' && !p._key && !p._tempId), `before photos saved in Photos → Before photos: ${JSON.stringify(saved.beforePhotos[0])}`);
-    // The six spread across the visit first, as the reveal screen plays the first six; then the rest as taken
+    // The six spread across the visit first, as the live reveal page plays the first six; then the rest as taken
     ok(saved.beforePhotos.map((p) => p.source).join() === 'jt:B1,jt:B2,jt:B4,jt:B5,jt:B7,jt:B8,jt:B3,jt:B6', `order: ${saved.beforePhotos.map((p) => p.source).join()}`);
     ok(saved.beforeAfterPhotos.length === 0, `nothing in Before & after: ${saved.beforeAfterPhotos.length}`);
   }
@@ -1129,7 +1129,7 @@ async function beforePhotosGroup(browser) {
     await openDylan(page, false);
     const c0 = await counts(page);
     ok(c0.befores === 8 && c0.gallery > 0, `the group has its 8, the gallery its own (${JSON.stringify(c0)})`);
-    // A before photo's dialog: no crops (the site never crops one), its room, on the reveal screen or not
+    // A before photo's dialog: no crops (the site never crops one), its room, on the live reveal page or not
     await page.evaluate(() => document.querySelectorAll('#kd-befores .kd-tile__open')[6].click());
     await page.waitForSelector('.kd-photo-dlg', { timeout: 5000 });
     const dlg = await page.evaluate(() => ({
@@ -1137,19 +1137,19 @@ async function beforePhotosGroup(browser) {
       focal: !!document.querySelector('.kd-photo-dlg .kd-photo__focus, .kd-photo-dlg .kd-focus'), roles: [...document.querySelectorAll('.kd-photo-dlg .kd-role')].map((r) => `${r.querySelector('strong').textContent}:${r.getAttribute('aria-pressed')}`),
       place: document.querySelector('.kd-photo-dlg .kd-photo__move .form-label')?.textContent.trim(), room: !!document.querySelector('#kd-before-room'),
     }));
-    ok(dlg.title === 'Photo 7 of 8' && /Not on the reveal screen: it plays the first 6/.test(dlg.sub), `the dialog says where it is: ${dlg.title} · ${dlg.sub}`);
+    ok(dlg.title === 'Photo 7 of 8' && /Not on the live reveal page: it plays the first 6/.test(dlg.sub), `the dialog says where it is: ${dlg.title} · ${dlg.sub}`);
     ok(!dlg.focal && dlg.room && dlg.place === 'Place in Before photos', `no focal point or crops; a room; its place (${JSON.stringify(dlg)})`);
-    ok(dlg.roles.join() === 'On the page:true,On the reveal screen:false,Move to the gallery:null', `roles (Move to the gallery is an action, not a switch): ${dlg.roles.join()}`);
-    await clickText(page, '.kd-photo-dlg .kd-role', 'On the reveal screen');
+    ok(dlg.roles.join() === 'On the page:true,On the live reveal page:false,Move to the gallery:null', `roles (Move to the gallery is an action, not a switch): ${dlg.roles.join()}`);
+    await clickText(page, '.kd-photo-dlg .kd-role', 'On the live reveal page');
     await sleep(200);
-    ok(/On the reveal screen, 6th of 6/.test(await page.$eval('.kd-photo-dlg .kd-dialog__sub', (e) => e.textContent)), 'turned on, it plays 6th; the 6th steps off');
+    ok(/On the live reveal page, 6th of 6/.test(await page.$eval('.kd-photo-dlg .kd-dialog__sub', (e) => e.textContent)), 'turned on, it plays 6th; the 6th steps off');
     ok(await beforeKeys(page) === '1,2,3,4,5,7,6,8', `order: ${await beforeKeys(page)}`);
     await page.type('#kd-before-room', 'Bathroom');
     await clickText(page, '.kd-photo-dlg .kd-dialog__foot .btn', 'Done');
     await sleep(200);
     const slides = await page.evaluate(() => window.__soardRevealDesign?.().slides || []);
     const befores = slides.filter((s) => s.kind === 'before');
-    ok(befores.length === 6 && /before-7\.jpg/.test(befores[5].url) && befores[5].caption === 'Bathroom' && befores[0].badge === 'Before', `the reveal screen plays the first 6, the 6th with its room (${befores.map((s) => (s.url.match(/before-(\d)/) || [])[1]).join(',')}; “${befores[5]?.caption}”)`);
+    ok(befores.length === 6 && /before-7\.jpg/.test(befores[5].url) && befores[5].caption === 'Bathroom' && befores[0].badge === 'Before', `the live reveal page plays the first 6, the 6th with its room (${befores.map((s) => (s.url.match(/before-(\d)/) || [])[1]).join(',')}; “${befores[5]?.caption}”)`);
     // First, from its dialog
     await page.evaluate(() => document.querySelectorAll('#kd-befores .kd-tile__open')[7].click());
     await page.waitForSelector('.kd-photo-dlg');
@@ -1249,10 +1249,10 @@ async function beforePhotosGroup(browser) {
     const state = await page.$eval('#kd-befores .kd-befores__state', (e) => e.textContent.trim()).catch(() => '');
     ok(/^5 on the page, 2 kept off, 1 not checked yet\. Kept off: a person in it, by staff\. The site checks each photo from JobTread before it can show; open one to switch it on or off\.$/.test(state), `the group says where they stand: “${state}”`);
     const zones = await page.$$eval('#kd-befores .kd-zone', (z) => z.map((x) => x.textContent.trim()));
-    ok(zones.join() === 'On the reveal screen', `five on the page, so all of them play and there's no second zone: ${zones.join(' | ')}`);
+    ok(zones.join() === 'On the live reveal page', `five on the page, so all of them play and there's no second zone: ${zones.join(' | ')}`);
     await (await page.$('#kd-befores'))?.screenshot({ path: join(OUT, 'before-photos-on-page-1440.png') }).catch(() => {});
     let slides = (await page.evaluate(() => window.__soardRevealDesign?.().slides || [])).filter((x) => x.kind === 'before').map((x) => x.url.match(/before-(\d)/)[1]);
-    ok(slides.join() === '1,3,4,6,8', `the reveal screen plays only the ones on the page: ${slides.join()}`);
+    ok(slides.join() === '1,3,4,6,8', `the live reveal page plays only the ones on the page: ${slides.join()}`);
     const pairHint = await page.$eval('#kd-sec-transform .kd-pair .kd-warn-text', (e) => e.textContent.trim()).catch(() => '');
     ok(/^Its before is kept off the page in Before photos \(a person in it\), so this pair doesn’t show\. Switch it on there, or pick another\.$/.test(pairHint) && !(await page.$('#kd-sec-transform .kd-pair__preview')), `a pair whose before is kept off says it doesn’t show: “${pairHint}”`);
     // Select: Move to the gallery leaves one kept off where it is, and says why
@@ -1268,32 +1268,32 @@ async function beforePhotosGroup(browser) {
     await page.evaluate(() => document.querySelectorAll('#kd-befores .kd-tile__open')[1].click());
     await page.waitForSelector('.kd-photo-dlg');
     const d2 = await page.evaluate(() => ({ sub: document.querySelector('.kd-photo-dlg .kd-dialog__sub').textContent.trim(), roles: [...document.querySelectorAll('.kd-photo-dlg .kd-role')].map((r) => `${r.querySelector('strong').textContent}:${r.getAttribute('aria-pressed')}:${r.querySelector('small').textContent}`) }));
-    ok(/Not on the reveal screen: kept off the page by the site’s check \(a person in it\)/.test(d2.sub), `its dialog says so: “${d2.sub}”`);
+    ok(/Not on the live reveal page: kept off the page by the site’s check \(a person in it\)/.test(d2.sub), `its dialog says so: “${d2.sub}”`);
     ok(/^On the page:false:The site kept it off: a person in it\. Turn on if it’s fine to show\. A Before & after pair uses it, so the pair is on or off the page with it\.$/.test(d2.roles[0]) && d2.roles.length === 1, `its switch, and no Move to the gallery while it’s kept off: ${d2.roles.join(' | ')}`);
     await sleep(500);
     await shot(page, 'before-photo-kept-off-dialog-1440');
     await clickText(page, '.kd-photo-dlg .kd-role', 'On the page');
     await sleep(200);
     const on = await page.$eval('.kd-photo-dlg .kd-role', (r) => [r.getAttribute('aria-pressed'), r.querySelector('small').textContent]);
-    ok(on[0] === 'true' && /^Shows in the Before section of the page, and can play on the reveal screen\. Turn off to keep it off\. A Before & after pair uses it/.test(on[1]), `switched on: ${on.join(' · ')}`);
-    ok(/On the reveal screen, 2nd of 6/.test(await page.$eval('.kd-photo-dlg .kd-dialog__sub', (e) => e.textContent)), 'it plays now, 2nd of the six');
+    ok(on[0] === 'true' && /^Shows in the Before section of the page, and can play on the live reveal page\. Turn off to keep it off\. A Before & after pair uses it/.test(on[1]), `switched on: ${on.join(' · ')}`);
+    ok(/On the live reveal page, 2nd of 6/.test(await page.$eval('.kd-photo-dlg .kd-dialog__sub', (e) => e.textContent)), 'it plays now, 2nd of the six');
     // Six on the page now: the one not checked yet, opened, offers no reveal-screen switch, only its own
     await page.click('.kd-photo-dlg .kd-photo__nav.is-next'); await sleep(100);
     await page.click('.kd-photo-dlg .kd-photo__nav.is-next'); await sleep(100);
     await page.click('.kd-photo-dlg .kd-photo__nav.is-next'); await sleep(150);
     const d5 = await page.evaluate(() => ({ sub: document.querySelector('.kd-photo-dlg .kd-dialog__sub').textContent.trim(), roles: [...document.querySelectorAll('.kd-photo-dlg .kd-role strong')].map((r) => r.textContent), small: document.querySelector('.kd-photo-dlg .kd-role small').textContent }));
-    ok(/Not on the reveal screen: not checked yet/.test(d5.sub) && d5.roles.join() === 'On the page' && /^Not checked yet: the site looks at each before photo from JobTread within minutes of saving, and it shows nowhere until then\. Turn on to show it now\.$/.test(d5.small), `one not checked yet: ${d5.sub} · ${d5.small}`);
+    ok(/Not on the live reveal page: not checked yet/.test(d5.sub) && d5.roles.join() === 'On the page' && /^Not checked yet: the site looks at each before photo from JobTread within minutes of saving, and it shows nowhere until then\. Turn on to show it now\.$/.test(d5.small), `one not checked yet: ${d5.sub} · ${d5.small}`);
     await page.keyboard.press('Escape');
     await sleep(250);
     slides = (await page.evaluate(() => window.__soardRevealDesign?.().slides || [])).filter((x) => x.kind === 'before').map((x) => x.url.match(/before-(\d)/)[1]);
-    ok(slides.join() === '1,2,3,4,6,8', `the reveal screen follows: ${slides.join()}`);
+    ok(slides.join() === '1,2,3,4,6,8', `the live reveal page follows: ${slides.join()}`);
     // Seven on the page (8 too): the zone for the rest starts after the sixth, past the ones kept off
     await clickText(page, '#kd-befores .kd-sec__actions .btn', 'Select');
     await page.evaluate(() => document.querySelectorAll('#kd-befores .kd-tile__open')[4].click());
     await clickText(page, '#kd-befores .kd-selectbar .btn', 'Show on the page');
     await sleep(200);
     const z2 = await page.$$eval('#kd-befores .kd-tiles > li', (lis) => lis.map((li) => (li.classList.contains('kd-zone') ? `[${li.textContent.trim()}]` : li.querySelector('img').getAttribute('src').match(/before-(\d)/)[1])).join(' '));
-    ok(z2 === '[On the reveal screen] 1 2 3 4 5 6 [Not on the reveal screen] 7 8', `zones by the six on the page: ${z2}`);
+    ok(z2 === '[On the live reveal page] 1 2 3 4 5 6 [Not on the live reveal page] 7 8', `zones by the six on the page: ${z2}`);
     ok(/On the page\. It shows once saved and published\./.test(await page.$$eval('.toast', (t) => t.map((x) => x.textContent).join(' '))), 'the toast says so, of one');
     // Keep two off from the select bar, then Undo
     await clickText(page, '#kd-befores .kd-sec__actions .btn', 'Select');
@@ -1740,13 +1740,13 @@ async function beforePhotosGroup(browser) {
     const { page, api, errors } = await open(browser, { width: 1440, height: 900, mobile: false }, FILES, { kid: { beforePhotos: four, publishStatus: 'draft' } });
     await openDylan(page, false);
     // A hidden profile: the labels say "once the profile is shown"
-    ok(/On the reveal screen, once the profile is shown/.test(await page.$eval('#kd-befores .kd-zone', (z) => z.textContent)), 'a hidden profile’s label says once the profile is shown');
+    ok(/On the live reveal page, once the profile is shown/.test(await page.$eval('#kd-befores .kd-zone', (z) => z.textContent)), 'a hidden profile’s label says once the profile is shown');
     // Four photos: every one plays, so there's no switch; "of 4". Opened from the keyboard, as a person would
     await page.evaluate(() => document.querySelectorAll('#kd-befores .kd-tile__open')[2].focus());
     await page.keyboard.press('Enter');
     await page.waitForSelector('.kd-photo-dlg');
     const d4 = await page.evaluate(() => ({ sub: document.querySelector('.kd-photo-dlg .kd-dialog__sub').textContent, roles: [...document.querySelectorAll('.kd-photo-dlg .kd-role strong')].map((r) => r.textContent) }));
-    ok(/3rd of 4: every before photo on the page plays while there are 6 or fewer/.test(d4.sub) && /once the profile is shown/.test(d4.sub) && !d4.roles.includes('On the reveal screen'), `with 4, no switch: “${d4.sub}” · ${d4.roles.join(', ')}`);
+    ok(/3rd of 4: every before photo on the page plays while there are 6 or fewer/.test(d4.sub) && /once the profile is shown/.test(d4.sub) && !d4.roles.includes('On the live reveal page'), `with 4, no switch: “${d4.sub}” · ${d4.roles.join(', ')}`);
     // Focus comes back to the photo after it moves (First), then Escape
     await clickText(page, '.kd-photo-dlg .kd-photo__move .btn', 'First');
     await sleep(150);

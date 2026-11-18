@@ -440,7 +440,7 @@ export function kidRecord(data) {
     photos: clean(d.photos).filter((p) => p.url && !/^blob:/.test(p.url)),
     partnerLogos: clean(d.partnerLogos).filter((p) => p.url && !/^blob:/.test(p.url)),
     plans: clean(d.plans).filter((p) => p.url && !/^blob:/.test(p.url)).map((p) => ({ ...p, type: normalizePlanType(p.type) })),
-    // Photos → Before photos: the room before (the first ones on the page play on the reveal screen, ./reveal-design.js);
+    // Photos → Before photos: the room before (the first ones on the page play on the live page, ./reveal-design.js);
     // never in the gallery. Who looked at it, and whether it's kept off the page, only when they say something
     beforePhotos: clean(d.beforePhotos).filter((p) => p.url && !/^blob:/.test(p.url)).map(beforeRecord),
     // A pair can wait for its after while it's being made; the page shows whole pairs only

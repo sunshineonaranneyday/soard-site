@@ -87,8 +87,8 @@ export const needsTitleCrop = (p) => !isTrimmed(p?.url) && (FLOOR_PLAN_WORDS.tes
 /**
  * Someone has made sure the address isn't on it: its words were found and
  * painted out ('wiped'), staff covered it by hand ('covered'), or staff
- * looked and ticked that it has none ('checked'). The reveal screen and live
- * page show an as-built or proposed drawing only once one of those is true;
+ * looked and ticked that it has none ('checked'). The kid page and live page
+ * show an as-built or proposed drawing only once one of those is true;
  * a design board (marked as one) is shown whole without it. Plans from before
  * the check (and before boards had their own kind) never go out here; they're
  * on the revealed kid's page, as they always were.
@@ -104,10 +104,10 @@ const possessive = (name) => (/s$/i.test(name || '') ? `${name}’` : `${name}�
 // way to keep a photo from publishing?" Each before photo says who looked at it (looked: 'site', the site's check in
 // functions/api/_photo-screen.js; 'staff', a person: one they added or moved here, or one they switched) and whether
 // it's kept off the page (offPage, and offWhy: what the site saw). Only a photo someone has looked at, and that isn't
-// kept off, is ever public: the kid page, the reveal screen and the live page. One nobody has looked at yet (just in
+// kept off, is ever public: the kid page and the live page. One nobody has looked at yet (just in
 // from JobTread) waits off them, so anything new is off until it's been seen.
 
-/** Someone has looked at this before photo and it isn't kept off: it may show on the page and the reveal screen */
+/** Someone has looked at this before photo and it isn't kept off: it may show on the page and the live page */
 export const onPage = (p) => !!p?.looked && !p?.offPage;
 /** Kept off for good (until someone switches it on): looked at, and kept off */
 export const keptOff = (p) => !!p?.looked && !!p?.offPage;
@@ -115,7 +115,7 @@ export const keptOff = (p) => !!p?.looked && !!p?.offPage;
 export const pageState = (p) => (onPage(p) ? 'on' : keptOff(p) ? 'off' : 'waiting');
 
 /**
- * Each before photo's place on the reveal screen, in the list's order: 0 to BEFORE_SHOWN - 1 for the ones that play
+ * Each before photo's place on the live page, in the list's order: 0 to BEFORE_SHOWN - 1 for the ones that play
  * (the first BEFORE_SHOWN on the page), null for the rest (past them, kept off, or not looked at yet)
  */
 export function revealPlaces(list) {
@@ -124,7 +124,7 @@ export function revealPlaces(list) {
 }
 
 /**
- * Where to move before photo `from` in `list` so it plays on the reveal screen (shown: as the last of the first
+ * Where to move before photo `from` in `list` so it plays on the live page (shown: as the last of the first
  * BEFORE_SHOWN, whose last steps off) or doesn't (just past them) → the index to put it at, once taken out
  */
 export function revealMoveTo(list, from, shown) {
@@ -136,7 +136,7 @@ export function revealMoveTo(list, from, shown) {
 
 /**
  * A kid's before photos that may be seen, in their order, as { url, alt, room }: the first BEFORE_SHOWN play on the
- * reveal screen. Photos → Before photos, the ones on the page (onPage). A room revealed before that list existed
+ * live page. Photos → Before photos, the ones on the page (onPage). A room revealed before that list existed
  * (Nov 12 2026) has only its Before & after pairs, so its replay plays their befores, as it always did (they were on
  * its page already); a room not yet revealed only ever its Before photos.
  */
@@ -147,7 +147,7 @@ export function beforePhotosOf(kid) {
 }
 
 /**
- * Where new before photos go first: the reveal screen's places still free, filled with ones spread across the visit.
+ * Where new before photos go first: the live page's places still free, filled with ones spread across the visit.
  * One kept off takes no place; one not looked at yet does, as it may well be fine
  */
 export const freeBeforePlaces = (kid) => Math.max(0, BEFORE_SHOWN - (kid?.beforePhotos || []).filter((p) => !keptOff(p)).length);
