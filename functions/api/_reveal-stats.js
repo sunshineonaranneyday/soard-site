@@ -28,6 +28,9 @@
  *             the hearts so far (the hub's running totals).
  *  After      Facebook's video insights and YouTube's statistics are read
  *             again on a slowing schedule for 30 days (maybeRefreshRevealStats).
+ *             A reveal whose phone came back after Facebook's few minutes
+ *             (tRejoin) had more than one Facebook live post: each is read and
+ *             their numbers are added together (facebook.posts keeps each).
  */
 
 import * as fb from './_broadcast-fb.js';
@@ -347,7 +350,7 @@ export async function maybeRefreshRevealStats(env, { readState, hubStatus, force
       out.reactions = await copyHearts(DB, state.broadcastId, await hubStatus().catch(() => null));
     }
     const since = iso(now - REFRESH_DAYS * 86400e3);
-    const due = await DB.prepare(`SELECT b.id, b.live_at, b.ended_at, b.fb_live_video_id, b.fb_permalink, s.facebook, s.youtube, s.next_check_at
+    const due = await DB.prepare(`SELECT b.id, b.live_at, b.ended_at, b.fb_live_video_id, b.fb_permalink, b.data, s.facebook, s.youtube, s.next_check_at
         FROM broadcasts b LEFT JOIN broadcast_stats s ON s.broadcast_id = b.id
         WHERE b.live_at IS NOT NULL AND b.live_at >= ?1 AND (b.ended_at IS NOT NULL OR b.phase = 'ended') AND (s.next_check_at IS NULL OR s.next_check_at <= ?2)
         ORDER BY b.live_at DESC LIMIT 2`).bind(since, iso(now)).all();
@@ -370,19 +373,91 @@ export async function maybeRefreshRevealStats(env, { readState, hubStatus, force
 /** Only the numbers that came back: a reply missing one never wipes the last good value */
 const numbersOnly = (o) => Object.fromEntries(Object.entries(o || {}).filter(([, v]) => v != null && (typeof v !== 'number' || Number.isFinite(v))));
 
+/** The same Facebook post or video, however it was reached */
+const samePost = (a, b) => !!(a && b && ((a.liveVideoId && a.liveVideoId === b.liveVideoId) || (a.permalink && a.permalink === b.permalink) || (a.videoId && a.videoId === b.videoId)));
+
+/**
+ * Every Facebook live post a reveal had, in order, once each: the ones from before its phone came back
+ * (the row's data.fbEarlier, tRejoin) and then its last (the row's own, or the one the "at once" line saw).
+ */
+export function fbPostsOf(row, prevFb = {}) {
+  const data = typeof row?.data === 'string' ? json(row.data) : row?.data;
+  const last = { liveVideoId: row?.fb_live_video_id || prevFb?.liveVideoId || null, permalink: row?.fb_permalink || prevFb?.permalink || null };
+  const out = [];
+  for (const p of [...(Array.isArray(data?.fbEarlier) ? data.fbEarlier : []), last]) {
+    const q = { liveVideoId: p?.liveVideoId || null, permalink: p?.permalink || null };
+    if ((q.liveVideoId || q.permalink) && !out.some((x) => samePost(x, q))) out.push(q);
+  }
+  return out;
+}
+
+/** Facebook's counts that add up across a reveal's posts (someone on two posts is in each one's people counts) */
+const FB_SUMMED = ['views', 'unique', 'liveUnique', 'reactions', 'comments'];
+
+/** What one read of one Facebook post leaves: its new numbers over its last good ones, and how the read went */
+function fbRead(r, prev, now) {
+  // A failed read keeps the last good numbers and says why
+  // A read that failed outright says nothing about the permission: the last word on it stands
+  // checkedAt: last asked; readAt: when what came back came back; viewsReadAt: when the view totals themselves did
+  return { ...prev, ...(r.ok ? numbersOnly(r.totals) : {}), error: r.ok ? (r.partial || null) : r.error, errorKind: r.ok ? (r.partial ? 'partial' : null) : r.gone ? 'gone' : r.missing ? 'denied' : 'failed', missing: r.ok && !r.partial ? null : (r.missing || prev.missing || null), checkedAt: iso(now), ...(r.ok ? { readAt: iso(now) } : {}), ...(r.ok && !r.partial ? { viewsReadAt: iso(now) } : {}) };
+}
+
+/**
+ * A reveal with more than one Facebook live post: each read on its own (keeping its own last good numbers),
+ * then added together. Average watch is weighed by each post's views. A post Facebook no longer has keeps
+ * its last numbers in the total; how the reads went is said for the others (all gone: 'gone').
+ */
+async function readFbPosts(env, posts, prevFb, now) {
+  const before = Array.isArray(prevFb.posts) ? prevFb.posts : [];
+  // Read before the phone came back, as one post: those numbers were the first post's
+  const seed = !before.length && prevFb.videoId ? Object.fromEntries(['videoId', ...FB_SUMMED, 'avgSec', 'readAt', 'viewsReadAt', 'missing'].filter((k) => prevFb[k] != null).map((k) => [k, prevFb[k]])) : null;
+  const read = [];
+  for (const [i, p] of posts.entries()) {
+    const prev = before.find((x) => samePost(x, p)) || (i === 0 && seed) || {};
+    const r = await fb.fbVideoTotals(env, { liveVideoId: p.liveVideoId, permalink: p.permalink, videoId: prev.videoId || null }).catch((e) => ({ ok: false, error: e.message }));
+    read.push(fbRead(r, { ...prev, liveVideoId: p.liveVideoId || prev.liveVideoId || null, permalink: p.permalink || prev.permalink || null }, now));
+  }
+  // One video reached two ways counts once
+  const each = read.filter((x, i) => !read.slice(0, i).some((y) => samePost(y, x)));
+  const total = {};
+  for (const k of FB_SUMMED) {
+    const have = each.filter((x) => Number.isFinite(x[k]));
+    total[k] = have.length ? have.reduce((a, x) => a + x[k], 0) : null;
+  }
+  const weighed = each.filter((x) => Number.isFinite(x.avgSec) && Number.isFinite(x.views) && x.views > 0);
+  const w = weighed.reduce((a, x) => a + x.views, 0);
+  total.avgSec = w ? Math.round(weighed.reduce((a, x) => a + x.avgSec * x.views, 0) / w) : null;
+  // How the reads went: the posts still on Facebook speak for the total; only when none is left is it 'gone'
+  const live = each.filter((x) => x.errorKind !== 'gone');
+  const worst = live.length ? (['failed', 'denied', 'partial'].map((k) => live.find((x) => x.errorKind === k)).find(Boolean) || null) : each[0];
+  // When the numbers shown came back: the oldest read of the posts that speak for them (all gone: all of them).
+  // A post never read adds nothing to the numbers, so it doesn't make them undated (its failure is said)
+  const speak = live.length ? live : each;
+  const oldest = (k) => speak.map((x) => x[k]).filter(Boolean).sort()[0] || null;
+  return {
+    ...prevFb, ...total,
+    liveVideoId: posts[posts.length - 1].liveVideoId, permalink: posts[posts.length - 1].permalink, videoId: each[each.length - 1].videoId || null,
+    error: worst?.error || null, errorKind: live.length ? (worst?.errorKind || null) : 'gone',
+    missing: live.map((x) => x.missing).find(Boolean) || null,
+    checkedAt: iso(now), readAt: oldest('readAt'), viewsReadAt: oldest('viewsReadAt'),
+    posts: each,
+  };
+}
+
 /** Read one finished reveal's Facebook and YouTube totals and save them. */
 export async function refreshPlatforms(env, row, now = Date.now()) {
   const DB = env.DB;
   const prevFb = json(row.facebook) || {};
   const prevYt = json(row.youtube) || {};
   let facebook = prevFb;
-  if (fb.fbConfigured(env) && (row.fb_live_video_id || row.fb_permalink || prevFb.videoId)) {
-    const r = await fb.fbVideoTotals(env, { liveVideoId: row.fb_live_video_id || prevFb.liveVideoId, permalink: row.fb_permalink || prevFb.permalink, videoId: prevFb.videoId }).catch((e) => ({ ok: false, error: e.message }));
-    // A failed read keeps the last good numbers and says why
-    // checkedAt: the last time Facebook was asked; readAt: when the numbers shown came back (a failed read leaves it)
-    // A read that failed outright says nothing about the permission: the last word on it stands
-    // checkedAt: last asked; readAt: when what came back came back; viewsReadAt: when the view totals themselves did
-    facebook = { ...prevFb, liveVideoId: row.fb_live_video_id || prevFb.liveVideoId || null, permalink: row.fb_permalink || prevFb.permalink || null, ...(r.ok ? numbersOnly(r.totals) : {}), error: r.ok ? (r.partial || null) : r.error, errorKind: r.ok ? (r.partial ? 'partial' : null) : r.gone ? 'gone' : r.missing ? 'denied' : 'failed', missing: r.ok && !r.partial ? null : (r.missing || prevFb.missing || null), checkedAt: iso(now), ...(r.ok ? { readAt: iso(now) } : {}), ...(r.ok && !r.partial ? { viewsReadAt: iso(now) } : {}) };
+  const fbPosts = fbPostsOf(row, prevFb);
+  if (fb.fbConfigured(env) && fbPosts.length > 1) {
+    facebook = await readFbPosts(env, fbPosts, prevFb, now);
+  } else if (fb.fbConfigured(env) && (fbPosts.length || prevFb.videoId)) {
+    // Its one post: usually the row's own; after a pick-up whose new post never opened, the earlier one
+    const one = fbPosts[0] || {};
+    const r = await fb.fbVideoTotals(env, { liveVideoId: one.liveVideoId || null, permalink: one.permalink || null, videoId: prevFb.videoId }).catch((e) => ({ ok: false, error: e.message }));
+    facebook = fbRead(r, { ...prevFb, liveVideoId: one.liveVideoId || prevFb.liveVideoId || null, permalink: one.permalink || prevFb.permalink || null }, now);
   }
   let youtube = prevYt;
   if (prevYt.videoId && yt.youtubeConfigured(env)) {

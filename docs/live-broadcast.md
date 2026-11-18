@@ -133,8 +133,12 @@ which changes the moment the phone connects or disconnects. `sensePhone()` in `_
   or "Live now"). Until it closes, the "Ended" note, the kid's page, the replay email, the Kit replay draft
   and the Reel wait; the replay can already play on the live page. An API-mode Facebook post closes when
   the site ends the reveal (Facebook keeps a dropped stream's post open only 2–3 minutes), and a phone back
-  opens a new one for the rest. Clear replay, Reset, a new schedule, Set replay or turning test mode on
-  close the window at once.
+  opens a new one for the rest. The earlier post stays the reveal's (`state.fbEarlier`, kept in its History
+  row's `data.fbEarlier`): History reads every post and adds their numbers together (views, people, live
+  viewers, reactions, comments; average watch weighed by views; each post's own in `facebook.posts`, so a
+  failed or deleted one keeps its last numbers in the total), says so under the numbers, and links each
+  post (Peter, Nov 17 2026). A framing check's post is never counted. Clear replay, Reset, a new schedule,
+  Set replay or turning test mode on close the window at once.
 - A scheduled reveal whose phone stops before the scheduled start, after under 10 minutes on air, was a
   framing check (`tPreShowOver`): back to waiting (countdown up), nothing final happens, and that clip is
   never its replay. What was already sent stays sent (no second "we're live" or "Live now"); a Kit list

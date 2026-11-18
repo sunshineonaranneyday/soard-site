@@ -6274,13 +6274,27 @@
           r.source === 'manual' ? 'emergency banner' : null,
         ].filter(Boolean).join(' · ');
       };
+      // Its Facebook live post, or each one when the phone stopped and came back (data.fbEarlier, then the last), numbered
+      // by its place in the reveal. A post saved without a link opens by the video Facebook gave for it (stats.facebook.posts)
+      const bcFbLinks = (r) => {
+        const read = Array.isArray(r.stats?.facebook?.posts) ? r.stats.facebook.posts : [];
+        const posts = [...(Array.isArray(r.data?.fbEarlier) ? r.data.fbEarlier : []), { liveVideoId: r.fb_live_video_id || null, permalink: r.fb_permalink || null }]
+          .filter((p) => p?.liveVideoId || p?.permalink)
+          .filter((p, i, a) => a.findIndex((q) => (p.liveVideoId && q.liveVideoId === p.liveVideoId) || (p.permalink && q.permalink === p.permalink)) === i);
+        const link = (p) => {
+          if (p.permalink) return p.permalink;
+          const v = read.find((x) => x?.liveVideoId && x.liveVideoId === p.liveVideoId)?.videoId;
+          return /^\d{6,}$/.test(String(v || '')) ? `https://www.facebook.com/watch/?v=${v}` : null;
+        };
+        return posts.map((p, i) => [safeHref(link(p)), posts.length > 1 ? `Facebook, part ${i + 1}` : 'Facebook']).filter(([u]) => u);
+      };
       // Under each reveal's numbers (./reveal-stats.js): its links, the messages and keepsake, and the feed health report
       const extras = (r) => {
         const meta = { broadcastId: r.id, kidName: r.kid_name, title: r.title, date: r.live_at || r.scheduled_at };
         return html`<div>
           <div class="bc-btns">
             ${r.replay_uid ? html`<a class="btn btn-ghost btn-sm" href=${`https://watch.cloudflarestream.com/${r.replay_uid}`} target="_blank" rel="noopener">Replay ↗</a>` : null}
-            ${r.fb_permalink ? html`<a class="btn btn-ghost btn-sm" href=${r.fb_permalink} target="_blank" rel="noopener">Facebook ↗</a>` : null}
+            ${bcFbLinks(r).map(([href, label]) => html`<a class="btn btn-ghost btn-sm" href=${href} target="_blank" rel="noopener">${label} ↗</a>`)}
             ${r.data?.reel?.permalink ? html`<a class="btn btn-ghost btn-sm" href=${safeHref(r.data.reel.permalink)} target="_blank" rel="noopener">Reel ↗</a>` : null}
             ${r.messageCount > 0 ? html`
               <button class="btn btn-ghost btn-sm" type="button" aria-expanded=${msgsFor === r.id} onClick=${() => setMsgsFor(msgsFor === r.id ? null : r.id)}>${msgsFor === r.id ? 'Hide messages' : `Messages (${r.messageCount})`}</button>

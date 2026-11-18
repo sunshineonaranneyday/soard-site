@@ -93,7 +93,7 @@ export async function onRequestGet(context) {
       reminderCounts: DB.prepare(`SELECT channel, COUNT(*) AS n FROM broadcast_reminders WHERE unsubscribed_at IS NULL GROUP BY channel`).all(),
       recentReminders: DB.prepare(`SELECT channel, address, kid_slug, created_at, source FROM broadcast_reminders WHERE unsubscribed_at IS NULL ORDER BY created_at DESC LIMIT 10`).all(),
       sends: state.broadcastId ? DB.prepare(`SELECT kind, channel, recipients, sent, failed, error, created_at FROM broadcast_sends WHERE broadcast_id = ? ORDER BY created_at`).bind(state.broadcastId).all() : Promise.resolve(null),
-      history: DB.prepare(`SELECT id, kid_slug, kid_name, title, scheduled_at, live_at, ended_at, phase, replay_uid, fb_permalink, source, data, created_at, updated_at FROM broadcasts ORDER BY created_at DESC LIMIT ${HISTORY_LIMIT}`).all(),
+      history: DB.prepare(`SELECT id, kid_slug, kid_name, title, scheduled_at, live_at, ended_at, phase, replay_uid, fb_live_video_id, fb_permalink, source, data, created_at, updated_at FROM broadcasts ORDER BY created_at DESC LIMIT ${HISTORY_LIMIT}`).all(),
       events: DB.prepare(`SELECT broadcast_id, type, COUNT(*) AS n FROM broadcast_events WHERE broadcast_id IN (SELECT id FROM broadcasts ORDER BY created_at DESC LIMIT ${HISTORY_LIMIT}) GROUP BY broadcast_id, type`).all(),
       fbRecent: withFb ? fb.fbRecentBroadcasts(env, 5) : Promise.resolve(null),
       quiet: b.readQuiet(DB),

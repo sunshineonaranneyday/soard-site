@@ -223,6 +223,7 @@ export function defaultState() {
     fbReopen: false,       // picked up again (tRejoin): open a new Facebook post (preShowEffects)
     fbReleaseKey: null,    // which framing check or pick-up the Facebook release belongs to (done once each)
     fbSessionAt: null,     // when this stretch on air began: its Facebook post and closing claims date from then
+    fbEarlier: [],         // the reveal's Facebook live posts from before a pick-up ({ liveVideoId, permalink }): History adds their numbers to the last one's
     replayOut: null,       // false once a reveal ends, true when its replay has gone out (kid's page, replay email, Kit draft, Reel); null: a state from before
     replayStartedAt: null, // when the replay's recording began (after a long reconnect, later than liveAt): reveal stats line its moment up with the live minutes
     revealAtSeconds: null, // admin override for where the reveal happens in the recording
@@ -590,7 +591,9 @@ async function upsertBroadcastRow(DB, s) {
       fb_permalink=excluded.fb_permalink, source=excluded.source, data=excluded.data, updated_at=excluded.updated_at`)
     .bind(s.broadcastId, s.kidSlug, s.kidName, s.title, s.message, s.image, s.scheduledAt, s.liveAt, s.endedAt, s.phase,
       s.liveVideoUid, s.replayUid, s.fb?.liveVideoId || null, s.fb?.permalink || null, s.source,
-      JSON.stringify({ clicks: s.clicks || 0, note: s.note, kit: s.kit, kitLiveEmail: s.kitLiveEmail ?? null, replayUntil: s.replayUntil, reel: s.reel || null, jobId: s.jobId || null, test: !!s.test, revealAtSeconds: s.revealAtSeconds ?? null, replayStartedAt: s.replayStartedAt || null }), s.createdAt || nowIso(), nowIso()).run();
+      JSON.stringify({ clicks: s.clicks || 0, note: s.note, kit: s.kit, kitLiveEmail: s.kitLiveEmail ?? null, replayUntil: s.replayUntil, reel: s.reel || null, jobId: s.jobId || null, test: !!s.test, revealAtSeconds: s.revealAtSeconds ?? null, replayStartedAt: s.replayStartedAt || null,
+        // Facebook posts from before a pick-up (the last one is fb_live_video_id / fb_permalink): History adds them up
+        ...(Array.isArray(s.fbEarlier) && s.fbEarlier.length ? { fbEarlier: s.fbEarlier } : {}) }), s.createdAt || nowIso(), nowIso()).run();
 }
 
 /**
@@ -819,6 +822,15 @@ function withRecording(list, uid) {
   return [...have, uid].slice(-MAX_RECORDINGS);
 }
 
+/** A reveal's earlier Facebook live posts with `fb` (the one its phone was on) added: once each, in order, capped */
+function withFbPost(list, fb) {
+  const have = Array.isArray(list) ? list : [];
+  const p = { liveVideoId: fb?.liveVideoId || null, permalink: fb?.permalink || null };
+  if (!p.liveVideoId && !p.permalink) return have;
+  if (have.some((x) => (p.liveVideoId && x?.liveVideoId === p.liveVideoId) || (p.permalink && x?.permalink === p.permalink))) return have;
+  return [...have, p].slice(-MAX_RECORDINGS);
+}
+
 /** Is a reveal that ended by its phone stopping still waiting to see whether a phone comes back? */
 export function rejoinOpen(state, now = Date.now()) {
   return state?.phase === 'replay' && !!state.rejoinUntil && now < Date.parse(state.rejoinUntil);
@@ -833,7 +845,9 @@ export function tRejoin(state, { videoUid } = {}) {
     ...state, phase: 'live', segmentAt: nowIso(), disconnectedAt: null, endedAt: null,
     replayUntil: null, replayUid: null, replayReadyAt: null, replayStartedAt: null,
     rejoinUntil: null, closedAt: null, replayOut: false, gapSince: null,
-    // Its Facebook post was closed when the site ended it: a new one opens for the rest (preShowEffects, once)
+    // Its Facebook post was closed when the site ended it: a new one opens for the rest (preShowEffects, once).
+    // The closed one stays the reveal's: History adds its numbers to the new one's (refreshPlatforms)
+    fbEarlier: withFbPost(state.fbEarlier, state.fb),
     fb: { ...defaultState().fb }, fbReopen: true, fbReleaseKey: `rejoin:${nowIso()}`, fbSessionAt: nowIso(),
     liveVideoUid: videoUid || state.liveVideoUid, recordings: withRecording(state.recordings, videoUid),
   };
@@ -882,7 +896,7 @@ export function tStartQuiet(state, { videoUid, by } = {}, config) {
     phase: 'live', source: 'stream', test: false,
     liveAt: at, segmentAt: at, endedAt: null, disconnectedAt: null,
     liveVideoUid: videoUid || null, replayUid: null, replayReadyAt: null, replayUntil: null, replayStartedAt: null,
-    reel: null, fb: blank.fb, kit: blank.kit, kidCheckAt: null, kidAlertAt: null, manual: null, clicks: 0, note: null,
+    reel: null, fb: blank.fb, fbEarlier: [], kit: blank.kit, kidCheckAt: null, kidAlertAt: null, manual: null, clicks: 0, note: null,
     endedVideoUid: before.endedVideoUid || null, endedVideoAt: before.endedVideoAt || null, gapSince: null,
     quiet: { at },
     resume: before.phase === 'idle' || !before.phase ? null : before,
@@ -906,8 +920,9 @@ export function tPreShowOver(state) {
     phase: Date.now() >= at - ARM_WINDOW_MS ? 'armed' : 'scheduled',
     liveAt: null, segmentAt: null, disconnectedAt: null, gapSince: null, liveVideoUid: null, recordings: [],
     kit, kidCheckAt: null, kidAlertAt: null,
-    // Its Facebook post is released at once (preShowEffects closes it): the reveal opens its own when it starts
-    fb: { ...defaultState().fb },
+    // Its Facebook post is released at once (preShowEffects closes it): the reveal opens its own when it starts,
+    // and History counts only the reveal's posts
+    fb: { ...defaultState().fb }, fbEarlier: [],
     // Always: even a Facebook post that failed to open took the claim the reveal needs for its own
     preShowFb: { liveVideoId: state.fb?.liveVideoId || null, outputUid: state.fb?.outputUid || null },
     fbReleaseKey: `pre-show:${nowIso()}`,

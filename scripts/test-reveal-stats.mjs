@@ -6,7 +6,8 @@
  *   BASE=http://localhost:4391 node scripts/test-reveal-stats.mjs
  *
  * Realistic reveals: the next one coming up, big and small ones, one with
- * Facebook's view totals and one without the permission for them, one with
+ * Facebook's view totals (on two Facebook live posts, the phone having come
+ * back after Facebook's few minutes) and one without the permission for them, one with
  * YouTube too, one whose reveal moment isn't known, one from before counting
  * began, a very long name, and tests that stay out of the comparison.
  * Checks sorting, the average row, the best of each column, a reveal's tiles,
@@ -48,10 +49,13 @@ const stats = (o) => ({ counted: true, partial: false, staff: 0, tests: 0, sourc
 const HISTORY = [
   { id: 'live-9', kid_slug: 'dylan-2026', kid_name: 'Dylan', title: "Dylan's room reveal", scheduled_at: new Date(Date.now() + 9 * DAY).toISOString(), phase: 'scheduled', source: null, data: {}, messageCount: 0, events: { view_live_page: 41, banner_click: 4, reminder_signup: 1, click_calendar: 1 },
     stats: stats({ partial: true, people: 37, before: 37, live: 0, replay: 0, sources: { direct: 20, email: 9, facebook: 6, site: 2 }, staff: 4 }) },
-  { id: 'live-8', kid_slug: 'jordan-2026', kid_name: 'Jordan', title: "Jordan's room reveal", scheduled_at: ago(6), live_at: ago(6), ended_at: ago(6, 0.6), phase: 'idle', replay_uid: 'r8', fb_permalink: 'https://www.facebook.com/x/videos/8', source: 'stream', data: {}, messageCount: 31, events: { click_donate: 9, reminder_signup: 14, share: 6, qr_scan: 11 },
+  { id: 'live-8', kid_slug: 'jordan-2026', kid_name: 'Jordan', title: "Jordan's room reveal", scheduled_at: ago(6), live_at: ago(6), ended_at: ago(6, 0.6), phase: 'idle', replay_uid: 'r8', fb_live_video_id: 'lv8', fb_permalink: 'https://www.facebook.com/x/videos/8', source: 'stream', data: { fbEarlier: [{ liveVideoId: 'lv81', permalink: null }] }, messageCount: 31, events: { click_donate: 9, reminder_signup: 14, share: 6, qr_scan: 11 },
     stats: stats({ people: 286, before: 120, live: 171, avgLiveSec: 812, atReveal: 149, revealAt: 1215, replay: 64, avgReplaySec: 402, heartsTotal: 640, hearts: { heart: 640 }, staff: 6, tests: 1,
       sources: { email: 96, facebook: 88, direct: 51, qr: 22, push: 12, search: 7, site: 6, calendar: 4 }, series: line(36, 1215, { site: 120, fb: 160, yt: 18 }),
-      facebook: { unique: 1840, views: 2610, avgSec: 74, liveUnique: 690, reactions: 212, comments: 48, checkedAt: ago(0, -2) }, youtube: { videoId: 'abcDEF12345', views: 233, likes: 19, comments: 3, checkedAt: ago(0, -2) } }) },
+      facebook: { unique: 1840, views: 2610, avgSec: 74, liveUnique: 690, reactions: 212, comments: 48, checkedAt: ago(0, -2),
+        // The first post was saved without its link, and staff have since deleted it on Facebook
+        posts: [{ liveVideoId: 'lv81', permalink: null, videoId: '810000081', unique: 240, views: 410, avgSec: 30, liveUnique: 150, reactions: 22, comments: 5, errorKind: 'gone', error: 'does not exist', checkedAt: ago(0, -2) },
+          { liveVideoId: 'lv8', permalink: 'https://www.facebook.com/x/videos/8', videoId: '8', unique: 1600, views: 2200, avgSec: 82, liveUnique: 540, reactions: 190, comments: 43, checkedAt: ago(0, -2) }] }, youtube: { videoId: 'abcDEF12345', views: 233, likes: 19, comments: 3, checkedAt: ago(0, -2) } }) },
   { id: 'live-7', kid_slug: 'avery-2026', kid_name: 'Avery', title: "Avery's room reveal", scheduled_at: ago(13), live_at: ago(13), ended_at: ago(13, 0.45), phase: 'idle', replay_uid: 'r7', fb_permalink: 'https://www.facebook.com/x/videos/7', source: 'stream', data: {}, messageCount: 12, events: { click_donate: 3, reminder_signup: 5 },
     stats: stats({ people: 141, before: 52, live: 98, avgLiveSec: 505, atReveal: 61, revealAt: 980, replay: 30, avgReplaySec: 210, heartsTotal: 233, hearts: { heart: 233 },
       sources: { facebook: 61, email: 40, direct: 30, qr: 6, other: 4 }, series: line(27, 980, { site: 70, fb: 90 }),
@@ -181,12 +185,19 @@ try {
   ok(/People 3\+ seconds 1,840/.test(plats) && /Views 233/.test(plats), `Facebook and YouTube totals (${plats.slice(0, 120)})`);
   ok(/Not counted: 6 staff visits and 1 test visit/.test(await page.$eval('.rs-open', (el) => el.innerText)), 'who was left out');
   ok(/Replay ↗/.test(await page.$eval('.rs-open', (el) => el.innerText)), 'the reveal\'s links and messages follow');
+  ok(/Added up from this reveal.s 2 Facebook live posts: the phone stopped and came back, so the rest went out on a new post\./.test(plats) && /Someone who watched more than one counts in each/.test(plats), `two Facebook posts: their numbers are said to be added up (${(plats.match(/Added up[^.]*\./) || [''])[0]})`);
+  ok(/One of them is no longer on Facebook; its last numbers still count\./.test(plats), 'a post deleted on Facebook: its last numbers are said to still count');
+  const fbLinks = await page.$$eval('.rs-open a', (els) => els.filter((a) => /^Facebook/.test(a.textContent.trim())).map((a) => `${a.textContent.trim()} ${a.getAttribute('href')}`));
+  ok(fbLinks.join(' | ') === 'Facebook, part 1 ↗ https://www.facebook.com/watch/?v=810000081 | Facebook, part 2 ↗ https://www.facebook.com/x/videos/8', `a link to each, in order; one saved without its link opens by its video (${fbLinks.join(' | ')})`);
 
   ok(await clickText('.rs-row td.rs-name', /^Avery/), 'open Avery (a click anywhere on the row)');
   await settle(700); // a click on the row waits a moment, so a double-click to copy a number doesn't open it
   const avery = await platsText('.rs-open .rs-plats').catch(() => '');
   ok(/read insights/.test(avery), 'Facebook without the permission says so');
   ok(/Reactions 96/.test(avery) && /Comments 20/.test(avery), 'its reactions and comments still show');
+  ok(!/Added up/.test(avery), 'one Facebook post: nothing about adding up');
+  const averyLinks = await page.$$eval('.rs-open a', (els) => els.filter((a) => /^Facebook/.test(a.textContent.trim())).map((a) => a.textContent.trim()));
+  ok(averyLinks.join(',') === 'Facebook ↗', `one post, one plain link (${averyLinks.join(',')})`);
   ok(await clickText('.rs-namebtn', /^Nicolas/), 'open Nicolas and Maddox');
   await settle(200);
   const nmTiles = await page.$eval('.rs-open .rs-tiles', (el) => el.innerText.replace(/\s+/g, ' '));

@@ -42,7 +42,8 @@ globalThis.fetch = async (input, init = {}) => {
   const vid = url.match(/\/stream\/(vid\d+)$/);
   if (vid) return json({ success: true, result: { uid: vid[1], created: new Date(Date.now()).toISOString(), duration: sim.durations[vid[1]] ?? 60, status: { state: sim.videoState } } });
   if (url.startsWith('https://graph.facebook.com/')) {
-    if (method === 'POST' && url.includes('/live_videos')) return json({ id: 'fblive1', secure_stream_url: 'rtmps://live-api-s.facebook.com:443/rtmp/FB-123?s_bl=1' });
+    // Each live post its own id, as Facebook gives
+    if (method === 'POST' && url.includes('/live_videos')) return json({ id: `fblive${++fbSeq}`, secure_stream_url: 'rtmps://live-api-s.facebook.com:443/rtmp/FB-123?s_bl=1' });
     return json({ data: [] });
   }
   if (url.startsWith('https://api.resend.com/')) return json({ data: [] });
@@ -59,7 +60,7 @@ globalThis.fetch = async (input, init = {}) => {
   return new Response('not mocked: ' + url, { status: 599 });
 };
 const LIVE_HUB = { idFromName: () => 'main', get: () => ({ async fetch(url) { const p = new URL(url).pathname; return p === '/publish' || p === '/status' ? Response.json({ ok: true, clients: 1 }) : new Response('nf', { status: 404 }); } }) };
-let env, b;
+let env, b, rs;
 const tick = () => b.runTick(env, { source: 'test', force: true });
 const outward = (list) => list.filter((c) => (c.url.startsWith('https://graph.facebook.com/') && c.method !== 'GET') || c.url.startsWith('https://api.resend.com/') || c.url.startsWith('https://hook.test/') || (c.url.startsWith('https://api.kit.com/v4/broadcasts') && c.method === 'POST')).map((c) => `${c.method} ${c.url.split('?')[0]}`);
 const sends = async (id) => (await env.DB.prepare('SELECT kind, channel FROM broadcast_sends WHERE broadcast_id = ?').bind(id).all()).results.map((r) => `${r.kind}/${r.channel}`);
@@ -70,6 +71,7 @@ before(async () => {
   await DB.prepare(`INSERT INTO kids (slug, data, name, year, status) VALUES (?, ?, ?, ?, ?)`).bind('remi', JSON.stringify({ name: 'Remi', slug: 'remi', heroImage: 'kids/remi/hero' }), 'Remi', 2026, 'in-progress').run();
   env = { DB, LIVE_HUB, CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 'tok', RESEND_API_KEY: 're_test', KIT_API_KEY: 'kit_test', CF_PAGES_DEPLOY_HOOK: 'https://hook.test/deploy', SLACK_WEBHOOK_URL: 'https://hook.test/slack', FB_PAGE_ID: '123', FB_PAGE_TOKEN: 'fbtok', ALERT_EMAILS: 'staff@test' };
   b = await import('../functions/api/_broadcast.js');
+  rs = await import('../functions/api/_reveal-stats.js');
   await b.ensureSchema(DB);
   const cfg = await b.readConfig(DB);
   cfg.liveInput = { uid: 'in1' };
@@ -84,7 +86,9 @@ after(() => { Date.now = realNow; globalThis.fetch = realFetch; });
 
 const phoneOn = (vid) => { sim.live = true; sim.videoUID = vid; sim.inputState = 'connected'; sim.inputSince = iso(); };
 const phoneOff = () => { sim.inputState = 'disconnected'; sim.inputSince = iso(); }; // the lifecycle lags behind, as on Nov 17
-const ended = () => calls.filter((c) => c.url.includes('graph.facebook.com') && c.url.includes('fblive1') && c.method === 'POST').length;
+const isFbPostCall = (u) => String(u).includes('graph.facebook.com') && /\/fblive\d+(\?|$)/.test(String(u));
+let fbSeq = 0;
+const ended = () => calls.filter((c) => isFbPostCall(c.url) && c.method === 'POST').length;
 const fbPosts = () => calls.filter((c) => c.url.includes('graph.facebook.com') && c.url.includes('/live_videos') && c.method === 'POST').length;
 const slack = (re) => calls.filter((c) => c.url === 'https://hook.test/slack' && re.test(c.body || '')).length;
 const kidVideo = async () => JSON.parse((await env.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind('remi').first()).data).revealVideoUrl;
@@ -137,6 +141,8 @@ test('a 5-minute outage: the phone comes back and the same reveal goes on; nobod
   const liveBefore = (await sends(id)).filter((x) => x.startsWith('live/'));
   const nowAlerts = slack(/Live now/);
   sim.durations = { vid2: 1500, vid3: 240 };
+  const firstPost = (await b.readState(env.DB)).fb;
+  assert.ok(firstPost?.liveVideoId, 'on its first Facebook post');
   phoneOff();
   for (let i = 0; i < 5; i++) { travel(60 * S); await tick(); }
   let st = await b.readState(env.DB);
@@ -154,6 +160,13 @@ test('a 5-minute outage: the phone comes back and the same reveal goes on; nobod
   assert.equal(fbPosts(), 3, 'a new Facebook post for the rest of the reveal (one from each test so far, and this one)');
   const st2 = await b.readState(env.DB);
   assert.ok(st2.fb?.liveVideoId, 'the reveal is on its new Facebook post');
+  assert.notEqual(st2.fb.liveVideoId, firstPost.liveVideoId);
+  // History adds the two posts' numbers together: the first is kept with the reveal, in its row too
+  assert.deepEqual(st2.fbEarlier, [{ liveVideoId: firstPost.liveVideoId, permalink: firstPost.permalink || null }]);
+  const histRow = await env.DB.prepare('SELECT fb_live_video_id, data FROM broadcasts WHERE id = ?').bind(id).first();
+  assert.equal(histRow.fb_live_video_id, st2.fb.liveVideoId, 'the row\'s own post is the last');
+  assert.deepEqual(JSON.parse(histRow.data).fbEarlier, st2.fbEarlier);
+  assert.deepEqual(rs.fbPostsOf(histRow).map((p) => p.liveVideoId), [firstPost.liveVideoId, st2.fb.liveVideoId], 'both posts, in order');
   assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM broadcasts WHERE id = ?').bind(id).first()).n, 1);
   // Now the phone stops for good
   phoneOff();
@@ -433,7 +446,7 @@ test('a framing check whose Facebook post won\'t close still leaves the reveal i
   for (let i = 0; i < 3; i++) { travel(60 * S); await tick(); }
   // Facebook refuses to close anything from here on
   const realFetch3 = globalThis.fetch;
-  globalThis.fetch = async (u, init = {}) => (String(u).includes('graph.facebook.com') && String(u).includes('fblive1') && (init.method || 'GET') === 'POST' ? new Response(JSON.stringify({ error: { message: 'temporarily unavailable', code: 2 } }), { status: 500 }) : realFetch3(u, init));
+  globalThis.fetch = async (u, init = {}) => (isFbPostCall(u) && (init.method || 'GET') === 'POST' ? new Response(JSON.stringify({ error: { message: 'temporarily unavailable', code: 2 } }), { status: 500 }) : realFetch3(u, init));
   try {
     phoneOff(); sim.live = false;
     for (let i = 0; i < 4; i++) { travel(60 * S); await tick(); }

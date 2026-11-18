@@ -458,6 +458,17 @@ function Platforms({ r, s, youtubeKey, youtubeOn, facebookOn }) {
     : r.fb_permalink || f.videoId || f.liveVideoId ? (old ? 'Facebook didn\'t report numbers for this reveal.' : 'Facebook\'s totals come in after the reveal.')
     : r.source === 'manual' ? 'This reveal was live on Facebook, but the site doesn\'t know which video it was, so it can\'t read Facebook\'s numbers.'
     : 'This reveal wasn\'t on the Facebook Page.';
+  // More than one Facebook live post (the phone came back after Facebook's few minutes): the numbers are their total
+  const posts = Array.isArray(f.posts) ? f.posts : [];
+  const counted = (p) => ['views', 'unique', 'liveUnique', 'reactions', 'comments'].some((k) => Number.isFinite(p?.[k]));
+  const deleted = posts.filter((p) => p?.errorKind === 'gone');
+  const kept = deleted.filter(counted).length, lost = deleted.length - kept;
+  const some = (k) => (k === 1 ? 'One of them is' : `${k} of them are`);
+  const fbPosts = posts.length > 1 && fbNums.length
+    ? `Added up from this reveal's ${posts.length} Facebook live posts: the phone stopped and came back, so the rest went out on a new post. Someone who watched more than one counts in each.`
+      + (deleted.length < posts.length && kept ? ` ${some(kept)} no longer on Facebook; ${kept === 1 ? 'its' : 'their'} last numbers still count.` : '')
+      + (deleted.length < posts.length && lost ? ` ${some(lost)} no longer on Facebook and ${lost === 1 ? 'was' : 'were'} never read, so ${lost === 1 ? 'it isn\'t' : 'they aren\'t'} in the total.` : '')
+    : null;
   const ytNote = !youtubeKey && (yt.videoId || ytNums.length) ? `YouTube isn't connected for numbers yet: it needs a YouTube API key.${ytNums.length && readAt(yt) ? ` The numbers shown are from ${ago(readAt(yt))}.` : ''}`
     : yt.error && (yt.errorKind === 'gone' || /has no video|no youtube video/i.test(yt.error)) ? `YouTube says this video isn't there any more (deleted or made private), so its numbers can't be read.${ytNums.length && readAt(yt) ? ` The numbers shown are from ${ago(readAt(yt))}.` : ''}`
     : yt.error ? `YouTube couldn't be read when last asked${ago(yt.checkedAt) ? ` (${ago(yt.checkedAt)})` : ''}: ${plainError(yt.error)}${ytNums.length && readAt(yt) ? ` The numbers shown are from ${ago(readAt(yt))}.` : ''}`
@@ -468,13 +479,14 @@ function Platforms({ r, s, youtubeKey, youtubeOn, facebookOn }) {
     : !youtubeKey ? 'YouTube isn\'t connected for numbers yet: it needs a YouTube API key.'
     : isUpcoming(r) || isLiveNow(r) ? 'Counted once it\'s live on YouTube.'
     : 'YouTube wasn\'t showing this reveal.';
-  const block = (name, nums, note, when, raw) => html`<div class="rs-plat">
+  const block = (name, nums, note, when, raw, about = null) => html`<div class="rs-plat">
     <h5>${name}</h5>
     ${nums.length ? html`<dl>${nums.map(([k, v]) => html`<div><dt>${k}</dt><dd>${v}</dd></div>`)}</dl>` : null}
+    ${about ? html`<p class="rs-muted">${about}</p>` : null}
     ${note ? html`<p class="rs-muted" title=${raw ? words(raw) : null}>${note}</p>` : null}
     ${when && nums.length && !note ? html`<p class="rs-muted">Read ${ago(when)}.</p>` : null}
   </div>`;
-  return html`<div class="rs-plats">${block('Facebook', fbNums, fbNote, readAt(f), f.error)}${block('YouTube', ytNums, ytNote, readAt(yt), yt.error)}</div>`;
+  return html`<div class="rs-plats">${block('Facebook', fbNums, fbNote, readAt(f), f.error, fbPosts)}${block('YouTube', ytNums, ytNote, readAt(yt), yt.error)}</div>`;
 }
 
 /** "Site 120 · Facebook 160 · YouTube 18, 20:30 after going live": where the most-at-once crowd was */
