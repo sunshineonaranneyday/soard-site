@@ -11,7 +11,7 @@
  * what a first-time viewer understands at a glance.
  */
 import type { LiveClient, LivePlayer } from './live-client';
-import { mountPlayer, type PlayerHandle, type PlayerStatus } from './live-player';
+import { mountPlayer, type LiveSeek, type PlayerHandle, type PlayerStatus } from './live-player';
 import { watchMeter } from './live-stats';
 import { PHONE, SIDE, typingIn } from './live-media';
 
@@ -24,10 +24,20 @@ export interface StageView {
   orientation: 'portrait' | 'landscape';
   /** Badge on the photo before the watch party ('' hides it) */
   badge: string;
+  /** The broadcast's own phase ('live', 'ending', 'replay', ...): the live video's end note needs to know the phone came
+   * back on (live again after it wasn't) rather than the broadcast simply not having moved on yet */
+  phase?: string;
 }
 export interface Stage {
   update(view: StageView): void;
   readonly party: boolean;
+  /**
+   * The live video is still playing the broadcast: viewers watch about 20 s behind the phone, so when the broadcast stops
+   * being live its last seconds (often the reveal itself) are still to come. The page keeps showing it live until false
+   */
+  readonly playingLive: boolean;
+  /** "That's the reveal!" is showing (the live video played its last frame): the page keeps the video's place for it */
+  readonly ended: boolean;
   /**
    * Hold the video in a small player at the top of the screen while something covers the page on a phone:
    * 'give', the give sheet (top right, over the page above the sheet); 'design', the design viewer (its top left corner)
@@ -45,6 +55,8 @@ interface Options {
    * the controls are in the rail (it has no room for them). null for onAir: not live
    */
   onAir?: (onAir: boolean | null, watching: number | null) => void;
+  /** playingLive or ended changed: the page draws itself again */
+  onEnd?: () => void;
 }
 
 /** Below this the count reads as lonely rather than lively, so it stays hidden. */
@@ -115,6 +127,13 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   let viewers = 0;
   let watching = false;
   let slowConnect = false;
+  // Live: going back through the broadcast so far (the player's: canSeek, behind)
+  let liveSeek: LiveSeek = { canSeek: false, behind: 0 };
+  // The reveal over: "That's the reveal!" showing, what the page asked for meanwhile (shown when they tap Watch the
+  // replay), and whether the broadcast has been off since (so its coming back on means the phone did)
+  let endShown = false;
+  let endPending: StageView | null = null;
+  let endSawOff = false;
   let connectingTimer: ReturnType<typeof setTimeout> | undefined;
   let soundBeacon = false;
   let replayBeacon = false;
@@ -139,6 +158,24 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
 
   // ── What goes in the frame ──────────────────────────────────────
   function update(next: StageView) {
+    // The reveal over and "That's the reveal!" up: it stays until they ask for the replay, or the phone comes back on
+    // (the broadcast live again after it was off); what the page asks for meanwhile waits
+    if (endShown) {
+      if (next.phase && next.phase !== 'live') endSawOff = true;
+      const backOn = next.mode === 'live' && next.phase === 'live' && endSawOff;
+      // (back to the countdown: the broadcast was set up again for later, the note's done)
+      const over = next.mode === 'upcoming';
+      if (!backOn && !over) { endPending = next; paint(); return; }
+      hideEnd();
+      unmount();
+      mounted = ''; // (a fresh live player for the phone's new feed)
+    } else if (kind === 'live' && player && (next.mode === 'replay' || next.mode === 'idle')) {
+      // The live video was on and the broadcast has moved on to its replay, or to nothing (the page holds it live while
+      // it still has frames to play: playingLive): it ends with the note, not a cut to whatever comes next. (Back to the
+      // countdown, a camera check before the start, isn't an end: that goes as it always has)
+      showEnd(next);
+      return;
+    }
     view = next;
     const wasParty = party;
     party = !!next.player && (next.mode === 'live' || next.mode === 'replay');
@@ -155,7 +192,13 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
         kind = next.player.kind;
         root.dataset.pkind = kind;
         playerEl.hidden = false;
-        player = mountPlayer(playerEl, { player: next.player, onStatus, onSize, onMuted });
+        player = mountPlayer(playerEl, {
+          player: next.player, onStatus, onSize, onMuted,
+          onLive: (st) => { liveSeek = st; paint(); },
+          // (the feed over: the end only once the broadcast itself has moved on to its replay, or to nothing. While it's
+          // still live or ending, a phone that dropped may yet come back: the player says Reconnecting meanwhile)
+          onFeedEnd: () => { if (kind === 'live' && (view.phase === 'replay' || view.phase === 'idle')) showEnd(null); else tellPage(); },
+        });
         // Live starts muted, a replay doesn't; after that, volume events keep this current
         muted = player.video?.muted ?? true;
         attachMedia();
@@ -180,6 +223,51 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     updateDock();
   }
 
+  // ── The reveal over ─────────────────────────────────────────────
+  // The live video has played its last frame (or the broadcast moved on with nothing left for it to play): "That's the
+  // reveal!" over the soft photo, the live video kept under it (hidden) in case the phone comes back on, and the replay
+  // offered once there is one. Nothing starts by itself
+  // Still playing the broadcast (the page keeps it live while this is so): a live video on, not over, and not out of
+  // frames (waiting or reconnecting with the broadcast moved on means nothing is left for it to play)
+  const isPlayingLive = () => kind === 'live' && !!player && !endShown && !player.feedEnded && !player.closed && pstatus !== 'waiting' && pstatus !== 'reconnecting';
+  let playingWas = false;
+  let endWas = false;
+  // (after the moment: the page may be in the middle of drawing itself, which is what told the stage something)
+  function tellPage() {
+    queueMicrotask(() => {
+      const now = isPlayingLive();
+      if (now !== playingWas || endShown !== endWas) { playingWas = now; endWas = endShown; opts.onEnd?.(); }
+    });
+  }
+  function showEnd(next: StageView | null) {
+    if (endShown) return;
+    endShown = true;
+    endSawOff = !!next?.phase && next.phase !== 'live' || (view.phase != null && view.phase !== 'live');
+    if (next) endPending = next;
+    flag('data-ended', true);
+    if (document.fullscreenElement === root) document.exitFullscreen().catch(() => {});
+    paint();
+    updateDock();
+    tellPage();
+  }
+  function hideEnd() {
+    endShown = false;
+    endPending = null;
+    flag('data-ended', false);
+    tellPage();
+  }
+  $('end-replay')?.addEventListener('click', () => {
+    const next = endPending;
+    hideEnd();
+    // (the live video kept under the note goes now: the replay takes its place, from the beginning)
+    unmount();
+    mounted = '';
+    if (next) update(next);
+    root.focus({ preventScroll: true });
+  });
+  $('from-start')?.addEventListener('click', () => player?.seekToStart());
+  $('to-live')?.addEventListener('click', () => player?.toLive());
+
   function unmount() {
     meter?.stop(); meter = null;
     detach?.(); detach = null;
@@ -187,6 +275,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     player = null;
     kind = '';
     pstatus = '';
+    liveSeek = { canSeek: false, behind: 0 };
     sized = '';
     revealAt = null; hasCaptions = false; cues = null;
     clearTimeout(metaTimer);
@@ -211,8 +300,12 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (st === 'connecting') connectingTimer = setTimeout(() => { slowConnect = true; paint(); }, 800);
     if (st === 'playing' && kind === 'replay' && !replayBeacon) { replayBeacon = true; client.beacon('click_replay'); }
     if (st === 'iframe') attachMedia();
+    // The phone back on while "That's the reveal!" is up with the broadcast still live (it never went off): the live
+    // video playing again takes the note away
+    if (endShown && kind === 'live' && st === 'playing' && view.mode === 'live' && !endSawOff) hideEnd();
     paint();
     updateDock();
+    tellPage();
   }
   function onSize(w: number, h: number) {
     sized = h > w ? 'portrait' : 'landscape';
@@ -267,7 +360,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const focused = document.activeElement as HTMLElement | null;
     for (const [el, show] of shows) setHidden(el, !show);
     if (focused && focused.hidden && shows.has(focused)) {
-      const twin = focused === $('sound') ? $('mute') : focused === $('mute') ? $('sound') : null;
+      const pairs: [HTMLElement | null, HTMLElement | null][] = [[$('sound'), $('mute')], [$('from-start'), $('to-live')]];
+      const pair = pairs.find(([a, b]) => focused === a || focused === b);
+      const twin = pair ? (pair[0] === focused ? pair[1] : pair[0]) : null;
       const next = twin && !twin.hidden ? twin : [...shows.keys()].find((el) => el && !el.hidden && root.contains(el));
       next?.focus({ preventScroll: true });
     }
@@ -298,7 +393,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const bt = $('badge-text'); if (bt) bt.textContent = view.badge;
 
     // Over the frame only when there is no picture
-    const note = isVideo && pstatus && (pstatus !== 'connecting' || slowConnect) ? NOTES[kind]?.[pstatus] : null;
+    // (none once the reveal is over: "That's the reveal!" says it, and a Reconnecting under it would say otherwise)
+    const note = !endShown && isVideo && pstatus && (pstatus !== 'connecting' || slowConnect) ? NOTES[kind]?.[pstatus] : null;
     setHidden($('note'), !note);
     if (note) { const t = $('note-title'); const x = $('note-text'); if (t) t.textContent = note[0]; if (x) x.textContent = note[1]; }
     setHidden($('tap'), !(isVideo && pstatus === 'blocked'));
@@ -308,14 +404,15 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);
-    const onAir = live && (!isVideo || showing || pstatus === 'blocked');
+    // (the reveal over, "That's the reveal!" up: nothing says Live any more, though the live video waits under the note)
+    const onAir = live && !endShown && (!isVideo || showing || pstatus === 'blocked');
     flag('data-onair', onAir);
     const status = $('status');
-    if (status) status.textContent = live ? (onAir ? 'Live' : STATUS[pstatus as PlayerStatus] || 'Connecting') : kind === 'replay' ? 'Replay' : '';
+    if (status) status.textContent = endShown ? '' : live ? (onAir ? 'Live' : STATUS[pstatus as PlayerStatus] || 'Connecting') : kind === 'replay' ? 'Replay' : '';
     const count = live && onAir && viewers >= VIEWERS_MIN;
     setHidden($('count'), !count);
-    const said = `${party && live ? (onAir ? 1 : 0) : ''}|${count ? viewers : ''}`;
-    if (said !== lastSaid) { lastSaid = said; opts.onAir?.(party && live ? onAir : null, count ? viewers : null); }
+    const said = `${party && live && !endShown ? (onAir ? 1 : 0) : ''}|${count ? viewers : ''}`;
+    if (said !== lastSaid) { lastSaid = said; opts.onAir?.(party && live && !endShown ? onAir : null, count ? viewers : null); }
     // The number and its word apart, so the word can step aside first on a narrow bar
     const cn = $('count-num'); const cw = $('count-word');
     if (count) { if (cn) cn.textContent = viewers.toLocaleString(); if (cw) cw.textContent = 'watching'; }
@@ -326,13 +423,30 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const mute = $('mute');
     // (a switch named by its word, "Sound", so a voice saying what's on screen reaches it; pressed: the sound is on)
     mute?.setAttribute('aria-pressed', String(!muted));
+    // Going back: From the start once the broadcast so far can be gone back through (and it's playing at the live
+    // moment); Back to live, with how far behind, once they have
+    const going = live && isVideo && !endShown;
+    const behind = $('behind');
+    if (behind) behind.textContent = going && liveSeek.behind > 0 ? `${formatTime(liveSeek.behind)} behind` : '';
+    $('to-live')?.setAttribute('aria-label', going && liveSeek.behind > 0 ? `Back to live (you're ${formatTime(liveSeek.behind)} behind)` : 'Back to live');
     const shows = new Map<HTMLElement | null, boolean>([
-      [$('sound'), soundCta],
-      [mute, live && isVideo && showing && !muted],
-      [$('heart'), live && roomy && (onAir || !isVideo)],
-      ...[...root.querySelectorAll<HTMLElement>('[data-full]')].map((b) => [b, isVideo && (kind === 'replay' || (live && roomy))] as [HTMLElement, boolean]),
+      [$('sound'), soundCta && !endShown],
+      [mute, live && isVideo && showing && !muted && !endShown],
+      [$('from-start'), going && liveSeek.canSeek && liveSeek.behind === 0 && pstatus === 'playing'],
+      [$('to-live'), going && liveSeek.behind > 0],
+      [$('heart'), live && roomy && (onAir || !isVideo) && !endShown],
+      ...[...root.querySelectorAll<HTMLElement>('[data-full]')].map((b) => [b, !endShown && isVideo && (kind === 'replay' || (live && roomy))] as [HTMLElement, boolean]),
     ]);
     railChange(shows);
+    // "That's the reveal!": whose, and the replay when there's one (until then, when it will be)
+    setHidden($('end'), !endShown);
+    if (endShown) {
+      const kid = (client.state?.kidName || '').trim();
+      const t = $('end-text'); if (t) t.textContent = kid ? `Thank you for watching ${kid}'s reveal.` : 'Thank you for watching.';
+      const replayReady = endPending?.player?.kind === 'replay';
+      setHidden($('end-replay'), !replayReady);
+      setHidden($('end-wait'), replayReady || endPending?.mode === 'idle');
+    }
     const cc = $('cc-toggle');
     setHidden(cc, !(kind === 'replay' && hasCaptions && isVideo));
     cc?.setAttribute('aria-pressed', String(ccOn));
@@ -757,6 +871,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   return {
     update,
     get party() { return party; },
+    get playingLive() { return isPlayingLive(); },
+    get ended() { return endShown; },
     pin(on: boolean, where: 'give' | 'design' = 'give') {
       pinned = on;
       if (on) root.dataset.pin = where; else delete root.dataset.pin;

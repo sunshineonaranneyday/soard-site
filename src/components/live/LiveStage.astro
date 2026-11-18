@@ -47,6 +47,9 @@ const ICON = {
   soundOn: svg(`${SPEAKER}<path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/>`),
   full: svg('<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>'),
   fullExit: svg('<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>'),
+  // Going back through the broadcast so far: to its start, and back to the live moment
+  fromStart: svg('<path d="M6 5v14"/><path d="M19 6.5v11a1 1 0 0 1-1.55.83L9.5 13.03a1.25 1.25 0 0 1 0-2.06l7.95-5.3A1 1 0 0 1 19 6.5Z"/>'),
+  toLive: svg('<path d="M18 5v14"/><path d="M5 6.5v11a1 1 0 0 0 1.55.83l7.95-5.3a1.25 1.25 0 0 0 0-2.06L6.55 5.67A1 1 0 0 0 5 6.5Z"/>'),
   heart: svg('<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>'),
   play: svg('<path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor"/>'),
   pause: svg('<rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/>'),
@@ -76,6 +79,14 @@ const ICON = {
           <p class="stage__note-title" data-s="note-title"></p>
           <p class="stage__note-text" data-s="note-text"></p>
         </div>
+        <!-- The reveal over: once the live video has played its last frame (live-stage.ts), over the soft photo like the
+             notes above, never over the video. The replay starts only when asked for -->
+        <div class="stage__end" data-s="end" role="status" hidden>
+          <p class="stage__end-title">That's the reveal!</p>
+          <p class="stage__end-text" data-s="end-text">Thank you for watching.</p>
+          <button class="stage__end-btn" type="button" data-s="end-replay" hidden><Fragment set:html={ICON.play} /><span>Watch the replay</span></button>
+          <p class="stage__end-wait" data-s="end-wait">The replay will be here in a few minutes.</p>
+        </div>
         <button class="stage__tap" type="button" data-s="tap" hidden>
           <span class="stage__tap-icon"><Fragment set:html={ICON.play} /></span>
           <span>Tap to watch</span>
@@ -101,6 +112,10 @@ const ICON = {
           <span class="bar__ico"><span class="bar__on"><Fragment set:html={ICON.soundOn} /></span><span class="bar__off"><Fragment set:html={ICON.soundOff} /></span></span>
           <span class="bar__lbl" aria-hidden="true">Sound</span>
         </button>
+        <!-- Going back through the broadcast so far (Cloudflare keeps it as it goes): from its start, then back to the
+             live moment, with how far behind you are -->
+        <button class="bar__btn bar__dvr" type="button" data-s="from-start" aria-label="Watch from the start" title="From the start" hidden><span class="bar__ico"><Fragment set:html={ICON.fromStart} /></span><span class="bar__lbl" aria-hidden="true">From the start</span></button>
+        <button class="bar__btn bar__dvr bar__tolive" type="button" data-s="to-live" aria-label="Back to live" title="Back to live" hidden><span class="bar__ico"><Fragment set:html={ICON.toLive} /></span><span class="bar__lbl" aria-hidden="true">Back to live</span><span class="bar__behind" data-s="behind" aria-hidden="true"></span></button>
         <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)" hidden><span class="bar__ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
         <!-- In the rail beside a portrait picture (data-rail): the hearts everyone sends float up here, beside the picture, never on it -->
         <span class="bar__rise" data-s="rise" aria-hidden="true"></span>
@@ -237,6 +252,28 @@ const ICON = {
   .stage__note-text { font-size: 14px; line-height: 1.55; margin: 0 auto; max-width: 30ch; color: rgba(255, 255, 255, 0.86); }
   .stage__note-text:empty { display: none; }
 
+  /* The reveal over: the soft photo behind, the words on it, a button for the replay once there is one */
+  .stage[data-ended] .stage__photo { opacity: 1; visibility: visible; transition: opacity 0.45s ease, visibility 0s; }
+  .stage[data-ended] .stage__player { opacity: 0; pointer-events: none; }
+  .stage__end {
+    position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 0; text-align: center;
+    padding: 24px; color: #fff;
+  }
+  .stage__end[hidden] { display: none; }
+  .stage__end:not([hidden]) { animation: noteIn 0.5s ease-out both; }
+  .stage__end-title { font-family: var(--font-display); font-size: clamp(1.4rem, 9cqi, 2rem); line-height: 1.15; margin: 0 0 10px; }
+  .stage__end-text { font-size: 15px; line-height: 1.5; margin: 0 auto; max-width: 26ch; color: rgba(255, 255, 255, 0.9); text-wrap: balance; }
+  .stage__end-btn {
+    display: inline-flex; align-items: center; gap: 8px; margin: 20px 0 0; padding: 0 20px; height: 46px; border: 0; border-radius: 100px;
+    background: var(--c-yellow); color: var(--c-dark); font: inherit; font-size: 15px; font-weight: 800; cursor: pointer;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25); animation: noteIn 0.4s ease-out both;
+  }
+  .stage__end-btn[hidden] { display: none; }
+  .stage__end-btn :global(svg) { width: 16px; height: 16px; fill: currentColor; }
+  .stage__end-btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  .stage__end-wait { margin: 18px auto 0; font-size: 13px; line-height: 1.5; max-width: 28ch; color: rgba(255, 255, 255, 0.75); }
+  .stage__end-wait[hidden] { display: none; }
+
   .stage__tap {
     position: absolute; inset: 0; z-index: 4; display: grid; place-content: center; justify-items: center; gap: 12px;
     border: 0; background: rgba(0, 0, 0, 0.35); color: #fff; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
@@ -326,7 +363,7 @@ const ICON = {
   .full-in, .full-out { display: grid; place-items: center; }
   .full-out, .stage[data-fullscreen] .full-in { display: none; }
   .stage[data-fullscreen] .full-out { display: grid; }
-  .bar__lbl, .bar__rise { display: none; }
+  .bar__lbl, .bar__rise, .bar__behind { display: none; }
 
   /* ── The rail: a live portrait picture has its controls in a slim column beside it, not in a bar under it (the
      Theater layout, Peter, Nov 17 2026): sound and full screen at the top, each with its word under it, and the heart
@@ -370,6 +407,16 @@ const ICON = {
       display: block; max-width: 100%; font-size: 10.5px; font-weight: 700; line-height: 1.2; text-align: center; letter-spacing: 0;
       white-space: normal; overflow-wrap: normal; color: var(--c-text-muted);
     }
+    /* Behind the live moment by your own choice: Back to live is the one that matters, in yellow like Tap for sound,
+       with how far behind you are under its words */
+    .stage[data-rail] .bar__tolive .bar__ico { background: var(--c-yellow-soft); border: 1.5px solid var(--c-yellow); }
+    .stage[data-rail] .bar__tolive .bar__lbl { color: var(--c-text); }
+    .stage[data-rail] .bar__behind { display: block; margin-top: -3px; font-size: 10px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--c-text-muted); }
+    .stage[data-rail] .bar__behind:empty { display: none; }
+    /* A short rail (a small phone): the round controls only, each still named for a screen reader, Tap for sound's words
+       kept (it's the one that matters first) */
+    .stage[data-rail] .bar__live { container: rail / size; }
+    @container rail (max-height: 330px) { .bar__lbl, .bar__behind { display: none !important; } .bar__end { gap: 10px !important; } }
     /* Muted: the one control that matters first, in yellow, with its words under it */
     .stage[data-rail] .bar__sound .bar__ico { background: var(--c-yellow-soft); border: 1.5px solid var(--c-yellow); animation: soundNudge 2.8s ease-in-out 1.5s 3; }
     .stage[data-rail] .bar__sound .bar__txt { color: var(--c-text); }
@@ -675,6 +722,7 @@ const ICON = {
     .bar__sound, .bar__heart.is-beat, .stage[data-party] .stage__picture.is-docked { animation: none; }
     .stage[data-rail] .bar__sound .bar__ico, .stage[data-rail] .bar__ico, .stage[data-rail] .bar__end > button { animation: none; transition: none; }
     .bar__rise { display: none !important; }
+    .stage__end, .stage__end-btn { animation: none; }
     .stage[data-onair][data-mode='live'] .bar__dot::after { animation: none; }
     .stage__player, .bar__btn { transition: none; }
   }

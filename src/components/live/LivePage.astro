@@ -630,6 +630,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       setAttr(stageEl, 'data-partners', on);
     }
     let last: LiveState | null = null;
+    // The live broadcast's video, as last seen (the reveal's last seconds play on it after the broadcast moves on)
+    let liveSeen: { id: string; player: NonNullable<LiveState['player']> } | null = null;
     let lastMeta: { reminders: ReminderOptions | null } = { reminders: null };
     let remindKid = ''; // who a sign-up here is for; empty means every reveal
     let remindNamed = ''; // the child the block names (its slug), whichever reveals they pick
@@ -671,6 +673,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 
     const stage = createStage(stageEl, {
       client,
+      // The live video still playing the broadcast's last seconds, or "That's the reveal!" up: the page draws itself again
+      // (decide keeps it live meanwhile, and keeps the video's place for the note)
+      onEnd: () => { if (rendered) render(last, lastMeta); },
       // The hero lays itself out around the video's real shape
       onShape: (orientation, party) => { hero.dataset.orientation = orientation; setAttr(hero, 'data-party', party); },
       // With the video's controls in its rail, "Live" and the number watching are the page's to say: after "Live now"
@@ -954,14 +959,23 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       // A stream with no kid known yet only counts as this kid's on the day of this kid's reveal
       const forThisKid = !pageKid || s.kidSlug === pageKid || (!s.kidSlug && revealIsToday(pageKid, upcoming.filter((r) => r.confirmed)));
       const phase = forThisKid ? s.phase : 'idle';
-      const view = phase === 'live' || phase === 'ending' ? 'live' : phase === 'replay' ? 'replay' : phase === 'scheduled' || phase === 'armed' ? 'upcoming' : 'idle';
+      let view = phase === 'live' || phase === 'ending' ? 'live' : phase === 'replay' ? 'replay' : phase === 'scheduled' || phase === 'armed' ? 'upcoming' : 'idle';
+      // The reveal's last seconds: viewers watch about 20 s behind the phone, so when the broadcast moves on the live
+      // video still has its ending to play (often the reveal itself). It stays live here until the stage says it has
+      // played its last frame (then "That's the reveal!", which keeps the video's place: stage.ended)
+      // (only on to the replay or to nothing: a camera check before the start goes back to the countdown as it always has)
+      const holdLive = (view === 'replay' || view === 'idle') && !!liveSeen && liveSeen.id === s.id && stage.playingLive;
+      if (holdLive) view = 'live';
+      const player = holdLive && liveSeen ? liveSeen.player : s.player;
       const kidSlug = pageKid || (view !== 'idle' ? s.kidSlug || '' : '');
-      const hasPlayer = !!(s.player && forThisKid && (view === 'live' || view === 'replay'));
-      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer };
+      const hasPlayer = !!(player && forThisKid && (view === 'live' || view === 'replay'));
+      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer || stage.ended, player };
     }
+
     function drawPage(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
       last = state; lastMeta = meta;
-      const { s, forThisKid, view, kidSlug, hasPlayer, party } = decide(state);
+      const { s, forThisKid, phase, view, kidSlug, hasPlayer, party, player } = decide(state);
+      if ((phase === 'live' || phase === 'ending') && s.player?.kind === 'live' && s.id) liveSeen = { id: s.id, player: s.player };
       display = view;
       hero.dataset.phase = display;
       setAttr(hero, 'data-party', party);
@@ -1055,7 +1069,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 
       stage.update({
         mode: display as 'idle' | 'upcoming' | 'live' | 'replay',
-        player: hasPlayer ? s.player : null,
+        player: hasPlayer ? player : null,
+        phase,
         orientation: s.orientation === 'landscape' ? 'landscape' : 'portrait',
         badge,
       });
