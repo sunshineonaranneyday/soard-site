@@ -142,6 +142,7 @@ export function initAdvisoryForm() {
   const sayError = (text) => putText(ui.sendError, text);
   let sending = false;
   let clearedThere = false; // Start over pressed in another tab: the overview here says why its answers went
+  let awayNote = ''; // a photo turned down while they were on the overview: why, said there until they go back in
   let clearingElsewhere = false; // that Start over, being done here: the other tab took the photo off this device
   let restored = false;
   let typedHere = false; // something typed or picked on this visit (not the browser filling boxes from its history)
@@ -464,7 +465,13 @@ export function initAdvisoryForm() {
    * the step's summary, Continue's words, the review and the save, as a typed answer does
    */
   function photoChanged(id, { problem = false, silent = false, kept = false } = {}) {
-    if (kept) { paint(); return; } // (the photo kept on this device: only what says so changes)
+    // (the photo kept on this device: only what says so changes, the bar across the top too)
+    if (kept) { paint(); if (ui.saved.textContent && ui.saved.textContent !== savedWords()) ui.saved.textContent = savedWords(); return; }
+    // (turned down while they're on the overview, its words out of sight: said there, and heard)
+    if (problem && !focused && photos[id]?.refusal) {
+      awayNote = photos[id].refusal;
+      if (ui.hubLive) { ui.hubLive.textContent = ''; setTimeout(() => { ui.hubLive.textContent = `Your photo didn’t go in: ${awayNote}`; }, 40); }
+    }
     if (!silent) typedHere = true;
     if (problem) { if (step >= 0 && step < total && pages[step]?.contains(fieldEl(id))) paintSummary(stillWrong(), { always: true }); }
     else {
@@ -545,11 +552,12 @@ export function initAdvisoryForm() {
     const wasTitle = ui.hubTitle.textContent;
     ui.hubTitle.textContent = was ? 'We received your application' : started ? (canKeep && photoKeeping ? 'Saving your application on this device' : canKeep && !photoUnkept ? 'Your application is saved on this device' : canKeep ? 'Your answers are saved on this device; keep this page open until you send it, since this browser can’t keep your photo' : 'Keep this page open until you send it') : 'Six steps, about 20 minutes';
     if (wasTitle === 'Saving your application on this device' && ui.hubTitle.textContent !== wasTitle && ui.hubLive) {
-      const words = ui.hubTitle.textContent;
+      // (a photo that didn't go in is what's heard then, the heading's own words beside it)
+      const words = awayNote ? `${ui.hubTitle.textContent}. Your photo didn’t go in: ${awayNote}` : ui.hubTitle.textContent;
       ui.hubLive.textContent = '';
       setTimeout(() => { ui.hubLive.textContent = words; }, 40);
     }
-    ui.hubLead.textContent = was ? `It arrived on ${on}, and we’ll be in touch by email.`
+    ui.hubLead.textContent = awayNote && !was ? `Your photo didn’t go in: ${awayNote}` : was ? `It arrived on ${on}, and we’ll be in touch by email.`
       : !canKeep ? (started ? 'This browser blocks saving, so your answers are only on this page until you send them.' : 'Have a reference in mind and a photo of yourself ready. This browser blocks saving, so plan to finish in one sitting.')
         : started ? (doneCount === total ? (sendingStore.get() ? MAYBE_SENT : 'Every step is done. Look it over and send it.') : `${doneCount} of ${total + 1} steps done. Pick up where you left off.`)
           : clearedThere ? 'Your answers were deleted: Start over was pressed in another tab. Start again whenever you’re ready.'
@@ -697,6 +705,7 @@ export function initAdvisoryForm() {
   function armTrap() { if (!depth) pushLoc(); }
   function begin(i = null) {
     clearedThere = false;
+    awayNote = '';
     if (!focused) {
       focused = true;
       root.classList.add('is-focus');
@@ -967,8 +976,13 @@ export function initAdvisoryForm() {
     if (there?.session) sendSession = there.session; // (another tab's, saved first: the one id for the application)
     write({ answers, step: Math.min(step, REVIEW), screen: screenNo, field: step < total ? lastIdOn(step, screenNo) : null, furthest, startedAt: Math.min(startedAt, Number(there?.startedAt) || startedAt), session: sendSession, savedAt: Date.now() });
     takeTheirs(answers, now);
-    const said = canKeep ? 'Saved on this device' : 'Not saved: this browser blocks it';
+    const said = savedWords();
     if (ui.saved.textContent !== said) ui.saved.textContent = said; // (heard once, not at every pause in typing)
+  }
+  // (the bar across the top: what's kept on this device, never the photo when this browser can't keep it)
+  function savedWords() {
+    if (!canKeep) return 'Not saved: this browser blocks it';
+    return Object.values(photos).some((ph) => ph.file && !ph.kept && !ph.keeping) ? 'Saved on this device, except your photo' : 'Saved on this device';
   }
   const same = (x, y) => JSON.stringify(x ?? '') === JSON.stringify(y ?? '');
   /** Answers another tab saved, shown here where this one hasn't changed them since */
@@ -1333,6 +1347,8 @@ export function initAdvisoryForm() {
   // (an answer typed or changed while Continue waits on a photo: they're still working on this screen, so it gives way,
   // never moving them on mid-word once the photo's ready; a photo picked is waited for instead)
   form.addEventListener('input', (e) => { if (photoWait && e.target?.type !== 'file') moved(); });
+  // (and so is going into one, by a click or Tab, before a word's typed: never moved on with the cursor in another answer)
+  form.addEventListener('focusin', (e) => { if (photoWait && e.target?.matches?.('input:not([type=file]), textarea, select')) moved(); });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (sending || moving || photoWait || performance.now() < calmUntil) return;
@@ -1361,8 +1377,13 @@ export function initAdvisoryForm() {
         clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false;
       }
       if (at !== navSeq || !focused) return; // (Back or Save and exit pressed meanwhile: that stands)
-      // (a photo picked meanwhile and turned down: Continue stops there, its words in sight, never on with the earlier one)
-      if (reads.some((id, k) => photos[id].refused !== refusedWere[k])) return;
+      // (a photo picked meanwhile and turned down: Continue stops there, its words in sight, never on with the earlier one;
+      // at the review, where its card isn't, they're said over Send, and heard)
+      const turned = reads.find((id, k) => photos[id].refused !== refusedWere[k]);
+      if (turned) {
+        if (!fieldEl(turned)?.getClientRects().length) { ui.sendError.textContent = photos[turned].refusal; ui.sendError.hidden = false; }
+        return;
+      }
     }
     ui.sendError.hidden = true;
     if (step === REVIEW) { await send(); return; }
@@ -1703,7 +1724,12 @@ export function initAdvisoryForm() {
     // saying what's so, never "checking" for a photo found an instant later)
     const looking = step >= REVIEW && Object.values(photos).some((ph) => !ph.isLoaded);
     if (!looking) begin(step);
-    else Promise.race([Promise.all(Object.values(photos).map((ph) => ph.known)), new Promise((r) => { setTimeout(r, 300); })]).then(() => { if (!focused) begin(step); });
+    else {
+      // (the application's own screen meanwhile, empty for that moment: never the page and its hero first)
+      document.documentElement.classList.add('adv-focus', 'adv-waking');
+      Promise.race([Promise.all(Object.values(photos).map((ph) => ph.known)), new Promise((r) => { setTimeout(r, 300); })])
+        .then(() => { document.documentElement.classList.remove('adv-waking'); if (!focused) begin(step); });
+    }
   }
   // In the application with only a photo picked so far (no answer typed yet), then a reload: back in it, as with any answer
   else if (session.get()) {

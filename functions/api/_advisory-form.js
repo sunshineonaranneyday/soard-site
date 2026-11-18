@@ -149,44 +149,63 @@ export const ALSO_A_NAME = /^(mba|ma|ms|md|do|pa|ra|pe|ba|bs|ap|ea)$/;
 const bare = (w) => String(w).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 const afterName = (raw, { comma = false, caps = false } = {}) => {
   const w = bare(raw);
+  // ("J.R." with a dot between is initials, never "Jr.")
+  if (/^(jr|sr)$/.test(w) && /^\p{L}\.\p{L}/u.test(raw)) return false;
   if (AFTER_NAME.test(w)) return true;
   return ALSO_A_NAME.test(w) && (comma || raw.includes('.') || (caps && raw === raw.toUpperCase()));
 };
 /**
  * A name as it's said, first name first, as written: "Ames, Jordan" (and "De La Cruz, Maria") is written last name
- * first; titles before it set apart ("Dr.", "The Honorable"), and letters after it ("Dana Price, CPA", "Jordan Ames
- * M.D.", "Dana Price MBA"). → { words, titles, shown, could }
- *   shown: the name to show, first name first ("Ames, Jordan, PhD" is "Jordan Ames, PhD"; anything else as written)
+ * first; titles before it set apart ("Dr.", "The Honorable", "Mr. and Mrs."), and letters after it ("Dana Price, CPA",
+ * "Jane Doe, ASID", "Jordan Ames M.D.", "Dana Price MBA"). → { words, titles, shown, could }
+ *   shown: the name to show, first name first ("Ames, Jordan Jr." is "Jordan Ames Jr."; anything else as written)
  *   could: the words with a last word kept that might be a family name in capitals ("Anh Van DO"), when one was set
  *   apart as letters: matching tries both
  */
 export function readName(full) {
   const s = String(full || '').replace(/\s+/g, ' ').trim();
   const parts = s.split(',').map((x) => x.trim()).filter(Boolean);
+  const shouting = !/\p{Ll}/u.test(s);
   const lead = (p) => {
-    const w = (p || '').split(' ').filter((x) => bare(x));
+    const w = (p || '').split(' ').filter((x) => bare(x) || x === '&');
     const t = [];
-    while (w.length > 1 && (TITLE.test(w[0]) || (/^the$/i.test(w[0]) && TITLE.test(w[1])))) t.push(w.shift());
-    return [w, t];
+    while (w.length > 1 && (TITLE.test(w[0]) || (/^the$/i.test(w[0]) && TITLE.test(w[1])) || (t.length && /^(and|&)$/i.test(w[0]) && TITLE.test(w[1])))) t.push(w.shift());
+    return [w.filter((x) => bare(x)), t];
   };
-  // (what follows a comma is letters after the name ("Dana Price, PE, CCIM", "Jordan Ames, Jr."), or, when it isn't,
-  // their first name: written last name first)
-  const flipped = parts.length > 1 && !parts[1].split(' ').every((t) => afterName(t, { comma: true }));
-  const [last, t1] = lead(parts[0]);
-  const [first, t2] = flipped ? lead(parts[1]) : [[], []];
-  const words = [...first, ...last];
-  const titles = [...t1, ...t2];
-  const caps = /\p{Ll}/u.test(words.join(' ')); // (capitals mean letters only in a name that has small letters)
-  let could = null;
-  const end = () => words[words.length - 1];
-  while (words.length > 1 && afterName(end(), { caps }) && (words.length > 2 || AFTER_NAME.test(bare(end())))) {
-    const w = end();
-    if (!could && !AFTER_NAME.test(bare(w)) && !w.includes('.')) could = [...words];
-    words.pop();
+  // Letters after a name, set apart (never the only word left after the first; a last word that might be a family
+  // name in capitals kept as `could`)
+  const trail = (w) => {
+    const caps = /\p{Ll}/u.test(w.join(' ')); // (capitals mean letters only in a name that has small letters)
+    const out = [...w];
+    const off = [];
+    let could = null;
+    const end = () => out[out.length - 1];
+    while (out.length > 1 && afterName(end(), { caps }) && (out.length > 2 || AFTER_NAME.test(bare(end())))) {
+      if (!could && !AFTER_NAME.test(bare(end())) && !end().includes('.')) could = [...out];
+      off.unshift(out.pop());
+    }
+    return [out, off, could];
+  };
+  // After a comma: letters after the name ("PE, CCIM", "Jr.", any in capitals: "ASID", "RD", or ending in one: "PharmD"),
+  // else their first name, written last name first: after one word ("Ames, Jordan"), or, after more, a name's shape
+  // ("De La Cruz, Maria"). A name all in capitals can't say which after more than one word: left as written
+  // (initials with dots, "J.R.", are a first name, never letters: those it knows, "M.D.", it knows as letters)
+  const initials = (t) => /^(\p{L}\.)+\p{L}?\.?$/u.test(t);
+  const letters = (p) => p.split(' ').every((t) => afterName(t, { comma: true }) || (!shouting && !initials(t) && /\p{L}/u.test(t) && !/\p{Ll}/u.test(t)) || /\p{Ll}\p{Lu}\.?$/u.test(t));
+  const nameShaped = (p) => { const w = p.split(' '); return w.length <= 3 && w.every((t) => /^\p{Lu}/u.test(t) && /\p{Ll}/u.test(t)); };
+  const [head, t1] = lead(parts[0]);
+  const flipped = parts.length > 1 && !letters(parts[1]) && (head.length === 1 || (!shouting && nameShaped(parts[1])));
+  if (!flipped) {
+    const [words, , could] = trail(head);
+    return { words, titles: t1, shown: s, could };
   }
-  const rest = parts.slice(flipped ? 2 : 1);
-  const shown = flipped ? `${[...titles, ...words].join(' ')}${rest.length ? `, ${rest.join(', ')}` : ''}` : s;
-  return { words, titles, shown, could };
+  const [tail, t2] = lead(parts[1]);
+  const [first, firstOff] = trail(tail);
+  const [last, lastOff] = trail(head);
+  const titles = [...t1, ...t2];
+  const rest = parts.slice(2);
+  const shown = `${[...titles, ...first, ...last, ...lastOff, ...firstOff].join(' ')}${rest.length ? `, ${rest.join(', ')}` : ''}`;
+  return { words: [...first, ...last], titles, shown, could: null };
 }
 /** What a thank-you calls them: the name they go by, else their first name past a title ("Mrs. Lee", alone, stays so) */
 export function greetName(a) {
@@ -194,9 +213,10 @@ export function greetName(a) {
   if (pref) return pref.slice(0, 60);
   const { words, titles } = readName(a?.fullName);
   if (!words.length) return '';
-  // (a name typed all in capitals is greeted in ordinary ones: "AMES, JORDAN" is "Jordan", never shouted)
-  const shouted = !/\p{Ll}/u.test(String(a?.fullName || ''));
-  const calm = (w) => (shouted && w.length > 1 ? w[0] + w.slice(1).toLowerCase() : w);
+  // (a name typed all in capitals is greeted in ordinary ones: "AMES, JORDAN" is "Jordan", "MARY-KATE" is "Mary-Kate",
+  // whatever titles or letters came with it)
+  const shouted = !/\p{Ll}/u.test(words.join(' '));
+  const calm = (w) => (shouted ? w.toLowerCase().replace(/(^|[-'’])(\p{L})/gu, (m, p, c) => p + c.toUpperCase()) : w);
   return (titles.length && words.length === 1 ? `${calm(titles[titles.length - 1])} ${calm(words[0])}` : calm(words[0])).replace(/[,;:]+$/, '');
 }
 export const EMAIL_RE = /^[^\s@<>",;]+@[^\s@<>"',;]+\.[a-z]{2,}$/i; // (an apostrophe is fine before the @: o'brien@)

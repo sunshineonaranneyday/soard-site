@@ -69,6 +69,14 @@ export async function rename(env, { collection, from, to } = {}, userEmail = 'un
   if (await DB.prepare(`SELECT slug FROM ${table} WHERE slug = ?`).bind(to).first()) {
     return { status: 409, body: { success: false, error: `Someone already has the address “${to}”. Pick another.` } };
   }
+  // A press of Add to Advisory Board adding to this record, or making one at the new address, right now: it goes on
+  // with the address it has, so the rename waits for it (never its application, email and welcome left at the old one)
+  if (table === 'team') {
+    const { addingTo } = await import('./_advisory-add.js');
+    if (await addingTo(DB, from) || await addingTo(DB, to)) {
+      return { status: 409, body: { success: false, error: 'Someone is adding this person to the Advisory Board right now. Change the address in a moment.' } };
+    }
+  }
   // A former board member's board records are kept under their address (signatures, sign-ins): never someone else's.
   // Their own earlier address, nobody's since, is theirs to go back to (a rename undone)
   let back = false;

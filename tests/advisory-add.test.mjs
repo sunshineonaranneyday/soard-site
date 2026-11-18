@@ -1288,3 +1288,121 @@ test('names, round ten: last name first with a family name of two words, more le
     assert.deepEqual(among(await plan((await applied(`Dana Price ${l}`, `dl${k}@x.org`)).id)), ['dana-price'], l);
   }
 });
+
+// ─── Round eleven ───────────────────────────────────────────────────
+
+test('letters after a comma it doesn’t know (ASID, RD, PharmD, REALTOR®) are letters, never a first name: greeted by their own, and asked about the same person', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  await person('jane-doe', { name: 'Jane Doe', group: 'advisory' }, 'jane.work@x.org');
+  for (const [k, n] of ['Jane Doe, ASID', 'Jane Doe, RD', 'Jane Doe, LPN', 'Jane Doe, NCIDQ', 'Jane Doe, RD, MS', 'Jane Doe, PharmD', 'Jane Doe, REALTOR®', 'Jane Doe, DPT'].entries()) {
+    assert.equal(greetName({ fullName: n }), 'Jane', n);
+    const p = await plan((await applied(n, `jd${k}@x.org`)).id);
+    assert.deepEqual([p.kind, p.person?.slug, p.asName], ['choose', 'jane-doe', undefined], n);
+  }
+});
+
+test('greetings, round eleven: capitals with titles or letters, hyphens and apostrophes; Jr. kept after the family name; initials after a comma; "Mr. and Mrs."', async () => {
+  const { greetName, readName } = await import('../functions/api/_advisory-form.js');
+  for (const [n, g] of [['Dr. JORDAN AMES', 'Jordan'], ['JORDAN AMES, PhD', 'Jordan'], ['JORDAN AMES Jr.', 'Jordan'], ['MARY-KATE OLSEN', 'Mary-Kate'], ['D’ANDRE SMITH', 'D’Andre'],
+    ['Ames, J.R.', 'J.R.'], ['Mr. and Mrs. Jordan Ames', 'Jordan'], ['Ames, DeShawn', 'DeShawn'], ['Jordan Ames, M.D.', 'Jordan']]) {
+    assert.equal(greetName({ fullName: n }), g, n);
+  }
+  assert.equal(readName('Ames, Jordan Jr.').shown, 'Jordan Ames Jr.');
+  assert.equal(readName('Ames Jr., Jordan').shown, 'Jordan Ames Jr.');
+  await person('jordan-ames', { name: 'Jordan Ames', group: 'advisory' }, 'ja@x.org');
+  assert.deepEqual((await plan((await applied('Mr. and Mrs. Jordan Ames', 'mm@x.org')).id)).person?.slug, 'jordan-ames');
+});
+
+test('a name with no letters a to z but a title or letters in them (Dr., PhD, Jr.) gets an address of its own, never "dr", and is never asked about someone else for it', async () => {
+  const vlad = await applied('Dr. Владимир Петров', 'vlad@x.org');
+  const r = await add(vlad.id, 'new');
+  assert.equal(r.success, true, r.error);
+  assert.match(r.person.slug, /^advisory-board-member-/);
+  const wang = await plan((await applied('Dr. 王小明', 'wang@x.org')).id);
+  assert.equal(wang.kind, 'new', 'never "Is this the same Dr. 王小明?" about Dr. Владимир Петров');
+  assert.notEqual(wang.slug, r.person.slug);
+  // (and a name with letters a to z: its address from the name, never its title or letters)
+  assert.equal((await plan((await applied('Dr. Jordan Smith, CPA', 'js@x.org')).id)).slug, 'jordan-smith');
+});
+
+test('a delete marked before anything goes: the mark not saving deletes nothing; stopping after the headshot leaves it marked, never used as whole, and Delete again finishes it', async () => {
+  const deleted = [];
+  const f = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => { if (init.method === 'DELETE') { deleted.push(String(input)); return Response.json({ success: true, result: {} }); } return f(input, init); };
+  const real = env.DB.prepare.bind(env.DB);
+  const remove = async (id) => (await adminApi.onRequestPost(ctx('POST', { remove: { id } }))).json();
+  // The mark doesn't save (D1 busy): nothing deleted, nothing marked
+  const a = await applied('Una Marked', 'una@example.org');
+  env.DB.prepare = (sql) => (/SET deleting_at = \?/.test(sql) ? { bind: () => ({ run: async () => { throw new Error('D1_ERROR: busy'); } }) } : real(sql));
+  assert.equal((await remove(a.id)).success, false);
+  env.DB.prepare = real;
+  assert.equal(deleted.length, 0, 'its headshot never touched');
+  const still = await getAdvisoryApplication(env.DB, a.id);
+  assert.ok(still.headshot && !still.deleting);
+  // The headshot goes, then the row doesn't: left marked, its headshot never shown or made anyone's photo
+  env.DB.prepare = (sql) => (/^DELETE FROM advisory_applications WHERE id = \?$/.test(sql) ? { bind: () => ({ run: async () => { throw new Error('D1_ERROR: busy'); } }) } : real(sql));
+  const r = await remove(a.id);
+  env.DB.prepare = real;
+  assert.equal(r.success, false);
+  assert.equal(r.error, 'Deleting this application didn’t finish: its headshot is gone, and the rest is still here. Press Delete application again to finish it.');
+  assert.equal(deleted.length, 1);
+  const half = await getAdvisoryApplication(env.DB, a.id);
+  assert.deepEqual([half.deleting, half.headshot], [true, null]);
+  const tried = await add(a.id, 'new');
+  assert.equal(tried.success, false);
+  assert.equal(tried.error, 'Deleting this application didn’t finish, so nobody can be added from it. Press Delete application to finish deleting it.');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM team').first()).n, 0, 'nobody added with a photo that’s gone');
+  // Delete again: finished
+  assert.equal((await remove(a.id)).success, true);
+  assert.equal(await getAdvisoryApplication(env.DB, a.id), null);
+});
+
+test('the box’s key, round eleven: a status the box doesn’t mention never makes a press out of date (Not now does); a namesake’s web address neither; an organization the box tells people apart by does', async () => {
+  const app = await applied('Sam Status', 'sam.status@example.org');
+  const box = await plan(app.id);
+  await adminApi.onRequestPost(ctx('POST', { status: { id: app.id, status: 'talking' } }));
+  assert.equal((await plan(app.id)).key, box.key, 'In conversation: the box says the same');
+  const notNow = await plan(app.id);
+  await adminApi.onRequestPost(ctx('POST', { status: { id: app.id, status: 'not-now' } }));
+  const refused = await add(app.id, 'new', notNow.key);
+  assert.match(refused.error, /^This application was marked Not now by linzi@soardcharity\.com since the box opened/);
+  // A namesake elsewhere given another web address: the box says the same, so the press goes
+  await person('kai-board', { name: 'Kai Board', group: 'board' }, 'kai.b@example.org');
+  const k = await applied('Kai Board', 'kai.new@example.org');
+  const kbox = await plan(k.id);
+  const row = await env.DB.prepare('SELECT * FROM team WHERE slug = ?').bind('kai-board').first();
+  await env.DB.prepare('DELETE FROM team WHERE slug = ?').bind('kai-board').run();
+  await person('kai-board-member', { ...JSON.parse(row.data), slug: 'kai-board-member' });
+  assert.equal((await add(k.id, 'new', kbox.key)).success, true);
+  // Two with one name told apart by organization, swapped meanwhile: out of date, never linked to the other
+  await person('lee-twin-a', { name: 'Lee Twin', group: 'advisory', organization: 'Acme' }, 'lee.a@example.org');
+  await person('lee-twin-b', { name: 'Lee Twin', group: 'advisory', organization: 'Beta' }, 'lee.b@example.org');
+  const l = await applied('Lee Twin', 'lee.new@example.org');
+  const lbox = await plan(l.id);
+  for (const [slug, org] of [['lee-twin-a', 'Beta'], ['lee-twin-b', 'Acme']]) await env.DB.prepare('UPDATE team SET data = ? WHERE slug = ?').bind(JSON.stringify({ ...(await rec(slug)), organization: org }), slug).run();
+  const swapped = await (await adminApi.onRequestPost(ctx('POST', { add: { id: l.id, as: 'same', to: 'lee-twin-a', seen: lbox.key } }))).json();
+  assert.equal(swapped.success, false);
+  assert.match(swapped.error, /changed since the box opened/);
+});
+
+test('two notes saved at the same moment are both kept', async () => {
+  const app = await applied('Nora Notes', 'nora@example.org');
+  const g = gate(/^UPDATE advisory_applications SET notes/);
+  const first = adminApi.onRequestPost(ctx('POST', { note: { id: app.id, text: 'First.' } }));
+  await g.reached;
+  const second = await (await adminApi.onRequestPost(ctx('POST', { note: { id: app.id, text: 'Second.' } }))).json();
+  assert.equal(second.success, true);
+  g.open();
+  assert.equal((await (await first).json()).success, true);
+  assert.deepEqual((await getAdvisoryApplication(env.DB, app.id)).notes.map((n) => n.text).sort(), ['First.', 'Second.']);
+});
+
+test('a People record a press is adding to (or making) can’t have its web address changed meanwhile', async () => {
+  const { rename } = await import('../functions/api/rename-content.js');
+  await person('rita-rename', { name: 'Rita Rename', group: 'advisory' }, 'rita@example.org');
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?)').bind('slug:rita-rename', Date.now()).run();
+  const r = await rename(env, { collection: 'team', from: 'rita-rename', to: 'rita-r' }, 'linzi@soardcharity.com');
+  assert.deepEqual([r.status, r.body.error], [409, 'Someone is adding this person to the Advisory Board right now. Change the address in a moment.']);
+  assert.ok(await rec('rita-rename'), 'still at its address');
+});

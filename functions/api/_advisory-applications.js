@@ -80,6 +80,8 @@ export async function ensureAdvisorySchema(DB) {
   // Their email and answers, and the 30 days they fall in: the same application sent twice at once (with no page id
   // to say so) is one application too
   try { await DB.prepare('ALTER TABLE advisory_applications ADD COLUMN same_key TEXT').run(); } catch { /* already there */ }
+  // A delete under way (marked before anything of it goes): never used as if whole until it finishes
+  try { await DB.prepare('ALTER TABLE advisory_applications ADD COLUMN deleting_at TEXT').run(); } catch { /* already there */ }
   await DB.prepare('CREATE UNIQUE INDEX IF NOT EXISTS idx_advisory_same ON advisory_applications(same_key)').run();
   _ready.add(DB);
 }
@@ -97,7 +99,9 @@ function fromRow(r, { full = false } = {}) {
     isTest: isTestApplication(r.name),
     // One line for the list: why they want to serve
     why: String(answers.why || '').replace(/\s+/g, ' ').slice(0, 220),
-    headshot: hs?.url ? { url: hs.url, width: Number(hs.width) || null, height: Number(hs.height) || null } : null,
+    // (a delete that stopped partway: its headshot may be gone already, so it's never shown or used as theirs)
+    headshot: hs?.url && !r.deleting_at ? { url: hs.url, width: Number(hs.width) || null, height: Number(hs.height) || null } : null,
+    ...(r.deleting_at ? { deleting: true } : {}),
   };
   if (full) {
     out.answers = answers;
@@ -583,8 +587,10 @@ export async function addAdvisoryNote(DB, id, text, { by = null, now = Date.now(
   if (t.length > NOTE_MAX) throw Object.assign(new Error(`That note is ${t.length.toLocaleString('en-US')} characters. Notes take up to ${NOTE_MAX.toLocaleString('en-US')}: shorten it, or split it in two.`), { status: 400 });
   const app = await getAdvisoryApplication(DB, id);
   if (!app) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
-  const notes = [...app.notes, { at: iso(now), by, text: t }];
-  await DB.prepare('UPDATE advisory_applications SET notes = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(notes), iso(now), id).run();
+  // (added to the list in the one statement, never the list read, added to and written back: two notes saved at the
+  // same moment are both kept)
+  await DB.prepare("UPDATE advisory_applications SET notes = json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)), updated_at = ? WHERE id = ?")
+    .bind(JSON.stringify({ at: iso(now), by, text: t }), iso(now), id).run();
   return getAdvisoryApplication(DB, id);
 }
 
@@ -632,19 +638,37 @@ export async function deleteAdvisoryApplication(env, id, { fetchImpl = fetch } =
   await ensureAdvisorySchema(DB);
   const row = await DB.prepare('SELECT headshot, source, source_id FROM advisory_applications WHERE id = ?').bind(id).first();
   if (!row) return false;
+  // Marked first: once anything of it goes (its headshot), it's never used as if whole (never shown, never someone's
+  // photo by Add) until the delete finishes; the mark not saving (D1 busy) stops it before anything's gone
+  await DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), id).run();
+  const unmark = () => DB.prepare('UPDATE advisory_applications SET deleting_at = NULL WHERE id = ?').bind(id).run().catch(() => {});
   const hs = parse(row.headshot, null);
+  let gone = 0;
   for (const pic of [hs?.id, ...(hs?.older || [])].filter(Boolean)) {
     if (await photoOnPeople(DB, pic)) continue;
-    const gone = await deleteImage(env, pic, fetchImpl).catch(() => false);
-    // (500, never 502: Cloudflare puts its own error page over a Function's 502, and these words would be lost)
-    if (!gone) throw Object.assign(new Error('Its headshot didn’t delete just now, so the application is still here. Please try again in a moment.'), { status: 500 });
+    const ok = await deleteImage(env, pic, fetchImpl).catch(() => false);
+    if (!ok) {
+      // (nothing gone yet: it's left as it was; a picture gone already: left marked, and pressing Delete again finishes)
+      if (!gone) await unmark();
+      // (500, never 502: Cloudflare puts its own error page over a Function's 502, and these words would be lost)
+      throw Object.assign(new Error(gone ? UNFINISHED : 'Its headshot didn’t delete just now, so the application is still here. Please try again in a moment.'), { status: 500 });
+    }
+    gone++;
   }
-  // One sent to the old form: its copy kept from Jotform goes too (else it would come back in on the next visit),
-  // with any files of theirs that copy kept
-  if (row.source === 'jotform' && row.source_id) await forgetJotformCopy(env, row.source_id);
-  const r = await DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(id).run();
-  return !!r?.meta?.changes;
+  try {
+    // One sent to the old form: its copy kept from Jotform goes too (else it would come back in on the next visit),
+    // with any files of theirs that copy kept
+    if (row.source === 'jotform' && row.source_id) await forgetJotformCopy(env, row.source_id);
+    const r = await DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(id).run();
+    return !!r?.meta?.changes;
+  } catch (e) {
+    if (!gone) { await unmark(); throw e; }
+    console.error('[advisory] delete stopped partway', e?.message || e);
+    throw Object.assign(new Error(UNFINISHED), { status: 500 });
+  }
 }
+// (said where a delete stopped after its headshot went: the application stays, marked, until Delete is pressed again)
+export const UNFINISHED = 'Deleting this application didn’t finish: its headshot is gone, and the rest is still here. Press Delete application again to finish it.';
 
 /**
  * The Jotform backfill's copy of an Advisory Board application: its answers and its files gone, so it never comes

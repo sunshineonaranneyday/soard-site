@@ -297,6 +297,8 @@ const hero = {
   html.adv-focus .adv { padding: 0; background: #fff; }
   html.adv-focus .adv-app { max-width: none; display: flex; flex-direction: column; min-height: 100dvh; }
   html.adv-focus .adv-hub { display: none; }
+  /* (a reload straight into the review, a moment while this device's photo is looked for: its screen, empty) */
+  html.adv-waking .adv-top { visibility: hidden; }
   .adv-top { position: sticky; top: 0; z-index: 1000; background: rgba(255,255,255,.97); }
   html.adv-focus .adv-top { display: block; }
   @supports (backdrop-filter: blur(1px)) { .adv-top { background: rgba(255,255,255,.88); backdrop-filter: saturate(1.4) blur(14px); } }

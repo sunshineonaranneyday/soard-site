@@ -223,6 +223,8 @@ async function answer(req, ip) {
   // The home address's suggestions (the application's endpoint), as Google would answer
   if (url.pathname === '/api/apply' && url.searchParams.has('address')) return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, source: 'google', results: /^3167/.test(url.searchParams.get('address')) ? [{ id: 'ChIJ_home_one_0001', line1: '3167 Main St', sub: 'Duluth, GA' }] : [] }) });
   if (url.pathname === '/api/apply' && url.searchParams.has('place')) return req.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true, address: { line1: '3167 Main St', line2: '', city: 'Duluth', state: 'GA', zip: '30096' } }) });
+  // (a headshot that won't load: Cloudflare answering 404)
+  if (/broken-headshot/.test(url.pathname)) return req.respond({ status: 404, contentType: 'text/plain', body: 'not found' });
   // A headshot on Cloudflare Images: a real photo, so the screenshots show how one looks
   if (/\/cdn-cgi\/imagedelivery\/|^imagedelivery\.net$/.test(url.pathname + url.hostname) && /advisory-applications\//.test(url.pathname)) return req.respond({ status: 200, contentType: 'image/jpeg', body: readFileSync(GOOD_JPG) });
   // Anything from outside: a script (Cloudflare's analytics) answered as an empty one, anything else as a picture
@@ -635,6 +637,8 @@ await phone.close();
   await pd.waitForFunction(() => document.querySelector('.ava-drawer h2')?.textContent.trim() === 'Application not found', { timeout: 6000 }).catch(() => null);
   const after = { dialog: !!(await pd.$('.ava-dialog')), head: await text(pd, '.ava-drawer h2'), callout: await text(pd, '.ava-drawer .ava-callout'), add: !!(await pd.$$eval('.ava-drawer button', (bs) => bs.some((b) => /^Add to Advisory Board$/.test(b.textContent.trim())))) };
   ok(!after.dialog && after.head === 'Application not found' && /deleted, maybe in another tab/.test(after.callout) && !after.add, `deleted elsewhere, then Add pressed: the panel says it's gone, with no Add left (${JSON.stringify(after)})`);
+  const keys = await pd.evaluate(() => ({ on: document.activeElement?.matches('.ava-drawer') || false, role: document.querySelector('.ava-drawer .ava-callout')?.getAttribute('role') }));
+  ok(keys.on && keys.role === 'alert', `and the keys are on the panel, its words read out, never lost to the page (${JSON.stringify(keys)})`);
   // Closed: its row is off the list, and the count with it
   const allNow = Number((await text(pd, '.ava-strip button.is-all b')) || NaN);
   await pd.keyboard.press('Escape');
@@ -642,6 +646,23 @@ await phone.close();
   const list = { row: await pd.$(`.ava-row[data-id="${del.id}"]`).then((r) => !!r), all: Number((await text(pd, '.ava-strip button.is-all b')) || NaN), rows: (await DB.prepare('SELECT COUNT(*) AS n FROM advisory_applications').first()).n };
   ok(!list.row && list.all === allNow && list.all === list.rows, `and once the panel closes, its row is off the list and the count says so (${JSON.stringify(list)})`);
   await pd.close();
+}
+{
+  // A headshot that won't load: their initials in its circle, never an empty one
+  const bh = (await submitApplication(env, { ...base, fullName: 'Bea Broken', email: 'bea.broken@example.org', signature: 'Bea Broken' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  await DB.prepare('UPDATE advisory_applications SET headshot = ? WHERE id = ?').bind(JSON.stringify({ id: 'advisory-applications/broken-headshot/x', url: 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/broken-headshot/x/public', width: 900, height: 1200 }), bh.id).run();
+  const pb = await open(1280, `/admin/__advisory.html#advisory-applications/${bh.id}`, 900);
+  await pb.waitForSelector('.ava-drawer .ava-shot', { timeout: 8000 });
+  await sleep(1200);
+  const circle = await pb.evaluate(() => { const img = document.querySelector('.ava-shot img'); const span = document.querySelector('.ava-shot span'); return { imgShown: getComputedStyle(img).display !== 'none', initials: span?.textContent, initialsSeen: !!span && span.getBoundingClientRect().width > 0 && getComputedStyle(span).visibility !== 'hidden' }; });
+  ok(!circle.imgShown && circle.initials === 'BB' && circle.initialsSeen, `a headshot that won’t load: their initials in its circle (${JSON.stringify(circle)})`);
+  // A delete that stopped partway (its headshot gone): said, with no Add to press
+  await DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), bh.id).run();
+  await pb.reload({ waitUntil: 'networkidle0' });
+  await pb.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 }); await sleep(300);
+  const half = { said: await text(pb, '.ava-drawer .ava-callout'), add: await pb.$$eval('.ava-drawer button', (bs) => bs.some((b) => /^Add to Advisory Board$/.test(b.textContent.trim()))), shot: !!(await pb.$('.ava-shot')) };
+  ok(/Deleting this application didn’t finish/.test(half.said) && !half.add && !half.shot, `a delete that stopped partway: the panel says so, with no Add and no headshot (${JSON.stringify(half)})`);
+  await pb.close();
 }
 {
   // Two members with one name: each button and line says which (their organization), never two that read the same
@@ -1177,6 +1198,70 @@ if (DIST) {
     await r.close();
   }
   {
+    // Round eleven, IndexedDB that never answers: a photo in, a file that isn't one turned down, Save and exit while the
+    // first is still being kept: "Saving…" always ends, in what's so, heard; and the bar across the top never says the
+    // photo's saved when this browser couldn't keep it
+    const hungPage = async (ip) => {
+      const x = await browser.newPage();
+      await x.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await x.setRequestInterception(true);
+      x.on('request', async (req) => { try { if (await answer(req, ip) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await x.evaluateOnNewDocument(() => { indexedDB.open = () => ({}); localStorage.clear(); localStorage.setItem('soard-advisory-application', JSON.stringify({ answers: { fullName: 'Hung Hope', email: 'hung.hope@example.org', phone: '404 555 0175' }, step: 0, screen: 0, field: null, furthest: 0, startedAt: Date.now() - 60000, session: crypto.randomUUID(), savedAt: Date.now() })); });
+      await x.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      await x.click('#adv-go'); await sleep(700);
+      for (let i = 0; i < 6 && await x.evaluate(() => !!document.querySelector('[data-field="headshot"]').closest('[data-off]')); i++) { await x.click('#adv-next'); await sleep(700); }
+      await x.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
+      await sleep(400);
+      return x;
+    };
+    {
+      const x = await hungPage('198.51.100.76');
+      const input = await x.$('#adv-headshot');
+      await input.uploadFile(GOOD_JPG);
+      await x.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 10000 }).catch(() => null);
+      await input.uploadFile(FAKE_JPG); await sleep(300);
+      await x.evaluate(() => { const t = document.getElementById('adv-hub-title'); window.__titles = []; new MutationObserver(() => window.__titles.push(t.textContent)).observe(t, { childList: true, characterData: true, subtree: true }); });
+      await x.click('#adv-exit');
+      const ended = await x.waitForFunction(() => /can’t keep your photo/.test(document.getElementById('adv-hub-title').textContent), { timeout: 9000 }).then(() => true).catch(() => false);
+      await sleep(300);
+      const out = { ended, titles: [...new Set(await x.evaluate(() => window.__titles))], heard: await text(x, '#adv-hub-live') };
+      ok(out.ended && /can’t keep your photo/.test(out.heard), `a photo, then a file turned down, then Save and exit while the first is being kept: "Saving…" ends in what's so, heard (${JSON.stringify(out)})`);
+      await x.close();
+    }
+    {
+      const x = await hungPage('198.51.100.77');
+      await (await x.$('#adv-headshot')).uploadFile(GOOD_JPG);
+      await x.waitForFunction(() => /can’t keep it/.test(document.getElementById('adv-headshot-status').textContent), { timeout: 10000 }).catch(() => null);
+      await x.waitForFunction(() => document.getElementById('adv-saved').textContent === 'Saved on this device, except your photo', { timeout: 3000 }).catch(() => null);
+      const bar = await text(x, '#adv-saved');
+      ok(bar === 'Saved on this device, except your photo', `the bar across the top never says the photo is saved when this browser can't keep it (${bar})`);
+      await x.close();
+    }
+  }
+  {
+    // Round eleven, IndexedDB that never answers, a photo kept before: a reload straight into the review shows the
+    // application's screen from the first moment the page's script runs, never the page and its hero meanwhile
+    const r = await browser.newPage();
+    await r.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+    await r.setRequestInterception(true);
+    r.on('request', async (req) => { try { if (await answer(req, '198.51.100.78') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    await r.evaluateOnNewDocument((answers) => {
+      indexedDB.open = () => ({});
+      localStorage.clear();
+      localStorage.setItem('soard-advisory-application', JSON.stringify({ answers, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+      localStorage.setItem('soard-advisory-photo-seq', '1');
+      sessionStorage.setItem('soard-advisory-focus', '1');
+      window.__hubAfter = 0;
+      const tick = () => { const root = document.querySelector('[data-adv]'); const hub = document.getElementById('adv-hub'); if (root?.dataset.ready === 'go' && hub && getComputedStyle(hub).display !== 'none') window.__hubAfter++; if (performance.now() < 2000) requestAnimationFrame(tick); };
+      requestAnimationFrame(tick);
+    }, { ...base, fullName: 'Wake Up', email: 'wake.up@example.org', signature: 'Wake Up' });
+    await r.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await sleep(1500);
+    const seen = await r.evaluate(() => ({ hubAfter: window.__hubAfter, title: document.getElementById('adv-title')?.textContent.trim() }));
+    ok(seen.hubAfter === 0 && seen.title === 'Review and send', `a reload straight into the review, this device slow to say: the application's screen at once, never the page and its hero meanwhile (${JSON.stringify(seen)})`);
+    await r.close();
+  }
+  {
     // A reload straight back into the review, a photo kept on this device (a browser that answers): the review comes up
     // saying it's there, never "checking" for an instant
     const r = await browser.newPage();
@@ -1445,6 +1530,73 @@ if (DIST) {
       const hub2 = { title: await text(sp, '#adv-hub-title'), heard: await text(sp, '#adv-hub-live') };
       ok(hub1 === 'Saving your application on this device' && during.missing === null && during.sum === 'Getting your photo ready' && during.row === 'Getting it ready' && later.missing === null && later.row === 'photo' && hub2.title === 'Your application is saved on this device',
         `a photo being got ready: the overview says it’s saving, the review that it’s being got ready (never "Please add a headshot"), then both say what’s so (${JSON.stringify({ hub1, during, later, hub2 })})`);
+      await sp.close();
+    }
+    {
+      // Round eleven: a photo turned down while they're on the overview (Save and exit while it's being got ready, the
+      // reader for iPhone photos never arriving): the overview says it didn't go in, and why, heard
+      const sp = await browser.newPage();
+      await sp.setViewport({ width: 1280, height: 800 });
+      await sp.setCacheEnabled(false);
+      await sp.setRequestInterception(true);
+      sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) { await sleep(3000); return req.abort('failed'); } if (await answer(req, '198.51.100.90') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await sp.evaluateOnNewDocument(() => { if (!sessionStorage.getItem('aw')) { localStorage.clear(); indexedDB.deleteDatabase('soard-advisory'); sessionStorage.setItem('aw', '1'); localStorage.setItem('soard-advisory-application', JSON.stringify({ answers: { fullName: 'Away Note', email: 'away.note@example.org', phone: '404 555 0176' }, step: 0, screen: 0, field: null, furthest: 0, startedAt: Date.now() - 60000, session: crypto.randomUUID(), savedAt: Date.now() })); } });
+      await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      await sp.click('#adv-go'); await sleep(700);
+      for (let i = 0; i < 6 && await sp.evaluate(() => !!document.querySelector('[data-field="headshot"]').closest('[data-off]')); i++) { await sp.click('#adv-next'); await sleep(700); }
+      await sp.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
+      await sleep(400);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(200);
+      await sp.click('#adv-exit');
+      await sp.waitForFunction(() => /didn’t go in/.test(document.getElementById('adv-hub-lead').textContent), { timeout: 15000 }).catch(() => null);
+      await sleep(300);
+      const hub = { title: await text(sp, '#adv-hub-title'), lead: await text(sp, '#adv-hub-lead'), heard: await text(sp, '#adv-hub-live') };
+      ok(/^Your photo didn’t go in: /.test(hub.lead) && /Your photo didn’t go in: /.test(hub.heard), `a photo turned down while they're on the overview: it says the photo didn't go in, and why, read out (${JSON.stringify(hub)})`);
+      await sp.close();
+    }
+    {
+      // Round eleven: going into another answer (a click, before a word's typed) while Continue waits is a change of
+      // mind: nothing moves them on, the cursor stays where they put it
+      const sp = await slowPage('198.51.100.92');
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(200);
+      await sp.click('#adv-next'); await sleep(500);
+      await sp.click('#adv-jobTitle'); await sleep(SLOW_MS + 2500);
+      const at = { title: await text(sp, '#adv-title'), focus: await sp.evaluate(() => document.activeElement?.id) };
+      ok(at.title === 'About you' && at.focus === 'adv-jobTitle', `clicking into another answer while Continue waits: nothing moves them on, the cursor where they put it (${JSON.stringify(at)})`);
+      await sp.close();
+    }
+    {
+      // Round eleven: at the review, with a photo kept, a new one picked (Change) that's turned down while Send waits:
+      // Send stops with the words over it, heard, never stopping without a word
+      const sp = await browser.newPage();
+      await sp.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await sp.setCacheEnabled(false);
+      await sp.setRequestInterception(true);
+      // (the reader for iPhone photos never arriving: a dropped connection)
+      sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) { await sleep(SLOW_MS); return req.abort('failed'); } if (await answer(req, '198.51.100.91') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      await sp.evaluate(async (answers, b64) => {
+        localStorage.clear();
+        await new Promise((res) => { const d = indexedDB.deleteDatabase('soard-advisory'); d.onsuccess = d.onerror = d.onblocked = () => res(); });
+        localStorage.setItem('soard-advisory-application', JSON.stringify({ answers, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        await new Promise((res) => { const o = indexedDB.open('soard-advisory', 1); o.onupgradeneeded = () => o.result.createObjectStore('photos'); o.onsuccess = () => { const tx = o.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new File([bytes], 'h.jpg', { type: 'image/jpeg' }), name: 'h.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { o.result.close(); res(); }; }; });
+        localStorage.setItem('soard-advisory-photo-seq', '1');
+      }, { ...base, fullName: 'Sen Stop', email: 'sen.stop@example.org', signature: 'Sen Stop' }, readFileSync(GOOD_JPG).toString('base64'));
+      await sp.reload({ waitUntil: 'networkidle0' }); await sleep(400);
+      await sp.click('#adv-go');
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 6000 }).catch(() => null);
+      const all = await sp.$('#adv-review-all'); if (all) { await all.click(); await sleep(300); }
+      await sp.evaluate(() => document.querySelector('#adv-review [data-answer="headshot"]')?.click()); await sleep(900);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-back'); // (back to the review at once, the photo still being got ready)
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 4000 }).catch(() => null);
+      await sleep(400);
+      await sp.click('#adv-next'); // (Send, waiting on the photo)
+      await sp.waitForFunction(() => { const e = document.getElementById('adv-send-error'); return e && !e.hidden && e.textContent; }, { timeout: SLOW_MS + 15000 }).catch(() => null);
+      const said = await sp.evaluate(() => { const e = document.getElementById('adv-send-error'); return { shown: !e.hidden && !!e.getClientRects().length, text: e.textContent, role: e.getAttribute('role'), title: document.getElementById('adv-title').textContent.trim() }; });
+      const stored = (await DB.prepare('SELECT COUNT(*) AS n FROM advisory_applications WHERE email = ?').bind('sen.stop@example.org').first()).n;
+      ok(said.shown && said.role === 'alert' && /Your earlier headshot is still here/.test(said.text) && said.title === 'Review and send' && stored === 0, `a new photo turned down while Send waits: Send stops with its words over it, read out, nothing sent (${JSON.stringify({ ...said, stored })})`);
       await sp.close();
     }
     {

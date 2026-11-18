@@ -105,6 +105,7 @@ const CSS = `
 .ava-shot { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .ava-shot > a { position: relative; display: grid; place-items: center; flex: none; width: 128px; height: 128px; border-radius: 50%; overflow: hidden; background: var(--tone-warn-bg); color: var(--tone-warn-fg); font-weight: 700; font-size: var(--fs-lg); text-decoration: none; }
 .ava-shot > a img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: cover; }
+.ava-shot > a img[hidden] { display: none; } /* (one that didn't load: their initials show) */
 .ava-full { display: inline-flex; align-items: center; min-height: 32px; }
 .ava-note { padding: .55rem .75rem; border-radius: var(--radius-sm, 8px); background: var(--tone-warn-bg); color: var(--tone-warn-fg); font-size: var(--fs-sm); }
 .ava-compare { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: .5rem 1rem; margin: .25rem 0 .75rem; font-size: var(--fs-sm); }
@@ -635,7 +636,11 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
 
   const lastFail = useRef(0); // the status the last action failed with (404: deleted elsewhere)
   // Deleted elsewhere, found out by any press here: the box closes, the panel says so, and its row leaves the list
-  const deletedNow = (j) => { setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: j.error }); onGone?.(id); };
+  const deletedNow = (j) => {
+    setConfirm(null); setPlan(null); setApp(null); setErr({ missing: true, words: j.error }); onGone?.(id);
+    // (the button pressed is gone with the rest: the keys on the panel, and its words read out, never lost to the page)
+    requestAnimationFrame(() => panel.current?.focus());
+  };
   const post = async (body, what) => {
     setBusy(what);
     const j = await call(API, body);
@@ -800,7 +805,7 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
         </div>
       </div>
       <div class="ava-dbody">
-        ${err && html`<div class="ava-callout">${err.words}${err.missing ? null : html` <button class="btn btn-ghost btn-sm" onClick=${() => { setErr(null); setTries((n) => n + 1); }}>Try again</button>`}</div>`}
+        ${err && html`<div class="ava-callout" role=${err.missing ? 'alert' : null}>${err.words}${err.missing ? null : html` <button class="btn btn-ghost btn-sm" onClick=${() => { setErr(null); setTries((n) => n + 1); }}>Try again</button>`}</div>`}
         ${!app && !err && html`<div class="ava-skel">Loading…</div>`}
         ${app && html`
           <section class="ava-panel" aria-label="Where it stands">
@@ -813,7 +818,8 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
               })}
             </div>
             ${linked ? html`<div class="ava-callout is-good" tabindex="-1">On People → Advisory as ${linked.name}${linked.publishStatus === 'draft' ? ' (hidden from the public site for now)' : ''}${app.status !== 'joined' ? '. This application isn’t marked Joined: Add to Advisory Board below finishes adding them (their sign-in and welcome) and marks it Joined' : ''}. ${kit.onOpenPerson ? html`<button class="btn btn-ghost btn-sm" onClick=${() => kit.onOpenPerson(linked.slug)}>Open their page</button>` : ''}</div>` : null}
-            ${linked && app.status === 'joined' ? null
+            ${app.deleting ? html`<div class="ava-callout" role="alert">Deleting this application didn’t finish: its headshot is gone, and the rest is still here. Press Delete application below to finish it.</div>`
+              : linked && app.status === 'joined' ? null
               : html`${linked ? null : gone ? html`<p class="ava-note">This was linked to someone who isn’t on People any more.</p>`
                   : left ? html`<p class="ava-note">This was linked to ${person.name}, who isn’t on the Advisory Board now.</p>`
                     : app.status === 'joined' ? html`<p class="ava-note">This is marked Joined, but it isn’t linked to anyone on People now (the Notes say why).</p>` : null}<div class="ava-actions">

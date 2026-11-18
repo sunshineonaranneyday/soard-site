@@ -112,6 +112,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
   let kept = true; // whether this device could keep the photo (IndexedDB)
   let saving = 0; // a picked photo being kept on this device right now
   let refused = 0; // picks turned down so far (a Continue waiting on one sees it was)
+  let refusal = ''; // the words the last one was turned down with (said wherever they'd be seen: the review, the overview)
 
   /** The status line (a live region: heard as it changes) */
   function say(words, { warn = false } = {}) {
@@ -183,6 +184,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     const hadOne = !!held;
     const wont = (words) => {
       refused++;
+      refusal = hadOne ? `${words} Your earlier headshot is still here.` : words;
       setBusy(null); // (an earlier pick still being got ready is dropped with this one: never left spinning)
       if (hadOne) say(`${words} Your earlier headshot is still here.`, { warn: true });
       else { say(''); problem(words); announce(words); } // (the note under it isn't a live region: heard here)
@@ -215,6 +217,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     // another tab's word never puts the photo it's replacing back (load waits), and nothing says it's saved
     kept = true;
     saving++;
+    let ok = false;
     try {
       unproblem();
       say(addedNote());
@@ -222,9 +225,13 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
       paint();
       onChange({});
       reveal();
-      kept = !!(await photoStore.put(id, { blob: drawn.file, name: drawn.file.name, width: drawn.width, height: drawn.height, sourceWidth: real.width, sourceHeight: real.height, at: pickedAt, seq }));
+      ok = !!(await photoStore.put(id, { blob: drawn.file, name: drawn.file.name, width: drawn.width, height: drawn.height, sourceWidth: real.width, sourceHeight: real.height, at: pickedAt, seq }));
     } finally { saving--; }
-    if (my !== gen) return;
+    // (another photo held since: its own save says; this one's done, so what says "saving" says what's so now)
+    if (held?.seq !== seq) { onChange({ kept: true }); return; }
+    // This photo still the one held (a pick turned down since changes nothing about it): kept or not, said, and the other
+    // tabs told
+    kept = ok;
     if (!kept) { say(addedNote()); onChange({}); reveal(); } // (this browser couldn't keep it: said)
     else onChange({ kept: true }); // (kept: the overview, if it's showing, says so now)
     ping();
@@ -319,8 +326,9 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     get preparing() { return !!busy; },
     /** A picked photo being got ready or kept on this device right now: not saved yet (whether it can be isn't known) */
     get keeping() { return saving > 0 || !!busy; },
-    /** Picks turned down so far */
+    /** Picks turned down so far, and the words the last one was turned down with */
     get refused() { return refused; },
+    get refusal() { return refusal; },
     /** The status line's words off (the form's own note now says what's needed) */
     quiet() { if (!busy) say(''); },
     /** Leaving the step: a warning about a photo turned down there goes (an added photo's note stays) */

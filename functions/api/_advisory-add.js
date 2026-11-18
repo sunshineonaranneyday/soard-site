@@ -207,14 +207,16 @@ export async function addPlan(env, id, { now = Date.now() } = {}) {
   // (who it matches, as the box shows them: whether someone has a photo only when there's a headshot to give them; a
   // namesake by where they are and whether they're In memoriam; never the web address a new record would take)
   const shot = !!app.headshot?.url;
+  // (the application's part as the box says it: marked Not now, and by whom, or added since; any other status the box
+  // doesn't mention, so it never makes a press out of date)
   plan.key = [
-    [app.status || '', app.statusAt || ''].join('|'),
+    app.status === 'not-now' ? `not-now|${app.statusBy || ''}|${app.statusAt || ''}` : app.status === 'joined' ? 'joined' : '',
     shotSaid(plan) ? app.headshot?.url || '' : '',
     switchSaid(plan) ? (plan.emailsOn ? 'on' : 'off') : '',
-    [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', shot && p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
-      plan.asName || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.slug || '', plan.namesake?.where || '',
+    [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.organization || '', shot && p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
+      plan.asName || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.name || '', plan.namesake?.where || '',
       plan.namesake?.status === 'memorial' ? 1 : 0,
-      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.welcomed ? 1 : 0}:${shot && o.hasPhoto ? 1 : 0}`).join(',')].join('|'),
+      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.organization || ''}:${o.welcomed ? 1 : 0}:${shot && o.hasPhoto ? 1 : 0}`).join(',')].join('|'),
   ].join('#');
   return plan;
 }
@@ -274,6 +276,8 @@ async function planOf(env, id, now = Date.now()) {
   await ensureAdvisorySchema(DB);
   const app = await getAdvisoryApplication(DB, id);
   if (!app) throw err(GONE, 404);
+  // (a delete that stopped partway, its headshot gone: nobody's added from it until it's finished)
+  if (app.deleting) throw err('Deleting this application didn’t finish, so nobody can be added from it. Press Delete application to finish deleting it.');
   const [{ people, emails }, welcomes, intent, settings] = await Promise.all([peopleAndEmails(DB), welcomeRecords(DB), intentOf(DB, app.id), advisorySettings(DB)]);
   const email = normEmail(app.email);
   // An email the sign-in can't use (one an old application came with), or SOARD's own group inbox (everyone in the
@@ -315,14 +319,17 @@ async function planOf(env, id, now = Date.now()) {
   // Their name: on People → Advisory under any address (an active member before a former one; never someone In
   // memoriam), else elsewhere on People
   const key = nameKey(app.name);
-  // (the name a new record takes: first name first, as they'd be shown: "Ames, Jordan" is Jordan Ames)
-  const asName = readName(app.name).shown || String(app.name || '').trim();
-  const same = people.filter((p) => key && (p.slug === slugOf(asName) || mightBe(p.name, app.name)));
+  // (the name a new record takes: first name first, as they'd be shown: "Ames, Jordan" is Jordan Ames; its address from
+  // the name itself, never a title or letters after it: "Dr. Владимир Петров" is never "dr")
+  const read = readName(app.name);
+  const asName = read.shown || String(app.name || '').trim();
+  const nameSlug = slugOf(read.words.join(' '));
+  const same = people.filter((p) => key && ((nameSlug && p.slug === nameSlug) || mightBe(p.name, app.name)));
   const exact = (p) => (nameKey(p.name) === key ? 0 : 1);
   const named = same.filter((p) => p.group === 'advisory' && !memorial(p))
     .sort((a, b) => exact(a) - exact(b) || (personStatus(a) === 'active' ? 0 : 1) - (personStatus(b) === 'active' ? 0 : 1))[0]
-    || same.find((p) => p.slug === slugOf(asName)) || same.sort((a, b) => exact(a) - exact(b))[0] || null;
-  const slug = await freeSlug(DB, asName, people, app.id);
+    || same.find((p) => nameSlug && p.slug === nameSlug) || same.sort((a, b) => exact(a) - exact(b))[0] || null;
+  const slug = await freeSlug(DB, read.words.join(' '), people, app.id);
   // Someone with this name being added right now from another application, their record not made yet (their address
   // written down): held against too, so this box waits for it, and then asks whether it's them
   const pending = await pendingNamed(DB, app, people);
@@ -410,6 +417,10 @@ async function hold(DB, keys, now) {
 const release = async (DB, keys) => { for (const key of keys || []) await DB.prepare('DELETE FROM advisory_add_holds WHERE key = ?').bind(key).run().catch(() => {}); };
 
 const held = async (DB, key, now) => !!(await DB.prepare('SELECT key FROM advisory_add_holds WHERE key = ? AND at >= ?').bind(key, now - HOLD_MS).first());
+/** Whether a press of Add to Advisory Board is adding to this People record (or making one there) right now */
+export async function addingTo(DB, slug, now = Date.now()) {
+  try { return await held(DB, `slug:${slug}`, now); } catch (e) { if (/no such table/i.test(e?.message || '')) return false; throw e; }
+}
 
 export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by = '', now = Date.now(), fetchImpl = fetch } = {}) {
   const { DB } = env;
