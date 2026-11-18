@@ -511,7 +511,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
          brings the messages' card back to the right column (data-msgs-open, the page script); its × puts it back */
       .hero[data-party][data-orientation='portrait'] .hero-frame :global([data-stage][data-party]) { --under: calc(var(--lpb-h) + var(--gap)); }
       .hero[data-party][data-orientation='portrait'] .hero-frame :global([data-stage][data-party] .stage__under) { display: block; min-height: var(--lpb-h); }
-      :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .hero-frame :global(.lpb) { visibility: hidden; }
+      /* (only while the messages line is there to take its place: messages switched off, or closed with none, the band shows) */
+      :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):has(.hero-party:not([hidden])):not([data-msgs-open])) .hero-frame :global(.lpb) { visibility: hidden; }
       :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .hero-party:not([hidden]) {
         grid-area: frame; align-self: end; position: relative; z-index: 2; height: var(--lpb-h);
         /* (as wide as the video's column, never widening it: its newest message is cut to fit, not the column made for it) */
