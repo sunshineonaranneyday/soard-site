@@ -62,6 +62,11 @@ const STALL_MS = 4000;
 const NATIVE_START_MS = 12_000;
 /** An iPhone on hls.js (Managed Media Source) with the feed's playlist there but no picture after this long goes back to Safari's own player */
 const MANAGED_START_MS = 20_000;
+/** An iPhone on hls.js that has played goes back to Safari's own player after this many of hls.js's own fatal errors this close together */
+const MANAGED_LATER_ERRORS = 3;
+const MANAGED_LATER_WINDOW_MS = 2 * 60_000;
+/** Low latency: more than this many target durations behind, however it got there, jumps to the live moment */
+const LIVE_MAX_BEHIND_COUNT = 10;
 /** Picture stuck this long while "playing": start over */
 const FROZEN_MS = 12_000;
 const RETRY_MS = 4000;
@@ -112,16 +117,27 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   let useLl = !!urls.llhls;
   let failures = 0;
   // An iPhone (Managed Media Source, no classic one) plays the live reveal through hls.js (start(), below). If hls.js
-  // can't get a picture going there, this page goes back to Safari's own player, which every iPhone used until
-  // Nov 17 2026 (later behind the moment, but playing): the feed's playlist is there and no picture has come in
-  // MANAGED_START_MS (hls.js can sit on a source that refuses it without ever giving up), or two fatal errors of its
-  // own before the picture ever played (decoding, packaging, anything but the network: "nothing live yet" is the
-  // network and counts for nothing)
+  // can't play there, this page goes back to Safari's own player, which every iPhone used until Nov 17 2026 (later
+  // behind the moment, but playing):
+  //   - the feed's playlist is there and no picture has come in MANAGED_START_MS (hls.js can sit on a source that
+  //     refuses it without ever giving up), waiting on as long as the page asks for a tap (Low Power Mode)
+  //   - a fatal error of hls.js's own before the playlist is read, or two before the picture ever played
+  //   - MANAGED_LATER_ERRORS of them within MANAGED_LATER_WINDOW_MS once it has played
+  // Its own: decoding, packaging, anything but the network. The network is the phone's signal or "nothing live yet",
+  // the same on either player, so it counts for nothing (it would send iPhones the slow way for the rest of a reveal).
   const managedOnly = !('MediaSource' in window) && 'ManagedMediaSource' in window;
   let hlsTrouble = 0;
+  let laterTrouble: number[] = [];
   let nativeOnly = false;
   let managedTimer: ReturnType<typeof setTimeout> | undefined;
-  const toSafari = () => { nativeOnly = true; restart(0); };
+  // (straight to it, keeping "connecting" or "reconnecting" on screen: nothing is wrong with the camera)
+  const toSafari = () => {
+    if (dead) return;
+    nativeOnly = true;
+    stopEngine();
+    pending = true;
+    retryTimer = setTimeout(start, 0);
+  };
   let hls: InstanceType<HlsClass> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let stallTimer: ReturnType<typeof setTimeout> | undefined;
@@ -173,11 +189,20 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   }
 
   function viaNative() {
+    // (hls.js turns AirPlay off for Managed Media Source; Safari's own player has it)
+    video.disableRemotePlayback = false;
     video.src = urls.hls;
     if (!live) return;
     tryPlay();
-    // Safari may neither error nor play while the camera is off; start over until a frame shows
-    nativeTimer = setTimeout(() => { if (!dead && video.readyState < 2 && status !== 'blocked') restart(); }, NATIVE_START_MS);
+    // Safari may neither error nor play while the camera is off; start over until a frame shows. A refused autoplay
+    // (Low Power Mode) isn't the camera: wait on the tap, then start counting again
+    const watchNative = () => {
+      nativeTimer = setTimeout(() => {
+        if (dead || video.readyState >= 2) return;
+        if (status === 'blocked') watchNative(); else restart();
+      }, NATIVE_START_MS);
+    };
+    watchNative();
   }
 
   function viaHls(Hls: HlsClass) {
@@ -192,17 +217,35 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       levelLoadingMaxRetry: 4,
       fragLoadingMaxRetry: 4,
     });
+    // Set on the running player, not passed in: hls.js refuses this limit in its options unless its own distance from
+    // the live moment is passed too (it throws, and nothing plays), and that would replace the shorter distance the
+    // low-latency playlist asks for (PART-HOLD-BACK). hls.js reads it from here on every check.
+    if (live) h.config.liveMaxLatencyDurationCount = LIVE_MAX_BEHIND_COUNT;
     hls = h;
+    let parsed = false;
+    const watchStart = () => {
+      clearTimeout(managedTimer);
+      managedTimer = setTimeout(() => {
+        if (dead || hls !== h || everPlayed || video.readyState >= 2) return;
+        if (status === 'blocked') watchStart(); // waiting on a tap, not on the player
+        else toSafari();
+      }, MANAGED_START_MS);
+    };
     h.on(Hls.Events.MANIFEST_PARSED, () => {
+      parsed = true;
       if (live) tryPlay();
-      if (managedOnly && !everPlayed) {
-        clearTimeout(managedTimer);
-        managedTimer = setTimeout(() => { if (!dead && hls === h && !everPlayed && video.readyState < 2 && status !== 'blocked') toSafari(); }, MANAGED_START_MS);
-      }
+      if (managedOnly && !everPlayed) watchStart();
     });
     h.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal || hls !== h) return;
-      if (managedOnly && !everPlayed && d.type !== Hls.ErrorTypes.NETWORK_ERROR && ++hlsTrouble >= 2) { toSafari(); return; }
+      if (managedOnly && d.type !== Hls.ErrorTypes.NETWORK_ERROR) {
+        if (!everPlayed && (!parsed || ++hlsTrouble >= 2)) { toSafari(); return; }
+        if (everPlayed) {
+          const now = Date.now();
+          laterTrouble = [...laterTrouble.filter((t) => now - t < MANAGED_LATER_WINDOW_MS), now];
+          if (laterTrouble.length >= MANAGED_LATER_ERRORS) { toSafari(); return; }
+        }
+      }
       if (d.type === Hls.ErrorTypes.MEDIA_ERROR) { h.recoverMediaError(); return; }
       const code = d.response?.code;
       // LL-HLS refused outright (not just "nothing live yet"): plain HLS from here on
@@ -259,7 +302,23 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     if (restarting || video.ended || dead) return;
     if (status === 'playing' || status === 'buffering') set('paused');
   });
-  video.addEventListener('play', () => { if (status === 'paused' || status === 'ended') set(everPlayed ? 'buffering' : 'connecting'); });
+  // Playing again, or a tap getting past a refused autoplay: "Tap to watch" goes, and the start watches count from here
+  video.addEventListener('play', () => {
+    if (status === 'paused' || status === 'ended' || status === 'blocked') set(everPlayed ? 'buffering' : 'connecting');
+    if (live && everPlayed) toLiveMoment();
+  });
+  // Live, playing again after a pause (the lock screen, a call, another app, leaving full screen): straight back to the
+  // live moment. hls.js eases back only from about one segment late and jumps only past LIVE_MAX_BEHIND_COUNT, so a
+  // pause in between would leave this viewer 10 to 20 s behind everyone else for the rest of the reveal.
+  function toLiveMoment() {
+    const h = hls;
+    if (!h) return;
+    const sync = h.liveSyncPosition;
+    const target = h.targetLatency;
+    const step = h.latestLevelDetails?.targetduration;
+    if (sync == null || target == null || !step) return;
+    if (h.latency > target + step) video.currentTime = sync;
+  }
   video.addEventListener('ended', () => {
     // A live playlist that ends is the camera dropping; the replay ending is just the end
     if (live) restart(); else set('ended');

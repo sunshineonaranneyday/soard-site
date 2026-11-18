@@ -17,6 +17,10 @@
  *     mini player; no links sending viewers off to watch somewhere else
  *   - a sideways picture reshapes the frame; camera-not-connected and
  *     dropped-feed notes, and recovery on its own
+ *   - back from a pause (the lock screen, a call): at the live moment again,
+ *     not left behind everyone else
+ *   - autoplay refused (an iPhone in Low Power Mode): Tap to watch, the tap
+ *     taken at once even before the picture has come in, then it plays
  *   - replay: own controls, the reveal marked on the seek bar, Jump to the
  *     reveal, captions under the picture, keyboard control
  *   - giving without leaving: the Zeffy form opens beside the video (desktop)
@@ -48,7 +52,9 @@ const ok = (cond, msg) => { if (!cond) failures.push(msg); console.log(`${cond ?
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // ── The fake broadcast ────────────────────────────────────────────
-const feed = { shape: 'portrait', down: false, split: false, t0: Date.now(), revealAt: 6, design: { open: false } };
+// window: how many pieces older than the newest the playlist keeps (Stream keeps far more; 3 keeps the tests quick).
+// held: the pieces' answers wait here instead of going out (a picture that hasn't come in yet).
+const feed = { shape: 'portrait', down: false, split: false, t0: Date.now(), revealAt: 6, design: { open: false }, window: 3, held: null };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 /** The room's design, for the strip beside the video (a kid's page) */
 const DESIGN = {
@@ -61,7 +67,7 @@ const DESIGN = {
  */
 function livePlaylist(track = '') {
   const newest = Math.floor((Date.now() - feed.t0) / 2000) + 3;
-  const first = newest - 3;
+  const first = Math.max(0, newest - feed.window);
   let s = `#EXTM3U\n#EXT-X-VERSION:${track ? 7 : 3}\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:${first}\n#EXT-X-DISCONTINUITY-SEQUENCE:${Math.floor(first / SEGMENTS)}\n`;
   if (track) s += `#EXT-X-MAP:URI="${track}-init.mp4"\n`;
   for (let i = first; i <= newest; i++) {
@@ -112,7 +118,9 @@ async function mock(page) {
         return req.respond({ status: 200, contentType: 'video/mp4', headers: cors, body: readFileSync(`${FIX}split/${name}`) });
       }
       if (url.pathname.endsWith('.m3u8')) return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: livePlaylist() });
-      return req.respond({ status: 200, contentType: 'video/mp2t', headers: cors, body: readFileSync(`${FIX}${feed.shape}/${url.pathname.split('/').pop()}`) });
+      const piece = () => req.respond({ status: 200, contentType: 'video/mp2t', headers: cors, body: readFileSync(`${FIX}${feed.shape}/${url.pathname.split('/').pop()}`) }).catch(() => {});
+      if (feed.held) return feed.held.push(piece);
+      return piece();
     }
     // (the design's pictures load, a tiny stand-in: the strip leaves out any that don't)
     if ((url.pathname.startsWith('/cdn-cgi/imagedelivery/') || url.hostname === 'imagedelivery.net') && url.pathname.includes('/before-')) return req.respond({ status: 200, contentType: 'image/png', headers: cors, body: PNG });
@@ -303,6 +311,57 @@ try {
   await waitFor(page, ['playing'], 30000);
   g = await probe(page);
   ok(g.pstatus === 'playing' && g.status === 'Live', 'picks back up by itself');
+
+  console.log('\n▶ back from a pause (the lock screen, a call, another app)');
+  // A playlist long enough that a 10 s pause stays inside it: hls.js eases back from about one piece late and jumps
+  // only past 10, so on its own it would carry on 10 s behind everyone else
+  {
+    feed.window = 15;
+    await open(page);
+    await waitFor(page, ['playing']); await sleep(3000);
+    const behind = () => page.evaluate(() => { const v = document.querySelector('.stage__player video'); return v?.seekable.length ? v.seekable.end(v.seekable.length - 1) - v.currentTime : null; });
+    const before = await behind();
+    await page.evaluate(() => document.querySelector('.stage__player video').pause());
+    await sleep(10000);
+    await page.evaluate(() => document.querySelector('.stage__player video').play());
+    await waitFor(page, ['playing']); await sleep(2000);
+    const after = await behind();
+    ok(before != null && after != null && after <= before + 2.5, `playing again after a 10 s pause, it's back at the live moment (${before?.toFixed(1)} s from the newest piece before the pause, ${after?.toFixed(1)} s after)`);
+    feed.window = 3;
+  }
+
+  console.log('\n▶ autoplay refused (an iPhone in Low Power Mode), tapped before the picture has come in');
+  {
+    const tapPage = await browser.newPage();
+    tapPage.on('console', (m) => { if (m.type() === 'error' && !/WebSocket|Failed to load resource|cloudflareinsights\.com/.test(m.text())) errors.push(m.text()); });
+    tapPage.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    await tapPage.evaluateOnNewDocument(() => {
+      // Nothing plays until someone taps, the browser's own autoplay included
+      let tapped = false;
+      addEventListener('click', () => { tapped = true; }, true);
+      const play = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function () { return tapped ? play.call(this) : Promise.reject(new DOMException('Low Power Mode', 'NotAllowedError')); };
+      Object.defineProperty(HTMLMediaElement.prototype, 'autoplay', { get() { return false; }, set() {} });
+    });
+    await mock(tapPage);
+    await tapPage.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+    feed.held = [];
+    await tapPage.goto(`${BASE}/live/?visit=${++visits}`, { waitUntil: 'domcontentloaded' });
+    await waitFor(tapPage, ['blocked']);
+    const tapShown = () => tapPage.evaluate(() => { const el = document.querySelector('[data-s="tap"]'); return !!el && !el.closest('[hidden]') && el.getBoundingClientRect().width > 0; });
+    let t = await probe(tapPage);
+    ok(t.pstatus === 'blocked' && await tapShown(), `Tap to watch over the frame (${t.pstatus})`);
+    await tapPage.click('[data-s="tap"]');
+    await sleep(500);
+    t = await probe(tapPage);
+    ok(t.pstatus === 'connecting' && !(await tapShown()), `the tap is taken at once: Tap to watch goes and it waits for the picture (${t.pstatus})`);
+    for (const send of feed.held.splice(0)) send();
+    feed.held = null;
+    await waitFor(tapPage, ['playing'], 30000);
+    t = await probe(tapPage);
+    ok(t.pstatus === 'playing' && !(await tapShown()), `then it plays (${t.pstatus})`);
+    await tapPage.close();
+  }
 
   console.log('\n▶ replay');
   state = STATES.replay;
