@@ -1971,6 +1971,23 @@ async function askIfOver(env, config, state, work) {
 }
 
 /**
+ * How long until "Is the reveal over?" is due for the stop on now (ms), while it is still to come. The hub's heartbeat
+ * (every 8 s on air) then runs one more tick at that moment (broadcast-hooks.js), so the text goes 10 s after the phone
+ * stops rather than at the next heartbeat, up to 8 s later (Peter, Nov 18 2026: "yes send text sooner"; viewers watch
+ * about 20 s behind, so a quick Y brings "That's the reveal!" about when their video ends). null: no stop, already due,
+ * held, or asked
+ */
+export async function overAskDueIn(env, now = Date.now()) {
+  const state = await readState(env.DB);
+  const stoppedAt = stopOf(state);
+  if (!stoppedAt || !recent(stoppedAt) || holding(state) || state.source !== 'stream' || !state.broadcastId) return null;
+  const due = Date.parse(stoppedAt) + OVER_ASK_AFTER_MS - now;
+  if (!(due > 0) || due > OVER_ASK_AFTER_MS) return null;
+  if (await claimExists(env.DB, state.broadcastId, overAskKey(state))) return null;
+  return due;
+}
+
+/**
  * Test mode keeps Facebook and YouTube out of it by pausing every Stream output
  * on the main feed that is on, while the switch is on or a test is still
  * streaming, and putting back exactly those once neither is true. An output

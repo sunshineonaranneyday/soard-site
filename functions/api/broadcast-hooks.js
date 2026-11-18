@@ -15,7 +15,7 @@
  * (see below).
  */
 
-import { runTick, verifyHubNonce, publishToHub, publicPayload, readState, readConfig, hubStatus } from './_broadcast.js';
+import { runTick, verifyHubNonce, publishToHub, publicPayload, readState, readConfig, hubStatus, overAskDueIn } from './_broadcast.js';
 import { maybeRefreshRevealStats } from './_reveal-stats.js';
 import { maybeNudge } from './_reveal-nudges.js';
 import { maybeSweep, maybeCheckGuests, readConfig as readInviteConfig } from './_reveal-invites.js';
@@ -86,6 +86,15 @@ export async function onRequestPost(context) {
     // A tick that outlasts the answer still finishes (waitUntil), and pushes what it changed to the hub itself
     context.waitUntil(ticking.then(async (t) => {
       if (answered && t.changed) await publishToHub(env, await readState(env.DB), await readConfig(env.DB), 'tick');
+    }).catch(() => {}));
+    // "Is the reveal over?" 10 s after the phone stops, not at the next heartbeat (up to 8 s later): one more tick
+    // at that moment (_broadcast.js overAskDueIn), still inside this call's time after the reply
+    context.waitUntil(ticking.then(async () => {
+      const due = await overAskDueIn(env);
+      if (due == null || Date.now() + due + 5000 > deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, due + 250));
+      const t = await runTick(env, { source: 'hub:over-ask', force: true });
+      if (t.changed) await publishToHub(env, await readState(env.DB), await readConfig(env.DB), 'tick');
     }).catch(() => {}));
     let timer;
     const late = new Promise((resolve) => { timer = setTimeout(() => { answered = true; resolve(null); }, HUB_ANSWER_MS); });

@@ -85,7 +85,7 @@ const ICON = {
           <p class="stage__end-title">That's the reveal!</p>
           <p class="stage__end-text" data-s="end-text">Thank you for watching.</p>
           <button class="stage__end-btn" type="button" data-s="end-replay" aria-label="Watch the replay" hidden><Fragment set:html={ICON.play} /><span class="stage__end-long">Watch the replay</span><span class="stage__end-short">Replay</span></button>
-          <p class="stage__end-wait" data-s="end-wait">The replay will be here in a few minutes.</p>
+          <p class="stage__end-wait" data-s="end-wait">The replay will be here in a few minutes.<span class="stage__end-line" aria-hidden="true"><span class="stage__end-fill" data-s="end-fill"></span></span></p>
         </div>
         <button class="stage__tap" type="button" data-s="tap" hidden>
           <span class="stage__tap-icon"><Fragment set:html={ICON.play} /></span>
@@ -275,6 +275,10 @@ const ICON = {
   .stage__end-btn:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
   .stage__end-wait { margin: 18px auto 0; font-size: 13px; line-height: 1.5; max-width: 28ch; color: rgba(255, 255, 255, 0.75); }
   .stage__end-wait[hidden] { display: none; }
+  /* While the replay is being made: a thin line under those words, filling slowly (live-stage.ts paintEndLine). Flat
+     yellow on a soft track, never full until the replay is here; it goes with the words when Watch the replay comes */
+  .stage__end-line { display: block; width: min(168px, 72cqi); height: 3px; margin: 12px auto 0; border-radius: 3px; background: rgba(255, 255, 255, 0.24); overflow: hidden; }
+  .stage__end-fill { display: block; width: 100%; height: 100%; border-radius: inherit; background: var(--c-yellow); transform: scaleX(0); transform-origin: left center; transition: transform 1s linear; }
   .stage__end-short { display: none; }
   /* A small frame (a short phone's, beside the design strip: an iPhone SE's is about 120px wide): the note scaled to it,
      and the button one short line, "Replay" (its name for a screen reader stays "Watch the replay") */
@@ -286,6 +290,7 @@ const ICON = {
     .stage__end-long { display: none; }
     .stage__end-short { display: inline; }
     .stage__end-wait { margin-top: 12px; font-size: 12px; line-height: 1.4; }
+    .stage__end-line { margin-top: 8px; }
   }
   /* (the smallest, an old 4-inch iPhone's: the name of the moment and what to do, the thank-you steps aside) */
   @container (max-width: 119px) {
@@ -294,6 +299,7 @@ const ICON = {
     .stage__end-btn { padding: 0 12px; margin-top: 10px; }
     .stage__end-btn :global(svg) { display: none; }
     .stage__end-wait { margin-top: 8px; }
+    .stage__end-line { margin-top: 6px; height: 2px; }
   }
 
   .stage__tap {
@@ -754,6 +760,7 @@ const ICON = {
     .stage[data-rail] .bar__sound .bar__ico, .stage[data-rail] .bar__ico, .stage[data-rail] .bar__end > button { animation: none; transition: none; }
     .bar__rise { display: none !important; }
     .stage__end, .stage__end-btn { animation: none; }
+    .stage__end-fill { transition: none; }
     .stage[data-onair][data-mode='live'] .bar__dot::after { animation: none; }
     .stage__player, .bar__btn { transition: none; }
   }

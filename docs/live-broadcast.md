@@ -155,12 +155,16 @@ which changes the moment the phone connects or disconnects. `sensePhone()` in `_
 
 Tests: `tests/broadcast-lag.test.mjs`, `tests/broadcast-rejoin.test.mjs`.
 
+**While the replay is being made** (Peter, Nov 18 2026: "can there be a motion or something building the reveal video?!"): under "The replay will be here in a few minutes." a thin yellow line fills from the reveal's end (`endedAt`), quickly at first and slower as it goes, paced on Stream's usual 2 to 3 minutes, never past 92% until the replay is here; it goes with those words when Watch the replay comes or the replay is overdue (`paintEndLine` in live-stage.ts). Flat yellow, no glide under reduced motion (redrawn every 10 s).
+
 ## Is the reveal over? (the Y/N text)
 
 The site can't tell a dropped signal from the crew stopping the phone because the reveal is done, so it asks
 (Peter, Nov 18 2026). Once the phone has been away 10 seconds during a stream on air (the same wait as the feed
 monitor's "The phone lost its connection", so a Larix reconnect within a few seconds texts nobody), every number on
-the alert list (Reveals → Settings → Alerts) gets, once for each stop:
+the alert list (Reveals → Settings → Alerts) gets, once for each stop (sent at 10 s exactly, not at the next 8 s
+heartbeat: the hub's heartbeat runs one more tick then, `overAskDueIn` in broadcast-hooks.js; Peter, Nov 18 2026,
+"yes send text sooner", so a quick Y brings "That's the reveal!" about when viewers' video, 20 s behind, ends):
 
 > SOARD: The stream from Dylan's reveal stopped at 4:21 PM. Is the reveal over? Reply Y if it's over, or N if the
 > signal dropped (viewers see Reconnecting). Or tap: https://sunshineonaranneyday.com/over/…

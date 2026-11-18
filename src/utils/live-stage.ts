@@ -76,6 +76,15 @@ const DOCK_AT = 0.35;
 /** Start this far before the reveal moment, so the countdown is in the shot */
 const JUMP_LEAD = 5;
 const REPLAY_META_MS = 2 * 60 * 1000;
+/**
+ * The line under "The replay will be here in a few minutes." (Peter, Nov 18 2026: "can there be a motion or something
+ * building the reveal video?!", then "love the yellow line"): it fills from the reveal's end on a curve paced on how long
+ * Stream takes to have the replay ready (about 2 to 3 minutes: 2.6 and 2.4 in the Nov 18 tests), quickly at first,
+ * slower as it goes, and never past END_LINE_MAX until the replay is really here (then the words and the line go and
+ * Watch the replay comes). From the broadcast's endedAt, so a late arrival sees it as far along as everyone else
+ */
+const END_LINE_MAX = 0.92;
+const END_LINE_TAU_S = 75;
 const REPLAY_META_FOR_MS = 45 * 60 * 1000;
 const CC_KEY = 'soard-live-cc';
 
@@ -473,8 +482,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       const replayReady = endPending?.player?.kind === 'replay';
       setHidden($('end-replay'), !replayReady);
       // (nothing promised once the replay is overdue)
-      setHidden($('end-wait'), replayReady || endPending?.mode === 'idle' || endPending?.replaySoon === false);
-    }
+      const waiting = !(replayReady || endPending?.mode === 'idle' || endPending?.replaySoon === false);
+      setHidden($('end-wait'), !waiting);
+      paintEndLine(waiting);
+    } else paintEndLine(false);
     const cc = $('cc-toggle');
     setHidden(cc, !(kind === 'replay' && hasCaptions && isVideo));
     cc?.setAttribute('aria-pressed', String(ccOn));
@@ -484,6 +495,26 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     setHidden($('cc'), !root.hasAttribute('data-cc'));
     paintMark();
     paintJump(v?.currentTime ?? 0);
+  }
+
+  // The line while the replay is being made (END_LINE_MAX above): drawn every second, the transition between draws
+  // makes it glide (every 10 s and no glide for someone who asked for less motion)
+  let endLineTimer: ReturnType<typeof setInterval> | undefined;
+  let endLineFrom = 0;
+  function paintEndLine(on: boolean) {
+    const fill = $('end-fill');
+    if (!on || !fill) { clearInterval(endLineTimer); endLineTimer = undefined; endLineFrom = 0; return; }
+    if (endLineTimer) return;
+    endLineFrom = Date.now();
+    const draw = () => {
+      const ended = Date.parse(client.state?.endedAt || '');
+      const from = Number.isFinite(ended) && ended <= Date.now() ? ended : endLineFrom;
+      const t = Math.max(0, (Date.now() - from) / 1000);
+      fill.style.transform = `scaleX(${(END_LINE_MAX * (1 - Math.exp(-t / END_LINE_TAU_S))).toFixed(4)})`;
+    };
+    // (the first drawing lands where it should at once, then it glides on)
+    fill.style.transition = 'none'; draw(); void fill.offsetWidth; fill.style.transition = '';
+    endLineTimer = setInterval(draw, reduced ? 10_000 : 1000);
   }
 
   function paintMark() {
@@ -952,6 +983,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       updateDock();
     },
     destroy() {
+      paintEndLine(false);
       unmount();
       mounted = '';
       if (watching) { watching = false; client.unwatch(); }

@@ -302,6 +302,34 @@ test('the phone stops: every alert number is asked once, with the kid and the ti
   assert.equal((await events(id, 'over_asked')).length, 1, 'the question is in the broadcast\'s events');
 });
 
+test('the question goes 10 s after the stop, not at the next heartbeat: overAskDueIn says when (broadcast-hooks.js ticks then); nothing once asked or back', async () => {
+  await fresh();
+  await goLiveRemi('vid1x');
+  assert.equal(await b.overAskDueIn(env), null, 'on air: nothing to ask');
+  const n = texts.length;
+  phoneOff();
+  travel(3 * S); await tick();
+  const due = await b.overAskDueIn(env);
+  assert.ok(due > 6000 && due <= 7000, `due about 7 s from now: ${due}`);
+  travel(due - 1000); let r = await tick();
+  assert.ok(!r.work.includes('asked-if-over'), 'not a moment early');
+  assert.ok((await b.overAskDueIn(env)) <= 1000, 'still to come, in under a second');
+  travel(1250); r = await tick();
+  assert.ok(r.work.includes('asked-if-over'), `asked at 10 s: ${r.work.join(',')}`);
+  assert.equal(questions(n).length, 2);
+  assert.equal(await b.overAskDueIn(env), null, 'asked: nothing more to wait for');
+  // Back on, then a blip: due again for that stop, and nothing once the phone is back
+  phoneOn('vid1x');
+  travel(4 * S); await tick();
+  assert.equal(await b.overAskDueIn(env), null, 'back on air');
+  phoneOff();
+  travel(2 * S); await tick();
+  assert.ok((await b.overAskDueIn(env)) > 7000, 'a new stop: its own 10 s');
+  phoneOn('vid1x');
+  travel(3 * S); await tick();
+  assert.equal(await b.overAskDueIn(env), null, 'back within a few seconds: nothing to ask');
+});
+
 const lostTexts = (from = 0) => texts.slice(from).filter((t) => /lost its connection/.test(t.body));
 const backTexts = (from = 0) => texts.slice(from).filter((t) => /The phone is back/.test(t.body));
 
