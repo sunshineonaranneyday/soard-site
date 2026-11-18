@@ -644,6 +644,15 @@ const ICON = {
     animation: dockIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
   }
   @keyframes dockIn { from { opacity: 0; transform: translateY(16px) scale(0.96); } to { opacity: 1; transform: none; } }
+  /* Its corner (live-stage.ts data-corner: tr, tl, br, bl). On a phone it starts top right, under the site's header and
+     its own label: what you scroll to arrives at the foot of the screen, under your thumb, and a corner player there sat
+     on the buttons and the newest message just as they came into view. Dragged, it springs to the nearest corner and
+     stays there while you're on the page. Pinned (the give form, the design viewer) it goes where those put it */
+  .stage[data-party] .stage__picture.is-docked:not(.is-pinned) { touch-action: none; }
+  .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner^='t'] { top: calc(var(--header-height) + 48px); bottom: auto; }
+  .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner$='l'] { left: max(16px, env(safe-area-inset-left, 0px)); right: auto; }
+  .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner$='l'] .stage__dockbar { right: auto; left: 0; }
+  .stage[data-party] .stage__picture.is-docked.is-dragging { animation: none; cursor: grabbing; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4); }
   /* Pinned above the give sheet on a phone: small, at the top, over everything the sheet covers */
   .stage[data-party] .stage__picture.is-docked.is-pinned {
     inset: calc(var(--header-height) + 44px) 16px auto auto; --mini-h: 140px; z-index: 1250;
@@ -698,8 +707,8 @@ const ICON = {
   .stage__undock:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
 
   @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
-    /* (a little smaller on a phone: it floats over the page, the buttons and messages under it) */
-    .stage[data-party] .stage__picture.is-docked { --mini-h: 176px; }
+    /* (a little smaller on a phone, and no more than about a quarter of a short one's height: it floats over the page) */
+    .stage[data-party] .stage__picture.is-docked { --mini-h: min(176px, 24svh); }
     .stage[data-party] .stage__picture { border-radius: 16px; }
     .stage[data-party] .stage__accent { display: none; }
   }

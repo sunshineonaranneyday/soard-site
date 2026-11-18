@@ -753,6 +753,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (!picture || on === docked) return;
     docked = on;
     if (on) {
+      applyCorner();
       // Sit above the auction bar when one is showing (the box to write a message on a phone is the page's own to know
       // from the first paint: LiveStage.astro, --live-dock)
       const bar = document.querySelector<HTMLElement>('.auction-bar');
@@ -876,8 +877,48 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (kind === 'live') player?.setMuted(true); else video()?.pause();
     updateDock();
   });
+  // ── The small player's corner: dragged, it springs to the nearest one (LiveStage.astro data-corner) ──
+  const CORNER_KEY = 'soard-live-corner';
+  let corner = (() => { try { return sessionStorage.getItem(CORNER_KEY) || ''; } catch { return ''; } })();
+  const applyCorner = () => { if (picture) picture.dataset.corner = corner || (phone.matches ? 'tr' : 'br'); };
+  let drag: { id: number; x: number; y: number; moved: boolean } | null = null;
+  let dragged = false;
+  picture?.addEventListener('pointerdown', (e) => {
+    if (!docked || pinned || e.button !== 0 || (e.target as Element).closest('[data-s="undock"]')) return;
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+  });
+  picture?.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id || !picture) return;
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    // (a tap wobbles a little: only a real move is a drag)
+    if (!drag.moved && Math.hypot(dx, dy) < 8) return;
+    if (!drag.moved) { drag.moved = true; try { picture.setPointerCapture(e.pointerId); } catch { /* gone */ } picture.classList.add('is-dragging'); }
+    picture.style.transform = `translate(${dx}px, ${dy}px)`;
+  });
+  const endDrag = (e: PointerEvent) => {
+    if (!drag || e.pointerId !== drag.id || !picture) return;
+    const was = drag;
+    drag = null;
+    if (!was.moved) return;
+    // (the tap that ends a drag isn't a tap to go back to the video)
+    dragged = true;
+    setTimeout(() => { dragged = false; }, 0);
+    const from = picture.getBoundingClientRect();
+    corner = `${from.top + from.height / 2 < innerHeight / 2 ? 't' : 'b'}${from.left + from.width / 2 < innerWidth / 2 ? 'l' : 'r'}`;
+    try { sessionStorage.setItem(CORNER_KEY, corner); } catch { /* private mode */ }
+    picture.style.transform = '';
+    picture.classList.remove('is-dragging');
+    applyCorner();
+    // From where it was let go, a little spring into its corner
+    const to = picture.getBoundingClientRect();
+    if (!reduced) picture.animate([{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)` }, { transform: 'none' }], { duration: 380, easing: 'cubic-bezier(0.34, 1.4, 0.64, 1)' });
+  };
+  picture?.addEventListener('pointerup', endDrag);
+  picture?.addEventListener('pointercancel', endDrag);
+
   // Tapping the mini player takes you back to it
   picture?.addEventListener('click', (e) => {
+    if (dragged) { e.preventDefault(); e.stopPropagation(); return; }
     if (!docked || (e.target as Element).closest('[data-s="undock"]')) return;
     e.preventDefault();
     e.stopPropagation();

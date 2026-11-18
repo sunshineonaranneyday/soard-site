@@ -314,7 +314,9 @@ try {
     await page.evaluate(() => window.scrollTo(0, document.querySelector('.hero').offsetHeight + 400));
     await sleep(900);
     g = await probe(page);
-    ok(g.docked && g.picture.y > g.vh / 2 && g.picture.b <= g.vh - 8 && g.picture.r <= g.vw - 8 && (!g.composeFixed || g.picture.b <= g.compose.y), `mini player in the corner, above the docked message box (${JSON.stringify(g.picture)})`);
+    // (a phone: top right, under the header, so what you scroll to comes into view clear of it; a computer: bottom right)
+    const miniTop = g.vw < 600;
+    ok(g.docked && (miniTop ? g.picture.y >= 60 && g.picture.b < g.vh / 2 + 40 : g.picture.y > g.vh / 2) && g.picture.b <= g.vh - 8 && g.picture.r <= g.vw - 8 && (!g.composeFixed || g.picture.b <= g.compose.y), `mini player in its corner (${miniTop ? 'top right on a phone' : 'bottom right'}), clear of the docked message box (${JSON.stringify(g.picture)})`);
     ok(!g.covered, 'nothing drawn on the mini player either');
     await page.screenshot({ path: `${OUT}docked-${name}.png` });
     await page.click('[data-s="undock"]');
