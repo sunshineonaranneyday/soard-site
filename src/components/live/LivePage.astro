@@ -498,8 +498,12 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         /* (the frame's height, LivePage's --fh below; --stage-h: the stage's own, measured, when it's shorter) */
         --theater-h: var(--stage-h, clamp(420px, calc(var(--live-vh, 100svh) - var(--header-height) - var(--apply-bar-h, 0px) - 44px), 900px));
       }
+      /* Each column exactly as tall as the video's stage from the first paint: the row is the stage's own height (the
+         only thing in it that sets one), the story, the messages' card and the sponsors stretch to it and never set it
+         (size containment). --theater-h, measured a frame after the page arrived, guessed the screen's height until then:
+         where the stage is narrower than that (1280x720), every column, and the messages line under the video, jumped */
       .hero[data-party][data-orientation='portrait'] .hero-text,
-      .hero[data-party][data-orientation='portrait'] .hero-party:not([hidden]) { height: var(--theater-h); }
+      .hero[data-party][data-orientation='portrait'] .hero-party:not([hidden]) { height: auto; align-self: stretch; contain: size; }
       /* The screen in Peter's order (Nov 18 2026: "priority of screen should be the reveal, plans/before and sponsors"):
          with the build's sponsors in the right column (LiveSponsors), the messages are one line under the video, in the
          place the partners' band has (its partners are in that column now, by tier; the band stays in the page, unseen,

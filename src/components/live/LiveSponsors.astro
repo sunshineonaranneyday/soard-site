@@ -23,7 +23,7 @@ const { kid, inner } = Astro.props;
   /* (the Theater's width, LivePage: a computer's layout, DESK in src/utils/live-media.ts) */
   @media (min-width: 1200px) {
     .hero[data-party][data-orientation='portrait']:not([data-msgs-open]) .lsp:not([hidden]) {
-      grid-area: party; display: flex; flex-direction: column; gap: 18px; min-height: 0; height: var(--theater-h); overflow-y: auto; overscroll-behavior: contain;
+      grid-area: party; display: flex; flex-direction: column; gap: 18px; min-height: 0; align-self: stretch; contain: size; overflow-y: auto; overscroll-behavior: contain;
       padding: 22px 20px; box-sizing: border-box; text-align: left;
       background: #fff; border: 1px solid var(--c-border); border-radius: 24px; box-shadow: 0 20px 50px rgba(30, 31, 37, 0.06);
       scrollbar-width: thin; animation: lspIn 0.45s ease-out both;

@@ -64,7 +64,6 @@ const SITE = 'https://sunshineonaranneyday.com';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-/** A kid's saved profile ({} when unknown or unreadable) */
 // The partner records' levels (Admin → Partners), for the build's sponsors by tier beside the video (LiveSponsors):
 // read once in a while, not on every page (they change when staff edit a partner)
 let partnerLevels = { at: 0, rows: null };
@@ -75,6 +74,7 @@ async function partnerRows(env) {
   return partnerLevels.rows;
 }
 
+/** A kid's saved profile ({} when unknown or unreadable) */
 async function kidData(env, slug) {
   try {
     const row = await env.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind(slug).first();
