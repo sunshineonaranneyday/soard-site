@@ -327,6 +327,90 @@ export async function sendSms(env, { to, body, mediaUrl = null }) {
   return out;
 }
 
+// ─── Text replies (Twilio → /api/twilio-inbound) ────────────────────
+// Staff answer "Is the reveal over?" by replying to the alert number. Twilio sends a reply to the
+// Messaging Service's incoming-message webhook, which must be the site's /api/twilio-inbound (POST).
+// Read and set only when staff ask (/api/broadcast textRepliesStatus | connectTextReplies), never on
+// its own. The Services API needs the account's Auth Token: the restricted key can only send.
+
+export const TEXT_REPLIES_URL = `${SITE_ORIGIN}/api/twilio-inbound`;
+
+function messagingService(env) {
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) return { error: 'Twilio’s Account SID and Auth Token aren’t both set in Cloudflare.' };
+  if (!env.TWILIO_MESSAGING_SERVICE_SID) return { error: 'There’s no TWILIO_MESSAGING_SERVICE_SID, so there’s no Messaging Service to send replies here.' };
+  return {
+    url: `https://messaging.twilio.com/v1/Services/${encodeURIComponent(env.TWILIO_MESSAGING_SERVICE_SID)}`,
+    auth: 'Basic ' + btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`),
+  };
+}
+
+/** Where the Messaging Service sends replies, and whether that's the site. Never a secret. */
+function repliesSetting(svc) {
+  const url = svc?.inbound_request_url || null;
+  const method = svc?.inbound_method ? String(svc.inbound_method).toUpperCase() : null;
+  const onNumber = svc?.use_inbound_webhook_on_number === true;
+  return { connected: url === TEXT_REPLIES_URL && method === 'POST' && !onNumber, url, method, useInboundWebhookOnNumber: onNumber, want: TEXT_REPLIES_URL };
+}
+
+// What Twilio last said about it (site_config 'text-replies'): the question is texted only while
+// replies are known to reach the site, so "Reply Y if it's over" is never an empty promise
+export const TEXT_REPLIES_KEY = 'text-replies';
+
+/** Do replies reach the site, as of the last time staff read or set it? */
+export async function textRepliesOn(DB) {
+  try {
+    const row = await DB.prepare('SELECT data FROM site_config WHERE key = ?').bind(TEXT_REPLIES_KEY).first();
+    return !!(row?.data && JSON.parse(row.data).connected === true);
+  } catch { return false; }
+}
+
+/**
+ * Can staff be asked "Is the reveal over?" and answer: someone on the alert list, texting set up, the Auth
+ * Token that checks a reply, and replies reaching the site. askIfOver asks only then, and the feed monitor
+ * then leaves the drop's text to it (Slack and email still hear "The phone lost its connection").
+ */
+export async function overQuestionOn(env, config) {
+  return alertPhones(config).length > 0 && smsConfigured(env) && !!env.TWILIO_AUTH_TOKEN && textRepliesOn(env.DB);
+}
+
+async function serviceCall(env, init = {}) {
+  const svc = messagingService(env);
+  if (svc.error) return { ok: false, status: 503, error: svc.error };
+  let out;
+  try {
+    const res = await fetch(svc.url, { ...init, headers: { Authorization: svc.auth, ...(init.headers || {}) }, signal: AbortSignal.timeout(10000) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, status: 502, error: `Twilio said ${data.message || `HTTP ${res.status}`}` };
+    out = { ok: true, ...repliesSetting(data) };
+  } catch (e) {
+    return { ok: false, status: 502, error: `Twilio didn’t answer (${e.message})` };
+  }
+  if (env.DB) {
+    const at = new Date(Date.now()).toISOString();
+    await env.DB.prepare('INSERT INTO site_config (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
+      .bind(TEXT_REPLIES_KEY, JSON.stringify({ connected: out.connected, url: out.url, method: out.method, at }), at).run().catch(() => {});
+  }
+  return out;
+}
+
+/** Does a reply to the alert number reach the site? (GET the Messaging Service) */
+export function textRepliesStatus(env) {
+  return serviceCall(env);
+}
+
+/**
+ * Point the Messaging Service's incoming messages at the site: InboundRequestUrl /api/twilio-inbound,
+ * InboundMethod POST (the route only takes POST), and UseInboundWebhookOnNumber false, so the
+ * service's own URL is used for every number in it, not each number's own webhook setting.
+ */
+export function connectTextReplies(env) {
+  return serviceCall(env, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ InboundRequestUrl: TEXT_REPLIES_URL, InboundMethod: 'POST', UseInboundWebhookOnNumber: 'false' }),
+  });
+}
+
 // ─── Web Push (RFC 8291 aes128gcm + RFC 8292 VAPID) ─────────────────
 
 export async function generateVapidKeys() {
@@ -743,6 +827,34 @@ export function alertText({ title, detail, fix, url, tone = 'info', icon = undef
 /** "Live now": only what's known the second the phone connects; the feed monitor's "All green" follows */
 export function liveNowText({ title, url }) {
   return alertText({ title: `Live now: ${title || 'the reveal'}`, detail: 'Checking sound, picture, Facebook and YouTube. "All green" follows in about a minute.', url, icon: '📡' });
+}
+
+/** "4:21 PM" in the broadcast's time zone; another day's also says which ("Tue, Nov 17 at 4:21 PM") */
+export function clockTime(iso, tz = 'America/New_York', now = Date.now()) {
+  const t = Date.parse(iso || '');
+  if (!Number.isFinite(t)) return '';
+  const time = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', timeZone: tz }).format(t);
+  return isRevealToday(new Date(t).toISOString(), tz, now) ? time : `${whenParts(new Date(t).toISOString(), tz).short} at ${time}`;
+}
+
+/**
+ * The phone stopped (askIfOver in _broadcast.js): the site can't tell a dropped signal from the crew stopping the
+ * phone, so it asks. One plain text segment; a test's opens "Test: ". It never says Twilio's opt-out words ("Reply Y to
+ * end it" invites END, which unsubscribes the number). The answer comes back to /api/twilio-inbound.
+ */
+/** "The stream from Dylan's reveal stopped at 4:21 PM." (the time alone: the stop is minutes old) */
+export function overStopLine({ kidName = null, at, tz = 'America/New_York', named = true }) {
+  const first = named ? String(kidName || '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().split(/\s+/)[0] : '';
+  return smsSafe(`${first ? `The stream from ${first}'s reveal` : "The reveal's stream"} stopped at ${clockTime(at, tz, Date.parse(at))}.`);
+}
+
+export function overQuestionText({ kidName = null, at, tz = 'America/New_York', test = false, link = null }) {
+  const tap = link ? ` Or tap: ${link}` : '';
+  const text = (named) => `${test ? 'Test: ' : 'SOARD: '}${overStopLine({ kidName, at, tz, named })} Is the reveal over? Reply Y if it's over, or N if the signal dropped (viewers see Reconnecting).${tap}`;
+  // One segment (160 plain characters), or two with the link: a name too long for it gives way
+  const room = tap ? TEXT_MAX : 160;
+  const named = text(true);
+  return named.length <= room ? named : text(false);
 }
 
 /** The first text a new number on the alert list gets: proof texts reach it, and how to stop */

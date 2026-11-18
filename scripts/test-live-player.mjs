@@ -61,8 +61,26 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ── The fake broadcast ────────────────────────────────────────────
 // window: how many pieces older than the newest the playlist keeps (Stream keeps far more; 3 keeps the tests quick).
 // held: the pieces' answers wait here instead of going out (a picture that hasn't come in yet).
-// frozen / shrink / closed: the feed stopping (livePlaylist). pieces: every piece the page asks for, when collecting.
-const feed = { shape: 'portrait', down: false, split: false, t0: Date.now(), revealAt: 6, design: { open: false }, window: 3, held: null, frozen: null, shrink: false, closed: false, pieces: null };
+// down: the input answers 204 (no camera connected). phone: 'on' adds a piece to the recording every 2 s, 'off'
+// freezes it (phoneOn/phoneOff/closeRecording below). pieces: every piece the page asks for, when collecting.
+const feed = { shape: 'portrait', down: false, split: false, revealAt: 6, design: { open: false }, window: 8, held: null, phone: 'on', rec: null, pieces: null, dvrFails: 0 };
+// Stream's recordings, as the real feed behaved on Nov 18 2026: the input's playlist (/live1/...) is a short sliding
+// window of the recording that's on, its pieces addressed /<recording id>/video/...; each recording's DVR playlist
+// (/<recording id>/manifest/...) holds every piece from its first and only grows; the phone stopping freezes both;
+// Stream closing the recording ends its DVR playlist (and the input answers 204); a phone back after that is a new
+// recording.
+const recordings = new Map(); // id → { count, closed }
+let recordingNo = 0;
+function newRecording() {
+  const id = `${(++recordingNo).toString(16).padStart(4, '0')}${'ab'.repeat(14)}`; // 32 hex characters, like Stream's
+  recordings.set(id, { count: 4, closed: false });
+  feed.rec = id;
+}
+newRecording();
+setInterval(() => { if (feed.phone === 'on' && feed.rec && !recordings.get(feed.rec).closed) recordings.get(feed.rec).count++; }, 2000).unref();
+const phoneOff = () => { feed.phone = 'off'; };
+const phoneOn = () => { if (recordings.get(feed.rec).closed) newRecording(); feed.phone = 'on'; };
+const closeRecording = () => { recordings.get(feed.rec).closed = true; feed.phone = 'off'; };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 /** The room's design, for the strip beside the video (a kid's page) */
 const DESIGN = {
@@ -73,22 +91,18 @@ const DESIGN = {
  * The fixture looped forever as a live playlist, with a discontinuity at each wrap. With a track ('v' or 'a'), that
  * track of the split fixture: fMP4 pieces after their own init segment, as Stream sends them.
  */
-function livePlaylist(track = '') {
-  // A feed that has stopped (frozen: the newest piece then) stays where it was; shrunk, its end reads a piece earlier
-  // than the player already got to, as Stream's did when the phone stopped on Nov 18 2026 (so hls.js "catches up"
-  // backwards); closed, it's the recording Stream makes of it: every piece from the first, and an end
-  const top = feed.frozen != null ? feed.frozen - (feed.shrink ? 1 : 0) : Math.floor((Date.now() - feed.t0) / 2000) + 3;
-  const first = feed.closed ? 0 : Math.max(0, top - feed.window);
+function livePlaylist(track = '', recId = feed.rec, { dvr = false } = {}) {
+  const r = recordings.get(recId);
+  const top = r.count - 1;
+  const first = dvr ? 0 : Math.max(0, top - feed.window);
   let s = `#EXTM3U\n#EXT-X-VERSION:${track ? 7 : 3}\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:${first}\n#EXT-X-DISCONTINUITY-SEQUENCE:${Math.floor(first / SEGMENTS)}\n`;
-  if (feed.closed) s += '#EXT-X-PLAYLIST-TYPE:VOD\n';
+  if (dvr && r.closed) s += '#EXT-X-PLAYLIST-TYPE:VOD\n';
   if (track) s += `#EXT-X-MAP:URI="${track}-init.mp4"\n`;
   for (let i = first; i <= top; i++) {
     if (i > first && i % SEGMENTS === 0) s += '#EXT-X-DISCONTINUITY\n';
-    // Dated like Stream's pieces: the moment each was filmed
-    s += `#EXT-X-PROGRAM-DATE-TIME:${new Date(feed.t0 + i * 2000).toISOString()}\n`;
-    s += `#EXTINF:2.000000,\n${track ? `${track}${i % SEGMENTS}.m4s` : `seg${i % SEGMENTS}.ts`}?n=${i}${feed.closed ? '&closed=1' : ''}\n`;
+    s += `#EXTINF:2.000000,\n../../${recId}/video/${track ? `${track}${i % SEGMENTS}.m4s` : `seg${i % SEGMENTS}.ts`}?n=${i}&r=${recId.slice(0, 4)}\n`;
   }
-  if (feed.closed) s += '#EXT-X-ENDLIST\n';
+  if (dvr && r.closed) s += '#EXT-X-ENDLIST\n';
   return s;
 }
 /** Stream's own shape: a master playlist whose sound is a separate audio rendition (EXT-X-MEDIA TYPE=AUDIO) */
@@ -124,16 +138,25 @@ async function mock(page) {
         if (name.endsWith('.m3u8')) return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: readFileSync(`${FIX}${feed.shape}/video.m3u8`, 'utf8') });
         return req.respond({ status: 200, contentType: 'video/mp2t', headers: cors, body: readFileSync(`${FIX}${feed.shape}/${name}`) });
       }
-      // What Stream answers while no camera is connected: an empty playlist
-      if (feed.down) return req.respond({ status: 204, headers: cors, body: '' });
-      if (feed.split) {
-        const name = url.pathname.split('/').pop();
-        if (name === 'video.m3u8') return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: SPLIT_MASTER });
-        if (name === 'v.m3u8' || name === 'a.m3u8') return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: livePlaylist(name[0]) });
-        return req.respond({ status: 200, contentType: 'video/mp4', headers: cors, body: readFileSync(`${FIX}split/${name}`) });
+      const name = url.pathname.split('/').pop();
+      if (name.endsWith('.m3u8')) {
+        // The input (/live1/...): the recording that's on, or 204 with no camera connected or once it has closed.
+        // A recording's own (/<id>/...): its DVR playlist
+        const input = url.pathname.startsWith('/live1/');
+        const recId = input ? feed.rec : url.pathname.split('/')[1];
+        if (input && (feed.down || recordings.get(feed.rec).closed)) return req.respond({ status: 204, headers: cors, body: '' });
+        if (!recordings.has(recId)) return req.respond({ status: 404, headers: cors, body: '' });
+        // (dvrFails: the next DVR playlist reads fail, as a passing error at Stream would)
+        if (!input && feed.dvrFails > 0) { feed.dvrFails--; return req.respond({ status: 500, headers: cors, body: '' }); }
+        const m3u8 = (body) => req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body });
+        if (feed.split) {
+          if (name === 'video.m3u8') return m3u8(SPLIT_MASTER);
+          return m3u8(livePlaylist(name[0], recId, { dvr: !input }));
+        }
+        return m3u8(livePlaylist('', recId, { dvr: !input }));
       }
-      if (url.pathname.endsWith('.m3u8')) return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: livePlaylist() });
-      if (feed.pieces && url.searchParams.has('n')) feed.pieces.push({ n: Number(url.searchParams.get('n')), closed: url.searchParams.has('closed') });
+      if (feed.split) return req.respond({ status: 200, contentType: 'video/mp4', headers: cors, body: readFileSync(`${FIX}split/${name}`) });
+      if (feed.pieces && url.searchParams.has('n')) feed.pieces.push({ n: Number(url.searchParams.get('n')), r: url.searchParams.get('r') });
       const piece = () => req.respond({ status: 200, contentType: 'video/mp2t', headers: cors, body: readFileSync(`${FIX}${feed.shape}/${url.pathname.split('/').pop()}`) }).catch(() => {});
       if (feed.held) return feed.held.push(piece);
       return piece();
@@ -334,67 +357,203 @@ try {
   console.log('\n▶ the feed drops, then comes back');
   feed.down = false;
   await waitFor(page, ['playing']);
-  feed.down = true;
-  await waitFor(page, ['reconnecting'], 30000);
+  phoneOff();
+  // (the usual delay's worth of picture plays out first)
+  await waitFor(page, ['reconnecting'], 45000);
   g = await probe(page);
   ok(g.pstatus === 'reconnecting' && g.note === 'Reconnecting' && g.status === 'Reconnecting', 'Reconnecting, on the frame and in the bar');
-  feed.down = false;
-  await waitFor(page, ['playing'], 30000);
+  phoneOn();
+  // (and plays on once the feed has the usual delay's worth again)
+  await waitFor(page, ['playing'], 45000);
   g = await probe(page);
   ok(g.pstatus === 'playing' && g.status === 'Live', 'picks back up by itself');
 
-  console.log('\n▶ the feed stops, then Stream closes it into a recording, then the phone is back: nothing plays twice');
-  // Nov 18 2026 test broadcast: the phone's feed stopped; the page played its last few seconds over and over (hls.js
-  // moving back to "catch up" with a playlist that no longer reached the picture, and every start-over beginning
-  // several seconds back), then, once Stream had closed the feed into a recording, the whole broadcast from 0:00
+  console.log('\n▶ the live delay, a dropped signal, Stream closing the recording, the phone back: nothing twice, nothing skipped');
+  // Nov 18 2026 test broadcasts: the page replayed the last few seconds over and over when the feed stalled, then the
+  // whole broadcast from 0:00 once Stream had closed the recording. Now viewers watch 20 s behind the phone, a drop
+  // under that never shows, a longer one holds the last frame and goes on from exactly there, and a closed recording
+  // is played to its last frame and never from its start
   {
-    feed.window = 6;
     await open(page);
-    await waitFor(page, ['playing']); await sleep(5000);
-    // Every frame the page shows, by the player it came from (a start-over empties the video) and its place in it
+    await waitFor(page, ['playing']); await sleep(4000);
+    // Every frame shown, by the player it came from (a start-over empties the video) and its place; the status 4x a second
     await page.evaluate(() => {
       const v = document.querySelector('.stage__player video');
       const w = window;
-      w.__frames = []; w.__gen = 0;
+      w.__frames = []; w.__gen = 0; w.__st = [];
       v.addEventListener('emptied', () => { w.__gen++; });
       const each = (_now, md) => { w.__frames.push([w.__gen, md.mediaTime]); v.requestVideoFrameCallback(each); };
       v.requestVideoFrameCallback(each);
+      setInterval(() => w.__st.push(document.querySelector('[data-stage]')?.dataset.pstatus), 250);
     });
-    await sleep(1500);
-    feed.pieces = [];
-    feed.frozen = Math.floor((Date.now() - feed.t0) / 2000) + 3;
-    feed.shrink = true;
-    const fromFrame = await page.evaluate(() => window.__frames.length);
-    // Past the player's own 12 s frozen-picture check, so a start-over has its chance to replay
-    await sleep(18000);
-    let g = await probe(page);
-    ok(g.pstatus === 'reconnecting' && g.note === 'Reconnecting', `stopped feed: Reconnecting (${g.pstatus})`);
-    const replayed = await page.evaluate((from) => {
-      // A frame earlier than one this same player already showed: seen again
+    const behindNewest = () => page.evaluate(() => { const v = document.querySelector('.stage__player video'); return v?.seekable.length ? v.seekable.end(v.seekable.length - 1) - v.currentTime : null; });
+    const seenAgain = (from) => page.evaluate((f) => {
       const best = new Map();
       let again = 0;
-      window.__frames.forEach(([gen, t], i) => {
-        const top = best.get(gen) ?? -1;
-        if (i >= from && t < top - 0.5) again++;
-        if (t > top) best.set(gen, t);
-      });
+      window.__frames.forEach(([gen, t], i) => { const top = best.get(gen) ?? -1; if (i >= f && t < top - 0.5) again++; if (t > top) best.set(gen, t); });
       return again;
-    }, fromFrame);
-    const older = feed.pieces.filter((p) => p.n < feed.frozen - 1).map((p) => p.n);
-    ok(replayed <= 1 && older.length === 0, `stopped feed: nothing shown twice (${replayed} frames seen again; pieces from before the stop asked for again: ${older.join(', ') || 'none'})`);
-    feed.closed = true;
-    await sleep(10000);
+    }, from);
+    const frameCount = () => page.evaluate(() => window.__frames.length);
+    let b = await behindNewest();
+    ok(b != null && b > 15 && b < 25, `viewers watch about 20 s behind the phone (${b?.toFixed(1)} s)`);
+
+    // A short drop, under the delay: never seen
+    const st0 = await page.evaluate(() => window.__st.length);
+    phoneOff(); await sleep(8000); phoneOn(); await sleep(14000);
+    const sts = await page.evaluate((f) => [...new Set(window.__st.slice(f))], st0);
+    ok(sts.length === 1 && sts[0] === 'playing', `an 8 s drop never shows: the picture plays straight through (${sts.join(', ')})`);
+
+    // A long drop: the picture plays out what it has, holds its last frame, then goes on from exactly there
+    let from = await frameCount();
+    phoneOff();
+    await waitFor(page, ['reconnecting'], 45000);
+    const heldAt = await page.evaluate(() => document.querySelector('.stage__player video').currentTime);
+    await sleep(6000);
+    const held = await page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { t: v.currentTime, rs: v.readyState, src: !!v.currentSrc }; });
     g = await probe(page);
-    const fromStart = feed.pieces.filter((p) => p.closed).map((p) => p.n);
-    ok(g.pstatus === 'reconnecting' && fromStart.length === 0, `closed into a recording: still Reconnecting, nothing played from the start (${g.pstatus}; recording pieces asked for: ${fromStart.slice(0, 6).join(', ') || 'none'})`);
-    const stoppedAt = feed.frozen;
-    feed.closed = false; feed.frozen = null; feed.shrink = false; feed.pieces = [];
-    await waitFor(page, ['playing'], 30000); await sleep(1500);
+    ok(g.pstatus === 'reconnecting' && g.note === 'Reconnecting' && Math.abs(held.t - heldAt) < 0.05 && held.rs >= 2 && held.src, `long drop: Reconnecting over the last frame, held (${heldAt.toFixed(1)} s, then ${held.t.toFixed(1)} s)`);
+    // A tap on the picture (sound on) while it holds: still holding (playing on now would leave no cushion)
+    await page.evaluate(() => { const pic = document.querySelector('.stage__picture'); const b = pic.getBoundingClientRect(); pic.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: b.left + b.width / 2, clientY: b.top + b.height / 2 })); });
+    await sleep(2500);
+    const tapped = await page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { t: v.currentTime, paused: v.paused, muted: v.muted }; });
     g = await probe(page);
-    const asked = feed.pieces.map((p) => p.n);
-    ok(g.pstatus === 'playing' && g.status === 'Live' && asked.length > 0 && Math.min(...asked) >= stoppedAt, `phone back: plays on at the live moment, nothing from before the stop (${g.pstatus}; pieces ${Math.min(...asked)} on, stopped at ${stoppedAt})`);
+    ok(g.pstatus === 'reconnecting' && tapped.paused && Math.abs(tapped.t - heldAt) < 0.05, `a tap for sound while it holds: still holding (${g.pstatus}, at ${tapped.t.toFixed(1)} s, sound ${tapped.muted ? 'off' : 'on'})`);
+    const framesBefore = await frameCount();
+    phoneOn();
+    await waitFor(page, ['playing'], 45000); await sleep(3000);
+    const after = await page.evaluate((f) => window.__frames.slice(f).map(([, t]) => t), framesBefore);
+    b = await behindNewest();
+    const again = await seenAgain(from);
+    ok(again <= 1 && after.length > 0 && after[0] >= heldAt - 0.5 && after[0] <= heldAt + 2.5, `back: on from exactly where it stopped, nothing shown twice or skipped (${again} frames again; held at ${heldAt.toFixed(1)}, went on at ${after[0]?.toFixed(1)})`);
+    ok(b != null && b > 14, `back with the usual delay to spare again (${b?.toFixed(1)} s behind the newest piece)`);
+
+    // Stream closes the recording: the last frame, then nothing (never the recording from its start)
+    phoneOff();
+    await waitFor(page, ['reconnecting'], 45000);
+    const oldRec = feed.rec.slice(0, 4);
+    const lastPiece = recordings.get(feed.rec).count - 1;
+    feed.pieces = [];
+    closeRecording();
+    await sleep(14000);
+    g = await probe(page);
+    const replayedPieces = feed.pieces.filter((p) => p.r === oldRec && p.n < lastPiece - 1).map((p) => p.n);
+    ok(g.pstatus === 'reconnecting' && replayedPieces.length === 0, `recording closed: Reconnecting, nothing of it played again (${g.pstatus}; pieces asked for again: ${replayedPieces.slice(0, 6).join(', ') || 'none'})`);
+
+    // Someone arriving now: a closed recording is never played as live
+    {
+      const late = await browser.newPage();
+      late.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+      await mock(late);
+      await late.setViewport({ width: 1424, height: 830 });
+      feed.pieces = [];
+      await late.goto(`${BASE}/live/?visit=${++visits}`, { waitUntil: 'domcontentloaded' });
+      await sleep(7000);
+      const ls = await late.evaluate(() => document.querySelector('[data-stage]')?.dataset.pstatus);
+      ok(ls === 'waiting' && feed.pieces.length === 0, `arriving after the recording closed: not played as live (${ls}; pieces asked for: ${feed.pieces.length})`);
+      await late.close();
+    }
+
+    // The phone back: a new recording, from its first piece, with the usual delay's worth in hand
+    feed.pieces = [];
+    phoneOn();
+    const newRec = feed.rec.slice(0, 4);
+    await waitFor(page, ['playing'], 45000); await sleep(2000);
+    g = await probe(page);
+    const asked = feed.pieces.filter((p) => p.r === newRec).map((p) => p.n);
+    const oldAsked = feed.pieces.filter((p) => p.r !== newRec).map((p) => p.n);
+    ok(newRec !== oldRec && g.pstatus === 'playing' && asked.length > 0 && Math.min(...asked) === 0 && oldAsked.length === 0, `phone back after the close: the new recording from its first piece (pieces ${asked.length ? Math.min(...asked) : '-'} on), nothing of the old one (${oldAsked.join(', ') || 'none'})`);
     feed.pieces = null;
-    feed.window = 3;
+
+    // Someone there from the very start of a recording: they wait for the usual delay's worth, then sit the full
+    // delay behind too (not a few seconds, with no cushion); and a passing error reading the DVR playlist doesn't
+    // send the player to the short plain playlist
+    closeRecording(); await sleep(1000); phoneOn(); // a new recording, 8 s long
+    feed.dvrFails = 2;
+    const early = await browser.newPage();
+    early.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+    await mock(early);
+    await early.setViewport({ width: 1424, height: 830 });
+    await early.goto(`${BASE}/live/?visit=${++visits}`, { waitUntil: 'domcontentloaded' });
+    await sleep(4000);
+    const before = await early.evaluate(() => document.querySelector('[data-stage]')?.dataset.pstatus);
+    await waitFor(early, ['playing'], 45000); await sleep(1500);
+    const eb = await early.evaluate(() => { const v = document.querySelector('.stage__player video'); return v?.seekable.length ? v.seekable.end(v.seekable.length - 1) - v.currentTime : null; });
+    const es = await early.evaluate(() => document.querySelector('[data-stage]')?.dataset.pstatus);
+    ok(before === 'waiting' && es === 'playing' && eb != null && eb > 15, `there from the start: waits for the delay's worth (${before}), then plays the full delay behind (${eb?.toFixed(1)} s), through a passing DVR error`);
+    await early.close();
+    feed.dvrFails = 0;
+  }
+
+  console.log('\n▶ going back (From the start, Back to live) and the reveal\'s end ("That\'s the reveal!")');
+  // Peter, Nov 18 2026: someone arriving late can go back to the beginning (Cloudflare's recording of the broadcast so
+  // far) and come back to the live moment; the reveal ends with "That's the reveal!" once the live video, 20 s behind the
+  // phone, has played its last frame (often the reveal itself is in those last seconds), and the replay only on a tap
+  {
+    const refresh = () => page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    const seen = (k) => page.evaluate((x) => { const e = document.querySelector(`[data-s="${x}"]`); return !!e && !e.closest('[hidden]') && e.getBoundingClientRect().width > 0; }, k);
+    const end = () => page.evaluate(() => {
+      const t = (k) => document.querySelector(`[data-s="${k}"]`);
+      const v = document.querySelector('.stage__player video'); const pic = document.querySelector('.stage__picture').getBoundingClientRect();
+      const hit = document.elementFromPoint(pic.left + pic.width / 2, pic.top + pic.height * 0.8);
+      return {
+        shown: !t('end').hidden, text: t('end-text').textContent, replay: !t('end-replay').hidden, wait: !t('end-wait').hidden, status: !t('note').hidden ? t('note-title').textContent : '',
+        pill: !document.querySelector('[data-live="onair"]').hidden, overVideo: hit === v, pkind: document.querySelector('[data-stage]').dataset.pkind, phase: document.querySelector('#live-hero').dataset.phase,
+      };
+    });
+    if (recordings.get(feed.rec).closed) phoneOn();
+    state = { ...STATES.live, kidName: 'Axel' }; feed.shape = 'portrait'; feed.down = false; feed.window = 8;
+    await page.setViewport({ width: 1424, height: 830 });
+    await open(page);
+    await waitFor(page, ['playing']);
+    let offered = false;
+    for (let i = 0; i < 45 && !(offered = await seen('from-start')); i++) await sleep(1000);
+    ok(offered && !(await seen('to-live')), 'From the start is offered once the broadcast so far can be gone back through');
+    const t0 = await page.evaluate(() => document.querySelector('.stage__player video').currentTime);
+    await page.click('[data-s="from-start"]'); await sleep(3500);
+    const back = await page.evaluate(() => ({ t: document.querySelector('.stage__player video').currentTime, behind: document.querySelector('[data-s="behind"]').textContent, focus: document.activeElement?.dataset?.s }));
+    ok((await seen('to-live')) && !(await seen('from-start')) && back.t < t0 - 8 && /\d:\d\d behind/.test(back.behind) && back.focus === 'to-live', `From the start: back to the beginning (${t0.toFixed(1)} → ${back.t.toFixed(1)} s), Back to live with "${back.behind}", the focus on it (${back.focus})`);
+    await page.click('[data-s="to-live"]'); await sleep(4000);
+    const live = await page.evaluate(() => document.querySelector('.stage__player video').currentTime);
+    ok((await seen('from-start')) && !(await seen('to-live')) && live > back.t + 8, `Back to live: the live moment again (${live.toFixed(1)} s), From the start offered again`);
+
+    // The broadcast becomes a replay (not ready yet) while the video still has its last seconds: it plays on, live
+    state = { ...STATES.replay, kidName: 'Axel', player: null }; await refresh(); await sleep(3000);
+    let e = await end();
+    g = await probe(page);
+    ok(!e.shown && e.phase === 'live' && e.pkind === 'live' && g.pstatus === 'playing', `the broadcast moves on: its last seconds still play, live (${e.phase}, ${g.pstatus})`);
+    // The phone stopped and Stream closes the recording: once its last frame has played, "That's the reveal!"
+    phoneOff(); closeRecording();
+    for (let i = 0; i < 60 && !(e = await end()).shown; i++) await sleep(1000);
+    ok(e.shown && /^Thank you for watching Axel's reveal\.$/.test(e.text) && e.wait && !e.replay, `the last frame played: "That's the reveal!", "${e.text}", the replay in a few minutes`);
+    ok(!e.overVideo && !e.status && !e.pill, `over the photo, not the video; no Reconnecting under it, no Live by the name (${JSON.stringify({ overVideo: e.overVideo, status: e.status, pill: e.pill })})`);
+    // The replay ready: offered, never started by itself; a tap starts it
+    state = { ...STATES.replay, kidName: 'Axel' }; await refresh(); await sleep(2500);
+    e = await end();
+    ok(e.shown && e.replay && !e.wait && e.pkind === 'live', `the replay ready: Watch the replay, not started by itself (${e.pkind})`);
+    await page.click('[data-s="end-replay"]');
+    await waitFor(page, ['paused', 'playing'], 20000); await sleep(1000);
+    e = await end();
+    ok(!e.shown && e.pkind === 'replay', `Watch the replay: the replay, from its beginning (${e.pkind})`);
+
+    // The phone back on after the end (the same reveal reopened): the note goes, live again
+    phoneOn(); state = { ...STATES.live, kidName: 'Axel' }; await open(page); await waitFor(page, ['playing']); await sleep(2000);
+    state = { ...STATES.replay, kidName: 'Axel', player: null }; await refresh(); await sleep(1500);
+    phoneOff(); closeRecording();
+    for (let i = 0; i < 60 && !(e = await end()).shown; i++) await sleep(1000);
+    phoneOn(); state = { ...STATES.live, kidName: 'Axel' }; await refresh();
+    await waitFor(page, ['playing'], 45000); await sleep(1500);
+    e = await end();
+    ok(!e.shown && e.pkind === 'live', `the phone back on: the note goes, live again (${e.pkind})`);
+
+    // A camera check before the start: live, then back to the countdown, never "That's the reveal!"
+    state = { ...STATES.live, kidName: 'Axel' }; await refresh(); await sleep(1000);
+    state = { ...base, phase: 'armed', upcoming: true, scheduledAt: new Date(Date.now() + 30 * 60e3).toISOString(), player: null }; await refresh();
+    let flashed = false;
+    for (let i = 0; i < 8; i++) { await sleep(500); if ((await end()).shown) flashed = true; }
+    ok(!flashed, 'a camera check before the start (back to the countdown) never shows "That\'s the reveal!"');
+    state = STATES.live;
+    // (the phone's recording here is a new one: what follows expects one long enough for the usual delay and more)
+    await sleep(26000);
   }
 
   console.log('\n▶ back from a pause (the lock screen, a call, another app)');

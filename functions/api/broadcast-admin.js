@@ -236,7 +236,7 @@ export async function onRequestPost(context) {
       case 'setupInput': {
         if (!stream.streamConfigured(env)) return fail('CF_STREAM_TOKEN / CF_ACCOUNT_ID are not set in Cloudflare Pages');
         if (config.liveInput?.uid && !body.force) return fail('A live input already exists. Use Rotate keys, or pass force to replace it.');
-        const r = await stream.createLiveInput(env, { name: body.name || 'SOARD reveals', timeoutSeconds: 30, lowLatency: true });
+        const r = await stream.createLiveInput(env, { name: body.name || 'SOARD reveals', timeoutSeconds: 120, lowLatency: true });
         if (!r.ok) return fail(`Stream: ${stream.errorMessage(r)}`, 500);
         await storeInput(env, config, 'liveInput', r.result);
         if (!config.setupAt) { config.setupAt = new Date().toISOString(); config.setupBy = userEmail; await b.writeConfig(env.DB, config); }
