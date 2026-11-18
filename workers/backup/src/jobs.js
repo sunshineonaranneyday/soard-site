@@ -18,6 +18,7 @@
 import { readDatabase, d1Http, d1Binding, Moved } from './db.js';
 import { createSplitter, HOLD } from './sql.js';
 import { stageEncrypted, putStream, hasher, decrypt } from './stage.js';
+import { checkSlice, slicesFor, chunksPerSlice, OpenError } from './slice.js';
 import { shipCopy } from './ship.js';
 import { driveToken, listDrives, pickDrive, download as driveDownload, uploadSmall, replaceContent, findChild, backupAccount, listAllIds, fileInfo, DriveError } from './drive.js';
 import { b2Client, B2Error } from './b2.js';
@@ -561,100 +562,162 @@ export async function drillDatabaseJob(env, state, h, db, run) {
 }
 
 /** A copy of a file opens to exactly what was copied, from each home */
-export async function drillFilesJob(env, state, h, run) {
-  const parts = [];
-  if (homesUp(h).length === 2) {
-    const identity = await state.secretKey();
-    // A few files, and one each of the key-value, search-index and Worker-code copies there are
-    const sample = [...(await state.sampleCopies('file', 3)), ...(await state.sampleCopies('kv', 1)), ...(await state.sampleCopies('vectorize', 1)), ...(await state.sampleCopies('worker', 1))];
-    for (const c of sample) {
-      for (const w of homesUp(h)) {
-        try {
-          const plain = await decrypt(identity, checked(await fromHome(h, c, w), c.sha256, `the copy in ${w}`));
-          const got = hasher();
-          await plain.pipeTo(new WritableStream({ write(chunk) { got.update(chunk); } }));
-          if (got.result().sha256 !== c.plain_sha256) throw new Error('it opens to something other than what was copied');
-          parts.push({ path: c.path, where: w, ok: true });
-        } catch (e) { parts.push({ path: c.path, where: w, ok: false, problem: `${c.path} in ${w}: ${errText(e)}` }); }
-      }
-    }
-  }
-  const d = (await state.get(drillKey(run))) || {};
-  await state.set(drillKey(run), { ...d, files: parts });
-  return { checked: parts.length, ok: parts.every((p) => p.ok) };
+// A code copy opens to a git bundle
+const BUNDLE_START = [...enc.encode('# v2 git bundle\n')];
+
+/** The month's code for `repo` as a restore needs it, oldest first: its newest full copy and every one since */
+async function codeChain(state, repo) {
+  const mine = (await state.copies({ kind: 'code', limit: 500 })).filter((x) => x.meta?.repo === repo);
+  const full = mine.findIndex((x) => x.meta?.full);
+  return full < 0 ? [] : mine.slice(0, full + 1).reverse();
 }
 
 /**
- * A git bundle opens whole: "# v2 git bundle", its lines, a blank line, then a pack whose last 20 bytes are the
- * SHA-1 of the rest. Read as a stream, so a bundle of any size fits.
+ * What the drill proves opens, each a copy in a home read a slice a step (./slice.js), however large: a few files
+ * and one each of the key-value, search-index and Worker-code copies there are, from both homes; and each
+ * repository's code as a restore needs it (the month's full copy and every one since, Nov 17, 2026: the newest
+ * alone was checked before, so after the month's first night the full copy never was), from the first home with it.
  */
-export async function checkBundle(plain) {
-  const reader = plain.getReader();
-  const sha = createHash('sha1');
-  let header = new Uint8Array(0);
-  let inPack = false;
-  let tail = new Uint8Array(0);
-  let packBytes = 0;
-  let magic = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    let chunk = value;
-    if (!inPack) {
-      const joined = new Uint8Array(header.length + chunk.length);
-      joined.set(header);
-      joined.set(chunk, header.length);
-      let p = -1;
-      for (let i = 0; i < joined.length - 1; i++) if (joined[i] === 0x0a && joined[i + 1] === 0x0a) { p = i + 2; break; }
-      if (p < 0) { if (joined.length > 1 << 20) throw new Error('its header never ends'); header = joined; continue; }
-      if (new TextDecoder().decode(joined.subarray(0, 16)) !== '# v2 git bundle\n') throw new Error('it doesn’t start like a git bundle');
-      inPack = true;
-      chunk = joined.subarray(p);
+export async function drillPlanJob(env, state, h, run) {
+  // A restarted run (same name) starts its checks afresh: an earlier attempt's results are never this one's
+  const d0 = (await state.get(drillKey(run))) || {};
+  if (d0.files || d0.code) { const { files, code, ...rest } = d0; await state.set(drillKey(run), rest); }
+  const up = homesUp(h);
+  // (each check's slice size is fixed here, so a deploy part way through can't change what its slices cover)
+  const per = chunksPerSlice(env);
+  // Every copy checked is checked in each home that holds it: both homes are the backup, and either may be the one
+  // a restore comes from (a home down now leaves its checks unfinished, so the drill doesn't pass)
+  const checks = [];
+  const sample = [...(await state.sampleCopies('file', 3)), ...(await state.sampleCopies('kv', 1)), ...(await state.sampleCopies('vectorize', 1)), ...(await state.sampleCopies('worker', 1))];
+  for (const c of sample) for (const where of ['drive', 'b2']) checks.push({ group: 'files', id: c.id, path: c.path, where, per, slices: slicesFor(per, c.size) });
+  for (const repo of config(env).repos) {
+    for (const c of await codeChain(state, repo)) {
+      const holds = ['drive', 'b2'].filter((w) => (w === 'drive' ? c.drive_id : c.b2_id));
+      // One in neither home yet: still on its way (made in the last day, or a home is down: the run itself says so as
+      // a note) is left for the next drill; one older than that can't be put back, which is trouble
+      const waiting = !c.shipped_at && (up.length < 2 || Date.now() - Date.parse(c.created_at) < 24 * HOUR);
+      if (!holds.length) checks.push({ group: `code:${repo}`, id: c.id, path: c.path, where: null, per, slices: 0, ...(waiting ? { waiting: true } : {}) });
+      for (const where of holds) checks.push({ group: `code:${repo}`, id: c.id, path: c.path, where, per, slices: slicesFor(per, c.size), bundle: true });
     }
-    if (magic.length < 4) magic += new TextDecoder('latin1').decode(chunk.subarray(0, 4 - magic.length));
-    const joined = new Uint8Array(tail.length + chunk.length);
-    joined.set(tail);
-    joined.set(chunk, tail.length);
-    const keep = Math.max(0, joined.length - 20);
-    sha.update(joined.subarray(0, keep));
-    tail = joined.slice(keep);
-    packBytes += chunk.length;
   }
-  const trailer = [...tail].map((x) => x.toString(16).padStart(2, '0')).join('');
-  if (!inPack || magic !== 'PACK' || packBytes < 32 || sha.digest('hex') !== trailer) throw new Error('it isn’t a whole git bundle');
-  return packBytes;
+  return { run, up, checks };
 }
 
-/** The newest code copy of a repo opens to a whole git bundle */
-export async function drillCodeJob(env, state, h, repo, run) {
-  const c = (await state.copies({ kind: 'code', limit: 200 })).find((x) => x.meta?.repo === repo && x.shipped_at);
-  let part;
-  if (!c || !homesUp(h).length) part = { repo, skipped: 'no copy in a home yet' };
-  else {
-    try {
-      const where = homesUp(h)[0];
-      const plain = await decrypt(await state.secretKey(), checked(await fromHome(h, c, where), c.sha256, `the copy in ${where}`));
-      part = { repo, path: c.path, packBytes: await checkBundle(plain), ok: true };
-    } catch (e) { part = { repo, ok: false, problem: `${repo}: ${errText(e)}` }; }
+/** One slice of one check: { ok: true, from, to, count }, or { ok: false, problem } for a copy that doesn't open */
+export async function drillSliceJob(env, state, h, check, slice) {
+  const c = await state.copy(check.id);
+  if (!c) return { ok: false, problem: `${check.path}: its record is gone` };
+  // (a home that can't be reached now is tried again, as the step is)
+  if (!h[check.where]) throw new Error(`${check.where === 'b2' ? 'Backblaze' : 'Google Drive'} can’t be reached`);
+  try {
+    // The file in the home is this very copy: its own record says so (Drive's MD5, Backblaze's SHA-1, and its length),
+    // before a byte of it is read (any copy under the backup key would open; only this one is what was sent)
+    if (slice === 0) {
+      if (check.where === 'drive') {
+        const f = await fileInfo(h.drive.token, c.drive_id, { fetchImpl: h.drive.fetchImpl });
+        if (f?.trashed) throw new OpenError('Google Drive has it in the trash');
+        // (one moved out of the backup drive is gone from the backup, as the audit counts it)
+        if (f?.driveId !== h.drive.driveId) throw new OpenError('it isn’t in the backup drive any more');
+        if (f?.md5Checksum !== c.md5 || Number(f?.size) !== c.size) throw new OpenError('the file Google Drive holds for it isn’t this copy (its MD5 or length differs)');
+      } else {
+        const f = await h.b2.info(c.b2_id);
+        if ((f?.contentSha1 === 'none' ? f?.fileInfo?.large_file_sha1 : f?.contentSha1) !== c.sha1 || Number(f?.contentLength) !== c.size) throw new OpenError('the file Backblaze holds for it isn’t this copy (its SHA-1 or length differs)');
+      }
+    }
+    const r = await checkSlice({
+      identity: await state.secretKey(), size: c.size, slice, per: check.per, starts: check.bundle ? BUNDLE_START : null,
+      read: async (first, last) => (check.where === 'drive' ? driveDownload(h.drive.token, c.drive_id, { fetchImpl: h.drive.fetchImpl, range: [first, last] }) : h.b2.download(c.b2_id, { range: [first, last] })),
+    });
+    return { ok: true, ...r };
+  } catch (e) {
+    if (e instanceof OpenError) return { ok: false, problem: `${check.path} in ${check.where}: ${e.message}` };
+    // A home that answers that it hasn't the file (or not that far into it) has lost it; one that refuses the request
+    // itself is said as it said it: either way not tried again, and the home isn't taken for down
+    const name = check.where === 'b2' ? 'Backblaze' : 'Google Drive';
+    if ((e instanceof DriveError || e instanceof B2Error) && [404, 410, 416].includes(e.status)) return { ok: false, problem: `${check.path} in ${check.where}: ${name} no longer has it (${e.status})` };
+    if ((e instanceof DriveError || e instanceof B2Error) && e.status === 400) return { ok: false, problem: `${check.path} in ${check.where}: ${name} refused the request (400): ${errText(e).slice(0, 120)}` };
+    throw e;
   }
-  const d = (await state.get(drillKey(run))) || {};
-  await state.set(drillKey(run), { ...d, code: [...(d.code || []).filter((x) => x.repo !== repo), part] });
-  return { repo, ok: part.ok ?? null };
 }
+
+/**
+ * What the slices found, check by check, kept for the drill's report: a check passed only when every slice opened and
+ * together they covered every chunk of the copy, first to last, once; one whose slices never all finished is said,
+ * never taken for a pass, as is a repository's code missing a copy from both homes (a restore needs every one)
+ */
+export async function drillCheckedJob(env, state, h, run, plan, results = []) {
+  // No plan at all: no files or code results for this run (an earlier attempt's included), so the report says the
+  // checks didn't finish
+  if (!plan) {
+    const d0 = (await state.get(drillKey(run))) || {};
+    if (d0.files || d0.code) { const { files, code, ...rest } = d0; await state.set(drillKey(run), rest); }
+    return { ok: null };
+  }
+  const at = (i) => ({ where: plan.checks[i].where, parts: results[i] || [] });
+  const outcome = (check, { where, parts = [] }) => {
+    const label = `${check.path} in ${where}`;
+    // (what a slice found wrong is said first: the slices after it weren't run)
+    const bad = parts.find((p) => p?.ok === false);
+    if (bad) return { ok: false, problem: bad.problem };
+    if (parts.length < check.slices || parts.some((p) => !p)) return { ok: false, problem: `${label}: its check didn’t finish` };
+    // Every chunk, 0 to the last, each once, in order
+    let next = 0;
+    for (const p of parts) {
+      if (p.count !== parts[0].count || (p.to >= p.from && p.from !== next)) return { ok: false, problem: `${label}: its slices didn’t cover it in order` };
+      if (p.to >= p.from) next = p.to + 1;
+    }
+    if (!parts.length || next !== parts[0].count) return { ok: false, problem: `${label}: its last chunk was never reached` };
+    if (parts.some((p) => p.head !== parts[0].head)) return { ok: false, problem: `${label}: it changed while it was checked (another header)` };
+    return { ok: true };
+  };
+  const files = [];
+  const code = new Map(config(env).repos.map((r) => [r, { repo: r, ids: new Set(), problems: [] }]));
+  // A home that was down when the plan was made: its checks are left for the next run (the drill doesn't pass, but
+  // it isn't trouble of its own, the home down is already said), as the databases' are
+  let skipped = 0;
+  plan.checks.forEach((check, i) => {
+    const got = at(i);
+    if ((check.where && !(plan.up || []).includes(check.where)) || check.waiting) { skipped++; return; }
+    if (check.group === 'files') { const o = outcome(check, got); files.push({ path: check.path, where: check.where, ok: o.ok, ...(o.problem ? { problem: o.problem } : {}) }); return; }
+    const r = code.get(check.group.slice(5));
+    if (!r) return;
+    if (!check.where) { r.problems.push(`${check.path}: in neither home, so the code can’t be put back whole`); return; }
+    r.ids.add(check.id);
+    const o = outcome(check, got);
+    if (!o.ok) r.problems.push(o.problem);
+  });
+  const codeParts = [...code.values()].map((r) => (r.problems.length ? { repo: r.repo, copies: r.ids.size, ok: false, problem: r.problems.join('; ') }
+    : !r.ids.size ? { repo: r.repo, skipped: 'no copy yet' } : { repo: r.repo, copies: r.ids.size, ok: true }));
+  const d = (await state.get(drillKey(run))) || {};
+  const { incomplete: _, ...rest } = d;
+  await state.set(drillKey(run), { ...rest, files, code: codeParts, ...(skipped ? { incomplete: `${skipped} check(s) left for the next run (a home was down, or a copy is still on its way)` } : {}) });
+  return { ok: files.every((f) => f.ok) && codeParts.every((x) => x.ok !== false), files: files.length, code: codeParts.length };
+}
+
+/**
+ * A drill that passed: it said so, and every check it should have made is in it (a report from before a check that
+ * never finished was counted, Nov 17, 2026, said ok with the website's code unchecked: the next run drills again)
+ */
+export const drillPassed = (d, cfg) => d?.ok === true && cfg.repos.every((r) => (d.code || []).some((x) => x.repo === r));
 
 /** The drill's report: ok, failed, or skipped (nothing to drill yet), written beside the run */
 export async function drillReportJob(env, state, h, run, { by, databases = config(env).databases.map((d) => d.name) } = {}) {
   const d = (await state.get(drillKey(run))) || {};
   const problems = [...(d.databases || []), ...(d.files || []), ...(d.code || [])].filter((p) => p.ok === false).map((p) => p.problem);
+  // A check that never finished (every try cut off: Nov 17, 2026, the website's 1.36 GB code copy ran out of
+  // memory three times) proves nothing, so the drill can't pass: it runs again with every run until it does. Each
+  // check writes what it found, even "nothing to check yet", so one with nothing written never finished.
+  if (!d.files) problems.push('the files: their check didn’t finish');
+  for (const repo of config(env).repos) if (!(d.code || []).some((x) => x.repo === repo)) problems.push(`the code of ${repo}: its check didn’t finish`);
   // Passed only when every database was restored and came back exactly: one skipped (its copy not in both homes)
   // leaves the drill to run again with the next run
   const skipped = databases.filter((name) => !(d.databases || []).some((x) => x.name === name && x.ok === true));
-  const report = { run, at: new Date().toISOString(), databases: d.databases || [], files: d.files || [], code: d.code || [], problems, ok: problems.length ? false : skipped.length ? null : true };
-  if (report.ok === null) report.skipped = `not drilled yet (not in both homes): ${skipped.join(', ')}`;
+  const report = { run, at: new Date().toISOString(), databases: d.databases || [], files: d.files || [], code: d.code || [], problems, ok: problems.length ? false : skipped.length || d.incomplete ? null : true };
+  if (report.ok === null) report.skipped = [skipped.length ? `not drilled yet (not in both homes): ${skipped.join(', ')}` : '', d.incomplete || ''].filter(Boolean).join('; ');
   await state.set('drill', report);
   // In the homes, in plain: what was drilled and how it came out, never an error's words (they can quote a value)
   const plain = {
-    run, at: report.at, ok: report.ok, skipped: report.ok === null ? skipped : [], problems: problems.length,
+    run, at: report.at, ok: report.ok, skipped: report.ok === null ? skipped : [], incomplete: d.incomplete || null, problems: problems.length,
     databases: report.databases.map((x) => ({ name: x.name, tables: x.tables ?? null, rows: x.rows ?? null, different: x.different?.length ?? null, ok: x.ok ?? null })),
     files: { checked: report.files.length, ok: report.files.filter((x) => x.ok).length },
     code: report.code.map((x) => ({ repo: x.repo, ok: x.ok ?? null })),

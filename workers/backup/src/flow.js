@@ -51,8 +51,9 @@ export const WORK = {
   ship: async (env, state, homes, by) => jobs.shipJob(env, state, await homes(), { by }),
   fileList: async (env, state, homes, by, run) => jobs.fileListJob(env, state, await homes(), run, { by }),
   drillDatabase: async (env, state, homes, by, db, run) => jobs.drillDatabaseJob(env, state, await homes(), db, run),
-  drillFiles: async (env, state, homes, by, run) => jobs.drillFilesJob(env, state, await homes(), run),
-  drillCode: async (env, state, homes, by, repo, run) => jobs.drillCodeJob(env, state, await homes(), repo, run),
+  drillPlan: async (env, state, homes, by, run) => jobs.drillPlanJob(env, state, await homes(), run),
+  drillSlice: async (env, state, homes, by, check, slice) => jobs.drillSliceJob(env, state, await homes(), check, slice),
+  drillChecked: async (env, state, homes, by, run, plan, results) => jobs.drillCheckedJob(env, state, await homes(), run, plan, results),
   drillReport: async (env, state, homes, by, run, databases) => jobs.drillReportJob(env, state, await homes(), run, { by, databases }),
   finish: async (env, state, homes, by, run, sections) => jobs.finishJob(env, state, await homes(), run, sections, { by }),
 };
@@ -174,8 +175,25 @@ export class Night extends WorkflowEntrypoint {
       sections.list = await safe('files list', job('fileList', run));
       if (drill) {
         for (const db of t.databases) await safe(`drill ${db.name}`, job('drillDatabase', db, run), drillOptions(env));
-        await safe('drill files', job('drillFiles', run), drillOptions(env));
-        for (const repo of cfg.repos) await safe(`drill code ${repo}`, job('drillCode', repo, run), drillOptions(env));
+        // The files' and the code's copies, each proved to open a slice a step, so a copy of any size fits (read
+        // whole, the website's 1.36 GB code copy ran out of memory, Nov 17, 2026)
+        const plan = await safe('drill plan', job('drillPlan', run), drillOptions(env));
+        // A check stops at its first slice that fails; a home whose slice couldn't be read at all (every try) isn't
+        // asked again this drill, so a home down never holds the run for hours (each is said as not finished)
+        // (a home that wasn't up when the plan was made is down from the start)
+        const results = [];
+        const down = new Set(['drive', 'b2'].filter((w) => plan && !plan.up?.includes(w)));
+        for (const [i, check] of (plan?.checks || []).entries()) {
+          const parts = [];
+          for (let k = 0; check.where && k < check.slices && !down.has(check.where); k++) {
+            const r = await safe(`drill check ${i + 1} part ${k + 1}`, job('drillSlice', check, k), drillOptions(env));
+            parts.push(r);
+            if (!r) down.add(check.where);
+            if (!r || r.ok === false) break;
+          }
+          results.push(parts);
+        }
+        await safe('drill checked', job('drillChecked', run, plan, results), drillOptions(env));
         sections.drill = await safe('drill report', job('drillReport', run, t.databases.map((d) => d.name)), drillOptions(env)) || { ok: false, problems: 'its report couldn’t be written' };
       }
     }

@@ -13,7 +13,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { Night, Jobs, stateOf } from './flow.js';
 import { BackupState } from './state.js';
-import { checkSetup, config } from './jobs.js';
+import { checkSetup, config, drillPassed } from './jobs.js';
 
 export { Night, Jobs, BackupState };
 
@@ -77,7 +77,7 @@ export async function startNight(env, { now = new Date(), by = null, run: named 
     const test = env.TEST_MODE === '1';
     const run = test && /^\d{4}-\d{2}-\d{2}( \d{4})?$/.test(named || '') ? named : scheduled ? t.night : `${t.night} ${t.hhmm}`;
     const lastDrill = await state.get('drill');
-    const drill = test && typeof drillAsked === 'boolean' ? drillAsked : (scheduled && t.weekday === 'Sun') || lastDrill?.ok !== true;
+    const drill = test && typeof drillAsked === 'boolean' ? drillAsked : (scheduled && t.weekday === 'Sun') || !drillPassed(lastDrill, config(env));
     const id = `${scheduled ? 'night' : 'run'}-${run.replace(' ', '-')}-${ticket.slice(0, 8)}`;
     const record = { run, id, at: now.toISOString(), drill, by: by || 'schedule', restarts };
     // Written down before it's made, so a run can never be going unrecorded (one that failed to start reads as gone)

@@ -347,7 +347,8 @@ const backupDrillLive = (f) => {
   if (off) return off;
   const d = f.backup.drill;
   if (!d) return OFF('The first drill runs with the first run.');
-  if (d.ok === null) return OFF(`Nothing was in both homes to drill on ${d.run} yet; it runs again with the next run.`, d.at);
+  // (left for the next run: a database not in both homes yet, or checks a home down or a copy on its way kept back)
+  if (d.ok === null) return OFF(d.skipped ? `The drill on ${d.run} left some for the next run: ${d.skipped}. It runs again then.` : `Nothing was in both homes to drill on ${d.run} yet; it runs again with the next run.`, d.at);
   if (!d.ok) return ATTN(`The drill on ${d.run} found: ${(d.problems || []).slice(0, 3).join('; ')}. It runs again with every run until it passes.`, d.at);
   const dbs = (d.databases || []).filter((x) => x.tables).map((x) => `${x.name} (${plural(x.tables, 'table')}, every one back exactly)`).join(' and ');
   if (stale(d.at, 8 * DAY)) return ATTN(`The last drill was ${d.run}.`, d.at);

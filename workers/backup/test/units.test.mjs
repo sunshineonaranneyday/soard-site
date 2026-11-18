@@ -205,8 +205,16 @@ test('a run starts once a night after 2 AM Eastern, never beside another, and ag
   assert.equal(again2.restarts, 2);
   w.statuses[again2.id] = 'terminated';
   assert.match((await startNight(w.env, { now: at('2026-11-16T07:45:00Z') })).why, /broke three times/);
-  // A drill that passed: weekdays skip it
-  w.kv.set('drill', { ok: true });
+  // A report that says ok but is missing a check (the website's code, Nov 17, 2026: a check that never finished
+  // wasn't counted then) isn't a pass: the drill runs again
+  w.env.REPOS = JSON.stringify(['org/site', 'org/store']);
+  w.kv.set('drill', { ok: true, files: [], code: [{ repo: 'org/store', ok: true }] });
+  const n2b = await startNight(w.env, { now: at('2026-11-17T07:00:00Z') });
+  assert.equal(n2b.drill, true, 'a check missing from an ok report runs the drill again');
+  w.statuses[n2b.id] = 'terminated';
+  w.kv.delete?.('scheduled');
+  // A drill that passed, every check in it: weekdays skip it
+  w.kv.set('drill', { ok: true, files: [], code: JSON.parse(w.env.REPOS || '[]').map((repo) => ({ repo, ok: true })) });
   const n3 = await startNight(w.env, { now: at('2026-11-17T07:00:00Z') });
   assert.equal(n3.drill, false);
   // Two starters at the same moment: one waits
@@ -678,4 +686,200 @@ test('Backblaze is asked whether a copy is already there on every try but its fi
   assert.deepEqual(await ship({ ship_fails: 0 }), { log: ['look', 'upload', 'record b2_id=up1'], b2: 'up1' });
   // A large copy already begun is always looked for (its finish's answer may have been lost)
   assert.deepEqual(await ship({ ship_fails: 1, b2_large: 'large1' }, { fileId: 'there2' }), { log: ['look', 'record b2_id=there2 b2_large=null'], b2: 'there2' });
+});
+
+test('a drill check that never finished keeps the drill from passing, so it runs again with the next run', async () => {
+  const { drillReportJob } = await import('../src/jobs.js');
+  const report = async (written) => {
+    const sets = {};
+    // (the report's plain copy is already kept, so nothing is staged or sent here)
+    const state = { get: async (k) => (k === 'drill:R' ? written : null), set: async (k, v) => { sets[k] = v; }, copy: async (id) => ({ id }) };
+    const env = { REPOS: JSON.stringify(['org/site', 'org/store']) };
+    const r = await drillReportJob(env, state, {}, 'R', { databases: ['site-db'] });
+    return { r, problems: sets.drill.problems, ok: sets.drill.ok };
+  };
+  const db = [{ name: 'site-db', ok: true, tables: 3 }];
+  // Every check finished and passed
+  assert.deepEqual(await report({ databases: db, files: [{ ok: true }], code: [{ repo: 'org/site', ok: true }, { repo: 'org/store', ok: true }] }), { r: { ok: true, problems: 0 }, problems: [], ok: true });
+  // Nothing to check yet is written too, and isn't a problem
+  assert.deepEqual((await report({ databases: db, files: [], code: [{ repo: 'org/site', skipped: 'no copy in a home yet' }, { repo: 'org/store', ok: true }] })).ok, true);
+  // The website's code check cut off every try (Nov 17, 2026): not passed, and said
+  assert.deepEqual(await report({ databases: db, files: [{ ok: true }], code: [{ repo: 'org/store', ok: true }] }), { r: { ok: false, problems: 1 }, problems: ['the code of org/site: its check didn’t finish'], ok: false });
+  // Nor the files' check
+  assert.deepEqual((await report({ databases: db, code: [{ repo: 'org/site', ok: true }, { repo: 'org/store', ok: true }] })).problems, ['the files: their check didn’t finish']);
+});
+
+test('a copy is proved to open a slice at a time: every chunk, its last one, and nothing changed, moved, cut or added', async () => {
+  const { checkSlice, slicesFor, CHUNK, OpenError } = await import('../src/slice.js');
+  const { encrypt } = await import('../src/stage.js');
+  const { randomBytes } = await import('node:crypto');
+  const { identity, recipient } = await newIdentity();
+  const other = await newIdentity();
+  const seal = async (plain) => new Uint8Array(await new Response(await encrypt(recipient, new Response(plain).body)).arrayBuffer());
+  const per = 3;
+  // Every slice of a copy as the drill takes them (`stored`: what the home holds, which may differ from the size
+  // the records have); the biggest read is never more than a slice and a byte
+  const check = async (bytes, { id = identity, starts = null, stored = bytes } = {}) => {
+    let biggest = 0;
+    const read = async (first, last) => { const part = stored.subarray(first, Math.min(last, stored.length - 1) + 1); biggest = Math.max(biggest, part.length); return new Response(part); };
+    const out = [];
+    for (let k = 0; k < slicesFor(per, bytes.length); k++) out.push(await checkSlice({ identity: id, size: bytes.length, read, slice: k, per, starts }));
+    assert.ok(biggest <= per * CHUNK + 1, `read ${biggest} bytes at once`);
+    // The slices cover every chunk, in order, once
+    let next = 0;
+    for (const p of out) { if (p.to >= p.from) { assert.equal(p.from, next); next = p.to + 1; } }
+    assert.equal(next, out[0].count);
+    return out[0].count;
+  };
+  // Sizes around the chunk's edges, up to several slices
+  for (const n of [0, 1, 100, 65535, 65536, 65537, 3 * 65536, 7 * 65536 + 5, 10 * 65536]) {
+    assert.equal(await check(await seal(randomBytes(n))), Math.max(1, Math.ceil(n / 65536)), `${n} bytes`);
+  }
+  // A code copy opens to a git bundle
+  const bundle = new TextEncoder().encode('# v2 git bundle\nabc refs/heads/main\n\nPACK....');
+  const start = [...new TextEncoder().encode('# v2 git bundle\n')];
+  assert.equal(await check(await seal(bundle), { starts: start }), 1);
+  await assert.rejects(check(await seal(randomBytes(500)), { starts: start }), /doesn’t open to what it should start with/);
+  // Whatever's wrong is found, in whichever slice holds it
+  const good = await seal(randomBytes(9 * 65536 + 77));
+  const at = good.length - 9 * CHUNK - 93; // where the payload starts (after the header and its nonce)
+  const bad = (f) => { const b = Uint8Array.from(good); f(b); return b; };
+  await assert.rejects(check(bad((b) => { b[at + 6 * CHUNK + 5] ^= 1; })), (e) => e instanceof OpenError && /chunk 7 of 10 doesn’t open/.test(e.message), 'a byte changed');
+  await assert.rejects(check(good.subarray(0, good.length - 40)), OpenError, 'cut short within its last chunk');
+  await assert.rejects(check(good.subarray(0, at + 5 * CHUNK)), /chunk 5 of 5 doesn’t open/, 'cut off exactly at a chunk’s edge (a full chunk that isn’t the last)');
+  await assert.rejects(check(Uint8Array.from([...good, 7])), OpenError, 'a byte added, and the records saying so');
+  await assert.rejects(check(good, { stored: Uint8Array.from([...good, 7]) }), /longer than its chunks/, 'the home holding a byte more than the records say');
+  await assert.rejects(check(good, { stored: good.subarray(0, good.length - 1) }), /ends part way/, 'the home holding a byte less');
+  const swapped = bad((b) => { const one = b.slice(at, at + CHUNK); b.copyWithin(at, at + CHUNK, at + 2 * CHUNK); b.set(one, at + CHUNK); });
+  await assert.rejects(check(swapped), OpenError, 'two chunks swapped');
+  await assert.rejects(check(good, { id: other.identity }), /backup key doesn’t open it/, 'another key');
+  await assert.rejects(check(bad((b) => { b[30] ^= 1; })), OpenError, 'its header changed');
+  // A slice past the copy's end checks nothing, and says where it would have started
+  const past = await checkSlice({ identity, size: good.length, read: async (a, z) => new Response(good.subarray(a, z + 1)), slice: 50, per });
+  assert.deepEqual([past.from, past.to, past.count, /^[0-9a-f]{64}$/.test(past.head)], [150, 149, 10, true]);
+});
+
+test('the drill’s record: a check passes only with every chunk covered; one that failed, stopped, or skipped some is said', async () => {
+  const { drillCheckedJob } = await import('../src/jobs.js');
+  let up = ['drive', 'b2'];
+  const record = async (checks, results) => {
+    const sets = {};
+    const state = { get: async () => null, set: async (k, v) => { sets[k] = v; } };
+    await drillCheckedJob({ REPOS: JSON.stringify(['org/site']) }, state, {}, 'R', { checks, up }, results);
+    return sets['drill:R'];
+  };
+  const file = { group: 'files', path: 'Files/a.age', where: 'drive', per: 3, slices: 2 };
+  const ok = (from, to, count = 6, head = 'h1') => ({ ok: true, from, to, count, head });
+  const one = async (parts, check = file) => (await record([check], [parts])).files[0];
+  assert.deepEqual(await one([ok(0, 2), ok(3, 5)]), { path: 'Files/a.age', where: 'drive', ok: true });
+  assert.match((await one([ok(0, 2), null])).problem, /didn’t finish/);
+  assert.match((await one([ok(0, 2)])).problem, /didn’t finish/, 'a slice never run');
+  assert.match((await one([{ ok: false, problem: 'Files/a.age in drive: chunk 2 of 6 doesn’t open' }])).problem, /chunk 2 of 6/, 'what was wrong, before the slices not run');
+  assert.match((await one([ok(0, 2), ok(4, 5)])).problem, /didn’t cover it in order/, 'a chunk skipped');
+  assert.match((await one([ok(0, 2), ok(3, 4)])).problem, /last chunk was never reached/);
+  assert.match((await one([ok(0, 2), ok(3, 5, 7)])).problem, /in order/, 'slices that disagree on the count');
+  assert.equal((await one([ok(0, 0, 1), { ok: true, from: 3, to: 2, count: 1, head: 'h1' }])).ok, true, 'a slice past the end checks nothing');
+  assert.match((await one([ok(0, 2), ok(3, 5, 6, 'h2')])).problem, /changed while it was checked/, 'another file part way through');
+  // The code: every copy of the chain, or the repository's check fails, naming what's missing
+  // The code: each copy of the chain in each home that holds it, or the repository's check fails, saying what
+  const code = (id, where = 'drive') => ({ group: 'code:org/site', id, path: id, where, per: 3, slices: where ? 1 : 0, bundle: true });
+  const site = async (checks, results) => (await record(checks, results)).code.find((x) => x.repo === 'org/site');
+  assert.deepEqual(await site([code('Code/full'), code('Code/full', 'b2'), code('Code/new')], [[ok(0, 0, 1)], [ok(0, 0, 1)], [ok(0, 1, 2)]]), { repo: 'org/site', copies: 2, ok: true });
+  const missing = await site([code('Code/full', null), code('Code/new')], [[], [ok(0, 0, 1)]]);
+  assert.equal(missing.ok, false);
+  assert.match(missing.problem, /Code\/full: in neither home/);
+  assert.match((await site([code('Code/full', 'b2')], [[{ ok: false, problem: 'Code/full in b2: Backblaze no longer has it (404)' }]])).problem, /no longer has it/);
+  assert.match((await site([code('Code/full', 'b2')], [[]])).problem, /didn’t finish/, 'a home that went down part way');
+  assert.deepEqual(await site([], []), { repo: 'org/site', skipped: 'no copy yet' });
+  // A home down when the plan was made: its checks are left for the next run, not taken for trouble
+  up = ['drive'];
+  const half = await record([code('Code/full'), code('Code/full', 'b2')], [[ok(0, 0, 1)], []]);
+  assert.deepEqual(half.code.find((x) => x.repo === 'org/site'), { repo: 'org/site', copies: 1, ok: true });
+  assert.match(half.incomplete, /1 check\(s\) left for the next run/);
+  // A code copy in neither home but still on its way: left for the next drill, not trouble
+  const onItsWay = await record([{ ...code('Code/new', null), waiting: true }, code('Code/full')], [[], [ok(0, 0, 1)]]);
+  assert.deepEqual(onItsWay.code.find((x) => x.repo === 'org/site'), { repo: 'org/site', copies: 1, ok: true });
+  assert.match(onItsWay.incomplete, /still on its way/);
+  up = ['drive', 'b2'];
+  // No plan at all: nothing is written (the report then says the checks didn't finish)
+  const sets = {};
+  assert.deepEqual(await drillCheckedJob({}, { get: async () => null, set: async (k, v) => { sets[k] = v; } }, {}, 'R', null, []), { ok: null });
+  assert.deepEqual(sets, {});
+  // and an earlier attempt's results for this run are cleared, the databases' kept
+  const kept = {};
+  await drillCheckedJob({}, { get: async () => ({ databases: [{ name: 'site-db', ok: true }], files: [{ ok: true }], code: [{ repo: 'org/site', ok: true }] }), set: async (k, v) => { kept[k] = v; } }, {}, 'R', null, []);
+  assert.deepEqual(kept['drill:R'], { databases: [{ name: 'site-db', ok: true }] });
+});
+
+test('a part of a file read back is the part: a whole file instead is taken only when it’s no more than was asked', async () => {
+  const { download } = await import('../src/drive.js');
+  const answer = (status, body, headers = {}) => async () => new Response(body, { status, headers });
+  // The part asked for
+  assert.equal((await download('t', 'f', { range: [10, 19], fetchImpl: answer(206, 'x'.repeat(10)) })).status, 206);
+  // A small file whole (asked from its start, with its length said, no more than asked): fine
+  assert.equal((await download('t', 'f', { range: [0, 999], fetchImpl: answer(200, 'abc', { 'content-length': '3' }) })).status, 200);
+  // A large file whole, a whole file for a part from its middle, or a whole file of a length not said: refused
+  await assert.rejects(download('t', 'f', { range: [0, 999], fetchImpl: answer(200, 'x'.repeat(2000), { 'content-length': '2000' }) }), /whole file/);
+  await assert.rejects(download('t', 'f', { range: [10, 19], fetchImpl: answer(200, 'x'.repeat(20), { 'content-length': '20' }) }), /whole file/);
+  await assert.rejects(download('t', 'f', { range: [0, 999], fetchImpl: async () => { const r = new Response('abc', { status: 200 }); r.headers.delete('content-length'); return r; } }), /whole file/);
+});
+
+test('a slice’s home is asked first whether it holds this very copy: lost, in the trash or another file is said, a home not answering is tried again', async () => {
+  const { drillSliceJob } = await import('../src/jobs.js');
+  const { encrypt, hasher } = await import('../src/stage.js');
+  const { DriveError } = await import('../src/drive.js');
+  const { B2Error } = await import('../src/b2.js');
+  const { randomBytes } = await import('node:crypto');
+  const { identity, recipient } = await newIdentity();
+  const bytes = new Uint8Array(await new Response(await encrypt(recipient, new Response(randomBytes(200_000)).body)).arrayBuffer());
+  const h0 = hasher(); h0.update(bytes);
+  const sums = h0.result();
+  const c = { id: 'c1', path: 'Files/x.age', size: bytes.length, md5: sums.md5, sha1: sums.sha1, drive_id: 'd1', b2_id: 'b1' };
+  const state = { copy: async () => c, secretKey: async () => identity };
+  const part = (range) => new Response(bytes.subarray(range[0], Math.min(range[1], bytes.length - 1) + 1), { status: 206 });
+  // Google Drive, as its API answers: the file's record, and its bytes by range
+  const drive = (info, status = 200) => ({ token: 't', driveId: 'shared1', fetchImpl: async (url, init) => {
+    if (!String(url).includes('alt=media')) return status === 200 ? Response.json(info) : Response.json({ error: { message: 'File not found' } }, { status });
+    const [, a, b] = /bytes=(\d+)-(\d+)/.exec(init.headers.Range);
+    return part([Number(a), Number(b)]);
+  } });
+  const b2 = (info) => ({ info: async () => { if (info instanceof Error) throw info; return info; }, download: async (id, { range }) => part(range) });
+  const check = { group: 'files', id: 'c1', path: 'Files/x.age', per: 2, slices: 2 };
+  const run = (where, h) => drillSliceJob({}, state, h, { ...check, where }, 0);
+  const good = { md5Checksum: c.md5, size: String(c.size), trashed: false, driveId: 'shared1' };
+  const fine = await run('drive', { drive: drive(good) });
+  assert.deepEqual([fine.ok, fine.from, fine.to, fine.count], [true, 0, 1, 4]);
+  assert.match((await run('drive', { drive: drive({ ...good, driveId: 'elsewhere' }) })).problem, /isn’t in the backup drive/);
+  assert.match((await run('drive', { drive: drive({ ...good, md5Checksum: 'f'.repeat(32) }) })).problem, /isn’t this copy/);
+  assert.match((await run('drive', { drive: drive({ ...good, size: String(c.size + 1) }) })).problem, /isn’t this copy/);
+  assert.match((await run('drive', { drive: drive({ ...good, trashed: true }) })).problem, /in the trash/);
+  assert.match((await run('drive', { drive: drive(null, 404) })).problem, /Google Drive no longer has it \(404\)/);
+  assert.match((await run('drive', { drive: drive(null, 400) })).problem, /Google Drive refused the request \(400\)/, 'a request refused isn’t a copy lost');
+  await assert.rejects(run('drive', { drive: drive(null, 503) }), (e) => e instanceof DriveError, 'a home not answering is tried again');
+  // Backblaze: a small file's SHA-1 is its own; a large one's is in its info
+  assert.equal((await run('b2', { b2: b2({ contentSha1: c.sha1, contentLength: c.size }) })).ok, true);
+  assert.equal((await run('b2', { b2: b2({ contentSha1: 'none', contentLength: c.size, fileInfo: { large_file_sha1: c.sha1 } }) })).ok, true);
+  assert.match((await run('b2', { b2: b2({ contentSha1: 'none', contentLength: c.size, fileInfo: { large_file_sha1: '0'.repeat(40) } }) })).problem, /isn’t this copy/);
+  assert.match((await run('b2', { b2: b2(new B2Error('Backblaze b2_get_file_info 404: not found', 404, 'not_found')) })).problem, /Backblaze no longer has it/);
+  await assert.rejects(run('b2', { b2: b2(new B2Error('Backblaze b2_get_file_info 503', 503, 'busy')) }), B2Error);
+  // A home not reachable at all this step: tried again
+  await assert.rejects(run('b2', {}), /can’t be reached/);
+});
+
+test('Backblaze gives back the part asked for, and a whole file instead only when it’s no more than was asked', async () => {
+  const { b2Client } = await import('../src/b2.js');
+  let answer;
+  const fetchImpl = async (url) => {
+    if (String(url).includes('b2_authorize_account')) return Response.json({ accountId: 'a', authorizationToken: 't', apiInfo: { storageApi: { apiUrl: 'https://api', downloadUrl: 'https://dl', allowed: { buckets: [{ id: 'b', name: 'n' }], capabilities: [] } } } });
+    return answer();
+  };
+  const b2 = await b2Client({ B2_KEY_ID: 'k', B2_APPLICATION_KEY: 's' }, { fetchImpl });
+  answer = () => new Response('x'.repeat(10), { status: 206 });
+  assert.equal((await b2.download('f', { range: [10, 19] })).status, 206);
+  answer = () => new Response('abc', { status: 200, headers: { 'content-length': '3' } });
+  assert.equal((await b2.download('f', { range: [0, 999] })).status, 200);
+  answer = () => new Response('x'.repeat(2000), { status: 200, headers: { 'content-length': '2000' } });
+  await assert.rejects(b2.download('f', { range: [0, 999] }), /whole file/);
+  answer = () => { const r = new Response('abc', { status: 200 }); r.headers.delete('content-length'); return r; };
+  await assert.rejects(b2.download('f', { range: [0, 999] }), /whole file/);
 });

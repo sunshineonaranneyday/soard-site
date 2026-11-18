@@ -26,6 +26,19 @@ const sha1 = (b) => createHash('sha1').update(b).digest('hex');
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } });
 const cf = (result, extra = {}) => json({ success: true, errors: [], messages: [], result, ...extra });
 const cfError = (status, message) => json({ success: false, errors: [{ code: status, message }], result: null }, status);
+// A file read back as Google Drive and Backblaze give it: the part a Range asks for (206), or all of it; the most
+// bytes any one answer carried is kept (the drill must never read a large copy whole)
+const readBack = (w, request, bytes) => {
+  const r = /^bytes=(\d+)-(\d+)$/.exec(request.headers.get('range') || '');
+  w.reads = (w.reads || 0) + 1;
+  if (!r) { w.biggestRead = Math.max(w.biggestRead || 0, bytes.length); return new Response(bytes); }
+  const first = Number(r[1]);
+  const last = Math.min(Number(r[2]), bytes.length - 1);
+  if (first >= bytes.length) return new Response(null, { status: 416 });
+  const part = bytes.subarray(first, last + 1);
+  w.biggestRead = Math.max(w.biggestRead || 0, part.length);
+  return new Response(part, { status: 206, headers: { 'content-range': `bytes ${first}-${last}/${bytes.length}` } });
+};
 
 export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk }) {
   const w = {
@@ -310,7 +323,10 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
       if ((m = /^\/drive\/v3\/files\/([^/]+)$/.exec(u.pathname))) {
         const f = w.drive.files.get(m[1]);
         if (!f) return json({ error: { message: 'not found' } }, 404);
-        if (u.searchParams.get('alt') === 'media') return new Response(f.bytes);
+        if (u.searchParams.get('alt') === 'media') {
+          if (request.headers.get('range')) w.driveRangedReads = (w.driveRangedReads || 0) + 1;
+          return w.faults.driveReadsDown ? json({ error: { message: 'backend error' } }, 500) : readBack(w, request, f.bytes);
+        }
         return json({ id: f.id, name: f.name, trashed: !!f.trashed, driveId: f.driveId || 'shared1', ...(f.bytes ? { size: String(f.bytes.length), md5Checksum: md5(f.bytes) } : {}) });
       }
       if ((m = /^\/upload\/drive\/v3\/files\/([^/]+)$/.exec(u.pathname)) && method === 'PATCH') {
@@ -364,6 +380,7 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
       w.b2.calls[name] = (w.b2.calls[name] || 0) + 1;
       const body = await request.json();
       if (/delete|hide|cancel/.test(name)) throw new Error(`the backup must never call ${name}`);
+      if (name === 'b2_get_file_info') { const f = w.b2.files.find((x) => x.fileId === body.fileId); return f ? json({ fileId: f.fileId, fileName: f.fileName, contentSha1: f.contentSha1, contentLength: f.contentLength, fileInfo: f.fileInfo || {} }) : json({ code: 'not_found', message: 'no such file' }, 404); }
       if (name === 'b2_list_buckets') return json({ buckets: [{ bucketId: w.b2.bucket.id, bucketName: w.b2.bucket.name, fileLockConfiguration: { isClientAuthorizedToRead: true, value: w.b2.lock } }] });
       if (name === 'b2_get_upload_url') return json({ uploadUrl: `https://pod.backblaze.test/upload/${body.bucketId}`, authorizationToken: 'up-token' });
       if (name === 'b2_list_file_versions' && w.faults.b2ListDown > 0) { w.faults.b2ListDown--; return json({ code: 'service_unavailable', message: 'busy' }, 503); }
@@ -405,9 +422,10 @@ export function createWorld({ gitDir, repo, streamPublicJwk, streamPrivateJwk })
       }
     }
     if (u.host === 'f001.backblaze.test') {
+      w.b2Reads = (w.b2Reads || 0) + 1;
       const f = w.b2.files.find((x) => x.fileId === u.searchParams.get('fileId'));
-      if (f && w.faults.b2GivesBackDamaged) { const b = Buffer.from(f.bytes); b[b.length - 1] ^= 1; return new Response(b); }
-      return f ? new Response(f.bytes) : json({ code: 'not_found' }, 404);
+      if (f && w.faults.b2GivesBackDamaged) { const b = Buffer.from(f.bytes); b[b.length - 1] ^= 1; return readBack(w, request, b); }
+      return f ? readBack(w, request, f.bytes) : json({ code: 'not_found' }, 404);
     }
 
     // ── GitHub, by real git ──

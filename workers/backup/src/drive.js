@@ -237,9 +237,14 @@ export async function replaceContent(token, fileId, bytes, { mimeType = 'text/pl
 }
 
 /** A file's bytes, for the restore drill: the response, with Google's MD5 of what it keeps checked by the caller */
-export async function download(token, fileId, { fetchImpl = fetch } = {}) {
-  const res = await fetchImpl(`${API}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers: { Authorization: `Bearer ${token}` } });
+export async function download(token, fileId, { fetchImpl = fetch, range = null } = {}) {
+  // (`range`: [first, last] bytes, last included: just those, as the drill reads a large copy a slice at a time)
+  const headers = { Authorization: `Bearer ${token}`, ...(range ? { Range: `bytes=${range[0]}-${range[1]}` } : {}) };
+  const res = await fetchImpl(`${API}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`, { headers });
   if (!res.ok) throw new DriveError(`Google Drive ${res.status} reading a file back`, res.status, 'download');
+  // A whole file back is only right when it's no more than was asked for (a large one whole is what this avoids)
+  const len = res.headers.get('content-length');
+  if (range && res.status !== 206 && !(range[0] === 0 && len !== null && Number(len) <= range[1] + 1)) { await res.body?.cancel(); throw new DriveError('Google Drive gave back the whole file, not the part asked for', res.status, 'download'); }
   return res;
 }
 

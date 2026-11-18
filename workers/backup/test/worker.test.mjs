@@ -289,7 +289,7 @@ export default {
         d1Databases: { DRILL: 'drill-db' },
         bindings: {
           TEST_MODE: '1', CF_ACCOUNT_ID: ACCT, API_PACE_MS: '0', STEP_DELAY: '1 second', AUDIT_SETTLE_MS: '0',
-          DRILL_DATABASE: 'drill-db', STAGING_BUCKET: 'backup-staging', KV_PART_KEYS: '3', VECTORIZE_PART: '3',
+          DRILL_DATABASE: 'drill-db', STAGING_BUCKET: 'backup-staging', KV_PART_KEYS: '3', VECTORIZE_PART: '3', DRILL_SLICE_BYTES: String(4 * 65552),
           DATABASES: JSON.stringify([{ name: 'site-db', id: 'site-db', label: 'Test site', quiet: false }, { name: 'store-db', id: 'store-db', label: 'Test store', quiet: false }]),
           REPOS: JSON.stringify([REPO]), R2_BUCKETS: JSON.stringify(['soard-files', 'soard-vendor-docs']),
           CF_BACKUP_TOKEN: 'cf-read-key', B2_KEY_ID: 'b2-key-id', B2_APPLICATION_KEY: 'b2-app-key', GITHUB_BACKUP_TOKEN: 'gh-read-key',
@@ -913,4 +913,56 @@ test('night 23: Backblaze keeps an upload but its answer never comes, and is too
   assert.equal(s.night.ok, true, JSON.stringify(s.night.problems));
   assert.equal(s.night.waitingToShip, 0, 'and the copy is in both homes');
   assert.ok((await open(twin(photoPath(world.images.at(-1))).bytes)).equals(world.images.at(-1).bytes));
+});
+
+test('night 24: a code copy many slices large is proved to open a slice a step, never read whole, with the whole month’s chain', async () => {
+  // The repository gains a large file: tonight's code copy is far more than a slice (the website's first full copy
+  // was 1.36 GB, and read whole it ran a Worker out of memory)
+  writeFileSync(join(gitDir, 'big.bin'), randomBytes(3_000_000));
+  git('add', '.'); git('commit', '-q', '-m', 'a large file');
+  world.biggestRead = 0;
+  const s = await runNight('2026-12-07');
+  assert.equal(s.night.ok, true, JSON.stringify([s.night.problems, s.drill?.problems]));
+  assert.equal(s.drill.ok, true, JSON.stringify(s.drill.problems));
+  const code = s.drill.code.find((x) => x.repo === REPO);
+  // December's full copy (night 2026-12-01) and every one since, tonight's large one among them
+  const chain = [...world.drive.files.values()].filter((f) => !f.trashed && /^2026-12-0[1-7] site (full|new) [0-9a-f]{7}\.bundle\.age$/.test(f.name));
+  assert.ok(code.ok && code.copies >= 2 && code.copies === chain.length, JSON.stringify([code, chain.map((f) => f.name)]));
+  const tonight = chain.find((f) => f.name.startsWith('2026-12-07'));
+  assert.ok(tonight && tonight.bytes.length > 2_900_000, 'tonight’s copy holds the large file');
+  assert.ok(world.biggestRead < 600_000, `no read carried more than a slice (the most was ${world.biggestRead} bytes)`);
+});
+
+test('night 25: Google Drive won’t give files back during the drill: it’s asked once (three tries) and not again, Backblaze’s copies are all checked, and nothing stalls', async () => {
+  world.faults.driveReadsDown = true;
+  world.driveRangedReads = 0;
+  const s = await runNight('2026-12-08');
+  world.faults.driveReadsDown = false;
+  assert.equal(world.driveRangedReads, 3, 'one slice’s three tries, then Drive is left for the rest of the drill');
+  const fromDrive = s.drill.files.filter((f) => f.where === 'drive');
+  const fromB2 = s.drill.files.filter((f) => f.where === 'b2');
+  assert.ok(fromDrive.length && fromDrive.every((f) => !f.ok && /didn’t finish/.test(f.problem)), JSON.stringify(fromDrive));
+  assert.ok(fromB2.length && fromB2.every((f) => f.ok), JSON.stringify(fromB2));
+  // The code: every copy checked in Backblaze; only Drive's checks are said, as not finished
+  const code = s.drill.code.find((x) => x.repo === REPO);
+  assert.ok(!code.ok && code.copies >= 2 && code.problem.split('; ').every((p) => / in drive: its check didn’t finish$/.test(p)), JSON.stringify(code));
+  assert.equal(s.drill.ok, false, 'not a pass: the drill runs again next run');
+  assert.ok(s.night.problemKinds.includes('drill'), JSON.stringify(s.night.problems));
+});
+
+test('night 26: Backblaze down from the start: its checks are left for the next run, never tried, and that’s no extra alert', async () => {
+  world.faults.b2Down = true;
+  world.b2Reads = 0;
+  const s = await runNight('2026-12-09');
+  world.faults.b2Down = false;
+  assert.equal(world.b2Reads, 0, 'nothing read from Backblaze');
+  assert.equal(s.drill.ok, null, JSON.stringify(s.drill));
+  assert.match(s.drill.skipped, /left for the next run \(a home was down/);
+  assert.ok(!s.night.problemKinds.some((k) => k.startsWith('step:drill')), `no drill step tried Backblaze: ${JSON.stringify(s.night.problemKinds)}`);
+  assert.ok(s.drill.files.length && s.drill.files.every((f) => f.where === 'drive' && f.ok), JSON.stringify(s.drill.files));
+  assert.ok(s.drill.code.find((x) => x.repo === REPO).ok);
+  assert.ok(!s.night.problemKinds.includes('drill') && s.night.problemKinds.includes('home:b2'), JSON.stringify(s.night.problemKinds));
+  // And the next run, all well, drills again and passes
+  const s2 = await runNight('2026-12-10');
+  assert.equal(s2.drill.ok, true, JSON.stringify(s2.drill.problems));
 });

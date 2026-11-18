@@ -106,10 +106,17 @@ export async function b2Client(env, { fetchImpl = fetch, wait = (ms) => new Prom
     },
     sendPart: (fileId, number, bytes, sha1) => send(() => call('b2_get_upload_part_url', { fileId }), { 'X-Bz-Part-Number': String(number), 'Content-Length': String(bytes.length), 'X-Bz-Content-Sha1': sha1 }, bytes),
     finishLarge: (fileId, sha1s) => call('b2_finish_large_file', { fileId, partSha1Array: sha1s }),
+    /** A file's record: its length and SHA-1 (a large file's is in its info), no bytes read (the restore drill) */
+    info: (fileId) => call('b2_get_file_info', { fileId }),
     /** Reads a file back (the restore drill) */
-    async download(fileId) {
-      const r = await fetchImpl(`${api.downloadUrl}/b2api/v4/b2_download_file_by_id?fileId=${encodeURIComponent(fileId)}`, { headers: { Authorization: auth.authorizationToken } });
+    async download(fileId, { range = null } = {}) {
+      // (`range`: [first, last] bytes, last included: just those, as the drill reads a large copy a slice at a time)
+      const headers = { Authorization: auth.authorizationToken, ...(range ? { Range: `bytes=${range[0]}-${range[1]}` } : {}) };
+      const r = await fetchImpl(`${api.downloadUrl}/b2api/v4/b2_download_file_by_id?fileId=${encodeURIComponent(fileId)}`, { headers });
       if (!r.ok) throw new B2Error(`Backblaze download ${r.status}`, r.status, 'download');
+      // A whole file back is only right when it's no more than was asked for (a large one whole is what this avoids)
+      const len = r.headers.get('content-length');
+      if (range && r.status !== 206 && !(range[0] === 0 && len !== null && Number(len) <= range[1] + 1)) { await r.body?.cancel(); throw new B2Error('Backblaze gave back the whole file, not the part asked for', r.status, 'download'); }
       return r;
     },
   };
