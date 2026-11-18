@@ -125,15 +125,14 @@ test('past its start time it says starting soon, not a time gone by', () => {
   assert.equal(bannerWords(s, 'today', [], { now: overnight }).msg, 'Dylan’s room reveal is starting soon.');
 });
 
-test('the button only offers what the page really does', () => {
-  assert.equal(say(planned(), [], { remindersOn: true }).cta, 'Remind me →');
-  const off = say(planned(), [], { remindersOn: false });
-  assert.equal(off.cta, 'Add to calendar →');
-  assert.doesNotMatch(`${off.cta} ${off.aria}`, /remind/i);
+test('the button names the reveal page it opens', () => {
+  assert.equal(say(planned()).cta, 'See Dylan’s reveal →');
+  assert.equal(say(planned({ kidName: 'James' })).cta, 'See James’ reveal →');
+  assert.equal(say(planned({ kidName: null })).cta, 'See the reveal →');
+  assert.doesNotMatch(`${say(planned()).cta} ${say(planned()).aria}`, /remind|calendar/i);
   // Inside the last half hour the page is where to wait for the video: go there
   const soon = planned({ scheduledAt: new Date(now + 12 * M).toISOString() });
-  assert.equal(say(soon, [], { remindersOn: true }).cta, 'Watch →');
-  assert.equal(say(soon, [], { remindersOn: false }).cta, 'Watch →');
+  assert.equal(say(soon).cta, 'Watch →');
 });
 
 test('"Replay ready" waits for a replay that exists', () => {
@@ -176,10 +175,10 @@ test('reminders only count as on when there is a way to sign up', () => {
 });
 
 test('the name screen readers and voice control get starts with what is on screen', () => {
-  const w = say(planned(), [reveal('max', 'Max', local(9))], { remindersOn: false });
+  const w = say(planned(), [reveal('max', 'Max', local(9))]);
   assert.ok(w.aria.startsWith('Coming up. Dylan’s room reveal goes live'));
   assert.ok(w.aria.includes(w.next));
-  assert.ok(w.aria.endsWith('Add to calendar.'));
+  assert.ok(w.aria.endsWith('See Dylan’s reveal.'));
 });
 
 test('hidden only where the page already shows this broadcast', () => {
@@ -236,14 +235,17 @@ test('none of it uses an em dash', () => {
   assert.doesNotMatch(readFileSync('src/utils/live-banner.ts', 'utf8').replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, ''), /—/);
 });
 
-test('a button that promises reminders or a calendar lands on them, not the top of a long page', () => {
+test('every banner opens the top of the reveal page, never partway down it (Peter, Nov 18)', () => {
   const now = Date.parse('2026-11-13T12:00:00Z');
   const coming = { id: 'a', upcoming: true, kidSlug: 'max', kidName: 'Max', scheduledAt: '2026-11-18T21:00:00.000Z' };
-  assert.equal(bannerWords(coming, 'upcoming', [], { now, remindersOn: true }).anchor, '#remind');
-  assert.equal(bannerWords(coming, 'upcoming', [], { now, remindersOn: false }).anchor, '#remind');
+  assert.equal(bannerWords(coming, 'upcoming', [], { now }).anchor, '');
+  // Reveal day, hours before the start: the case Peter clicked on Dylan's day
+  const dayOf = { ...coming, scheduledAt: new Date(now + 5.5 * 3600e3).toISOString() };
+  assert.equal(bannerWords(dayOf, 'today', [], { now }).anchor, '');
+  assert.equal(bannerWords(dayOf, 'today', [], { now }).cta, 'See Max’s reveal →');
   const soon = { ...coming, scheduledAt: new Date(now + 10 * 60e3).toISOString() };
-  assert.equal(bannerWords(soon, 'today', [], { now, remindersOn: true }).cta, 'Watch →');
-  assert.equal(bannerWords(soon, 'today', [], { now, remindersOn: true }).anchor, '');
+  assert.equal(bannerWords(soon, 'today', [], { now }).cta, 'Watch →');
+  assert.equal(bannerWords(soon, 'today', [], { now }).anchor, '');
   assert.equal(bannerWords({ ...coming, live: true }, 'live', [], { now }).anchor, '');
   assert.equal(bannerWords({ ...coming, upcoming: false, replay: true }, 'replay', [], { now }).anchor, '');
 });

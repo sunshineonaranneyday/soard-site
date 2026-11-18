@@ -149,7 +149,7 @@
   import { cfRaw } from '../../utils/cf-image';
   import { getLiveClient, type LiveState } from '../../utils/live-client';
   import { readReveals } from '../../utils/reveals-client';
-  import { bannerStage, bannerWords, revealsAfter, dismissValue, sitsOn, pageShowsIt, remindersUsable, browserCanPush, MAIN_CONTROLS, PICTURES, type Box, type NextReveal } from '../../utils/live-banner';
+  import { bannerStage, bannerWords, revealsAfter, dismissValue, sitsOn, pageShowsIt, MAIN_CONTROLS, PICTURES, type Box, type NextReveal } from '../../utils/live-banner';
   import { onPageLoad } from '../../utils/page-load';
 
   const DISMISS_KEY = 'soard-live-dismissed';
@@ -160,7 +160,6 @@
   const client = getLiveClient();
   let status: LiveState | null = null;
   let seen = '';                           // the broadcast and phase last read
-  let remindersOn = false;
   let reveals: NextReveal[] | null = null; // null until the schedule has been read
   let readingSchedule = false;
   let closed: string | null = null;        // stands in when the browser won't keep it
@@ -355,7 +354,7 @@
     } else photo.hidden = true;
 
     const next = stage === 'live' ? [] : revealsAfter(status, reveals || []);
-    const words = bannerWords(status, stage, next, { remindersOn });
+    const words = bannerWords(status, stage, next);
     const href = `${status.url || status.liveUrl || '/live/'}${words.anchor}`;
     if (link.getAttribute('href') !== href) link.href = href;
     put(label, words.label);
@@ -383,9 +382,8 @@
     }
   }
 
-  client.subscribe((s, meta) => {
+  client.subscribe((s) => {
     status = s;
-    remindersOn = remindersUsable(meta.reminders, browserCanPush());
     const now = `${s?.id}:${s?.phase}`;
     if (now !== seen) { seen = now; if (reveals !== null && currentStage()) readSchedule(); }
     render();

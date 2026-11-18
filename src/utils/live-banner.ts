@@ -96,7 +96,7 @@ function nextLine(next: NextReveal[], now: number): string {
   return `Next: ${possessive(r.name)} ${onDay(dayIso(r), now)}${r.time ? ` at ${clock(r.startsAt)}` : ''}${more}.`;
 }
 
-/** anchor: where on the page the button's words are kept, so "Remind me" lands on the form */
+/** anchor: a spot on the page to open at instead of its top (none today: every banner opens the top of the reveal page) */
 export interface BannerWords { label: string; msg: string; next: string; cta: string; aria: string; anchor: string }
 
 const words = (label: string, msg: string, next: string, cta: string, anchor = ''): BannerWords => ({
@@ -105,7 +105,7 @@ const words = (label: string, msg: string, next: string, cta: string, anchor = '
   aria: [`${label}.`, msg, next, `${cta.replace(' →', '')}.`].filter(Boolean).join(' '),
 });
 
-export function bannerWords(s: Status, stage: BannerStage, next: NextReveal[], { now = Date.now(), remindersOn = false } = {}): BannerWords {
+export function bannerWords(s: Status, stage: BannerStage, next: NextReveal[], { now = Date.now() } = {}): BannerWords {
   const who = s.kidName ? `${possessive(s.kidName)} room reveal` : (s.title || 'Live room reveal');
   if (stage === 'live') return words('Live now', s.message || who, '', 'Watch →');
   if (stage === 'ended') return words('Just ended', `${who} just ended.${s.source === 'stream' ? ' The replay is on its way.' : ''}`, nextLine(next, now), 'Details →');
@@ -114,10 +114,11 @@ export function bannerWords(s: Status, stage: BannerStage, next: NextReveal[], {
   const when = s.scheduledAt && Number.isFinite(at) ? ` goes live ${dayWords(s.scheduledAt, now)} at ${clock(s.scheduledAt)}` : '';
   // Past its start and still waiting on the stream: a time in the past reads as a mistake
   const msg = !(at <= now) ? `${who}${when}.` : runningLate(s.scheduledAt, now) ? `${who} is running a little late.` : `${who} is starting soon.`;
-  // The button says what the page it opens really offers; this close, that's waiting for the video, not signing up
+  // Opens the top of the reveal page (photo, title, countdown, its own Remind me), never partway down it (Peter, Nov 18 2026).
+  // This close, that page is where to wait for the video, so the button says Watch.
   const starting = at - now <= STARTING_MS;
-  const cta = starting ? 'Watch →' : remindersOn ? 'Remind me →' : 'Add to calendar →';
-  return words(stage === 'today' ? 'Reveal day' : 'Coming up', msg, thenLine(s, next, now), cta, starting ? '' : '#remind');
+  const cta = starting ? 'Watch →' : `See ${s.kidName ? possessive(s.kidName) : 'the'} reveal →`;
+  return words(stage === 'today' ? 'Reveal day' : 'Coming up', msg, thenLine(s, next, now), cta);
 }
 
 /** Reminders only count as on when there's a way to sign up for them */
