@@ -399,9 +399,8 @@ const ICON = {
      gets the room the bar took, so it's taller. LIVE and the number watching are the page's to show (its eyebrow on a
      computer, beside the kid's name on a phone). live-stage.ts decides when (data-rail): a live portrait picture, out
      of full screen, not on a phone held sideways. A replay keeps its bar: its progress line needs the width ── */
-  /* (UPRIGHT: word for word as in src/utils/live-media.ts. Never on a phone held sideways, even before the script has
-     said so: the server marks the rail before the page's script runs) */
-  @media (max-width: 559px), (max-aspect-ratio: 1749/1000), (min-height: 541px), (min-width: 1024px), (min-width: 961px) and (pointer: fine), (min-width: 961px) and (pointer: none) {
+  /* (a phone held sideways too: the server marks the rail before the page's script runs, for any screen) */
+  @media all {
     .stage[data-party][data-rail] {
       --rail: 56px; --rail-gap: 12px; --below: var(--under, 0px);
       grid-template-columns: minmax(0, 1fr) minmax(0, var(--pic)) var(--rail-gap) var(--rail) minmax(0, 1fr);
@@ -608,14 +607,17 @@ const ICON = {
       width: 100%;
       align-items: start;
     }
+    /* (a live upright picture has its controls in the rail beside it instead, as tall as it, LivePage putting the
+       messages beside them: the stage is just the picture and its rail) */
+    .stage[data-party][data-rail]:not([data-fullscreen]) { width: calc(var(--pic) + var(--rail-gap) + var(--rail)); }
     /* A portrait picture is narrow enough never to give way: it's always the screen's full height, so the design beside
        it is exactly that tall too (--fh), even when the controls beside them are taller */
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) {
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) {
       grid-template-columns: var(--pic) var(--beside-gap, 0px) var(--beside, 0px) 16px minmax(0, 1fr);
       grid-template-rows: auto auto auto minmax(0, 1fr);
       grid-template-areas: 'screen . beside . cc' 'screen . beside . bar' 'screen . beside . jump' 'screen . beside . .';
     }
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .stage__beside { height: var(--fh); }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) .stage__beside { height: var(--fh); }
     /* The first control beside the picture starts level with its top */
     .stage[data-party][data-orientation]:not([data-fullscreen]) .stage__cc:not([hidden]), .stage[data-party][data-orientation]:not([data-fullscreen]) .stage__cc[hidden] + .stage__bar,
     .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc:not([hidden]), .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc[hidden] + .stage__bar { margin-top: 0; }

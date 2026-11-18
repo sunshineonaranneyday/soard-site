@@ -418,7 +418,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     flag('data-muted', muted);
     // The rail: a live upright picture's controls in a column beside it (LiveStage), where there's room for the
     // heart and full screen even before the sound is on
-    const rail = party && live && shape() === 'portrait' && document.fullscreenElement !== root && !sideways.matches;
+    // (a phone held sideways too, Nov 18 2026: the picture as tall as the screen, its controls in the rail beside it, the
+    // messages beside that, where a long bar of controls used to leave most of the screen empty)
+    const rail = party && live && shape() === 'portrait' && document.fullscreenElement !== root;
     flag('data-rail', rail);
 
     // Photo badge, before the watch party only

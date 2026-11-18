@@ -264,6 +264,25 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     .msgs[data-place='hero'] .msgs__feed { flex: none; min-height: 0; }
     .msgs[data-place='hero'] .msgs__wall { max-height: min(46svh, 420px); min-height: 120px; }
   }
+  /* A phone held sideways with a live upright picture: the card beside the picture and its rail, as tall as them
+     (LivePage), its heading a line, the messages filling it, the box to write in at its foot (SIDE: live-media.ts) */
+  @media (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 960px), (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 1023px) and (pointer: coarse) {
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] { flex: 1 1 auto; min-height: 0; height: 100%; border-radius: 18px; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__head { padding: 10px 16px 8px; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] h2 { font-size: 1.02rem; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__lead { display: none; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__feed { flex: 1 1 0; min-height: 0; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__wall { flex: 1 1 auto; max-height: none; min-height: 0; padding: 10px 14px; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__compose { padding: 8px 10px 8px; }
+    /* The box one slim line at rest, so the messages have the card: its name line and small print come as you tap in */
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msg-box { border-radius: 16px; padding: 2px 3px 2px 14px; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msg-send { width: 44px; height: 44px; margin: 0; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msg-body { height: 44px; padding: 11px 0; max-height: 88px; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__compose:not(:focus-within) .msg-who,
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__compose:not(:focus-within) .msg-meta,
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__compose:not(:focus-within) .remind-note { display: none; }
+    :global(.hero:has([data-stage][data-rail])) .msgs[data-place='hero'] .msgs__compose:not(:focus-within) .msg-body { height: 44px !important; overflow: hidden; }
+  }
   @media (prefers-reduced-motion: reduce) {
     .msg-list :global(.msg), .msg-list :global(.msg.is-new .msg__card), .msgs__latest.is-new { animation: none; }
     .msgs__wall { scroll-behavior: auto; }

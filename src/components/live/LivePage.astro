@@ -312,6 +312,45 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
      the site's own page-to-page handover, which holds the old page whole under the new, showed both headings at once.
      Named only while it plays: a name makes the frame a stacking context of its own */
   :global(html[data-live-morph]) .hero-frame { view-transition-name: live-frame; }
+  /* What's on the page before and after (the label over the name, the name, the story's line, the buttons) glides from
+     its place to its new one with the frame, each its own: crossfaded with the rest of the page in place, they showed
+     twice over for a moment, two names and two rows of buttons. One that isn't there after fades away where it was */
+  :global(html[data-live-morph]) .hero-eyebrow { view-transition-name: live-eyebrow; }
+  :global(html[data-live-morph]) .hero-text h1 { view-transition-name: live-title; }
+  :global(html[data-live-morph]) .hero-lead { view-transition-name: live-lead; }
+  :global(html[data-live-morph]) .hero-ctas { view-transition-name: live-ctas; }
+  /* (and the countdown's line, and the partners' band under the frame: left in the page's crossfade, the line showed
+     over the starting video on a phone, and the band twice, where it was and where it goes. The line by its old
+     picture only ('old': morph() marks the page so until it draws the new): going live it folds away, and a named
+     part that stops being drawn mid-way ends the whole morph there, the frame's glide cut short) */
+  :global(html[data-live-morph='old']) .hero-status { view-transition-name: live-status; }
+  :global(html[data-live-morph] .hero [data-live-partners]) { view-transition-name: live-partners; }
+  :global(html[data-live-morph]::view-transition-group(live-status)),
+  :global(html[data-live-morph]::view-transition-group(live-partners)),
+  :global(html[data-live-morph]::view-transition-group(live-eyebrow)),
+  :global(html[data-live-morph]::view-transition-group(live-title)),
+  :global(html[data-live-morph]::view-transition-group(live-lead)),
+  :global(html[data-live-morph]::view-transition-group(live-ctas)) { animation-duration: 0.55s; animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
+  /* (each keeps its own shape as it goes, anchored at its start, never stretched: a name over two lines becoming one) */
+  :global(html[data-live-morph]::view-transition-old(live-eyebrow)), :global(html[data-live-morph]::view-transition-new(live-eyebrow)),
+  :global(html[data-live-morph]::view-transition-old(live-title)), :global(html[data-live-morph]::view-transition-new(live-title)),
+  :global(html[data-live-morph]::view-transition-old(live-lead)), :global(html[data-live-morph]::view-transition-new(live-lead)),
+  :global(html[data-live-morph]::view-transition-old(live-ctas)), :global(html[data-live-morph]::view-transition-new(live-ctas)),
+  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-new(live-status)) {
+    height: 100%; width: auto; object-fit: contain; object-position: left top;
+  }
+  /* (words one after the other, never both at once: the old out quickly as it starts to move, the new in as it
+     arrives; the page behind them is the same cream either way, so nothing blinks) */
+  :global(html[data-live-morph]::view-transition-old(live-eyebrow)), :global(html[data-live-morph]::view-transition-old(live-title)),
+  :global(html[data-live-morph]::view-transition-old(live-lead)), :global(html[data-live-morph]::view-transition-old(live-ctas)),
+  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-old(live-partners)) { animation: 0.12s cubic-bezier(0.4, 0, 1, 1) both vt-fade-out; mix-blend-mode: normal; }
+  :global(html[data-live-morph]::view-transition-new(live-eyebrow)), :global(html[data-live-morph]::view-transition-new(live-title)),
+  :global(html[data-live-morph]::view-transition-new(live-lead)), :global(html[data-live-morph]::view-transition-new(live-ctas)),
+  :global(html[data-live-morph]::view-transition-new(live-status)), :global(html[data-live-morph]::view-transition-new(live-partners)) { animation: 0.24s cubic-bezier(0, 0, 0.2, 1) 0.1s both vt-fade-in; mix-blend-mode: normal; }
+  /* The kid's name is the same name before and after: just the one, the new, from where it was to where it goes,
+     its size easing with it (no fade, so never two of it) */
+  :global(html[data-live-morph]::view-transition-old(live-title)) { animation: none; opacity: 0; }
+  :global(html[data-live-morph]::view-transition-new(live-title)) { animation: none; opacity: 1; }
   :global(html[data-live-morph]::view-transition-group(live-frame)) { animation-duration: 0.55s; animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); }
   :global(html[data-live-morph]::view-transition-old(live-frame)),
   :global(html[data-live-morph]::view-transition-new(live-frame)) { height: 100%; object-fit: cover; }
@@ -538,6 +577,32 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     .hero[data-party] .hero-frame { --fh: calc(var(--live-vh, 100svh) - var(--header-height) - 12px - 1.4rem - 6px - 14px); }
     /* Clear of the notch and the rounded corners on the side they're on (the page is drawn to the screen's edges) */
     .hero[data-party] .hero-inner { padding-left: max(var(--space-md), env(safe-area-inset-left)); padding-right: max(var(--space-md), env(safe-area-inset-right)); }
+
+    /* ── A live upright picture, the phone held sideways (Nov 18 2026: it was a thumbnail under the header and the
+       name, with a long bar of controls and most of the screen empty): the site's header slimmer for the while, the
+       picture as tall as the screen leaves with its controls in the rail beside it (LiveStage), and beside them the
+       kid's name with "Live" and the messages, as tall as the picture. The design, Fund the next room and Share are
+       further down, as on a phone held upright ── */
+    :global(html:has(.hero[data-party] [data-stage][data-rail])) { --header-height: 52px; }
+    :global(html:has(.hero[data-party] [data-stage][data-rail]) .site-header .logo-img) { height: 60px; max-height: 60px; transform: translateY(calc((60px - var(--header-height)) / 6)); }
+    :global(.hero[data-party]:has([data-stage][data-rail])) { padding-top: 10px; padding-bottom: 24px; }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-inner {
+      --side-fh: calc(var(--live-vh, 100svh) - var(--header-height) - 10px - 10px);
+      grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
+      grid-template-areas: 'frame title' 'frame party' 'ctas ctas'; column-gap: 20px; align-items: start; text-align: left;
+    }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-frame { grid-area: frame; width: auto; margin: 0; --fh: var(--side-fh); }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-titlerow { grid-area: title; justify-content: space-between; text-align: left; margin: 0 0 8px; }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-onair:not([hidden]) {
+      flex: none; display: inline-flex; align-items: center; gap: 7px; height: 26px; margin: 0; padding: 0 10px; border-radius: 100px;
+      background: #fff; border: 1px solid var(--c-border); font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--c-text);
+    }
+    .hero-onair__dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--c-yellow); }
+    .hero-onair__n { color: var(--c-text-muted); letter-spacing: 0.04em; }
+    .hero-onair__n:empty { display: none; }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-party { grid-area: party; margin: 0; height: calc(var(--side-fh) - 36px); display: flex; flex-direction: column; min-height: 0; }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-status { display: none; }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-ctas { grid-area: ctas; margin-top: 20px; justify-content: flex-start; }
   }
   /* The Theater's story column (above): on a tall screen the whole story; on a short one, first the small pictures
      step aside, then the sentence */
@@ -883,10 +948,11 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         && !frame?.querySelector('.is-docked');
       if (!can) { draw(); return; }
       morphDraw = draw;
-      root.dataset.liveMorph = '';
+      // ('old' while the page as it was is pictured: a part named only then fades where it was)
+      root.dataset.liveMorph = 'old';
       let t: ViewTransition;
       try {
-        t = document.startViewTransition(() => { const d = morphDraw; morphDraw = null; if (alive) d?.(); });
+        t = document.startViewTransition(() => { root.dataset.liveMorph = ''; const d = morphDraw; morphDraw = null; if (alive) d?.(); });
       } catch {
         morphDraw = null; delete root.dataset.liveMorph; draw(); return;
       }
