@@ -16,8 +16,7 @@
  *     its location, never an address
  *   - in a browser: /live/ (the hero lists what the feed has, each with its
  *     invite, and the sheet opens), each tentative kid's page badge and
- *     invite, /kids/ cards, the events page, the home strip's date line,
- *     and the slate's "Coming up next" card
+ *     invite, /kids/ cards, the events page and the home strip's date line
  *   - no console errors on any of them, no sideways scroll on a phone
  * Exits non-zero on any failure.
  */
@@ -130,7 +129,7 @@ for (const width of [1440, 390]) {
   await page.close();
 }
 
-console.log('\n── kid pages, /kids/, events, home, slate ──');
+console.log('\n── kid pages, /kids/, events, home ──');
 for (const r of tentative.slice(0, 3)) {
   const { page, errors } = await open(r.kidUrl);
   const badge = await page.evaluate(() => ({ badge: document.querySelector('[data-kid-reveal-badge]')?.textContent, link: document.querySelector('.hero__reveal-day')?.textContent, add: document.querySelector('.hero__reveal-add')?.dataset.invite }));
@@ -160,14 +159,6 @@ for (const r of tentative.slice(0, 3)) {
   if (line.kid) ok(r ? (r.confirmed ? /^Reveal \w+day, \w+ \d{1,2}$/.test(line.text) : line.text === `Reveal ${r.window.label}`) : line.text === 'Reveal coming soon', `home Up Next: "${line.text}"`);
   else ok(true, `home Up Next: staff's own date line or not a build ("${line.text}")`);
   ok(errors.length === 0, 'home: no console errors', errors.join(' | '));
-  await page.close();
-}
-{
-  const { page, errors } = await open('/live/slate/?music=0&still=1', { width: 960, height: 540 });
-  await wait(1500);
-  const s = await page.evaluate(() => ({ shown: !document.querySelector('[data-card="next"]')?.hidden, items: [...document.querySelectorAll('[data-next-list] li')].map((l) => l.textContent) }));
-  ok(upcoming?.length ? s.shown && s.items.length === Math.min(3, upcoming.length) : !s.shown, `slate: "Coming up next" ${JSON.stringify(s.items)}`);
-  ok(errors.length === 0, 'slate: no console errors', errors.join(' | '));
   await page.close();
 }
 

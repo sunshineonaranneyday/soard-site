@@ -1,6 +1,6 @@
 /**
  * Reveal dates for public pages (kid pages, events page, the live page's
- * "Coming up" list, the starting-soon screen). Data comes from /api/reveals,
+ * "Coming up" list). Data comes from /api/reveals,
  * which reads JobTread; see functions/api/_reveals.js. A confirmed reveal
  * has its day and time; a tentative one only "early/mid/late <month>".
  */

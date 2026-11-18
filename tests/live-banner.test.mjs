@@ -130,7 +130,7 @@ test('the button only offers what the page really does', () => {
   const off = say(planned(), [], { remindersOn: false });
   assert.equal(off.cta, 'Add to calendar →');
   assert.doesNotMatch(`${off.cta} ${off.aria}`, /remind/i);
-  // Inside the last half hour the page is the starting-soon screen, with neither on it
+  // Inside the last half hour the page is where to wait for the video: go there
   const soon = planned({ scheduledAt: new Date(now + 12 * M).toISOString() });
   assert.equal(say(soon, [], { remindersOn: true }).cta, 'Watch →');
   assert.equal(say(soon, [], { remindersOn: false }).cta, 'Watch →');
@@ -186,8 +186,6 @@ test('hidden only where the page already shows this broadcast', () => {
   assert.equal(pageShowsIt('/live/', 'dylan-2026'), true);
   assert.equal(pageShowsIt('/live', 'dylan-2026'), true);
   assert.equal(pageShowsIt('/live/dylan-2026/', 'dylan-2026'), true);
-  assert.equal(pageShowsIt('/live/dylan-2026/slate/', 'dylan-2026'), true, 'the starting-soon screen');
-  assert.equal(pageShowsIt('/live/max/slate/', 'dylan-2026'), true, 'a starting-soon screen never carries it');
   assert.equal(pageShowsIt('/live/max/', 'dylan-2026'), false, 'another kid’s page says nothing about the reveal, so the banner does');
   assert.equal(pageShowsIt('/live/max/', null), false);
   assert.equal(pageShowsIt('/kids/max/', 'max'), false);

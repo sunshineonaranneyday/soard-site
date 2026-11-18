@@ -220,7 +220,7 @@ export default function ogCards() {
           const page = pageOf(file);
           const og = metaContent(html, 'property', 'og:image');
           const tw = metaContent(html, 'name', 'twitter:image');
-          // Every page in the sitemap needs a card; a page that isn't (a starting-soon screen, admin) only needs a right one if it has one
+          // Every page in the sitemap needs a card; a page that isn't (admin) only needs a right one if it has one
           if (!og.length && !listed.has(page)) continue;
           if (og.length !== 1) { problems.push(`${page}: ${og.length} og:image tags`); continue; }
           if (tw[0] !== og[0]) problems.push(`${page}: twitter:image differs from og:image`);

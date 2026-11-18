@@ -1,8 +1,7 @@
 /**
  * live-when.ts — the live page's time words, in any zone
  * =======================================================
- * "Wednesday, November 18 at 4:00 PM EST", "in 8 days", "Reveal day". The
- * starting-soon screen (SlateScreen.astro) takes its day words from here too.
+ * "Wednesday, November 18 at 4:00 PM EST", "in 8 days", "Reveal day".
  * The live page writes them in the viewer's own zone (tz left out: the browser's);
  * the server writes the same words into the page before it goes out, in the
  * zone Cloudflare places the visitor in (functions/live/[[path]].js), so

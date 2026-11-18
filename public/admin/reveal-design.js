@@ -1,8 +1,8 @@
 /**
  * reveal-design.js — a kid's design, shown while everyone waits for their reveal
  * ==========================================================================
- * Peter, Nov 9 2026: show the design on the reveal's starting-soon screen
- * "about 1 hour before the reveal": "the asbuilt drawing, proposed drawing,
+ * Peter, Nov 9 2026: show the design for the reveal (first on its starting-soon
+ * screen, retired Nov 17 2026; now the live page): "the asbuilt drawing, proposed drawing,
  * about 4-6 before photos and any design boards", and "it should remain on
  * the page during the reveal too". The family is at the house for the reveal,
  * not on the site, so it goes to everyone watching.
@@ -34,13 +34,13 @@
  * How It Works shows whole pairs of revealed rooms only.
  */
 
-/** Before photos on the starting-soon screen (Peter: "about 4-6"): the first ones in Photos → Before photos */
+/** Before photos in the reveal's design (Peter: "about 4-6"): the first ones in Photos → Before photos */
 export const BEFORE_SHOWN = 6;
 export const BEFORE_SUGGESTED = 6;
 
 /**
- * badge: what a picture is, in one word, on the picture itself wherever it's shown (the starting-soon screen, the live
- * page's design, the strip beside the video, the viewer). Peter, Nov 11 2026: the plans have to say whether they're
+ * badge: what a picture is, in one word, on the picture itself wherever it's shown (the live page's design, the strip
+ * beside the video, the viewer). Peter, Nov 11 2026: the plans have to say whether they're
  * existing or proposed, and a before photo has to say so strongly enough that nobody takes the old room for our work.
  */
 export const BEFORE_BADGE = 'Before';
@@ -180,7 +180,7 @@ export function revealSlides(kid, { after = false } = {}) {
       // A board's own caption says what it is ("Bathroom design board"); a plan says which plan it is
       caption: k === 'board' ? (label && !looksLikeFileName(label) ? label : KIND[k].caption) : (after && KIND[k].captionAfter) || KIND[k].caption,
       ...(Number(p.w) > 0 && Number(p.h) > 0 ? { w: Math.round(p.w), h: Math.round(p.h) } : {}),
-      // A whole sheet: where its drawing is, for the viewer and the starting-soon screen to zoom to
+      // A whole sheet: where its drawing is, for the viewer to zoom to
       ...(sheetFocus(p) ? { focus: sheetFocus(p) } : {}),
     };
   });

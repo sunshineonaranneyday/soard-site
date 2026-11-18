@@ -4,8 +4,8 @@
  * The page says which kid it's showing and what moment it's in (setKid: its
  * own kid, or on /live/ the one being revealed); this asks /api/reveal-design
  * for them, draws the room as it was and the plan once it's open (once the
- * reveal is confirmed), and asks again: when the moment changes (starting
- * soon, live, replay), and every few minutes, so the confirm and a change in
+ * reveal is confirmed), and asks again: when the moment changes (live,
+ * replay), and every few minutes, so the confirm and a change in
  * Admin → Kids show up on their own.
  *
  * Two places, the same pictures:
@@ -467,7 +467,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   const sideWidth = () => Math.floor((frame?.getBoundingClientRect().left || 0) - 24);
   const fitSide = () => { if (viewer && mode === 'side') viewer.style.setProperty('--ldv-w', `${Math.max(SIDE_MIN_W, sideWidth())}px`); };
   // On a phone the small video's shape decides the room the viewer leaves it, and that shape can change while the viewer
-  // is open (a phone turned sideways gets the landscape starting-soon screen), so it's followed, not read once
+  // is open (the picture's real shape arrives after the setting's), so it's followed, not read once
   const wideNow = () => mode === 'pinned' && hero?.dataset.orientation === 'landscape';
   const fitPin = () => { if (viewer?.open) viewer.classList.toggle('ldv--wide', wideNow()); };
   // (and the watch party ending or starting while it's open, a live reveal ending before its replay is ready, changes the
@@ -575,7 +575,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   document.addEventListener('visibilitychange', onVisible);
 
   return {
-    /** The kid the page is showing now ('' for none), and its moment (upcoming, starting, live…): a change asks again */
+    /** The kid the page is showing now ('' for none), and its moment (upcoming, live, replay…): a change asks again */
     setKid(slug: string, now = '') {
       // The first time: the server may have drawn a kid's design into the page (functions/live/[[path]].js, data-kid on
       // its parts). This kid's stays, as it is, while it's asked for again (draw keeps the same cards); anyone else's,

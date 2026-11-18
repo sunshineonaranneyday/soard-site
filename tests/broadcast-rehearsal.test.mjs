@@ -35,7 +35,7 @@ const LIVE_HUB = { idFromName: () => 'main', get: () => ({ async fetch(u, init =
 // The message screening models: both say yes (the guard by name, the judge otherwise)
 const AI = { async run(model) { return { response: /guard/i.test(model) ? { safe: true } : { ok: true } }; } };
 
-let env, r, b, msgs, wp;
+let env, r, b, msgs;
 before(async () => {
   const DB = await createD1({ schemaFiles: ['scripts/schema.sql'] });
   await DB.prepare('INSERT INTO kids (slug, data, name, year, status) VALUES (?, ?, ?, ?, ?)').bind('dylan-2026', JSON.stringify({ name: 'Dylan', slug: 'dylan-2026', heroImage: 'kids/dylan/hero' }), 'Dylan', 2026, 'in-progress').run();
@@ -44,7 +44,6 @@ before(async () => {
   b = await import('../functions/api/_broadcast.js');
   r = await import('../functions/api/_broadcast-rehearsal.js');
   msgs = await import('../functions/api/_live-messages.js');
-  wp = await import('../functions/live/_watch-party.js');
   await b.ensureSchema(DB);
   // The real reveal: Dylan tomorrow, on the real input; the rehearsal feed set up beside it
   const config = { ...b.defaultConfig(), customerCode: 'cust', liveInput: { uid: 'liveIn' }, rehearsalInput: { uid: 'rehearsalIn' } };
@@ -213,14 +212,6 @@ test('nothing went anywhere but Stream, and the reveal never changed or was anno
   assert.equal(s.kidSlug, realBefore.kidSlug);
   assert.equal(s.phase, realBefore.phase);
   assert.equal(s.broadcastId, realBefore.broadcastId);
-});
-
-test("the starting-soon screen's address carries the rehearsal, as the page script builds it", () => {
-  assert.equal(wp.slateFor('dylan-2026', 'portrait'), '/live/dylan-2026/slate/?embed=1&music=0&o=portrait');
-  assert.equal(wp.slateFor('dylan-2026', 'portrait', true), '/live/dylan-2026/slate/?embed=1&music=0&o=portrait&rehearsal');
-  const pub = { phase: 'armed', kidSlug: 'dylan-2026', scheduledAt: new Date(Date.now() + 5 * M).toISOString(), orientation: 'portrait', player: null };
-  assert.equal(wp.watchParty(pub, { pageKid: 'dylan-2026', kidPublished: true, rehearsal: true }).slate, '/live/dylan-2026/slate/?embed=1&music=0&o=portrait&rehearsal');
-  assert.equal(wp.watchParty(pub, { pageKid: 'dylan-2026', kidPublished: true }).slate, '/live/dylan-2026/slate/?embed=1&music=0&o=portrait');
 });
 
 test('only signed-in staff: the rehearsal endpoint and a rehearsal\'s messages refuse anyone else', async () => {

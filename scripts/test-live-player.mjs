@@ -25,6 +25,9 @@
  *     navigation) brings the video back
  *   - the reveal starting with the page open further down brings the page up to
  *     the video (unless someone is typing)
+ *   - the build's partners scroll under the video, on screen with it, never on
+ *     it; not on a phone held sideways (a child's page: PARTNERS_KID, default
+ *     dylan-2026)
  *   - the sound plays on a computer when it comes as its own track, the way
  *     Cloudflare Stream sends it (tests/fixtures/live-hls/split: the portrait
  *     fixture's picture and sound as separate fMP4 renditions)
@@ -113,6 +116,8 @@ async function mock(page) {
     }
     // (the design's pictures load, a tiny stand-in: the strip leaves out any that don't)
     if ((url.pathname.startsWith('/cdn-cgi/imagedelivery/') || url.hostname === 'imagedelivery.net') && url.pathname.includes('/before-')) return req.respond({ status: 200, contentType: 'image/png', headers: cors, body: PNG });
+    // (and the partner logos under the frame)
+    if ((url.pathname.startsWith('/cdn-cgi/imagedelivery/') || url.hostname === 'imagedelivery.net') && /\/partners?[/-]|\/partner-/.test(url.pathname)) return req.respond({ status: 200, contentType: 'image/png', headers: cors, body: PNG });
     if (url.pathname.startsWith('/cdn-cgi/imagedelivery/') || url.hostname === 'imagedelivery.net') return req.abort();
     if (url.pathname === '/api/broadcast') return json({ state, reminders: { enabled: true, email: true, sms: false, push: false, pushKey: null }, messages: { enabled: true }, timezone: 'America/New_York', hub: true });
     if (url.pathname === '/api/live-messages' && req.method() === 'GET') return json({ ok: true, open: state.phase === 'live', enabled: true, broadcastId: state.id, messages: MESSAGES });
@@ -669,6 +674,36 @@ try {
   const stayed = await page.evaluate(() => ({ y: Math.round(scrollY), focused: document.activeElement?.matches('input[type="email"], textarea') || false }));
   ok(!!field && typedAt > 300 && stayed.y > 300 && stayed.focused, `someone typing (${field}) is left where they are when it starts (scrolled ${typedAt} → ${stayed.y}, still in the field: ${stayed.focused})`);
   await page.evaluate(() => document.activeElement?.blur());
+
+  // Peter, Nov 17 2026: "the vendors need the same scroll bar" (the starting-soon screen's band, now that screen is
+  // gone). A child's own page carries their partners from its build (LivePartners.astro)
+  console.log('\n▶ the build’s partners under the video');
+  const KID = process.env.PARTNERS_KID || 'dylan-2026';
+  for (const [name, vp] of [['phone', { width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }], ['desktop', { width: 1424, height: 830 }], ['sideways', { width: 844, height: 390, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }]]) {
+    state = { ...STATES.live, kidSlug: KID, kidName: 'Dylan' }; feed.shape = 'portrait';
+    await page.setViewport(vp);
+    await page.goto(`${BASE}/live/${KID}/?visit=${++visits}`, { waitUntil: 'domcontentloaded' });
+    await waitFor(page, ['playing']);
+    await sleep(1500);
+    const band = await page.evaluate(async () => {
+      const el = document.querySelector('[data-live-partners]');
+      const row = el?.querySelector('.lpb-row');
+      const box = (n) => { const r = n?.getBoundingClientRect(); return r ? { y: Math.round(r.top), b: Math.round(r.bottom), x: Math.round(r.left), r: Math.round(r.right), h: Math.round(r.height) } : null; };
+      const t1 = row ? getComputedStyle(row).transform : '';
+      await new Promise((res) => setTimeout(res, 600));
+      return {
+        chips: el?.querySelectorAll('.lpb-chip').length || 0, shown: !!el && !el.hidden && el.getBoundingClientRect().height > 0,
+        moving: !!row && getComputedStyle(row).transform !== t1, read: el?.querySelectorAll('img[alt]:not([alt=""])').length || 0,
+        band: box(el), bar: box(document.querySelector('[data-s="bar"]')), pic: box(document.querySelector('.stage__picture')), stage: box(document.querySelector('[data-stage]')), vh: innerHeight,
+      };
+    });
+    if (!band.chips) { ok(true, `${KID} has no partners in this build: skipped`); break; }
+    if (name === 'sideways') { ok(!band.shown, 'a phone held sideways: no partners under the picture, which keeps the screen’s height'); continue; }
+    ok(band.shown && band.moving, `${name}: the partners scroll under the video (${band.chips} logos in the row, ${band.read} read out)`);
+    ok(band.band.y >= band.bar.b && band.band.y >= band.pic.b && band.band.b <= band.vh, `${name}: under the bar, on screen with the video, never on it (band ${band.band.y}-${band.band.b}, bar to ${band.bar.b}, screen ${band.vh})`);
+    ok(band.band.x >= band.stage.x - 1 && band.band.r <= band.stage.r + 1, `${name}: as wide as the video and what's beside it`);
+  }
+  await page.setViewport({ width: 1424, height: 830 });
 
   console.log('\n▶ leave the page and come back');
   state = STATES.live; feed.shape = 'portrait';

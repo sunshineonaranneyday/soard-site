@@ -2,8 +2,7 @@
  * live-stage.ts — behaviour for LiveStage.astro (the live page's frame)
  * =====================================================================
  * The page tells the stage what should be on it (update()); the stage owns
- * everything after that: mounting the video or the starting-soon screen,
- * the one bar under the video (LIVE, viewers, sound, a heart, full screen;
+ * everything after that: mounting the video, the one bar under the video (LIVE, viewers, sound, a heart, full screen;
  * or replay controls with the reveal marked), captions under the picture,
  * the corner mini player and keyboard shortcuts.
  *
@@ -15,20 +14,15 @@ import { mountPlayer, type PlayerHandle, type PlayerStatus } from './live-player
 import { watchMeter } from './live-stats';
 import { PHONE, SIDE, typingIn } from './live-media';
 
-export type StageMode = 'loading' | 'idle' | 'upcoming' | 'starting' | 'live' | 'replay';
+export type StageMode = 'loading' | 'idle' | 'upcoming' | 'live' | 'replay';
 export interface StageView {
   mode: StageMode;
   /** The live or replay video (live and replay modes only) */
   player: LivePlayer | null;
-  /** Starting-soon screen address, when it should fill the frame */
-  slate: string;
-  /** The starting-soon screen about to fill the frame: loaded in it unseen, so it shows drawn when its time comes */
-  soon?: string;
   /** The broadcast's setting; the picture's real shape wins once known */
   orientation: 'portrait' | 'landscape';
   /** Badge on the photo before the watch party ('' hides it) */
   badge: string;
-  late?: boolean; // past the start by a while: "starting soon" has stopped being true
 }
 export interface Stage {
   update(view: StageView): void;
@@ -45,8 +39,6 @@ interface Options {
   client: LiveClient;
   /** The page lays itself out around the stage's shape */
   onShape?: (orientation: 'portrait' | 'landscape', party: boolean) => void;
-  /** The starting-soon screen didn't load (kid page not built) */
-  onSlateFailed?: (src: string) => void;
 }
 
 /** Below this the count reads as lonely rather than lively, so it stays hidden. */
@@ -96,11 +88,6 @@ export function parseVtt(vtt: string): Cue[] {
   return cues;
 }
 
-/** Going live, the starting-soon screen waits at most this long for the picture before it goes anyway */
-const HANDOFF_MAX_MS = 15_000;
-/** …and fades this long (.stage__slate's transition in LiveStage.astro) */
-const SLATE_FADE_MS = 650;
-
 export function createStage(root: HTMLElement, opts: Options): Stage {
   const $ = <T extends HTMLElement = HTMLElement>(k: string) => root.querySelector(`[data-s="${k}"]`) as T | null;
   const { client } = opts;
@@ -108,16 +95,11 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const picture = $('picture');
   const screen = root.querySelector<HTMLElement>('.stage__screen');
   const playerEl = $('player');
-  // The starting-soon screen has a layer of its own over the frame, so going live it can stay until the picture plays
-  const slateEl = $('slate');
   const seek = $<HTMLInputElement>('seek');
 
-  let view: StageView = { mode: 'loading', player: null, slate: '', orientation: 'portrait', badge: '' };
+  let view: StageView = { mode: 'loading', player: null, orientation: 'portrait', badge: '' };
   let party = false;
   let mounted = '';
-  let slateShown = '';
-  let handingOff = false;
-  let handoffTimer: ReturnType<typeof setTimeout> | undefined;
   let player: PlayerHandle | null = null;
   let kind = '';
   let pstatus: PlayerStatus | '' = '';
@@ -143,15 +125,15 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const flag = (name: string, on: boolean) => { if (on) root.setAttribute(name, ''); else root.removeAttribute(name); };
   const video = () => (player?.video ?? null);
   const shape = () => sized || view.orientation;
-  // The shape the page was last told: it hears again whenever the shape changes, not only when the party starts (a phone
-  // turned sideways swaps the starting-soon screen's shape mid-party, and the page lays out around it)
+  // The shape the page was last told: it hears again whenever the shape changes, not only when the party starts (the
+  // picture's real shape can differ from the broadcast's setting, and the page lays out around it)
   let told = '';
 
   // ── What goes in the frame ──────────────────────────────────────
   function update(next: StageView) {
     view = next;
     const wasParty = party;
-    party = !!next.slate || (!!next.player && (next.mode === 'live' || next.mode === 'replay'));
+    party = !!next.player && (next.mode === 'live' || next.mode === 'replay');
     root.dataset.mode = next.mode;
     flag('data-party', party);
     root.dataset.orientation = shape();
@@ -184,116 +166,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
         playerEl.hidden = true;
       }
     }
-    // The starting-soon screen, in its own layer. Going live it stays over the frame while the picture connects and
-    // fades as soon as there is something to see (endHandoff): never a blank frame between the two
-    const goingLive = party && next.player?.kind === 'live';
-    if (party && next.slate) { handingOff = false; showSlate(next.slate, !!next.late); }
-    else if (!party && next.soon) { if (slateShown) { handingOff = false; dropSlate(false); } warmSlate(next.soon); }
-    // (one loaded ahead and not wanted now: the reveal moved, or went live before its screen's time)
-    else if (slateEl?.hasAttribute('data-warm')) coolSlate();
-    else if (slateShown && goingLive && !handingOff) {
-      handingOff = true;
-      clearTimeout(handoffTimer);
-      handoffTimer = setTimeout(endHandoff, HANDOFF_MAX_MS);
-      if (pstatus && pstatus !== 'connecting') endHandoff();
-    } else if (slateShown && !goingLive) { handingOff = false; dropSlate(false); }
-    if (party && (next.mode === 'live' || next.mode === 'starting') && !watching) { watching = true; client.watch(); }
+    if (party && next.mode === 'live' && !watching) { watching = true; client.watch(); }
     if (party !== wasParty || !wasParty || shape() !== told) { told = shape(); opts.onShape?.(told as 'portrait' | 'landscape', party); }
     paint();
     updateDock();
-  }
-
-  /**
-   * The starting-soon screen in its layer: the one already there is kept (the server's, from the first paint:
-   * functions/live/[[path]].js), else it's loaded
-   */
-  function showSlate(src: string, late: boolean) {
-    if (!slateEl) return;
-    clearTimeout(handoffTimer);
-    slateEl.classList.remove('is-going');
-    slateEl.hidden = false;
-    // One loaded ahead (warmSlate) shows at once, not faded in: it's already drawn
-    if (slateEl.hasAttribute('data-warm')) {
-      slateEl.style.transition = 'none';
-      slateEl.removeAttribute('data-warm');
-      void slateEl.offsetWidth;
-      slateEl.style.transition = '';
-    }
-    const there = slateEl.querySelector<HTMLIFrameElement>(':scope > iframe');
-    if (there && there.getAttribute('src') === src) {
-      there.title = late ? 'Running late' : 'Starting soon';
-      there.removeAttribute('aria-hidden');
-      if (slateShown !== src) { slateShown = src; watchSlate(there, src); }
-      return;
-    }
-    slateEl.replaceChildren(slateFrame(src, late ? 'Running late' : 'Starting soon'));
-    slateShown = src;
-    watchSlate(slateEl.firstElementChild as HTMLIFrameElement, src);
-  }
-  function slateFrame(src: string, title: string) {
-    const f = document.createElement('iframe');
-    f.src = src;
-    f.title = title;
-    f.loading = 'eager';
-    f.tabIndex = -1;
-    return f;
-  }
-  /**
-   * The starting-soon screen about to fill the frame, loaded in its layer unseen (and unheard by a screen reader):
-   * when its time comes showSlate finds it there, drawn, and the page's turn into the watch party shows it at once
-   */
-  function warmSlate(src: string) {
-    if (!slateEl || slateShown) return;
-    const there = slateEl.querySelector<HTMLIFrameElement>(':scope > iframe');
-    if (there && there.getAttribute('src') === src && slateEl.hasAttribute('data-warm')) return;
-    clearTimeout(handoffTimer);
-    slateEl.classList.remove('is-going');
-    slateEl.setAttribute('data-warm', '');
-    slateEl.hidden = false;
-    const f = slateFrame(src, 'Starting soon');
-    f.setAttribute('aria-hidden', 'true');
-    slateEl.replaceChildren(f);
-    // (one that fails is known now, so the page never turns to a frame with nothing in it)
-    watchSlate(f, src);
-  }
-  /** Not so soon after all (the reveal was moved): the screen loaded ahead goes */
-  function coolSlate() {
-    if (!slateEl) return;
-    slateEl.removeAttribute('data-warm');
-    slateEl.replaceChildren();
-    slateEl.hidden = true;
-  }
-  /** The starting-soon screen goes: faded (handing over to the picture) or at once */
-  function dropSlate(fade: boolean) {
-    if (!slateEl) return;
-    clearTimeout(handoffTimer);
-    slateShown = '';
-    const clear = () => { slateEl.replaceChildren(); slateEl.hidden = true; slateEl.classList.remove('is-going'); slateEl.removeAttribute('data-warm'); };
-    if (!fade || reduced) { clear(); return; }
-    slateEl.classList.add('is-going');
-    handoffTimer = setTimeout(clear, SLATE_FADE_MS);
-  }
-  /** The picture has something to show (or a note to give): the starting-soon screen fades away over it */
-  function endHandoff() {
-    if (!handingOff) return;
-    handingOff = false;
-    dropSlate(true);
-  }
-
-  /** Same origin, so an unreadable document (or one without the canvas) means the starting-soon screen didn't load */
-  function watchSlate(f: HTMLIFrameElement, src: string) {
-    const check = () => {
-      let ok = false;
-      try { ok = !!f.contentDocument?.getElementById('canvas'); } catch { ok = false; }
-      if (!ok) opts.onSlateFailed?.(src);
-    };
-    f.addEventListener('load', check);
-    // The server's one may have loaded before this script ran (its blank first document doesn't count)
-    let loaded = false;
-    // (in the page and its document unreadable: the browser's error page, there and failed. One not in the page yet has
-    // no document at all, and is simply still to load)
-    try { const d = f.contentDocument; loaded = f.isConnected && (!d || (d.readyState === 'complete' && d.URL !== 'about:blank')); } catch { loaded = f.isConnected; }
-    if (loaded) check();
   }
 
   function unmount() {
@@ -319,7 +195,6 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // ── Player callbacks ────────────────────────────────────────────
   function onStatus(st: PlayerStatus) {
     pstatus = st;
-    if (handingOff && st !== 'connecting') endHandoff();
     root.dataset.pstatus = st;
     clearTimeout(connectingTimer);
     slowConnect = false;
@@ -373,7 +248,6 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const isVideo = !!player && pstatus !== 'iframe';
     const showing = pstatus === 'playing' || pstatus === 'buffering' || pstatus === 'paused';
     const live = view.mode === 'live';
-    const starting = view.mode === 'starting';
     flag('data-muted', muted);
 
     // Photo badge, before the watch party only
@@ -391,22 +265,22 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);
-    const onAir = starting || (live && (!isVideo || showing || pstatus === 'blocked'));
+    const onAir = live && (!isVideo || showing || pstatus === 'blocked');
     flag('data-onair', onAir);
     const status = $('status');
-    if (status) status.textContent = starting ? (view.late ? 'Running late' : 'Starting soon') : live ? (onAir ? 'Live' : STATUS[pstatus as PlayerStatus] || 'Connecting') : kind === 'replay' ? 'Replay' : '';
-    const count = (live && onAir || starting) && viewers >= VIEWERS_MIN;
+    if (status) status.textContent = live ? (onAir ? 'Live' : STATUS[pstatus as PlayerStatus] || 'Connecting') : kind === 'replay' ? 'Replay' : '';
+    const count = live && onAir && viewers >= VIEWERS_MIN;
     setHidden($('count'), !count);
     // The number and its word apart, so the word can step aside first on a narrow bar
     const cn = $('count-num'); const cw = $('count-word');
-    if (count) { if (cn) cn.textContent = viewers.toLocaleString(); if (cw) cw.textContent = starting ? 'waiting' : 'watching'; }
+    if (count) { if (cn) cn.textContent = viewers.toLocaleString(); if (cw) cw.textContent = 'watching'; }
     // Muted: one clear "Tap for sound". After that: sound, a heart, full screen
     const soundCta = live && isVideo && showing && muted;
     setHidden($('sound'), !soundCta);
     const mute = $('mute');
     setHidden(mute, !(live && isVideo && showing && !muted));
     mute?.setAttribute('aria-label', muted ? 'Turn sound on' : 'Mute');
-    setHidden($('heart'), !((live && !soundCta && (onAir || !isVideo)) || starting));
+    setHidden($('heart'), !(live && !soundCta && (onAir || !isVideo)));
     root.querySelectorAll<HTMLElement>('[data-full]').forEach((b) => setHidden(b, !(isVideo && (kind === 'replay' || (live && !soundCta)))));
     const cc = $('cc-toggle');
     setHidden(cc, !(kind === 'replay' && hasCaptions && isVideo));
@@ -550,11 +424,14 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   }
   async function toggleFullscreen() {
     const v = video() as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null;
+    // iPhone: only the video itself can go full screen, and it can refuse (InvalidStateError, a picture not ready yet):
+    // then nothing happens, instead of an error nobody catches
+    const videoOnly = () => { try { v?.webkitEnterFullscreen?.(); } catch { /* refused */ } };
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
       else if (root.requestFullscreen) await root.requestFullscreen();
-      else v?.webkitEnterFullscreen?.(); // iPhone: only the video itself can go full screen
-    } catch { v?.webkitEnterFullscreen?.(); }
+      else videoOnly();
+    } catch { videoOnly(); }
   }
 
   $('sound')?.addEventListener('click', () => soundOn('sound'));
@@ -637,7 +514,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   heart?.addEventListener('click', () => { bump('is-pop', 160); if (client.react('heart')) mine++; });
   const offs: (() => void)[] = [];
   offs.push(client.on('react', ({ c }) => {
-    if (view.mode !== 'live' && view.mode !== 'starting') return;
+    if (view.mode !== 'live') return;
     const total = Object.values(c).reduce((n, v) => n + (Number(v) || 0), 0);
     const theirs = total - Math.min(mine, total);
     mine = Math.max(0, mine - total);
@@ -658,7 +535,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       const bar = document.querySelector<HTMLElement>('.auction-bar');
       const off = bar && bar.offsetHeight && getComputedStyle(bar).display !== 'none' ? bar.offsetHeight : 0;
       picture.style.setProperty('--dock-bottom', `${off}px`);
-      const label = $('dock-label'); if (label) label.textContent = view.mode === 'replay' ? 'Replay' : view.mode === 'starting' ? (view.late ? 'Running late' : 'Starting soon') : 'Live';
+      const label = $('dock-label'); if (label) label.textContent = view.mode === 'replay' ? 'Replay' : 'Live';
     }
     picture.classList.toggle('is-docked', on);
     setHidden($('dockbar'), !on);
@@ -778,15 +655,6 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     screen?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
   }, true);
 
-  // The server put the starting-soon screen in the frame (functions/live/[[path]].js): it's the one showing until the
-  // page says otherwise, so going live hands over from it, and anything else takes it away. Watched now, before any
-  // redraw, so a screen that failed to load is noticed without drawing the page from inside a drawing of it
-  {
-    const served = slateEl?.querySelector<HTMLIFrameElement>(':scope > iframe');
-    const src = served?.getAttribute('src');
-    if (served && src) { slateShown = src; watchSlate(served, src); }
-  }
-
   return {
     update,
     get party() { return party; },
@@ -798,8 +666,6 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     destroy() {
       unmount();
       mounted = '';
-      handingOff = false;
-      dropSlate(false);
       if (watching) { watching = false; client.unwatch(); }
       io?.disconnect();
       document.removeEventListener('fullscreenchange', onFullscreen);

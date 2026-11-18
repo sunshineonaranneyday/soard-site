@@ -50,7 +50,6 @@ export default defineConfig({
       filter: (page) =>
         !page.includes('/admin/') &&
         !page.includes('/branding') &&
-        !page.includes('/slate/') &&
         !page.includes('/terms') &&
         !page.includes('/privacy-policy') &&
         // Private bio form reached only from a link SOARD sends (also noindex)

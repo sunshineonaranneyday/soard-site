@@ -10,7 +10,7 @@ import { buildSync } from 'esbuild';
 const load = (entry) => import(`data:text/javascript,${encodeURIComponent(buildSync({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', packages: 'external' }).outputFiles[0].text)}`);
 const { formatWhen, relativeUntil, revealLabel, daysUntil, dayWords } = await load('src/utils/live-when.ts');
 const { plannedText, betweenText, ctasThatApply, ctaPicks } = await load('src/utils/live-hero-text.ts');
-const { firstView, messagesInSection, messageHtml, pastFirst, musicThere, MUSIC_KEY } = await load('functions/live/[[path]].js');
+const { firstView, messagesInSection, messageHtml, pastFirst, onRequest, RETIRED_SLATE } = await load('functions/live/[[path]].js');
 
 const NOW = Date.parse('2026-11-10T15:00:00Z'); // Tuesday 10 AM Eastern
 const DYLAN = '2026-11-18T21:00:00.000Z';       // Wednesday 4 PM Eastern
@@ -30,7 +30,7 @@ test('the time words in a zone: the same sentence the browser writes there', () 
   assert.equal(relativeUntil('2026-11-11T09:00:00Z', NOW, 'America/New_York'), 'in 18 hours');
 });
 
-test('the starting-soon screen says the day as the live page does: "Today" only on the day itself', () => {
+test('the day is said as the live page says it: "Today" only on the day itself', () => {
   const tz = 'America/New_York';
   assert.equal(daysUntil(DYLAN, tz, NOW), 8);
   assert.equal(dayWords(DYLAN, tz, NOW), 'Wednesday, November 18', 'eight days out: the date, not "Live Wednesday", which reads as this week');
@@ -108,14 +108,14 @@ test('between reveals, past reveals go before the story in the page itself, so a
   assert.equal(pastFirst('<div>none</div>'), null);
 });
 
-test('the starting-soon screen asks for its music only when the track is in the files bucket, asked at most every 5 minutes', async () => {
-  let asked = 0;
-  const env = (there) => ({ FILES: { head: async (key) => { asked++; assert.equal(key, MUSIC_KEY); return there ? { key } : null; } } });
-  const t0 = Date.parse('2026-11-11T15:00:00Z');
-  assert.equal(await musicThere(env(false), t0), false, 'no track: the screen goes out without its music');
-  assert.equal(await musicThere(env(true), t0 + 60e3), false, 'remembered for 5 minutes');
-  assert.equal(asked, 1);
-  assert.equal(await musicThere(env(true), t0 + 6 * 60e3), true, 'an upload is seen within 5 minutes');
-  assert.equal(await musicThere({}, t0), true, 'no bucket bound: left to the screen');
+test('the retired starting-soon screen answers an empty, see-through page at its old addresses (a Larix layer left on shows the camera)', async () => {
+  for (const path of ['/live/slate/', '/live/slate', '/live/dylan-2026/slate/', '/live/dylan-2026/slate/?embed=1&music=0&o=portrait']) {
+    const res = await onRequest({ request: new Request(`https://sunshineonaranneyday.com${path}`), env: {}, next: async () => { throw new Error(`${path} went on to the page`); } });
+    assert.equal(res.status, 200, path);
+    assert.match(res.headers.get('X-Robots-Tag') || '', /noindex/, path);
+    const html = await res.text();
+    assert.match(html, /<body style="margin:0;background:transparent"><\/body>/, path);
+    assert.doesNotMatch(html, /<script|<img|<video|<iframe/, path);
+  }
+  for (const path of ['/live/', '/live/dylan-2026/', '/live/slater/']) assert.equal(RETIRED_SLATE.test(path), false, path);
 });
-

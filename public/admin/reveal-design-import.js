@@ -31,10 +31,9 @@
  * address away; they go up white. Undo, keyboard (Add a box, then arrow keys
  * to move it, Shift and arrows to size it, Delete to remove it) and touch.
  *
- * RevealPreview ("Preview the reveal screen"): the real starting-soon screen
- * (/live/<slug>/slate/?design=preview) in a frame, showing the editor's
- * unsaved design (window.__soardRevealDesign, set by the editor), with steps
- * to jump to each part (?slide=N; slide 0 is the kid's own photo).
+ * LivePreview ("Preview the live page"): the kid's real live page in a frame,
+ * before the reveal, live or on replay, showing the editor's unsaved design
+ * (window.__soardRevealDesign, set by the editor).
  */
 import { h, htm, useState, useEffect, useRef, useMemo, useCallback } from './vendor.js';
 import { PLAN_KINDS, kindFromText, suggestBefores, freeBeforePlaces, addressWords, BEFORE_SHOWN } from './reveal-design.js';
@@ -112,13 +111,8 @@ const CSS = `
 .rdc-foot { display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%; justify-content: flex-end; }
 .rdp .kd-dialog__body { display: flex; flex-direction: column; gap: 0.75rem; }
 .rdp-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 0.75rem; }
-.rdp-steps { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .rdp .notice { margin: 0; }
 .rdp-stage { display: grid; place-items: center; min-height: 0; background: var(--seg-bg); border-radius: 12px; padding: 0.75rem; }
-.rdp-frame { position: relative; width: 100%; max-width: 100%; border-radius: 8px; overflow: hidden; background: #fff; box-shadow: var(--shadow-sm); }
-.rdp-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
-.rdp-frame--landscape { aspect-ratio: 16 / 9; width: min(100%, calc((100vh - 380px) * 16 / 9)); min-width: 280px; }
-.rdp-frame--portrait { aspect-ratio: 9 / 16; width: auto; height: min(calc(100vh - 380px), 720px); min-height: 280px; }
 .rlp-when { color: var(--color-text-muted, #5A5B61); font-size: var(--fs-sm, 0.9rem); }
 .rlp-stage { overflow: hidden; }
 .rlp-device { position: relative; overflow: hidden; border-radius: 14px; background: #fff; box-shadow: var(--shadow-sm); }
@@ -132,8 +126,6 @@ const CSS = `
   .rdi-body { padding: 0.5rem; }
   .rdi-foot .btn, .rdc-foot .btn { flex: 1 1 auto; }
   .rdi-foot .btn-primary { margin-left: 0; }
-  .rdp-frame--landscape { width: 100%; min-width: 0; }
-  .rdp-frame--portrait { height: min(60vh, 560px); }
   .rdc-stage { max-height: 58vh; }
 }
 `;
@@ -823,59 +815,15 @@ export function RevealImport({ kid, jobId = '', revealed = false, plans = [], be
 // Preview the reveal screen
 // ═══════════════════════════════════════════
 // (No design boards: they never play on the live page or stream; Peter, Nov 12 2026)
-const STEPS = [['before', 'The room today'], ['as-built', 'Floor plan today'], ['proposed', 'New floor plan']];
-/**
- * slug, name, published (a hidden kid has no page of its own yet), kinds (the
- * design's slides in order, as the editor has them), waiting (drawings still
- * waiting for an address check), uploading (pictures still going up), Dialog, onClose
- */
-export function RevealPreview({ slug, name, published = true, kinds = [], waiting = 0, uploading = 0, Dialog, onClose }) {
-  useStyles();
-  // The stream's picture, as Facebook and YouTube viewers see it (Preview the live page shows it inside our page)
-  const [o, setO] = useState('portrait');
-  const [slide, setSlide] = useState(null); // null: plays through; N: holds slide N (0 is the kid's photo)
-  const [fallback, setFallback] = useState(!published);
-  const base = fallback || !slug ? '/live/slate/' : `/live/${encodeURIComponent(slug)}/slate/`;
-  const src = `${base}?design=preview&o=${o}${slide != null ? `&slide=${slide}` : ''}`;
-  const onLoad = (e) => {
-    // A profile with no page built yet gets the screen that follows whoever is next, showing this design
-    try { if (!fallback && !e.currentTarget.contentDocument?.getElementById('canvas')) setFallback(true); } catch { /* not ours to read */ }
-  };
-  const steps = STEPS.map(([k, label]) => [k, label, kinds.indexOf(k)]).filter(([, , i]) => i >= 0);
-  const shapes = ['landscape', 'portrait'];
-  const who = possessive(name || 'this kid');
-  return html`<${Dialog} title="Preview the stream" sub=${`What people watching on Facebook and YouTube see for the hour before ${who} reveal, with the design as it is here, saved or not. The cards with codes to scan are for people watching on a TV or laptop; the live page leaves them out (it has real Share and Give buttons).`}
-    onClose=${onClose} size="lg" className="rdp" footer=${html`<button type="button" class="btn btn-secondary" onClick=${onClose}>Done</button>`}>
-    ${!kinds.length ? html`<p class="notice notice--info">${icon.shield}<span class="notice__body">No design to show yet. Add plans or before photos, or bring them in from JobTread; until then the screen shows ${who} photo.</span></p>` : null}
-    ${waiting ? html`<p class="notice notice--warn">${icon.alert}<span class="notice__body">${plural(waiting, 'drawing is', 'drawings are')} waiting for an address check, so ${waiting === 1 ? 'it doesn’t' : 'they don’t'} play yet.</span></p>` : null}
-    ${uploading ? html`<p class="notice">${icon.alert}<span class="notice__body">${plural(uploading, 'picture')} still going up: ${uploading === 1 ? 'it shows' : 'they show'} here once ${uploading === 1 ? 'it’s' : 'they’re'} up.</span></p>` : null}
-    <div class="rdp-bar">
-      <div class="seg" role="radiogroup" aria-label="Screen shape">
-        ${shapes.map((s) => html`<button type="button" role="radio" aria-checked=${o === s} tabindex=${o === s ? 0 : -1}
-          onKeyDown=${(e) => radioKeys(e, shapes, o, setO)} onClick=${() => setO(s)}>${s === 'landscape' ? 'Landscape' : 'Portrait (phones)'}</button>`)}
-      </div>
-      ${steps.length ? html`<div class="rdp-steps" role="group" aria-label="Go to">
-        <button type="button" class=${`btn btn-ghost btn-sm${slide == null ? ' is-on' : ''}`} aria-pressed=${slide == null} onClick=${() => setSlide(null)}>Play it all</button>
-        ${steps.map(([k, label, i]) => html`<button key=${k} type="button" class=${`btn btn-ghost btn-sm${slide === i + 1 ? ' is-on' : ''}`} aria-pressed=${slide === i + 1} onClick=${() => setSlide(i + 1)}>${label}</button>`)}
-      </div>` : null}
-    </div>
-    <div class="rdp-stage">
-      <div class=${`rdp-frame rdp-frame--${o}`}>
-        <iframe key=${src} src=${src} title=${`The reveal screen, ${o}`} onLoad=${onLoad} />
-      </div>
-    </div>
-  <//>`;
-}
-
 // ═══════════════════════════════════════════
 // Preview the live page
 // ═══════════════════════════════════════════
-// The kid's real live page (/live/<slug>/) in a frame, at the moment staff pick: the hour before (the reveal screen in
-// the video box, Share and Give, the design under it), live (a past reveal's video standing in for the camera, the
+// The kid's real live page (/live/<slug>/) in a frame, at the moment staff pick: before (the kid's photo with the
+// countdown, the design under it), live (a past reveal's video standing in for the camera, the
 // messages beside it, the design under it) or the replay. BaseLayout hands the framed page to window.__soardPreview
 // before any of its own scripts run; this answers every request the page makes about the reveal from here, so nothing
 // reaches the real site: no sign-ups, no messages, no counts.
-const MOMENTS = [['starting', 'Starting soon'], ['live', 'Live'], ['replay', 'Replay']];
+const MOMENTS = [['before', 'Before'], ['live', 'Live'], ['replay', 'Replay']];
 const DEVICES = [['phone', 'Phone', 390, 844], ['laptop', 'Laptop', 1280, 800]];
 const STREAM_HOST_CODE = 'cuav5h47lgfe96ql';
 const SAMPLE_NOTES = [
@@ -900,7 +848,7 @@ function standInVideo() {
 
 function harness({ slug, name, photo, video }) {
   return (doc, win) => {
-    const moment = new URLSearchParams(win.location.search).get('moment') || 'starting';
+    const moment = new URLSearchParams(win.location.search).get('moment') || 'before';
     const now = Date.now();
     const iso = (ms) => new Date(now + ms).toISOString();
     const portrait = !video || video.aspect < 1;
@@ -928,7 +876,7 @@ function harness({ slug, name, photo, video }) {
       if (path === '/api/reveal-design') {
         let d = null;
         try { d = window.__soardRevealDesign?.(); } catch { /* the editor closed */ }
-        return json({ open: true, after: moment !== 'starting', name, slides: d?.slides || [] });
+        return json({ open: true, after: moment !== 'before', name, slides: d?.slides || [] });
       }
       if (path === '/api/live-messages') {
         if (method !== 'GET') return json({ ok: true, status: 'shown', message: { id: `preview-${now}`, name: 'You', body: 'A message here is only in this preview.', at: iso(0) } });
@@ -948,7 +896,7 @@ function harness({ slug, name, photo, video }) {
 /** slug, name, photo (the kid's main photo), published, Dialog, onClose */
 export function LivePreview({ slug, name, photo = '', published = true, Dialog, onClose }) {
   useStyles();
-  const [moment, setMoment] = useState('starting');
+  const [moment, setMoment] = useState('before');
   const [device, setDevice] = useState('phone');
   const [video, setVideo] = useState(undefined);
   const stage = useRef(null);
@@ -973,7 +921,7 @@ export function LivePreview({ slug, name, photo = '', published = true, Dialog, 
   const src = `/live/${encodeURIComponent(slug)}/?admin-preview=live&moment=${moment}`;
   const momentKeys = MOMENTS.map(([k]) => k);
   const deviceKeys = DEVICES.map(([k]) => k);
-  return html`<${Dialog} title="Preview the live page" sub=${`${who} live page as people will see it, with the design as it is here, saved or not. Nothing you do in it reaches the real page: no sign-ups, no messages.${moment !== 'starting' ? ' A past reveal stands in for the camera.' : ''}`}
+  return html`<${Dialog} title="Preview the live page" sub=${`${who} live page as people will see it, with the design as it is here, saved or not. Nothing you do in it reaches the real page: no sign-ups, no messages.${moment !== 'before' ? ' A past reveal stands in for the camera.' : ''}`}
     onClose=${onClose} size="lg" className="rdp rlp" footer=${html`<button type="button" class="btn btn-secondary" onClick=${onClose}>Done</button>`}>
     ${!published ? html`<p class="notice notice--warn">${icon.alert}<span class="notice__body">This profile is hidden, so it has no live page yet. Show it on the site to preview it.</span></p>` : null}
     <div class="rdp-bar">
@@ -985,7 +933,7 @@ export function LivePreview({ slug, name, photo = '', published = true, Dialog, 
         ${DEVICES.map(([k, label]) => html`<button type="button" role="radio" aria-checked=${device === k} tabindex=${device === k ? 0 : -1}
           onKeyDown=${(e) => radioKeys(e, deviceKeys, device, setDevice)} onClick=${() => setDevice(k)}>${label}</button>`)}
       </div>
-      <span class="rlp-when">${moment === 'starting' ? 'The hour before: the reveal screen plays in the video box' : moment === 'live' ? 'From the start time: the camera, live' : 'After: the replay'}</span>
+      <span class="rlp-when">${moment === 'before' ? 'Before the start time: the photo, the countdown, the design under it' : moment === 'live' ? 'From the start time: the camera, live' : 'After: the replay'}</span>
     </div>
     <div class="rdp-stage rlp-stage" ref=${stage}>
       ${published && video !== undefined ? html`<div class="rlp-device" style=${`width:${Math.round(w * scale)}px;height:${Math.round(h * scale)}px`}>

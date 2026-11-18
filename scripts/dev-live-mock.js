@@ -8,7 +8,7 @@
  * Switch states by visiting:
  *   /__live/?state=live       pulsing "Live now"
  *   /__live/?state=upcoming   "Reveal day" countdown (3 hours out)
- *   /__live/?state=starting   10 minutes out: the starting-soon screen fills the frame
+ *   /__live/?state=starting   10 minutes out: the photo and countdown, the camera any moment
  *   /__live/?state=replay     "Replay ready"
  *   /__live/?state=off        idle, no pill (the default)
  * Add &kid=<slug> to feature a specific kid; otherwise the most recent
@@ -22,8 +22,8 @@
  * kids: &reveals=demo (one confirmed, the rest tentative; the default),
  * &reveals=tentative (none confirmed) or &reveals=none (nothing coming up).
  *
- * Also answers /api/reveal-design (the kid's design for the starting-soon
- * screen and the live page) by the real rules against the fake broadcast:
+ * Also answers /api/reveal-design (the kid's design for the live page) by
+ * the real rules against the fake broadcast:
  * &design=auto (the default: open once the fake reveal is scheduled for the
  * kid, as a confirmed one is, so state=upcoming opens it), &design=open or
  * &design=closed to force it, or &design=sample to open it with a sample

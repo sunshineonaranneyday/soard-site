@@ -11,7 +11,8 @@
  *   - a client-router soft navigation (/ → /kids/ → a kid), which runs each new
  *     page's inline scripts under the first page's policy
  *   - forces broken images: partner logos swap to their name, a kid page's
- *     village logo hides, a slate's partner chip drops out; and no logo that
+ *     village logo hides, a partner logo under the live page's video leaves the
+ *     row; and no logo that
  *     loaded fine was hidden
  *   - checks the policy bites: an injected inline script and an inline handler
  *     are blocked and reported to /api/csp-report
@@ -181,7 +182,7 @@ async function record(label, page, errors, status) {
 }
 
 const PAGES = [
-  '/', '/kids/', '/kids/ethan/', '/kids/adrian-2025/', '/partners/', '/how-it-works/', '/live/', '/live/slate/', '/live/ethan/slate/',
+  '/', '/kids/', '/kids/ethan/', '/kids/adrian-2025/', '/partners/', '/how-it-works/', '/live/', '/live/dylan-2026/',
   '/apply/', '/apply/form/', '/apply/community-project/', '/donate/', '/events/', '/events/2026-evening-of-sunshine/', '/about/financials/', '/publicity/', '/faq/',
   '/this-page-does-not-exist/', '/admin/', '/admin/kid-template/full/',
 ];
@@ -272,18 +273,20 @@ console.log('\nBroken images');
   await page.close();
 }
 {
-  const { page, errors } = await open('/live/ethan/slate/?still=1&music=0');
+  // The build's partners under the live page's frame (LivePartners.astro): a logo that won't load leaves the row,
+  // both of its copies (the row is the list twice over), and the rest keep going
+  const { page, errors } = await open('/live/dylan-2026/');
   const r = await page.evaluate(async () => {
-    const before = document.querySelectorAll('.chip').length;
-    const img = document.querySelector('.chip img[data-img-fallback]');
+    const chips = () => document.querySelectorAll('[data-live-partners] .lpb-chip').length;
+    const before = chips();
+    const img = document.querySelector('[data-live-partners] img[data-lpb-logo]');
     if (!img) return { before, after: before, none: true };
     img.src = '/__broken-logo.png';
     await new Promise((res) => setTimeout(res, 800));
-    return { before, after: document.querySelectorAll('.chip').length, kid: document.body.dataset.kid };
+    return { before, after: chips(), shown: !document.querySelector('[data-live-partners]').hidden };
   });
-  ok(r.none || r.after === r.before - 1, `/live/ethan/slate/: a broken partner chip drops out (${JSON.stringify(r)})`);
-  ok(r.kid === 'ethan', '/live/ethan/slate/: the kid rides on <body data-kid>');
-  await record('/live/ethan/slate/ (broken chip)', page, errors, 200);
+  ok(r.none || (r.after === r.before - 1 && r.shown), `/live/dylan-2026/: a broken partner logo leaves the row (${JSON.stringify(r)})`);
+  await record('/live/dylan-2026/ (broken partner logo)', page, errors, 200);
   await page.close();
 }
 

@@ -1,8 +1,8 @@
 /**
  * reveal-design-client.ts — a kid's design, read and drawn in the browser
  * =======================================================================
- * The starting-soon screen (SlateScreen.astro, via slate-design.ts) and the
- * live page's "The design" section (LiveDesign.astro) both ask
+ * The live page's "The design" section (LiveDesign.astro) and the strip beside
+ * its video (LiveDesignRail.astro) ask
  * /api/reveal-design for the before photos and drawings, which it only
  * gives once the reveal is confirmed (public/admin/reveal-design.js has the
  * rules). This is the one place that asks, and the one place that

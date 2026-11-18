@@ -1,7 +1,7 @@
 /**
  * GET /api/reveal-design?kid=<slug> — a kid's design for their reveal
  * ====================================================================
- * The starting-soon screen (/live/<kid>/slate/) and the live page ask here
+ * The live page asks here
  * for the before photos, drawings and design boards on the kid's profile
  * (public/admin/reveal-design.js has the rules). Public, and it says nothing
  * until the design opens, once the reveal is confirmed:

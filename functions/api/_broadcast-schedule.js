@@ -3,7 +3,7 @@
  * ===========================================================================
  * JobTread decides the next reveal: an open job whose Reveal Date Confirmed is
  * Yes and whose Reveal Date has a time. This keeps the live broadcast (the
- * countdown, reminder signup, starting-soon screen, reminders and the Kit
+ * countdown, reminder signup, reminders and the Kit
  * "we're live" email) in step with it, so nobody schedules reveals in the admin:
  *
  *   nothing planned               → plan the next confirmed reveal

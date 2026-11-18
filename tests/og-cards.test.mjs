@@ -248,10 +248,9 @@ test('the build draws every card, links each page to its picture’s fingerprint
   page(dist, '/events/gala/2026/', await reg.registerCard('/events/gala/2026/', { layout: 'text', title: 'Evening of <em>Sunshine</em>' }));
   page(dist, '/live/', await reg.registerCard('/live/', { layout: 'text', title: 'Watch the <em>reveal</em> live' }));
   page(dist, '/live/amari/', await reg.registerCard('/live/amari/', { layout: 'text', title: 'Amari’s <em>room reveal</em>' }));
-  // An old address that forwards (Astro's static redirect), one forwarding off the site, and a starting-soon screen with no card
+  // An old address that forwards (Astro's static redirect), and one forwarding off the site
   page(dist, '/events/2026-evening-of-sunshine/', null, '<meta http-equiv="refresh" content="0;url=/events/gala/2026/">');
   page(dist, '/elsewhere/', null, '<meta http-equiv="refresh" content="0;url=https://example.org/events/gala/2026/">');
-  page(dist, '/live/amari/slate/', null);
   live = { index: null, files: {} };
   await runBuild(dist);
 

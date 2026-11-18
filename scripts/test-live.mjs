@@ -326,7 +326,7 @@ try {
       await page.select('#bc-new-kid', 'dana-draft');
       await page.waitForSelector('.bc-draft-note', { timeout: 3000 }).catch(() => {});
       const note = await page.$eval('.bc-draft-note', (el) => el.innerText).catch(() => '');
-      ok(/Dana isn't published on the site yet\. Reveal links will open the main live page until you publish Dana and the site redeploys, and the starting-soon screen won't exist\. Publish Dana before reveal day\./.test(note), 'draft kid warning under the schedule select');
+      ok(/Dana isn't published on the site yet\. Reveal links will open the main live page until you publish Dana and the site redeploys\. Publish Dana before reveal day\./.test(note), 'draft kid warning under the schedule select');
       await page.select('#bc-new-kid', kidSlug);
       await settle(150);
       ok(!(await page.$('.bc-draft-note')), 'warning clears for a published kid');

@@ -17,7 +17,7 @@ import type { ReminderOptions } from './live-client';
 /** The hero's lead when no reveal is set (LivePage.astro); /live/'s share card says the same */
 export const LIVE_GENERIC_LEAD = 'Room reveals stream live right here. Watch the moment a child sees their new room for the first time.';
 
-/** A planned reveal, before its starting-soon screen → { eyebrow, status } */
+/** A planned reveal → { eyebrow, status } */
 export function plannedText(scheduledAt: string | null, tz?: string, now = Date.now()) {
   const rel = relativeUntil(scheduledAt, now, tz);
   return {
@@ -31,8 +31,6 @@ export function plannedText(scheduledAt: string | null, tz?: string, now = Date.
 export interface MomentFacts {
   /** The broadcast's own view of this page: upcoming, live, replay */
   view: 'upcoming' | 'live' | 'replay';
-  /** The starting-soon screen is in the frame (the last hour before a reveal) */
-  starting: boolean;
   scheduledAt: string | null;
   hasPlayer: boolean;
   /** 'stream' when the reveal went out through our own stream (a replay is on its way) */
@@ -45,7 +43,7 @@ export interface MomentFacts {
 /**
  * The hero's eyebrow and status line and the frame's badge, from a planned reveal to its replay: drawPage in
  * LivePage.astro draws them, and functions/live/[[path]].js writes the same into the page before it goes out
- * (starting soon, live and replay included), so the first paint is already what the script draws. Between reveals
+ * (live and replay included), so the first paint is already what the script draws. Between reveals
  * the status line comes from the schedule instead (betweenText).
  */
 export function momentWords(f: MomentFacts): { eyebrow: string; status: string; badge: string } {
@@ -65,15 +63,6 @@ export function momentWords(f: MomentFacts): { eyebrow: string; status: string; 
   }
   const rel = relativeUntil(f.scheduledAt, now, f.tz);
   const badge = rel ? `Live ${rel}` : 'Coming up';
-  if (f.starting) {
-    const late = runningLate(f.scheduledAt, now);
-    return {
-      eyebrow: late ? 'Running late' : 'Starting soon',
-      status: f.scheduledAt && Date.parse(f.scheduledAt) > now ? `We go live ${formatWhen(f.scheduledAt, f.tz, now)}. Stay right here.`
-        : late ? 'We’re running a little late. Stay right here.' : 'Any moment now. Stay right here.',
-      badge,
-    };
-  }
   return { ...plannedText(f.scheduledAt, f.tz, now), badge };
 }
 
@@ -100,14 +89,13 @@ export function betweenText(upcoming: UpcomingReveal[], pageKid: string, tz?: st
 export const HERO_CTAS: Record<string, string[]> = {
   idle: ['cta-remind', 'cta-calendar', 'cta-past', 'cta-share', 'cta-donate'],
   upcoming: ['cta-remind', 'cta-calendar', 'cta-share', 'cta-donate'],
-  starting: ['cta-facebook', 'cta-messages', 'cta-donate', 'cta-share'],
   live: ['cta-facebook', 'cta-messages', 'cta-donate', 'cta-share'],
   replay: ['cta-facebook', 'cta-share', 'cta-donate', 'cta-messages'],
 };
 export const HERO_CTA_MAX = 2;
 
 export interface CtaFacts {
-  /** What the hero shows: idle, upcoming, starting, live, replay */
+  /** What the hero shows: idle, upcoming, live, replay */
   display: string;
   /** The broadcast's own view of this page: idle, upcoming, live, replay */
   view: string;

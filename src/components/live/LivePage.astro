@@ -3,9 +3,8 @@
  * LivePage.astro — the live reveal page (used by /live/ and /live/[slug]/)
  * ========================================================================
  * Editorial split hero, same skeleton as apply/donate: text left, frame
- * right. The frame (LiveStage) holds the kid's photo until the last 30
- * minutes, then the starting-soon screen, then the live video, then the
- * replay. On /live/ between reveals the frame shows what's coming up
+ * right. The frame (LiveStage) holds the kid's photo until the camera comes
+ * on, then the live video, then the replay. On /live/ between reveals the frame shows what's coming up
  * instead (HeroUpcoming: each child with their own calendar invite,
  * RevealInvite). Everything dynamic comes from the shared live client, so the page
  * flips within a second of the phone connecting and never needs a rebuild.
@@ -16,7 +15,7 @@
  * the hero with data-follow, and during the watch party it also lays the
  * page out for the video before first paint; the script keeps it current.
  *
- * Watch party (data-party: starting soon, live, replay): the crew shoots
+ * Watch party (data-party: live, replay): the crew shoots
  * portrait, so the frame becomes a 9:16 video as tall as the screen allows,
  * with nothing drawn on the picture and one simple bar under it. The
  * messages for the family (LiveMessages) sit beside it on a desktop and
@@ -44,12 +43,15 @@ import HeroUpcoming from './HeroUpcoming.astro';
 import RevealInvite from './RevealInvite.astro';
 import LiveDesign from './LiveDesign.astro';
 import LiveDesignRail from './LiveDesignRail.astro';
+import LivePartners from './LivePartners.astro';
+import { bandPartners, partnersBandInner } from '../../utils/live-partners-html';
 import ShareSheet from '../ui/ShareSheet.astro';
 import { upcomingAtBuild } from '../../utils/reveals-copy';
 
 interface KidLite {
   slug: string; name: string; heroImage: string | null; heroSummary?: string | null; shortDescription?: string | null;
   bio?: string | null; roomTypes?: string[] | null; year?: number | null; fundraisingUrl?: string | null;
+  partnerLogos?: { url: string; name?: string }[] | null;
 }
 interface Props { kid?: KidLite | null; fallbackImage: string }
 const { kid = null, fallbackImage } = Astro.props;
@@ -60,6 +62,8 @@ const name = kid?.name || null;
 const summary = kid?.heroSummary || kid?.shortDescription || null;
 const story = storyLead(kid?.bio) || summary;
 const rooms = kid?.roomTypes?.length ? kid.roomTypes.join(', ') : null;
+// The build's partners, scrolling under the frame (LivePartners.astro; on /live/ the server draws the current kid's)
+const partners = partnersBandInner(bandPartners(kid?.partnerLogos));
 // /live/ between reveals: the hero shows what's coming up (the page script keeps this current)
 const heroNext = !kid && upcomingAtBuild().length > 0;
 const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></svg>';
@@ -94,10 +98,11 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     </div>
 
     <div class="hero-frame" id="player">
-      <LiveStage photo={photo} alt={name || 'A child in a newly built room'}>
+      <LiveStage photo={photo} alt={name || 'A child in a newly built room'} partners={!!partners}>
         <!-- The room's design with the video during the watch party (hidden until the hero has data-design): part of the
              stage, so it sits beside the picture and the controls run under both -->
         <LiveDesignRail slot="beside" />
+        <LivePartners slot="under" kid={partners ? kid!.slug : ''} inner={partners} />
       </LiveStage>
       {!kid && <HeroUpcoming />}
     </div>
@@ -233,8 +238,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   }
   .hero-eyebrow::before { content: ''; width: 28px; height: 2px; background: currentColor; flex-shrink: 0; }
   .hero-eyebrow__dot { display: none; width: 10px; height: 10px; border-radius: 50%; background: var(--c-yellow); position: relative; }
-  .hero[data-phase='live'] .hero-eyebrow__dot,
-  .hero[data-phase='starting'] .hero-eyebrow__dot { display: inline-block; }
+  .hero[data-phase='live'] .hero-eyebrow__dot { display: inline-block; }
   .hero[data-phase='live'] .hero-eyebrow__dot::after {
     content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--c-yellow); opacity: 0;
     animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
@@ -444,12 +448,12 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 <script>
   import { getLiveClient, rehearsal, type LiveState, type ReminderOptions } from '../../utils/live-client';
   import { shareable } from '../../utils/live-stats';
-  import { remindersUsable, browserCanPush, revealIsToday, runningLate } from '../../utils/live-banner';
+  import { remindersUsable, browserCanPush, revealIsToday } from '../../utils/live-banner';
   import { holdPlace, keepFocus } from '../../utils/hold-place';
   import { upcomingAtBuild } from '../../utils/reveals-copy';
   import { wireRemindForm } from '../../utils/remind-signup';
   import { createStage } from '../../utils/live-stage';
-  import { SIDE, typingIn } from '../../utils/live-media';
+  import { typingIn } from '../../utils/live-media';
   import { createMessages } from '../../utils/live-messages';
   import { createGive } from '../../utils/live-give';
   import { createLiveDesign } from '../../utils/live-design';
@@ -459,9 +463,6 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   import { heroRowsHtml, rowsSignature, afterLine } from '../../utils/upcoming-rows';
   import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../utils/live-hero-text';
   import { onPageLoad } from '../../utils/page-load';
-
-  /** The starting-soon screen fills the frame for the last hour: it carries the room's design for people waiting (the crew may start streaming up to 30 minutes early, per the runbook) */
-  const SLATE_LEAD_MS = 60 * 60 * 1000;
 
   // The hero's buttons, two at most, and which apply when: src/utils/live-hero-text.ts (HERO_CTAS, ctasThatApply), shared
   // with the server, which shows the same two from the first paint
@@ -498,13 +499,38 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     const bq = <T extends Element>(k: string) => body?.querySelector(`[data-live="${k}"]`) as T | null;
     const setHidden = (el: Element | null, hidden: boolean) => { if (el) (el as HTMLElement).hidden = hidden; };
     const setAttr = (el: HTMLElement, name: string, on: boolean) => { if (on) el.setAttribute(name, ''); else el.removeAttribute(name); };
+
+    // ── The build's partners, scrolling under the frame (LivePartners.astro) ──
+    // Each logo takes the same room whatever its shape once it has loaded (--r); one that won't load leaves the row,
+    // both of its copies. The band shows only with the child it belongs to: /live/ following the next reveal, or
+    // between reveals, has another child's (or nobody's) frame
+    const band = hero.querySelector<HTMLElement>('[data-live-partners]');
+    const bandHas = () => !!band?.querySelector('.lpb-chip');
+    band?.querySelectorAll<HTMLImageElement>('img[data-lpb-logo]').forEach((img) => {
+      const weigh = () => { if (img.naturalWidth && img.naturalHeight) img.style.setProperty('--r', (img.naturalWidth / img.naturalHeight).toFixed(3)); };
+      const drop = () => {
+        const src = img.getAttribute('src');
+        band!.querySelectorAll<HTMLImageElement>('img[data-lpb-logo]').forEach((other) => { if (other.getAttribute('src') === src) other.closest('.lpb-chip')?.remove(); });
+        if (!bandHas()) drawBand(shownKidNow);
+      };
+      img.addEventListener('load', weigh);
+      img.addEventListener('error', drop);
+      if (img.complete) { if (img.naturalWidth) weigh(); else if (img.getAttribute('src')) img.decode().then(weigh, () => { if (!img.naturalWidth) drop(); }); }
+    });
+    let shownKidNow = '';
+    function drawBand(kidSlug: string) {
+      shownKidNow = kidSlug;
+      const on = !!band && !!kidSlug && band.dataset.kid === kidSlug && bandHas();
+      setHidden(band, !on);
+      setAttr(stageEl, 'data-partners', on);
+    }
     let last: LiveState | null = null;
     let lastMeta: { reminders: ReminderOptions | null } = { reminders: null };
     let remindKid = ''; // who a sign-up here is for; empty means every reveal
     let remindNamed = ''; // the child the block names (its slug), whichever reveals they pick
     let remindShown = ''; // that child's name (empty: the block names nobody, and signs up for every reveal)
     const upNextBand = () => document.getElementById('up-next');
-    // Someone who came for what's next (the starting-soon screen's "Coming up next" code opens /live/#up-next). The
+    // Someone who came for what's next (a link to /live/#up-next). The
     // browser looked for the band while the page was still laid out as built, often with it hidden: between reveals
     // the hero shows the same list instead. So go there now, to whichever is showing. Once, on arrival (not on Back).
     let upNextArrived = location.hash !== '#up-next' || (history.state?.scrollY || 0) > 0;
@@ -530,7 +556,6 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     let viewed = false;
     let rendered = false;
     let alive = true;
-    const slateFailed = new Set<string>();
     // What's coming up (JobTread via /api/reveals): the idle hero names the next reveal and lists them. It starts from
     // the schedule the server drew the page from (left on the hero, functions/live/[[path]].js), so the status line,
     // the buttons and the rows are already what this script draws; else as the build had it (the hero's rows were
@@ -543,8 +568,6 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       client,
       // The hero lays itself out around the video's real shape
       onShape: (orientation, party) => { hero.dataset.orientation = orientation; setAttr(hero, 'data-party', party); },
-      // (redrawn after the drawing it was noticed in, never from inside it)
-      onSlateFailed: (src) => { slateFailed.add(src); queueMicrotask(() => { if (alive && last) render(last, lastMeta); }); },
     });
 
     const panel = document.querySelector<HTMLElement>('[data-msgs="panel"]');
@@ -630,23 +653,6 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         }
       }
       setTitle(want ? s.kidName || null : null, view);
-    }
-
-    // ── Starting-soon screen in the frame for the last 30 minutes ──
-    // A phone held sideways: the starting-soon screen comes in its landscape shape, filling the screen's height
-    // (in the portrait one its words would be a few pixels tall); the stage lays that out beside the controls
-    const sideways = matchMedia(SIDE);
-    const slateShape = (s: LiveState) => (sideways.matches || s.orientation === 'landscape' ? 'landscape' : 'portrait');
-    /** The starting-soon screen once its hour has come (or, with ahead, that much before it: the screen is loaded unseen
-        in the frame then, so the page turning into the watch party shows it drawn rather than loading) */
-    function slateSrc(s: LiveState, view: string, kidSlug: string, ahead = 0) {
-      if (view !== 'upcoming' || !kidSlug || !s.scheduledAt) return '';
-      if (Date.parse(s.scheduledAt) - Date.now() > SLATE_LEAD_MS + ahead) return '';
-      const shape = slateShape(s);
-      // (slateFor in functions/live/_watch-party.js builds the same address for the first paint: a staff rehearsal's
-      // screen is the rehearsal's)
-      const src = `/live/${kidSlug}/slate/?embed=1&music=0&o=${shape}${rehearsal ? '&rehearsal' : ''}`;
-      return slateFailed.has(src) ? '' : src;
     }
 
     // Whatever a redraw moves, the field someone is typing in stays where it is on screen; and coming back to the page,
@@ -810,19 +816,19 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const view = phase === 'live' || phase === 'ending' ? 'live' : phase === 'replay' ? 'replay' : phase === 'scheduled' || phase === 'armed' ? 'upcoming' : 'idle';
       const kidSlug = pageKid || (view !== 'idle' ? s.kidSlug || '' : '');
       const hasPlayer = !!(s.player && forThisKid && (view === 'live' || view === 'replay'));
-      const slate = hasPlayer ? '' : slateSrc(s, view, kidSlug);
-      return { s, forThisKid, phase, view, kidSlug, hasPlayer, slate, party: !!slate || hasPlayer };
+      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer };
     }
     function drawPage(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
       last = state; lastMeta = meta;
-      const { s, forThisKid, view, kidSlug, hasPlayer, slate, party } = decide(state);
-      display = slate ? 'starting' : view;
+      const { s, forThisKid, view, kidSlug, hasPlayer, party } = decide(state);
+      display = view;
       hero.dataset.phase = display;
       setAttr(hero, 'data-party', party);
       if (page) page.dataset.view = display;
-      // Starting or live, the video is the only thing: the application bar is asked to step aside
-      if (display === 'starting' || display === 'live') document.dispatchEvent(new CustomEvent('apply-bar:step-aside'));
+      // Live, the video is the only thing: the application bar is asked to step aside
+      if (display === 'live') document.dispatchEvent(new CustomEvent('apply-bar:step-aside'));
       follow(s, view);
+      drawBand(kidSlug);
       design?.setKid(kidSlug, display);
       // "Coming up" leaves out the reveal this page is showing
       const upNext = upNextBand();
@@ -857,9 +863,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       status?.setAttribute('aria-live', view === 'upcoming' ? 'off' : 'polite');
       let badge = '';
       if (view !== 'idle') {
-        // The server wrote the same words (momentWords), starting soon, live and replay included, so normally nothing
-        // changes here
-        const said = momentWords({ view, starting: !!slate, scheduledAt: s.scheduledAt || null, hasPlayer, source: s.source, endedAt: s.endedAt });
+        // The server wrote the same words (momentWords), live and replay included, so normally nothing changes here
+        const said = momentWords({ view, scheduledAt: s.scheduledAt || null, hasPlayer, source: s.source, endedAt: s.endedAt });
         if (eyebrow) eyebrow.textContent = said.eyebrow;
         setStatus(said.status);
         badge = said.badge;
@@ -908,14 +913,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       }
 
       stage.update({
-        mode: display as 'idle' | 'upcoming' | 'starting' | 'live' | 'replay',
+        mode: display as 'idle' | 'upcoming' | 'live' | 'replay',
         player: hasPlayer ? s.player : null,
-        slate,
-        // (the page redraws every 15 seconds before a reveal: a minute is four chances to have it ready)
-        soon: party ? '' : slateSrc(s, view, kidSlug, 60_000),
-        orientation: slate ? slateShape(s) : s.orientation === 'landscape' ? 'landscape' : 'portrait',
+        orientation: s.orientation === 'landscape' ? 'landscape' : 'portrait',
         badge,
-        late: slate && runningLate(s.scheduledAt),
       });
       messages?.update({ active: forThisKid && !!s.id && view !== 'idle', broadcastId: s.id, kidName: s.kidName, party });
       if (!party) give?.close();
@@ -1073,7 +1074,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const block = bq('remind-block');
       if (arrived || !block || block.hidden) return;
       arrived = true;
-      // The tab was left open until the reveal: stay on the slate or the video. The browser keeps going to a hash until
+      // The tab was left open until the reveal: stay on the video. The browser keeps going to a hash until
       // the page has loaded, so the hash goes, and the page comes back up once it's done.
       if (view !== 'upcoming' && view !== 'idle') {
         history.replaceState(history.state, '', location.pathname + location.search);
@@ -1168,17 +1169,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 
     // Last, so everything render() touches is declared before the first (possibly synchronous) call
     const unsubscribe = client.subscribe(render);
-    // Keeps the countdown fresh and opens the starting-soon window on time
+    // Keeps the countdown fresh
     const countdown = setInterval(() => { if (last?.upcoming) render(last, { reminders: client.reminders }); }, 15_000);
-    // Turning the phone sideways or back: the starting-soon screen takes the shape that fits. Not while someone types
-    // (heldW, below): a keyboard that leaves a wide screen short isn't a turn, and the screen would reload for nothing;
-    // a real turn mid-typing is caught up when typing ends
-    let turnLater = false;
-    const onTurn = () => {
-      if (heldW) { turnLater = true; return; }
-      if (rendered && alive && last) render(last, lastMeta);
-    };
-    sideways.addEventListener('change', onTurn);
 
     // ── The frame's height holds still while someone types on the page ──
     // The frame is sized to the screen's height (100svh). Some browsers (Android in-app ones, Facebook's among them)
@@ -1206,7 +1198,6 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     const letGo = () => {
       clearTimeout(goTimer);
       heldW = 0; heldH = 0; root.style.removeProperty('--live-vh');
-      if (turnLater) { turnLater = false; onTurn(); }
     };
     // Typing ends a moment before the keyboard goes. Letting go then shrank the frame to the page the keyboard left, for
     // that moment, and the page moved hundreds of pixels from the message just typed. So while the page is still short
@@ -1260,7 +1251,6 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       for (const type of ['wheel', 'touchstart', 'keydown']) removeEventListener(type, gaveUp);
       bandSeen?.disconnect();
       clearInterval(countdown);
-      sideways.removeEventListener('change', onTurn);
       document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('focusout', onFocusOut);
       removeEventListener('resize', onWidth);

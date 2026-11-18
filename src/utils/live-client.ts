@@ -5,8 +5,7 @@
  * to /api/live-ws (proxied to the real-time hub) so state changes arrive in
  * under a second; falls back to polling /api/broadcast when the socket is
  * unavailable. A single instance lives on window so the pill and the live
- * page never open two sockets; a same-origin iframe (the starting-soon screen
- * shown inside the live page) borrows its parent's instance too.
+ * page never open two sockets.
  *
  * Watch party: a live page calls watch() so the hub counts it as a viewer,
  * then gets 'viewers', 'react' and 'msg' / 'msg-hide' events through on().
@@ -54,7 +53,7 @@ const KEY = '__soardLiveClient';
  * the state comes from /api/broadcast-rehearsal (the private rehearsal feed, functions/api/_broadcast-rehearsal.js),
  * asked for every few seconds since the real-time hub carries only the real reveal; nothing is counted (reveal stats,
  * viewers, hearts), and leaving the page is a full page load, so no other page goes on reading the rehearsal. Decided
- * once, when the page is opened; the starting-soon screen inside it borrows this client.
+ * once, when the page is opened.
  */
 export const rehearsal = (() => {
   try { return location.pathname.startsWith('/live/') && new URLSearchParams(location.search).has('rehearsal'); } catch { return false; }
@@ -229,13 +228,6 @@ function createClient() {
 export type LiveClient = ReturnType<typeof createClient>;
 
 export function getLiveClient(): LiveClient {
-  // Inside a same-origin frame (the starting-soon screen on the live page), share the parent's socket
-  try {
-    if (window.parent !== window) {
-      const parent = window.parent as unknown as Record<string, LiveClient>;
-      if (parent[KEY]) return parent[KEY];
-    }
-  } catch { /* cross-origin parent */ }
   const w = window as unknown as Record<string, LiveClient>;
   if (!w[KEY]) w[KEY] = createClient();
   return w[KEY];

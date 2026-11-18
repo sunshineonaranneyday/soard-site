@@ -21,8 +21,7 @@
  *   - while a reveal is scheduled, /live/ follows it and the list leaves it out
  *   - nothing coming up: no section, the old hero line, past reveals back
  *   - the events page section, a kid page's badge, the /kids/ cards'
- *     badges, the home page's Up Next date line, the slate's
- *     "Coming up next" card (current kid left out, joins the rotation)
+ *     badges, the home page's Up Next date line
  *   - reduced motion shows every row at once
  *   - no console errors, no sideways scroll, axe (WCAG 2.1 AA) on the section
  * SHOTS=<dir> saves screenshots.
@@ -1489,9 +1488,9 @@ for (const width of [1440, 820, 390]) {
   }
 }
 
-// ── Events page, kid page, slate ──
+// ── Events page, kid page ──
 {
-  console.log('\n── events, kid page, slate ──');
+  console.log('\n── events, kid page ──');
   const { page, errors } = await open('/events/');
   const ev = await page.evaluate(() => { const s = document.querySelector('#reveals'); return { hidden: s?.hidden, rows: s?.querySelectorAll('.upn-row').length, title: s?.querySelector('h2')?.textContent }; });
   ok(ev.hidden === false && ev.rows === 4, 'events page lists the reveals', JSON.stringify(ev));
@@ -1535,17 +1534,6 @@ for (const width of [1440, 820, 390]) {
   else ok(true, `home Up Next: staff wrote their own date line (${line.text})`);
   ok(he.length === 0, 'home: no console errors', he.join(' | '));
   await home.close();
-
-  const { page: s, errors: se } = await open('/live/colin/slate/?music=0&still=1', { width: 960, height: 540 });
-  const slate = await s.evaluate(() => {
-    const c = document.querySelector('[data-card="next"]');
-    return { shown: c && !c.hidden, items: [...document.querySelectorAll('[data-next-list] li')].map((l) => l.querySelector('b').textContent + ' | ' + l.querySelector('span').textContent) };
-  });
-  ok(slate.shown, 'slate: "Coming up next" card joins');
-  ok(slate.items.length === 3 && !slate.items.some((i) => i.startsWith('Colin')), 'slate: the next three, this kid left out', JSON.stringify(slate.items));
-  ok(slate.items.every((i) => !/\d/.test(i.split('|')[1]) || i.startsWith('Colin')), 'slate: tentative ones show only their window', JSON.stringify(slate.items));
-  ok(se.length === 0, 'slate: no console errors', se.join(' | '));
-  await s.close();
 }
 
 await browser.close();

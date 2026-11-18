@@ -1,6 +1,6 @@
 /**
  * GET /api/reveals (public) — upcoming reveals for the kid pages, the events
- * page, the live page's "Coming up" list and the starting-soon screen. See
+ * page and the live page's "Coming up" list. See
  * ./_reveals.js for where the dates come from and what may be shown.
  *
  * → { reveals: [{ slug, name, startsAt, date, time, image, kidUrl, liveUrl }],   confirmed only

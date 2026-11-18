@@ -1,0 +1,65 @@
+---
+/**
+ * LivePartners.astro — the build's partners, scrolling under the live page's frame
+ * ================================================================================
+ * Peter, Nov 17 2026: "the vendors need the same scroll bar". "Built with help from", then the kid's partner logos in
+ * one slow endless row, as the starting-soon screen had it: under the photo before the reveal, under the video and its
+ * bar during it, under the replay after. It goes in LiveStage's "under" slot, which keeps it on screen with the video.
+ *
+ * The markup comes from src/utils/live-partners-html.ts, which the server also uses to draw it on /live/ for whichever
+ * reveal is current, so the styles here are global. LivePage's script sizes each logo once it loads (--r, so a wide
+ * logo and a tall one take the same room) and drops any that fail. It stops while a pointer rests on it, and stands
+ * still, each partner once, scrolling by hand, for anyone who asks for less motion.
+ */
+interface Props { kid: string; inner: string }
+const { kid, inner } = Astro.props;
+---
+
+<div class="lpb" data-live-partners data-kid={kid} hidden={!inner} set:html={inner} />
+
+<style is:global>
+  /* The band's height: LiveStage takes it out of the picture's (--under) so it stays on screen with the video */
+  .hero { --lpb-h: 60px; }
+  .lpb { display: flex; align-items: center; gap: 14px; height: var(--lpb-h); min-width: 0; text-align: left; }
+  .lpb[hidden] { display: none; }
+  /* Two lines, "Built with" / "help from", each whole: as wide as its words in any browser's font (a fixed width broke it
+     into four in Safari on an iPad), and left-aligned where the page around it is centred (phones, tablets) */
+  .lpb-label {
+    flex: none; margin: 0; font-size: 10.5px; font-weight: 800; letter-spacing: 0.12em; line-height: 1.35;
+    text-transform: uppercase; color: var(--c-text-muted);
+  }
+  .lpb-label span { display: block; white-space: nowrap; }
+  /* Width 0, grown into the room left: the long row inside never widens the band, the frame or the column it sits in */
+  .lpb-window { flex: 1 1 0; width: 0; min-width: 0; height: 100%; overflow: hidden; display: flex; align-items: center; }
+  .lpb-row {
+    --lpb-gap: 10px;
+    display: flex; gap: var(--lpb-gap); width: max-content; margin: 0; padding: 0; list-style: none;
+    animation: lpb-scroll calc(var(--lpb-n, 8) * 3.2s) linear infinite;
+  }
+  /* The row is the list twice over: half its length (and one gap) along, the second copy sits where the first began */
+  @keyframes lpb-scroll { to { transform: translateX(calc(-50% - var(--lpb-gap) / 2)); } }
+  .lpb:hover .lpb-row, .lpb:focus-within .lpb-row { animation-play-state: paused; }
+  .lpb-chip {
+    --logo-h: 30px;
+    flex: none; height: 46px; min-width: 84px; padding: 6px 16px; box-sizing: border-box;
+    display: flex; align-items: center; justify-content: center;
+    background: #fff; border: 1px solid var(--c-border); border-radius: 12px;
+  }
+  .lpb-chip img { display: block; max-height: var(--logo-h); max-width: 150px; width: auto; height: auto; object-fit: contain; }
+  /* Every logo the same area, whatever its shape (as the starting-soon screen sized them): at one height for all, a
+     5-wide-to-1-tall logo was seven times the size of a 0.6-to-1 one. --r (width ÷ height) is set once it loads */
+  .lpb-chip img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.118 / sqrt(var(--r)))); }
+  @media (max-width: 768px) {
+    .hero { --lpb-h: 52px; }
+    .lpb { gap: 10px; }
+    .lpb-label { font-size: 9.5px; letter-spacing: 0.1em; }
+    .lpb-chip { --logo-h: 26px; height: 40px; min-width: 72px; padding: 5px 12px; border-radius: 10px; }
+    .lpb-chip img { max-width: 120px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lpb-row { animation: none; }
+    .lpb-chip[aria-hidden] { display: none; }
+    .lpb-window { overflow-x: auto; scrollbar-width: none; }
+    .lpb-window::-webkit-scrollbar { display: none; }
+  }
+</style>

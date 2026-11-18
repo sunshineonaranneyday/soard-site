@@ -96,8 +96,8 @@ test('every page section is decided: the bar runs where it shows and nowhere els
   for (const s of SHOW) assert.ok(usesBar(`functions/${s}/_middleware.js`), `functions/${s}/_middleware.js runs the bar`);
   for (const s of SKIP) assert.ok(!usesBar(`functions/${s}/_middleware.js`) && !usesBar(`functions/${s}/index.js`), `${s} has no bar`);
   assert.ok(usesBar('functions/index.js'), 'the home page runs the bar');
-  assert.match(readFileSync('functions/live/[[path]].js', 'utf8'), /const liveNow = !!broadcast\?\.pub\?\.live \|\| party\?\.mode === 'starting' \|\| party\?\.mode === 'live';/, 'live: never while a reveal is starting or live, Facebook-only lives too');
-  assert.match(readFileSync('src/components/live/LivePage.astro', 'utf8'), /display === 'starting' \|\| display === 'live'\) document\.dispatchEvent\(new CustomEvent\('apply-bar:step-aside'\)\)/, 'a /live/ page left open asks it to go when the reveal starts');
+  assert.match(readFileSync('functions/live/[[path]].js', 'utf8'), /const liveNow = !!broadcast\?\.pub\?\.live \|\| party\?\.mode === 'live';/, 'live: never while a reveal is live, Facebook-only lives too');
+  assert.match(readFileSync('src/components/live/LivePage.astro', 'utf8'), /display === 'live'\) document\.dispatchEvent\(new CustomEvent\('apply-bar:step-aside'\)\)/, 'a /live/ page left open asks it to go when the reveal starts');
   assert.match(readFileSync('src/components/global/ApplicationBar.astro', 'utf8'), /addEventListener\('apply-bar:step-aside'[\s\S]{0,120}leave\(bar\)/, 'and it leaves its own way (reading place, focus)');
   // Only the bar touches the bar: everyone else uses its height and its two events
   for (const f of ['src/components/global/Header.astro', 'src/components/live/LivePage.astro']) assert.doesNotMatch(readFileSync(f, 'utf8'), /getElementById\('apply-bar'\)/, f);

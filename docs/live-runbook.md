@@ -8,14 +8,14 @@ For the crew holding the phone, and for the office. Keep this short and keep it 
    **Rehearsing the whole path:** create a JobTread job at the office location named `TEST` plus a kid's name and year, like `TEST Isla Example (2026)`. Give it a Reveal task and a Construction group with a Demo task, then mark Demo complete (that starts construction, which sends the tentative invite), confirm, move the date and un-confirm as you would for real. Everything runs: invites (to the test guests only, titled TEST), the countdown (marked Rehearsal in the admin, invisible on the public site), and reminders under the current Settings (to the test address only). A real confirmed reveal always takes the slot first. Close the job when done; its invite is cancelled.
 2. Facebook → Live Producer → schedule a live video for the same time using the **persistent stream key**. (Not needed once the Live Video API is approved.)
 3. Reveals → Now shows the **Go / no-go** for the scheduled reveal: fix anything it lists (each item has its own button). If the reveal is tomorrow, the site re-checks by itself in the morning and alerts if anything is off.
-4. Sound check, before the first reveal and whenever the phone or mic changes: put the phone on the **rehearsal** profile (Admin → Broadcast → Settings → Phones → rehearsal QR), open Admin → Broadcast → Now → **Start mic check**, and talk normally. The verdict should read "Sound is good", with speech between −24 and −12 dB on both meters. Switch the starting-soon screen layer on as well: the music should also land in that band, on the quiet side. Nothing in a rehearsal reaches the public.
+4. Sound check, before the first reveal and whenever the phone or mic changes: put the phone on the **rehearsal** profile (Admin → Broadcast → Settings → Phones → rehearsal QR), open Admin → Broadcast → Now → **Start mic check**, and talk normally. The verdict should read "Sound is good", with speech between −24 and −12 dB on both meters. Nothing in a rehearsal reaches the public.
 
 ## Reveal day (crew, 30 seconds)
 
 1. Charge the phone. Plug in the wireless mic receiver. Put the phone on the gimbal.
 2. Open **Larix Broadcaster**. Check the audio meter moves when someone talks.
 3. Tap the red **record** button. You are live everywhere: the site, Facebook, YouTube.
-   - **Starting early?** Put the "starting soon" screen up first (setup below), then tap record up to 30 minutes before the scheduled time. Everyone watching sees the logo and the kid's name while the room gets ready. Mute the mic in Larix while the screen is up so viewers hear the music, not setup chatter. When the reveal begins, switch that layer off and unmute. Connecting more than 30 minutes early holds the "we're live" email to the list.
+   - **Don't start early.** The moment the phone connects, the site, Facebook and YouTube show the camera, setup and all. Until then the live page shows the kid's photo and the countdown, with the build's partners scrolling under it, and it turns into the video the moment the phone connects (everyone on the page is brought up to it). Check picture and sound beforehand on the rehearsal profile instead. Connecting more than 30 minutes early holds the "we're live" email to the list.
 4. When the reveal is done, tap stop. The site switches to the replay on its own, saves the recording, adds it to the kid's page, emails the people who asked, and posts the reveal to Instagram as a Reel about 15 to 30 minutes later.
 
 If the phone goes live from the Facebook app instead, nothing extra is needed. Put the kid's name in the first line of the Facebook post ("Remi and Nico's reveal!"). A few hours after it ends, the site saves the replay to Stream, puts it on that kid's page, and redeploys.
@@ -38,23 +38,8 @@ Use a wireless mic with its own receiver that plugs into the phone's port: DJI M
 
 - Settings → Connectivity → **Adaptive bitrate: Ladder ascend**. Weak signal lowers quality instead of dropping.
 - Settings → Video → **Background streaming** on, so a notification doesn't stop the stream.
-- Shoot **vertical**. In Larix, set the video orientation to portrait (Settings → Video) and lock the phone's rotation so it never flips mid-reveal.
-
-## "Starting soon" screen (set up once per phone)
-
-While the stream warms up, viewers on the site, Facebook and YouTube see a starting-soon screen in the site's style: logo, "{Name}'s room reveal", the start time, a slowly drifting photo, rotating QR cards (invite someone to watch, fund the next room, the kid's story), the rooms being built, a band of that build's partner logos, and music.
-
-- **Start time:** taken from the reveal confirmed in JobTread. More than an hour out it reads "Live at 6:30 PM, in about 2 hours". In the final hour it becomes a running clock ("Starting in 12:34"), and at zero it reads "Any moment now" (half an hour past, "Running late" and "Thanks for waiting"). On an earlier day, as when checking the screen ahead of time, it says the day as the live page does ("Live tomorrow at", "Live Wednesday, November 18 at") and "Coming up"; "Today" over the room and "Starting soon" show only on the reveal day. Change the time in JobTread and the screen follows within a minute.
-- **Music:** plays under the countdown and fades out when the clock reaches zero, so it never plays over the reveal. The track is `live/starting-soon.mp3` on the files bucket (`files.sunshineonaranneyday.com`). Upload a replacement in the Cloudflare dashboard under R2 with the same name to change it. Use a track licensed for live streaming: Facebook and YouTube mute or cut off live video with copyrighted music. No file there means no music, and nothing breaks: the screen isn't told about a track that isn't there (checked every 5 minutes), so an upload starts playing within 5 minutes.
-- **Which kid:** automatic. The screen follows whichever reveal is scheduled. With nothing scheduled it shows a general "Our next room reveal" screen.
-
-**Larix, once per phone:** Settings → Overlays → add a **Web page** layer, full frame, with `https://sunshineonaranneyday.com/live/slate/`. It lays itself out portrait or landscape from the shape of the frame, so the same address works whichever way the crew shoots. Turn on **Play media** in the layer's properties and **Add internal audio** in Larix's audio settings so the music reaches the stream, and accept the prompt Larix shows for that. Never change the address again. During the stream, the layers button turns the screen on and off. If Larix shows a Premium lock on overlays, Larix Premium is $9.99/month.
-
-Fallback without a web layer: an **Image** layer with `https://sunshineonaranneyday.com/live/<kid>/starting-soon.png` (or `starting-soon-portrait.png`). That one is per kid and has no clock or music.
-
-**TV or laptop at the house:** `https://sunshineonaranneyday.com/live/slate/?tv=1`, full screen (Chrome: F11, or Cmd+Ctrl+F on a Mac). The first card offers the stream to guests' phones, and it stays silent. Admin → Reveals → Now links the preview, the TV version and the still image once a reveal is scheduled.
-
-Optional overrides on the address: `?at=18:30` (start time by hand), `?photo=<image id>`, `?music=0` (silent), `?still=1` (no motion).
+- Shoot **vertical**. In Larix, set the video orientation to portrait (Settings → Video) and lock the phone's rotation so it never flips mid-reveal. If the picture on Admin → Broadcast shows people lying on their side, this setting is off (Nov 17 2026 test: the phone sent 1920×1080 held upright, and the site, Facebook and YouTube all showed it sideways).
+- **No overlays.** The "starting soon" screen was retired on Nov 17 2026. If a phone still has its **Web page** layer (Settings → Overlays, address `…/live/slate/`) or its **Image** layer (`…/starting-soon.png`), delete it. Left on, it now shows nothing (the address answers an empty, see-through page, and the image is gone), but it has no reason to be there.
 
 ## Sharing the reveal and messages for the family (office)
 

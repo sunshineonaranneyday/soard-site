@@ -5765,8 +5765,8 @@
       </div>`;
     }
 
-    // Draft kids have no page, live page, or starting-soon screen until
-    // they are published and the site rebuilds.
+    // Draft kids have no page or live page until they are published and
+    // the site rebuilds.
     const bcKidLabel = (k, withYear) => {
       const bits = [withYear && k.year ? k.year : null, k.publishStatus === 'draft' ? 'draft' : null].filter(Boolean);
       return `${k.name}${bits.length ? ` (${bits.join(', ')})` : ''}`;
@@ -5774,11 +5774,11 @@
     function BcDraftNote({ kid }) {
       if (!kid || kid.publishStatus !== 'draft') return null;
       const n = kid.name || 'This kid';
-      return html`<div class="bc-note bc-draft-note" role="note">${icons.warning}<span>${n} isn't published on the site yet. Reveal links will open the main live page until you publish ${n} and the site redeploys, and the starting-soon screen won't exist. Publish ${n} before reveal day.</span></div>`;
+      return html`<div class="bc-note bc-draft-note" role="note">${icons.warning}<span>${n} isn't published on the site yet. Reveal links will open the main live page until you publish ${n} and the site redeploys. Publish ${n} before reveal day.</span></div>`;
     }
 
     /**
-     * Reveals → Now: the before photos this reveal's live page and starting-soon screen play, from the confirm on (the
+     * Reveals → Now: the before photos this reveal's live page shows, from the confirm on (the
      * first RD.BEFORE_SHOWN on the page, in their order in the kid's Photos → Before photos, exactly as
      * /api/reveal-design picks them), and Choose them, which opens the profile there. Peter, Nov 16 2026. Nothing is
      * kept here: the choosing is done on the profile, so the kid page, the live page and this card always agree.
@@ -6059,7 +6059,6 @@
       if (st.source === 'manual' && phase !== 'idle') sub.push(html`<span>Emergency banner (no stream)</span>`);
       const links = [];
       if (pub.liveUrl && phase !== 'idle') links.push(html`<a href=${pub.liveUrl} target="_blank" rel="noopener">Live page ↗</a>`);
-      if (pub.kidSlug && (sched || live)) links.push(html`<span>Starting-soon screen: <a href=${`/live/${pub.kidSlug}/slate/`} target="_blank" rel="noopener">preview ↗</a> · <a href=${`/live/${pub.kidSlug}/slate/?tv=1`} target="_blank" rel="noopener">TV ↗</a> · <a href=${`/live/${pub.kidSlug}/starting-soon.png`} target="_blank" rel="noopener">still image ↗</a></span>`);
       if (st.fb?.permalink) links.push(html`<a href=${st.fb.permalink} target="_blank" rel="noopener">Facebook post ↗</a>`);
       if (st.jobId && (sched || live)) links.push(html`<a href=${`https://app.jobtread.com/jobs/${st.jobId}/schedule`} target="_blank" rel="noopener">Change it in JobTread ↗</a>`);
 
@@ -12733,8 +12732,8 @@
     }
 
     // ═══ A kid's design for their reveal (Peter, Nov 9 2026) ═══
-    // Bring in from JobTread and Preview the reveal screen live in ./reveal-design-import.js, loaded the first time
-    // either opens. part: 'import' | 'preview'
+    // Bring in from JobTread, Preview the live page and the Cover tool live in ./reveal-design-import.js, loaded the
+    // first time one opens. part: 'import' | 'live' | 'cover'
     let kdRevealModule = null;
     function KdRevealLazy({ part, ...props }) {
       const [mod, setMod] = useState(() => lazyNow(kdRevealModule));
@@ -12745,17 +12744,17 @@
       };
       useEffect(load, []);
       if (err) return html`<${KdDialogBox} title="Couldn’t open this" onClose=${props.onClose} size="sm"><${LoadErrorCard} error=${err} onRetry=${() => { setErr(null); load(); }} /><//>`;
-      const Comp = mod && { import: mod.RevealImport, preview: mod.RevealPreview, live: mod.LivePreview, cover: mod.CoverDialog }[part];
+      const Comp = mod && { import: mod.RevealImport, live: mod.LivePreview, cover: mod.CoverDialog }[part];
       return Comp ? html`<${Comp} ...${props} Dialog=${KdDialogBox} />` : null;
     }
     const kdPoss = (name) => (/s$/i.test(name || '') ? `${name}’` : `${name}’s`);
-    /** When an unrevealed kid's design first shows: from the confirmed reveal, on their page, live page and stream */
+    /** When an unrevealed kid's design first shows: from the confirmed reveal, on their page and live page */
     function kdDesignWhen(name, reveal, hidden = false) {
       const who = name || 'this kid';
-      // A hidden profile has no live page or reveal screen of its own (/api/reveal-design answers nothing for it)
-      if (hidden) return html`${kdPoss(who)} profile is hidden, so the design doesn’t show anywhere: not on the page, the live page or the stream. Show the profile on the site and the existing and proposed plans show on the page and the live reveal page once the reveal is confirmed.`;
-      if (reveal?.confirmed) return html`The reveal is confirmed, so the existing and proposed plans show on ${kdPoss(who)} page and live reveal page now (each once its address is seen to), and play on the stream before it starts. Design boards stay off until after the reveal.`;
-      return html`The existing and proposed plans show on ${kdPoss(who)} page and live reveal page once JobTread confirms the reveal, and play on the stream before it starts. Design boards stay off until after the reveal.`;
+      // A hidden profile has no live page of its own (/api/reveal-design answers nothing for it)
+      if (hidden) return html`${kdPoss(who)} profile is hidden, so the design doesn’t show anywhere: not on the page or the live page. Show the profile on the site and the existing and proposed plans show on the page and the live reveal page once the reveal is confirmed.`;
+      if (reveal?.confirmed) return html`The reveal is confirmed, so the existing and proposed plans show on ${kdPoss(who)} page and live reveal page now (each once its address is seen to). Design boards stay off until after the reveal.`;
+      return html`The existing and proposed plans show on ${kdPoss(who)} page and live reveal page once JobTread confirms the reveal. Design boards stay off until after the reveal.`;
     }
 
     /** One plan: what it is (as-built, proposed, board), the page's crop (floor plans lose the address block), caption, place */
@@ -13576,7 +13575,7 @@
       const coarse = useMatchMedia('(pointer: coarse)');
       const [arranging, setArranging] = useState(false);
       const [showAllPlans, setShowAllPlans] = useState(false);
-      const [design, setDesign] = useState(null); // the reveal design dialogs: 'import' | 'preview'
+      const [design, setDesign] = useState(null); // the reveal design dialogs: 'import' | 'import-befores' | 'live'
       const [coverKey, setCoverKey] = useState(null); // a plan whose address is being covered
       // On a phone a long story is several screens: it shows as a preview until you edit it
       const narrow = useMatchMedia('(max-width: 768px)');
@@ -13604,7 +13603,7 @@
 
       const record = useMemo(() => kdSaveRecord(data), [data]);
       const uploading = Object.keys(uploads).length > 0;
-      // Preview the reveal screen shows the design as it is here, saved or not: the screen asks for it every second
+      // Preview the live page shows the design as it is here, saved or not: the page asks for it as it draws
       useEffect(() => {
         window.__soardRevealDesign = () => { const d = dataRef.current; return { name: d.name || '', slides: RD.revealSlides(kdSaveRecord(d)) }; };
         return () => { delete window.__soardRevealDesign; };
@@ -14676,9 +14675,6 @@
         ${design ? html`<${KdRevealLazy} part=${design === 'import-befores' ? 'import' : design} startWith=${design === 'import-befores' ? 'befores' : 'design'} kid=${{ slug: data.slug || slug, name: data.name, year: data.year }} jobId=${jobId || ''} revealed=${revealed}
           plans=${data.plans} befores=${data.beforePhotos} pairs=${data.beforeAfterPhotos} gallery=${data.photos} removed=${[...removedHere.current]} slug=${data.slug || slug} name=${data.name} published=${!!slug && data.publishStatus !== 'draft'}
           photo=${String(data.heroImage || '').replace(/^https:\/\/imagedelivery\.net\/[^/]+\//, '').replace(/\/(public|[^/]*=[^/]*)$/, '')}
-          kinds=${RD.revealSlides(record).map((x) => x.kind)}
-          waiting=${revealed ? 0 : data.plans.filter((x) => !kdLocal(x.url) && !RD.addressChecked(x)).length}
-          uploading=${Object.keys(uploads).length}
           onAdd=${addFromJobTread} onClose=${() => setDesign(null)} />` : null}
         ${coverKey && data.plans.find((x) => x._key === coverKey) ? (() => { const cp = data.plans.find((x) => x._key === coverKey); return html`<${KdRevealLazy} part="cover"
           src=${kdImg(cp.url, 'w=2400,q=95')} label=${cp.label || RD.PLAN_KINDS.find((k) => k.id === RD.planKind(cp))?.long || 'Drawing'}
@@ -14970,7 +14966,6 @@
             : 'Before the reveal the page shows the as-built plan, then the proposed one, from the confirm, and the reveal screen plays them; design boards wait for the page until after the reveal.',
           html`${slug ? html`<button type="button" class="btn btn-ghost btn-sm" onClick=${() => setDesign('import')}>Bring in from JobTread</button>` : null}
             <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setDesign('live')}>${kdIcon.play} Preview the live page</button>
-            <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setDesign('preview')}>${kdIcon.play} Preview the stream</button>
             <button type="button" class="btn btn-ghost btn-sm" onClick=${() => planInput.current?.click()}>${kdIcon.upload} Add plans</button>
             <input type="file" accept="image/*" multiple hidden ref=${planInput} onChange=${(e) => { addPlans([...e.target.files]); e.target.value = ''; }} />`,
           html`

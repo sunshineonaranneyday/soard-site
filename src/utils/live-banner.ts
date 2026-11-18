@@ -12,7 +12,7 @@ import type { LiveState, ReminderOptions } from './live-client';
 export const BANNER_LEAD_DAYS = 7;
 const DAY = 86_400_000;
 const ENDED_MS = 6 * 3600e3;     // a recording that hasn't come by now isn't "on its way" (REPLAY_WORK_MAX_MS)
-const STARTING_MS = 30 * 60_000; // this close, the live page is the starting-soon screen (ARM_WINDOW_MS)
+const STARTING_MS = 30 * 60_000; // this close, the live page is where to wait for it (ARM_WINDOW_MS)
 export const RUNNING_LATE_MS = 30 * 60_000; // past the start with no stream for this long, "any moment" has stopped being true
 export const runningLate = (iso: string | null | undefined, now = Date.now()) => !!iso && now - Date.parse(iso) > RUNNING_LATE_MS;
 const LOCALE = 'en-US';          // the sentences around the dates are English, whatever the browser's language
@@ -114,7 +114,7 @@ export function bannerWords(s: Status, stage: BannerStage, next: NextReveal[], {
   const when = s.scheduledAt && Number.isFinite(at) ? ` goes live ${dayWords(s.scheduledAt, now)} at ${clock(s.scheduledAt)}` : '';
   // Past its start and still waiting on the stream: a time in the past reads as a mistake
   const msg = !(at <= now) ? `${who}${when}.` : runningLate(s.scheduledAt, now) ? `${who} is running a little late.` : `${who} is starting soon.`;
-  // The button says what the page it opens really offers; this close, that page is the starting-soon screen
+  // The button says what the page it opens really offers; this close, that's waiting for the video, not signing up
   const starting = at - now <= STARTING_MS;
   const cta = starting ? 'Watch →' : remindersOn ? 'Remind me →' : 'Add to calendar →';
   return words(stage === 'today' ? 'Reveal day' : 'Coming up', msg, thenLine(s, next, now), cta, starting ? '' : '#remind');
@@ -146,11 +146,11 @@ export const easternDay = (now = Date.now()) => new Intl.DateTimeFormat('en-CA',
 export const revealIsToday = (slug: string, reveals: { slug: string; date?: string }[], now = Date.now()) =>
   reveals.some((r) => r.slug === slug && r.date === easternDay(now));
 
-/** /live/, the reveal's own /live page and its starting-soon screen already show it; another kid's page doesn't */
+/** /live/ and the reveal's own /live page already show it; another kid's page doesn't */
 export function pageShowsIt(path: string, kidSlug: string | null | undefined, reveals: { slug: string; date?: string }[] = [], now = Date.now()): boolean {
-  const [root, kid, more] = path.split('/').filter(Boolean);
+  const [root, kid] = path.split('/').filter(Boolean);
   if (root !== 'live') return false;
-  return !kid || !!more || kid === kidSlug || (!kidSlug && revealIsToday(kid, reveals, now));
+  return !kid || kid === kidSlug || (!kidSlug && revealIsToday(kid, reveals, now));
 }
 
 /**

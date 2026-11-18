@@ -1,11 +1,11 @@
 ---
 /**
- * LiveStage.astro — the frame on the live page: photo, starting-soon screen, video
- * ===============================================================================
+ * LiveStage.astro — the frame on the live page: photo, then the video
+ * ====================================================================
  * Before the watch party it is the hero's portrait photo with its badge
  * (countdown, "Live" for a Facebook-only broadcast, "Processing").
  *
- * During the watch party (data-party: starting soon, live, replay) it is the
+ * During the watch party (data-party: live, replay) it is the
  * video, as big as the screen allows, with nothing drawn on the picture and
  * one simple bar under it:
  *
@@ -25,11 +25,17 @@
  * Sizing: the page sets --fh, the height the whole stage may take; the
  * stage fits the video and bar inside it at the picture's real shape (--ar,
  * width / height). Behaviour lives in src/utils/live-stage.ts.
+ *
+ * Under it all, the build's partners scroll by (the page's "under" slot,
+ * LivePartners.astro; data-partners when there are any): under the photo
+ * before the reveal, under the video's bar during it, and their height comes
+ * out of the picture's so they stay on screen with it. Not in full screen,
+ * nor on a phone held sideways, where the picture needs the screen's height.
  */
 import { cfRaw, cfSrcset, cfLqip } from '../../utils/cf-image';
 
-interface Props { photo: string; alt: string }
-const { photo, alt } = Astro.props;
+interface Props { photo: string; alt: string; partners?: boolean }
+const { photo, alt, partners = false } = Astro.props;
 
 const svg = (paths: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const SPEAKER = '<path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/>';
@@ -46,7 +52,7 @@ const ICON = {
 };
 ---
 
-<div class="stage" data-stage data-mode="loading" data-orientation="portrait" tabindex="-1">
+<div class="stage" data-stage data-mode="loading" data-orientation="portrait" data-partners={partners ? '' : undefined} tabindex="-1">
   <div class="stage__screen">
     <div class="stage__accent" aria-hidden="true"></div>
     <div class="stage__picture" data-s="picture" data-live="frame" style={`background-image:url(${cfLqip(photo)})`}>
@@ -62,7 +68,6 @@ const ICON = {
           data-live="photo"
         />
         <div class="stage__player" data-s="player" hidden></div>
-        <div class="stage__slate" data-s="slate" hidden></div>
         <div class="stage__note" data-s="note" role="status" hidden>
           <p class="stage__note-title" data-s="note-title"></p>
           <p class="stage__note-text" data-s="note-text"></p>
@@ -119,11 +124,14 @@ const ICON = {
   <!-- Something that goes with the picture (the page's design strip). The grid places it beside the picture; it comes
        last so the keyboard reaches the video's own controls first -->
   <div class="stage__beside"><slot name="beside" /></div>
+
+  <!-- The build's partners, scrolling under everything (LivePartners.astro) -->
+  <div class="stage__under"><slot name="under" /></div>
 </div>
 
 <style>
   /* ── Before the watch party: the hero's portrait photo ── */
-  .stage { --ar: 0.5625; --gap: 8px; --bar: 52px; --below: calc(var(--bar) + var(--gap)); position: relative; outline: none; }
+  .stage { --ar: 0.5625; --gap: 8px; --bar: 52px; --below: calc(var(--bar) + var(--gap) + var(--under, 0px)); position: relative; outline: none; }
   .stage[data-orientation='landscape'] { --ar: 1.7778; }
   .stage__screen { position: relative; }
   .stage__accent {
@@ -138,20 +146,15 @@ const ICON = {
   }
   .stage__clip { position: absolute; inset: 0; border-radius: inherit; overflow: hidden; container-type: inline-size; }
   .stage__photo { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* The partners: above the yellow block that peeks out from behind the frame, and clear of it under the photo */
+  .stage__under { position: relative; z-index: 1; min-width: 0; }
+  .stage:not([data-partners]) .stage__under { display: none; }
+  .stage:not([data-party]) .stage__under { margin-top: 36px; }
   .stage__player { position: absolute; inset: 0; transition: opacity 0.3s ease; }
   .stage__player[hidden] { display: none; }
   /* :global: the video and iframes are created at runtime, so they have no Astro scope attribute */
   .stage__player :global(iframe) { width: 100%; height: 100%; border: 0; display: block; }
   .stage__player :global(video) { width: 100%; height: 100%; display: block; object-fit: contain; background: #000; }
-  /* The starting-soon screen, over the frame in a layer of its own: going live it stays while the picture connects and
-     fades as the picture shows (live-stage.ts endHandoff). Nothing to tap on it: taps reach the picture under it.
-     It's the screen's own cream (SlateScreen.astro) while the screen loads, and the screen fades in on it once drawn */
-  .stage__slate { position: absolute; inset: 0; z-index: 1; pointer-events: none; transition: opacity 0.6s ease; background: var(--c-cream); }
-  .stage__slate[hidden] { display: none; }
-  .stage__slate.is-going { opacity: 0; }
-  /* Loaded ahead, unseen (live-stage.ts warmSlate): drawn but not shown, so it shows drawn when its time comes */
-  .stage__slate[data-warm] { opacity: 0; transition: none; }
-  .stage__slate :global(iframe) { width: 100%; height: 100%; border: 0; display: block; }
   .stage[data-pkind='replay'] .stage__player :global(video) { cursor: pointer; }
 
   .stage__badge {
@@ -174,25 +177,27 @@ const ICON = {
     --pic: calc((var(--fh, 640px) - var(--below)) * var(--ar));
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, var(--pic)) var(--beside-gap, 0px) var(--beside, 0px) minmax(0, 1fr);
-    grid-template-areas: '. screen . beside .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'jump jump jump jump jump';
+    grid-template-areas: '. screen . beside .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'jump jump jump jump jump' 'under under under under under';
     width: min(var(--stage-max, 100%), max(calc(var(--pic) + var(--beside-gap, 0px) + var(--beside, 0px)), var(--controls-min, 0px)));
     margin-inline: auto;
   }
   /* A landscape picture fills the width: what goes with it sits under everything */
-  .stage[data-party][data-orientation='landscape'] { grid-template-areas: '. screen . . .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'jump jump jump jump jump' 'beside beside beside beside beside'; }
+  .stage[data-party][data-orientation='landscape'] { grid-template-areas: '. screen . . .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'jump jump jump jump jump' 'beside beside beside beside beside' 'under under under under under'; }
   .stage[data-party] .stage__screen { grid-area: screen; }
   .stage[data-party] .stage__beside { grid-area: beside; position: relative; min-width: 0; }
   .stage[data-party] .stage__cc { grid-area: cc; }
   .stage[data-party] .stage__bar { grid-area: bar; container: bar / inline-size; }
   .stage[data-party] .stage__jump { grid-area: jump; }
+  .stage[data-party] .stage__under { grid-area: under; margin-top: var(--gap); }
+  /* The partners take their own height out of the picture's, so the picture, its bar and they all fit the screen */
+  .stage[data-party][data-partners] { --under: calc(var(--lpb-h) + var(--gap)); }
   /* A replay's bar holds play, the line, captions and full screen: room enough for a line worth dragging */
   .stage[data-party][data-mode='replay'] { --controls-min: 320px; }
-  /* Live: "Live", the count and three buttons (or Tap for sound); starting soon: its words, the count and the heart */
+  /* Live: "Live", the count and three buttons (or Tap for sound) */
   .stage[data-party][data-mode='live'] { --controls-min: 270px; }
-  .stage[data-party][data-mode='starting'] { --controls-min: 250px; }
-  .stage[data-party][data-cc] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap)); }
-  .stage[data-party][data-jump] { --below: calc(var(--bar) + var(--gap) + 46px + var(--gap)); }
-  .stage[data-party][data-cc][data-jump] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + 46px + var(--gap)); }
+  .stage[data-party][data-cc] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + var(--under, 0px)); }
+  .stage[data-party][data-jump] { --below: calc(var(--bar) + var(--gap) + 46px + var(--gap) + var(--under, 0px)); }
+  .stage[data-party][data-cc][data-jump] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + 46px + var(--gap) + var(--under, 0px)); }
   .stage[data-party] .stage__screen { aspect-ratio: var(--ar); }
   .stage[data-party] .stage__picture { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 20px; }
   .stage[data-party] .stage__photo { display: none; }
@@ -249,7 +254,7 @@ const ICON = {
   .bar__status span:last-child { overflow: hidden; text-overflow: ellipsis; }
   @media (max-width: 360px) { .stage__bar { padding-left: 12px; } }
   /* The bar's words give way by the bar's own width, not the screen's (beside a sideways phone's picture it's narrow on
-     a wide screen): the viewer count's words go first, so "Live" and "Starting soon" are never squeezed out */
+     a wide screen): the viewer count's words go first, so "Live" is never squeezed out */
   @container bar (max-width: 300px) { .bar__status { font-size: 11px; letter-spacing: 0.04em; } }
   .bar__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c-text-light); position: relative; flex-shrink: 0; }
   .stage[data-onair] .bar__dot { background: var(--c-yellow); }
@@ -399,6 +404,8 @@ const ICON = {
   }
   .stage[data-party][data-fullscreen] .stage__screen { width: min(100%, var(--pic)); justify-self: center; }
   .stage[data-party][data-fullscreen] .stage__beside { display: none; }
+  .stage[data-party][data-partners][data-fullscreen] { --under: 0px; }
+  .stage[data-fullscreen] .stage__under { display: none; }
 
   /* ── A phone held sideways: the picture as tall as the screen allows (the page gives the frame the screen's height,
      less the menu and the kid's name), and everything else beside it; under it, the controls would leave a picture a
@@ -407,6 +414,9 @@ const ICON = {
      replay's the most); a wide picture gives way to them. Full screen is full screen ── */
   /* (PHONE, DESK and SIDE: word for word as in src/utils/live-media.ts) */
   @media (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 960px), (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 1023px) and (pointer: coarse) {
+    /* No room under the picture for the partners: the picture keeps the screen's height */
+    .stage[data-party][data-partners] { --under: 0px; }
+    .stage[data-party] .stage__under { display: none; }
     .stage[data-party][data-orientation]:not([data-fullscreen]) {
       --pic: calc(var(--fh, 640px) * var(--ar));
       --side-min: max(var(--controls-min, 0px), 280px);
@@ -426,8 +436,6 @@ const ICON = {
     .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc:not([hidden]), .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc[hidden] + .stage__bar { margin-top: 0; }
     /* The corner player a size smaller on a screen this short */
     .stage[data-party][data-orientation] .stage__picture.is-docked { --mini-h: min(210px, 50svh); }
-    /* "Starting soon" needs less room than a replay's controls: the starting-soon screen gets it */
-    .stage[data-party][data-orientation][data-mode='starting']:not([data-fullscreen]) { --side-min: 250px; }
     /* The controls stack from the top, the design under them; what's left of the picture's height stays below. Beside
        a wide picture they take a little less room than elsewhere, so the picture keeps the screen's height */
     .stage[data-party][data-orientation='landscape']:not([data-fullscreen]) {
@@ -551,6 +559,6 @@ const ICON = {
     .stage__accent { animation: none; opacity: 0.35; }
     .bar__sound, .bar__heart.is-beat, .stage[data-party] .stage__picture.is-docked { animation: none; }
     .stage[data-onair][data-mode='live'] .bar__dot::after { animation: none; }
-    .stage__player, .stage__slate, .bar__btn { transition: none; }
+    .stage__player, .bar__btn { transition: none; }
   }
 </style>

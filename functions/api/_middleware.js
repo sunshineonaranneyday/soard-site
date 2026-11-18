@@ -112,7 +112,7 @@ const PUBLIC_ROUTES = ['/api/newsletter', '/api/kids.json', '/api/download-logo'
 // application-bar-closed only sets the cookie that remembers the bar's X for the season.
 const PUBLIC_GET_ROUTES = ['/api/live-status', '/api/fb-live-videos', '/api/broadcast', '/api/reveals', '/api/reveals.ics', '/api/application-open', '/api/application-bar-closed'];
 
-// reveal-design is a kid's before photos and drawings for the live page and starting-soon screen: nothing at all
+// reveal-design is a kid's before photos and drawings for the live page: nothing at all
 // until their reveal is confirmed (it checks), and drawings only without the family's address
 PUBLIC_GET_ROUTES.push('/api/reveal-design');
 

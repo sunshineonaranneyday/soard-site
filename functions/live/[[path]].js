@@ -9,7 +9,7 @@
  *     title and the share preview (texts and Slack fetch it fresh each time;
  *     Facebook caches previews, so Facebook posts use the kid's own link).
  *     The hero gets data-follow so the page script knows what it was given.
- *   - During the watch party (starting soon, live, replay), /live/ and the
+ *   - During the watch party (live, replay), /live/ and the
  *     current kid's own page are laid out for the video before they leave
  *     the server (_watch-party.js), so nothing on screen shifts when the
  *     page script takes over. That is when most viewers arrive at once.
@@ -20,7 +20,7 @@
  *     slug) redirects to /live/, which shows whatever reveal is current
  *     instead of a "page not found".
  *   - While the family application is open, /live/ carries the application
- *     bar (../_apply-bar.js), except while a reveal is starting or live, when
+ *     bar (../_apply-bar.js), except while a reveal is live, when
  *     the video is the only thing. Someone arriving from the Instagram bio is
  *     exactly who should hear the application is open.
  *
@@ -36,14 +36,14 @@
  */
 
 import { readState, readConfig, publicState, visibleState, publicReminders } from '../api/_broadcast.js';
-import { watchParty, slateFor, slateFacts } from './_watch-party.js';
-import { SLATE_CROP } from '../../src/utils/slate-photo.ts';
+import { watchParty } from './_watch-party.js';
 import { revealSlides, designWindow } from '../../public/admin/reveal-design.js';
 import { revealOf } from '../api/reveal-design.js';
 import { cachedReveals } from '../api/_reveals.js';
 import { cfRaw, cfSrcset, cfLqip } from '../../src/utils/cf-image.ts';
 import { designSignature, validSlide } from '../../src/utils/reveal-design-client.ts';
 import { designPartsHtml, designName, designLead } from '../../src/utils/live-design-html.ts';
+import { bandPartners, partnersBandInner } from '../../src/utils/live-partners-html.ts';
 import { barFor, addBar, PAGE_REUSE } from '../_apply-bar.js';
 import { cardFor } from '../_og-cards.js';
 import { edgeSchedule, scheduleAttr } from '../_kid-reveal.js';
@@ -61,8 +61,6 @@ const ACTIVE = new Set(['scheduled', 'armed', 'live', 'ending', 'replay']);
 const SITE = 'https://sunshineonaranneyday.com';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-/** Slides as JSON inside a <script type="application/json">: no "<" in it, so nothing in a caption can close the block */
-export const slidesJson = (slides) => JSON.stringify(slides || []).replace(/</g, '\\u003c');
 
 /** A kid's saved profile ({} when unknown or unreadable) */
 async function kidData(env, slug) {
@@ -130,19 +128,6 @@ export function addDesign(res, design) {
   return new Response(out.body, { status: out.status, headers });
 }
 
-/** The starting-soon track (docs/live-runbook.md: live/starting-soon.mp3 in the files bucket) is there: asked of R2 at
- * most every 5 minutes. Without the bucket bound, taken as there (the screen copes with a missing one) */
-export const MUSIC_KEY = 'live/starting-soon.mp3';
-let musicSeen = { at: 0, there: true };
-export async function musicThere(env, now = Date.now()) {
-  if (!env.FILES) return true;
-  if (now - musicSeen.at < 5 * 60_000) return musicSeen.there;
-  let there = musicSeen.there;
-  try { there = !!(await env.FILES.head(MUSIC_KEY)); } catch { /* keep what was known */ }
-  musicSeen = { at: now, there };
-  return there;
-}
-
 const setAttrs = (attrs) => ({
   element(e) { for (const [k, v] of Object.entries(attrs)) { if (v === null) e.removeAttribute(k); else e.setAttribute(k, v); } },
 });
@@ -204,6 +189,13 @@ function rewrite(res, { kid, party, messages, design }) {
       .on('.live-page', setAttrs({ 'data-next': null }))
       .on('#live-hero h1', { element(e) { e.setInnerContent(`${esc(kid.name)}'s <em>room reveal</em>`, { html: true }); } });
     if (kid.summary) rw = rw.on('#live-hero [data-live="lead"]', { element(e) { e.setInnerContent(kid.summary); } });
+    // The build's partners, scrolling under the frame, as a child's own page has them from its build (LivePartners.astro)
+    const partners = partnersBandInner(bandPartners(kid.data?.partnerLogos));
+    if (partners) {
+      rw = rw
+        .on('#live-hero [data-live-partners]', { element(e) { e.setInnerContent(partners, { html: true }); e.removeAttribute('hidden'); e.setAttribute('data-kid', kid.slug); } })
+        .on('#live-hero [data-stage]', setAttrs({ 'data-partners': '' }));
+    }
     if (kid.card) {
       // The kid's own live page's share card (built for every published kid)
       const og = `${SITE}${kid.card}`;
@@ -220,30 +212,23 @@ function rewrite(res, { kid, party, messages, design }) {
   }
   if (party) {
     const shape = { 'data-party': '', 'data-orientation': party.orientation };
-    const starting = party.mode === 'starting';
     const words = party.words;
     rw = rw
       .on('.live-page', setAttrs({ 'data-view': party.mode, 'data-next': null }))
       .on('#live-hero', setAttrs({ 'data-phase': party.mode, ...shape }))
-      // (on air from the start while the starting-soon screen plays: its dot is lit, as live-stage.ts paints it)
-      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': starting ? '' : null }))
+      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': null }))
       .on('#live-hero [data-s="bar"]', setAttrs({ hidden: null }))
       .on('#live-hero [data-live="eyebrow"]', { element(e) { e.setInnerContent(words.eyebrow); } })
-      // The status line: the starting-soon countdown's words; the video says it all once it plays
-      .on('#live-hero [data-live="status"]', { element(e) { e.setInnerContent(words.status); e.setAttribute('aria-live', starting ? 'off' : 'polite'); } })
-      // The bar under the frame: the replay's own controls, or the live bar's words (a heart from the start before the
-      // reveal; live, the sound and heart come once the picture plays)
+      // The status line: the video says it all once it plays
+      .on('#live-hero [data-live="status"]', { element(e) { e.setInnerContent(words.status); e.setAttribute('aria-live', 'polite'); } })
+      // The bar under the frame: the replay's own controls, or the live bar's words (the sound and heart come once the
+      // picture plays)
       .on('#live-hero [data-s="livebar"]', setAttrs({ hidden: party.mode === 'replay' ? '' : null }))
       .on('#live-hero [data-s="replaybar"]', setAttrs({ hidden: party.mode === 'replay' ? null : '' }))
-      .on('#live-hero [data-s="status"]', { element(e) { e.setInnerContent(starting ? (party.late ? 'Running late' : 'Starting soon') : party.mode === 'replay' ? 'Replay' : 'Connecting'); } })
-      .on('#live-hero [data-s="heart"]', setAttrs({ hidden: starting ? null : '' }))
+      .on('#live-hero [data-s="status"]', { element(e) { e.setInnerContent(party.mode === 'replay' ? 'Replay' : 'Connecting'); } })
+      .on('#live-hero [data-s="heart"]', setAttrs({ hidden: '' }))
       // Full screen, live: there from the moment the player is in the frame (until it plays muted: then "Tap for sound")
       .on('#live-hero [data-s="livebar"] [data-full]', setAttrs({ hidden: party.mode === 'live' ? null : '' }));
-    // The starting-soon screen is in the frame from the first paint (live-stage.ts keeps it rather than load it again)
-    if (starting && party.slate) {
-      const title = party.late ? 'Running late' : 'Starting soon';
-      rw = rw.on('#live-hero [data-s="slate"]', { element(e) { e.removeAttribute('hidden'); e.setInnerContent(`<iframe src="${esc(party.slate)}" title="${title}" loading="eager" tabindex="-1"></iframe>`, { html: true }); } });
-    }
     if (party.ctas) rw = ctaFirstPaint(rw, party.ctas, { 'cta-messages': false });
     if (messages) rw = heroMessages(rw, messages);
     if (!kid && party.mode === 'live' && party.generic) rw = rw.on('#live-hero h1', { element(e) { e.setInnerContent("Today's <em>room reveal</em>", { html: true }); } });
@@ -374,7 +359,7 @@ export function firstView({ state, pub, pageKid = '', party = null, rows = null,
   if (party || !state) return null;
   const ours = !pageKid || pub?.kidSlug === pageKid;
   const phase = ours ? state.phase : 'idle';
-  if (phase === 'scheduled' || phase === 'armed') return { view: 'upcoming', ...momentWords({ view: 'upcoming', starting: false, scheduledAt: state.scheduledAt || null, hasPlayer: false, tz, now }) };
+  if (phase === 'scheduled' || phase === 'armed') return { view: 'upcoming', ...momentWords({ view: 'upcoming', scheduledAt: state.scheduledAt || null, hasPlayer: false, tz, now }) };
   if (phase === 'live' || phase === 'ending' || phase === 'replay') return null;
   return { view: 'idle', eyebrow: null, status: rows ? betweenText(rows, pageKid, tz) : '', badge: '' };
 }
@@ -496,20 +481,28 @@ function fresh(request) {
   return r;
 }
 
+/**
+ * The starting-soon screen is gone (Peter, Nov 17 2026). A crew phone may still have it as a full-frame Larix overlay
+ * (the old runbook set one up at /live/slate/, with the page's sound on): its old addresses answer an empty,
+ * see-through page, so a layer left switched on shows the camera, never the live page inside its own stream
+ */
+export const RETIRED_SLATE = /^\/live\/(?:[^/]+\/)?slate\/?$/;
+export function retiredSlate() {
+  return new Response('<!doctype html><html lang="en" style="background:transparent"><head><meta charset="utf-8"><meta name="robots" content="noindex"><title>Sunshine on a Ranney Day</title></head><body style="margin:0;background:transparent"></body></html>', {
+    status: 200,
+    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex' },
+  });
+}
+
 export async function onRequest(context) {
   const { request, env, next } = context;
   if (request.method !== 'GET' && request.method !== 'HEAD') return next();
   const url = new URL(request.url);
+  if (RETIRED_SLATE.test(url.pathname)) return retiredSlate();
   const isIndex = url.pathname === '/live/';
   const slugMatch = url.pathname.match(/^\/live\/([^/]+)\/$/);
-  const pageKid = slugMatch && slugMatch[1] !== 'slate' ? slugMatch[1] : '';
+  const pageKid = slugMatch ? slugMatch[1] : '';
 
-  // The starting-soon screen (a child's, or /live/slate/ that follows whichever is scheduled), before it goes out:
-  // marked as showing the design when the design is out, so its frame is drawn where the design puts it rather than
-  // moving there once the screen has asked; given the reveal's time and picked photo (slateFacts), so it's drawn
-  // with them rather than changing once it has asked; and left without its music when the track isn't in the files
-  // bucket, so it never asks for a file that isn't there (SlateScreen.astro)
-  const slateMatch = url.pathname.match(/^\/live\/(?:([^/]+)\/)?slate\/$/);
   // Every read on the way to the first byte is from the database's nearest copy (_read-copy.js)
   const near = nearEnv(env);
   // A staff rehearsal (?rehearsal, _broadcast-rehearsal.js): signed-in staff get the page drawn from the rehearsal, as
@@ -518,64 +511,7 @@ export async function onRequest(context) {
   const rehearsal = wantsRehearsal && env.DB && (await isAuthenticated(request, env).catch(() => false))
     ? await rehearsalFor(env.DB).catch(() => null) : null;
   const ours = (res) => (wantsRehearsal ? unkept(res) : res);
-  if (slateMatch && env.DB) {
-    try {
-      const slug = slateMatch[1] || '';
-      const forKid = !!slug && url.searchParams.get('design') !== 'preview';
-      const [state, config, schedule, row, music] = await Promise.all([
-        forKid ? (rehearsal ? rehearsal.state : readState(near.DB)) : null,
-        forKid ? (rehearsal ? rehearsal.config : readConfig(near.DB).catch(() => null)) : null,
-        forKid ? cachedReveals(near).catch(() => null) : null,
-        forKid ? kidData(near, slug) : null,
-        musicThere(env),
-      ]);
-      // (the broadcast as /api/reveal-design reads it, which the screen asks again every few minutes: the two agree)
-      const design = forKid && state ? designFor(slug, row.data, state, schedule) : null;
-      const facts = forKid && state ? slateFacts(publicState(state, config || {}, { includeTest: !!rehearsal }), slug, config?.timezone) : null;
-      // (a photo asked for by ?photo= wins, as it does in the screen)
-      const picked = facts?.image && !url.searchParams.get('photo') ? facts.image : '';
-      const rewrite = !!design || !music || !!facts;
-      const res = await next(rewrite ? fresh(request) : request);
-      if (!rewrite || res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html')) return ours(res);
-      const marks = setAttrs({
-        ...(design ? { 'data-design': '' } : {}),
-        ...(music ? {} : { 'data-music': null }),
-        ...(facts?.at ? { 'data-at': facts.at } : {}),
-        ...(facts?.tz ? { 'data-tz': facts.tz } : {}),
-      });
-      let rw = new HTMLRewriter().on('body', {
-        element(e) {
-          marks.element(e);
-          // The design's slides, for the screen to play from its first drawing (startSlateDesign's served): data, not a
-          // script, so the CSP has nothing to allow
-          if (design) e.append(`<script type="application/json" id="slate-design">${slidesJson(design.slides)}</script>`, { html: true });
-        },
-      });
-      if (picked) {
-        rw = rw.on('#photo', setAttrs({ 'data-landscape': cfRaw(picked, SLATE_CROP.landscape), 'data-portrait': cfRaw(picked, SLATE_CROP.portrait) }));
-        // (and the head's early ask for it, so the screen never fetches the photo it no longer shows)
-        rw = rw.on('link[rel="preload"][as="image"]', {
-          element(e) {
-            const shape = /portrait/.test(e.getAttribute('media') || '') ? 'portrait' : 'landscape';
-            e.setAttribute('href', cfRaw(picked, SLATE_CROP[shape]));
-          },
-        });
-        const lqip = cfLqip(picked);
-        if (lqip) rw = rw.on('.frame > .photo', setAttrs({ style: `background-image:url(${lqip})` }));
-      }
-      const out = rw.transform(res);
-      const headers = new Headers(out.headers);
-      headers.set('Cache-Control', wantsRehearsal ? 'no-store' : PAGE_REUSE);
-      headers.delete('ETag');
-      headers.delete('Last-Modified');
-      headers.delete('Content-Length');
-      return new Response(out.body, { status: out.status, headers });
-    } catch {
-      return ours(await next());
-    }
-  }
-
-  // Only the live pages themselves are ever rewritten (not slates, images or share cards)
+  // Only the live pages themselves are ever rewritten (not images or share cards)
   if (!isIndex && !pageKid) {
     const res = await next();
     if (res.status === 404 && /^\/live\/[^/]+\/?$/.test(url.pathname)) return Response.redirect(`${url.origin}/live/${url.search}`, 302);
@@ -598,10 +534,10 @@ export async function onRequest(context) {
   try {
     const kid = isIndex && broadcast ? await currentKid(near, broadcast.state) : null;
     if (kid?.published) kid.card = await cardFor(context, `/live/${kid.slug}/`);
-    const party = broadcast ? watchParty(broadcast.pub, { pageKid, kidPublished: pageKid ? true : !!kid?.published, rehearsal: wantsRehearsal }) : null;
+    const party = broadcast ? watchParty(broadcast.pub, { pageKid }) : null;
     if (party) party.generic = !broadcast.pub.kidSlug;
     let bar = null;
-    const liveNow = !!broadcast?.pub?.live || party?.mode === 'starting' || party?.mode === 'live';
+    const liveNow = !!broadcast?.pub?.live || party?.mode === 'live';
     if (isIndex && !liveNow) {
       try { bar = await barFor(context, url.pathname); } catch { bar = null; }
     }
@@ -646,9 +582,9 @@ export async function onRequest(context) {
     if (party) {
       // The hero's words and buttons for the watch party, by the page script's rules (momentWords, ctasThatApply)
       const pub = broadcast.pub;
-      const view = party.mode === 'starting' ? 'upcoming' : party.mode;
-      const hasPlayer = party.mode !== 'starting';
-      party.words = momentWords({ view, starting: party.mode === 'starting', scheduledAt: pub.scheduledAt || null, hasPlayer, source: pub.source, endedAt: pub.endedAt, tz: visitorZone(request) });
+      const view = party.mode;
+      const hasPlayer = true;
+      party.words = momentWords({ view, scheduledAt: pub.scheduledAt || null, hasPlayer, source: pub.source, endedAt: pub.endedAt, tz: visitorZone(request) });
       party.ctas = { display: party.mode, view, scheduledAt: pub.scheduledAt || null, remindUsable, pageKid, inSchedule: false, pastOnPage: false, hasPlayer };
     }
     // The messages box moves first (it needs the page's text); the rest are streamed rewrites

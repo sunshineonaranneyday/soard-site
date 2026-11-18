@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { watchParty, slateFacts } from '../functions/live/_watch-party.js';
+import { watchParty } from '../functions/live/_watch-party.js';
 
 const now = Date.parse('2026-10-14T18:00:00Z');
 const at = (min) => new Date(now + min * 60e3).toISOString();
@@ -12,7 +12,7 @@ const pub = (extra) => ({ phase: 'idle', kidSlug: 'axel', player: null, schedule
 const live = pub({ phase: 'live', player: { kind: 'live', uid: 'in1', customerCode: 'c' } });
 
 test('live with a video: watch party on /live/ and on that kid\'s page', () => {
-  assert.deepEqual(watchParty(live, { now }), { mode: 'live', orientation: 'portrait', eyebrow: 'Live now', late: false, slate: '' });
+  assert.deepEqual(watchParty(live, { now }), { mode: 'live', orientation: 'portrait', eyebrow: 'Live now' });
   assert.equal(watchParty(live, { pageKid: 'axel', now }).mode, 'live');
   assert.equal(watchParty({ ...live, phase: 'ending' }, { now }).mode, 'live', 'a dropped camera is still the live reveal');
 });
@@ -27,47 +27,16 @@ test('a Facebook-only broadcast keeps the photo hero', () => {
 
 test('replay with a video', () => {
   const r = watchParty(pub({ phase: 'replay', player: { kind: 'replay', uid: 'v1', customerCode: 'c' }, orientation: 'landscape' }), { now });
-  assert.deepEqual(r, { mode: 'replay', orientation: 'landscape', eyebrow: 'Replay', late: false, slate: '' });
+  assert.deepEqual(r, { mode: 'replay', orientation: 'landscape', eyebrow: 'Replay' });
 });
 
-test('starting soon only in the last hour (as the page has it), and only for a published kid', () => {
-  assert.equal(watchParty(pub({ phase: 'armed', scheduledAt: at(10) }), { kidPublished: true, now }).mode, 'starting');
-  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(45) }), { kidPublished: true, now }).mode, 'starting', 'the page shows the starting-soon screen from an hour out');
-  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(75) }), { kidPublished: true, now }), null);
-  assert.equal(watchParty(pub({ phase: 'armed', scheduledAt: at(10) }), { kidPublished: false, now }), null, 'no starting-soon screen without a built kid page');
-  assert.equal(watchParty(pub({ phase: 'armed', scheduledAt: at(10), kidSlug: null }), { kidPublished: true, now }), null);
+test('before the camera comes on it is the plain hero, however close the start (the starting-soon screen is gone)', () => {
+  assert.equal(watchParty(pub({ phase: 'armed', scheduledAt: at(10) }), { now }), null);
+  assert.equal(watchParty(pub({ phase: 'armed', scheduledAt: at(-35) }), { pageKid: 'axel', now }), null, 'running late too');
+  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(45) }), { now }), null);
 });
 
 test('idle is the plain hero', () => {
   assert.equal(watchParty(pub({}), { now }), null);
   assert.equal(watchParty(null, { now }), null);
-});
-
-test('watch party: the starting-soon screen it puts in the frame, and running late', () => {
-  const soon = watchParty(pub({ phase: 'armed', scheduledAt: at(10) }), { kidPublished: true, now });
-  assert.equal(soon.slate, '/live/axel/slate/?embed=1&music=0&o=portrait', 'the frame plays the kid\'s own starting-soon screen');
-  assert.equal(soon.late, false);
-  assert.equal(soon.eyebrow, 'Starting soon');
-  const sideways = watchParty(pub({ phase: 'armed', scheduledAt: at(10), orientation: 'landscape' }), { pageKid: 'axel', kidPublished: true, now });
-  assert.equal(sideways.slate, '/live/axel/slate/?embed=1&music=0&o=landscape');
-  const moment = watchParty(pub({ phase: 'armed', scheduledAt: at(-6) }), { kidPublished: true, now });
-  assert.equal(moment.late, false, 'a few minutes past is "any moment now", not late');
-  const late = watchParty(pub({ phase: 'armed', scheduledAt: at(-35) }), { kidPublished: true, now });
-  assert.equal(late.mode, 'starting', 'past its time and not live yet: still the starting-soon screen');
-  assert.equal(late.late, true);
-  assert.equal(late.eyebrow, 'Running late', 'as the page script says it (runningLate)');
-});
-
-test('the starting-soon screen is drawn with the reveal\'s time and picked photo (slateFacts, as its script sets them)', () => {
-  const soon = slateFacts(pub({ phase: 'armed', scheduledAt: at(20), image: 'kids/axel/pick' }), 'axel', 'America/New_York');
-  assert.deepEqual(soon, { at: at(20), tz: 'America/New_York', image: 'kids/axel/pick' });
-  // Live and ending still say the time (ACTIVE in SlateScreen.astro); a replay keeps only the photo
-  assert.equal(slateFacts(pub({ phase: 'live', scheduledAt: at(-5) }), 'axel').at, at(-5));
-  assert.equal(slateFacts(pub({ phase: 'ending', scheduledAt: at(-50) }), 'axel').at, at(-50));
-  assert.deepEqual(slateFacts(pub({ phase: 'replay', scheduledAt: at(-90), image: 'kids/axel/pick' }), 'axel'), { at: '', tz: '', image: 'kids/axel/pick' });
-  // Another kid's broadcast, or nothing to add: the screen goes out as built
-  assert.equal(slateFacts(pub({ phase: 'armed', scheduledAt: at(20), kidSlug: 'bea' }), 'axel'), null);
-  assert.equal(slateFacts(pub({ phase: 'idle' }), 'axel'), null);
-  assert.equal(slateFacts(null, 'axel'), null);
-  assert.equal(slateFacts(pub({ phase: 'armed', scheduledAt: at(20) }), ''), null);
 });

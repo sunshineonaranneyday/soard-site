@@ -455,7 +455,7 @@ try {
     ok(imgs.every((i) => i.w >= 60 && i.w <= 80), `thumbnails are a readable size (${imgs.map((i) => i.w).join(',')}px)`);
     const link = await v.page.$eval('.bc-befores a', (a) => ({ href: a.getAttribute('href'), label: a.textContent.trim() })).catch(() => ({}));
     ok(link.href === '#kids/max/before-photos' && link.label === 'Choose them', `Choose them goes to Max’s Before photos (${link.href})`);
-    ok(await v.page.evaluate(() => document.querySelector('.bc-status .bc-links')?.nextElementSibling?.classList.contains('bc-befores')), 'it sits right under the starting-soon screen links, in the status card');
+    ok(await v.page.evaluate(() => document.querySelector('.bc-status .bc-links')?.nextElementSibling?.classList.contains('bc-befores')), 'it sits right under the status card’s links');
     const card = await v.page.$('.bc-status');
     if (card) await card.screenshot({ path: join(OUT, 'befores-strip.png') });
     // Choose them: Max's profile, at Before photos, with focus there
