@@ -2121,14 +2121,21 @@ export async function runTick(env, { source = 'tick', force = false, by = null, 
     extendedAt = Date.now();
     return extendTickLease(DB, lease);
   };
+  let result;
   try {
-    const result = await tick(env, { source, force, by, keepLease, answer });
+    result = await tick(env, { source, force, by, keepLease, answer });
     _lastTickAt = Date.now();
     _lastTickResult = result;
-    return result;
   } finally {
     await releaseTickLease(DB, lease);
   }
+  // Whoever noticed the change (a visitor's page, the admin, a webhook, a text), every open page hears it at once,
+  // not at the hub's next heartbeat (up to a minute away from a reveal: Peter's 2:13 PM test on Nov 18 went live on the
+  // site 24 s before the pages heard). The hub's own ticks are published by broadcast-hooks.js
+  if (result?.changed && !String(source).startsWith('hub')) {
+    await publishToHub(env, await readState(DB), await readConfig(DB), 'tick').catch(() => {});
+  }
+  return result;
 }
 
 // The state as far as "did anything change" goes (rev and updatedAt are bookkeeping)

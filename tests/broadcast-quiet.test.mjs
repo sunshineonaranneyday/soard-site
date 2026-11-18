@@ -73,9 +73,11 @@ globalThis.fetch = async (input, init = {}) => {
   return new Response('not mocked: ' + url, { status: 599 });
 };
 
+// What the hub was told (every publish's body), so a test can see the open pages hear a change at once
+const hubPublishes = [];
 const LIVE_HUB = {
   idFromName: () => 'main',
-  get: () => ({ async fetch(url) { const path = new URL(url).pathname; return path === '/publish' || path === '/status' ? Response.json({ ok: true, clients: 1 }) : new Response('nf', { status: 404 }); } }),
+  get: () => ({ async fetch(url, init) { const path = new URL(url).pathname; if (path === '/publish') { try { hubPublishes.push(JSON.parse(init?.body || '{}')); } catch { /* not ours */ } } return path === '/publish' || path === '/status' ? Response.json({ ok: true, clients: 1 }) : new Response('nf', { status: 404 }); } }),
 };
 
 let env, b;
@@ -440,4 +442,34 @@ test('a test\'s end reaches signed-in staff only: /api/broadcast-test-end refuse
   travel(11 * M);
   assert.equal((await (await ep.onRequestGet(ctx)).json()).state, null);
   assert.equal((await b.publicPayload(env)).state.testEndUntil, undefined);
+});
+
+test('a change noticed by a visitor\'s page (not the hub) reaches every open page at once: the tick publishes it to the hub', async () => {
+  // Peter's 2:13 PM test (Nov 18): the site went live 24 s before the pages heard, waiting for the hub's next heartbeat
+  sim.live = false; sim.inputState = null; sim.inputSince = null;
+  await b.adminAction(env, 'quietTest', { on: true }, 'peter@test');
+  travel(70 * S);
+  let r = await b.runTick(env, { source: 'visitor', force: true });
+  const before = hubPublishes.length;
+  sim.live = true; sim.videoUID = 'vidP'; sim.inputState = 'connected'; sim.inputSince = new Date(Date.now()).toISOString();
+  travel(5 * S);
+  r = await b.runTick(env, { source: 'visitor', force: true });
+  assert.ok(r.changed, `the visitor's tick saw the phone: ${r.work.join(',')}`);
+  const sent = hubPublishes.slice(before);
+  assert.ok(sent.some((m) => m.state?.live === true), 'the hub was told the page is live, by the visitor\'s tick itself');
+  // A tick that changes nothing tells the hub nothing new
+  const n = hubPublishes.length;
+  travel(3 * S);
+  r = await b.runTick(env, { source: 'visitor', force: true });
+  if (!r.changed) assert.equal(hubPublishes.length, n, 'nothing changed, nothing published');
+  // The hub's own ticks are published by broadcast-hooks.js, not here (no second copy)
+  sim.live = false; sim.inputState = 'disconnected'; sim.inputSince = new Date(Date.now()).toISOString();
+  travel(5 * S);
+  const m = hubPublishes.length;
+  r = await b.runTick(env, { source: 'hub:alarm', force: true });
+  assert.ok(r.changed, r.work.join(','));
+  assert.equal(hubPublishes.length, m, 'the hub\'s own tick is not published again from runTick');
+  // tidy: the test ends and the switch goes off
+  for (let i = 0; i < 8; i++) { travel(10 * S); await b.runTick(env, { source: 'visitor', force: true }); }
+  await b.adminAction(env, 'quietTest', { on: false }, 'peter@test');
 });
