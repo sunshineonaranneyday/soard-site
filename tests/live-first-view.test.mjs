@@ -81,7 +81,10 @@ test('the messages box moves from the hero into its section, whole', () => {
 });
 
 test('a message is drawn as the script draws it, and never as markup', () => {
-  assert.equal(messageHtml({ id: 'm1', name: 'Ana', body: 'So happy <3 & "proud"' }), '<li class="msg" data-id="m1" style="animation:none"><span class="msg__name">Ana</span><p class="msg__body">So happy &lt;3 &amp; &quot;proud&quot;</p></li>');
+  assert.equal(messageHtml({ id: 'm1', name: 'Ana', body: 'So happy <3 & "proud"' }), '<li class="msg" data-id="m1" style="animation:none"><span class="msg__av" data-tone="3" aria-hidden="true">A</span><div class="msg__card"><span class="msg__name">Ana</span><p class="msg__body">So happy &lt;3 &amp; &quot;proud&quot;</p></div></li>');
+  // The writer's letter is a whole character, and its colour the same for the same name wherever it's drawn
+  assert.match(messageHtml({ id: 'm2', name: 'élodie', body: 'x' }), /data-tone="1" aria-hidden="true">É</);
+  assert.match(messageHtml({ id: 'm3', name: '😊 Sam', body: 'x' }), /aria-hidden="true">😊</);
   assert.doesNotMatch(messageHtml({ id: 'x"><script>', name: '<b>', body: '' }), /<script>|<b>/);
 });
 

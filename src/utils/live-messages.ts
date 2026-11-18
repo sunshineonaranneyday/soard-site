@@ -14,6 +14,7 @@
  */
 import { trapValue } from '../../functions/api/_bot-trap.js';
 import { rehearsal, type LiveClient, type LiveMessage } from './live-client';
+import { messageInitial, messageTone } from './live-message-look';
 
 export interface MessagesView {
   /** A broadcast is on (scheduled, live or replay) and it is this page's kid */
@@ -104,6 +105,7 @@ export function createMessages(opts: Options) {
     setHidden(cta, !(show && open && !inHero));
     if (show && !shown) requestAnimationFrame(toEnd);
     shown = show;
+    paintLatest();
   }
 
   function add(m: LiveMessage, animate = true, mine = false) {
@@ -113,19 +115,67 @@ export function createMessages(opts: Options) {
     const li = document.createElement('li');
     li.className = 'msg';
     li.dataset.id = m.id;
-    if (!animate) li.style.animation = 'none';
+    // Arriving now (not drawn as part of a fresh load): it rises in and glows for a moment (LiveMessages.astro)
+    if (animate) li.classList.add('is-new'); else li.style.animation = 'none';
+    // As the server draws it (functions/live/[[path]].js messageHtml): the writer's letter, then the bubble
+    const av = document.createElement('span');
+    av.className = 'msg__av';
+    av.dataset.tone = String(messageTone(m.name));
+    av.setAttribute('aria-hidden', 'true');
+    av.textContent = messageInitial(m.name);
+    const card = document.createElement('div');
+    card.className = 'msg__card';
     const who = document.createElement('span');
     who.className = 'msg__name';
     who.textContent = m.name;
     const text = document.createElement('p');
     text.className = 'msg__body';
     text.textContent = m.body;
-    li.append(who, text);
+    card.append(who, text);
+    li.append(av, card);
     holdReading(() => list.append(li), stick);
     while (list.children.length > MAX) list.firstElementChild?.remove();
     setHidden($('empty'), true);
     if (stick) toEnd(); else setHidden($('jump'), false);
+    paintLatest(animate);
   }
+
+  // ── The newest message, in one line under the video on a phone (LiveMessages.astro); a tap goes to them all ──
+  const latest = $<HTMLButtonElement>('latest');
+  let latestId = '';
+  const HEART = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>';
+  function paintLatest(arrived = false) {
+    if (!latest) return;
+    const li = list?.lastElementChild as HTMLElement | null;
+    const id = li?.dataset.id || (open ? `first:${view.kidName || ''}` : '');
+    setHidden(latest, !id);
+    if (!id || id === latestId) return;
+    latestId = id;
+    // None yet: the line asks for the first (a tap goes to the box)
+    if (!li) {
+      const av = $('latest-av'); if (av) { av.innerHTML = HEART; av.dataset.tone = '0'; }
+      const n = $('latest-name'); if (n) n.textContent = '';
+      const t = $('latest-text'); if (t) t.textContent = view.kidName ? `Be the first to write to ${view.kidName}'s family` : 'Be the first to leave a message';
+      latest.setAttribute('aria-label', 'Be the first to leave a message');
+      return;
+    }
+    const av = $('latest-av'); const src = li.querySelector<HTMLElement>('.msg__av');
+    if (av) { av.textContent = src?.textContent || ''; av.dataset.tone = src?.dataset.tone || '0'; }
+    const name = li.querySelector('.msg__name')?.textContent || '';
+    const body = li.querySelector('.msg__body')?.textContent || '';
+    const n = $('latest-name'); if (n) n.textContent = name;
+    const t = $('latest-text'); if (t) t.textContent = body;
+    latest.setAttribute('aria-label', `Newest message, from ${name}: ${body}. See every message`);
+    if (arrived && !reduced) { latest.classList.remove('is-new'); void latest.offsetWidth; latest.classList.add('is-new'); }
+  }
+  latest?.addEventListener('animationend', () => latest.classList.remove('is-new'));
+  latest?.addEventListener('click', () => {
+    if (!list?.children.length) { form?.querySelector<HTMLTextAreaElement>('textarea[name="body"]')?.focus(); return; }
+    (wall || list)?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
+    toEnd();
+  });
+  // (the messages the server drew into the page: their newest is the line's from the start)
+  paintLatest();
   function remove(id: string) {
     ids.delete(id);
     const li = list?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
@@ -133,6 +183,7 @@ export function createMessages(opts: Options) {
     const under = !!li && !!wall && li.getBoundingClientRect().top >= wall.getBoundingClientRect().bottom;
     if (li) holdReading(() => li.remove(), !under);
     setHidden($('empty'), !!list?.children.length);
+    paintLatest();
   }
 
   async function load(fresh: boolean) {
@@ -150,6 +201,7 @@ export function createMessages(opts: Options) {
       if (!fresh) for (const id of [...ids]) if (!keep.has(id)) remove(id);
       for (const m of incoming) add(m, !fresh);
       if (fresh) toEnd();
+      paintLatest();
       open = !!data.open;
       paint();
     } catch { /* offline */ } finally { loading = false; }
@@ -164,6 +216,37 @@ export function createMessages(opts: Options) {
   ];
   const poll = setInterval(() => { if (broadcast && !(client.connected && relayed) && !document.hidden && shown) load(false); }, POLL_MS);
 
+  // ── The box, docked at the bottom of a phone's screen (LiveMessages.astro) ──
+  // It's fixed to the page's bottom, which an on-screen keyboard covers: while it's up, the box rides on top of it (the
+  // visible part of the page, visualViewport). And the page knows how tall it is (--live-dock): the page's foot leaves
+  // that much room, and the corner video sits above it (live-stage.ts, data-bottom-bar)
+  const compose = $('compose');
+  const docked = () => !!compose && getComputedStyle(compose).position === 'fixed';
+  const vv = window.visualViewport;
+  const onViewport = () => {
+    if (!compose) return;
+    const kb = docked() && vv ? Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop)) : 0;
+    if (kb) compose.style.setProperty('--kb', `${kb}px`); else compose.style.removeProperty('--kb');
+  };
+  vv?.addEventListener('resize', onViewport);
+  vv?.addEventListener('scroll', onViewport);
+  const root = document.documentElement;
+  const sizeDock = () => {
+    // (at rest: while someone's in it, it shows its "Writing as" line too, and the page above mustn't move for that)
+    if (compose?.contains(document.activeElement)) return;
+    const h = docked() && compose ? Math.round(compose.getBoundingClientRect().height) : 0;
+    if (h) root.style.setProperty('--live-dock', `${h}px`); else root.style.removeProperty('--live-dock');
+  };
+  // (a frame later: the page laid out again for the new height inside the observer's own pass is a loop browsers warn about)
+  let dockFrame = 0;
+  const dockWatch = compose && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+    cancelAnimationFrame(dockFrame);
+    dockFrame = requestAnimationFrame(() => { sizeDock(); onViewport(); });
+  }) : null;
+  if (compose) dockWatch?.observe(compose);
+  // (its position changes with the layout, not its size: a turn sideways undocks it)
+  addEventListener('resize', sizeDock);
+
   // ── Posting ─────────────────────────────────────────────────────
   function store(key: string, value?: string) {
     try { if (value === undefined) return localStorage.getItem(key) || ''; localStorage.setItem(key, value); } catch { /* private mode */ }
@@ -175,8 +258,22 @@ export function createMessages(opts: Options) {
     const bodyInput = form.querySelector<HTMLTextAreaElement>('textarea[name="body"]');
     const count = $('count');
     const note = $('note');
+    const send = $('send');
     if (nameInput) nameInput.value = store('soard-live-name');
-    bodyInput?.addEventListener('input', () => { if (count) count.textContent = `${bodyInput.value.length}/280`; });
+    // The box grows with what's typed (to about five lines, then it scrolls), the count shows once it's getting long,
+    // and the arrow turns yellow when there's something to send
+    const fitBody = () => {
+      if (!bodyInput) return;
+      bodyInput.style.height = '';
+      if (bodyInput.scrollHeight > bodyInput.clientHeight) bodyInput.style.height = `${Math.min(bodyInput.scrollHeight, 132)}px`;
+    };
+    const typed = () => {
+      const n = bodyInput?.value.length || 0;
+      if (count) { count.textContent = `${n}/280`; count.hidden = n < 200; }
+      send?.classList.toggle('is-ready', (bodyInput?.value.trim().length || 0) >= 2);
+      fitBody();
+    };
+    bodyInput?.addEventListener('input', typed);
     // Enter posts, Shift+Enter is a new line, like every chat
     bodyInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
     const say = (text: string, error = false) => { if (note) { note.className = error ? 'remind-note remind-note--error' : 'remind-note'; note.textContent = text; } };
@@ -197,7 +294,7 @@ export function createMessages(opts: Options) {
         if (res.ok && data.ok) {
           store('soard-live-name', name);
           if (bodyInput) bodyInput.value = '';
-          if (count) count.textContent = '0/280';
+          typed();
           if (data.status === 'shown' && data.message) { add(data.message, true, true); say('Posted. Thank you!'); }
           else say('Thank you! Your message will show up once someone on our team takes a look.');
         } else {
@@ -226,6 +323,12 @@ export function createMessages(opts: Options) {
     destroy() {
       clearInterval(poll);
       for (const off of offs) off();
+      vv?.removeEventListener('resize', onViewport);
+      vv?.removeEventListener('scroll', onViewport);
+      removeEventListener('resize', sizeDock);
+      dockWatch?.disconnect();
+      cancelAnimationFrame(dockFrame);
+      root.style.removeProperty('--live-dock');
     },
   };
 }

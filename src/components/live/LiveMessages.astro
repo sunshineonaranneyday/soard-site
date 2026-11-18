@@ -7,10 +7,24 @@ import BotTrap from '../global/BotTrap.astro';
  * a live reveal, so it is already in place on first paint. Before the
  * reveal, src/utils/live-messages.ts moves it into its own section below the
  * hero (data-place="section"), where it spreads out into two columns.
+ *
+ * Beside the video it's a card (the Theater layout, Peter, Nov 17 2026): its
+ * heading, the messages newest at the bottom like a chat, each with its
+ * writer's first letter, and the box to write in at the bottom. The box asks
+ * for a first name once ("Writing as"), grows with what's typed, and its
+ * arrow turns yellow when there's something to send. A new message glows
+ * yellow for a moment as it arrives.
  */
+const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>';
 ---
 
 <div class="msgs" data-msgs="panel" data-place="hero">
+  <!-- On a phone, under the video: the newest message, one line (a tap goes to them all, below) -->
+  <button class="msgs__latest" type="button" data-msgs="latest" hidden>
+    <span class="msg__av" data-msgs="latest-av" aria-hidden="true"></span>
+    <span class="msgs__latest-name" data-msgs="latest-name"></span>
+    <span class="msgs__latest-text" data-msgs="latest-text"></span>
+  </button>
   <div class="msgs__head">
     <p class="section-label">Messages</p>
     <h2 data-msgs="heading">Messages for the family</h2>
@@ -23,19 +37,24 @@ import BotTrap from '../global/BotTrap.astro';
     </div>
     <button class="msg-jump" type="button" data-msgs="jump" hidden>New messages</button>
   </div>
-  <div class="msgs__compose">
+  <!-- On a phone during the watch party it's docked at the bottom of the screen (data-bottom-bar: the corner video
+       player sits above it, live-stage.ts) -->
+  <div class="msgs__compose" data-msgs="compose" data-bottom-bar>
     <form class="msg-form" data-msgs="form" novalidate>
-      <label class="msg-label" for="msg-name">Your first name</label>
-      <input class="msg-field" id="msg-name" name="name" type="text" maxlength="40" autocomplete="given-name" placeholder="First name" required />
-      <label class="msg-label" for="msg-body">Your message</label>
-      <textarea class="msg-field msg-field--area" id="msg-body" name="body" maxlength="280" rows="3" required placeholder="We are so happy for you!" enterkeyhint="send"></textarea>
-      <BotTrap />
-      <div class="msg-actions">
-        <button class="btn btn-primary" type="submit">Post message</button>
-        <span class="msg-count" data-msgs="count" aria-hidden="true">0/280</span>
+      <div class="msg-box">
+        <p class="msg-who">
+          <label class="msg-who__label" for="msg-name">Writing as</label>
+          <input class="msg-who__field" id="msg-name" name="name" type="text" maxlength="40" autocomplete="given-name" placeholder="your first name" required />
+        </p>
+        <div class="msg-row">
+          <label class="sr-only" for="msg-body">Your message</label>
+          <textarea class="msg-body" id="msg-body" name="body" maxlength="280" rows="1" required placeholder="We are so happy for you!" enterkeyhint="send"></textarea>
+          <button class="msg-send" type="submit" aria-label="Send your message" data-msgs="send"><Fragment set:html={ARROW} /></button>
+        </div>
       </div>
+      <BotTrap />
+      <p class="msg-meta"><span class="msg-fine">Checked before it shows. First names only, please.</span><span class="msg-count" data-msgs="count" aria-hidden="true" hidden>0/280</span></p>
       <p class="remind-note" data-msgs="note" role="status" aria-live="polite"></p>
-      <p class="msg-fine">Messages are checked before they appear. First names only, please.</p>
     </form>
     <p class="msg-closed" data-msgs="closed" hidden>Messages are closed for this reveal. Thank you to everyone who wrote in.</p>
   </div>
@@ -59,29 +78,71 @@ import BotTrap from '../global/BotTrap.astro';
   }
   .msg-jump[hidden] { display: none; }
   .msg-jump:focus-visible { outline: 2px solid var(--c-yellow); outline-offset: 2px; }
-  .msg-form { display: grid; gap: 8px; max-width: 480px; }
-  .msg-form[hidden] { display: none; }
-  .msg-label { font-size: 13px; font-weight: 700; color: var(--c-text); margin-top: 6px; }
-  .msg-field {
-    width: 100%; padding: 13px 18px; border-radius: 14px; border: 1.5px solid var(--c-border); background: #fff;
-    font: inherit; font-size: 16px; color: var(--c-text); transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
-  }
-  .msg-field--area { resize: vertical; min-height: 104px; line-height: 1.5; }
-  .msg-field:focus { outline: none; border-color: var(--c-dark); box-shadow: 0 0 0 3px var(--c-yellow-soft); }
-  .msg-actions { display: flex; align-items: center; gap: 16px; margin-top: 8px; }
-  .msg-count { font-size: 13px; color: var(--c-text-light); }
-  .msg-fine { font-size: 12px; color: var(--c-text-light); margin: 0; }
-  .msg-closed { color: var(--c-text-muted); line-height: 1.6; }
-  .msg-closed[hidden] { display: none; }
-  .msg-list { list-style: none; margin: 0 0 auto; padding: 0; display: grid; gap: 10px; }
-  .msg-list :global(.msg) { background: #fff; border: 1px solid var(--c-border); border-radius: 16px; padding: 12px 16px; animation: msgIn 320ms cubic-bezier(0.16, 1, 0.3, 1) both; }
-  .msg-list :global(.msg__name) { display: block; font-weight: 700; font-size: 14px; color: var(--c-dark); }
-  .msg-list :global(.msg__body) { margin: 4px 0 0; line-height: 1.55; color: var(--c-text); overflow-wrap: anywhere; }
-  @keyframes msgIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
   .msg-empty { color: var(--c-text-muted); margin: 0; padding: 8px 4px; }
   .msg-empty[hidden] { display: none; }
+  .msg-closed { color: var(--c-text-muted); line-height: 1.6; }
+  .msg-closed[hidden] { display: none; }
+
+  /* ── One message: the writer's first letter, then their name and words in a bubble ── */
+  .msg-list { list-style: none; margin: 0 0 auto; padding: 0; display: grid; gap: 12px; }
+  .msg-list :global(.msg) { display: flex; align-items: flex-start; gap: 12px; animation: msgIn 360ms cubic-bezier(0.16, 1, 0.3, 1) both; }
+  .msg-list :global(.msg__av) {
+    flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 14px; font-weight: 800; line-height: 1; background: var(--c-yellow); color: var(--c-dark-deep);
+  }
+  /* (each writer's letter a colour of their own, from the brand's: the same in the server's markup and the script's) */
+  .msg-list :global(.msg__av[data-tone='1']) { background: #FFF1A8; }
+  .msg-list :global(.msg__av[data-tone='2']) { background: #ECE8DC; color: var(--c-text); }
+  .msg-list :global(.msg__av[data-tone='3']) { background: var(--c-dark); color: var(--c-yellow); }
+  .msg-list :global(.msg__av[data-tone='4']) { background: #fff; color: var(--c-text); box-shadow: inset 0 0 0 1px var(--c-border); }
+  .msg-list :global(.msg__card) {
+    min-width: 0; flex: 1; background: var(--c-cream); border: 1px solid var(--c-border); border-radius: 4px 16px 16px 16px; padding: 9px 14px 10px;
+  }
+  .msg-list :global(.msg__name) { display: block; font-weight: 700; font-size: 13.5px; color: var(--c-dark); }
+  .msg-list :global(.msg__body) { margin: 2px 0 0; font-size: 15px; line-height: 1.5; color: var(--c-text); overflow-wrap: anywhere; text-wrap: pretty; }
+  /* Just arrived: it rises in and its bubble glows yellow for a moment, then settles */
+  .msg-list :global(.msg.is-new .msg__card) { animation: msgGlow 2.4s ease-out both; }
+  @keyframes msgIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  @keyframes msgGlow { 0%, 35% { background: #FFF6CC; border-color: #F2D45A; } 100% { background: var(--c-cream); border-color: var(--c-border); } }
+
+  /* ── The box to write in: "Writing as" and a first name, then the message and its arrow ── */
+  .msg-form { display: grid; gap: 8px; max-width: 520px; }
+  .msg-form[hidden] { display: none; }
+  .msg-box {
+    border: 1.5px solid #DCD7C9; border-radius: 20px; background: #fff; padding: 4px 6px 6px 16px;
+    transition: border-color 160ms ease, box-shadow 160ms ease;
+  }
+  .msg-box:focus-within { border-color: var(--c-dark); box-shadow: 0 0 0 3px var(--c-yellow-soft); }
+  /* The box shows where you're typing (above): the site's own ring would draw a second one inside it */
+  .msg-who__field:focus-visible, .msg-body:focus-visible { outline: none; box-shadow: none; }
+  .msg-who { display: flex; align-items: center; gap: 6px; margin: 0 10px 0 0; padding: 4px 0 5px; border-bottom: 1px solid var(--c-border); font-size: 13px; color: var(--c-text-muted); }
+  .msg-who__label { flex: none; font-weight: 500; cursor: text; }
+  .msg-who__field {
+    flex: 1; min-width: 0; padding: 4px 0; border: 0; background: transparent; outline: none;
+    font: inherit; font-size: 14px; font-weight: 700; color: var(--c-text);
+  }
+  .msg-who__field::placeholder { color: var(--c-text-muted); font-weight: 600; opacity: 1; }
+  .msg-row { display: flex; align-items: flex-end; gap: 8px; }
+  .msg-body {
+    flex: 1; min-width: 0; height: 44px; max-height: 132px; padding: 11px 0; border: 0; background: transparent; outline: none; resize: none;
+    font: inherit; font-size: 16px; line-height: 22px; color: var(--c-text); overflow-y: auto;
+  }
+  .msg-body::placeholder { color: var(--c-text-muted); opacity: 1; }
+  .msg-send {
+    flex: none; width: 42px; height: 42px; margin: 1px 0; border: 0; border-radius: 14px; display: grid; place-items: center; cursor: pointer;
+    background: var(--c-warm-gray); color: var(--c-text-muted); transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+  }
+  .msg-send :global(svg) { width: 19px; height: 19px; }
+  .msg-send.is-ready { background: var(--c-yellow); color: var(--c-dark); }
+  .msg-send:active { transform: scale(0.9); }
+  .msg-send:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
+  .msg-send:disabled { cursor: progress; }
+  .msg-meta { display: flex; justify-content: space-between; gap: 12px; margin: 0 4px; font-size: 12px; color: var(--c-text-light); }
+  .msg-fine { min-width: 0; }
+  .msg-count { flex: none; font-variant-numeric: tabular-nums; }
+  .msg-count[hidden] { display: none; }
   .remind-hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
-  .remind-note { font-size: 14px; color: var(--c-text-muted); min-height: 1.4em; margin: 8px 0 0; }
+  .remind-note { font-size: 14px; color: var(--c-text-muted); min-height: 1.4em; margin: 0 4px; }
   .remind-note--error { color: var(--c-text); font-weight: 600; }
 
   /* In its own section: heading and form on the left, the wall on the right */
@@ -94,32 +155,82 @@ import BotTrap from '../global/BotTrap.astro';
   .msgs[data-place='section'] .msgs__feed { grid-area: feed; }
   .msgs[data-place='section'] .msgs__wall { max-height: 560px; background: var(--c-cream); }
 
-  /* Beside the video: a compact chat that fills the column */
-  .msgs[data-place='hero'] { display: flex; flex-direction: column; gap: 12px; flex: 1 0 auto; text-align: left; }
+  /* ── Beside the video: a card that fills its column ── */
+  .msgs[data-place='hero'] {
+    display: flex; flex-direction: column; flex: 1 0 auto; text-align: left; min-height: 0;
+    background: #fff; border: 1px solid var(--c-border); border-radius: 24px; overflow: hidden; box-shadow: 0 20px 50px rgba(30, 31, 37, 0.06);
+  }
+  .msgs[data-place='hero'] .msgs__head { padding: 20px 22px 14px; border-bottom: 1px solid var(--c-border); }
   .msgs[data-place='hero'] .section-label { display: none; }
   .msgs[data-place='hero'] h2 { font-size: 1.3rem; letter-spacing: -0.01em; margin: 0; }
-  .msgs[data-place='hero'] .msgs__lead { font-size: 13px; line-height: 1.5; margin: 4px 0 0; }
+  .msgs[data-place='hero'] .msgs__lead { font-size: 13px; line-height: 1.5; margin: 6px 0 0; }
   .msgs[data-place='hero'] .msgs__feed { flex: 1 1 0; min-height: 150px; }
-  .msgs[data-place='hero'] .msgs__wall { flex: 1 1 auto; min-height: 0; background: #fff; border: 1px solid var(--c-border); padding: 12px; }
-  .msgs[data-place='hero'] .msg-list :global(.msg) { background: var(--c-cream); border-color: transparent; padding: 10px 14px; border-radius: 14px; }
-  .msgs[data-place='hero'] .msg-form { max-width: none; gap: 8px; }
-  .msgs[data-place='hero'] .msg-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-  .msgs[data-place='hero'] .msg-field { padding: 11px 16px; }
-  .msgs[data-place='hero'] .msg-field--area { min-height: 0; height: 68px; resize: none; }
-  .msgs[data-place='hero'] .msg-actions { margin-top: 0; }
-  .msgs[data-place='hero'] .remind-note { margin: 0; min-height: 0; }
+  .msgs[data-place='hero'] .msgs__wall { flex: 1 1 auto; min-height: 0; border-radius: 0; padding: 16px 20px; }
+  /* A short list sits at the bottom, by the box you write in, as a chat's does */
+  .msgs[data-place='hero'] .msg-list { margin: auto 0 0; }
+  .msgs[data-place='hero'] .msgs__compose { padding: 14px 16px 12px; border-top: 1px solid var(--c-border); background: #fff; }
+  .msgs[data-place='hero'] .msg-form { max-width: none; gap: 6px; }
+  .msgs[data-place='hero'] .msg-closed { margin: 0; font-size: 14px; }
+  .msgs[data-place='hero'] .remind-note { min-height: 0; font-size: 13px; }
   .msgs[data-place='hero'] .remind-note:empty { display: none; }
+
+  /* The newest message, one line (a phone held upright, beside the video: below) */
+  .msgs__latest { display: none; }
+
+  /* ── A phone held upright, during the watch party (the Theater layout, Peter, Nov 17 2026): the newest message in
+     one line under the video, and the box to write in docked at the bottom of the screen, so writing is one tap from
+     anywhere on the page. live-messages.ts keeps it above the on-screen keyboard (--kb) and tells the page its height
+     (--live-dock: the page's foot leaves room for it, the corner video sits above it). Its "Writing as" line and the
+     small print show while you're in it ── */
+  /* (PHONE without SIDE: src/utils/live-media.ts, PHONE_UPRIGHT) */
+  @media (max-width: 559px), (max-width: 960px) and (max-aspect-ratio: 1749/1000), (max-width: 960px) and (min-height: 541px) {
+    .msgs[data-place='hero'] .msgs__latest:not([hidden]) {
+      order: -1; display: flex; align-items: center; gap: 10px; width: 100%; height: 52px; margin: 0 0 12px; padding: 0 14px 0 10px;
+      border: 1px solid var(--c-border); border-radius: 16px; background: #fff; color: var(--c-text); font: inherit; font-size: 14.5px; text-align: left; cursor: pointer;
+    }
+    .msgs__latest .msg__av {
+      flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 12.5px; font-weight: 800; line-height: 1;
+      background: var(--c-yellow); color: var(--c-dark-deep);
+    }
+    .msgs__latest .msg__av[data-tone='1'] { background: #FFF1A8; }
+    .msgs__latest .msg__av[data-tone='2'] { background: #ECE8DC; color: var(--c-text); }
+    .msgs__latest .msg__av[data-tone='3'] { background: var(--c-dark); color: var(--c-yellow); }
+    .msgs__latest .msg__av[data-tone='4'] { background: #fff; color: var(--c-text); box-shadow: inset 0 0 0 1px var(--c-border); }
+    .msgs__latest-name { flex: none; max-width: 40%; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .msgs__latest-text { min-width: 0; flex: 1; color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .msgs__latest.is-new { animation: latestIn 2.4s ease-out; }
+    /* A phone shorter than that has no room for it under the video (LivePage keeps the video its size): the messages
+       themselves are just below */
+    @media (max-height: 739px) { .msgs[data-place='hero'] .msgs__latest:not([hidden]) { display: none; } }
+    @keyframes latestIn { 0% { background: #FFF6CC; border-color: #F2D45A; transform: translateY(6px); opacity: 0.4; } 12% { transform: none; opacity: 1; } 35% { background: #FFF6CC; border-color: #F2D45A; } 100% { background: #fff; border-color: var(--c-border); } }
+    .msgs[data-place='hero'] { display: flex; flex-direction: column; background: none; border: 0; border-radius: 0; box-shadow: none; overflow: visible; }
+    .msgs[data-place='hero'] > .msgs__head, .msgs[data-place='hero'] > .msgs__feed { background: #fff; border: 1px solid var(--c-border); }
+    .msgs[data-place='hero'] > .msgs__head { border-radius: 20px 20px 0 0; border-bottom-color: var(--c-border); }
+    .msgs[data-place='hero'] > .msgs__feed { border-top: 0; border-radius: 0 0 20px 20px; overflow: hidden; }
+    .msgs[data-place='hero'] .msgs__compose:has(.msg-form:not([hidden])) {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 940;
+      padding: 8px max(12px, env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+      background: var(--c-cream); border-top: 1px solid var(--c-border); box-shadow: 0 -10px 30px rgba(30, 31, 37, 0.06);
+      transform: translateY(calc(-1 * var(--kb, 0px)));
+    }
+    /* Slim at rest, so the video keeps its size above it */
+    .msgs__compose:has(.msg-form:not([hidden])) .msg-box { border-radius: 18px; padding: 2px 4px 2px 14px; }
+    .msgs__compose:has(.msg-form:not([hidden])):not(:focus-within) .msg-box { padding-top: 2px; }
+    .msgs__compose:has(.msg-form:not([hidden])) .msg-send { width: 40px; height: 40px; }
+    .msgs__compose:has(.msg-form:not([hidden])):not(:focus-within) .msg-who,
+    .msgs__compose:has(.msg-form:not([hidden])):not(:focus-within) .msg-meta { display: none; }
+  }
 
   /* (PHONE, DESK and SIDE: word for word as in src/utils/live-media.ts) */
   @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
     .msgs[data-place='section'] { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-template-areas: 'head' 'feed' 'compose'; row-gap: 24px; }
     .msgs[data-place='section'] .msgs__wall { max-height: 360px; }
-    .msgs[data-place='hero'] .msgs__head { text-align: center; }
     .msgs[data-place='hero'] .msgs__feed { flex: none; min-height: 0; }
     .msgs[data-place='hero'] .msgs__wall { max-height: min(46svh, 420px); min-height: 120px; }
   }
   @media (prefers-reduced-motion: reduce) {
-    .msg-list :global(.msg) { animation: none; }
+    .msg-list :global(.msg), .msg-list :global(.msg.is-new .msg__card), .msgs__latest.is-new { animation: none; }
     .msgs__wall { scroll-behavior: auto; }
+    .msg-box, .msg-send { transition: none; }
   }
 </style>

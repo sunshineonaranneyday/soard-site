@@ -17,9 +17,13 @@
  *
  * Watch party (data-party: live, replay): the crew shoots
  * portrait, so the frame becomes a 9:16 video as tall as the screen allows,
- * with nothing drawn on the picture and one simple bar under it. The
- * messages for the family (LiveMessages) sit beside it on a desktop and
- * under it on a phone, where the kid's name sits above it. Kept simple for
+ * with nothing drawn on the picture: live, its controls in a rail beside it
+ * (the heart at its foot sends hearts up the rail), a replay's in a bar under
+ * it. The Theater layout (Peter, Nov 17 2026): on a computer 1200px and
+ * wider, three columns as tall as the video, the story with the room and the
+ * plan (LiveRoom), the video, and the messages for the family (LiveMessages);
+ * on a phone the kid's name with "Live" above the video, the newest message
+ * under it and the message box docked at the foot of the screen. Kept simple for
  * people who have never been here: watch, leave a message, give, share.
  * Nothing sends people off to watch somewhere else, except a Facebook-only
  * broadcast with no video here. The pieces: LiveStage.astro + utils/live-stage.ts (the frame),
@@ -43,6 +47,7 @@ import HeroUpcoming from './HeroUpcoming.astro';
 import RevealInvite from './RevealInvite.astro';
 import LiveDesign from './LiveDesign.astro';
 import LiveDesignRail from './LiveDesignRail.astro';
+import LiveRoom from './LiveRoom.astro';
 import LivePartners from './LivePartners.astro';
 import { bandPartners, partnersBandInner } from '../../utils/live-partners-html';
 import ShareSheet from '../ui/ShareSheet.astro';
@@ -73,19 +78,22 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 <section class="hero" id="live-hero" data-phase="loading" data-orientation="portrait" data-kid={kid?.slug || ''} data-generic-lead={GENERIC_LEAD} data-generic-photo={cfRaw(fallbackImage, 'w=640,h=800,fit=cover,gravity=face,q=82')} data-whole>
   <div class="hero-inner">
     <div class="hero-text">
-      <p class="hero-eyebrow"><span class="hero-eyebrow__dot" aria-hidden="true"></span><span data-live="eyebrow">Live reveal</span></p>
-      <h1 data-live="title">
-        {name ? <>{name}'s <em>room reveal</em></> : <>Watch the <em>reveal</em> live</>}
-      </h1>
+      <p class="hero-eyebrow"><span class="hero-eyebrow__dot" aria-hidden="true"></span><span data-live="eyebrow">Live reveal</span><span class="hero-eyebrow__n" data-live="watching" hidden></span></p>
+      <!-- The kid's name, and on a phone during a live reveal the "Live" the video's rail has no room for (LiveStage) -->
+      <div class="hero-titlerow">
+        <h1 data-live="title">
+          {name ? <>{name}'s <em>room reveal</em></> : <>Watch the <em>reveal</em> live</>}
+        </h1>
+        <p class="hero-onair" data-live="onair" hidden><span class="hero-onair__dot" aria-hidden="true"></span><span>Live</span><span class="hero-onair__n" data-live="onair-n"></span></p>
+      </div>
       <p class="hero-lead" data-live="lead">
         {summary || GENERIC_LEAD}
       </p>
       <p class="hero-status" data-live="status" aria-live="polite"></p>
       <!-- The reveals after this one, on a child's page or while /live/ follows one: "After Dylan: Max on Friday, November 20 and Colin in early December" -->
       <p class="hero-next" data-live="next-line" hidden><span data-live="next-text"></span> <a href="#up-next">See every reveal</a></p>
-      <!-- The messages box sits in the hero during the watch party; the server moves it (between the markers) into its
-           section below when the page goes out with a reveal coming up (functions/live/[[path]].js) -->
-      <div class="hero-party" data-slot="hero" hidden><!--msgs-panel--><LiveMessages /><!--/msgs-panel--></div>
+      <!-- The room as it is and the plan, beside the video during the watch party on a computer (LiveRoom) -->
+      <LiveRoom />
       <div class="hero-ctas">
         <a class="btn btn-primary btn-lg hero-glow" href="https://www.facebook.com/SunshineOnaRanneyDay" target="_blank" rel="noopener" data-live="cta-facebook" hidden>Watch on Facebook</a>
         <a class="btn btn-primary btn-lg hero-glow" href="#remind" data-live="cta-remind" hidden>Get every reveal by email</a>
@@ -106,6 +114,11 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       </LiveStage>
       {!kid && <HeroUpcoming />}
     </div>
+
+    <!-- The messages box sits in the hero during the watch party (beside the video on a computer, under it on a phone);
+         the server moves it (between the markers) into its section below when the page goes out with a reveal coming up
+         (functions/live/[[path]].js) -->
+    <div class="hero-party" data-slot="hero" hidden><!--msgs-panel--><LiveMessages /><!--/msgs-panel--></div>
   </div>
   <span data-whole-end hidden></span>
 </section>
@@ -244,6 +257,13 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
   @keyframes live-ping { 0% { transform: scale(0.6); opacity: 0.9; } 70%, 100% { transform: scale(1.5); opacity: 0; } }
+  /* How many are watching, after "Live now", when the video's controls are in its rail (which has no room for it) */
+  .hero-eyebrow__n { display: none; color: var(--c-text-muted); letter-spacing: 0.08em; }
+  .hero-eyebrow__n::before { content: '·'; margin-right: 10px; }
+  :global(.hero:has([data-stage][data-rail])) .hero-eyebrow__n:not([hidden]) { display: inline; }
+  /* The kid's name, and beside it on a phone during a live reveal, "Live" and the number watching */
+  .hero-titlerow { display: contents; }
+  .hero-onair { display: none; }
 
   .hero-text h1 {
     font-size: clamp(2.5rem, 6vw, 4.5rem); letter-spacing: -0.035em; line-height: 1.04; color: var(--c-text);
@@ -314,6 +334,12 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .hero[data-party] .hero-status { margin-bottom: 20px; min-height: 0; }
   .hero[data-party] .hero-text h1 { font-size: clamp(2rem, 3.4vw, 3.1rem); margin-bottom: 16px; }
   .hero[data-party] .hero-eyebrow { margin-bottom: 14px; }
+
+  /* The box to write a message, docked at a phone's foot during the watch party (LiveMessages): the page's own foot
+     leaves room for it (--live-dock, its height), and it steps aside while the give form or the design viewer covers
+     the screen (the video is pinned small then: LiveStage's data-pin) */
+  :global(body) { padding-bottom: var(--live-dock, 0px); }
+  :global(.hero:has([data-stage][data-pin]) .msgs__compose[data-bottom-bar]) { visibility: hidden; }
 
   /* ── Body ── */
   .live-msgs { background: #fff; border-top: 1px solid var(--c-border); border-bottom: 1px solid var(--c-border); padding: clamp(48px, 6vw, 80px) 0; scroll-margin-top: 80px; }
@@ -398,9 +424,47 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     /* A portrait stage sits in an auto-sized column, where a percentage width has nothing to
        resolve against (desktop only: on phones the column is the screen width, and 100% is right) */
     .hero[data-party][data-orientation='portrait'] .hero-frame { --stage-max: 100vw; }
-    /* The text column matches the video's height and the message wall takes up the slack */
-    .hero[data-party] .hero-text { display: flex; flex-direction: column; min-height: 0; }
-    .hero[data-party] .hero-party:not([hidden]) { flex: 1 1 0; display: flex; flex-direction: column; }
+    /* The text column on top and the messages under it, together as tall as the video beside them: the message wall
+       takes up the slack */
+    .hero[data-party] .hero-inner { grid-template-areas: 'text frame' 'party frame'; grid-template-rows: auto minmax(0, 1fr); }
+    .hero[data-party] .hero-text { grid-area: text; display: flex; flex-direction: column; min-height: 0; }
+    .hero[data-party] .hero-frame { grid-area: frame; }
+    .hero[data-party] .hero-party { grid-area: party; margin: 0; }
+    .hero[data-party] .hero-party:not([hidden]) { display: flex; flex-direction: column; min-height: 0; }
+
+    /* ── Theater (Peter, Nov 17 2026): an upright video during the watch party, on a screen wide enough, is three
+       columns, each exactly as tall as the video: the story (the kid's name, the room as it is and the plan, the
+       buttons), the video with its controls in a rail beside it, and the messages. The video is sized first (its
+       column is auto, the others share what's left), so it's never squeezed for them ── */
+    @media (min-width: 1200px) {
+      .hero[data-party][data-orientation='portrait'] .hero-inner {
+        max-width: 1480px; padding-inline: clamp(24px, 4vw, 64px);
+        grid-template-columns: minmax(260px, 1fr) auto minmax(300px, 1fr);
+        grid-template-areas: 'text frame party'; grid-template-rows: auto;
+        column-gap: clamp(28px, 3vw, 48px); align-items: start;
+        /* (the frame's height, LivePage's --fh below; --stage-h: the stage's own, measured, when it's shorter) */
+        --theater-h: var(--stage-h, clamp(420px, calc(var(--live-vh, 100svh) - var(--header-height) - var(--apply-bar-h, 0px) - 44px), 900px));
+      }
+      .hero[data-party][data-orientation='portrait'] .hero-text,
+      .hero[data-party][data-orientation='portrait'] .hero-party:not([hidden]) { height: var(--theater-h); }
+      /* The room is in the story column here, so the design strip beside the video (a replay's: a live video's rail
+         has it hidden already) gives its room back to the video */
+      .hero[data-party][data-orientation='portrait'] .hero-frame { --beside: 0px; --beside-gap: 0px; }
+      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage__beside) { display: none; }
+      .hero[data-party][data-orientation='portrait'] .hero-text h1 { font-size: clamp(2.4rem, 3.3vw, 3rem); line-height: 1.06; text-wrap: balance; margin-bottom: 14px; }
+      .hero[data-party][data-orientation='portrait'] .hero-lead {
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden;
+        font-size: 15.5px; line-height: 1.55; margin-bottom: 20px; opacity: 1; animation: none;
+      }
+      @media (max-height: 760px) { .hero[data-party][data-orientation='portrait'] .hero-lead { -webkit-line-clamp: 2; line-clamp: 2; } }
+      /* The room takes the room that's left; its picture gives way first on a shorter screen (nothing else gives) */
+      .hero[data-party][data-orientation='portrait'] .hero-text > * { flex-shrink: 0; }
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm:not([hidden])) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-stage) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-big) { flex: 0 1 auto; min-height: 150px; height: auto; }
+      .hero[data-party][data-orientation='portrait'] .hero-ctas { margin-top: auto; padding-top: 16px; flex-wrap: nowrap; gap: 10px; }
+      .hero[data-party][data-orientation='portrait'] .hero-ctas > * { flex: 0 1 auto; min-width: 0; padding-inline: clamp(16px, 1.6vw, 24px); white-space: nowrap; }
+    }
   }
   @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
     .hero-inner, .hero[data-party] .hero-inner, .hero[data-party][data-orientation='landscape'] .hero-inner { grid-template-columns: minmax(0, 1fr); gap: 40px; text-align: center; }
@@ -416,13 +480,31 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     .hero[data-party] .hero-inner, .hero[data-party][data-orientation='landscape'] .hero-inner { gap: 0; }
     .hero[data-party] .hero-text { display: contents; }
     .hero[data-party] .hero-eyebrow { display: none; }
+    .hero[data-party] .hero-titlerow { order: 1; display: flex; align-items: center; justify-content: center; gap: 12px; min-width: 0; margin: 0 0 10px; }
     .hero[data-party] .hero-text h1 {
-      order: 1; font-size: 1.4rem; line-height: 1.25; letter-spacing: -0.015em; margin: 0 0 10px;
+      font-size: 1.4rem; line-height: 1.25; letter-spacing: -0.015em; margin: 0; min-width: 0;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    .hero[data-party] .hero-frame { order: 2; max-width: none; --fh: calc(var(--live-vh, 100svh) - var(--header-height) - 12px - 2.2rem - 18px - var(--fh-cut, 0px)); }
+    /* The video's controls in its rail (LiveStage): "Live" and the number watching go beside the kid's name */
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-titlerow { justify-content: space-between; text-align: left; }
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-onair:not([hidden]) {
+      flex: none; display: inline-flex; align-items: center; gap: 7px; height: 28px; margin: 0; padding: 0 11px; border-radius: 100px;
+      background: #fff; border: 1px solid var(--c-border); font-size: 11.5px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--c-text);
+    }
+    .hero-onair__dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--c-yellow); }
+    .hero-onair__dot::after { content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--c-yellow); opacity: 0; animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite; }
+    .hero-onair__n { color: var(--c-text-muted); letter-spacing: 0.04em; }
+    .hero-onair__n:empty { display: none; }
+    /* (and above the box docked at the screen's foot, when there is one: --live-dock, LiveMessages) */
+    .hero[data-party] .hero-frame { order: 2; max-width: none; --fh: calc(var(--live-vh, 100svh) - var(--header-height) - 12px - 2.2rem - 18px - var(--fh-cut, 0px) - var(--live-dock, 0px)); }
     .hero[data-party] .hero-status { order: 3; margin: 20px auto 0; }
     .hero[data-party] .hero-party { order: 4; margin: 24px 0 0; }
+    /* With the controls in the rail, the newest message's line sits right under the video, and the video leaves room
+       for it on the screen (LiveMessages: the line and the 12px over it) */
+    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-party { margin-top: 12px; }
+    /* (on a phone at least 740px tall; a shorter one keeps the video's size and has the line further down, LiveMessages.
+       From the held screen height, --live-vh, so a keyboard coming up never resizes the video: 64px or nothing) */
+    :global(.hero[data-party]:has([data-stage][data-rail]):has(.hero-party:not([hidden]))) .hero-frame { --fh-cut: clamp(0px, calc((var(--live-vh, 100svh) - 739px) * 100), 64px); }
     .hero[data-party] .hero-ctas { order: 5; margin-top: 24px; }
   }
   @media (max-width: 768px) {
@@ -434,7 +516,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   /* A phone held sideways: the kid's name a size smaller, and the frame as tall as what's left, since the stage puts
      its controls and the design beside the picture there (LiveStage) */
   @media (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 960px), (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 1023px) and (pointer: coarse) {
-    .hero[data-party] .hero-text h1 { font-size: 1.1rem; margin-bottom: 6px; }
+    .hero[data-party] .hero-titlerow { margin-bottom: 6px; }
+    .hero[data-party] .hero-text h1 { font-size: 1.1rem; margin-bottom: 0; }
     .hero[data-party] .hero-frame { --fh: calc(var(--live-vh, 100svh) - var(--header-height) - 12px - 1.4rem - 6px - 14px); }
     /* Clear of the notch and the rounded corners on the side they're on (the page is drawn to the screen's edges) */
     .hero[data-party] .hero-inner { padding-left: max(var(--space-md), env(safe-area-inset-left)); padding-right: max(var(--space-md), env(safe-area-inset-right)); }
@@ -568,7 +651,31 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       client,
       // The hero lays itself out around the video's real shape
       onShape: (orientation, party) => { hero.dataset.orientation = orientation; setAttr(hero, 'data-party', party); },
+      // With the video's controls in its rail, "Live" and the number watching are the page's to say: after "Live now"
+      // on a computer, beside the kid's name on a phone (LiveStage)
+      onAir: (on, n) => {
+        const many = n != null ? n.toLocaleString() : '';
+        const w = q<HTMLElement>('watching');
+        if (w) { w.textContent = many ? `${many} watching` : ''; w.hidden = !(on && many); }
+        const pill = q<HTMLElement>('onair');
+        if (pill) pill.hidden = !on;
+        const pn = q<HTMLElement>('onair-n');
+        if (pn) pn.textContent = many ? `· ${many}` : '';
+      },
     });
+    // The Theater layout's columns are as tall as the video's stage: measured, for when it's shorter than the screen
+    // allows (a window too narrow for the video's full height)
+    // (its layout height, not what's on screen: the frame's entrance zooms it in a touch, and a measure taken then was short)
+    // (set a frame later, out of the observer's own pass: columns laid out again inside it is a loop browsers warn about)
+    let stageFrame = 0;
+    const stageSize = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
+      cancelAnimationFrame(stageFrame);
+      stageFrame = requestAnimationFrame(() => {
+        const h = stageEl.offsetHeight;
+        if (h > 0) hero.style.setProperty('--stage-h', `${h}px`); else hero.style.removeProperty('--stage-h');
+      });
+    }) : null;
+    stageSize?.observe(stageEl);
 
     const panel = document.querySelector<HTMLElement>('[data-msgs="panel"]');
     const heroSlot = hero.querySelector<HTMLElement>('[data-slot="hero"]');
@@ -585,6 +692,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       rail: hero.querySelector<HTMLElement>('[data-design-rail]'),
       frame: hero.querySelector<HTMLElement>('.hero-frame'),
       stage,
+      room: hero.querySelector<HTMLElement>('[data-live-room]'),
     }) : null;
 
     // ── Giving without leaving the reveal ───────────────────────────
@@ -1257,6 +1365,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       letGo();
       vhProbe.remove();
       give?.destroy();
+      stageSize?.disconnect();
+      cancelAnimationFrame(stageFrame);
       stage.destroy();
       messages?.destroy();
     };

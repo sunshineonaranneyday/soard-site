@@ -52,6 +52,7 @@ import { heroRowsHtml, rowsSignature, afterLine } from '../../src/utils/upcoming
 import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../src/utils/live-hero-text.ts';
 import { inviteData, inviteLinks } from '../../src/utils/reveals-client.ts';
 import { messagesOpen, shownMessages } from '../api/_live-messages.js';
+import { messageInitial, messageTone } from '../../src/utils/live-message-look.ts';
 import { isAuthenticated } from '../api/_middleware.js';
 import { rehearsalFor } from '../api/_broadcast-rehearsal.js';
 import { nearEnv } from '../api/_read-copy.js';
@@ -216,7 +217,9 @@ function rewrite(res, { kid, party, messages, design }) {
     rw = rw
       .on('.live-page', setAttrs({ 'data-view': party.mode, 'data-next': null }))
       .on('#live-hero', setAttrs({ 'data-phase': party.mode, ...shape }))
-      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': null }))
+      // A live upright picture has its controls in a rail beside it (LiveStage, live-stage.ts's data-rail; its styles never
+      // apply to a phone held sideways, which the server can't know): the page is laid out for that from the first paint
+      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': null, 'data-rail': party.mode === 'live' && party.orientation === 'portrait' ? '' : null }))
       .on('#live-hero [data-s="bar"]', setAttrs({ hidden: null }))
       .on('#live-hero [data-live="eyebrow"]', { element(e) { e.setInnerContent(words.eyebrow); } })
       // The status line: the video says it all once it plays
@@ -389,7 +392,7 @@ export function pastFirst(html) {
 }
 
 /** One message as the page script draws it (live-messages.ts add, as a fresh load does: no entrance) */
-export const messageHtml = (m) => `<li class="msg" data-id="${escHtml(m.id)}" style="animation:none"><span class="msg__name">${escHtml(m.name)}</span><p class="msg__body">${escHtml(m.body)}</p></li>`;
+export const messageHtml = (m) => `<li class="msg" data-id="${escHtml(m.id)}" style="animation:none"><span class="msg__av" data-tone="${messageTone(m.name)}" aria-hidden="true">${escHtml(messageInitial(m.name))}</span><div class="msg__card"><span class="msg__name">${escHtml(m.name)}</span><p class="msg__body">${escHtml(m.body)}</p></div></li>`;
 
 /**
  * The hero (and, before a reveal with messages open, the messages box in its section with the notes so far)

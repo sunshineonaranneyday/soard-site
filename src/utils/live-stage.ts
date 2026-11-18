@@ -2,8 +2,9 @@
  * live-stage.ts — behaviour for LiveStage.astro (the live page's frame)
  * =====================================================================
  * The page tells the stage what should be on it (update()); the stage owns
- * everything after that: mounting the video, the one bar under the video (LIVE, viewers, sound, a heart, full screen;
- * or replay controls with the reveal marked), captions under the picture,
+ * everything after that: mounting the video, its controls (live and upright: a rail beside the picture with sound,
+ * full screen and a heart whose hearts float up beside it; otherwise one bar under it: LIVE, viewers, sound, a heart,
+ * full screen, or replay controls with the reveal marked), captions under the picture,
  * the corner mini player and keyboard shortcuts.
  *
  * Nothing is ever drawn on a playing picture, and the controls are kept to
@@ -39,6 +40,11 @@ interface Options {
   client: LiveClient;
   /** The page lays itself out around the stage's shape */
   onShape?: (orientation: 'portrait' | 'landscape', party: boolean) => void;
+  /**
+   * On air, and how many are watching (null below VIEWERS_MIN): what the bar says, for the page to say instead when
+   * the controls are in the rail (it has no room for them). null for onAir: not live
+   */
+  onAir?: (onAir: boolean | null, watching: number | null) => void;
 }
 
 /** Below this the count reads as lonely rather than lively, so it stays hidden. */
@@ -92,6 +98,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const $ = <T extends HTMLElement = HTMLElement>(k: string) => root.querySelector(`[data-s="${k}"]`) as T | null;
   const { client } = opts;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const sideways = matchMedia(SIDE);
   const picture = $('picture');
   const screen = root.querySelector<HTMLElement>('.stage__screen');
   const playerEl = $('player');
@@ -119,6 +126,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   let metaTimer: ReturnType<typeof setTimeout> | undefined;
   let metaSince = 0;
   let detach: (() => void) | null = null;
+  let lastSaid = '';
   let meter: { stop: () => void } | null = null;
 
   const setHidden = (el: Element | null, hidden: boolean) => { if (el) (el as HTMLElement).hidden = hidden; };
@@ -211,6 +219,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     root.style.setProperty('--ar', String(Math.min(2.4, Math.max(0.42, w / h))));
     told = sized;
     opts.onShape?.(sized, party);
+    paint();
   }
   function onMuted(m: boolean) { muted = m; paint(); }
 
@@ -249,6 +258,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const showing = pstatus === 'playing' || pstatus === 'buffering' || pstatus === 'paused';
     const live = view.mode === 'live';
     flag('data-muted', muted);
+    // The rail: a live upright picture's controls in a column beside it (LiveStage), where there's room for the
+    // heart and full screen even before the sound is on
+    const rail = party && live && shape() === 'portrait' && document.fullscreenElement !== root && !sideways.matches;
+    flag('data-rail', rail);
 
     // Photo badge, before the watch party only
     setHidden($('badge'), party || !view.badge);
@@ -271,6 +284,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (status) status.textContent = live ? (onAir ? 'Live' : STATUS[pstatus as PlayerStatus] || 'Connecting') : kind === 'replay' ? 'Replay' : '';
     const count = live && onAir && viewers >= VIEWERS_MIN;
     setHidden($('count'), !count);
+    const said = `${party && live ? (onAir ? 1 : 0) : ''}|${count ? viewers : ''}`;
+    if (said !== lastSaid) { lastSaid = said; opts.onAir?.(party && live ? onAir : null, count ? viewers : null); }
     // The number and its word apart, so the word can step aside first on a narrow bar
     const cn = $('count-num'); const cw = $('count-word');
     if (count) { if (cn) cn.textContent = viewers.toLocaleString(); if (cw) cw.textContent = 'watching'; }
@@ -280,8 +295,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const mute = $('mute');
     setHidden(mute, !(live && isVideo && showing && !muted));
     mute?.setAttribute('aria-label', muted ? 'Turn sound on' : 'Mute');
-    setHidden($('heart'), !(live && !soundCta && (onAir || !isVideo)));
-    root.querySelectorAll<HTMLElement>('[data-full]').forEach((b) => setHidden(b, !(isVideo && (kind === 'replay' || (live && !soundCta)))));
+    setHidden($('heart'), !(live && (rail || !soundCta) && (onAir || !isVideo)));
+    root.querySelectorAll<HTMLElement>('[data-full]').forEach((b) => setHidden(b, !(isVideo && (kind === 'replay' || (live && (rail || !soundCta))))));
     const cc = $('cc-toggle');
     setHidden(cc, !(kind === 'replay' && hasCaptions && isVideo));
     cc?.setAttribute('aria-pressed', String(ccOn));
@@ -502,23 +517,52 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     }
   });
 
-  // ── Love: one heart. Yours pops; when others send love, it beats ──
-  // (nothing floats over the picture, and no numbers)
+  // ── Love: one heart. In the rail, hearts float up beside the picture: a burst for yours, one for each someone else
+  // sends (a few at most at once). In a bar, yours pops and others' make it beat. Never over the picture, no numbers ──
   const heart = $('heart');
+  const rise = $('rise');
   const bump = (cls: string, ms: number) => {
     if (!heart || reduced) return;
     heart.classList.remove(cls); void heart.offsetWidth; heart.classList.add(cls);
     setTimeout(() => heart.classList.remove(cls), ms);
   };
+  const HEART_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>';
+  // Mostly the brand's yellow, now and then its pale yellow or its ink, so a stream of them reads as many people
+  const HEART_COLORS = ['var(--c-yellow)', 'var(--c-yellow)', 'var(--c-yellow)', 'var(--c-yellow-soft)', 'var(--c-text)'];
+  const floats = new Set<ReturnType<typeof setTimeout>>();
+  const later = (fn: () => void, ms: number) => { const t = setTimeout(() => { floats.delete(t); fn(); }, ms); floats.add(t); };
+  function floatHeart(big: boolean) {
+    if (!rise || reduced || !root.hasAttribute('data-rail') || rise.childElementCount > 40) return;
+    const h = document.createElement('span');
+    h.className = 'float';
+    const sway = () => `${Math.round((Math.random() - 0.5) * 26)}px`;
+    const sz = big ? 18 + Math.random() * 12 : 14 + Math.random() * 8;
+    const v: Record<string, string> = {
+      '--sz': `${sz.toFixed(1)}px`, '--dx': `${((Math.random() - 0.5) * 10).toFixed(1)}px`, '--up': `${Math.max(80, rise.clientHeight - 24)}px`,
+      '--s1': sway(), '--s2': sway(), '--s3': sway(),
+      '--r1': `${Math.round((Math.random() - 0.5) * 30)}deg`, '--r2': `${Math.round((Math.random() - 0.5) * 30)}deg`,
+      '--d': `${(2.4 + Math.random() * 1.2).toFixed(2)}s`, '--c': HEART_COLORS[Math.floor(Math.random() * HEART_COLORS.length)],
+    };
+    for (const [k, val] of Object.entries(v)) h.style.setProperty(k, val);
+    h.innerHTML = HEART_SVG;
+    h.addEventListener('animationend', () => h.remove(), { once: true });
+    rise.append(h);
+  }
   let mine = 0;
-  heart?.addEventListener('click', () => { bump('is-pop', 160); if (client.react('heart')) mine++; });
+  heart?.addEventListener('click', () => {
+    bump('is-pop', 160);
+    if (root.hasAttribute('data-rail')) for (let i = 0; i < 7; i++) later(() => floatHeart(true), i * 70);
+    if (client.react('heart')) mine++;
+  });
   const offs: (() => void)[] = [];
   offs.push(client.on('react', ({ c }) => {
     if (view.mode !== 'live') return;
     const total = Object.values(c).reduce((n, v) => n + (Number(v) || 0), 0);
     const theirs = total - Math.min(mine, total);
     mine = Math.max(0, mine - total);
-    if (theirs > 0) bump('is-beat', 600);
+    if (theirs <= 0) return;
+    if (root.hasAttribute('data-rail')) for (let i = 0; i < Math.min(theirs, 6); i++) later(() => floatHeart(false), i * 140);
+    else bump('is-beat', 600);
   }));
   offs.push(client.on('viewers', ({ n }) => { viewers = n; paint(); }));
 
@@ -531,9 +575,13 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (!picture || on === docked) return;
     docked = on;
     if (on) {
-      // Sit above the auction bar when one is showing
-      const bar = document.querySelector<HTMLElement>('.auction-bar');
-      const off = bar && bar.offsetHeight && getComputedStyle(bar).display !== 'none' ? bar.offsetHeight : 0;
+      // Sit above the auction bar when one is showing, and above anything docked at the screen's foot (the box to write
+      // a message on a phone, data-bottom-bar: LiveMessages.astro)
+      let off = 0;
+      for (const bar of document.querySelectorAll<HTMLElement>('.auction-bar, [data-bottom-bar]')) {
+        const st = getComputedStyle(bar);
+        if (bar.offsetHeight && st.display !== 'none' && (bar.matches('.auction-bar') || st.position === 'fixed')) off += bar.offsetHeight;
+      }
       picture.style.setProperty('--dock-bottom', `${off}px`);
       const label = $('dock-label'); if (label) label.textContent = view.mode === 'replay' ? 'Replay' : 'Live';
     }
@@ -578,7 +626,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     io.observe(screen);
   }
   // (data-fullscreen: what LiveStage's full-screen layout keys on, in place of :fullscreen, which older Safari can't read)
-  const onFullscreen = () => { flag('data-fullscreen', document.fullscreenElement === root); updateDock(); refit(); };
+  const onFullscreen = () => { flag('data-fullscreen', document.fullscreenElement === root); paint(); updateDock(); refit(); };
+  const onSideways = () => paint();
+  sideways.addEventListener('change', onSideways);
   document.addEventListener('fullscreenchange', onFullscreen);
 
   // The captions line and the progress line, when their width changes (a turn, full screen, the layout chosen below,
@@ -594,7 +644,6 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // own. Which leaves the picture biggest turns on the screen's exact width and height, so the stage tries each and
   // keeps the one with the biggest picture that fits on the screen. It runs before the screen is next drawn, so no
   // other way ever shows
-  const sideways = matchMedia(SIDE);
   const besideEl = root.querySelector<HTMLElement>('.stage__beside');
   // (the height the page's frame goes by: the screen's, held while someone types; LivePage)
   const roomProbe = document.createElement('div');
@@ -669,6 +718,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       if (watching) { watching = false; client.unwatch(); }
       io?.disconnect();
       document.removeEventListener('fullscreenchange', onFullscreen);
+      sideways.removeEventListener('change', onSideways);
       document.removeEventListener('focusin', onTyping);
       document.removeEventListener('focusout', onTypingOut);
       phone.removeEventListener('change', onTyping);
@@ -677,6 +727,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       roomWatch?.disconnect();
       roomProbe.remove();
       for (const off of offs) off();
+      for (const t of floats) clearTimeout(t);
+      floats.clear();
+      rise?.replaceChildren();
     },
   };
 }

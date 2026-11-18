@@ -9,12 +9,19 @@
  * /api/broadcast, /api/live-messages and /api/live-replay. Checks, at
  * desktop, laptop and phone sizes (including a phone with Safari's
  * toolbars showing):
- *   - the whole stage (video and the bar under it) fits on screen, the kid's name
+ *   - the whole stage (video and its controls) fits on screen, the kid's name
  *     above the video on phones, the messages beside it on desktops
+ *   - the Theater layout (Peter, Nov 17 2026): a live upright video has its
+ *     controls in a rail beside it, the heart at its foot sending hearts up
+ *     the rail (never over the picture); on a computer 1200px and wider the
+ *     story, the video and the messages are three columns; on a phone the
+ *     newest message sits under the video and the message box is docked at
+ *     the bottom of the screen, with the corner player above it
  *   - nothing is ever drawn on a playing picture (every sampled point of
  *     the video hits the video)
- *   - one simple bar: Tap for sound, then sound / heart / full screen; the
- *     mini player; no links sending viewers off to watch somewhere else
+ *   - muted: Tap for sound first (in the rail, with the heart and full screen
+ *     already there), then sound / heart / full screen; the mini player; no
+ *     links sending viewers off to watch somewhere else
  *   - a sideways picture reshapes the frame; camera-not-connected and
  *     dropped-feed notes, and recovery on its own
  *   - back from a pause (the lock screen, a call): at the live moment again,
@@ -160,7 +167,10 @@ const probe = (page) => page.evaluate(() => {
     }
   }
   return {
-    party: stage?.hasAttribute('data-party'), mode: stage?.dataset.mode, pstatus: stage?.dataset.pstatus, orient: stage?.dataset.orientation,
+    party: stage?.hasAttribute('data-party'), mode: stage?.dataset.mode, pstatus: stage?.dataset.pstatus, orient: stage?.dataset.orientation, rail: !!stage?.hasAttribute('data-rail'),
+    text: r(document.querySelector('.hero-text')), panel: r(document.querySelector('[data-msgs="panel"]')),
+    compose: r(document.querySelector('[data-msgs="compose"]')), composeFixed: getComputedStyle(document.querySelector('[data-msgs="compose"]')).position === 'fixed',
+    latest: vis(document.querySelector('[data-msgs="latest"]')) ? r(document.querySelector('[data-msgs="latest"]')) : null,
     vsize: video ? `${video.videoWidth}x${video.videoHeight}` : null, muted: video?.muted, time: video?.currentTime, paused: video?.paused,
     stage: r(stage), picture: r(pic), bar: r(s('bar')), h1: r(document.querySelector('.hero-text h1')),
     status: s('status')?.textContent, soundCta: vis(s('sound')), heart: vis(s('heart')), mute: vis(s('mute')),
@@ -208,23 +218,32 @@ try {
     ok(Math.abs(g.picture.w / g.picture.h - 0.5625) < 0.02, `9:16 frame (${g.picture.w}x${g.picture.h})`);
     ok(!g.covered, `nothing drawn on the picture${g.covered ? ` (hit ${g.covered})` : ''}`);
     ok(g.stage.y >= 0 && g.stage.b <= g.vh, `video and bar all on screen (stage ${g.stage.y}-${g.stage.b} of ${g.vh})`);
-    // The same width as the picture, or wider when the picture is too narrow for "Live" and its buttons (it never is
-    // narrower), and centred under it
-    ok(g.bar.y >= g.picture.b && g.bar.w >= g.picture.w - 2 && (g.bar.w - g.picture.w <= 2 || g.bar.w <= 272) && Math.abs((g.bar.x + g.bar.w / 2) - (g.picture.x + g.picture.w / 2)) <= 2,
-      `the bar sits under the picture, centred, at least as wide (bar ${g.bar.w}, picture ${g.picture.w})`);
+    // A live upright picture: the controls are a rail beside it, exactly as tall as it
+    ok(g.rail && g.bar.x >= g.picture.r && g.bar.x - g.picture.r <= 16 && Math.abs(g.bar.y - g.picture.y) <= 2 && Math.abs(g.bar.b - g.picture.b) <= 2,
+      `the controls are a rail beside the picture, as tall as it (rail ${g.bar.x},${g.bar.y}-${g.bar.b}; picture to ${g.picture.r}, ${g.picture.y}-${g.picture.b})`);
     ok(g.overflowX <= 0, `no sideways scroll (${g.overflowX})`);
     // The hero clips overflow, so scroll width alone can't see a stage that runs off the side
     ok([g.stage, g.bar].every((b) => b.x >= 8 && b.r <= g.vw - 8), `video and bar inside the screen's gutters (stage ${g.stage.x}-${g.stage.r} of ${g.vw})`);
-    ok(g.status === 'Live' && g.soundCta && !g.heart && !g.mute && !g.full, 'muted: the bar says Live and offers one thing, Tap for sound');
+    ok(g.status === 'Live' && g.soundCta && g.heart && !g.mute && g.full, 'muted: Tap for sound first in the rail, with the heart and full screen there too');
+    const pill = await page.evaluate(() => { const v = (el) => !!el && el.getBoundingClientRect().height > 0; return { eyebrow: document.querySelector('[data-live="eyebrow"]')?.textContent, onair: v(document.querySelector('[data-live="onair"]')) }; });
+    ok(pill.eyebrow === 'Live now' && (vp.width < 961 ? pill.onair : true), `"Live" said by the page, where the rail has no room for it (${JSON.stringify(pill)})`);
     ok(g.leaveLinks === 0, `nothing sends viewers off to watch somewhere else (${g.leaveLinks} links)`);
     if (phone) {
       ok(g.h1.b <= g.picture.y && g.h1.y >= 0, `kid's name above the video (${g.h1.y}-${g.h1.b})`);
       ok(g.picture.w >= 250, `video at least 250px wide (${g.picture.w})`);
       // Touch screens get 44px minimum buttons site-wide: the round controls must stay round at that size
-      const odd = await page.evaluate(() => [...document.querySelectorAll('[data-stage] .bar__btn:not(.bar__cc), [data-stage] .bar__play')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => el.getBoundingClientRect()).filter((b) => Math.abs(b.width - b.height) > 1 || b.height < 44).length);
-      ok(odd === 0, `round controls are 44px circles on a touch screen (${odd} out of shape)`);
+      const odd = await page.evaluate(() => [...document.querySelectorAll('[data-stage]:not([data-rail]) .bar__btn:not(.bar__cc), [data-stage] .bar__play, [data-stage][data-rail] .bar__ico')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => el.getBoundingClientRect()).filter((b) => Math.abs(b.width - b.height) > 1 || b.height < 44).length);
+      ok(odd === 0, `round controls are 44px circles (at least) on a touch screen (${odd} out of shape)`);
+      ok(g.composeFixed && g.compose.b <= g.vh + 1 && g.compose.y >= g.vh - 140, `the message box is docked at the bottom of the screen (${g.compose.y}-${g.compose.b} of ${g.vh})`);
+      // (a phone shorter than 740px keeps the video its size instead: the messages are just below)
+      if (g.vh >= 740) ok(!!g.latest && g.latest.y >= g.stage.b && g.latest.b <= g.compose.y + 1, `the newest message under the video, clear of the box (${g.latest ? `${g.latest.y}-${g.latest.b}` : 'none'})`);
+      else ok(!g.latest || g.latest.y >= g.compose.y, `a short phone: no newest-message line squeezed in above the box (${g.latest ? g.latest.y : 'none'})`);
+      ok(g.stage.b <= g.compose.y, `the video and the partners above the docked box (${g.stage.b} vs ${g.compose.y})`);
     } else {
       ok(g.panelBeside && g.form.b <= g.vh + 8, `messages beside the video, message box on screen (${g.form.b})`);
+      ok(!g.composeFixed, 'the message box stays in its card on a computer');
+      if (vp.width >= 1200) ok(g.text.r <= g.stage.x && g.panel.x >= g.stage.r && Math.abs(g.panel.y - g.stage.y) <= 2 && Math.abs(g.panel.b - g.stage.b) <= 2,
+        `three columns: the story, the video, the messages, each as tall as the video (text to ${g.text.r}, video ${g.stage.x}-${g.stage.r}, messages ${g.panel.x}, ${g.panel.y}-${g.panel.b} vs ${g.stage.y}-${g.stage.b})`);
       ok(g.picture.w >= (vp.height < 800 ? 290 : 340), `video as big as the screen height allows (${g.picture.w}px wide)`);
     }
     await page.screenshot({ path: `${OUT}live-${name}.png` });
@@ -243,6 +262,7 @@ try {
       const apart = (a, b) => a.r <= b.x || b.r <= a.x || a.b <= b.y || b.b <= a.y;
       ok(!!g.give && g.pstatus === 'playing' && apart(g.give, g.picture), `the donation form opens without covering the video, which keeps playing (${JSON.stringify(g.give)} vs ${JSON.stringify(g.picture)})`);
       if (phone) ok(g.docked && g.picture.y >= 0 && g.picture.b <= g.give.y, 'on a phone the video sits in a small player above the form');
+      if (phone) ok(await page.evaluate(() => getComputedStyle(document.querySelector('[data-msgs="compose"]')).visibility === 'hidden'), 'the docked message box steps aside while the form is open');
       await page.screenshot({ path: `${OUT}give-${name}.png` });
       await page.keyboard.press('Escape');
       await sleep(300);
@@ -256,11 +276,13 @@ try {
     await sleep(500);
     g = await probe(page);
     ok(!g.covered, 'sending love draws nothing over the picture');
+    const hearts = await page.evaluate(() => { const pic = document.querySelector('.stage__picture').getBoundingClientRect(); const f = [...document.querySelectorAll('[data-s="rise"] .float')]; return { n: f.length, onPicture: f.filter((h) => { const b = h.getBoundingClientRect(); return b.left < pic.right && b.right > pic.left && b.top < pic.bottom && b.bottom > pic.top; }).length }; });
+    ok(hearts.n > 0 && hearts.onPicture === 0, `hearts float up the rail beside the picture (${hearts.n}, ${hearts.onPicture} on it)`);
 
     await page.evaluate(() => window.scrollTo(0, document.querySelector('.hero').offsetHeight + 400));
     await sleep(900);
     g = await probe(page);
-    ok(g.docked && g.picture.y > g.vh / 2 && g.picture.b <= g.vh - 8 && g.picture.r <= g.vw - 8, `mini player in the corner (${JSON.stringify(g.picture)})`);
+    ok(g.docked && g.picture.y > g.vh / 2 && g.picture.b <= g.vh - 8 && g.picture.r <= g.vw - 8 && (!g.composeFixed || g.picture.b <= g.compose.y), `mini player in the corner, above the docked message box (${JSON.stringify(g.picture)})`);
     ok(!g.covered, 'nothing drawn on the mini player either');
     await page.screenshot({ path: `${OUT}docked-${name}.png` });
     await page.click('[data-s="undock"]');
@@ -596,7 +618,8 @@ try {
   await open(page);
   await waitFor(page, ['playing']); await sleep(800);
   await page.click('[data-s="sound"]').catch(() => {});
-  await page.$eval('#msg-body', (e) => e.scrollIntoView({ block: 'center' }));
+  // (the box is docked at the foot of the screen: down at the messages, the video is in the corner player)
+  await page.$eval('[data-msgs="wall"]', (e) => e.scrollIntoView({ block: 'center' }));
   await sleep(900);
   const was = await page.evaluate(() => ({ y: Math.round(scrollY), docked: !!document.querySelector('.is-docked') }));
   const box = await (await page.$('#msg-body')).boundingBox();
@@ -605,10 +628,13 @@ try {
   await sleep(900);
   const typing = await page.evaluate(() => {
     const r = (s) => document.querySelector(s).getBoundingClientRect();
-    const pic = r('.stage__picture'), bar = r('[data-s="bar"]');
-    return { upright: bar.top >= pic.bottom - 0.5, docked: !!document.querySelector('.is-docked'), sx: document.documentElement.scrollWidth - innerWidth };
+    const pic = r('.stage__picture'), bar = r('[data-s="bar"]'), box = r('[data-msgs="compose"]');
+    // Upright: a live upright picture's controls in their rail beside it (else the bar under it), never the sideways layout
+    const rail = document.querySelector('[data-stage]').hasAttribute('data-rail');
+    return { upright: rail ? bar.left >= pic.right - 0.5 : bar.top >= pic.bottom - 0.5, rail, docked: !!document.querySelector('.is-docked'), sx: document.documentElement.scrollWidth - innerWidth, box: [Math.round(box.top), Math.round(box.bottom)], vh: innerHeight };
   });
-  ok(was.docked && typing.upright && typing.sx <= 0, `390×200 with the keyboard up: the page stays upright (controls under the picture), nothing sideways`);
+  ok(was.docked && typing.upright && typing.sx <= 0, `390×200 with the keyboard up: the page stays upright (${typing.rail ? 'the rail beside the picture' : 'controls under the picture'}), nothing sideways`);
+  ok(typing.box[0] >= 0 && typing.box[1] <= typing.vh + 1, `the docked box stays in sight above the keyboard (${typing.box.join('-')} of ${typing.vh})`);
   ok(!typing.docked, 'the corner player steps aside while typing');
   await page.evaluate(() => document.activeElement.blur());
   await sleep(100);

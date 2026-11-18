@@ -42,7 +42,7 @@
  * full-screen viewer. The page holds still behind it either way.
  */
 import { fetchDesign, slideSrc, designSignature, focusOf, isWholeSheet, knownRatio, type DesignSlide } from './reveal-design-client';
-import { designPartsHtml, designPartsOf, designName, designLead, gridClass, partNote, possessive, straight, type PartKey } from './live-design-html';
+import { designPartsHtml, designPartsOf, designName, designLead, gridClass, partNote, partTitle, possessive, straight, type PartKey } from './live-design-html';
 import { holdPlace } from './hold-place';
 import type { Stage } from './live-stage';
 import { DESK } from './live-media';
@@ -83,12 +83,14 @@ interface Options {
   frame?: HTMLElement | null;
   /** The video: held in a small player while the viewer covers a phone's screen */
   stage?: Stage | null;
+  /** The room beside the video on a computer (LiveRoom.astro): one big picture, a switch between the parts, the rest small */
+  room?: HTMLElement | null;
 }
 
 type ViewerMode = 'modal' | 'side' | 'pinned';
 
 export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
-  const { hero = null, rail = null, frame = null, stage = null } = opts;
+  const { hero = null, rail = null, frame = null, stage = null, room = null } = opts;
   const parts = section.querySelector<HTMLElement>('[data-ldz="parts"]')!;
   const nameEl = section.querySelector<HTMLElement>('[data-ldz="name"]');
   const leadEl = section.querySelector<HTMLElement>('[data-ldz="lead"]');
@@ -146,6 +148,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     sig = '';
     slides = [];
     if (!keepPlace) mark(false);
+    drawRoom();
   }
 
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {
@@ -322,10 +325,14 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     lead();
     recounts.push(lead);
     if (railName) railName.textContent = name ? `${possessive(name)} design` : 'The design';
+    roomAfter = isAfter;
+    roomName = name;
+    recounts.push(drawRoom);
     holdPlace(() => {
       if (!served) { parts.innerHTML = designPartsHtml(next, isAfter); parts.dataset.sig = s; parts.dataset.kid = kid; }
       wireParts(next);
       drawRail(next);
+      drawRoom();
       section.hidden = false;
     });
     mark(true);
@@ -353,6 +360,141 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     askTimer = setTimeout(ask, wait);
   }
 
+  // ── The room beside the video (LiveRoom.astro) ──
+  // One part at a time (the room, the plan, the look), its picture big and the rest small. Its pictures come only once
+  // it shows (a computer, the watch party, an upright video), at the size it shows at; a new one fades in over the last
+  const rq = <T extends HTMLElement = HTMLElement>(k: string) => room?.querySelector<T>(`[data-lrm="${k}"]`) || null;
+  const touchy = matchMedia('(hover: none)');
+  let roomPart: PartKey | '' = '';
+  const roomAt = new Map<PartKey, number>();
+  let roomAfter = false;
+  let roomName = '';
+  let roomSig = '';
+  let roomTabsSig = '';
+  let roomShown: DesignSlide | null = null;
+  const roomShowing = () => !!room && !room.hidden && room.getClientRects().length > 0;
+  function roomPicture(s: DesignSlide) {
+    const pic = rq('pic');
+    const big = rq('big');
+    if (!pic || !big || !roomShowing()) return;
+    if (roomShown === s && pic.querySelector('img')) return;
+    roomShown = s;
+    const want = Math.min(1600, Math.max(480, Math.round(big.clientWidth * (devicePixelRatio || 1))));
+    void slideSrc(s, want).then((src) => {
+      if (roomShown !== s) return;
+      if (!src) { drop(s); return; }
+      const img = el('img');
+      img.alt = straight(s.alt);
+      img.decoding = 'async';
+      img.dataset.kind = s.kind;
+      img.addEventListener('error', () => drop(s), { once: true });
+      img.addEventListener('load', () => {
+        if (roomShown !== s) { img.remove(); return; }
+        img.classList.add('is-in');
+        // The one it replaces goes once the new one has faded in over it
+        for (const old of [...pic.querySelectorAll('img')]) if (old !== img) setTimeout(() => old.remove(), 400);
+      }, { once: true });
+      img.src = src;
+      pic.append(img);
+    });
+  }
+  function drawRoom() {
+    if (!room) return;
+    const partsNow = designPartsOf(slides);
+    const tabs = rq('tabs'), thumbs = rq('thumbs'), big = rq('big');
+    if (!partsNow.length || !tabs || !thumbs || !big) {
+      room.hidden = true;
+      tabs?.replaceChildren(); thumbs?.replaceChildren(); rq('pic')?.replaceChildren();
+      roomSig = ''; roomTabsSig = ''; roomShown = null; roomPart = ''; roomAt.clear();
+      return;
+    }
+    if (!partsNow.some((p) => p.key === roomPart)) roomPart = partsNow[0].key;
+    const part = partsNow.find((p) => p.key === roomPart)!;
+    const at = Math.max(0, Math.min(roomAt.get(part.key) ?? 0, part.slides.length - 1));
+    roomAt.set(part.key, at);
+    const s = part.slides[at];
+    const title = partTitle(part.key, roomAfter);
+    const nameEl2 = rq('name');
+    if (nameEl2) nameEl2.textContent = roomName ? `${possessive(straight(roomName))} room` : 'The room';
+    // The switch and the small pictures are drawn again only when what's in them changes (picking a part only marks
+    // it), so focus stays where it was
+    const tabsSig = `${roomAfter}|${partsNow.map((p) => p.key).join(',')}`;
+    if (tabsSig !== roomTabsSig) {
+      roomTabsSig = tabsSig;
+      tabs.hidden = partsNow.length < 2;
+      tabs.replaceChildren(...partsNow.map((p) => {
+        const b = el('button', 'lrm-tab', partTitle(p.key, roomAfter));
+        b.type = 'button';
+        b.dataset.part = p.key;
+        b.setAttribute('role', 'tab');
+        b.addEventListener('click', () => { roomPart = p.key; drawRoom(); });
+        return b;
+      }));
+    }
+    for (const b of tabs.querySelectorAll<HTMLButtonElement>('.lrm-tab')) {
+      const on = b.dataset.part === part.key;
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
+    }
+    const sig = `${part.key}|${part.slides.map((x) => x.url).join(',')}`;
+    if (sig !== roomSig) {
+      roomSig = sig;
+      thumbs.toggleAttribute('data-paper', part.key !== 'photos');
+      thumbs.hidden = part.slides.length < 2;
+      thumbs.replaceChildren(...part.slides.map((x, i) => {
+        const li = el('li');
+        const b = el('button', 'lrm-thumb');
+        b.type = 'button';
+        b.setAttribute('aria-label', `Show ${x.kind === 'before' ? `photo ${i + 1} of ${part.slides.length}` : straight(x.caption)}`);
+        const img = el('img');
+        img.alt = '';
+        img.decoding = 'async';
+        img.addEventListener('error', () => drop(x), { once: true });
+        b.append(img);
+        b.addEventListener('click', () => { roomAt.set(part.key, i); drawRoom(); });
+        li.append(b);
+        return li;
+      }));
+    }
+    // The one showing big is marked among the small ones
+    [...thumbs.querySelectorAll<HTMLButtonElement>('.lrm-thumb')].forEach((b, i) => { if (i === at) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); });
+    big.toggleAttribute('data-paper', s.kind !== 'before');
+    big.toggleAttribute('data-sheet', isWholeSheet(s));
+    big.setAttribute('aria-label', `See it big: ${s.badge ? `${s.badge}, ` : ''}${title}${part.slides.length > 1 ? `, ${at + 1} of ${part.slides.length}` : ''}`);
+    const b = rq('badge');
+    if (b) { b.textContent = s.badge || ''; b.dataset.kind = s.kind; b.hidden = !s.badge; }
+    const cap = rq('cap'); if (cap) cap.textContent = title;
+    const how = touchy.matches ? 'tap' : 'click';
+    const count = rq('count'); if (count) count.textContent = part.slides.length > 1 ? `${at + 1} of ${part.slides.length} · ${how} to see it big` : `${how[0].toUpperCase()}${how.slice(1)} to see it big`;
+    room.hidden = false;
+    if (roomShowing()) {
+      roomPicture(s);
+      for (const [i, img] of [...thumbs.querySelectorAll<HTMLImageElement>('.lrm-thumb img')].entries()) {
+        const x = part.slides[i];
+        if (!x || img.getAttribute('src')) continue;
+        void slideSrc(x, 220).then((src) => { if (src && !img.getAttribute('src')) img.src = src; else if (!src) drop(x); });
+      }
+    }
+  }
+  rq('big')?.addEventListener('click', () => {
+    const part = designPartsOf(slides).find((p) => p.key === roomPart);
+    const s = part?.slides[roomAt.get(part.key) ?? 0];
+    if (s) open(s);
+  });
+  rq('tabs')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const keys = designPartsOf(slides).map((p) => p.key);
+    const i = keys.indexOf(roomPart as PartKey);
+    if (i < 0 || keys.length < 2) return;
+    e.preventDefault();
+    roomPart = keys[(i + (e.key === 'ArrowRight' ? 1 : -1) + keys.length) % keys.length];
+    drawRoom();
+    rq('tabs')?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
+  });
+  // Its pictures come the moment it shows (the watch party starting, a window widened past the phone layout)
+  const roomWatch = room && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (roomShowing()) drawRoom(); }) : null;
+  if (room) roomWatch?.observe(room);
+
   // ── Viewer ──
   let shown: DesignSlide | null = null;
   let mode: ViewerMode = 'modal';
@@ -362,6 +504,10 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
 
   /** The strip marks the picture open in the viewer, and scrolls it into its own view (never the page) */
   function markShown(s: DesignSlide | null) {
+    if (s && room) {
+      const p = designPartsOf(slides).find((x) => x.slides.includes(s));
+      if (p) { roomPart = p.key; roomAt.set(p.key, p.slides.indexOf(s)); drawRoom(); }
+    }
     for (const [x, b] of railCards) {
       if (x === s) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
     }
@@ -596,6 +742,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       alive = false;
       shapeWatch?.disconnect();
       railWatch?.disconnect();
+      roomWatch?.disconnect();
       sizeWatch?.disconnect();
       laptop.removeEventListener('change', onLayout);
       asking?.abort();

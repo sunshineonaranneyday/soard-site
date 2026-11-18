@@ -6,8 +6,11 @@
  * (countdown, "Live" for a Facebook-only broadcast, "Processing").
  *
  * During the watch party (data-party: live, replay) it is the
- * video, as big as the screen allows, with nothing drawn on the picture and
- * one simple bar under it:
+ * video, as big as the screen allows, with nothing drawn on the picture. Live
+ * and upright (data-rail, the Theater layout, Peter, Nov 17 2026) its controls
+ * are a rail beside it: Tap for sound (then Sound) and Full screen at the top,
+ * the heart at the foot, sending hearts up the rail. Otherwise one simple bar
+ * under it:
  *
  *   ┌──────────────┐
  *   │              │
@@ -92,13 +95,15 @@ const ICON = {
       <span class="bar__status"><span class="bar__dot" aria-hidden="true"></span><span data-s="status">Connecting</span></span>
       <span class="bar__count" data-s="count" hidden><span class="bar__count-n"><Fragment set:html={ICON.eye} /><span data-s="count-num"></span></span><span class="bar__count-word" data-s="count-word"></span></span>
       <span class="bar__end">
-        <button class="bar__sound" type="button" data-s="sound" hidden><Fragment set:html={ICON.soundOff} /><span>Tap for sound</span></button>
+        <button class="bar__sound" type="button" data-s="sound" hidden><span class="bar__ico"><Fragment set:html={ICON.soundOff} /></span><span class="bar__txt">Tap for sound</span></button>
         <button class="bar__btn" type="button" data-s="mute" aria-label="Mute" title="Sound (M)" hidden>
-          <span class="bar__on"><Fragment set:html={ICON.soundOn} /></span>
-          <span class="bar__off"><Fragment set:html={ICON.soundOff} /></span>
+          <span class="bar__ico"><span class="bar__on"><Fragment set:html={ICON.soundOn} /></span><span class="bar__off"><Fragment set:html={ICON.soundOff} /></span></span>
+          <span class="bar__lbl" aria-hidden="true">Sound</span>
         </button>
-        <button class="bar__btn bar__heart" type="button" data-s="heart" aria-label="Send love to the family" title="Send love" hidden><Fragment set:html={ICON.heart} /></button>
-        <button class="bar__btn" type="button" data-full aria-label="Full screen" title="Full screen (F)" hidden><Fragment set:html={ICON.full} /></button>
+        <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)" hidden><span class="bar__ico"><Fragment set:html={ICON.full} /></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
+        <!-- In the rail beside a portrait picture (data-rail): the hearts everyone sends float up here, beside the picture, never on it -->
+        <span class="bar__rise" data-s="rise" aria-hidden="true"></span>
+        <button class="bar__btn bar__heart" type="button" data-s="heart" aria-label="Send love to the family" title="Send love" hidden><span class="bar__ico"><Fragment set:html={ICON.heart} /></span></button>
       </span>
     </div>
     <div class="bar__replay" data-s="replaybar" hidden>
@@ -301,6 +306,80 @@ const ICON = {
   .bar__heart.is-beat { animation: heartBeat 0.6s ease-out; }
   @keyframes heartBeat { 0% { transform: none; } 25% { transform: scale(1.22); } 50% { transform: scale(0.96); } 75% { transform: scale(1.1); } 100% { transform: none; } }
   .bar__cc { font-size: 12px; font-weight: 800; letter-spacing: 0.04em; border: 1.5px solid var(--c-border); width: 40px; height: 32px; border-radius: 8px; }
+  /* (the icons' own boxes, and the words that go under them in the rail: none in the bar) */
+  .bar__ico { display: grid; place-items: center; }
+  .bar__lbl, .bar__rise { display: none; }
+
+  /* ── The rail: a live portrait picture has its controls in a slim column beside it, not in a bar under it (the
+     Theater layout, Peter, Nov 17 2026): sound and full screen at the top, each with its word under it, and the heart
+     at the bottom, where the hearts everyone sends float up the column beside the picture (never on it). The picture
+     gets the room the bar took, so it's taller. LIVE and the number watching are the page's to show (its eyebrow on a
+     computer, beside the kid's name on a phone). live-stage.ts decides when (data-rail): a live portrait picture, out
+     of full screen, not on a phone held sideways. A replay keeps its bar: its progress line needs the width ── */
+  /* (UPRIGHT: word for word as in src/utils/live-media.ts. Never on a phone held sideways, even before the script has
+     said so: the server marks the rail before the page's script runs) */
+  @media (max-width: 559px), (max-aspect-ratio: 1749/1000), (min-height: 541px), (min-width: 1024px), (min-width: 961px) and (pointer: fine), (min-width: 961px) and (pointer: none) {
+    .stage[data-party][data-rail] {
+      --rail: 56px; --rail-gap: 12px; --below: var(--under, 0px);
+      grid-template-columns: minmax(0, 1fr) minmax(0, var(--pic)) var(--rail-gap) var(--rail) minmax(0, 1fr);
+      grid-template-areas: '. screen . bar .' 'under under under under under';
+      width: min(var(--stage-max, 100%), calc(var(--pic) + var(--rail-gap) + var(--rail)));
+    }
+    .stage[data-party][data-rail] .stage__beside { display: none; }
+    .stage[data-party][data-rail] .stage__bar {
+      margin: 0; height: auto; padding: 0; border: 0; border-radius: 0; background: none; align-self: stretch; min-height: 0; container: none;
+    }
+    .stage[data-rail] .bar__live { flex-direction: column; height: 100%; gap: 0; }
+    .stage[data-rail] .bar__status, .stage[data-rail] .bar__count { display: none; }
+    .stage[data-rail] .bar__end { flex-direction: column; align-items: center; gap: 14px; margin: 0; width: 100%; flex: 1 1 auto; min-height: 0; }
+    .stage[data-rail] .bar__btn, .stage[data-rail] .bar__sound {
+      width: 100%; height: auto; padding: 0; gap: 6px; border-radius: 0; background: none; animation: none;
+      display: flex; flex-direction: column; align-items: center; font: inherit; color: var(--c-text-muted);
+    }
+    .stage[data-rail] .bar__end > [hidden] { display: none; }
+    .stage[data-rail] .bar__btn:hover { background: none; }
+    .stage[data-rail] .bar__ico {
+      width: 46px; height: 46px; border-radius: 50%; background: #fff; border: 1px solid var(--c-border); color: var(--c-dark);
+      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+    }
+    .stage[data-rail] .bar__btn:hover .bar__ico { border-color: var(--c-dark); }
+    .stage[data-rail] .bar__btn :global(svg), .stage[data-rail] .bar__sound :global(svg) { width: 19px; height: 19px; }
+    .stage[data-rail] .bar__lbl, .stage[data-rail] .bar__txt {
+      display: block; max-width: 100%; font-size: 10.5px; font-weight: 700; line-height: 1.2; text-align: center; letter-spacing: 0;
+      white-space: normal; overflow-wrap: normal; color: var(--c-text-muted);
+    }
+    /* Muted: the one control that matters first, in yellow, with its words under it */
+    .stage[data-rail] .bar__sound .bar__ico { background: var(--c-yellow-soft); border: 1.5px solid var(--c-yellow); animation: soundNudge 2.8s ease-in-out 1.5s 3; }
+    .stage[data-rail] .bar__sound .bar__txt { color: var(--c-text); }
+    /* The site's two-tone focus ring, on the round part only (not around its word too) */
+    .stage[data-rail] .bar__btn:focus-visible, .stage[data-rail] .bar__sound:focus-visible { outline: none; box-shadow: none; }
+    .stage[data-rail] .bar__btn:focus-visible .bar__ico, .stage[data-rail] .bar__sound:focus-visible .bar__ico { outline: 2px solid var(--c-dark); outline-offset: 2px; box-shadow: 0 0 0 5px var(--c-yellow); }
+    /* The hearts' column takes what's between the top controls and the heart */
+    .stage[data-rail] .bar__rise { display: block; position: relative; flex: 1 1 0; min-height: 0; width: 100%; margin: 0 0 -14px; overflow: hidden; pointer-events: none; }
+    .stage[data-rail] .bar__heart { order: 9; }
+    .stage[data-rail] .bar__heart .bar__ico {
+      width: 52px; height: 52px; border: 0; background: var(--c-yellow); box-shadow: 0 10px 24px rgba(30, 31, 37, 0.16);
+    }
+    .stage[data-rail] .bar__heart :global(svg) { width: 24px; height: 24px; fill: var(--c-dark); }
+    .stage[data-rail] .bar__heart:active .bar__ico, .stage[data-rail] .bar__heart.is-pop .bar__ico { transform: scale(0.82); }
+    .stage[data-rail] .bar__heart:active, .stage[data-rail] .bar__heart.is-pop, .stage[data-rail] .bar__heart.is-beat { transform: none; animation: none; }
+  }
+  /* One heart floating up the column: it rises from the button, sways a little and fades near the top
+     (--up: the column's height, --s1..3 and --r1..2: its own sway, set by live-stage.ts) */
+  .bar__rise :global(.float) {
+    position: absolute; bottom: 0; left: 50%; width: var(--sz, 20px); height: var(--sz, 20px); margin-left: calc(var(--sz, 20px) / -2 + var(--dx, 0px));
+    color: var(--c, var(--c-yellow)); opacity: 0; pointer-events: none;
+    animation: heartRise var(--d, 2.8s) cubic-bezier(0.25, 0.6, 0.35, 1) forwards;
+  }
+  .bar__rise :global(.float svg) { display: block; width: 100%; height: 100%; fill: currentColor; stroke: none; filter: drop-shadow(0 2px 4px rgba(30, 31, 37, 0.18)); }
+  @keyframes heartRise {
+    0% { opacity: 0; transform: translate(0, 0) scale(0.4); }
+    8% { opacity: 1; transform: translate(0, -18px) scale(1); }
+    35% { transform: translate(var(--s1), calc(var(--up) * -0.33)) rotate(var(--r1)); }
+    70% { opacity: 0.9; transform: translate(var(--s2), calc(var(--up) * -0.68)) rotate(var(--r2)); }
+    100% { opacity: 0; transform: translate(var(--s3), calc(var(--up) * -1)) scale(0.9); }
+  }
+
   .bar__cc[aria-pressed='true'] { background: var(--c-dark); color: #fff; border-color: var(--c-dark); }
 
   .bar__play {
@@ -548,6 +627,7 @@ const ICON = {
   @media (hover: none) and (pointer: coarse) {
     .stage { --bar: 56px; }
     .bar__btn, .bar__play { width: 44px; height: 44px; }
+    .stage[data-rail] .bar__btn { width: 100%; height: auto; }
     .bar__cc { height: 44px; }
     .bar__sound { height: 44px; }
     .seek, .seek__range { height: 44px; }
@@ -558,6 +638,8 @@ const ICON = {
   @media (prefers-reduced-motion: reduce) {
     .stage__accent { animation: none; opacity: 0.35; }
     .bar__sound, .bar__heart.is-beat, .stage[data-party] .stage__picture.is-docked { animation: none; }
+    .stage[data-rail] .bar__sound .bar__ico, .stage[data-rail] .bar__ico { animation: none; transition: none; }
+    .bar__rise { display: none !important; }
     .stage[data-onair][data-mode='live'] .bar__dot::after { animation: none; }
     .stage__player, .bar__btn { transition: none; }
   }
