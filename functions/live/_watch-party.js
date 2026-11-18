@@ -9,6 +9,7 @@
  *
  * Mirrors render() in src/components/live/LivePage.astro: keep them in step.
  */
+import { afterReveal } from '../../src/utils/live-hero-text.ts';
 
 /**
  * How the page should look at first paint, or null when it is the plain hero.
@@ -22,10 +23,16 @@ export function watchParty(pub, { pageKid = '' } = {}) {
   if (!forThisKid) return null;
   const phase = pub.phase;
   const view = phase === 'live' || phase === 'ending' ? 'live' : phase === 'replay' ? 'replay' : '';
-  if (!view || !pub.player) return null;
+  if (!view) return null;
+  // The reveal over and its replay not here yet: the watch party's layout all the same, "That's the reveal!" in the
+  // frame (LivePage decide, live-stage.ts StageView.ended), for everyone arriving after the end
+  const after = afterReveal({ view, hasPlayer: !!pub.player, source: pub.source, endedAt: pub.endedAt });
+  if (!pub.player && !after.ended) return null;
   return {
     mode: view,
     orientation: pub.orientation === 'landscape' ? 'landscape' : 'portrait',
     eyebrow: view === 'live' ? 'Live now' : 'Replay',
+    ended: after.ended,
+    replaySoon: after.replaySoon,
   };
 }

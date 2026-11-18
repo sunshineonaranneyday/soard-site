@@ -569,7 +569,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   import { cfRaw } from '../../utils/cf-image';
   import { readUpcoming, loadSignup, inviteData, inviteLinks, scheduleOnPage, type UpcomingReveal } from '../../utils/reveals-client';
   import { heroRowsHtml, rowsSignature, afterLine } from '../../utils/upcoming-rows';
-  import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences } from '../../utils/live-hero-text';
+  import { afterReveal, momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences } from '../../utils/live-hero-text';
   import { onPageLoad } from '../../utils/page-load';
 
   // The hero's buttons, two at most, and which apply when: src/utils/live-hero-text.ts (HERO_CTAS, ctasThatApply), shared
@@ -972,14 +972,17 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const player = holdLive && liveSeen ? liveSeen.player : s.player;
       const kidSlug = pageKid || (view !== 'idle' ? s.kidSlug || '' : '');
       const hasPlayer = !!(player && forThisKid && (view === 'live' || view === 'replay'));
+      // The reveal over and its replay not here yet: the watch party's layout all the same, "That's the reveal!" in the
+      // frame, for everyone (arriving after the end too)
+      const after = afterReveal({ view, hasPlayer, source: s.source, endedAt: s.endedAt });
       // (party held for "That's the reveal!" both while it shows and when this very drawing brings it up: decided here,
       // before the stage hears of it, so the layout never drops for a moment and an open give form stays open)
-      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer || stage.endsWith(view as 'idle' | 'upcoming' | 'live' | 'replay'), player };
+      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer || after.ended || stage.endsWith(view as 'idle' | 'upcoming' | 'live' | 'replay'), player, after };
     }
 
     function drawPage(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
       last = state; lastMeta = meta;
-      const { s, forThisKid, phase, view, kidSlug, hasPlayer, party, player } = decide(state);
+      const { s, forThisKid, phase, view, kidSlug, hasPlayer, party, player, after } = decide(state);
       if ((phase === 'live' || phase === 'ending') && s.player?.kind === 'live' && s.id) liveSeen = { id: s.id, player: s.player };
       display = view;
       hero.dataset.phase = display;
@@ -1024,7 +1027,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       let badge = '';
       if (view !== 'idle') {
         // The server wrote the same words (momentWords), live and replay included, so normally nothing changes here
-        const said = momentWords({ view, scheduledAt: s.scheduledAt || null, hasPlayer, source: s.source, endedAt: s.endedAt });
+        const said = momentWords({ view, scheduledAt: s.scheduledAt || null, hasPlayer, source: s.source, endedAt: s.endedAt, party });
         if (eyebrow) eyebrow.textContent = said.eyebrow;
         setStatus(said.status);
         badge = said.badge;
@@ -1040,7 +1043,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const inviteFor = kidSlug ? upcoming.find((r) => r.slug === kidSlug) : undefined;
       const applies = ctasThatApply({
         display, view, scheduledAt: s.scheduledAt || null, remindUsable: remindersUsable(meta.reminders, browserCanPush()),
-        pageKid, inSchedule: !!inviteFor, pastOnPage: !!document.getElementById('past-reveals'), hasPlayer,
+        pageKid, inSchedule: !!inviteFor, pastOnPage: !!document.getElementById('past-reveals'), hasPlayer, source: s.source,
       });
       setHidden(q('cta-remind'), !applies['cta-remind']);
       // Calendar: this child's own invite (the live link only), whether or not the day is set yet;
@@ -1078,6 +1081,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         phase,
         orientation: s.orientation === 'landscape' ? 'landscape' : 'portrait',
         badge,
+        ended: after.ended,
+        replaySoon: after.replaySoon,
       });
       messages?.update({ active: forThisKid && !!s.id && view !== 'idle', broadcastId: s.id, kidName: s.kidName, party });
       if (!party) give?.close();

@@ -246,6 +246,18 @@ function rewrite(res, { kid, party, messages, design }) {
       .on('#live-hero [data-live="onair"]', setAttrs({ hidden: party.mode === 'live' ? null : '' }))
       // Full screen, live: there from the moment the player is in the frame (until it plays muted: then "Tap for sound")
       .on('#live-hero [data-s="livebar"] [data-full]', setAttrs({ hidden: party.mode === 'live' ? null : '' }));
+    if (party.ended) {
+      // The reveal over, its replay not here yet: "That's the reveal!" over the soft photo, as the stage shows it
+      // (live-stage.ts showEnd), and no bar under it (no video to control)
+      const name = String(party.kidName || '').trim();
+      rw = rw
+        .on('#live-hero [data-stage]', setAttrs({ 'data-ended': '' }))
+        .on('#live-hero [data-s="bar"]', setAttrs({ hidden: '' }))
+        .on('#live-hero [data-s="end"]', setAttrs({ hidden: null }))
+        .on('#live-hero [data-s="end-text"]', { element(e) { e.setInnerContent(name ? `Thank you for watching ${name}'s reveal.` : 'Thank you for watching.'); } })
+        .on('#live-hero [data-s="end-replay"]', setAttrs({ hidden: '' }))
+        .on('#live-hero [data-s="end-wait"]', setAttrs({ hidden: party.replaySoon ? null : '' }));
+    }
     if (party.ctas) rw = ctaFirstPaint(rw, party.ctas, { 'cta-messages': false });
     if (messages) rw = heroMessages(rw, messages);
     if (!kid && party.mode === 'live' && party.generic) rw = rw.on('#live-hero h1', { element(e) { e.setInnerContent("Today's <em>room reveal</em>", { html: true }); } });
@@ -552,7 +564,7 @@ export async function onRequest(context) {
     const kid = isIndex && broadcast ? await currentKid(near, broadcast.state) : null;
     if (kid?.published) kid.card = await cardFor(context, `/live/${kid.slug}/`);
     const party = broadcast ? watchParty(broadcast.pub, { pageKid }) : null;
-    if (party) party.generic = !broadcast.pub.kidSlug;
+    if (party) { party.generic = !broadcast.pub.kidSlug; party.kidName = broadcast.pub.kidName || ''; }
     let bar = null;
     const liveNow = !!broadcast?.pub?.live || party?.mode === 'live';
     if (isIndex && !liveNow) {
@@ -600,9 +612,10 @@ export async function onRequest(context) {
       // The hero's words and buttons for the watch party, by the page script's rules (momentWords, ctasThatApply)
       const pub = broadcast.pub;
       const view = party.mode;
-      const hasPlayer = true;
-      party.words = momentWords({ view, scheduledAt: pub.scheduledAt || null, hasPlayer, source: pub.source, endedAt: pub.endedAt, tz: visitorZone(request) });
-      party.ctas = { display: party.mode, view, scheduledAt: pub.scheduledAt || null, remindUsable, pageKid, inSchedule: false, pastOnPage: false, hasPlayer };
+      // (a video, except once the reveal is over with its replay not here yet: "That's the reveal!" holds the frame)
+      const hasPlayer = !party.ended;
+      party.words = momentWords({ view, scheduledAt: pub.scheduledAt || null, hasPlayer, source: pub.source, endedAt: pub.endedAt, party: true, tz: visitorZone(request) });
+      party.ctas = { display: party.mode, view, scheduledAt: pub.scheduledAt || null, remindUsable, pageKid, inSchedule: false, pastOnPage: false, hasPlayer, source: pub.source };
     }
     // The messages box moves first (it needs the page's text); the rest are streamed rewrites
     const ctaFacts = first ? {

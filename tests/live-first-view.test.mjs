@@ -9,7 +9,7 @@ import { buildSync } from 'esbuild';
 
 const load = (entry) => import(`data:text/javascript,${encodeURIComponent(buildSync({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', packages: 'external' }).outputFiles[0].text)}`);
 const { formatWhen, relativeUntil, revealLabel, daysUntil, dayWords } = await load('src/utils/live-when.ts');
-const { plannedText, betweenText, ctasThatApply, ctaPicks } = await load('src/utils/live-hero-text.ts');
+const { plannedText, betweenText, ctasThatApply, ctaPicks, momentWords, afterReveal } = await load('src/utils/live-hero-text.ts');
 const { firstView, messagesInSection, messageHtml, pastFirst, onRequest, RETIRED_SLATE } = await load('functions/live/[[path]].js');
 
 const NOW = Date.parse('2026-11-10T15:00:00Z'); // Tuesday 10 AM Eastern
@@ -101,6 +101,37 @@ test('the hero’s two buttons: the same rule for the server and the page', () =
   assert.deepEqual(picks({ ...base, pageKid: 'max', display: 'idle', view: 'idle' }), ['cta-remind', 'cta-calendar']);
   // /live/ between reveals: email, then past reveals
   assert.deepEqual(picks({ ...base, pageKid: '', inSchedule: false, display: 'idle', view: 'idle' }), ['cta-remind', 'cta-past']);
+});
+
+test('nobody is sent off to Facebook, except to watch an emergency Facebook-only broadcast (Peter, Nov 18 2026)', () => {
+  const base = { scheduledAt: DYLAN, remindUsable: true, pageKid: 'dylan-2026', inSchedule: true, pastOnPage: true, now: Date.parse(DYLAN) + 3600e3 };
+  const picks = (f) => { const a = ctasThatApply(f); return ctaPicks(f.display, (k) => !!a[k]); };
+  // Live with our video: giving and sharing (no Facebook; "Leave a message" is the message box's own to show)
+  assert.deepEqual(picks({ ...base, display: 'live', view: 'live', hasPlayer: true, source: 'stream' }), ['cta-donate', 'cta-share']);
+  // Our stream with no video yet: still no Facebook
+  assert.equal(ctasThatApply({ ...base, display: 'live', view: 'live', hasPlayer: false, source: 'stream' })['cta-facebook'], false);
+  // The reveal over, its replay on its way, and the replay itself: Share and Fund the next room
+  for (const hasPlayer of [false, true]) {
+    assert.deepEqual(picks({ ...base, display: 'replay', view: 'replay', hasPlayer, source: 'stream' }), ['cta-share', 'cta-donate'], `replay (${hasPlayer ? 'ready' : 'on its way'})`);
+  }
+  // An emergency Facebook-only broadcast: live there, nothing here, so Watch on Facebook; once it's over, not even then
+  assert.deepEqual(picks({ ...base, display: 'live', view: 'live', hasPlayer: false, source: 'manual' }), ['cta-facebook', 'cta-donate']);
+  assert.equal(ctasThatApply({ ...base, display: 'replay', view: 'replay', hasPlayer: false, source: 'manual' })['cta-facebook'], false);
+  // and its words: only it says "live on Facebook"
+  assert.equal(momentWords({ view: 'live', scheduledAt: DYLAN, hasPlayer: false, source: 'manual' }).status, 'We are live on Facebook right now.');
+  assert.equal(momentWords({ view: 'live', scheduledAt: DYLAN, hasPlayer: false, source: 'stream' }).status, '');
+});
+
+test('the reveal over, its replay not here yet: the watch party kept, the frame says it, not the status line', () => {
+  const now = Date.parse(DYLAN) + 3600e3;
+  const endedAt = new Date(now - 5 * 60e3).toISOString();
+  assert.deepEqual(afterReveal({ view: 'replay', hasPlayer: false, source: 'stream', endedAt, now }), { ended: true, replaySoon: true });
+  assert.deepEqual(afterReveal({ view: 'replay', hasPlayer: false, source: 'stream', endedAt: new Date(now - 7 * 3600e3).toISOString(), now }), { ended: true, replaySoon: false }, 'overdue: no promise');
+  assert.equal(afterReveal({ view: 'replay', hasPlayer: true, source: 'stream', endedAt, now }).ended, false, 'the replay ready: its own video');
+  assert.equal(afterReveal({ view: 'replay', hasPlayer: false, source: 'manual', endedAt, now }).ended, false, 'Facebook only: nothing to come back to');
+  assert.equal(afterReveal({ view: 'live', hasPlayer: false, source: 'stream', endedAt, now }).ended, false);
+  assert.equal(momentWords({ view: 'replay', scheduledAt: DYLAN, hasPlayer: false, source: 'stream', endedAt, party: true, now }).status, '');
+  assert.equal(momentWords({ view: 'replay', scheduledAt: DYLAN, hasPlayer: false, source: 'stream', endedAt, now }).status, 'The reveal just ended. The replay will appear here soon.', 'outside the watch party, as before');
 });
 
 test('between reveals, past reveals go before the story in the page itself, so a page that arrives in pieces is drawn in order', () => {

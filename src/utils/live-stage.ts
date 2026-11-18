@@ -27,6 +27,14 @@ export interface StageView {
   /** The broadcast's own phase ('live', 'ending', 'replay', ...): the live video's end note needs to know the phone came
    * back on (live again after it wasn't) rather than the broadcast simply not having moved on yet */
   phase?: string;
+  /**
+   * The reveal over and its replay not here yet (Peter, Nov 18 2026: "why not keep the theater view up for some period
+   * of time after"): the watch party's layout all the same, for everyone, those arriving after the end included, with
+   * "That's the reveal!" in the frame, and Watch the replay on it once the replay is ready. Replay mode, no player
+   */
+  ended?: boolean;
+  /** The replay is on its way (the note says it will be here in a few minutes); false: it's overdue, nothing is promised */
+  replaySoon?: boolean;
 }
 export interface Stage {
   update(view: StageView): void;
@@ -183,7 +191,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     }
     view = next;
     const wasParty = party;
-    party = !!next.player && (next.mode === 'live' || next.mode === 'replay');
+    // (the reveal over, its replay not here yet: the watch party's layout, with the note in the frame: showEnd below)
+    const after = !!next.ended && next.mode === 'replay' && !next.player;
+    party = (!!next.player && (next.mode === 'live' || next.mode === 'replay')) || after;
     root.dataset.mode = next.mode;
     flag('data-party', party);
     root.dataset.orientation = shape();
@@ -225,6 +235,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     }
     if (party && next.mode === 'live' && !watching) { watching = true; client.watch(); }
     if (party !== wasParty || !wasParty || shape() !== told) { told = shape(); opts.onShape?.(told as 'portrait' | 'landscape', party); }
+    if (after) { showEnd(next); return; }
     paint();
     updateDock();
   }
@@ -274,6 +285,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     unmount();
     mounted = '';
     if (next) update(next);
+    // (and it plays, with its sound: the tap was asking for it, never a second tap on the replay's own play)
+    if (player && kind === 'replay') { player.setMuted(false); player.play(); }
     root.focus({ preventScroll: true });
   });
   $('from-start')?.addEventListener('click', () => player?.seekToStart());
@@ -413,7 +426,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     setHidden($('tap'), !(isVideo && !endShown && (pstatus === 'blocked' || (kind === 'live' && pstatus === 'paused'))));
 
     // Bar
-    setHidden($('bar'), !party);
+    // (none under "That's the reveal!" when there's no video at all: someone arriving after the end has nothing to control)
+    setHidden($('bar'), !party || (endShown && !player));
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);
@@ -458,7 +472,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       const t = $('end-text'); if (t) t.textContent = kid ? `Thank you for watching ${kid}'s reveal.` : 'Thank you for watching.';
       const replayReady = endPending?.player?.kind === 'replay';
       setHidden($('end-replay'), !replayReady);
-      setHidden($('end-wait'), replayReady || endPending?.mode === 'idle');
+      // (nothing promised once the replay is overdue)
+      setHidden($('end-wait'), replayReady || endPending?.mode === 'idle' || endPending?.replaySoon === false);
     }
     const cc = $('cc-toggle');
     setHidden(cc, !(kind === 'replay' && hasCaptions && isVideo));

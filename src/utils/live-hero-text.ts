@@ -45,9 +45,11 @@ export interface MomentFacts {
   view: 'upcoming' | 'live' | 'replay';
   scheduledAt: string | null;
   hasPlayer: boolean;
-  /** 'stream' when the reveal went out through our own stream (a replay is on its way) */
+  /** 'stream' when the reveal went out through our own stream (a replay is on its way); 'manual': Facebook only */
   source?: string | null;
   endedAt?: string | null;
+  /** The watch party's layout: the frame itself says what's happening ("That's the reveal!"), so the status line doesn't */
+  party?: boolean;
   tz?: string;
   now?: number;
 }
@@ -61,21 +63,36 @@ export interface MomentFacts {
 export function momentWords(f: MomentFacts): { eyebrow: string; status: string; badge: string } {
   const now = f.now ?? Date.now();
   if (f.view === 'live') {
-    // The video says it all; without one (a Facebook-only broadcast) point people there
-    return { eyebrow: 'Live now', status: f.hasPlayer ? '' : 'We are live on Facebook right now.', badge: 'Live' };
+    // The video says it all. Only an emergency Facebook-only broadcast (no video here) points people there (Peter, Nov 18
+    // 2026: "i dont want to send anyone to Faceboook! they should stay on my website")
+    return { eyebrow: 'Live now', status: !f.hasPlayer && f.source === 'manual' ? 'We are live on Facebook right now.' : '', badge: 'Live' };
   }
   if (f.view === 'replay') {
     // A recording is only on its way from our own stream, and only for a few hours
     const waiting = f.source === 'stream' && !replayOverdue(f.endedAt, now);
     return {
       eyebrow: f.hasPlayer || waiting ? 'Replay' : 'Ended',
-      status: f.hasPlayer ? '' : waiting ? 'The reveal just ended. The replay will appear here soon.' : 'This reveal has ended.',
+      // (in the watch party's layout the frame says it: "That's the reveal!", and the replay in a few minutes)
+      status: f.hasPlayer || f.party ? '' : waiting ? 'The reveal just ended. The replay will appear here soon.' : 'This reveal has ended.',
       badge: f.hasPlayer || waiting ? 'Processing' : 'Ended',
     };
   }
   const rel = relativeUntil(f.scheduledAt, now, f.tz);
   const badge = rel ? `Live ${rel}` : 'Coming up';
   return { ...plannedText(f.scheduledAt, f.tz, now), badge };
+}
+
+/**
+ * The reveal over and its replay not here yet: the page keeps the watch party's layout (Peter, Nov 18 2026: "why not
+ * keep the theater view up for some period of time after"), for everyone, those arriving after the end included, with
+ * "That's the reveal!" in the frame (live-stage.ts: StageView.ended), and Watch the replay on it once it's ready. Our
+ * own stream's reveals only: an emergency Facebook-only one has no video here to come back to. The page script
+ * (LivePage decide) and the server's first paint (functions/live/_watch-party.js) both decide by this.
+ * replaySoon: the replay is still on its way (the note promises it in a few minutes; not once it's overdue)
+ */
+export function afterReveal(f: { view: string; hasPlayer: boolean; source?: string | null; endedAt?: string | null; now?: number }) {
+  const ended = f.view === 'replay' && !f.hasPlayer && f.source === 'stream';
+  return { ended, replaySoon: ended && !replayOverdue(f.endedAt, f.now ?? Date.now()) };
 }
 
 /** Between reveals: a child's page names their own reveal, /live/ the next one ('' when the schedule has nothing to say) */
@@ -102,7 +119,7 @@ export const HERO_CTAS: Record<string, string[]> = {
   idle: ['cta-remind', 'cta-calendar', 'cta-past', 'cta-share', 'cta-donate'],
   upcoming: ['cta-remind', 'cta-calendar', 'cta-share', 'cta-donate'],
   live: ['cta-facebook', 'cta-messages', 'cta-donate', 'cta-share'],
-  replay: ['cta-facebook', 'cta-share', 'cta-donate', 'cta-messages'],
+  replay: ['cta-share', 'cta-donate', 'cta-messages'],
 };
 export const HERO_CTA_MAX = 2;
 
@@ -120,6 +137,8 @@ export interface CtaFacts {
   /** The page has past reveals to jump to */
   pastOnPage: boolean;
   hasPlayer: boolean;
+  /** The broadcast's source: 'manual' is an emergency Facebook-only broadcast (no video here) */
+  source?: string | null;
   now?: number;
 }
 
@@ -134,7 +153,9 @@ export function ctasThatApply(f: CtaFacts): Record<string, boolean> {
     'cta-calendar': (f.display === 'upcoming' && !begun) || (f.display === 'idle' && !!f.pageKid && f.inSchedule),
     'cta-past': f.view === 'idle' && f.pastOnPage,
     'cta-share': f.view !== 'idle',
-    'cta-facebook': (f.view === 'live' || f.view === 'replay') && !f.hasPlayer,
+    // Nobody is sent off to Facebook (Peter, Nov 18 2026), except to watch an emergency Facebook-only broadcast: live,
+    // with no video here
+    'cta-facebook': f.view === 'live' && !f.hasPlayer && f.source === 'manual',
     'cta-donate': true,
   };
 }
