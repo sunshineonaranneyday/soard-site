@@ -176,20 +176,14 @@ test('turning the switch off mid-test keeps that test quiet until the phone stop
 
 test('phone stops: the planned reveal comes back exactly, Facebook comes back, nothing saved to the kid', async () => {
   const n = calls.length;
-  // (Stream still finishing the recording when the test ends: its replay comes a little later)
-  sim.live = false; sim.videoState = 'live-inprogress';
+  sim.live = false; sim.videoState = 'ready';
   let r = await tick();
   assert.equal(r.state.phase, 'ending', 'the usual 45 s grace');
   travel(50 * S);
   r = await tick();
   assert.ok(r.work.includes('test-ended'), r.work.join(','));
-  // The website shows the test's end as the reveal's will: ended, "That's the reveal!", its replay to come
-  assert.equal(r.state.phase, 'replay');
-  assert.equal(r.state.testEnded, true);
-  assert.equal(r.state.kidName, 'Remi');
-  assert.equal(r.state.player, null, 'the replay comes once Stream has the recording ready');
+  assert.equal(r.state.phase, 'scheduled');
   const st = await b.readState(env.DB);
-  assert.equal(st.phase, 'scheduled', 'underneath, the planned reveal is back as it was');
   assert.equal(st.broadcastId, planned.broadcastId);
   assert.equal(st.scheduledAt, planned.scheduledAt);
   assert.equal(st.liveAt, null);
@@ -198,17 +192,9 @@ test('phone stops: the planned reveal comes back exactly, Facebook comes back, n
   assert.equal(outputs.get('fbout').enabled, true, 'Facebook back on');
   assert.equal(outputs.get('ytout').enabled, false, 'the one paused in Settings stays paused');
   assert.deepEqual((await b.readQuiet(env.DB)).paused, []);
-  sim.videoState = 'ready';
   travel(40 * S);
   r = await tick();
-  assert.equal(r.state.phase, 'replay');
-  assert.deepEqual(r.state.player, { kind: 'replay', uid: 'vid1', customerCode: r.state.player?.customerCode }, 'the test recording, as the replay');
-  // Ten minutes after the end, the countdown again
-  travel(10 * M);
-  r = await tick();
-  assert.ok(r.work.includes('test-end-over'), r.work.join(','));
   assert.equal(r.state.phase, 'scheduled');
-  assert.equal(r.state.testEnded, undefined);
   const kid = JSON.parse((await env.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind('remi').first()).data);
   assert.equal(kid.revealVideoUrl, undefined, 'the test recording is not on Remi’s page');
   assert.deepEqual(outward(since(n)), [], 'no replay email, deploy or Reel');
@@ -224,9 +210,7 @@ test('End the test by hand puts the reveal back and keeps the switch on 10 more 
   travel(110 * M); // the switch's own 2 hours are nearly up
   r = await b.adminAction(env, 'endNow', {}, 'peter@test');
   assert.equal(r.success, true, r.error);
-  assert.equal(r.state.phase, 'replay', 'the end shows on the website as the reveal will');
-  assert.equal(r.state.testEnded, true);
-  assert.equal((await b.readState(env.DB)).phase, 'scheduled');
+  assert.equal(r.state.phase, 'scheduled');
   assert.equal((await b.readState(env.DB)).broadcastId, planned.broadcastId);
   assert.ok(Date.parse(r.quiet.until) >= Date.now() + 9 * M, 'switch kept on');
   // The phone is still connected: it starts another test, never the reveal
@@ -308,11 +292,7 @@ test('with nothing planned, a test goes back to idle; a Stream failure keeps the
   sim.live = false;
   await tick(); travel(50 * S);
   const end = await tick();
-  assert.equal(end.state.phase, 'replay');
-  assert.equal(end.state.testEnded, true);
-  assert.equal((await b.readState(env.DB)).phase, 'idle');
-  travel(11 * M);
-  assert.equal((await tick()).state.phase, 'idle');
+  assert.equal(end.state.phase, 'idle');
 });
 
 test('the phone stopping ends it 45 seconds later even while Stream\'s public status still says live', async () => {
@@ -344,47 +324,12 @@ test('the phone stopping ends it 45 seconds later even while Stream\'s public st
   travel(30 * S); // 46 s after the stop
   r = await tick();
   assert.ok(r.work.includes('test-ended'), r.work.join(','));
-  assert.equal(r.state.phase, 'replay', 'its end shows on the website');
-  assert.equal((await b.readState(env.DB)).phase, 'idle');
+  assert.equal(r.state.phase, 'idle');
   travel(5 * S);
   r = await tick();
-  assert.ok(!r.work.includes('test-start'), 'a lifecycle that is only catching up starts nothing');
-  assert.equal((await b.readState(env.DB)).phase, 'idle', 'a lifecycle that is only catching up starts nothing');
+  assert.equal(r.state.phase, 'idle', 'a lifecycle that is only catching up starts nothing');
   sim.live = false; sim.inputState = null; sim.inputSince = null;
   travel(5 * S);
   r = await tick();
-  assert.equal((await b.readState(env.DB)).phase, 'idle');
-  travel(11 * M);
-  r = await tick();
-  assert.equal(r.state.phase, 'idle', 'ten minutes on, the website is back to what it was');
-});
-
-test('a test\'s end on the website: never into the half hour before a planned reveal, and a new test or reveal replaces it', async () => {
-  const s = b.defaultState();
-  const now = Date.now();
-  const test = { ...s, phase: 'live', source: 'stream', quiet: { at: new Date(now - 5 * M).toISOString() }, broadcastId: 'bt1', kidSlug: 'remi', kidName: 'Remi', liveAt: new Date(now - 5 * M).toISOString(), liveVideoUid: 'vidT', recordings: ['vidT'] };
-  // A planned reveal 2 hours away: the end shows for 10 minutes
-  const far = b.tEndQuiet({ ...test, resume: { ...s, phase: 'scheduled', broadcastId: 'bp', kidSlug: 'remi', scheduledAt: new Date(now + 2 * H).toISOString() } }, null, now);
-  assert.equal(far.phase, 'scheduled');
-  assert.equal(Date.parse(far.testEnd.until), now + 10 * M);
-  const shown = b.publicState(far, { customerCode: 'cc' });
-  assert.equal(shown.phase, 'replay');
-  assert.equal(shown.id, 'bt1', 'the test\'s own broadcast, so the page knows its video moved on');
-  assert.equal(shown.player, null);
-  assert.equal(b.publicState({ ...far, testEnd: { ...far.testEnd, replayUid: 'vidT' } }, { customerCode: 'cc' }).player.uid, 'vidT');
-  // A planned reveal 40 minutes away: the end shows only until 30 minutes before it
-  const near = b.tEndQuiet({ ...test, resume: { ...s, phase: 'scheduled', broadcastId: 'bp', scheduledAt: new Date(now + 40 * M).toISOString() } }, null, now);
-  assert.equal(Date.parse(near.testEnd.until), now + 10 * M);
-  const nearer = b.tEndQuiet({ ...test, resume: { ...s, phase: 'scheduled', broadcastId: 'bp', scheduledAt: new Date(now + 35 * M).toISOString() } }, null, now);
-  assert.equal(Date.parse(nearer.testEnd.until), now + 5 * M);
-  // 30 minutes away (armed): nothing shown, the countdown at once
-  const armed = b.tEndQuiet({ ...test, resume: { ...s, phase: 'armed', broadcastId: 'bp', scheduledAt: new Date(now + 30 * M).toISOString() } }, null, now);
-  assert.equal(armed.testEnd, null);
-  assert.equal(b.publicState(armed, { customerCode: 'cc' }).phase, 'armed');
-  // A test with no recording shows no end
-  assert.equal(b.tEndQuiet({ ...test, liveVideoUid: null, recordings: [] }, null, now).testEnd, null);
-  // A new test, or the real reveal, replaces it
-  assert.equal(b.tStartQuiet(far, { videoUid: 'vidU' }, { defaults: {} }).testEnd, null);
-  assert.equal(b.tStartQuiet(far, { videoUid: 'vidU' }, { defaults: {} }).resume.testEnd, null);
-  assert.equal(b.tStartLive(far, { videoUid: 'vidV', source: 'stream' }, { defaults: {} }).testEnd, null);
+  assert.equal(r.state.phase, 'idle');
 });

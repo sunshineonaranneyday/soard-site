@@ -113,8 +113,6 @@ won't pause Facebook, the switch stays off. Tests: `tests/broadcast-quiet.test.m
 
 The rehearsal feed is still the place for a private mic check: nothing on it is public.
 
-**A test ends on the website as the reveal will** (Peter, Nov 18 2026): when a test stops (the phone, a Y to "Is the reveal over?", or End now), the site puts back what the test interrupted as before, but the public page shows the test's end for 10 minutes first (`state.testEnd`, `publicState`): "That's the reveal!", "Thank you for watching", then the test's own recording as the replay with Watch the replay once Stream has it ready (`findTestReplay`), then the countdown again. Never into the half hour before a planned reveal (clipped to 30 minutes before it), and a new test or the real reveal replaces it at once. Shown only: nothing is sent, posted or attached, and the kid's page, History and stats never see it.
-
 ## When the phone stops (or drops)
 
 Stream answers "is a phone sending?" two ways: the public lifecycle (says live once the video plays, and
