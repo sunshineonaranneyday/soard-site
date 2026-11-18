@@ -49,10 +49,10 @@ import { cardFor } from '../_og-cards.js';
 import { edgeSchedule, scheduleAttr } from '../_kid-reveal.js';
 import { onBands } from '../_upcoming-band.js';
 import { heroRowsHtml, rowsSignature, afterLine } from '../../src/utils/upcoming-rows.ts';
-import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords } from '../../src/utils/live-hero-text.ts';
+import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences } from '../../src/utils/live-hero-text.ts';
 import { inviteData, inviteLinks } from '../../src/utils/reveals-client.ts';
 import { messagesOpen, shownMessages } from '../api/_live-messages.js';
-import { messageInitial, messageTone } from '../../src/utils/live-message-look.ts';
+import { messageInitial, messageTone, latestLine, LATEST_HEART } from '../../src/utils/live-message-look.ts';
 import { isAuthenticated } from '../api/_middleware.js';
 import { rehearsalFor } from '../api/_broadcast-rehearsal.js';
 import { nearEnv } from '../api/_read-copy.js';
@@ -165,8 +165,19 @@ function heroMessages(rw, msgs) {
     .on('#msg-body', setAttrs({ placeholder: name ? `${name}, we are so happy for you!` : 'We are so happy for you!' }))
     .on('[data-msgs="form"]', setAttrs({ hidden: msgs.open ? null : '' }))
     .on('[data-msgs="closed"]', setAttrs({ hidden: msgs.open || !count ? '' : null }))
-    .on('[data-msgs="empty"]', setAttrs({ hidden: count || !msgs.open ? '' : null }));
+    .on('[data-msgs="empty"]', setAttrs({ hidden: count || !msgs.open ? '' : null }))
+    .on('[data-msgs="empty-text"]', { element(e) { e.setInnerContent(latestLine(name, null, true).text); } });
   if (count) rw = rw.on('[data-msgs="list"]', { element(e) { e.setInnerContent(msgs.list.map(messageHtml).join(''), { html: true }); } });
+  // The newest message's line under the video on a phone, filled now so it's there with the video (it shows only where
+  // LiveMessages.astro gives it room; live-messages.ts paintLatest keeps it up to date from the same latestLine)
+  const line = show ? latestLine(name, count ? msgs.list[count - 1] : null, !!msgs.open) : null;
+  if (line) {
+    rw = rw
+      .on('[data-msgs="latest"]', setAttrs({ hidden: null, 'aria-label': line.label, 'data-line': line.id }))
+      .on('[data-msgs="latest-av"]', { element(e) { e.setAttribute('data-tone', String(line.tone)); e.setInnerContent(line.heart ? LATEST_HEART : escHtml(line.initial), { html: true }); } })
+      .on('[data-msgs="latest-name"]', { element(e) { e.setInnerContent(line.name); } })
+      .on('[data-msgs="latest-text"]', { element(e) { e.setInnerContent(line.text); } });
+  }
   return rw;
 }
 
@@ -189,7 +200,8 @@ function rewrite(res, { kid, party, messages, design }) {
       // A reveal is on: the frame is the stage, not the "Coming up" list
       .on('.live-page', setAttrs({ 'data-next': null }))
       .on('#live-hero h1', { element(e) { e.setInnerContent(`${esc(kid.name)}'s <em>room reveal</em>`, { html: true }); } });
-    if (kid.summary) rw = rw.on('#live-hero [data-live="lead"]', { element(e) { e.setInnerContent(kid.summary); } });
+    // (in its sentences, as LivePage builds it: leadSentences)
+    if (kid.summary) rw = rw.on('#live-hero [data-live="lead"]', { element(e) { e.setInnerContent(leadSentences(kid.summary).map((t) => `<span class="lead-s">${escHtml(t)}</span>`).join(' '), { html: true }); } });
     // The build's partners, scrolling under the frame, as a child's own page has them from its build (LivePartners.astro)
     const partners = partnersBandInner(bandPartners(kid.data?.partnerLogos));
     if (partners) {
@@ -230,6 +242,8 @@ function rewrite(res, { kid, party, messages, design }) {
       .on('#live-hero [data-s="replaybar"]', setAttrs({ hidden: party.mode === 'replay' ? null : '' }))
       .on('#live-hero [data-s="status"]', { element(e) { e.setInnerContent(party.mode === 'replay' ? 'Replay' : 'Connecting'); } })
       .on('#live-hero [data-s="heart"]', setAttrs({ hidden: '' }))
+      // "Live" by the kid's name (shown where the rail is: LivePage), as the page's script shows it
+      .on('#live-hero [data-live="onair"]', setAttrs({ hidden: party.mode === 'live' ? null : '' }))
       // Full screen, live: there from the moment the player is in the frame (until it plays muted: then "Tap for sound")
       .on('#live-hero [data-s="livebar"] [data-full]', setAttrs({ hidden: party.mode === 'live' ? null : '' }));
     if (party.ctas) rw = ctaFirstPaint(rw, party.ctas, { 'cta-messages': false });

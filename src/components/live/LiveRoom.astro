@@ -27,7 +27,7 @@
 <section class="lrm" data-live-room hidden aria-labelledby="lrm-name">
   <h2 class="sr-only" id="lrm-name" data-lrm="name">The design</h2>
   <div class="lrm-tabs" role="tablist" aria-labelledby="lrm-name" data-lrm="tabs"></div>
-  <div class="lrm-stage" data-lrm="stage" role="tabpanel">
+  <div class="lrm-stage" id="lrm-stage" data-lrm="stage" role="tabpanel" aria-labelledby="lrm-name">
     <button class="lrm-big" type="button" data-lrm="big">
       <span class="lrm-pic" data-lrm="pic"></span>
       <span class="lrm-badge" data-lrm="badge" hidden></span>
@@ -42,7 +42,8 @@
   .lrm { display: none; }
   /* (the Theater layout's width, LivePage: always a computer's layout, DESK in src/utils/live-media.ts) */
   @media (min-width: 1200px) {
-    .hero[data-party][data-orientation='portrait'] .lrm:not([hidden]) { display: block; margin: 0 0 24px; }
+    .hero[data-party][data-orientation='portrait'] .lrm:not([hidden]) { display: block; margin: 0 0 24px; animation: lrmIn 0.45s ease-out both; }
+    @keyframes lrmIn { from { opacity: 0; } }
   }
   /* The switch: the room, the plan, the look (whichever have pictures) */
   .lrm-tabs { display: inline-flex; align-self: flex-start; gap: 2px; padding: 4px; margin: 0 0 14px; border-radius: 100px; background: #fff; border: 1px solid var(--c-border); max-width: 100%; }
@@ -54,7 +55,8 @@
   .lrm-tab:hover { color: var(--c-text); }
   .lrm-tab[aria-selected='true'] { background: var(--c-yellow); color: var(--c-dark); }
   .lrm-tab:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
-  /* The picture: a photo fills a 4:3 card (and drifts in very slowly); a plan sits whole on its white paper */
+  /* The picture: a photo fills its card; a plan sits whole on its white paper. Still: it's beside a video, and nothing
+     next to the reveal moves but the reveal */
   .lrm-big {
     position: relative; display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; border-radius: 18px; overflow: hidden; cursor: zoom-in;
     background: var(--c-warm-gray); box-shadow: 0 18px 44px rgba(30, 31, 37, 0.1), 0 0 0 1px rgba(30, 31, 37, 0.04);
@@ -63,8 +65,9 @@
   .lrm-pic { position: absolute; inset: 0; display: block; }
   .lrm-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 360ms ease; }
   .lrm-pic img.is-in { opacity: 1; }
-  .lrm-pic img[data-kind='before'].is-in { animation: lrmDrift 14s ease-in-out infinite alternate; }
-  @keyframes lrmDrift { from { transform: scale(1.02); } to { transform: scale(1.07) translate(-1%, -0.6%); } }
+  /* (the one it replaces goes at once, so a badge never sits on the wrong picture; its small picture stands in) */
+  .lrm-pic img.is-out { opacity: 0; transition-duration: 120ms; }
+  .lrm-pic img.is-stand { opacity: 1; transition: none; }
   .lrm-big[data-paper] { background: #fff; }
   .lrm-big[data-paper] .lrm-pic img { object-fit: contain; padding: 12px; }
   .lrm-badge {
@@ -77,6 +80,7 @@
   .lrm-big[data-sheet] .lrm-badge { left: auto; right: 12px; }
   .lrm-cap { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 12px 2px; font-size: 13.5px; color: var(--c-text-muted); }
   .lrm-cap b { color: var(--c-text); font-weight: 700; }
+  .lrm-cap b:empty { display: none; }
   .lrm-cap span { white-space: nowrap; }
   /* The rest, small: a click shows one above */
   .lrm-thumbs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -85,15 +89,15 @@
     position: relative; display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
     background: #fff; box-shadow: 0 0 0 1px var(--c-border); transition: box-shadow 160ms ease, transform 160ms ease;
   }
-  .lrm-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; opacity: 0.68; transition: opacity 160ms ease; }
-  .lrm-thumbs[data-paper] .lrm-thumb img { object-fit: contain; padding: 4px; opacity: 0.85; }
-  .lrm-thumb:hover img, .lrm-thumb[aria-current='true'] img { opacity: 1; }
+  /* (all at full strength: a dimmed one reads as switched off; the one showing big has the ring) */
+  .lrm-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+  .lrm-thumbs[data-paper] .lrm-thumb img { object-fit: contain; padding: 4px; }
   .lrm-thumb:hover { transform: translateY(-1px); }
   .lrm-thumb[aria-current='true'] { box-shadow: 0 0 0 2px var(--c-yellow), 0 0 0 3px var(--c-dark); }
   .lrm-thumb:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 3px; }
   @media (prefers-reduced-motion: reduce) {
     .lrm-pic img, .lrm-thumb, .lrm-thumb img, .lrm-tab { transition: none; }
-    .lrm-pic img[data-kind='before'].is-in { animation: none; }
+    .lrm { animation: none !important; }
     .lrm-thumb:hover { transform: none; }
   }
 </style>

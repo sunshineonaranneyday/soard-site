@@ -207,7 +207,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     clearTimeout(connectingTimer);
     slowConnect = false;
     // Only say "loading" when it is actually slow
-    if (st === 'connecting') connectingTimer = setTimeout(() => { slowConnect = true; paint(); }, 2500);
+    // (after a moment: a blank frame with no words reads as broken; the note fades in, LiveStage.astro)
+    if (st === 'connecting') connectingTimer = setTimeout(() => { slowConnect = true; paint(); }, 800);
     if (st === 'playing' && kind === 'replay' && !replayBeacon) { replayBeacon = true; client.beacon('click_replay'); }
     if (st === 'iframe') attachMedia();
     paint();
@@ -252,6 +253,35 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   }
 
   // ── Painting ────────────────────────────────────────────────────
+  // The controls come and go as the picture starts and the sound goes on (Tap for sound, then Sound; the heart once
+  // it's on air). In the rail, the ones that stay glide to their new places instead of jumping there, and one that
+  // comes grows in (LiveStage.astro). Measured only when one of them is about to come or go
+  function railChange(shows: Map<HTMLElement | null, boolean>) {
+    const railEnd = root.querySelector<HTMLElement>('[data-s="livebar"] .bar__end');
+    const changing = [...shows].some(([el, show]) => el && el.hidden === show);
+    const glide = changing && !reduced && !!railEnd && root.hasAttribute('data-rail');
+    const items = glide && railEnd ? ([...railEnd.children] as HTMLElement[]).filter((el) => !el.hidden && shows.get(el) !== false) : [];
+    const tops = items.map((el) => el.getBoundingClientRect().top);
+    // A control that goes while it has the keyboard's focus hands it on: Tap for sound to Sound and back, else the first
+    // control still there (the focus would otherwise drop to the page, and a screen reader lose its place)
+    const focused = document.activeElement as HTMLElement | null;
+    for (const [el, show] of shows) setHidden(el, !show);
+    if (focused && focused.hidden && shows.has(focused)) {
+      const twin = focused === $('sound') ? $('mute') : focused === $('mute') ? $('sound') : null;
+      const next = twin && !twin.hidden ? twin : [...shows.keys()].find((el) => el && !el.hidden && root.contains(el));
+      next?.focus({ preventScroll: true });
+    }
+    items.forEach((el, i) => {
+      const dy = tops[i] - el.getBoundingClientRect().top;
+      if (Math.abs(dy) <= 0.5) return;
+      // (gliding, it's drawn over where the one that came now is: it takes no taps until it's there, so a quick tap on
+      // Tap for sound as it appears is never a tap on Full screen passing over it)
+      el.style.pointerEvents = 'none';
+      const glide = el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+      const done = () => { el.style.pointerEvents = ''; };
+      glide.onfinish = done; glide.oncancel = done;
+    });
+  }
   function paint() {
     const v = video();
     const isVideo = !!player && pstatus !== 'iframe';
@@ -289,14 +319,20 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // The number and its word apart, so the word can step aside first on a narrow bar
     const cn = $('count-num'); const cw = $('count-word');
     if (count) { if (cn) cn.textContent = viewers.toLocaleString(); if (cw) cw.textContent = 'watching'; }
-    // Muted: one clear "Tap for sound". After that: sound, a heart, full screen
+    // Muted: one clear "Tap for sound". After that: sound, a heart, full screen. In the rail, and in full screen (where
+    // there's no other way back out on a computer or an Android phone but Esc or Back), all three from the start
     const soundCta = live && isVideo && showing && muted;
-    setHidden($('sound'), !soundCta);
+    const roomy = rail || document.fullscreenElement === root || !soundCta;
     const mute = $('mute');
-    setHidden(mute, !(live && isVideo && showing && !muted));
-    mute?.setAttribute('aria-label', muted ? 'Turn sound on' : 'Mute');
-    setHidden($('heart'), !(live && (rail || !soundCta) && (onAir || !isVideo)));
-    root.querySelectorAll<HTMLElement>('[data-full]').forEach((b) => setHidden(b, !(isVideo && (kind === 'replay' || (live && (rail || !soundCta))))));
+    // (a switch named by its word, "Sound", so a voice saying what's on screen reaches it; pressed: the sound is on)
+    mute?.setAttribute('aria-pressed', String(!muted));
+    const shows = new Map<HTMLElement | null, boolean>([
+      [$('sound'), soundCta],
+      [mute, live && isVideo && showing && !muted],
+      [$('heart'), live && roomy && (onAir || !isVideo)],
+      ...[...root.querySelectorAll<HTMLElement>('[data-full]')].map((b) => [b, isVideo && (kind === 'replay' || (live && roomy))] as [HTMLElement, boolean]),
+    ]);
+    railChange(shows);
     const cc = $('cc-toggle');
     setHidden(cc, !(kind === 'replay' && hasCaptions && isVideo));
     cc?.setAttribute('aria-pressed', String(ccOn));
@@ -521,47 +557,59 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // sends (a few at most at once). In a bar, yours pops and others' make it beat. Never over the picture, no numbers ──
   const heart = $('heart');
   const rise = $('rise');
-  const bump = (cls: string, ms: number) => {
-    if (!heart || reduced) return;
+  const bump = (cls: string, ms: number, evenStill = false) => {
+    if (!heart || (reduced && !evenStill)) return;
     heart.classList.remove(cls); void heart.offsetWidth; heart.classList.add(cls);
     setTimeout(() => heart.classList.remove(cls), ms);
   };
   const HEART_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>';
-  // Mostly the brand's yellow, now and then its pale yellow or its ink, so a stream of them reads as many people
-  const HEART_COLORS = ['var(--c-yellow)', 'var(--c-yellow)', 'var(--c-yellow)', 'var(--c-yellow-soft)', 'var(--c-text)'];
   const floats = new Set<ReturnType<typeof setTimeout>>();
   const later = (fn: () => void, ms: number) => { const t = setTimeout(() => { floats.delete(t); fn(); }, ms); floats.add(t); };
-  function floatHeart(big: boolean) {
-    if (!rise || reduced || !root.hasAttribute('data-rail') || rise.childElementCount > 40) return;
+  // One heart up the column beside the picture: all the brand's yellow, each its own size, strength and lane (left,
+  // middle, right), so a burst fans out and reads as many hearts, not one lump. As high as the column goes, however
+  // short (a small phone's is a few dozen pixels), and quick, so they don't pile up
+  function floatHeart(big: boolean, lane = Math.floor(Math.random() * 3)) {
+    // (not while the page is out of sight: a hidden tab's animations never run, so they'd all rise at once on return)
+    if (!rise || reduced || document.hidden || !root.hasAttribute('data-rail') || rise.childElementCount > 16) return;
     const h = document.createElement('span');
     h.className = 'float';
-    const sway = () => `${Math.round((Math.random() - 0.5) * 26)}px`;
-    const sz = big ? 18 + Math.random() * 12 : 14 + Math.random() * 8;
+    const sway = () => `${Math.round((Math.random() - 0.5) * 16)}px`;
+    const sz = big ? 20 + Math.random() * 8 : 14 + Math.random() * 6;
     const v: Record<string, string> = {
-      '--sz': `${sz.toFixed(1)}px`, '--dx': `${((Math.random() - 0.5) * 10).toFixed(1)}px`, '--up': `${Math.max(80, rise.clientHeight - 24)}px`,
+      '--sz': `${sz.toFixed(1)}px`, '--dx': `${((lane % 3) - 1) * 12 + (Math.random() - 0.5) * 4}px`, '--up': `${Math.max(24, rise.clientHeight - 12)}px`,
       '--s1': sway(), '--s2': sway(), '--s3': sway(),
-      '--r1': `${Math.round((Math.random() - 0.5) * 30)}deg`, '--r2': `${Math.round((Math.random() - 0.5) * 30)}deg`,
-      '--d': `${(2.4 + Math.random() * 1.2).toFixed(2)}s`, '--c': HEART_COLORS[Math.floor(Math.random() * HEART_COLORS.length)],
+      '--r1': `${Math.round((Math.random() - 0.5) * 24)}deg`, '--r2': `${Math.round((Math.random() - 0.5) * 24)}deg`,
+      '--d': `${(1.5 + Math.random() * 0.6).toFixed(2)}s`, '--o': (0.85 + Math.random() * 0.15).toFixed(2),
     };
     for (const [k, val] of Object.entries(v)) h.style.setProperty(k, val);
     h.innerHTML = HEART_SVG;
     h.addEventListener('animationend', () => h.remove(), { once: true });
     rise.append(h);
   }
+  // Your own taps come back in the hub's next batch or two (every 400 ms): they're taken off those, so you see everyone
+  // else's. Only recent ones: the hub lets only so many through from one page, and the rest never come back to take off
   let mine = 0;
+  let mineAt = 0;
+  // (said once in a while, not for every tap of a run of them)
+  let saidAt = 0;
   heart?.addEventListener('click', () => {
-    bump('is-pop', 160);
-    if (root.hasAttribute('data-rail')) for (let i = 0; i < 7; i++) later(() => floatHeart(true), i * 70);
-    if (client.react('heart')) mine++;
+    bump('is-pop', 380);
+    // With reduced motion there are no hearts going up: the button goes dark for a moment instead, nothing moving
+    if (reduced) bump('is-sent', 600, true);
+    const said = $('said');
+    if (said && Date.now() - saidAt > 4000) { saidAt = Date.now(); said.textContent = ''; requestAnimationFrame(() => { said.textContent = 'Love sent to the family'; }); }
+    if (root.hasAttribute('data-rail')) for (let i = 0; i < 4; i++) later(() => floatHeart(true, i + 1), i * 110);
+    if (client.react('heart')) { mine++; mineAt = Date.now(); }
   });
   const offs: (() => void)[] = [];
   offs.push(client.on('react', ({ c }) => {
     if (view.mode !== 'live') return;
     const total = Object.values(c).reduce((n, v) => n + (Number(v) || 0), 0);
+    if (Date.now() - mineAt > 1500) mine = 0;
     const theirs = total - Math.min(mine, total);
     mine = Math.max(0, mine - total);
     if (theirs <= 0) return;
-    if (root.hasAttribute('data-rail')) for (let i = 0; i < Math.min(theirs, 6); i++) later(() => floatHeart(false), i * 140);
+    if (root.hasAttribute('data-rail')) for (let i = 0; i < Math.min(theirs, 4); i++) later(() => floatHeart(false), i * 160);
     else bump('is-beat', 600);
   }));
   offs.push(client.on('viewers', ({ n }) => { viewers = n; paint(); }));
@@ -575,13 +623,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (!picture || on === docked) return;
     docked = on;
     if (on) {
-      // Sit above the auction bar when one is showing, and above anything docked at the screen's foot (the box to write
-      // a message on a phone, data-bottom-bar: LiveMessages.astro)
-      let off = 0;
-      for (const bar of document.querySelectorAll<HTMLElement>('.auction-bar, [data-bottom-bar]')) {
-        const st = getComputedStyle(bar);
-        if (bar.offsetHeight && st.display !== 'none' && (bar.matches('.auction-bar') || st.position === 'fixed')) off += bar.offsetHeight;
-      }
+      // Sit above the auction bar when one is showing (the box to write a message on a phone is the page's own to know
+      // from the first paint: LiveStage.astro, --live-dock)
+      const bar = document.querySelector<HTMLElement>('.auction-bar');
+      const off = bar && bar.offsetHeight && getComputedStyle(bar).display !== 'none' ? bar.offsetHeight : 0;
       picture.style.setProperty('--dock-bottom', `${off}px`);
       const label = $('dock-label'); if (label) label.textContent = view.mode === 'replay' ? 'Replay' : 'Live';
     }
@@ -626,7 +671,12 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     io.observe(screen);
   }
   // (data-fullscreen: what LiveStage's full-screen layout keys on, in place of :fullscreen, which older Safari can't read)
-  const onFullscreen = () => { flag('data-fullscreen', document.fullscreenElement === root); paint(); updateDock(); refit(); };
+  const onFullscreen = () => {
+    const full = document.fullscreenElement === root;
+    flag('data-fullscreen', full);
+    root.querySelectorAll<HTMLElement>('[data-full]').forEach((b) => { b.setAttribute('aria-label', full ? 'Exit full screen' : 'Full screen'); b.title = full ? 'Exit full screen (F)' : 'Full screen (F)'; });
+    paint(); updateDock(); refit();
+  };
   const onSideways = () => paint();
   sideways.addEventListener('change', onSideways);
   document.addEventListener('fullscreenchange', onFullscreen);

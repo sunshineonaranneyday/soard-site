@@ -14,7 +14,7 @@
  */
 import { trapValue } from '../../functions/api/_bot-trap.js';
 import { rehearsal, type LiveClient, type LiveMessage } from './live-client';
-import { messageInitial, messageTone } from './live-message-look';
+import { messageInitial, messageTone, latestLine, LATEST_HEART } from './live-message-look';
 
 export interface MessagesView {
   /** A broadcast is on (scheduled, live or replay) and it is this page's kid */
@@ -141,32 +141,24 @@ export function createMessages(opts: Options) {
   }
 
   // ── The newest message, in one line under the video on a phone (LiveMessages.astro); a tap goes to them all ──
+  // (the server drew it into the page already, from the same latestLine: data-line says which it shows)
   const latest = $<HTMLButtonElement>('latest');
-  let latestId = '';
-  const HEART = '<svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>';
+  let latestId = latest && !latest.hidden ? latest.dataset.line || '' : '';
   function paintLatest(arrived = false) {
     if (!latest) return;
     const li = list?.lastElementChild as HTMLElement | null;
-    const id = li?.dataset.id || (open ? `first:${view.kidName || ''}` : '');
-    setHidden(latest, !id);
-    if (!id || id === latestId) return;
-    latestId = id;
-    // None yet: the line asks for the first (a tap goes to the box)
-    if (!li) {
-      const av = $('latest-av'); if (av) { av.innerHTML = HEART; av.dataset.tone = '0'; }
-      const n = $('latest-name'); if (n) n.textContent = '';
-      const t = $('latest-text'); if (t) t.textContent = view.kidName ? `Be the first to write to ${view.kidName}'s family` : 'Be the first to leave a message';
-      latest.setAttribute('aria-label', 'Be the first to leave a message');
-      return;
-    }
-    const av = $('latest-av'); const src = li.querySelector<HTMLElement>('.msg__av');
-    if (av) { av.textContent = src?.textContent || ''; av.dataset.tone = src?.dataset.tone || '0'; }
-    const name = li.querySelector('.msg__name')?.textContent || '';
-    const body = li.querySelector('.msg__body')?.textContent || '';
-    const n = $('latest-name'); if (n) n.textContent = name;
-    const t = $('latest-text'); if (t) t.textContent = body;
-    latest.setAttribute('aria-label', `Newest message, from ${name}: ${body}. See every message`);
-    if (arrived && !reduced) { latest.classList.remove('is-new'); void latest.offsetWidth; latest.classList.add('is-new'); }
+    const newest = li?.dataset.id ? { id: li.dataset.id, name: li.querySelector('.msg__name')?.textContent || '', body: li.querySelector('.msg__body')?.textContent || '' } : null;
+    const line = latestLine(view.kidName, newest, open);
+    setHidden(latest, !line);
+    if (!line || line.id === latestId) return;
+    latestId = line.id;
+    latest.dataset.line = line.id;
+    const av = $('latest-av');
+    if (av) { if (line.heart) av.innerHTML = LATEST_HEART; else av.textContent = line.initial || ''; av.dataset.tone = String(line.tone); }
+    const n = $('latest-name'); if (n) n.textContent = line.name;
+    const t = $('latest-text'); if (t) t.textContent = line.text;
+    latest.setAttribute('aria-label', line.label);
+    if (arrived && newest && !reduced) { latest.classList.remove('is-new'); void latest.offsetWidth; latest.classList.add('is-new'); }
   }
   latest?.addEventListener('animationend', () => latest.classList.remove('is-new'));
   latest?.addEventListener('click', () => {
@@ -174,8 +166,7 @@ export function createMessages(opts: Options) {
     (wall || list)?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center' });
     toEnd();
   });
-  // (the messages the server drew into the page: their newest is the line's from the start)
-  paintLatest();
+  // (nothing to paint until the page says whose reveal it is, update(): the server drew the line as it should be)
   function remove(id: string) {
     ids.delete(id);
     const li = list?.querySelector<HTMLElement>(`[data-id="${CSS.escape(id)}"]`);
@@ -217,35 +208,72 @@ export function createMessages(opts: Options) {
   const poll = setInterval(() => { if (broadcast && !(client.connected && relayed) && !document.hidden && shown) load(false); }, POLL_MS);
 
   // ── The box, docked at the bottom of a phone's screen (LiveMessages.astro) ──
-  // It's fixed to the page's bottom, which an on-screen keyboard covers: while it's up, the box rides on top of it (the
-  // visible part of the page, visualViewport). And the page knows how tall it is (--live-dock): the page's foot leaves
-  // that much room, and the corner video sits above it (live-stage.ts, data-bottom-bar)
+  // Its height at rest is the page's to know (LiveMessages.astro sets --live-dock from the first paint: the page's foot
+  // leaves that room and the video's size counts it), so nothing here measures it. It's fixed to the page's bottom,
+  // which an on-screen keyboard covers: while someone types in it, it rides on top of the keyboard (the visible part of
+  // the page, visualViewport). Only then: someone zoomed in with no keyboard up also has a smaller visible part, and
+  // the box mustn't chase it around the page
   const compose = $('compose');
   const docked = () => !!compose && getComputedStyle(compose).position === 'fixed';
   const vv = window.visualViewport;
+  let kbFrame = 0;
   const onViewport = () => {
     if (!compose) return;
-    const kb = docked() && vv ? Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop)) : 0;
+    const typingHere = compose.contains(document.activeElement) && docked();
+    const kb = typingHere && vv && vv.scale < 1.05 ? Math.max(0, Math.round(innerHeight - vv.height - vv.offsetTop)) : 0;
     if (kb) compose.style.setProperty('--kb', `${kb}px`); else compose.style.removeProperty('--kb');
+    // (with the keyboard up the box sits on it, not over the home bar: no room kept for that, LiveMessages.astro)
+    if (kb) compose.dataset.kb = ''; else delete compose.dataset.kb;
   };
-  vv?.addEventListener('resize', onViewport);
-  vv?.addEventListener('scroll', onViewport);
-  const root = document.documentElement;
-  const sizeDock = () => {
-    // (at rest: while someone's in it, it shows its "Writing as" line too, and the page above mustn't move for that)
-    if (compose?.contains(document.activeElement)) return;
-    const h = docked() && compose ? Math.round(compose.getBoundingClientRect().height) : 0;
-    if (h) root.style.setProperty('--live-dock', `${h}px`); else root.style.removeProperty('--live-dock');
-  };
-  // (a frame later: the page laid out again for the new height inside the observer's own pass is a loop browsers warn about)
-  let dockFrame = 0;
-  const dockWatch = compose && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => {
-    cancelAnimationFrame(dockFrame);
-    dockFrame = requestAnimationFrame(() => { sizeDock(); onViewport(); });
-  }) : null;
-  if (compose) dockWatch?.observe(compose);
-  // (its position changes with the layout, not its size: a turn sideways undocks it)
-  addEventListener('resize', sizeDock);
+  const onViewportSoon = () => { cancelAnimationFrame(kbFrame); kbFrame = requestAnimationFrame(onViewport); };
+  vv?.addEventListener('resize', onViewportSoon);
+  vv?.addEventListener('scroll', onViewportSoon);
+  compose?.addEventListener('focusin', onViewportSoon);
+  compose?.addEventListener('focusout', onViewportSoon);
+  // An iPhone scrolls the page as its keyboard comes up, to show the box above it (the video goes off the top). Once
+  // you're done writing, the page goes back to where you were, the video, unless you scrolled it yourself meanwhile
+  let restoreY: number | null = null;
+  let scrolledSelf = false;
+  let restoreTimer: ReturnType<typeof setTimeout> | undefined;
+  compose?.addEventListener('focusin', (e) => {
+    if (!docked() || compose?.contains(e.relatedTarget as Node | null)) return;
+    clearTimeout(restoreTimer);
+    restoreY = scrollY; scrolledSelf = false;
+  });
+  const onSelfScroll = () => { if (restoreY !== null) scrolledSelf = true; };
+  addEventListener('touchmove', onSelfScroll, { passive: true });
+  addEventListener('wheel', onSelfScroll, { passive: true });
+  compose?.addEventListener('focusout', (e) => {
+    if (restoreY === null || compose?.contains(e.relatedTarget as Node | null)) return;
+    const y = restoreY;
+    restoreY = null;
+    if (scrolledSelf) return;
+    // (once the keyboard has gone and the page has its height back)
+    restoreTimer = setTimeout(() => {
+      if (compose?.contains(document.activeElement) || Math.abs(scrollY - y) < 8) return;
+      scrollTo({ top: y, behavior: reduced ? 'auto' : 'smooth' });
+    }, 350);
+  });
+
+  // The example in the empty box: the kid's name in it when it fits on the box's one line, a shorter one when it doesn't
+  // (a box can't end a line in "…", and the example was cut off mid-word in a narrow one)
+  const area = panel.querySelector<HTMLTextAreaElement>('textarea');
+  const measure = document.createElement('canvas').getContext('2d');
+  let told = false; // (the server's example stands until the page says whose reveal it is: update())
+  function fitPlaceholder() {
+    if (!area || !told) return;
+    const kid = view.kidName ? `${view.kidName}, we are so happy for you!` : '';
+    const options = [kid, 'We are so happy for you!', 'So happy for you!'].filter(Boolean);
+    const room = area.clientWidth - 2;
+    let pick = options[0];
+    if (measure && room > 0) {
+      measure.font = getComputedStyle(area).font;
+      pick = options.find((t) => measure.measureText(t).width <= room) || options[options.length - 1];
+    }
+    if (area.placeholder !== pick) area.placeholder = pick;
+  }
+  const areaWatch = area && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => fitPlaceholder()) : null;
+  if (area) areaWatch?.observe(area);
 
   // ── Posting ─────────────────────────────────────────────────────
   function store(key: string, value?: string) {
@@ -259,6 +287,10 @@ export function createMessages(opts: Options) {
     const count = $('count');
     const note = $('note');
     const send = $('send');
+    // A tap on the arrow never takes the focus from where you're typing: the keyboard stays up for the next message, as
+    // a chat's does, and nothing in the box moves between the finger touching the arrow and lifting off it (on an
+    // iPhone the box used to change shape as the keyboard went, and the tap landed beside the arrow: nothing sent)
+    send?.addEventListener('mousedown', (e) => e.preventDefault());
     if (nameInput) nameInput.value = store('soard-live-name');
     // The box grows with what's typed (to about five lines, then it scrolls), the count shows once it's getting long,
     // and the arrow turns yellow when there's something to send
@@ -273,18 +305,36 @@ export function createMessages(opts: Options) {
       send?.classList.toggle('is-ready', (bodyInput?.value.trim().length || 0) >= 2);
       fitBody();
     };
-    bodyInput?.addEventListener('input', typed);
-    // Enter posts, Shift+Enter is a new line, like every chat
-    bodyInput?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); form.requestSubmit(); } });
-    const say = (text: string, error = false) => { if (note) { note.className = error ? 'remind-note remind-note--error' : 'remind-note'; note.textContent = text; } };
+    // Enter posts (the keyboard's Send key too). A message is one paragraph, as it's posted and kept for the family, so
+    // Shift+Enter makes no new line either; pasted lines join with a space
+    bodyInput?.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      if (!e.shiftKey) form.requestSubmit();
+    });
+    bodyInput?.addEventListener('input', () => { if (bodyInput.value.includes('\n')) { const at = bodyInput.selectionStart; bodyInput.value = bodyInput.value.replace(/\s*\n\s*/g, ' '); bodyInput.setSelectionRange(at, at); } });
+    let noteTimer: ReturnType<typeof setTimeout> | undefined;
+    let posting = false;
+    const say = (text: string, error = false, forMs = 0) => {
+      clearTimeout(noteTimer);
+      if (!note) return;
+      note.className = error ? 'remind-note remind-note--error' : 'remind-note';
+      note.textContent = text;
+      if (forMs) noteTimer = setTimeout(() => { if (note && note.textContent === text) note.textContent = ''; }, forMs);
+    };
+    // A note is about what was just sent (or tried): once you write again, it's done
+    bodyInput?.addEventListener('input', () => { typed(); if (!posting && note?.textContent) say(''); });
+    nameInput?.addEventListener('input', () => { if (!posting && note?.textContent) say(''); });
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      // (once at a time: Enter again before the first is back would post it twice; the button is off meanwhile, Enter isn't)
+      if (posting) return;
       const btn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
       const name = nameInput?.value.trim() || '';
       const text = bodyInput?.value.trim() || '';
       if (!name) { say('Add your first name.', true); nameInput?.focus(); return; }
       if (text.length < 2) { say('Write a little more.', true); bodyInput?.focus(); return; }
-      btn.disabled = true; say('Posting…');
+      btn.disabled = true; posting = true; say('Posting…');
       try {
         const res = await fetch(MESSAGES_URL, {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
@@ -295,7 +345,8 @@ export function createMessages(opts: Options) {
           store('soard-live-name', name);
           if (bodyInput) bodyInput.value = '';
           typed();
-          if (data.status === 'shown' && data.message) { add(data.message, true, true); say('Posted. Thank you!'); }
+          // (posted: your message on the wall says so, so the note goes after a moment; one held for a person stays)
+          if (data.status === 'shown' && data.message) { add(data.message, true, true); say('Posted. Thank you!', false, 3500); }
           else say('Thank you! Your message will show up once someone on our team takes a look.');
         } else {
           say(data.error || 'Something went wrong. Please try again.', true);
@@ -303,7 +354,7 @@ export function createMessages(opts: Options) {
       } catch {
         say('No connection. Please try again.', true);
       } finally {
-        btn.disabled = false;
+        btn.disabled = false; posting = false;
       }
     });
   }
@@ -313,8 +364,10 @@ export function createMessages(opts: Options) {
       view = next;
       const heading = $('heading');
       if (heading) heading.textContent = next.kidName ? `Messages for ${next.kidName}'s family` : 'Messages for the family';
-      const area = panel.querySelector<HTMLTextAreaElement>('textarea');
-      if (area) area.placeholder = next.kidName ? `${next.kidName}, we are so happy for you!` : 'We are so happy for you!';
+      told = true;
+      fitPlaceholder();
+      const empty = $('empty-text');
+      if (empty) empty.textContent = latestLine(next.kidName, null, true)?.text || 'Be the first to leave a message';
       if (!next.active) { broadcast = ''; open = false; }
       else if (next.broadcastId !== broadcast) { broadcast = next.broadcastId || ''; load(true); }
       paint();
@@ -323,12 +376,13 @@ export function createMessages(opts: Options) {
     destroy() {
       clearInterval(poll);
       for (const off of offs) off();
-      vv?.removeEventListener('resize', onViewport);
-      vv?.removeEventListener('scroll', onViewport);
-      removeEventListener('resize', sizeDock);
-      dockWatch?.disconnect();
-      cancelAnimationFrame(dockFrame);
-      root.style.removeProperty('--live-dock');
+      vv?.removeEventListener('resize', onViewportSoon);
+      vv?.removeEventListener('scroll', onViewportSoon);
+      cancelAnimationFrame(kbFrame);
+      areaWatch?.disconnect();
+      removeEventListener('touchmove', onSelfScroll);
+      removeEventListener('wheel', onSelfScroll);
+      clearTimeout(restoreTimer);
     },
   };
 }

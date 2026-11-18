@@ -156,6 +156,15 @@ test('a whole family on one wifi can all post', async () => {
   }
 });
 
+test('two of the family on one wifi can write the same words (a repeat is the same person, not the same address)', async () => {
+  for (const clientId of ['aunt-1', 'uncle-1']) {
+    const res = await post({ name: clientId.startsWith('aunt') ? 'Rosa' : 'Teo', body: 'Congratulations Axel!!', clientId }, '198.51.100.7');
+    assert.equal(res.status, 200, clientId);
+  }
+  // ...while the same person sending it again is still a repeat
+  assert.equal((await post({ name: 'Rosa', body: 'Congratulations Axel!!', clientId: 'aunt-1' }, '198.51.100.7')).status, 409);
+});
+
 test('duplicates and the honeypot', async () => {
   assert.equal((await post({ name: 'Kim', body: 'A fourth note', clientId: 'c5' })).status, 409);
   const before = (await m.adminList(env)).messages.length;

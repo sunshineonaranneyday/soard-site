@@ -66,7 +66,8 @@ const ZEFFY_EMBED = formLinks(requireSiteForm(siteSettings, 'liveUrl'))!.embed;
   /* Desktop: down the left side, over the messages; the video on the right keeps playing */
   /* (PHONE, DESK and SIDE: word for word as in src/utils/live-media.ts) */
   @media (min-width: 961px) and (pointer: fine), (min-width: 961px) and (pointer: none), (min-width: 961px) and (min-height: 541px), (min-width: 961px) and (max-aspect-ratio: 1749/1000), (min-width: 1024px) {
-    .give { top: calc(var(--header-height) + 12px); bottom: 12px; left: 12px; width: min(460px, 40vw); }
+    /* (--give-max: the room left of the video, live-give.ts) */
+    .give { top: calc(var(--header-height) + 12px); bottom: 12px; left: 12px; width: min(460px, 40vw, var(--give-max, 460px)); }
     .give__panel { border-radius: 20px; }
     @keyframes giveIn { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
   }
