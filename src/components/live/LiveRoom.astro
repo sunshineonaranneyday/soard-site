@@ -16,6 +16,10 @@
  *   The room before        1 of 5 · click to see it big
  *   ▢ ▢ ▢ ▢ ▢                     a click shows that one above
  *
+ * The plan's first picture is its compare (Peter, Nov 18 2026): the floor
+ * plan today and the new one on one picture, a line between them to drag
+ * (plan-compare.ts, compare-slider.ts), then the designer's two sheets.
+ *
  * The same pictures and badges as the design section under the hero and the
  * viewer: live-design.ts fills all three (createLiveDesign's room). Shown only
  * on a computer with an upright video during the watch party; a phone has the
@@ -32,6 +36,9 @@
       <span class="lrm-pic" data-lrm="pic"></span>
       <span class="lrm-badge" data-lrm="badge" hidden></span>
     </button>
+    <!-- The plan's compare, in the big picture's place when it's the one showing (live-design.ts fills it: drag the line;
+         its corner button, or a click that isn't a drag, opens it big) -->
+    <div class="lrm-cmp" data-lrm="cmp" hidden></div>
     <p class="lrm-cap"><b data-lrm="cap"></b><span data-lrm="count"></span></p>
     <ul class="lrm-thumbs" data-lrm="thumbs"></ul>
   </div>
@@ -62,6 +69,8 @@
     background: var(--c-warm-gray); box-shadow: 0 18px 44px rgba(30, 31, 37, 0.1), 0 0 0 1px rgba(30, 31, 37, 0.04);
   }
   .lrm-big:focus-visible { outline: 3px solid var(--c-dark); outline-offset: 3px; }
+  /* (the compare in its place: gone, not just covered) */
+  .lrm-big[hidden] { display: none; }
   .lrm-pic { position: absolute; inset: 0; display: block; }
   .lrm-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 360ms ease; }
   .lrm-pic img.is-in { opacity: 1; }
@@ -92,6 +101,17 @@
   /* (all at full strength: a dimmed one reads as switched off; the one showing big has the ring) */
   .lrm-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
   .lrm-thumbs[data-paper] .lrm-thumb img { object-fit: contain; padding: 4px; }
+  /* The compare in the big picture's place: as big as the room allows at its own shape, centred */
+  .lrm-cmp { position: relative; width: 100%; aspect-ratio: 4 / 3; container-type: size; display: grid; place-items: center; }
+  .lrm-cmp[hidden] { display: none; }
+  .lrm-cmp .pcmp {
+    width: min(100cqw, calc(100cqh / var(--pcmp-r, 1))); border-radius: 18px;
+    box-shadow: 0 18px 44px rgba(30, 31, 37, 0.1), 0 0 0 1px rgba(30, 31, 37, 0.06);
+  }
+  /* Its small picture: the two plans, half and half, with the line */
+  .lrm-thumbs .lrm-thumb--cmp img { position: absolute; inset: 0; object-fit: contain; padding: 4px; background: #fff; }
+  .lrm-thumb--cmp .lrm-half { clip-path: inset(0 50% 0 0); }
+  .lrm-thumb--cmp::after { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--c-dark); }
   .lrm-thumb:hover { transform: translateY(-1px); }
   .lrm-thumb[aria-current='true'] { box-shadow: 0 0 0 2px var(--c-yellow), 0 0 0 3px var(--c-dark); }
   .lrm-thumb:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 3px; }

@@ -120,6 +120,10 @@
     box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.92);
   }
   .hds-tag--proposed { background: var(--c-yellow); color: var(--c-dark); }
+  /* The plan before and after (its compare): the two plans half and half with the line between, its tag yellow and dark */
+  .hds-cmp .hds-half { clip-path: inset(0 50% 0 0); }
+  .hds-cmp::before { content: ''; position: absolute; z-index: 1; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--c-dark); pointer-events: none; }
+  .hds-tag--cmp { background: var(--c-yellow); color: var(--c-dark); }
 
   @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
     .hero { --hds-w: clamp(76px, 23vw, 92px); --hds-h: 88px; --hds-gap: 10px; }

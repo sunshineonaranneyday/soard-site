@@ -11,7 +11,7 @@
  * shape when that's known (a photo is always 4:3), so the pictures fill them
  * in place. Plain functions, nothing of the browser's.
  */
-import { isWholeSheet, knownRatio, type DesignSlide } from './reveal-design-client';
+import { compareRatio, isWholeSheet, knownRatio, planPairOf, type DesignSlide, type PlanPair } from './reveal-design-client';
 
 const esc = (s: string) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
 // The rest of /live/ writes names with a straight apostrophe ("Don't miss Dylan's reveal")
@@ -19,6 +19,8 @@ export const straight = (s: string) => String(s ?? '').replace(/’/g, "'");
 export const possessive = (name: string) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
 
 export const PLANS_NOTE = 'Before and after, from above';
+/** Under the plan's compare: what to do with it */
+export const COMPARE_NOTE = 'Drag the line to see what changes';
 export type PartKey = 'photos' | 'plans' | 'boards';
 export interface DesignPart { key: PartKey; slides: DesignSlide[] }
 
@@ -73,12 +75,44 @@ function cardHtml(s: DesignSlide, i: number, key: PartKey, at: number, of: numbe
   return `<li data-i="${i}"><button class="${cls}" type="button" aria-label="${esc(`Enlarge: ${s.badge ? `${s.badge}, ` : ''}${label}`)}">${badge}<span class="ldz-pic"${shape}><img alt="${esc(straight(s.alt))}" decoding="async" loading="lazy"></span></button>${cap}</li>`;
 }
 
+const ARROWS = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 7l-5 5 5 5M15 7l5 5-5 5"/></svg>';
+const ENLARGE = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>';
+
+/**
+ * The plan before and after on one picture (plan-compare.ts lines them up and fills it in; compare-slider.ts moves the
+ * line). The same markup in the design section, the room beside the video and the viewer, so each looks and works the
+ * same. It's its final shape from the start (compareRatio), so nothing moves when the pictures come. `enlarge`: a
+ * button in its corner that opens it big (where a tap on it isn't already that)
+ */
+export function compareHtml(pair: PlanPair, enlarge = false, extraClass = ''): string {
+  const r = compareRatio(pair);
+  const alt = (s: DesignSlide, word: string) => esc(straight(s.alt || `${word} floor plan`));
+  return `<div class="pcmp${extraClass ? ` ${extraClass}` : ''}" data-pcmp style="--pcmp-r:${r.toFixed(4)}">`
+    + '<div class="pcmp__pics" data-pcmp="pics">'
+    + `<img class="pcmp__img pcmp__img--after" data-pcmp="after" alt="${alt(pair.proposed, 'The new')}" draggable="false" decoding="async">`
+    + `<img class="pcmp__img pcmp__img--before" data-pcmp="before" alt="${alt(pair.existing, "Today's")}" draggable="false" decoding="async">`
+    + '</div>'
+    + '<input class="pcmp__range" data-pcmp="range" type="range" min="0" max="100" step="1" value="50" aria-label="Compare the floor plan before and after: left shows it today, right the new plan">'
+    + `<div class="pcmp__line" aria-hidden="true"><span class="pcmp__knob">${ARROWS}</span></div>`
+    + `<span class="pcmp__tag pcmp__tag--before" data-pcmp="tag-before" aria-hidden="true">${esc(pair.existing.badge || 'Existing')}</span>`
+    + `<span class="pcmp__tag pcmp__tag--after" data-pcmp="tag-after" aria-hidden="true">${esc(pair.proposed.badge || 'Proposed')}</span>`
+    + (enlarge ? `<button class="pcmp__enlarge" type="button" data-pcmp="enlarge" aria-label="See the plans big">${ENLARGE}</button>` : '')
+    + '</div>';
+}
+
 /** The section's parts as markup: each card carries its slide's place in `slides` (data-i) for the page script */
 export function designPartsHtml(slides: DesignSlide[], isAfter: boolean): string {
   return designPartsOf(slides).map(({ key, slides: list }) => {
-    const note = partNote(key, list);
+    const pair = key === 'plans' ? planPairOf(list) : null;
+    const note = pair ? COMPARE_NOTE : partNote(key, list);
     const n = key === 'photos' ? ` data-n="${list.length}"` : '';
     const cards = list.map((s, at) => cardHtml(s, slides.indexOf(s), key, at, list.length)).join('');
-    return `<div class="ldz-part" data-part="${key}"><div class="ldz-part__head"><h3 class="ldz-part__title">${esc(partTitle(key, isAfter))}</h3><p class="ldz-part__note"${note ? '' : ' hidden'}>${esc(note)}</p></div><ul class="${gridClass(key, list)}"${n}>${cards}</ul></div>`;
+    const head = `<div class="ldz-part__head"><h3 class="ldz-part__title">${esc(partTitle(key, isAfter))}</h3><p class="ldz-part__note"${note ? '' : ' hidden'}>${esc(note)}</p></div>`;
+    // The plan: the two drawings on one picture to compare first, then the designer's two sheets as they drew them
+    // (border, title block and all: the official plan set, Peter, Nov 16 2026)
+    const compare = pair
+      ? `<div class="ldz-compare" data-ldz-compare="${slides.indexOf(pair.existing)},${slides.indexOf(pair.proposed)}">${compareHtml(pair, true)}</div><p class="ldz-sheets">The designer's sheets</p>`
+      : '';
+    return `<div class="ldz-part" data-part="${key}">${head}${compare}<ul class="${gridClass(key, list)}${pair ? ' ldz-grid--sheets' : ''}"${n}>${cards}</ul></div>`;
   }).join('');
 }

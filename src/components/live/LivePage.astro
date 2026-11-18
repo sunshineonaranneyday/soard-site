@@ -477,7 +477,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     @media (min-width: 1200px) {
       .hero[data-party][data-orientation='portrait'] .hero-inner {
         max-width: 1480px; padding-inline: clamp(24px, 4vw, 64px);
-        grid-template-columns: minmax(260px, 1fr) auto minmax(300px, 1fr);
+        /* The room's pictures get the most of what's left, the messages a card that still reads as one (Peter, Nov 18
+           2026: "we are giving too much space to the comments, i want more space for the before pics and plans").
+           (The two narrowest still add up to 560px: --stage-max below counts on it) */
+        grid-template-columns: minmax(300px, 1.75fr) auto minmax(260px, 1fr);
         grid-template-areas: 'text frame party'; grid-template-rows: auto;
         column-gap: clamp(28px, 3vw, 48px); align-items: start;
         /* (the frame's height, LivePage's --fh below; --stage-h: the stage's own, measured, when it's shorter) */
@@ -509,7 +512,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       .hero[data-party][data-orientation='portrait'] .hero-text > * { flex-shrink: 0; }
       .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm:not([hidden])) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
       .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-stage) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-big) { flex: 1 1 0; aspect-ratio: auto; min-height: 150px; max-height: 100cqi; height: auto; }
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-big),
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-cmp) { flex: 1 1 0; aspect-ratio: auto; min-height: 150px; max-height: 100cqi; height: auto; }
       .hero[data-party][data-orientation='portrait'] .hero-ctas { margin-top: auto; padding-top: 16px; flex-wrap: nowrap; gap: 10px; }
       .hero[data-party][data-orientation='portrait'] .hero-ctas > * { flex: 0 1 auto; min-width: 0; padding-inline: clamp(16px, 1.6vw, 24px); white-space: nowrap; }
     }

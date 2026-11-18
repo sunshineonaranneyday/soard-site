@@ -52,6 +52,8 @@ export interface Stage {
    * Hold the video in a small player at the top of the screen while something covers the page on a phone:
    * 'give', the give sheet (top right, over the page above the sheet); 'design', the design viewer (its top left corner)
    */
+  /** The rail's way into the room's design: its face (a picture's address), or '' for none */
+  setDesign(face: string): void;
   pin(on: boolean, where?: 'give' | 'design'): void;
   /** Stop everything: the page is being swapped out by a client-side navigation */
   destroy(): void;
@@ -151,6 +153,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // The reveal over: "That's the reveal!" showing, what the page asked for meanwhile (shown when they tap Watch the
   // replay), and whether the broadcast has been off since (so its coming back on means the phone did)
   let endShown = false;
+  // The room's design, a button in the rail (live-design.ts gives it the room's first picture as its face): the rail
+  // takes the place where the design's strip sat beside the video, so this is its way in (Peter, Nov 9 2026: the design
+  // has to be with the video during the reveal)
+  let designFace = '';
   let endPending: StageView | null = null;
   let endSawOff = false;
   // The broadcast the video on belongs to: only its own moving on is the reveal's end (a staff test after the reveal,
@@ -474,6 +480,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       [$('to-live'), going && liveSeek.behind > 0],
       [$('heart'), live && roomy && (onAir || !isVideo) && !endShown],
       ...[...root.querySelectorAll<HTMLElement>('[data-full]')].map((b) => [b, !endShown && isVideo && (kind === 'replay' || (live && roomy))] as [HTMLElement, boolean]),
+      [$('design'), rail && !!designFace && !endShown],
     ]);
     railChange(shows);
     // "That's the reveal!": whose, and the replay when there's one (until then, when it will be)
@@ -979,6 +986,15 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     get playingLive() { return isPlayingLive(); },
     get ended() { return endShown; },
     endsWith(mode: StageMode) { return endShown || endsNow({ mode }); },
+    /** The rail's way into the room's design: its face (a picture's address), or '' for none (no design, or the room
+     *  beside the video already shows it) */
+    setDesign(face: string) {
+      if (face === designFace) return;
+      designFace = face;
+      const img = $('design-face') as HTMLImageElement | null;
+      if (img && face && img.getAttribute('src') !== face) img.src = face;
+      paint();
+    },
     pin(on: boolean, where: 'give' | 'design' = 'give') {
       pinned = on;
       if (on) root.dataset.pin = where; else delete root.dataset.pin;

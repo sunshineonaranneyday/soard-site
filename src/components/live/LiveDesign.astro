@@ -35,14 +35,15 @@
 <dialog class="ldv" data-ldz-viewer aria-labelledby="ldv-caption">
   <div class="ldv__bar">
     <p class="ldv__caption" id="ldv-caption"><span class="ldv__kicker" data-ldv="kicker"></span><span data-ldv="caption"></span></p>
+    <!-- The room, the plan, the look: one tap to each (the one showing says where in it you are); a single part: the count -->
+    <div class="ldv__parts" data-ldv="parts" aria-label="Parts of the design"></div>
     <span class="ldv__count" data-ldv="count" aria-live="polite"></span>
     <form method="dialog"><button class="ldv__btn" type="submit" aria-label="Close" data-ldv="close">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
     </button></form>
   </div>
-  <div class="ldv__stage" data-ldv="stage">
-    <img class="ldv__img" data-ldv="img" alt="" />
-  </div>
+  <!-- The pictures, side by side in a strip that moves with a finger (design-viewer.ts) -->
+  <div class="ldv__stage" data-ldv="stage"></div>
   <div class="ldv__nav">
     <button class="ldv__btn" type="button" data-ldv="prev" aria-label="Previous picture">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
@@ -51,7 +52,7 @@
     <button class="ldv__btn ldv__zoom" type="button" data-ldv="zoom" hidden>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <!-- (its two words stacked in one place, the longer one unseen: the button is that wide either way, never moving) -->
-      <span class="ldv__zoom-words"><span data-ldv="zoom-text">Zoom in</span><span class="ldv__zoom-alt" aria-hidden="true">Whole sheet</span></span>
+      <span class="ldv__zoom-words"><span data-ldv="zoom-text">Zoom in</span><span class="ldv__zoom-alt" aria-hidden="true">Whole sheet</span><span class="ldv__zoom-alt" aria-hidden="true">Zoom out</span></span>
     </button>
     <button class="ldv__btn" type="button" data-ldv="next" aria-label="Next picture">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
@@ -115,10 +116,80 @@
   /* A plan's or a board's caption, under it */
   .ldz-cap { margin: 12px 0 0; color: var(--c-text); font-size: 15px; font-weight: 600; line-height: 1.35; }
 
+  /* ── The plan before and after, on one picture (compareHtml, live-design-html.ts; plan-compare.ts lines the two up,
+     compare-slider.ts moves the line). The same in the section, the room beside the video and the viewer ── */
+  .pcmp {
+    --ba-pos: 50%; position: relative; display: block; width: 100%; aspect-ratio: 1 / var(--pcmp-r, 1); overflow: hidden;
+    background: #fff; cursor: ew-resize; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  .pcmp__pics { position: absolute; inset: 0; }
+  .pcmp__img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 0.35s ease; -webkit-user-drag: none; pointer-events: none; }
+  .pcmp[data-state='ready'] .pcmp__img { opacity: 1; }
+  /* Today's plan on the left of the line, the new one on the right */
+  .pcmp__img--before { clip-path: inset(0 calc(100% - var(--ba-pos)) 0 0); }
+  .pcmp__line {
+    position: absolute; z-index: 2; top: 0; bottom: 0; left: var(--ba-pos); width: 2px; margin-left: -1px; pointer-events: none;
+    background: var(--c-dark); box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9); opacity: 0; transition: opacity 0.35s ease;
+  }
+  .pcmp[data-state='ready'] .pcmp__line { opacity: 1; }
+  .pcmp__knob {
+    /* (kept inside the picture at either end, where the line goes to the edge: --knob-dx, live-design.ts / design-viewer.ts) */
+    position: absolute; top: 50%; left: 50%; translate: var(--knob-dx, 0px) 0; display: grid; place-items: center; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
+    background: var(--c-yellow); color: var(--c-dark); box-shadow: 0 0 0 2px #fff, 0 8px 22px rgba(30, 31, 37, 0.26);
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .pcmp:hover .pcmp__knob { transform: scale(1.07); }
+  .pcmp.is-dragging .pcmp__knob { transform: scale(0.92); transition-duration: 0.1s; }
+  /* Which is which, on the picture: the same badges as the sheets (EXISTING dark, PROPOSED yellow); each steps aside
+     as the line comes to its side */
+  .pcmp__tag {
+    position: absolute; z-index: 3; top: 12px; padding: 7px 12px 6px; border-radius: 8px; pointer-events: none;
+    font-size: 12.5px; font-weight: 800; line-height: 1.1; letter-spacing: 0.12em; text-transform: uppercase;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.92), 0 6px 18px rgba(0, 0, 0, 0.16); transition: opacity 0.25s ease;
+  }
+  .pcmp__tag--before { left: 12px; background: var(--c-dark); color: #fff; }
+  .pcmp__tag--after { right: 12px; background: var(--c-yellow); color: var(--c-dark); }
+  .pcmp__tag[data-fade] { opacity: 0; }
+  /* The keyboard's way in (Tab, then the arrows): unseen, its focus shown on the knob */
+  .pcmp__range { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; opacity: 0; }
+  .pcmp__range:focus-visible ~ .pcmp__line { opacity: 1; }
+  .pcmp__range:focus-visible ~ .pcmp__line .pcmp__knob { outline: 3px solid var(--c-dark); outline-offset: 3px; }
+  .pcmp__enlarge {
+    position: absolute; z-index: 3; right: 12px; bottom: 12px; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%;
+    border: 1px solid var(--c-border); background: rgba(255, 255, 255, 0.96); color: var(--c-dark); cursor: zoom-in;
+    box-shadow: 0 6px 18px rgba(30, 31, 37, 0.12); transition: transform 160ms ease, border-color 160ms ease;
+  }
+  .pcmp__enlarge:hover { transform: scale(1.06); border-color: var(--c-dark); }
+  .pcmp__enlarge:focus-visible { outline: 3px solid var(--c-dark); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .pcmp__img, .pcmp__line, .pcmp__knob, .pcmp__tag { transition: none; } }
+
+  /* In the viewer: it fills its pane, its two pictures zoom and move (design-viewer.ts sets their place), and the line,
+     its knob and the badges stay their size, at the place the line marks and on the pictures' visible corners */
+  .pcmp.pcmp--viewer { position: absolute; inset: 0; width: auto; aspect-ratio: auto; background: transparent; touch-action: none; }
+  .pcmp--viewer .pcmp__pics { inset: auto; left: 0; top: 0; transform-origin: 0 0; background: #fff; }
+  .pcmp--viewer .pcmp__line { left: var(--line, 50%); top: var(--pics-t, 0px); bottom: var(--pics-b, 0px); }
+  .pcmp--viewer .pcmp__tag--before { left: calc(var(--pics-l, 0px) + 12px); top: calc(var(--pics-t, 0px) + 12px); }
+  .pcmp--viewer .pcmp__tag--after { right: calc(var(--pics-r, 0px) + 12px); top: calc(var(--pics-t, 0px) + 12px); }
+
+  /* The section's plan: the compare first, as wide as the plans were, then the designer's two sheets, smaller */
+  .ldz-compare { max-width: 880px; }
+  /* (never taller than the window leaves under the site's header: the whole plan in sight while its line is dragged) */
+  .ldz-compare .pcmp { width: min(100%, calc((100svh - var(--header-height, 80px) - 96px) / var(--pcmp-r, 1))); border-radius: 18px; border: 1px solid var(--c-border); box-shadow: 0 18px 40px rgba(30, 31, 37, 0.07); }
+  .ldz-sheets { margin: 28px 0 12px; color: var(--c-text-muted); font-size: 13px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+  .ldz-grid--sheets { max-width: 880px; gap: 16px; }
+  .ldz-grid--sheets .ldz-cap { font-size: 14px; }
+
   @media (max-width: 768px) {
     .ldz-grid--photos, .ldz-grid--photos[data-n='4'] { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .ldz-grid--plans, .ldz-grid--boards { grid-template-columns: minmax(0, 1fr); gap: 18px; }
-    .ldz-item { border-radius: 14px; }
+    /* (beside the compare, the sheets stay two across: they're the record, a tap opens either big) */
+    .ldz-grid--plans.ldz-grid--sheets { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .ldz-grid--sheets .ldz-badge { top: 6px; right: 6px; padding: 5px 8px 4px; font-size: 10.5px; }
+    .ldz-grid--sheets .ldz-cap { font-size: 13px; margin-top: 8px; }
+    .ldz-item, .ldz-compare .pcmp { border-radius: 14px; }
+    .pcmp__tag { top: 10px; padding: 6px 10px 5px; font-size: 11px; }
+    .pcmp__tag--before { left: 10px; }
+    .pcmp__tag--after { right: 10px; }
   }
   @media (prefers-reduced-motion: reduce) {
     .ldz-item img { transition: none; }
@@ -139,8 +210,9 @@
 
   /* Beside the video on a laptop: down the left, over the messages; the video and the strip stay as they are */
   .ldv.ldv--side {
-    position: fixed; z-index: 1200; inset: calc(var(--header-height) + 12px) auto 12px 12px;
-    width: var(--ldv-w, 640px); height: auto; border-radius: 20px;
+    /* (over the story column exactly: as tall as the video beside it, live-design.ts fitSide) */
+    position: fixed; z-index: 1200; inset: var(--ldv-top, calc(var(--header-height) + 12px)) auto auto 12px;
+    width: var(--ldv-w, 640px); height: var(--ldv-h, calc(100dvh - var(--header-height) - 24px)); border-radius: 20px;
     box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32), 0 8px 24px rgba(0, 0, 0, 0.14);
     animation: ldv-side 0.32s cubic-bezier(0.16, 1, 0.3, 1);
   }
@@ -157,11 +229,23 @@
   }
   .ldv--pinned.ldv--wide .ldv__bar { --pin-w: calc(var(--ldp-hw) * 1.7778); min-height: calc(var(--ldp-top) + var(--ldp-hw) + 12px); }
   .ldv--pinned .ldv__caption { display: block; grid-column: 1; grid-row: 1; font-size: 15.5px; -webkit-line-clamp: unset; }
-  .ldv--pinned .ldv__count { grid-column: 1; grid-row: 2; font-size: 13.5px; }
+  .ldv--pinned .ldv__bar > .ldv__parts { grid-area: auto; grid-column: 1 / -1; grid-row: 2; }
+  .ldv--pinned .ldv__bar > .ldv__count { grid-area: auto; grid-column: 1; grid-row: 3; justify-self: start; font-size: 13.5px; }
+  .ldv--pinned .ldv__part { height: 30px; padding: 0 10px; font-size: 13px; }
   .ldv--pinned .ldv__bar > form { grid-column: 2; grid-row: 1; margin-top: -4px; }
   @media (prefers-reduced-motion: reduce) { .ldv.ldv--side, .ldv.ldv--pinned { animation: none; } }
-  .ldv__bar { display: flex; align-items: center; gap: 16px; padding: max(14px, env(safe-area-inset-top)) clamp(14px, 3vw, 28px) 10px; }
-  .ldv__caption { flex: 1; min-width: 0; margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  /* What it is and the close button on top; the parts and where in its part this one is under them */
+  .ldv__bar {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'cap close' 'parts count'; align-items: center;
+    column-gap: 16px; row-gap: 10px; padding: max(14px, env(safe-area-inset-top)) clamp(14px, 3vw, 28px) 10px;
+  }
+  .ldv__bar > .ldv__caption { grid-area: cap; }
+  .ldv__bar > form { grid-area: close; }
+  .ldv__bar > .ldv__parts { grid-area: parts; }
+  .ldv__bar > .ldv__count { grid-area: count; justify-self: end; }
+  /* (always two lines tall: a one-line caption and a two-line one leave the pictures under them the same room, so nothing
+     jumps between them) */
+  .ldv__caption { min-width: 0; min-height: 2.7em; margin: 0; font-size: 16px; font-weight: 600; line-height: 1.35; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
   .ldv__kicker { margin-right: 10px; color: var(--c-yellow); font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; }
   /* A picture's badge leads its caption, as on the picture: white for the room before and the existing plan, yellow for the proposed */
   .ldv__kicker:is([data-kind='before'], [data-kind='as-built'], [data-kind='proposed']) {
@@ -172,14 +256,32 @@
   /* On a phone, beside the small video: the badge on its own line above the caption */
   .ldv.ldv--pinned .ldv__kicker { display: table; margin: 0 0 8px; }
   .ldv__count { color: rgba(255, 255, 255, 0.7); font-size: 14px; font-variant-numeric: tabular-nums; }
-  /* The picture always fits the space between the bar and the arrows, whatever its shape and the screen's */
-  .ldv__stage { position: relative; min-height: 0; margin: 8px clamp(8px, 3vw, 28px); touch-action: pinch-zoom; overflow: hidden; }
-  .ldv__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; transform-origin: 0 0; transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
-  .ldv__img.is-still { transition: none; }
-  /* A whole plan sheet: zoomed to its drawing, or the whole sheet (a double-click or double-tap swaps them) */
-  .ldv__stage[data-sheet] .ldv__img { cursor: zoom-in; }
-  .ldv__stage[data-sheet][data-zoomed] .ldv__img { cursor: zoom-out; }
-  @media (prefers-reduced-motion: reduce) { .ldv__img { transition: none; } }
+  .ldv__count:empty { display: none; }
+  /* The parts: pills, the one showing yellow with where in it you are ("The room · 2 of 5"). One tap jumps to a part */
+  .ldv__parts { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ldv__parts:empty { display: none; }
+  .ldv__part {
+    height: 32px; padding: 0 12px; border-radius: 100px; border: 1px solid rgba(255, 255, 255, 0.28); background: rgba(255, 255, 255, 0.06);
+    color: #fff; font: inherit; font-size: 13.5px; font-weight: 700; white-space: nowrap; cursor: pointer; font-variant-numeric: tabular-nums;
+    transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+  }
+  .ldv__part:hover { background: rgba(255, 255, 255, 0.14); }
+  .ldv__part[aria-current='true'] { background: var(--c-yellow); border-color: var(--c-yellow); color: var(--c-dark); }
+  .ldv__part:focus-visible { outline: 3px solid var(--c-yellow); outline-offset: 2px; }
+  .ldv__part-at { font-weight: 600; opacity: 0.75; margin-left: 6px; }
+  /* The pictures always fit the space between the bar and the arrows, whatever their shape and the screen's. The page
+     never pinches or scrolls under a finger here: the pictures answer it (design-viewer.ts) */
+  .ldv__stage { position: relative; min-height: 0; margin: 8px clamp(8px, 3vw, 28px); touch-action: none; overflow: hidden; user-select: none; -webkit-user-select: none; }
+  .ldg-track { position: absolute; inset: 0; will-change: transform; }
+  .ldg-pane { position: absolute; top: 0; bottom: 0; overflow: hidden; }
+  .ldg-fly { position: absolute; inset: 0; transform-origin: 50% 50%; }
+  .ldg-zoom { position: absolute; left: 0; top: 0; transform-origin: 0 0; cursor: zoom-in; }
+  .ldv__stage[data-zoomed] .ldg-zoom { cursor: grab; }
+  .ldv__stage[data-zoomed] .ldg-zoom:active { cursor: grabbing; }
+  .ldg-img { display: block; width: 100%; height: 100%; object-fit: contain; -webkit-user-drag: none; -webkit-touch-callout: none; }
+  /* A drawing or a board on its white paper (the picture's own box: a zoomed one shows paper to its edges) */
+  .ldg-pane:is([data-kind='sheet'], [data-kind='paper']) .ldg-zoom { background: #fff; }
+  .ldg-cmp { position: absolute; inset: 0; }
   .ldv__nav { display: flex; justify-content: center; gap: 16px; padding: 10px 0 max(18px, env(safe-area-inset-bottom)); }
   .ldv__btn {
     display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 50%;
@@ -188,6 +290,12 @@
   .ldv__btn:hover { background: rgba(255, 255, 255, 0.16); }
   .ldv__btn:focus-visible { outline: 3px solid var(--c-yellow); outline-offset: 2px; }
   .ldv__btn[hidden] { display: none; }
+  /* (at the first or the last picture: there's no further that way, and the button says so) */
+  .ldv__btn[aria-disabled='true'] { opacity: 0.32; cursor: default; }
+  .ldv__btn[aria-disabled='true']:hover { background: rgba(255, 255, 255, 0.08); }
+  /* Dragged down to close: the dark lifts with it */
+  .ldv { --ldv-dim: 1; background: rgba(22, 23, 27, var(--ldv-dim)); }
+  .ldv > .ldv__bar, .ldv > .ldv__nav { opacity: var(--ldv-dim); }
   /* The whole sheet / zoom in button: words, so a pill (after .ldv__btn, which it builds on) */
   .ldv__btn.ldv__zoom { width: auto; display: inline-flex; align-items: center; gap: 8px; padding: 0 20px 0 16px; border-radius: 24px; font: inherit; font-size: 15px; font-weight: 600; white-space: nowrap; }
   .ldv__btn.ldv__zoom[hidden] { display: none; }
@@ -200,7 +308,9 @@
   }
   /* (Last, so it wins over the phone rules above.) A phone held sideways: the small video keeps the left side to itself and the viewer takes the rest at full height
      (above the picture, the room the video needs would leave the picture a sliver) */
-  @media (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 960px), (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 1023px) and (pointer: coarse) {
+  /* (any short screen wider than tall: the viewer has no field to type in, so no keyboard can make a phone look sideways
+     here, and 664×390 left the picture a 98px sliver under the bar) */
+  @media (orientation: landscape) and (max-height: 540px) and (max-width: 1023px) {
     .ldv.ldv--pinned {
       --pin-w: calc(var(--ldp-h) * 0.5625);
       grid-template-columns: calc(var(--ldp-left) + var(--pin-w) + 16px) minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr);
@@ -212,7 +322,20 @@
     .ldv.ldv--pinned > .ldv__nav { grid-column: 1; grid-row: 1 / -1; align-self: end; flex-wrap: wrap; justify-content: flex-start; gap: 8px; padding: 0 0 max(12px, env(safe-area-inset-bottom)) var(--ldp-left); }
     .ldv--pinned .ldv__bar, .ldv--pinned.ldv--wide .ldv__bar { min-height: 0; padding: var(--ldp-top) max(12px, env(safe-area-inset-right)) 0 0; }
     .ldv.ldv--pinned > .ldv__stage { margin-right: max(8px, env(safe-area-inset-right)); }
-    /* The badge leads the caption on its line, as on a laptop */
-    .ldv.ldv--pinned .ldv__kicker { display: inline-block; margin: 0 10px 0 0; }
+    /* The bar on one line, so the picture gets the height: the badge (what it is), the parts, where in its part, close.
+       The caption's words are kept for a screen reader (the badge and the part say it on screen) */
+    .ldv.ldv--pinned > .ldv__bar {
+      grid-template-columns: auto minmax(0, 1fr) auto auto; grid-template-areas: 'cap parts count close'; row-gap: 0; column-gap: 10px; align-items: center;
+    }
+    .ldv.ldv--pinned .ldv__bar > .ldv__caption { grid-area: cap; grid-column: auto; grid-row: auto; min-height: 0; }
+    .ldv.ldv--pinned .ldv__caption [data-ldv='caption'] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .ldv.ldv--pinned .ldv__kicker { display: inline-block; margin: 0; }
+    .ldv.ldv--pinned .ldv__kicker:empty { display: none; }
+    .ldv.ldv--pinned .ldv__bar > .ldv__parts { grid-area: parts; grid-column: auto; grid-row: auto; flex-wrap: nowrap; }
+    .ldv.ldv--pinned .ldv__bar > .ldv__count { grid-area: count; grid-column: auto; grid-row: auto; }
+    .ldv.ldv--pinned .ldv__bar > form { grid-area: close; grid-column: auto; grid-row: auto; margin: 0; }
+    /* Under the small video there's room for round buttons only: zoom by its magnifier (its words for a screen reader) */
+    .ldv.ldv--pinned .ldv__btn.ldv__zoom { width: 48px; padding: 0; justify-content: center; }
+    .ldv.ldv--pinned .ldv__zoom-words { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   }
 </style>

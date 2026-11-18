@@ -1061,6 +1061,7 @@ const planOrientation = (() => {
 <script>
   import { onPageLoad } from '../../utils/page-load';
   import { lightboxPhoto } from '../../utils/lightbox-photo';
+  import { attachCompare } from '../../utils/compare-slider';
   let _kidObserver: IntersectionObserver | null = null;
   let _staggerObserver: IntersectionObserver | null = null;
   let _chapterObserver: IntersectionObserver | null = null;
@@ -1337,138 +1338,20 @@ const planOrientation = (() => {
       });
     }
 
-    // ── Before/After Sliders (Best-in-Class) ────
-    // Physics: momentum with friction, spring bounce at edges
-    const FRICTION = 0.92, MIN_VEL = 0.1, SPRING = 0.15, VEL_SCALE = 0.4;
-
-    // Keyboard: arrows for fine control
-    let activeSlider: { upd: (v:number)=>void; pos:()=>number } | null = null;
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        const d = (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? 10 : 1);
-        if (activeSlider) { e.preventDefault(); activeSlider.upd(Math.max(0, Math.min(100, activeSlider.pos() + d))); }
-      }
-    });
-
-    document.querySelectorAll<HTMLElement>('[data-ba-slider]').forEach(slider => {
+    // ── Before/After Sliders ────
+    // The site's one before/after slider (src/utils/compare-slider.ts, which the live page's plan uses too): drag
+    // anywhere, a flick keeps it going and springs off the edges, a double tap centres it, the keyboard moves it
+    // (Shift: by ten), and it sweeps in from "before" once it's in sight
+    document.querySelectorAll<HTMLElement>('[data-ba-slider]').forEach((slider) => {
       const container = slider.querySelector<HTMLElement>('[data-ba-container]');
       const range = slider.querySelector<HTMLInputElement>('.ba-slider__range');
-      const labelBefore = slider.querySelector<HTMLElement>('[data-ba-label="before"]');
-      const labelAfter = slider.querySelector<HTMLElement>('[data-ba-label="after"]');
       if (!container || !range) return;
-
-      let pos = 50, vel = 0, momRaf: number | null = null;
-      let isDrag = false, lastX = 0, lastT = 0, vels: number[] = [];
-
-      const updatePos = (v: number, sync = true) => {
-        pos = Math.max(0, Math.min(100, v));
-        container.style.setProperty('--ba-pos', `${pos}%`);
-        if (sync) range.value = String(pos);
-        if (labelBefore) labelBefore.toggleAttribute('data-fade', pos < 20);
-        if (labelAfter) labelAfter.toggleAttribute('data-fade', pos > 80);
-      };
-
-      const getP = (x: number) => ((x - container.getBoundingClientRect().left) / container.getBoundingClientRect().width) * 100;
-
-      // Momentum animation loop
-      const runMomentum = () => {
-        vel *= FRICTION;
-        let p = pos + vel;
-        if (p < 0) { p = 0; vel = -vel * SPRING; } else if (p > 100) { p = 100; vel = -vel * SPRING; }
-        updatePos(p);
-        if (Math.abs(vel) > MIN_VEL) momRaf = requestAnimationFrame(runMomentum);
-      };
-
-      // Double-tap to reset to center
-      let lastTap = 0;
-      container.addEventListener('touchend', (e) => {
-        const now = Date.now();
-        if (now - lastTap < 300) {
-          e.preventDefault();
-          // Animate to center
-          if (!prefersReducedMotion) {
-            const from = pos, to = 50;
-            let start: number | null = null;
-            const anim = (ts: number) => {
-              if (!start) start = ts;
-              const p = Math.min((ts - start) / 300, 1);
-              const ease = 1 - Math.pow(1 - p, 3);
-              updatePos(from + (to - from) * ease);
-              if (p < 1) requestAnimationFrame(anim);
-            };
-            requestAnimationFrame(anim);
-          } else {
-            updatePos(50);
-          }
-        }
-        lastTap = now;
-      }, { passive: false });
-
-      // Pointer events for buttery-smooth dragging with momentum
-      container.addEventListener('pointerdown', (e) => {
-        if ((e.target as HTMLElement).closest('button')) return;
-        isDrag = true; lastX = e.clientX; lastT = performance.now(); vels = [];
-        if (momRaf) cancelAnimationFrame(momRaf);
-        vel = 0;
-        container.setPointerCapture(e.pointerId);
-        container.classList.add('is-dragging');
-        // Prevent scroll during drag
-        document.body.style.touchAction = 'none';
-        document.body.style.overscrollBehavior = 'none';
-        activeSlider = { upd: (v) => updatePos(v), pos: () => pos };
+      attachCompare(container, {
+        range,
+        labelBefore: slider.querySelector<HTMLElement>('[data-ba-label="before"]'),
+        labelAfter: slider.querySelector<HTMLElement>('[data-ba-label="after"]'),
+        intro: true,
       });
-
-      container.addEventListener('pointermove', (e) => {
-        if (!isDrag) return;
-        const now = performance.now(), dt = now - lastT, dx = e.clientX - lastX;
-        if (dt > 0) { vels.push((dx / container.getBoundingClientRect().width) * 100 / dt * 16); if (vels.length > 5) vels.shift(); }
-        lastX = e.clientX; lastT = now;
-        updatePos(getP(e.clientX));
-      });
-
-      const onUp = (e: PointerEvent) => {
-        if (!isDrag) return;
-        isDrag = false;
-        container.releasePointerCapture(e.pointerId);
-        container.classList.remove('is-dragging');
-        // Restore scroll
-        document.body.style.touchAction = '';
-        document.body.style.overscrollBehavior = '';
-        // Apply momentum if we have velocity samples
-        if (vels.length && !prefersReducedMotion) {
-          vel = vels.reduce((a,b) => a+b, 0) / vels.length * VEL_SCALE;
-          if (Math.abs(vel) > MIN_VEL) runMomentum();
-        }
-      };
-      container.addEventListener('pointerup', onUp);
-      container.addEventListener('pointercancel', onUp);
-
-      // Range input for accessibility
-      range.addEventListener('input', () => updatePos(parseFloat(range.value), false));
-      range.addEventListener('focus', () => { activeSlider = { upd: (v) => updatePos(v), pos: () => pos }; });
-
-      // Auto-reveal with overshoot easing (easeOutBack)
-      if (!prefersReducedMotion) {
-        pos = 100; updatePos(100);
-        const obs = new IntersectionObserver((entries) => {
-          entries.forEach(entry => {
-            if (entry.isIntersecting) {
-              obs.disconnect();
-              let start: number | null = null;
-              const dur = 1600;
-              const easeOutBack = (t: number) => { const c = 1.70158; return 1 + (c+1) * Math.pow(t-1,3) + c * Math.pow(t-1,2); };
-              const anim = (ts: number) => {
-                if (!start) start = ts;
-                const p = Math.min((ts - start) / dur, 1);
-                updatePos(100 + (50 - 100) * easeOutBack(p));
-                if (p < 1) requestAnimationFrame(anim);
-              };
-              requestAnimationFrame(anim);
-            }
-          });
-        }, { threshold: 0.4 });
-        obs.observe(slider);
-      }
     });
 
     // Scroll progress — CSS animation-timeline with JS fallback

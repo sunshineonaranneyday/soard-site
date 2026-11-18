@@ -117,6 +117,9 @@ const ICON = {
         <button class="bar__btn bar__dvr" type="button" data-s="from-start" aria-label="Watch from the start" title="From the start" hidden><span class="bar__ico"><Fragment set:html={ICON.fromStart} /></span><span class="bar__lbl" aria-hidden="true">From the start</span></button>
         <button class="bar__btn bar__dvr bar__tolive" type="button" data-s="to-live" aria-label="Back to live" title="Back to live" hidden><span class="bar__ico"><Fragment set:html={ICON.toLive} /></span><span class="bar__lbl" aria-hidden="true">Back to live</span><span class="bar__behind" data-s="behind" aria-hidden="true"></span></button>
         <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)" hidden><span class="bar__ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
+        <!-- The room's before photos and plans (live-design.ts opens its viewer; the video stays small in the corner): the
+             rail sits where the design's strip did, so it's the way in. Its face is the room's first picture -->
+        <button class="bar__btn bar__design" type="button" data-s="design" aria-label="See the room and the plan" title="The room and the plan" hidden><span class="bar__ico"><img data-s="design-face" alt="" decoding="async" /></span><span class="bar__lbl" aria-hidden="true">The room</span></button>
         <!-- In the rail beside a portrait picture (data-rail): the hearts everyone sends float up here, beside the picture, never on it -->
         <span class="bar__rise" data-s="rise" aria-hidden="true"></span>
         <button class="bar__btn bar__heart" type="button" data-s="heart" aria-label="Send love to the family" title="Send love" hidden><span class="bar__ico"><Fragment set:html={ICON.heart} /></span></button>
@@ -444,6 +447,19 @@ const ICON = {
        kept (it's the one that matters first) */
     .stage[data-rail] .bar__live { container: rail / size; }
     @container rail (max-height: 330px) { .bar__lbl, .bar__behind { display: none !important; } .bar__end { gap: 10px !important; } }
+    /* The room: its first picture in the circle, ringed in yellow so it reads as a picture to open, not a control.
+       On a shorter rail its word goes first, then (where even the round ones only just fit) the button: the design is
+       then under the video, as it is on a computer */
+    .stage[data-rail] .bar__design { flex-shrink: 0; }
+    .stage[data-rail] .bar__design .bar__ico { padding: 0; overflow: hidden; border: 2px solid var(--c-yellow); box-shadow: 0 0 0 2px #fff, 0 4px 12px rgba(30, 31, 37, 0.14); }
+    .stage[data-rail] .bar__design img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 50%; }
+    .stage[data-rail] .bar__design:hover .bar__ico { transform: scale(1.06); border-color: var(--c-yellow); }
+    /* With it there, the rail's buttons sit a little closer, so it keeps its word on an ordinary phone (390×664); on a short
+       rail, where the words go anyway, the round buttons are a little smaller, so it still fits (375×553) */
+    .stage[data-rail] .bar__end:has(> .bar__design:not([hidden])) { gap: 10px; }
+    @container rail (max-height: 385px) { .bar__design .bar__lbl { display: none !important; } }
+    @container rail (max-height: 330px) { .bar__end:has(> .bar__design:not([hidden])) { gap: 7px !important; } .bar__end:has(> .bar__design:not([hidden])) .bar__ico { width: 40px; height: 40px; } }
+    @container rail (max-height: 250px) { .bar__design { display: none !important; } }
     /* Muted: the one control that matters first, in yellow, with its words under it */
     .stage[data-rail] .bar__sound .bar__ico { background: var(--c-yellow-soft); border: 1.5px solid var(--c-yellow); animation: soundNudge 2.8s ease-in-out 1.5s 3; }
     .stage[data-rail] .bar__sound .bar__txt { color: var(--c-text); }

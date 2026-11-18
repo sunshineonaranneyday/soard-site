@@ -33,6 +33,12 @@
  * once. The strip's pictures come only once it shows (the watch party, out of
  * full screen), all at once, so none pops in while it's scrolled.
  *
+ * The plan, when there's an existing and a proposed sheet that line up, is
+ * first of all one picture of both, a line between them to drag (Peter, Nov
+ * 18 2026: "should we do a before/after plans slider?"): in the section, the
+ * strip, the room and the viewer (plan-compare.ts, compare-slider.ts). The
+ * designer's two sheets follow it as they were.
+ *
  * The viewer: any picture opens large. During the watch party the reveal
  * keeps playing in sight (Peter, Nov 9 2026: the design has to be seen
  * during the reveal): on a laptop the viewer opens beside the video, over
@@ -41,8 +47,11 @@
  * player in its top corner (a tap on it goes back). Otherwise it's a plain
  * full-screen viewer. The page holds still behind it either way.
  */
-import { fetchDesign, slideSrc, designSignature, focusOf, isWholeSheet, knownRatio, type DesignSlide } from './reveal-design-client';
-import { designPartsHtml, designPartsOf, designName, designLead, gridClass, partNote, partTitle, possessive, straight, type PartKey } from './live-design-html';
+import { fetchDesign, slideSrc, designSignature, isWholeSheet, knownRatio, planPairOf, type DesignSlide, type PlanPair } from './reveal-design-client';
+import { designPartsHtml, designPartsOf, designName, designLead, gridClass, partNote, partTitle, possessive, straight, compareHtml, COMPARE_NOTE, type PartKey } from './live-design-html';
+import { compareFor } from './plan-compare';
+import { attachCompare, type CompareHandle } from './compare-slider';
+import { createGallery, type GalleryItem } from './design-viewer';
 import { holdPlace } from './hold-place';
 import type { Stage } from './live-stage';
 import { DESK } from './live-media';
@@ -103,6 +112,12 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   let firstAsk = true;
   let sig = '';
   let slides: DesignSlide[] = [];
+  // The plan's compare, while its two sheets are here and line up; every compare drawn (section, strip, room)
+  let pair: PlanPair | null = null;
+  // Where the compare's line was last left (any of them: the section's, the room's, the viewer's), so the next one to
+  // show starts there; null until one has swept in or been moved
+  let cmpPos: number | null = null;
+  let compares: { root: HTMLElement; handle: CompareHandle; near: IntersectionObserver | null }[] = [];
   let askTimer: ReturnType<typeof setTimeout> | undefined;
   let alive = true;
   let asking: AbortController | null = null;
@@ -147,8 +162,11 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     sizeWatch?.disconnect();
     sig = '';
     slides = [];
+    forgetCompares();
+    pair = null;
     if (!keepPlace) mark(false);
     drawRoom();
+    railFace();
   }
 
   function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = '', text = ''): HTMLElementTagNameMap[K] {
@@ -167,14 +185,111 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     const gone = cards.get(s) || [];
     cards.delete(s);
     railCards.delete(s);
-    if (shown === s && viewer?.open) {
-      if (slides.length) void show(slides[0]); else viewer.close();
-    }
+    if (pair && (pair.existing === s || pair.proposed === s)) dropCompare(false);
     holdPlace(() => {
       for (const li of gone) li.remove();
       for (const r of recounts) r();
       if (!slides.length) { section.hidden = true; mark(false); }
     });
+    refreshViewer();
+    railFace();
+  }
+
+  // ── The plan's compare ──
+  function forgetCompares() {
+    for (const c of compares) { c.handle.destroy(); c.near?.disconnect(); }
+    compares = [];
+    // (the room's is drawn again when it's next wanted)
+    room?.querySelector('[data-lrm="cmp"]')?.replaceChildren();
+  }
+  /** It can't be (it doesn't line up, a sheet can't be had): every compare goes, the sheets stay */
+  function dropCompare(redraw = true) {
+    if (!pair) return;
+    pair = null;
+    forgetCompares();
+    // (the room's plan loses its first picture: the one it showed keeps its place)
+    const at = roomAt.get('plans');
+    if (at) roomAt.set('plans', at - 1);
+    holdPlace(() => {
+      for (const e of document.querySelectorAll('.ldz-compare, .ldz-sheets, .hds-cmp-li')) e.remove();
+      for (const ul of parts.querySelectorAll('.ldz-grid--sheets')) ul.classList.remove('ldz-grid--sheets');
+      const note = parts.querySelector<HTMLElement>('.ldz-part[data-part="plans"] .ldz-part__note');
+      if (note) { note.textContent = partNote('plans', slides.filter((x) => x.kind === 'as-built' || x.kind === 'proposed')); note.hidden = !note.textContent; }
+      const cmp = rq('cmp'); if (cmp) { cmp.replaceChildren(); cmp.hidden = true; }
+      roomSig = ''; roomTabsSig = '';
+      if (redraw) drawRoom();
+    });
+    if (redraw) refreshViewer();
+  }
+  /**
+   * One compare wired: its line moves under a finger or the mouse (and with the keyboard), its pictures come from
+   * plan-compare.ts (lined up, the pig taken out), then it sweeps once from today's plan to the middle. `open`: a
+   * click that isn't a drag, or its corner button, opens it big
+   */
+  function mountCompare(root: HTMLElement, open: (from: Element) => void) {
+    const p = pair;
+    if (!p) return;
+    const before = root.querySelector<HTMLImageElement>('[data-pcmp="before"]');
+    const after = root.querySelector<HTMLImageElement>('[data-pcmp="after"]');
+    // (its knob kept inside the picture at either end, where the line itself goes to the edge)
+    const knob = (pos: number) => {
+      const w = root.clientWidth;
+      const x = (w * pos) / 100;
+      root.style.setProperty('--knob-dx', `${(Math.max(23, Math.min(w - 23, x)) - x).toFixed(1)}px`);
+    };
+    const handle = attachCompare(root, {
+      range: root.querySelector<HTMLInputElement>('[data-pcmp="range"]'),
+      labelBefore: root.querySelector<HTMLElement>('[data-pcmp="tag-before"]'),
+      labelAfter: root.querySelector<HTMLElement>('[data-pcmp="tag-after"]'),
+      // It sweeps in only if no compare on the page has been seen yet; else it starts where the line was left
+      intro: cmpPos == null,
+      introReady: () => root.dataset.state === 'ready',
+      onTap: () => open(root),
+      onMove: (pos) => { knob(pos); if (root.dataset.state === 'ready') cmpPos = pos; },
+    });
+    if (cmpPos != null) handle.set(cmpPos);
+    root.querySelector('[data-pcmp="enlarge"]')?.addEventListener('click', () => open(root));
+    // Its pictures are made once it's nearly in sight (the section's, far down the page, waits; the room's is in sight)
+    const fill = () => {
+      void wantCompare().then(async (made) => {
+        if (pair !== p || !made || !root.isConnected || !before || !after) return;
+        before.src = made.before;
+        after.src = made.after;
+        await Promise.all([before.decode?.().catch(() => {}), after.decode?.().catch(() => {})]);
+        if (pair !== p) return;
+        root.dataset.state = 'ready';
+        handle.intro();
+      });
+    };
+    let near: IntersectionObserver | null = null;
+    if (typeof IntersectionObserver !== 'undefined') {
+      near = new IntersectionObserver((list) => { if (list.some((x) => x.isIntersecting)) { near?.disconnect(); fill(); } }, { rootMargin: '600px 0px' });
+      near.observe(root);
+    } else fill();
+    compares.push({ root, handle, near });
+  }
+  /**
+   * The compare's two pictures, made (once: plan-compare.ts keeps them) when something is about to show them; every
+   * small picture of it on the page filled then. It can't be made: every compare goes, the sheets stay
+   */
+  function wantCompare() {
+    const p = pair;
+    if (!p) return Promise.resolve(null);
+    return compareFor(p).then((made) => {
+      if (pair !== p) return null;
+      if (!made) { dropCompare(); return null; }
+      for (const im of document.querySelectorAll<HTMLImageElement>('img[data-cmp-half]')) {
+        const want = im.dataset.cmpHalf === 'before' ? made.before : made.after;
+        if (im.getAttribute('src') !== want) im.src = want;
+      }
+      return made;
+    });
+  }
+  /** A small picture of the compare (the strip, the room's small ones): the two plans half and half, once they're made */
+  function compareThumb(halfClass: string): HTMLElement[] {
+    const a = el('img', halfClass), b = el('img');
+    for (const [im, w] of [[b, 'after'], [a, 'before']] as const) { im.alt = ''; im.decoding = 'async'; im.dataset.cmpHalf = w; }
+    return [b, a];
   }
 
   /** What a picture is, on it ('Before', 'Existing', 'Proposed'): the same badge in the section, the strip and the viewer */
@@ -225,6 +340,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       const ul = wrap.querySelector<HTMLElement>('ul');
       if (!ul) continue;
       const noteEl = wrap.querySelector<HTMLElement>('.ldz-part__note');
+      const cmp = key === 'plans' ? wrap.querySelector<HTMLElement>('.ldz-compare .pcmp') : null;
+      if (cmp && pair) mountCompare(cmp, (from) => open('cmp', from));
       const width = key === 'photos' ? (mine.length === 1 ? 1600 : 900) : mine.length === 1 ? 1800 : 1200;
       for (const li of ul.querySelectorAll<HTMLElement>(':scope > li[data-i]')) {
         const s = next[Number(li.dataset.i)];
@@ -232,8 +349,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       }
       const recount = () => {
         const left = slides.filter((y) => mine.includes(y));
-        if (key === 'photos') ul.dataset.n = String(ul.children.length); else ul.className = gridClass(key, left);
-        const note = partNote(key, left);
+        if (key === 'photos') ul.dataset.n = String(ul.children.length); else ul.className = `${gridClass(key, left)}${key === 'plans' && pair ? ' ldz-grid--sheets' : ''}`;
+        const note = key === 'plans' && pair ? COMPARE_NOTE : partNote(key, left);
         if (noteEl) { noteEl.textContent = note; noteEl.hidden = !note; }
         if (!ul.children.length) wrap.remove();
       };
@@ -261,6 +378,26 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     li.append(b);
     track(s, li);
     railCards.set(s, b);
+    return li;
+  }
+
+  /** The strip's compare: the two plans half and half, a line between; it opens the compare big */
+  let railCmp: HTMLButtonElement | null = null;
+  function railCompare() {
+    const li = el('li', 'hds-cmp-li');
+    const b = el('button', 'hds-item hds-paper hds-cmp');
+    b.type = 'button';
+    b.setAttribute('aria-label', 'See it big: the floor plan before and after, a line to drag between them');
+    b.append(...compareThumb('hds-half'), el('span', 'hds-tag hds-tag--cmp', 'Before & after'));
+    b.addEventListener('click', () => open('cmp', b));
+    li.append(b);
+    railCmp = b;
+    // Its pictures are made once it's in the strip's view (the strip shows, and it's scrolled to)
+    if (typeof IntersectionObserver !== 'undefined') {
+      const near = new IntersectionObserver((list) => { if (list.some((x) => x.isIntersecting)) { near.disconnect(); void wantCompare(); } }, { rootMargin: '200px' });
+      near.observe(b);
+      compares.push({ root: b, handle: { pos: 50, set() {}, intro() {}, cancel() {}, destroy() {} }, near });
+    }
     return li;
   }
 
@@ -298,6 +435,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
         const label = x.kind === 'before' ? `photo ${i + 1} of ${list.length}, ${caption}` : caption;
         return railItem(x, label);
       }));
+      if (title === 'The plan' && pair) ul.prepend(railCompare());
       recounts.push(() => { if (!ul.children.length) wrap.remove(); });
       out.push(wrap);
     }
@@ -310,7 +448,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     if (s === sig) return;
     if (!next.length) { hide(); return; }
     // Someone looking at a picture keeps it when the design is redrawn (the reveal starting turns "today" into "before")
-    const looking = viewer?.open && shown ? `${shown.kind}|${shown.url}` : '';
+    const now = viewer?.open ? gallery?.item : null;
+    const looking = !now ? '' : now.kind === 'compare' ? 'cmp' : `${now.s.kind}|${now.s.url}`;
     // The server drew these same cards into the page (functions/live/[[path]].js): they're kept, not drawn again
     const served = !sig && parts.dataset.sig === s && !!parts.firstElementChild;
     sig = s;
@@ -319,6 +458,9 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     railCards.clear();
     recounts = [];
     sizeWatch?.disconnect();
+    forgetCompares();
+    pair = planPairOf(slides);
+    railCmp = null;
     if (nameEl) nameEl.textContent = designName(name);
     // The line under the heading says what's here, as it is now (designLead), and again as pictures leave
     const lead = () => { if (leadEl) leadEl.textContent = designLead(slides, isAfter); };
@@ -336,9 +478,11 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       section.hidden = false;
     });
     mark(true);
-    if (looking) {
-      const again = slides.find((x) => `${x.kind}|${x.url}` === looking);
-      if (again) void show(again); else viewer?.close();
+    railFace();
+    // Someone looking keeps what they were looking at (the compare, or the same picture), else the first
+    if (viewer?.open) {
+      const again = looking === 'cmp' ? (pair ? 'cmp' : null) : slides.find((x) => `${x.kind}|${x.url}` === looking) || null;
+      if (again) refreshViewer(again); else requestClose();
     }
   }
 
@@ -361,8 +505,10 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   }
 
   // ── The room beside the video (LiveRoom.astro) ──
-  // One part at a time (the room, the plan, the look), its picture big and the rest small. Its pictures come only once
-  // it shows (a computer, the watch party, an upright video), at the size it shows at; a new one fades in over the last
+  // One part at a time (the room, the plan, the look), its picture big and the rest small; the plan's first is its
+  // compare, when there is one. Its pictures come only once it shows (a computer, the watch party, an upright video), at
+  // the size it shows at; a new one fades in over the last
+  type RoomEntry = DesignSlide | 'cmp';
   const rq = <T extends HTMLElement = HTMLElement>(k: string) => room?.querySelector<T>(`[data-lrm="${k}"]`) || null;
   const touchy = matchMedia('(hover: none)');
   let roomPart: PartKey | '' = '';
@@ -373,6 +519,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   let roomTabsSig = '';
   let roomShown: DesignSlide | null = null;
   const roomShowing = () => !!room && !room.hidden && room.getClientRects().length > 0;
+  /** A part's pictures in the room, in order: the plan's compare first */
+  const entriesOf = (p: { key: PartKey; slides: DesignSlide[] }): RoomEntry[] => (p.key === 'plans' && pair ? ['cmp', ...p.slides] : p.slides);
   // Each picture's small one, once loaded: it stands in, at once, while its big one comes
   const roomSmall = new Map<DesignSlide, string>();
   // Every big picture is fetched the first time the room shows, so a switch never waits on the network
@@ -422,21 +570,35 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       pic.append(img);
     });
   }
+  /** The compare in the big picture's place (drawn the first time it's wanted), or the big picture back */
+  function roomCompare(on: boolean) {
+    const cmp = rq('cmp'), big = rq('big');
+    if (!cmp || !big) return;
+    big.hidden = on;
+    cmp.hidden = !on;
+    if (on && pair && !cmp.firstElementChild) {
+      cmp.innerHTML = compareHtml(pair, true);
+      const root = cmp.querySelector<HTMLElement>('.pcmp');
+      if (root) mountCompare(root, (from) => open('cmp', from));
+    }
+  }
   function drawRoom() {
     if (!room) return;
     const partsNow = designPartsOf(slides);
     const tabs = rq('tabs'), thumbs = rq('thumbs'), big = rq('big');
     if (!partsNow.length || !tabs || !thumbs || !big) {
       room.hidden = true;
-      tabs?.replaceChildren(); thumbs?.replaceChildren(); rq('pic')?.replaceChildren();
+      tabs?.replaceChildren(); thumbs?.replaceChildren(); rq('pic')?.replaceChildren(); rq('cmp')?.replaceChildren();
       roomSig = ''; roomTabsSig = ''; roomShown = null; roomPart = ''; roomAt.clear();
+      railFace();
       return;
     }
     if (!partsNow.some((p) => p.key === roomPart)) roomPart = partsNow[0].key;
     const part = partsNow.find((p) => p.key === roomPart)!;
-    const at = Math.max(0, Math.min(roomAt.get(part.key) ?? 0, part.slides.length - 1));
+    const entries = entriesOf(part);
+    const at = Math.max(0, Math.min(roomAt.get(part.key) ?? 0, entries.length - 1));
     roomAt.set(part.key, at);
-    const s = part.slides[at];
+    const e = entries[at];
     const title = partTitle(part.key, roomAfter);
     const nameEl2 = rq('name');
     if (nameEl2) nameEl2.textContent = roomName ? `${possessive(straight(roomName))} room` : 'The room';
@@ -467,21 +629,24 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       b.tabIndex = on ? 0 : -1;
     }
     rq('stage')?.setAttribute('aria-labelledby', partsNow.length > 1 ? `lrm-tab-${part.key}` : 'lrm-name');
-    const sig = `${part.key}|${part.slides.map((x) => x.url).join(',')}`;
+    const sig = `${part.key}|${entries.map((x) => (x === 'cmp' ? 'cmp' : x.url)).join(',')}`;
     if (sig !== roomSig) {
       roomSig = sig;
       thumbs.toggleAttribute('data-paper', part.key !== 'photos');
-      thumbs.hidden = part.slides.length < 2;
-      thumbs.replaceChildren(...part.slides.map((x, i) => {
+      thumbs.hidden = entries.length < 2;
+      thumbs.replaceChildren(...entries.map((x, i) => {
         const li = el('li');
-        const b = el('button', 'lrm-thumb');
+        const b = el('button', `lrm-thumb${x === 'cmp' ? ' lrm-thumb--cmp' : ''}`);
         b.type = 'button';
-        b.setAttribute('aria-label', `Show ${x.kind === 'before' ? `photo ${i + 1} of ${part.slides.length}` : straight(x.caption)}`);
-        const img = el('img');
-        img.alt = '';
-        img.decoding = 'async';
-        img.addEventListener('error', () => drop(x), { once: true });
-        b.append(img);
+        b.setAttribute('aria-label', x === 'cmp' ? 'Show the floor plan before and after' : `Show ${x.kind === 'before' ? `photo ${i + 1} of ${entries.length}` : straight(x.caption)}`);
+        if (x === 'cmp') { b.append(...compareThumb('lrm-half')); if (roomShowing()) void wantCompare(); }
+        else {
+          const img = el('img');
+          img.alt = '';
+          img.decoding = 'async';
+          img.addEventListener('error', () => drop(x), { once: true });
+          b.append(img);
+        }
         b.addEventListener('click', () => { roomAt.set(part.key, i); drawRoom(); });
         li.append(b);
         return li;
@@ -489,30 +654,42 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     }
     // The one showing big is marked among the small ones
     [...thumbs.querySelectorAll<HTMLButtonElement>('.lrm-thumb')].forEach((b, i) => { if (i === at) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); });
-    big.toggleAttribute('data-paper', s.kind !== 'before');
-    big.toggleAttribute('data-sheet', isWholeSheet(s));
-    big.setAttribute('aria-label', `See it big: ${s.badge ? `${s.badge}, ` : ''}${title}${part.slides.length > 1 ? `, ${at + 1} of ${part.slides.length}` : ''}`);
+    const how = touchy.matches ? 'tap' : 'click';
+    const cap = rq('cap');
+    const count = rq('count');
     const b = rq('badge');
-    if (b) { b.textContent = s.badge || ''; b.dataset.kind = s.kind; b.hidden = !s.badge; }
     // (the switch above says which part this is already, and the badge on the picture what it shows: the line under it
     // names it only when there's no switch)
-    const cap = rq('cap'); if (cap) cap.textContent = partsNow.length > 1 ? '' : title;
-    const how = touchy.matches ? 'tap' : 'click';
-    const count = rq('count'); if (count) count.textContent = part.slides.length > 1 ? `${at + 1} of ${part.slides.length} · ${how} to see it big` : `${how[0].toUpperCase()}${how.slice(1)} to see it big`;
+    if (cap) cap.textContent = partsNow.length > 1 ? '' : title;
+    if (e === 'cmp') {
+      roomCompare(true);
+      if (b) b.hidden = true;
+      if (count) count.textContent = `${at + 1} of ${entries.length} · drag the line`;
+      big.setAttribute('aria-label', '');
+    } else {
+      roomCompare(false);
+      big.toggleAttribute('data-paper', e.kind !== 'before');
+      big.toggleAttribute('data-sheet', isWholeSheet(e));
+      big.setAttribute('aria-label', `See it big: ${e.badge ? `${e.badge}, ` : ''}${title}${entries.length > 1 ? `, ${at + 1} of ${entries.length}` : ''}`);
+      if (b) { b.textContent = e.badge || ''; b.dataset.kind = e.kind; b.hidden = !e.badge; }
+      if (count) count.textContent = entries.length > 1 ? `${at + 1} of ${entries.length} · ${how} to see it big` : `${how[0].toUpperCase()}${how.slice(1)} to see it big`;
+    }
     room.hidden = false;
     if (roomShowing()) {
-      roomPicture(s);
-      for (const [i, img] of [...thumbs.querySelectorAll<HTMLImageElement>('.lrm-thumb img')].entries()) {
-        const x = part.slides[i];
-        if (!x || img.getAttribute('src')) continue;
+      if (e !== 'cmp') roomPicture(e);
+      [...thumbs.querySelectorAll<HTMLButtonElement>('.lrm-thumb')].forEach((tb, i) => {
+        const x = entries[i];
+        const img = tb.querySelector('img');
+        if (!x || x === 'cmp' || !img || img.getAttribute('src')) return;
         void slideSrc(x, 220).then((src) => { if (src && !img.getAttribute('src')) { img.src = src; img.addEventListener('load', () => roomSmall.set(x, src), { once: true }); } else if (!src) drop(x); });
-      }
+      });
     }
+    railFace();
   }
   rq('big')?.addEventListener('click', () => {
     const part = designPartsOf(slides).find((p) => p.key === roomPart);
-    const s = part?.slides[roomAt.get(part.key) ?? 0];
-    if (s) open(s);
+    const e = part ? entriesOf(part)[roomAt.get(part.key) ?? 0] : null;
+    if (e) open(e, rq('big'));
   });
   // A tab list's keys: the arrows go round, Home and End to the first and the last
   rq('tabs')?.addEventListener('keydown', (e) => {
@@ -525,29 +702,82 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     drawRoom();
     rq('tabs')?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
   });
-  // Its pictures come the moment it shows (the watch party starting, a window widened past the phone layout)
-  const roomWatch = room && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (roomShowing()) drawRoom(); }) : null;
+  // Its pictures come the moment it shows (the watch party starting, a window widened past the phone layout); the
+  // rail's way in steps aside while it shows
+  const roomWatch = room && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (roomShowing()) drawRoom(); else railFace(); }) : null;
   if (room) roomWatch?.observe(room);
 
-  // ── Viewer ──
-  let shown: DesignSlide | null = null;
+  // ── The rail's way in (LiveStage's "The room" button) ──
+  // The rail beside a live upright video sits where the design's strip did, so it carries a button with the room's first
+  // picture for its face; it opens the viewer at that picture (the video kept small in the corner). Not while the room
+  // beside the video (a computer's Theater) shows the design already
+  const railBtn = frame?.querySelector<HTMLButtonElement>('[data-s="design"]') || null;
+  function railFace() {
+    if (!stage) return;
+    const first = slides.find((x) => x.kind === 'before') || slides[0];
+    if (!first || roomShowing()) { stage.setDesign(''); return; }
+    void slideSrc(first, 140).then((src) => { if (alive && (slides.find((x) => x.kind === 'before') || slides[0]) === first && !roomShowing()) stage.setDesign(src || ''); });
+  }
+  const onRailBtn = () => {
+    const first = itemsNow()[0];
+    if (first) open(first.kind === 'compare' ? 'cmp' : first.s, railBtn?.querySelector('img') || railBtn);
+  };
+  railBtn?.addEventListener('click', onRailBtn);
+
+  // ── Viewer (its pictures: design-viewer.ts) ──
   let mode: ViewerMode = 'modal';
   const vq = <T extends Element>(k: string) => viewer?.querySelector<T>(`[data-ldv="${k}"]`) || null;
   let opener: HTMLElement | null = null;
+  /** The card it opened from: it goes back into it (or into the one showing what it shows by then) */
+  let origin: Element | null = null;
   let held: { y: number; overflow: string } | null = null;
+  let closing = false;
+  let items: GalleryItem[] = [];
+  const stageEl = vq<HTMLElement>('stage');
 
-  /** The strip marks the picture open in the viewer, and scrolls it into its own view (never the page) */
-  function markShown(s: DesignSlide | null) {
-    if (s && room) {
-      const p = designPartsOf(slides).find((x) => x.slides.includes(s));
-      if (p) { roomPart = p.key; roomAt.set(p.key, p.slides.indexOf(s)); drawRoom(); }
+  /** Every picture the viewer goes through, in order: the room, the plan (its compare first), the look */
+  function itemsNow(): GalleryItem[] {
+    const out: GalleryItem[] = [];
+    for (const p of designPartsOf(slides)) {
+      if (p.key === 'plans' && pair) out.push({ kind: 'compare', pair, part: 'plans' });
+      for (const s of p.slides) out.push({ kind: 'slide', s, part: p.key });
     }
-    for (const [x, b] of railCards) {
-      if (x === s) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
+    return out;
+  }
+  const indexIn = (list: GalleryItem[], t: RoomEntry) => list.findIndex((x) => (t === 'cmp' ? x.kind === 'compare' : x.kind === 'slide' && x.s === t));
+  /** A small copy of a picture the page has already loaded (the strip's, a section card's, the room's), to show at once */
+  function smallOf(s: DesignSlide): string | null {
+    const imgs = [railCards.get(s)?.querySelector('img'), ...(cards.get(s) || []).map((li) => li.querySelector('img'))];
+    for (const im of imgs) if (im && im.complete && im.naturalWidth && (im.currentSrc || im.src)) return im.currentSrc || im.src;
+    return roomSmall.get(s) || null;
+  }
+  const gallery = stageEl ? createGallery(stageEl, {
+    src: (s, w) => slideSrc(s, w),
+    small: smallOf,
+    onChange: (i) => paintBar(i),
+    onZoom: (z, sheet) => zoomUi(z, sheet),
+    onDismiss: () => requestClose(),
+    onDismissProgress: (p) => viewer?.style.setProperty('--ldv-dim', (1 - p * 0.92).toFixed(3)),
+    onFail: (s) => drop(s),
+    onCompareFail: () => dropCompare(),
+    comparePos: () => cmpPos,
+    onCompareMove: (pos) => { cmpPos = pos; },
+  }) : null;
+
+  /** The strip and the room mark what the viewer shows (the strip scrolls it into its own view, never the page's) */
+  function markShown(it: GalleryItem | null) {
+    if (it && room) {
+      const p = designPartsOf(slides).find((x) => x.key === it.part);
+      const i = p ? entriesOf(p).indexOf(it.kind === 'compare' ? 'cmp' : it.s) : -1;
+      if (p && i >= 0) { roomPart = p.key; roomAt.set(p.key, i); drawRoom(); }
     }
-    const b = s ? railCards.get(s) : null;
-    if (!b || !railScroll) return;
-    const r = b.getBoundingClientRect();
+    const current = !it ? null : it.kind === 'compare' ? railCmp : railCards.get(it.s) || null;
+    for (const b of [...railCards.values(), railCmp]) {
+      if (!b) continue;
+      if (b === current) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current');
+    }
+    if (!current || !railScroll || !current.getClientRects().length) return;
+    const r = current.getBoundingClientRect();
     const c = railScroll.getBoundingClientRect();
     const behavior = (matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth') as ScrollBehavior;
     if (r.top < c.top) railScroll.scrollBy({ top: r.top - c.top - 6, behavior });
@@ -556,85 +786,59 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     else if (r.right > c.right) railScroll.scrollBy({ left: r.right - c.right + 6, behavior });
   }
 
-  // ── A whole plan sheet (Peter, Nov 16 2026: the plans shown as the official plan set) ──
-  // It opens as the designer drew it, title block and all; "Zoom in" (or a double-click or double-tap) moves in on its
-  // drawing, big enough to read the dimensions, and "Whole sheet" goes back. The picture is moved, never cropped, so
-  // it's the same sheet either way
-  let zoomed = false;
-  /** Where the picture goes: the drawing filling the stage when zoomed, else the whole sheet fitted in it */
-  function applyZoom() {
-    const img = vq<HTMLImageElement>('img');
-    const stg = vq<HTMLElement>('stage');
-    const f = focusOf(shown);
-    if (!img || !stg) return;
-    const W = stg.clientWidth, H = stg.clientHeight;
-    const sw = shown?.w || img.naturalWidth, sh = shown?.h || img.naturalHeight;
-    if (!f || !zoomed || !W || !H || !sw || !sh) { img.style.transform = ''; return; }
-    const fit = Math.min(W / sw, H / sh);
-    const dw = sw * fit, dh = sh * fit;
-    const k = Math.max(1, Math.min(W / (f.w * dw), H / (f.h * dh)) * 0.94);
-    const cx = (W - dw) / 2 + (f.x + f.w / 2) * dw, cy = (H - dh) / 2 + (f.y + f.h / 2) * dh;
-    img.style.transform = `translate(${(W / 2 - k * cx).toFixed(1)}px, ${(H / 2 - k * cy).toFixed(1)}px) scale(${k.toFixed(4)})`;
+  // The bar: what it is (its badge leading the caption: "BEFORE  Dylan's room today", "PROPOSED  The new floor plan"),
+  // the parts with a count each (one tap to each; the one showing yellow) and where in its part this one is
+  const shortPart: Record<PartKey, string> = { photos: 'The room', plans: 'The plan', boards: 'The look' };
+  let partsSig = '';
+  function paintBar(i: number) {
+    const it = items[i];
+    if (!it) return;
+    const k = vq<HTMLElement>('kicker'), c = vq<HTMLElement>('caption');
+    if (it.kind === 'compare') {
+      if (k) { k.textContent = ''; k.dataset.kind = ''; }
+      if (c) c.textContent = 'The floor plan, before and after';
+    } else {
+      if (k) { k.textContent = it.s.badge || it.s.kicker; k.dataset.kind = it.s.badge ? it.s.kind : ''; }
+      if (c) c.textContent = straight(it.s.caption);
+    }
+    const keys = [...new Set(items.map((x) => x.part))];
+    const inPart = items.filter((x) => x.part === it.part);
+    const partsEl = vq<HTMLElement>('parts');
+    if (partsEl) {
+      const want = keys.length > 1 ? keys.map((key) => `${key}:${items.filter((x) => x.part === key).length}`).join(',') : '';
+      if (want !== partsSig) {
+        partsSig = want;
+        partsEl.replaceChildren(...(want ? keys : []).map((key) => {
+          const b = el('button', 'ldv__part');
+          b.type = 'button';
+          b.dataset.part = key;
+          const n = items.filter((x) => x.part === key).length;
+          b.append(document.createTextNode(shortPart[key]), el('span', 'ldv__part-at', String(n)));
+          b.setAttribute('aria-label', `${shortPart[key]}: ${n} picture${n === 1 ? '' : 's'}`);
+          b.addEventListener('click', () => gallery?.go(items.findIndex((x) => x.part === key)));
+          return b;
+        }));
+      }
+      for (const b of partsEl.querySelectorAll<HTMLButtonElement>('.ldv__part')) b.setAttribute('aria-current', String(b.dataset.part === it.part));
+    }
+    // Where in its part (in its own place, its numbers all one width, so nothing moves as it changes)
+    const n = vq<HTMLElement>('count');
+    if (n) n.textContent = inPart.length > 1 ? `${inPart.indexOf(it) + 1} of ${inPart.length}` : '';
+    const prev = vq<HTMLButtonElement>('prev'), next = vq<HTMLButtonElement>('next');
+    // (aria-disabled, not disabled: a disabled button drops the keyboard's focus out of the viewer, and the arrows with it)
+    if (prev) { prev.hidden = items.length < 2; prev.setAttribute('aria-disabled', String(i <= 0)); }
+    if (next) { next.hidden = items.length < 2; next.setAttribute('aria-disabled', String(i >= items.length - 1)); }
+    markShown(it);
   }
-  /** The button says what it does next, and is there only for a whole sheet */
-  function zoomUi() {
+  /** The zoom button says what it does next: a whole sheet goes to its drawing and back, anything else in and out */
+  function zoomUi(zoomed: boolean, sheet: boolean) {
     const b = vq<HTMLButtonElement>('zoom');
     if (!b) return;
-    const f = !!focusOf(shown);
-    b.hidden = !f;
+    b.hidden = false;
     const t = b.querySelector<HTMLElement>('[data-ldv="zoom-text"]');
-    if (t) t.textContent = zoomed ? 'Whole sheet' : 'Zoom in';
+    if (t) t.textContent = zoomed ? (sheet ? 'Whole sheet' : 'Zoom out') : 'Zoom in';
     b.dataset.zoomed = zoomed ? 'true' : 'false';
-    vq<HTMLElement>('stage')?.toggleAttribute('data-sheet', f);
-    vq<HTMLElement>('stage')?.toggleAttribute('data-zoomed', f && zoomed);
-  }
-  function toggleZoom() {
-    if (!focusOf(shown)) return;
-    zoomed = !zoomed;
-    zoomUi();
-    applyZoom();
-  }
-  const zoomWatch = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (viewer?.open) applyZoom(); }) : null;
-  const stageEl = vq<HTMLElement>('stage');
-  if (stageEl) zoomWatch?.observe(stageEl);
-  const onZoomClick = () => toggleZoom();
-  const onDbl = (e: MouseEvent) => { if (focusOf(shown) && (e.target as Element)?.closest?.('[data-ldv="img"]')) { e.preventDefault(); toggleZoom(); } };
-  // A double tap on the picture (two taps close together, neither a swipe): the same as the button
-  let lastTap = 0;
-  const onTap = (e: TouchEvent) => {
-    if (e.changedTouches.length !== 1 || !(e.target as Element)?.closest?.('[data-ldv="img"]') || !focusOf(shown)) return;
-    const now = Date.now();
-    if (now - lastTap < 320) { lastTap = 0; e.preventDefault(); toggleZoom(); } else lastTap = now;
-  };
-
-  async function show(s: DesignSlide) {
-    const img = vq<HTMLImageElement>('img');
-    if (!img) return;
-    // A new picture comes in where it belongs, without sliding there from the last one's place
-    const moving = shown !== s;
-    shown = s;
-    if (moving) {
-      zoomed = false;
-      img.classList.add('is-still');
-      zoomUi();
-      applyZoom();
-      requestAnimationFrame(() => requestAnimationFrame(() => img.classList.remove('is-still')));
-    }
-    const i = slides.indexOf(s);
-    // The badge leads the caption ("BEFORE  Dylan's room today", "PROPOSED  The new floor plan"); a board keeps its kicker
-    const k = vq<HTMLElement>('kicker'); if (k) { k.textContent = s.badge || s.kicker; k.dataset.kind = s.badge ? s.kind : ''; }
-    const c = vq<HTMLElement>('caption'); if (c) c.textContent = straight(s.caption);
-    const n = vq<HTMLElement>('count'); if (n) n.textContent = slides.length > 1 ? `${i + 1} of ${slides.length}` : '';
-    img.alt = straight(s.alt);
-    for (const k2 of ['prev', 'next']) { const b = vq<HTMLButtonElement>(k2); if (b) b.hidden = slides.length < 2; }
-    markShown(s);
-    // A whole sheet comes big enough that its drawing is sharp when zoomed to it (as wide as the sheet is, at most)
-    const dpr = devicePixelRatio || 1;
-    const f = focusOf(s);
-    const want = f ? Math.min(s.w || 3200, 3200, Math.round((Math.max(innerWidth, innerHeight) * dpr) / Math.max(f.w, 0.2)))
-      : Math.min(2400, Math.round(Math.max(innerWidth, innerHeight) * dpr));
-    const src = await slideSrc(s, want);
-    if (shown === s && src) { img.src = src; if (f) img.decode?.().then(() => { if (shown === s) applyZoom(); }).catch(() => {}); }
+    stageEl?.toggleAttribute('data-zoomed', zoomed);
   }
 
   /** How the viewer opens now: beside the video (laptop), over a phone with the video kept small, or alone */
@@ -645,7 +849,17 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   }
   // From the screen's left edge to the frame (the video and its strip), with a margin each side
   const sideWidth = () => Math.floor((frame?.getBoundingClientRect().left || 0) - 24);
-  const fitSide = () => { if (viewer && mode === 'side') viewer.style.setProperty('--ldv-w', `${Math.max(SIDE_MIN_W, sideWidth())}px`); };
+  const fitSide = () => {
+    if (!viewer || mode !== 'side') return;
+    viewer.style.setProperty('--ldv-w', `${Math.max(SIDE_MIN_W, sideWidth())}px`);
+    // Top and bottom with the video (the Theater's columns are as tall as it), never past it onto the page below
+    const f = frame?.getBoundingClientRect();
+    const head = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-height')) || 80;
+    const top = Math.max(head + 12, f ? f.top : head + 12);
+    const bottom = Math.min(innerHeight - 12, f && f.height > 200 ? f.bottom : innerHeight - 12);
+    viewer.style.setProperty('--ldv-top', `${Math.round(top)}px`);
+    viewer.style.setProperty('--ldv-h', `${Math.round(Math.max(320, bottom - top))}px`);
+  };
   // On a phone the small video's shape decides the room the viewer leaves it, and that shape can change while the viewer
   // is open (the picture's real shape arrives after the setting's), so it's followed, not read once
   const wideNow = () => mode === 'pinned' && hero?.dataset.orientation === 'landscape';
@@ -657,51 +871,131 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   // starting: it opens again, on the same picture, in the way that fits now (beside the video, over it with the video
   // pinned, or alone)
   const onLayout = () => {
-    if (!viewer?.open || !shown) return;
+    if (!viewer?.open || !gallery?.item) return;
     if (modeNow() === mode) { fitSide(); return; }
-    const again = shown;
+    const it = gallery.item;
+    const again: RoomEntry = it.kind === 'compare' ? 'cmp' : it.s;
     viewer.addEventListener('close', () => { if (alive) open(again); }, { once: true });
     viewer.close();
   };
   laptop.addEventListener('change', onLayout);
   if (hero) shapeWatch?.observe(hero, { attributes: true, attributeFilter: ['data-orientation', 'data-party'] });
 
-  function open(s: DesignSlide) {
-    if (!viewer || !slides.includes(s)) return;
-    if (viewer.open) { void show(s); return; }
+  // ── What's under the viewer can't be reached while it's open (Tab, a screen reader): only the viewer, and what stays
+  // in sight with it, the video (with its controls and strip) and, beside the video on a laptop, the messages and the
+  // site's header. (Tab into the page under it scrolled the page and typed into fields no one could see)
+  let inerted: HTMLElement[] = [];
+  function hold(keep: (Element | null | undefined)[]) {
+    unhold();
+    const kept = [viewer, ...keep].filter((e): e is Element => !!e);
+    const onPath = new Set<Element>();
+    for (const k of kept) for (let e: Element | null = k; e && e !== document.body; e = e.parentElement) onPath.add(e);
+    for (const e of onPath) {
+      for (const sib of e.parentElement ? [...e.parentElement.children] : []) {
+        if (onPath.has(sib) || !(sib instanceof HTMLElement) || sib.inert || sib.tagName === 'SCRIPT' || sib.tagName === 'STYLE') continue;
+        sib.inert = true;
+        inerted.push(sib);
+      }
+    }
+  }
+  function unhold() {
+    for (const e of inerted) e.inert = false;
+    inerted = [];
+  }
+
+  const rectOf = (e: Element | null): DOMRect | null => {
+    if (!e || !e.isConnected) return null;
+    const pic = e.matches('img, .pcmp') ? e : e.querySelector('.pcmp, .lrm-pic img.is-in, img') || e;
+    const r = pic.getBoundingClientRect();
+    return r.width && r.height ? r : null;
+  };
+
+  function open(target: RoomEntry, from?: Element | null) {
+    if (!viewer || !gallery) return;
+    const list = itemsNow();
+    const i = indexIn(list, target);
+    if (i < 0) return;
+    if (viewer.open) { gallery.go(i); return; }
     opener = document.activeElement as HTMLElement | null;
+    origin = from || null;
     mode = modeNow();
     viewer.classList.toggle('ldv--side', mode === 'side');
     viewer.classList.toggle('ldv--pinned', mode === 'pinned');
     viewer.classList.toggle('ldv--wide', wideNow());
     viewer.setAttribute('aria-modal', mode === 'modal' ? 'true' : 'false');
+    viewer.style.setProperty('--ldv-dim', '1');
     fitSide();
-    void show(s);
     // The page holds still behind it: no wheel or swipe scrolls what's underneath
     held = { y: scrollY, overflow: document.documentElement.style.overflow };
     document.documentElement.style.overflow = 'hidden';
-    if (mode === 'modal') { viewer.showModal(); return; }
-    // Not modal: the video stays in sight and in reach (its sound, its controls), and so does the strip
-    viewer.show();
-    if (mode === 'pinned') stage?.pin(true, 'design');
-    vq<HTMLElement>('close')?.focus({ preventScroll: true });
-    document.addEventListener('keydown', onDocKey);
-    document.addEventListener('click', onDocClick, true);
-    addEventListener('resize', fitSide);
+    if (mode === 'modal') viewer.showModal();
+    else {
+      // Not modal: the video stays in sight and in reach (its sound, its controls), and so does the strip
+      viewer.show();
+      if (mode === 'pinned') stage?.pin(true, 'design');
+      const stageRoot = frame?.querySelector('[data-stage]');
+      hold(mode === 'side' ? [frame, hero?.querySelector('.hero-party'), document.querySelector('body > header, .site-header')] : [stageRoot]);
+      vq<HTMLElement>('close')?.focus({ preventScroll: true });
+      document.addEventListener('keydown', onDocKey);
+      document.addEventListener('click', onDocClick, true);
+      addEventListener('resize', fitSide);
+    }
+    items = list;
+    gallery.setItems(items, i);
+    paintBar(i);
+    gallery.flyFrom(rectOf(origin));
   }
-  const step = (d: number) => {
-    if (!shown || slides.length < 2) return;
-    const i = Math.max(0, slides.indexOf(shown));
-    void show(slides[(i + d + slides.length) % slides.length]);
+  /** The pictures changed while it's open (one couldn't load, the design was redrawn): the same one stays if it can */
+  function refreshViewer(target?: RoomEntry) {
+    if (!viewer?.open || !gallery) return;
+    const list = itemsNow();
+    if (!list.length) { requestClose(); return; }
+    const it = gallery.item;
+    const now: RoomEntry | null = target || (it ? (it.kind === 'compare' ? 'cmp' : it.s) : null);
+    let i = now ? indexIn(list, now) : -1;
+    if (i < 0) i = Math.min(gallery.index, list.length - 1);
+    items = list;
+    gallery.setItems(items, i);
+    paintBar(i);
+  }
+  /** Where it goes back to: the card it opened from while that shows what it shows, else the one that does, if in sight */
+  function closeTarget(): DOMRect | null {
+    const it = gallery?.item;
+    if (!it) return null;
+    const mine = (e: Element | null | undefined) => {
+      if (!e) return null;
+      const r = rectOf(e);
+      return r && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth ? r : null;
+    };
+    const originShows = origin && (it.kind === 'compare' ? !!origin.closest('.pcmp, .hds-cmp') || origin === rq('big') : origin === rq('big') || (cards.get(it.s) || []).some((li) => li.contains(origin)) || railCards.get(it.s)?.contains(origin));
+    if (originShows || origin === railBtn?.querySelector('img')) { const r = mine(origin); if (r) return r; }
+    if (roomShowing()) return mine(it.kind === 'compare' ? rq('cmp') : rq('big'));
+    const cardEl = it.kind === 'compare' ? railCmp || parts.querySelector('.ldz-compare .pcmp') : railCards.get(it.s) || cards.get(it.s)?.[0];
+    return mine(cardEl);
+  }
+  function requestClose() {
+    if (!viewer?.open || closing) return;
+    closing = true;
+    const to = closeTarget();
+    void (gallery ? gallery.flyTo(to) : Promise.resolve()).then(() => { closing = false; if (viewer.open) viewer.close(); });
+  }
+
+  const onPrev = () => gallery?.go(gallery.index - 1);
+  const onNext = () => gallery?.go(gallery.index + 1);
+  const onZoomClick = () => gallery?.toggleZoom();
+  const onKey = (e: KeyboardEvent) => {
+    // (on the compare's line, the arrows move the line)
+    if ((e.target as Element)?.closest?.('[data-pcmp="range"]') && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); onPrev(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); onNext(); }
+    else if (e.key === '+' || e.key === '=') { e.preventDefault(); gallery?.zoomBy(1.6); }
+    else if (e.key === '-' || e.key === '_') { e.preventDefault(); gallery?.zoomBy(1 / 1.6); }
   };
-  const onPrev = () => step(-1);
-  const onNext = () => step(1);
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); } else if (e.key === 'ArrowRight') { e.preventDefault(); step(1); } };
   // Not modal, the keys work wherever focus is (the strip, the video), except in a field someone is typing in
-  const typing = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest('input, textarea, select, [contenteditable="true"]');
+  const typing = (t: EventTarget | null) => t instanceof HTMLElement && !!t.closest('input:not([data-pcmp]), textarea, select, [contenteditable="true"]');
   const onDocKey = (e: KeyboardEvent) => {
     if (!viewer?.open) return;
-    if (e.key === 'Escape') { e.preventDefault(); viewer.close(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); requestClose(); return; }
     if (viewer.contains(e.target as Node) || typing(e.target)) return;
     onKey(e);
   };
@@ -711,27 +1005,28 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     if (!(e.target as Element).closest?.('[data-stage] [data-s="picture"]')) return;
     e.preventDefault();
     e.stopPropagation();
-    viewer.close();
+    requestClose();
   };
-  let touchX: number | null = null;
-  const onTouchStart = (e: TouchEvent) => { touchX = e.touches.length === 1 ? e.touches[0].clientX : null; };
-  const onTouchEnd = (e: TouchEvent) => {
-    if (touchX == null || e.changedTouches.length !== 1) return;
-    const dx = e.changedTouches[0].clientX - touchX;
-    touchX = null;
-    // A swipe, not a pinch or a tap
-    if (Math.abs(dx) > 50 && (!window.visualViewport || window.visualViewport.scale <= 1.01)) step(dx < 0 ? 1 : -1);
+  // A click on the dark around the picture closes it (never the end of a drag)
+  const onBackdrop = (e: MouseEvent) => {
+    const t = e.target as Element;
+    if (t === viewer || ((t.classList?.contains('ldg-pane') || t.classList?.contains('ldg-fly') || t.classList?.contains('ldg-cmp')) && !gallery?.wasDrag)) requestClose();
   };
-  // A click on the dark around the picture closes it
-  const onBackdrop = (e: MouseEvent) => { if (e.target === viewer || e.target === vq('stage')) viewer?.close(); };
+  // Esc on a modal one, and its close button: it goes back into its card first
+  const onCancel = (e: Event) => { e.preventDefault(); requestClose(); };
+  const onCloseBtn = (e: MouseEvent) => { e.preventDefault(); requestClose(); };
   const onClose = () => {
     document.removeEventListener('keydown', onDocKey);
     document.removeEventListener('click', onDocClick, true);
     removeEventListener('resize', fitSide);
     if (mode === 'pinned') stage?.pin(false);
     mode = 'modal';
+    closing = false;
+    gallery?.settle();
     markShown(null);
-    shown = null;
+    if (cmpPos != null) for (const c of compares) if (c.root.matches('.pcmp') && Math.abs(c.handle.pos - cmpPos) > 0.1) c.handle.set(cmpPos);
+    unhold();
+    viewer?.style.removeProperty('--ldv-dim');
     if (held) {
       document.documentElement.style.overflow = held.overflow;
       if (Math.abs(scrollY - held.y) > 1) scrollTo({ top: held.y, behavior: 'instant' as ScrollBehavior });
@@ -739,16 +1034,15 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     }
     opener?.focus({ preventScroll: true });
     opener = null;
+    origin = null;
   };
   vq('prev')?.addEventListener('click', onPrev);
   vq('next')?.addEventListener('click', onNext);
   vq('zoom')?.addEventListener('click', onZoomClick);
-  viewer?.addEventListener('dblclick', onDbl);
-  viewer?.addEventListener('touchend', onTap);
+  vq<HTMLElement>('close')?.addEventListener('click', onCloseBtn);
   viewer?.addEventListener('keydown', onKey);
-  viewer?.addEventListener('touchstart', onTouchStart, { passive: true });
-  viewer?.addEventListener('touchend', onTouchEnd);
   viewer?.addEventListener('click', onBackdrop);
+  viewer?.addEventListener('cancel', onCancel);
   viewer?.addEventListener('close', onClose);
 
   const onVisible = () => { if (document.visibilityState === 'visible' && kid) void ask(); };
@@ -785,15 +1079,15 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       vq('prev')?.removeEventListener('click', onPrev);
       vq('next')?.removeEventListener('click', onNext);
       vq('zoom')?.removeEventListener('click', onZoomClick);
-      viewer?.removeEventListener('dblclick', onDbl);
-      viewer?.removeEventListener('touchend', onTap);
-      zoomWatch?.disconnect();
+      vq<HTMLElement>('close')?.removeEventListener('click', onCloseBtn);
+      railBtn?.removeEventListener('click', onRailBtn);
       viewer?.removeEventListener('keydown', onKey);
-      viewer?.removeEventListener('touchstart', onTouchStart);
-      viewer?.removeEventListener('touchend', onTouchEnd);
       viewer?.removeEventListener('click', onBackdrop);
+      viewer?.removeEventListener('cancel', onCancel);
       if (viewer?.open) viewer.close();
       onClose();
+      forgetCompares();
+      gallery?.destroy();
       viewer?.removeEventListener('close', onClose);
     },
   };

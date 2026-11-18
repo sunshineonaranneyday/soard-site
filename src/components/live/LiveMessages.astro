@@ -181,7 +181,8 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   /* A short list sits at the bottom, by the box you write in, as a chat's does */
   .msgs[data-place='hero'] .msg-list { margin: auto 0 0; }
   .msgs[data-place='hero'] .msgs__compose { padding: 14px 16px 12px; border-top: 1px solid var(--c-border); background: #fff; }
-  .msgs[data-place='hero'] .msg-form { max-width: none; gap: 6px; }
+  /* (one column that can be narrower than the name field's own width: the Theater's card is 260px at its narrowest) */
+  .msgs[data-place='hero'] .msg-form { max-width: none; gap: 6px; grid-template-columns: minmax(0, 1fr); }
   .msgs[data-place='hero'] .msg-closed { margin: 0; font-size: 14px; }
   .msgs[data-place='hero'] .remind-note { min-height: 0; font-size: 13px; }
   .msgs[data-place='hero'] .remind-note:empty { display: none; }
