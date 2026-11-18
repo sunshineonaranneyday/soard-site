@@ -30,6 +30,10 @@ export interface LiveState {
   facebookUrl: string | null; youtubeUrl: string | null; instagramUrl: string | null;
   orientation: 'landscape' | 'portrait';
   source: string | null; updatedAt: string | null;
+  /** A main-feed test just ended: until then a signed-in staff page shows its end (staff test end, below) */
+  testEndUntil?: string;
+  /** This is a test's end, shown to staff only (functions/api/broadcast-test-end.js) */
+  testEnded?: boolean;
 }
 export interface ReminderOptions { enabled: boolean; hours?: number[]; email: boolean; sms: boolean; push: boolean; pushKey: string | null }
 type Listener = (state: LiveState | null, meta: { reminders: ReminderOptions | null; timezone: string | null }) => void;
@@ -60,6 +64,19 @@ export const rehearsal = (() => {
 })();
 const STATE_URL = rehearsal ? '/api/broadcast-rehearsal' : '/api/broadcast';
 
+/**
+ * A main-feed test's end, for signed-in staff (Peter, Nov 18 2026: "Test the main feed" should end with the theater,
+ * the thank-you and the replay; the public must never read that the reveal had ended before it started). When a test
+ * stops, the public state is back to the countdown and carries `testEndUntil`; while it does, this page asks
+ * /api/broadcast-test-end (staff only) and, if it answers, shows the test's end in place of the countdown, asked
+ * again every few seconds so its replay comes in when Stream has it. Anyone else gets a 403 once and keeps the
+ * countdown. Nothing of a test's end is counted.
+ */
+const TEST_END_URL = '/api/broadcast-test-end';
+const TEST_END_POLL_MS = 5000;
+// Only the live pages show it (the LIVE pill elsewhere keeps the countdown); read each time, the router keeps this client
+const onLivePage = () => { try { return location.pathname.startsWith('/live'); } catch { return false; } };
+
 function createClient() {
   let state: LiveState | null = null;
   let reminders: ReminderOptions | null = null;
@@ -82,7 +99,48 @@ function createClient() {
   // the real-time hub's state (often first) without them read as "no reminders", so /live/ dropped its sign-up button
   // and form for a moment and put them back. A state from the hub before then is kept, and heard with the answer.
   let settled = false;
-  const emit = () => { if (!settled) return; for (const l of listeners) { try { l(state, { reminders, timezone }); } catch { /* listener bug */ } } };
+  // What the page shows: a staff test end in place of the public state while there is one
+  const shown = () => staffEnd || state;
+  const emit = () => { if (!settled) return; const s = shown(); for (const l of listeners) { try { l(s, { reminders, timezone }); } catch { /* listener bug */ } } };
+
+  // A main-feed test's end, for signed-in staff (TEST_END_URL above)
+  let staffEnd: LiveState | null = null;
+  let notStaff = false;
+  let staffBusy = false;
+  let staffHeld = false;
+  let staffTimer: ReturnType<typeof setTimeout> | undefined;
+  const wantsStaffEnd = () => {
+    const until = Date.parse(state?.testEndUntil || '');
+    return !rehearsal && !notStaff && onLivePage() && !!state && !state.live && Number.isFinite(until) && until > Date.now();
+  };
+  async function askStaffEnd() {
+    clearTimeout(staffTimer); staffTimer = undefined;
+    if (staffBusy) return;
+    if (!wantsStaffEnd()) {
+      if (staffEnd || staffHeld) { staffEnd = null; staffHeld = false; emit(); }
+      return;
+    }
+    staffBusy = true;
+    let next = staffEnd;
+    try {
+      const res = await fetch(TEST_END_URL, { cache: 'no-store', redirect: 'manual' });
+      if (res.status === 401 || res.status === 403 || res.type === 'opaqueredirect') { notStaff = true; next = null; }
+      else if (res.ok) { const data = await res.json(); next = data?.state || null; }
+    } catch { /* kept as it was; asked again shortly */ }
+    staffBusy = false;
+    if (!wantsStaffEnd()) next = null;
+    const differs = JSON.stringify(next) !== JSON.stringify(staffEnd);
+    staffEnd = next;
+    if (differs || staffHeld) { staffHeld = false; emit(); }
+    if (wantsStaffEnd()) staffTimer = setTimeout(askStaffEnd, TEST_END_POLL_MS);
+  }
+  // The public state changed: a test that just ended waits for the staff answer, so a staff page goes from the test
+  // straight to its end without the countdown in between; anything else is heard at once
+  const stateChanged = () => {
+    if (wantsStaffEnd()) { if (!staffEnd) { staffHeld = true; void askStaffEnd(); return; } if (!staffTimer) void askStaffEnd(); }
+    else if (staffEnd) { staffEnd = null; clearTimeout(staffTimer); staffTimer = undefined; }
+    emit();
+  };
 
   let unreachable = false;
   // No answer to wait for any more: whatever state the hub gave is heard (its reminders unknown)
@@ -97,7 +155,7 @@ function createClient() {
       if (data?.state) {
         state = data.state; reminders = data.reminders || null; timezone = data.timezone || null;
         settled = true;
-        emit();
+        stateChanged();
       } else {
         // Answered with no state yet (the hub has no snapshot): the hub's own, if it gave one, is heard now
         settled = true;
@@ -142,7 +200,7 @@ function createClient() {
       try {
         const m = JSON.parse(ev.data);
         if (m.type === 'state') {
-          if (m.state) { state = m.state; emit(); }
+          if (m.state) { state = m.state; stateChanged(); }
           else fetchState(); // hub has no snapshot yet
         } else if (m.type === 'viewers' && typeof m.n === 'number') fire('viewers', { n: m.n });
         else if (m.type === 'react' && m.c && typeof m.c === 'object') fire('react', { c: m.c });
@@ -182,7 +240,7 @@ function createClient() {
   return {
     subscribe(l: Listener) {
       listeners.add(l);
-      if (state && settled) l(state, { reminders, timezone });
+      if (state && settled && !staffHeld) l(shown(), { reminders, timezone });
       return () => listeners.delete(l);
     },
     /** Count this page as a viewer (live pages only). Re-sent after reconnects. */
@@ -198,12 +256,12 @@ function createClient() {
     get connected() { return wsOk; },
     /** Its first read failed and nothing is known yet: a page can show what it can without waiting */
     get unreachable() { return unreachable && !state; },
-    get state() { return state; },
+    get state() { return shown(); },
     get reminders() { return reminders; },
     get timezone() { return timezone; },
     refresh: fetchState,
     beacon(type: string, meta?: Record<string, string>) {
-      if (rehearsal) return;
+      if (rehearsal || staffEnd) return;
       try {
         const body = JSON.stringify({ type, broadcastId: state?.id || undefined, meta, ...sender() });
         const blob = new Blob([body], { type: 'application/json' });
@@ -214,7 +272,7 @@ function createClient() {
     },
     /** Reveal stats: this browser watched `sec` more seconds of the reveal (live) or its replay */
     watched(kind: 'live' | 'replay', sec: number, broadcastId: string | null) {
-      if (rehearsal || !broadcastId || !(sec > 0)) return;
+      if (rehearsal || staffEnd || !broadcastId || !(sec > 0)) return;
       try {
         const body = JSON.stringify({ broadcastId, kind, sec, ...sender() });
         if (!(navigator.sendBeacon && navigator.sendBeacon('/api/live-watch', new Blob([body], { type: 'application/json' })))) {

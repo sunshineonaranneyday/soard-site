@@ -284,7 +284,9 @@ test('a new phone after a test, while the lifecycle still names the test\'s reco
   assert.ok(r.work.includes('test-start'), r.work.join(','));
   phoneOff();
   for (let i = 0; i < 7; i++) { travel(10 * S); r = await tick(); }
-  assert.equal(r.state.phase, 'scheduled', 'the test ended');
+  assert.equal((await b.readState(env.DB)).phase, 'scheduled', 'the test ended');
+  assert.equal(r.state.phase, 'scheduled', 'the public page: straight back to the countdown');
+  assert.equal((b.testEndPublicState(await b.readState(env.DB), await b.readConfig(env.DB))).phase, 'replay', 'staff see its end as the reveal\'s will');
   await b.adminAction(env, 'quietTest', { on: false }, 'peter@test');
   travel(30 * S);
   // The real phone connects; the lifecycle still names vid22 (lag)
