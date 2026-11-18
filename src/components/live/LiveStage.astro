@@ -234,6 +234,7 @@ const ICON = {
     opacity: 0; visibility: hidden; filter: blur(16px) brightness(0.5); transform: scale(1.12);
     transition: opacity 0.45s ease, visibility 0s linear 0.45s;
   }
+  .stage[data-party]:not([data-pstatus]) .stage__photo,
   .stage[data-party][data-pstatus='connecting'] .stage__photo,
   .stage[data-party][data-pstatus='waiting'] .stage__photo,
   .stage[data-party][data-pstatus='reconnecting'] .stage__photo { opacity: 1; visibility: visible; transition: opacity 0.45s ease, visibility 0s; }

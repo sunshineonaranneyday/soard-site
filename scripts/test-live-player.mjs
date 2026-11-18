@@ -551,6 +551,46 @@ try {
     let flashed = false;
     for (let i = 0; i < 8; i++) { await sleep(500); if ((await end()).shown) flashed = true; }
     ok(!flashed, 'a camera check before the start (back to the countdown) never shows "That\'s the reveal!"');
+
+    // A live video paused by the phone (the lock screen, a call, AirPods out): Tap to watch, and a tap plays on, live
+    if (recordings.get(feed.rec).closed) phoneOn();
+    state = { ...STATES.live, kidName: 'Axel' }; await open(page); await waitFor(page, ['playing']); await sleep(1500);
+    await page.click('[data-s="sound"]').catch(() => {}); await sleep(500);
+    await page.evaluate(() => document.querySelector('.stage__player video').pause());
+    await waitFor(page, ['paused'], 5000); await sleep(400);
+    const tapShown = await seen('tap');
+    await page.click('[data-s="tap"]');
+    await waitFor(page, ['playing'], 15000); await sleep(800);
+    const resumed = await page.evaluate(() => ({ paused: document.querySelector('.stage__player video').paused, st: document.querySelector('[data-stage]').dataset.pstatus }));
+    ok(tapShown && !resumed.paused && resumed.st === 'playing', `paused by the phone: Tap to watch, and a tap plays on (${tapShown}, ${resumed.st})`);
+
+    // Paused when the broadcast moves on: not held as live (nothing is playing out), the note straight away
+    await page.evaluate(() => document.querySelector('.stage__player video').pause());
+    await waitFor(page, ['paused'], 5000);
+    state = { ...STATES.replay, kidName: 'Axel' }; await refresh(); await sleep(2500);
+    e = await end();
+    ok(e.shown && e.phase !== 'live', `paused when the broadcast moved on: the note, not a Live page held for nothing (${e.shown}, ${e.phase})`);
+
+    // The give form open as the reveal ends: it stays open (the page keeps its layout for the note)
+    if (recordings.get(feed.rec).closed) phoneOn();
+    state = { ...STATES.live, kidName: 'Axel' }; await open(page); await waitFor(page, ['playing']); await sleep(1500);
+    const gave = await page.evaluate(() => { const b = [...document.querySelectorAll('.hero-ctas a, .hero-ctas button')].find((x) => /fund the next room/i.test(x.textContent || '')); b?.click(); return !!b; });
+    await sleep(1200);
+    state = { ...STATES.replay, kidName: 'Axel', player: null }; await refresh(); await sleep(1500);
+    phoneOff(); closeRecording();
+    for (let i = 0; i < 60 && !(e = await end()).shown; i++) await sleep(1000);
+    g = await probe(page);
+    ok(gave && e.shown && !!g.give, `the give form open as the reveal ends: it stays open beside "That's the reveal!" (${gave}, ${e.shown}, ${!!g.give})`);
+    await page.keyboard.press('Escape');
+
+    // A staff test after the reveal (its own broadcast), ending back on the reveal's replay: never "That's the reveal!"
+    phoneOn();
+    state = { ...STATES.live, id: 'test-2', kidName: 'Axel' }; await open(page); await waitFor(page, ['playing']); await sleep(1500);
+    state = { ...STATES.replay, kidName: 'Axel' }; await refresh();
+    let again = false;
+    for (let i = 0; i < 8; i++) { await sleep(500); if ((await end()).shown) again = true; }
+    e = await end();
+    ok(!again && e.pkind === 'replay', `a staff test after the reveal ends back on its replay: no "That's the reveal!" again (${again}, ${e.pkind})`);
     state = STATES.live;
     // (the phone's recording here is a new one: what follows expects one long enough for the usual delay and more)
     await sleep(26000);

@@ -38,6 +38,8 @@ export interface Stage {
   readonly playingLive: boolean;
   /** "That's the reveal!" is showing (the live video played its last frame): the page keeps the video's place for it */
   readonly ended: boolean;
+  /** The note is showing, or the page moving to this view would bring it up: the page keeps the video's place either way */
+  endsWith(mode: StageMode): boolean;
   /**
    * Hold the video in a small player at the top of the screen while something covers the page on a phone:
    * 'give', the give sheet (top right, over the page above the sheet); 'design', the design viewer (its top left corner)
@@ -134,6 +136,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   let endShown = false;
   let endPending: StageView | null = null;
   let endSawOff = false;
+  // The broadcast the video on belongs to: only its own moving on is the reveal's end (a staff test after the reveal,
+  // ending back on the reveal's replay, isn't)
+  let mountedFor = '';
   let connectingTimer: ReturnType<typeof setTimeout> | undefined;
   let soundBeacon = false;
   let replayBeacon = false;
@@ -169,7 +174,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       hideEnd();
       unmount();
       mounted = ''; // (a fresh live player for the phone's new feed)
-    } else if (kind === 'live' && player && (next.mode === 'replay' || next.mode === 'idle')) {
+    } else if (endsNow(next)) {
       // The live video was on and the broadcast has moved on to its replay, or to nothing (the page holds it live while
       // it still has frames to play: playingLive): it ends with the note, not a cut to whatever comes next. (Back to the
       // countdown, a camera check before the start, isn't an end: that goes as it always has)
@@ -187,6 +192,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const key = party && next.player ? `${next.player.kind}:${next.player.uid}:${client.state?.id || ''}` : '';
     if (key !== mounted && playerEl) {
       mounted = key;
+      mountedFor = client.state?.id || '';
       unmount();
       if (key && next.player) {
         kind = next.player.kind;
@@ -229,7 +235,12 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // offered once there is one. Nothing starts by itself
   // Still playing the broadcast (the page keeps it live while this is so): a live video on, not over, and not out of
   // frames (waiting or reconnecting with the broadcast moved on means nothing is left for it to play)
-  const isPlayingLive = () => kind === 'live' && !!player && !endShown && !player.feedEnded && !player.closed && pstatus !== 'waiting' && pstatus !== 'reconnecting';
+  // (playing or buffering only: paused by the phone, never started (Low Power Mode), connecting or Stream's own player
+  // aren't playing anything to the end, so the page doesn't stay Live for them)
+  const isPlayingLive = () => kind === 'live' && !!player && !endShown && !player.feedEnded && !player.closed && (pstatus === 'playing' || pstatus === 'buffering');
+  // The page's next view ends the reveal for the video on: it was this broadcast's live video, and the broadcast has
+  // moved on to its replay or to nothing (the page asks before drawing itself, so its layout and the give form hold)
+  const endsNow = (next: { mode: StageMode }) => kind === 'live' && !!player && !endShown && (next.mode === 'replay' || next.mode === 'idle') && mountedFor === (client.state?.id || '');
   let playingWas = false;
   let endWas = false;
   // (after the moment: the page may be in the middle of drawing itself, which is what told the stage something)
@@ -397,7 +408,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const note = !endShown && isVideo && pstatus && (pstatus !== 'connecting' || slowConnect) ? NOTES[kind]?.[pstatus] : null;
     setHidden($('note'), !note);
     if (note) { const t = $('note-title'); const x = $('note-text'); if (t) t.textContent = note[0]; if (x) x.textContent = note[1]; }
-    setHidden($('tap'), !(isVideo && pstatus === 'blocked'));
+    // Tap to watch: the browser refused to start it, or a live video was paused by something other than the viewer (an
+    // iPhone's lock screen, a call, AirPods out, Control Center, a media key): playing again goes to the live moment
+    setHidden($('tap'), !(isVideo && !endShown && (pstatus === 'blocked' || (kind === 'live' && pstatus === 'paused'))));
 
     // Bar
     setHidden($('bar'), !party);
@@ -609,8 +622,11 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // Tapping the picture: sound on for a muted live video, play / pause for a replay
   playerEl?.addEventListener('click', () => {
     if (docked) return;
-    if (kind === 'live' && muted) soundOn('video');
-    else if (kind === 'replay') togglePlay();
+    if (kind === 'live') {
+      if (muted) soundOn('video');
+      // (paused, by the system or otherwise: on again, at the live moment)
+      if (video()?.paused) player?.play();
+    } else if (kind === 'replay') togglePlay();
   });
   let seeking = false;
   // A tap on the reveal's star plays from the reveal, exactly, as Jump to the reveal does: the star is drawn on the
@@ -873,6 +889,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     get party() { return party; },
     get playingLive() { return isPlayingLive(); },
     get ended() { return endShown; },
+    endsWith(mode: StageMode) { return endShown || endsNow({ mode }); },
     pin(on: boolean, where: 'give' | 'design' = 'give') {
       pinned = on;
       if (on) root.dataset.pin = where; else delete root.dataset.pin;

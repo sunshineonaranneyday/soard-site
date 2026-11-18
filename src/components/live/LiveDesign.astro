@@ -50,7 +50,8 @@
     <!-- A whole plan sheet: from its drawing to the whole sheet and back (live-design.ts) -->
     <button class="ldv__btn ldv__zoom" type="button" data-ldv="zoom" hidden>
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
-      <span data-ldv="zoom-text">Zoom in</span>
+      <!-- (its two words stacked in one place, the longer one unseen: the button is that wide either way, never moving) -->
+      <span class="ldv__zoom-words"><span data-ldv="zoom-text">Zoom in</span><span class="ldv__zoom-alt" aria-hidden="true">Whole sheet</span></span>
     </button>
     <button class="ldv__btn" type="button" data-ldv="next" aria-label="Next picture">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
@@ -190,6 +191,9 @@
   /* The whole sheet / zoom in button: words, so a pill (after .ldv__btn, which it builds on) */
   .ldv__btn.ldv__zoom { width: auto; display: inline-flex; align-items: center; gap: 8px; padding: 0 20px 0 16px; border-radius: 24px; font: inherit; font-size: 15px; font-weight: 600; white-space: nowrap; }
   .ldv__btn.ldv__zoom[hidden] { display: none; }
+  .ldv__zoom-words { display: inline-grid; justify-items: start; }
+  .ldv__zoom-words > * { grid-area: 1 / 1; }
+  .ldv__zoom-alt { visibility: hidden; }
   /* A narrow phone with a landscape video: beside the small video there's no room for words, so they go under it */
   @media (max-width: 420px) {
     .ldv--pinned.ldv--wide .ldv__bar { min-height: 0; padding: calc(var(--ldp-top) + var(--ldp-hw) + 12px) 12px 0; }
