@@ -1,0 +1,62 @@
+---
+/**
+ * LiveSponsors.astro — the build's sponsors by tier, the column right of the video in the Theater
+ * ===============================================================================================
+ * Peter, Nov 18 2026: "i want the sponsor shown by their tier, priority of screen should be the reveal, plans/before
+ * and sponsors". On a computer with an upright live video (the Theater, LivePage) the right column is the build's
+ * sponsors, biggest first: the room's sponsor, then Signature, Champion, Builder partners, then Friends, each tier's
+ * logos smaller than the one above. The messages shrink to one line under the video (LiveMessages); a tap there
+ * brings their card back to this column. Everywhere else (a phone, before the reveal, a replay) the build's partners
+ * scroll under the video as before (LivePartners) and this isn't shown.
+ *
+ * The markup comes from src/utils/live-sponsors-html.ts, which the server also uses on /live/ for whichever reveal is
+ * current, so the styles here are global. LivePage's script sizes each logo once it loads (--r) and drops any that
+ * fail, and shows the column only with the child it belongs to.
+ */
+interface Props { kid: string; inner: string }
+const { kid, inner } = Astro.props;
+---
+<aside class="lsp" data-live-sponsors data-kid={kid} hidden={!inner} aria-label="Who built this room" set:html={inner} />
+
+<style is:global>
+  .lsp { display: none; }
+  /* (the Theater's width, LivePage: a computer's layout, DESK in src/utils/live-media.ts) */
+  @media (min-width: 1200px) {
+    .hero[data-party][data-orientation='portrait']:not([data-msgs-open]) .lsp:not([hidden]) {
+      grid-area: party; display: flex; flex-direction: column; gap: 18px; min-height: 0; height: var(--theater-h); overflow-y: auto; overscroll-behavior: contain;
+      padding: 22px 20px; box-sizing: border-box; text-align: left;
+      background: #fff; border: 1px solid var(--c-border); border-radius: 24px; box-shadow: 0 20px 50px rgba(30, 31, 37, 0.06);
+      scrollbar-width: thin; animation: lspIn 0.45s ease-out both;
+    }
+    @keyframes lspIn { from { opacity: 0; } }
+  }
+  .lsp-head { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-text-muted); }
+  .lsp-tier { display: grid; gap: 10px; }
+  .lsp-label { margin: 0; font-size: 12.5px; font-weight: 700; color: var(--c-text); }
+  .lsp-grid { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+  .lsp-card {
+    --logo-h: 30px;
+    display: flex; align-items: center; justify-content: center; min-width: 0; padding: 10px 12px; box-sizing: border-box;
+    border-radius: 14px; background: var(--c-cream); border: 1px solid var(--c-border);
+  }
+  .lsp-card img { display: block; max-width: 100%; max-height: var(--logo-h); width: auto; height: auto; object-fit: contain; }
+  /* Every logo the same area within its tier, whatever its shape (as the band under the video sizes them): --r is width ÷
+     height, set once it loads */
+  .lsp-card img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.118 / sqrt(var(--r)))); }
+  /* Biggest first: the room's sponsor a card of its own, Signature two across, Champion and Builder three, Friends four */
+  .lsp-tier--room .lsp-grid { grid-template-columns: minmax(0, 1fr); }
+  .lsp-tier--room .lsp-card { --logo-h: 64px; min-height: 104px; background: #fff; border-color: var(--c-yellow); box-shadow: 0 0 0 3px var(--c-yellow-soft); }
+  .lsp-tier--signature .lsp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lsp-tier--signature[data-n='1'] .lsp-grid { grid-template-columns: minmax(0, 1fr); }
+  .lsp-tier--signature .lsp-card { --logo-h: 40px; min-height: 72px; background: #fff; }
+  /* (five or more: three across, so every tier is in sight beside the video, the Signature cards still the biggest
+     after the room's) */
+  .lsp-tier--signature:not([data-n='1']):not([data-n='2']):not([data-n='3']):not([data-n='4']) .lsp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lsp-tier--signature:not([data-n='1']):not([data-n='2']):not([data-n='3']):not([data-n='4']) .lsp-card { --logo-h: 34px; min-height: 64px; padding: 8px; }
+  .lsp-tier--champion .lsp-grid, .lsp-tier--builder .lsp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .lsp-tier--champion .lsp-card { --logo-h: 30px; min-height: 60px; }
+  .lsp-tier--builder .lsp-card { --logo-h: 26px; min-height: 54px; }
+  .lsp-tier--friend .lsp-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .lsp-tier--friend .lsp-card { --logo-h: 20px; min-height: 42px; padding: 6px 8px; border-radius: 10px; }
+  @media (prefers-reduced-motion: reduce) { .lsp { animation: none !important; } }
+</style>

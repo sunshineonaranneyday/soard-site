@@ -44,6 +44,7 @@ import { cfRaw, cfSrcset, cfLqip } from '../../src/utils/cf-image.ts';
 import { designSignature, validSlide } from '../../src/utils/reveal-design-client.ts';
 import { designPartsHtml, designName, designLead } from '../../src/utils/live-design-html.ts';
 import { bandPartners, partnersBandInner } from '../../src/utils/live-partners-html.ts';
+import { sponsorTiers, sponsorsInner } from '../../src/utils/live-sponsors-html.ts';
 import { barFor, addBar, PAGE_REUSE } from '../_apply-bar.js';
 import { cardFor } from '../_og-cards.js';
 import { edgeSchedule, scheduleAttr } from '../_kid-reveal.js';
@@ -64,6 +65,16 @@ const SITE = 'https://sunshineonaranneyday.com';
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 /** A kid's saved profile ({} when unknown or unreadable) */
+// The partner records' levels (Admin → Partners), for the build's sponsors by tier beside the video (LiveSponsors):
+// read once in a while, not on every page (they change when staff edit a partner)
+let partnerLevels = { at: 0, rows: null };
+async function partnerRows(env) {
+  if (partnerLevels.rows && Date.now() - partnerLevels.at < 5 * 60_000) return partnerLevels.rows;
+  const r = await env.DB.prepare("SELECT slug, name, level, json_extract(data, '$.logo') AS logo FROM partners").all();
+  partnerLevels = { at: Date.now(), rows: r.results || [] };
+  return partnerLevels.rows;
+}
+
 async function kidData(env, slug) {
   try {
     const row = await env.DB.prepare('SELECT data FROM kids WHERE slug = ?').bind(slug).first();
@@ -181,7 +192,7 @@ function heroMessages(rw, msgs) {
   return rw;
 }
 
-function rewrite(res, { kid, party, messages, design }) {
+function rewrite(res, { kid, party, messages, design, partnerList }) {
   let rw = new HTMLRewriter();
   if (kid) {
     const title = `${kid.name}'s Reveal, Live | Sunshine on a Ranney Day`;
@@ -208,6 +219,14 @@ function rewrite(res, { kid, party, messages, design }) {
       rw = rw
         .on('#live-hero [data-live-partners]', { element(e) { e.setInnerContent(partners, { html: true }); e.removeAttribute('hidden'); e.setAttribute('data-kid', kid.slug); } })
         .on('#live-hero [data-stage]', setAttrs({ 'data-partners': '' }));
+    }
+    // The build's sponsors by tier, the Theater's right column, as a child's own page has them from its build
+    // (LiveSponsors.astro). Without the partner records (a read that failed) the page keeps what its build drew
+    if (partnerList) {
+      const sponsors = sponsorsInner(sponsorTiers(kid.data?.partnerLogos, kid.data?.sponsors, partnerList));
+      rw = rw.on('#live-hero [data-live-sponsors]', sponsors
+        ? { element(e) { e.setInnerContent(sponsors, { html: true }); e.removeAttribute('hidden'); e.setAttribute('data-kid', kid.slug); } }
+        : { element(e) { e.setInnerContent(''); e.setAttribute('hidden', ''); e.setAttribute('data-kid', ''); } });
     }
     if (kid.card) {
       // The kid's own live page's share card (built for every published kid)
@@ -597,10 +616,12 @@ export async function onRequest(context) {
     const designAsk = designSlug ? (kid && kid.slug === designSlug ? Promise.resolve(kid.data) : kidData(near, designSlug).then((r) => r.data)).catch(() => null) : null;
     // (the same schedule /api/reveal-design reads, past reveals and all, so the page and the API open the design alike)
     const revealsAsk = designSlug ? cachedReveals(near).catch(() => null) : null;
+    // (never holding the page: a read that fails, or takes longer than 0.8 s, leaves the column as the build drew it)
+    const partnersAsk = kid ? Promise.race([partnerRows(near).catch(() => null), new Promise((done) => setTimeout(() => done(null), 800))]) : null;
     const res = await next(kid || party || bar || schedule || first ? fresh(request) : request);
     if (res.status === 404 && pageKid) return Response.redirect(`${url.origin}/live/${url.search}`, 302);
     if (res.status !== 200 || !(res.headers.get('content-type') || '').includes('text/html') || !(kid || party || bar || schedule || first)) return ours(res);
-    const [shown, designData, reveals] = await Promise.all([messagesAsk, designAsk, revealsAsk]);
+    const [shown, designData, reveals, partnerList] = await Promise.all([messagesAsk, designAsk, revealsAsk, partnersAsk]);
     let messages = null;
     let heroMsgs = null;
     if (shown && first?.view === 'upcoming') messages = { kidName, list: shown.messages || [] };
@@ -626,7 +647,7 @@ export async function onRequest(context) {
       hasPlayer: false,
     } : null;
     let page = first ? await addFirstView(res, first, messages, ctaFacts) : res;
-    page = kid || party ? rewrite(page, { kid, party, messages: heroMsgs, design: party ? design : null }) : page;
+    page = kid || party ? rewrite(page, { kid, party, messages: heroMsgs, design: party ? design : null, partnerList }) : page;
     page = addDesign(page, design);
     if (rows && isIndex) page = addHeroRows(page, { list: rows, zone: visitorZone(request), between: !!broadcast && !kid && !ACTIVE.has(broadcast.state?.phase) });
     if (line) page = addAfterLine(page, line);

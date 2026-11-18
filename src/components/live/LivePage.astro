@@ -49,7 +49,10 @@ import LiveDesign from './LiveDesign.astro';
 import LiveDesignRail from './LiveDesignRail.astro';
 import LiveRoom from './LiveRoom.astro';
 import LivePartners from './LivePartners.astro';
+import LiveSponsors from './LiveSponsors.astro';
 import { bandPartners, partnersBandInner } from '../../utils/live-partners-html';
+import { sponsorTiers, sponsorsInner } from '../../utils/live-sponsors-html';
+import { getCollection } from 'astro:content';
 import ShareSheet from '../ui/ShareSheet.astro';
 import { upcomingAtBuild } from '../../utils/reveals-copy';
 
@@ -57,6 +60,8 @@ interface KidLite {
   slug: string; name: string; heroImage: string | null; heroSummary?: string | null; shortDescription?: string | null;
   bio?: string | null; roomTypes?: string[] | null; year?: number | null; fundraisingUrl?: string | null;
   partnerLogos?: { url: string; name?: string }[] | null;
+  /** The room's sponsors (partner slugs: its Monetary Sponsor) */
+  sponsors?: string[] | null;
 }
 interface Props { kid?: KidLite | null; fallbackImage: string }
 const { kid = null, fallbackImage } = Astro.props;
@@ -69,6 +74,11 @@ const story = storyLead(kid?.bio) || summary;
 const rooms = kid?.roomTypes?.length ? kid.roomTypes.join(', ') : null;
 // The build's partners, scrolling under the frame (LivePartners.astro; on /live/ the server draws the current kid's)
 const partners = partnersBandInner(bandPartners(kid?.partnerLogos));
+// The build's sponsors by tier, the column right of the video in the Theater (LiveSponsors.astro; on /live/ the server
+// draws the current kid's): the room's sponsor, then the partners by their level on the partner record
+const sponsors = kid
+  ? sponsorsInner(sponsorTiers(kid.partnerLogos, kid.sponsors, (await getCollection('partners')).map((p) => ({ slug: p.data.slug || p.id, name: p.data.name, level: p.data.level, logo: p.data.logo }))))
+  : '';
 // /live/ between reveals: the hero shows what's coming up (the page script keeps this current)
 const heroNext = !kid && upcomingAtBuild().length > 0;
 const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/></svg>';
@@ -118,6 +128,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
          the server moves it (between the markers) into its section below when the page goes out with a reveal coming up
          (functions/live/[[path]].js) -->
     <div class="hero-party" data-slot="hero" hidden><!--msgs-panel--><LiveMessages /><!--/msgs-panel--></div>
+    <!-- The build's sponsors by tier: the Theater's right column, the messages one line under the video (LiveSponsors) -->
+    <LiveSponsors kid={sponsors ? kid!.slug : ''} inner={sponsors} />
   </div>
   <span data-whole-end hidden></span>
 </section>
@@ -488,6 +500,19 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       }
       .hero[data-party][data-orientation='portrait'] .hero-text,
       .hero[data-party][data-orientation='portrait'] .hero-party:not([hidden]) { height: var(--theater-h); }
+      /* The screen in Peter's order (Nov 18 2026: "priority of screen should be the reveal, plans/before and sponsors"):
+         with the build's sponsors in the right column (LiveSponsors), the messages are one line under the video, in the
+         place the partners' band has (its partners are in that column now, by tier; the band stays in the page, unseen,
+         so the going-live morph's named part never stops rendering). A tap on the line, or "Write to the family",
+         brings the messages' card back to the right column (data-msgs-open, the page script); its × puts it back */
+      .hero[data-party][data-orientation='portrait'] .hero-frame :global([data-stage][data-party]) { --under: calc(var(--lpb-h) + var(--gap)); }
+      .hero[data-party][data-orientation='portrait'] .hero-frame :global([data-stage][data-party] .stage__under) { display: block; min-height: var(--lpb-h); }
+      :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .hero-frame :global(.lpb) { visibility: hidden; }
+      :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .hero-party:not([hidden]) {
+        grid-area: frame; align-self: end; position: relative; z-index: 2; height: var(--lpb-h);
+        /* (as wide as the video's column, never widening it: its newest message is cut to fit, not the column made for it) */
+        contain: inline-size; width: 100%; min-width: 0;
+      }
       /* The room is in the story column here, so the design strip beside the video (a replay's: a live video's rail
          has it hidden already) gives its room back to the video */
       .hero[data-party][data-orientation='portrait'] .hero-frame { --beside: 0px; --beside-gap: 0px; }
@@ -700,7 +725,60 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const on = !!band && !!kidSlug && band.dataset.kid === kidSlug && bandHas();
       setHidden(band, !on);
       setAttr(stageEl, 'data-partners', on);
+      // (the sponsors' column too: only with the child it belongs to, and while it has a logo)
+      setHidden(sponsorsEl, !(sponsorsEl && kidSlug && sponsorsEl.dataset.kid === kidSlug && sponsorsEl.querySelector('.lsp-card')));
     }
+
+    // ── The build's sponsors by tier, the Theater's right column (LiveSponsors.astro) ──
+    // Each logo the same area within its tier once it has loaded (--r); one that won't load leaves, and its tier with it
+    // when it was the last
+    const sponsorsEl = hero.querySelector<HTMLElement>('[data-live-sponsors]');
+    sponsorsEl?.querySelectorAll<HTMLImageElement>('img[data-lsp-logo]').forEach((img) => {
+      const weigh = () => { if (img.naturalWidth && img.naturalHeight) img.style.setProperty('--r', (img.naturalWidth / img.naturalHeight).toFixed(3)); };
+      const drop = () => {
+        const tier = img.closest('.lsp-tier');
+        img.closest('.lsp-card')?.remove();
+        if (tier && !tier.querySelector('.lsp-card')) tier.remove();
+        drawBand(shownKidNow);
+      };
+      img.addEventListener('load', weigh);
+      img.addEventListener('error', drop);
+      if (img.complete) { if (img.naturalWidth) weigh(); else if (img.getAttribute('src')) img.decode().then(weigh, () => { if (!img.naturalWidth) drop(); }); }
+    });
+
+    // ── The messages in the Theater: one line under the video until someone opens them ──
+    // (LiveMessages: the line and "Write to the family"; a tap on either brings the card to the right column in the
+    // sponsors' place, data-msgs-open, its × or Escape puts them back. Only in the Theater with the sponsors' column)
+    const theaterWide = matchMedia('(min-width: 1200px)');
+    const compactMsgs = () => theaterWide.matches && hero.hasAttribute('data-party') && hero.dataset.orientation === 'portrait'
+      && !!sponsorsEl && !sponsorsEl.hidden && !hero.hasAttribute('data-msgs-open');
+    const openMsgs = (write: boolean) => {
+      hero.setAttribute('data-msgs-open', '');
+      // (once the card is laid out in its column: before, the box can't take the keyboard)
+      requestAnimationFrame(() => {
+        const box = hero.querySelector<HTMLTextAreaElement>('.hero-party textarea[name="body"]');
+        const any = !!hero.querySelector('.hero-party [data-msgs="list"] > *');
+        if ((write || !any) && box && box.getClientRects().length) box.focus({ preventScroll: true });
+        else hero.querySelector<HTMLElement>('.hero-party [data-msgs="close"]')?.focus({ preventScroll: true });
+      });
+    };
+    const closeMsgs = () => {
+      if (!hero.hasAttribute('data-msgs-open')) return;
+      hero.removeAttribute('data-msgs-open');
+      hero.querySelector<HTMLElement>('.hero-party [data-msgs="latest"]:not([hidden]), .hero-party [data-msgs="write"]')?.focus({ preventScroll: true });
+    };
+    // (before the line's own tap, which on a phone goes down to the messages: here they come to the column instead)
+    hero.addEventListener('click', (e) => {
+      const t = e.target as Element;
+      if (t.closest?.('.hero-party [data-msgs="close"]')) { e.preventDefault(); closeMsgs(); return; }
+      if (!compactMsgs()) return;
+      const write = !!t.closest?.('.hero-party [data-msgs="write"]');
+      if (!write && !t.closest?.('.hero-party [data-msgs="latest"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openMsgs(write);
+    }, true);
+    hero.addEventListener('keydown', (e) => { if (e.key === 'Escape' && hero.hasAttribute('data-msgs-open') && (e.target as Element).closest?.('.hero-party')) closeMsgs(); });
     let last: LiveState | null = null;
     // The live broadcast's video, as last seen (the reveal's last seconds play on it after the broadcast moves on)
     let liveSeen: { id: string; player: NonNullable<LiveState['player']> } | null = null;
