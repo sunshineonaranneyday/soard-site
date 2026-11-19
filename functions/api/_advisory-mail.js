@@ -11,7 +11,10 @@
  * their address: the sign-in list is brought up to date there and then, and if
  * Cloudflare hasn't taken it yet the welcome waits for the heartbeat that sees
  * it has. With the switch off it waits for the switch (welcomeOnJoin,
- * sendWaitingWelcomes).
+ * sendWaitingWelcomes). Staff can also send it to one member from their row on
+ * Members, switch on or off (Peter, Nov 18 2026: "works with switch off"): the
+ * switch holds what the site sends by itself, never what a person sends by hand
+ * (sendWelcomeTo).
  *
  * To whoever runs the group: on from the start, because an introduction that nobody
  * sees is worse than none. A notice names what came in and links to Run it, never a
@@ -26,7 +29,7 @@
 
 import { sendEmails, sendEmailItems, EMAIL_FROM, SITE_ORIGIN, isEmail } from './_broadcast-notify.js';
 import * as shell from './_email-shell.js';
-import { activeAdvisors, peopleRows, privateEmails, readState, boardAdmins, memberSignIn } from './_board-roles.js';
+import { activeAdvisors, peopleRows, privateEmails, readState, boardAdmins, memberSignIn, signInWhy } from './_board-roles.js';
 import { ensureAdvisory, getSettings, INTRO_STATUSES, HOSTED_STATUSES, answerAsk } from './_advisory.js';
 import { syncBoardAccess, canSignIn, accessStatus } from './_board-access.js';
 import { greetName } from './_advisory-form.js';
@@ -54,7 +57,7 @@ const replyTo = async (env, settings) => (await leadOf(env, settings)).email;
 
 async function remember(DB, entry, now = Date.now()) {
   const log = await readState(DB, LOG);
-  const what = { ask: `This month’s ask: ${entry.title || ''}`, welcome: 'Your page is ready', goal: 'The goal was reached', 'goal-note': 'You reached the goal', 'advisory-update': 'An update to an Advisory Board member' }[entry.kind] || (String(entry.kind).startsWith('notice-') ? 'A notice to whoever runs the group' : entry.kind);
+  const what = { ask: `This month’s ask: ${entry.title || ''}`, welcome: entry.who ? `Your page is ready, to ${entry.who}` : 'Your page is ready', goal: 'The goal was reached', 'goal-note': 'You reached the goal', 'advisory-update': 'An update to an Advisory Board member' }[entry.kind] || (String(entry.kind).startsWith('notice-') ? 'A notice to whoever runs the group' : entry.kind);
   // (the list alone is written: what else the record holds is never written back from this read)
   await setTop(DB, 'list', [{ at: new Date(now).toISOString(), what, ...entry }, ...(log.list || [])].slice(0, 40));
 }
@@ -66,7 +69,7 @@ export const mailLog = async (DB) => (await readState(DB, LOG)).list || [];
  * as had, whoever. A welcome on its way is { sending: when }, never had.
  */
 const plain = (e) => String(e || '').trim().toLowerCase();
-const hadIt = (v, email = '') => typeof v === 'string' || (!!v && typeof v === 'object' && !!v.at && !v.sending && (!v.to || !email || v.to === plain(email)));
+const hadIt = (v, email = '') => typeof v === 'string' || (!!v && typeof v === 'object' && !!v.at && (!v.to || !email || v.to === plain(email)));
 /** { slug: true } for everyone who's had theirs at the address they have now */
 export const welcomedSlugs = async (DB) => {
   const [log, emails] = await Promise.all([readState(DB, LOG), privateEmails(DB)]);
@@ -80,6 +83,7 @@ export const mailSlugs = async (DB) => { const log = await readState(DB, LOG); r
  * read and written back: two at once (a press and the heartbeat, two staff) never undo each other.
  */
 const SENDING_STALE_MS = 10 * 60 * 1000; // a welcome "on its way" longer than this was a request that died: it can go again
+export const AGAIN_MS = 10 * 60 * 1000; // a sign-in email sent by hand goes again only this long after the last one (as Board's)
 const pathOf = (group, key) => `$.${JSON.stringify(group)}${key == null ? '' : `.${JSON.stringify(String(key))}`}`;
 async function logRow(DB) {
   await readState(DB, LOG); // (makes the table)
@@ -104,20 +108,55 @@ async function setTop(DB, key, value) {
 }
 /**
  * Their welcome, claimed for this send: true only for the one send that gets it (nobody emailed twice). Free to claim:
- * none yet, a claim a dead request left, or one that went to another address (someone else at this web address)
+ * none yet, a first one a dead request left, or one that went to another address (someone else at this web address).
+ * again: one they had at this address, sent at least AGAIN_MS ago, too (Send it again on their row). That claim keeps
+ * when the last one went ({ at, to, sending }), so a request that dies partway leaves them had, never unsent: nothing
+ * sends them it again by itself, and the row still says when it went
  */
-async function claimWelcome(DB, slug, now, email) {
+async function claimWelcome(DB, slug, now, email, { again = false } = {}) {
   await logRow(DB);
   const path = pathOf('welcomed', slug);
+  const stale = new Date(now - SENDING_STALE_MS).toISOString();
+  const sending = new Date(now).toISOString();
   const r = await DB.prepare(`UPDATE board_state SET data = json_set(${withGroup('welcomed')}, ?, json(?)), updated_at = ? WHERE key = ?
     AND (json_extract(data, ?) IS NULL OR (json_type(data, ?) = 'object' AND (
-      (json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) < ?)
-      OR (json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) != ?))))`)
-    .bind(path, JSON.stringify({ sending: new Date(now).toISOString() }), new Date().toISOString(), LOG, path, path,
-      `${path}.sending`, `${path}.sending`, new Date(now - SENDING_STALE_MS).toISOString(),
-      `${path}.at`, `${path}.to`, `${path}.to`, plain(email)).run();
-  return !!r?.meta?.changes;
+      (json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) < ? AND json_extract(data, ?) IS NULL)
+      OR (json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) != ?
+        AND (json_extract(data, ?) IS NULL OR json_extract(data, ?) < ?)))))`)
+    .bind(path, JSON.stringify({ sending }), new Date().toISOString(), LOG, path, path,
+      `${path}.sending`, `${path}.sending`, stale, `${path}.at`,
+      `${path}.at`, `${path}.to`, `${path}.to`, plain(email),
+      `${path}.sending`, `${path}.sending`, stale).run();
+  if (r?.meta?.changes) return true;
+  if (!again) return false;
+  // Had it here, long enough ago, and none on its way: claimed with when it went kept
+  const before = new Date(now - AGAIN_MS).toISOString();
+  const r2 = await DB.prepare(`UPDATE board_state SET data = json_set(data, ?, json_object(
+      'at', CASE json_type(data, ?) WHEN 'text' THEN json_extract(data, ?) ELSE json_extract(data, ?) END,
+      'to', CASE json_type(data, ?) WHEN 'text' THEN NULL ELSE json_extract(data, ?) END,
+      'sending', ?)), updated_at = ? WHERE key = ? AND json_valid(data) AND (
+    (json_type(data, ?) = 'text' AND json_extract(data, ?) < ?)
+    OR (json_type(data, ?) = 'object' AND json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) < ?
+      AND (json_extract(data, ?) IS NULL OR json_extract(data, ?) = ?)
+      AND (json_extract(data, ?) IS NULL OR json_extract(data, ?) < ?)))`)
+    .bind(path, path, path, `${path}.at`, path, `${path}.to`, sending, new Date().toISOString(), LOG,
+      path, path, before,
+      path, `${path}.at`, `${path}.at`, before,
+      `${path}.to`, `${path}.to`, plain(email),
+      `${path}.sending`, `${path}.sending`, stale).run();
+  return !!r2?.meta?.changes;
 }
+/** When their welcome went (a had-it record), else '' */
+const sentAt = (v) => (typeof v === 'string' ? v : v?.at || '');
+/**
+ * An email the service may have taken: no answer (it timed out, the connection dropped) or a gateway's 502/503/504 in
+ * front of Resend. Counted as sent, unconfirmed, as Board's are: pressing again could send a second copy. Resend's own
+ * error status, or email not set up, is a sure no
+ */
+const unsureOf = (r) => r.failed > 0 && (r.errors || []).some((e) => {
+  const t = String(e);
+  return /^Resend 50[234]:/.test(t) || (!/^Resend \d+:/.test(t) && !/RESEND_API_KEY not set/.test(t));
+});
 
 /**
  * Their welcome, written down as waiting (Add does this before Joined): the heartbeat sends it unless they've had it.
@@ -175,6 +214,12 @@ const greetingFor = (a, preferred) => preferred[a.slug] || firstOf(a.name);
 export const hasOrGoing = (v, now, email) => hadIt(v, email) || (!!v?.sending && Date.parse(v.sending) > now - SENDING_STALE_MS);
 /** Each address's welcome record as it is ({ slug: { at, to } | { sending } }), for a check against an address it'll have */
 export const welcomeRecords = async (DB) => (await readState(DB, LOG)).welcomed || {};
+/**
+ * One member's sign-in email as their row on Members shows it: { at } when they had it at the address they have now,
+ * { going: true } while one is on its way (a press, Add or the heartbeat), else {}
+ */
+export const welcomeOf = (v, email, now = Date.now()) => (v?.sending && Date.parse(v.sending) > now - SENDING_STALE_MS ? { going: true }
+  : hadIt(v, email) ? { at: sentAt(v), ...(v?.unconfirmed ? { unconfirmed: true } : {}) } : {});
 
 const para = (text) => shell.paragraphs(text);
 
@@ -395,29 +440,79 @@ export async function sendWaitingWelcomes(env, { now = Date.now() } = {}) {
 
 /**
  * Your page is ready: to those named, once each, who haven't had it. Each is claimed before theirs goes (a press
- * and the heartbeat at once never email anyone twice), marked had only once it went, and let go if it didn't, so
- * the next try sends it.
+ * and the heartbeat at once never email anyone twice), marked had only once it went, and put back as it was if it
+ * didn't, so the next try sends it.
+ * anyway: sent with the switch off (only sendWelcomeTo, a person's press). again: to one who had it AGAIN_MS ago or more
  */
-export async function sendWelcome(env, { by = '', slugs = null, now = Date.now(), greet = {} } = {}) {
+export async function sendWelcome(env, { by = '', slugs = null, now = Date.now(), greet = {}, anyway = false, again = false, who = '' } = {}) {
   const settings = await getSettings(env.DB);
-  if (!settings.emails) return { off: true, sent: 0 };
+  if (!settings.emails && !anyway) return { off: true, sent: 0 };
   // (only to an address that signs them in as an Advisory Board member: never a SOARD address or group inbox)
   const advisors = (await activeAdvisors(env.DB)).filter((a) => memberSignIn(a.email) && (!slugs || slugs.includes(a.slug)));
+  // (each one's record as it was before this send: one that had it keeps it if this one fails)
+  const was = (await readState(env.DB, LOG)).welcomed || {};
   const mine = [];
-  for (const a of advisors) if (await claimWelcome(env.DB, a.slug, now, a.email)) mine.push(a);
+  for (const a of advisors) if (await claimWelcome(env.DB, a.slug, now, a.email, { again })) mine.push(a);
   if (!mine.length) return { sent: 0, failed: 0 };
   const lead = await leadOf(env, settings);
   const preferred = { ...(await preferredNames(env.DB)), ...greet };
   const at = new Date(now).toISOString();
   let sent = 0;
   let failed = 0;
+  let unsure = 0;
   // (a batch goes, or fails, whole: one at most 100)
   for (let i = 0; i < mine.length; i += 100) {
     const chunk = mine.slice(i, i + 100);
     const r = await sendEmailItems(env, chunk.map((a) => ({ to: a.email, ...welcomeMessage(greetingFor(a, preferred), lead.name) })), { from: FROM, replyTo: lead.email, tags: tag('advisory-welcome') });
     if (r.sent) { sent += chunk.length; for (const a of chunk) await setEntry(env.DB, 'welcomed', a.slug, { at, to: plain(a.email) }); }
-    else { failed += chunk.length; for (const a of chunk) await removeEntry(env.DB, 'welcomed', a.slug); }
+    else if (unsureOf(r)) {
+      // (no answer: counted as sent, so nothing sends it a second time)
+      sent += chunk.length; unsure += chunk.length;
+      for (const a of chunk) await setEntry(env.DB, 'welcomed', a.slug, { at, to: plain(a.email), unconfirmed: true });
+    } else {
+      failed += chunk.length;
+      for (const a of chunk) await (sentAt(was[a.slug]) ? setEntry(env.DB, 'welcomed', a.slug, was[a.slug]) : removeEntry(env.DB, 'welcomed', a.slug));
+    }
   }
-  await remember(env.DB, { kind: 'welcome', by, sent, failed }, now);
-  return { sent, failed };
+  await remember(env.DB, { kind: 'welcome', by, sent, failed, ...(unsure ? { unsure } : {}), ...(who ? { who } : {}) }, now);
+  return { sent, failed, ...(unsure ? { unsure } : {}) };
+}
+
+/** Whether they've ever signed in to their page (Board's activity keeps each sign-in) */
+async function signedInEver(DB, slug) {
+  try { return !!(await DB.prepare('SELECT 1 AS x FROM board_signins WHERE slug = ? LIMIT 1').bind(slug).first()); } catch { return false; }
+}
+
+/**
+ * One member's sign-in email, sent by a person from their row on Members, with the Advisory Board's emails on or off
+ * (Peter, Nov 18 2026). As Board's: never to someone who has signed in already, and never twice within AGAIN_MS
+ * ("Send it again" after that). It goes only once the sign-in knows their address, so its link works when it lands:
+ * the list is brought up to date first if it doesn't yet.
+ * → { sent: 1, again, at, unsure? } | { failed: 1 } | { gone } | { noEmail, why: 'none' | 'bad' | 'group' | 'staff' } | { signedIn }
+ *   | { going } | { tooSoon, at } | { notReady, why: 'sign-in' (Cloudflare, minutes) | 'setup' (Board → Members says what's left) }
+ */
+export async function sendWelcomeTo(env, slug, { by = '', now = Date.now(), fetchImpl = fetch } = {}) {
+  const me = (await activeAdvisors(env.DB)).find((a) => a.slug === slug);
+  if (!me) return { gone: true };
+  if (!me.email) return { noEmail: true, why: 'none' };
+  const why = signInWhy(me.email);
+  if (why) return { noEmail: true, why };
+  if (await signedInEver(env.DB, slug)) return { signedIn: true };
+  const log = await readState(env.DB, LOG);
+  const state = welcomeOf(log.welcomed?.[slug], me.email, now);
+  if (state.going) return { going: true };
+  if (state.at && Date.parse(state.at) > now - AGAIN_MS) return { tooSoon: true, at: state.at };
+  if (!(await canSignIn(env, me.email))) await syncBoardAccess(env, { fetchImpl, now }).catch(() => null);
+  if (!(await canSignIn(env, me.email))) {
+    const a = await accessStatus(env).catch(() => null);
+    return { notReady: true, why: a && (!a.configured || a.attached === false) ? 'setup' : 'sign-in' };
+  }
+  const greet = log.waiting?.[slug]?.greet;
+  const r = await sendWelcome(env, { by, slugs: [slug], now, anyway: true, again: true, who: me.name, greet: greet ? { [slug]: greet } : {} });
+  // (had it now: one waiting for the switch or the sign-in isn't sent again)
+  if (r.sent) { await removeEntry(env.DB, 'waiting', slug); return { sent: 1, again: !!state.at, at: new Date(now).toISOString(), ...(r.unsure ? { unsure: true } : {}) }; }
+  if (r.failed) return { failed: 1 };
+  // Not claimed: another send took it meanwhile (another tab, Add, the heartbeat)
+  const after = welcomeOf((await readState(env.DB, LOG)).welcomed?.[slug], me.email, now);
+  return after.going ? { going: true } : after.at ? { tooSoon: true, at: after.at } : { failed: 1 };
 }

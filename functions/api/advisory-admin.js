@@ -8,6 +8,7 @@
  * GET                                  → everything it shows
  * GET ?zeffyForms=1                    → { ok, forms }  the forms in SOARD's Zeffy, for its Zeffy link dropdowns (./_zeffy-forms.js)
  * GET ?zeffyLinks=1                    → { ok, campaignUrl, campaignId, hosted }  for Admin → Site Config → Zeffy
+ * GET ?welcomes=1                      → { ok, welcomes: { slug: { at, unconfirmed } | { going } | {} } }  each sign-in email
  * POST { action, ... }                 see the cases below
  * POST multipart (file + docId)        a paper's file (advisory_docs); (file + meetingId) a meeting's (./_advisory-meetings.js)
  */
@@ -15,12 +16,12 @@
 import {
   whoIs, getSettings, saveSettings, listAsks, saveAsk, putAskOut, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros, setIntroStatus,
   listHosted, setHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES } from './_advisory.js';
-import { activeAdvisors, peopleRows, readState } from './_board-roles.js';
+import { activeAdvisors, peopleRows, readState, signInWhy } from './_board-roles.js';
 import { putFile, deleteFile, boardFileProblem } from './_board.js';
 import { logAudit } from './_audit.js';
 import { moneyView, goalNow, creditGift, uncreditGift, matchPage, findGifts, campaignFromUrl, campaignExists, sameLink } from './_advisory-money.js';
 import { pickableKids, pickKid, clearKid, kidCard } from './_advisory-sponsor.js';
-import { sendAsk, sendIntroUpdate, sendHostUpdate, sendWelcome, mailLog, welcomedSlugs } from './_advisory-mail.js';
+import { sendAsk, sendIntroUpdate, sendHostUpdate, sendWelcome, sendWelcomeTo, mailLog, welcomedSlugs, welcomeRecords, welcomeOf } from './_advisory-mail.js';
 import { adminMeetings, meetingAction } from './_advisory-meetings.js';
 import { advisoryBits, sharableBoardDocs } from './_board.js';
 import { boardPapers } from './_advisory-portal.js';
@@ -62,6 +63,11 @@ export async function onRequestGet(context) {
     if (refused) return refused;
     // The Zeffy form dropdowns (public/admin/zeffy-forms.js): the staff route is out of reach from the advisors' page
     if (new URL(context.request.url).searchParams.get('zeffyForms')) return Response.json({ ok: true, forms: await zeffyForms(env) });
+    // Each member's sign-in email alone, for a row showing one going out (a light look, every few seconds while it goes)
+    if (new URL(context.request.url).searchParams.get('welcomes')) {
+      const [advisors, welcomes] = await Promise.all([activeAdvisors(env.DB), welcomeRecords(env.DB)]);
+      return Response.json({ ok: true, welcomes: Object.fromEntries(advisors.map((a) => [a.slug, welcomeOf(welcomes[a.slug], a.email)])) }, { headers: { 'Cache-Control': 'no-store' } });
+    }
     // Admin → Site Config → Zeffy: the group's campaign and each approved fundraiser's Zeffy page, nothing else
     if (new URL(context.request.url).searchParams.get('zeffyLinks')) {
       const s = await getSettings(env.DB);
@@ -79,10 +85,10 @@ export async function onRequestGet(context) {
       const id = await campaignFromUrl(env, settings.campaignUrl);
       if (id) settings = await saveSettings(env.DB, { campaignId: id });
     }
-    const [advisors, people, term, seen, sigs, missing, docs, asks, wishes, intros, hosted, money, bits, group, meetings, kids, log] = await Promise.all([
+    const [advisors, people, term, seen, sigs, missing, docs, asks, wishes, intros, hosted, money, bits, group, meetings, kids, log, welcomes] = await Promise.all([
       activeAdvisors(env.DB), peopleRows(env.DB), allTerms(env.DB, settings), lastSeen(env.DB), signatures(env.DB), missingEmails(env.DB), listDocs(env.DB), listAsks(env.DB),
       listWishes(env.DB), listIntros(env.DB), listHosted(env.DB), moneyView(env, settings), advisoryBits(env), advisoryGroupStatus(env).catch(() => null),
-      adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []),
+      adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []), welcomeRecords(env.DB),
     ]);
     const nameOf = (slug) => people.find((p) => p.slug === slug)?.name || '';
     const withAnswers = await Promise.all(asks.map(async (a) => ({ ...a, mailed: log.some((l) => l.kind === 'ask' && l.id === a.id && l.sent > 0), answers: (await answersTo(env.DB, a.id)).map((r) => ({ ...r, name: nameOf(r.slug) })) })));
@@ -93,7 +99,9 @@ export async function onRequestGet(context) {
       leadName: nameOf(settings.lead),
       groupEmail: GROUP_ADDRESS,
       group,
-      advisors: advisors.map((a) => ({ slug: a.slug, name: a.name, email: a.email, photo: a.photo || '', organization: a.organization || '', term: term(a.slug), lastSeen: seen[a.slug] || '', signed: Object.fromEntries(Object.entries(sigs).map(([id, by]) => [id, by[a.slug] || null])) })),
+      // welcome: their sign-in email ({ at } | { going } | {}); emailWhy: why their email can't be their sign-in ('' when it can)
+      advisors: advisors.map((a) => ({ slug: a.slug, name: a.name, email: a.email, photo: a.photo || '', organization: a.organization || '', term: term(a.slug), lastSeen: seen[a.slug] || '', signed: Object.fromEntries(Object.entries(sigs).map(([id, by]) => [id, by[a.slug] || null])),
+        welcome: welcomeOf(welcomes[a.slug], a.email), emailWhy: a.email ? signInWhy(a.email) : 'none' })),
       missing,
       board: people.filter((p) => p.group === 'board' && p.status === 'active').map((p) => ({ slug: p.slug, name: p.name, committees: p.committees || [] })),
       docs, docKinds: DOC_KINDS, shelves: SHELVES, boardDocs: await sharableBoardDocs(env.DB),
@@ -272,6 +280,13 @@ export async function onRequestPost(context) {
         return Response.json({ ok: true, ...out });
       }
       case 'send-welcome': return Response.json({ ok: true, ...(await sendWelcome(env, { by, slugs: body.slugs })) });
+      case 'send-welcome-to': {
+        // One member's, from their row: emails on or off (./_advisory-mail.js sendWelcomeTo)
+        const slug = String(body.slug || '');
+        const r = await sendWelcomeTo(env, slug, { by });
+        if (r.sent) await audit(context, by, 'updated', `Advisory Board sign-in email ${r.again ? 'sent again' : 'sent'}: ${slug}`);
+        return Response.json({ ok: true, ...r });
+      }
       case 'sync-group': return Response.json({ ok: true, group: await syncAdvisoryGroup(env) });
       default:
         return await meetingAction(context, { action: body.action, body, by, w });

@@ -177,6 +177,15 @@ function adminPost(w, b, res) {
   if (b.action === 'email-ask') return json(res, 200, { ok: true, sent: a.advisors.length, failed: 0 });
   if (b.action === 'save-doc' && b.base && a.docs.find((d) => d.id === b.doc.id)?.updatedAt !== b.base) return json(res, 409, { ok: false, current: a.docs.find((d) => d.id === b.doc.id), error: 'Someone saved this since you opened it.' });
   if (b.action === 'save-doc') { const had = a.docs.find((d) => d.id === b.doc.id); const doc = { id: b.doc.id || `ad_${Date.now()}`, files: [], updatedAt: new Date().toISOString(), version: 1, ...had, ...b.doc, ...(b.doc.url ? { url: /^https:/.test(b.doc.url) ? b.doc.url : `https://${b.doc.url}` } : {}) }; a.docs = [...a.docs.filter((d) => d.id !== doc.id), doc]; return json(res, 200, { ok: true, doc }); }
+  if (b.action === 'send-welcome-to') {
+    const x = a.advisors.find((q) => q.slug === b.slug);
+    if (w.rowAnswer) return json(res, 200, { ok: true, ...w.rowAnswer });
+    const had = a.welcomed?.[b.slug];
+    if (had && Date.now() - Date.parse(had) < 10 * 60 * 1000) return json(res, 200, { ok: true, tooSoon: true, at: had });
+    const at = new Date().toISOString();
+    a.welcomed = { ...a.welcomed, [x.slug]: at };
+    return json(res, 200, { ok: true, sent: 1, again: !!had, at });
+  }
   if (b.action === 'send-welcome') { const fresh = (b.slugs || []).filter((x) => !a.welcomed?.[x]); a.welcomed = { ...a.welcomed, ...Object.fromEntries(fresh.map((x) => [x, new Date().toISOString()])) }; return json(res, 200, { ok: true, sent: fresh.length, failed: 0 }); }
   if (b.action === 'set-term') { w.terms = [...(w.terms || []), b]; return json(res, 200, { ok: true }); }
   if (b.action === 'save-settings') { if (b.settings.campaignUrl && !/^https:/.test(b.settings.campaignUrl)) b.settings.campaignUrl = `https://${b.settings.campaignUrl}`; a.settings = { ...a.settings, ...b.settings }; return json(res, 200, { ok: true, settings: a.settings }); }
@@ -203,7 +212,9 @@ const server = http.createServer(async (req, res) => {
     if (w.down) return json(res, w.down.status, w.down.body);
     // SOARD's Zeffy forms, for the campaign's and a fundraiser's dropdowns
     if (req.method === 'GET' && url.searchParams.get('zeffyForms')) return json(res, 200, { ok: true, forms: ADV_FORMS });
-    if (req.method === 'GET') return json(res, 200, p.endsWith('portal') ? w.portal : w.admin);
+    // (each member's row: their sign-in email as the server gives it, from who's had it)
+    if (req.method === 'GET' && !p.endsWith('portal')) return json(res, 200, { ...w.admin, advisors: w.admin.advisors.map((x) => ({ emailWhy: '', ...x, welcome: x.welcome || (w.admin.welcomed?.[x.slug] ? { at: w.admin.welcomed[x.slug] } : {}) })) });
+    if (req.method === 'GET') return json(res, 200, w.portal);
     const raw = await readBody(req);
     let b = {}; try { b = JSON.parse(raw.toString()); } catch { b = { multipart: true }; }
     w.posts.push({ path: p, ...b });
@@ -239,7 +250,8 @@ async function barFits() {
 }
 
 // ─── The browser ────────────────────────────────────────────────────
-const browser = await puppeteer.launch({ headless: 'shell', args: ['--no-sandbox', '--disable-gpu', '--disable-gpu-vsync', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--disable-background-timer-throttling'] });
+// (a long protocol wait: a machine busy with other work answers slowly, and that isn't the page failing)
+const browser = await puppeteer.launch({ headless: 'shell', protocolTimeout: 300_000, args: ['--no-sandbox', '--disable-gpu', '--disable-gpu-vsync', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--disable-background-timer-throttling'] });
 let passed = 0; const failures = []; const noise = [];
 const check = (ok, what) => { if (ok) passed++; else { failures.push(what); console.log(`  ✗ ${what}`); } };
 const settle = (ms = 120) => new Promise((r) => setTimeout(r, ms));
@@ -739,7 +751,72 @@ for (const width of [390, 1280]) {
   check(w.posts.find((x) => x.action === 'send-welcome')?.slugs.length === 2, 'round two: who’s had the sign-in email is left out');
   check((await page.$eval('.bp-toast', (x) => x.textContent)).includes('Sent to 2 Advisory Board members'), 'round two: it says how many');
   check(!(await textOf(page)).includes('Send the sign-in email'), 'round two: the button goes once everyone has it');
+  check(await page.evaluate(() => [...document.querySelectorAll('.ar-signin button')].map((b) => b.getAttribute('aria-label')).join('|')) === 'Send it again, Sam Ortiz', 'round two: only the one sent yesterday can be sent again; the two just sent wait their ten minutes');
   await page.close();
+}
+{
+  // One member's sign-in email from their row, with the emails OFF (Peter, Nov 18 2026: "works with switch off")
+  for (const width of [1280, 390]) {
+    const key = `lead/row-${width}`;
+    const a = filledAdmin('lead');
+    a.settings = { ...a.settings, emails: false };
+    // The first signed in; the second had hers days ago; the third never had one; a fourth's email is a SOARD address
+    a.advisors = a.advisors.map((x, i) => ({ ...x, lastSeen: i === 0 ? x.lastSeen || `${later(-2)}T15:00:00Z` : '' }));
+    a.welcomed = { [a.advisors[1].slug]: `${later(-3)}T12:00:00Z` };
+    a.advisors = [...a.advisors, { ...a.advisors[2], slug: 'staff-person', name: 'Staff Person', email: 'staff@soardcharity.com', emailWhy: 'staff', lastSeen: '' }];
+    worlds.set(key, { portal: filledPortal('lead'), admin: a, posts: [] });
+    const w = worlds.get(key);
+    const page = await tab(key, width);
+    await page.goto(`${ORIGIN}/admin/advisory/#/run`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('.ar-signin', { timeout: 6000 }).catch(() => {});
+    const rows = () => page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.ar-tr:not(.ar-tr--h)')].map((r) => [r.querySelector('.ar-who strong').textContent, r.querySelector('[data-label="Last signed in"]').innerText.replace(/\s+/g, ' ').trim()])));
+    const before = await rows();
+    const [first, second, third] = a.advisors.map((x) => x.name);
+    check(!/Send/.test(before[first]), `row (${width}): someone who signed in has no button (${before[first]})`);
+    check(/Sign-in email sent/.test(before[second]) && /Send it again/.test(before[second]), `row (${width}): one who had it can be sent it again (${before[second]})`);
+    check(/Not yet/.test(before[third]) && /Send the sign-in email/.test(before[third]), `row (${width}): one who never had it can be sent it, emails off (${before[third]})`);
+    check(/SOARD address/.test(before['Staff Person']) && !/Send/.test(before['Staff Person']), `row (${width}): a SOARD address is said, with no button (${before['Staff Person']})`);
+    check(!(await textOf(page)).includes('Send the sign-in email to'), `row (${width}): the send-to-everyone button stays off with the switch`);
+    check((await overflow(page)) <= 0, `row (${width}): the rows fit`);
+    // On a phone each row's sign-in email sits beside "Last signed in", in the right-hand column, its long lines wrapping there
+    if (width < 640) {
+      const beside = await page.evaluate(() => [...document.querySelectorAll('.ar-signin')].map((x) => {
+        const cell = x.closest('[data-label]').getBoundingClientRect(); const r = x.getBoundingClientRect();
+        return { left: Math.round(r.left - cell.left), top: Math.round(r.top - cell.top) };
+      }));
+      check(beside.every((b) => b.left > 90 && b.top < 4), `row (${width}): the sign-in email stays beside its label (${JSON.stringify(beside)})`);
+    }
+    await page.evaluate(() => document.querySelector('.ar-table').scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: join(SHOTS, `row-send-${width}-before.png`) });
+    const btn = await page.evaluateHandle((n) => [...document.querySelectorAll('.ar-signin button')].find((b) => b.getAttribute('aria-label') === `Send the sign-in email, ${n}`), third);
+    await btn.evaluate((x) => x.scrollIntoView({ block: 'center' }));
+    await btn.click();
+    await settle(400);
+    check(w.posts.filter((x) => x.action === 'send-welcome-to').map((x) => x.slug).join() === a.advisors[2].slug, `row (${width}): the press sends theirs alone`);
+    check((await page.$eval('.bp-toast', (x) => x.textContent)).includes(`Sign-in email sent to ${third}.`), `row (${width}): it says it went`);
+    const after = await rows();
+    check(/Sign-in email sent/.test(after[third]) && !/Send/.test(after[third]), `row (${width}): their row says it went, and waits its ten minutes (${after[third]})`);
+    check(await page.evaluate((n) => document.activeElement?.closest?.('.ar-tr')?.querySelector('.ar-who strong')?.textContent === n, third), `row (${width}): focus stays on their row, not the page`);
+    await page.evaluate(() => document.querySelector('.ar-table').scrollIntoView({ block: 'start' }));
+    await page.screenshot({ path: join(SHOTS, `row-send-${width}-after.png`) });
+    // What the server can answer instead, each said in words
+    for (const [answer, words] of [
+      [{ signedIn: true }, 'has signed in already, so they weren’t emailed'],
+      [{ notReady: true, why: 'sign-in' }, 'Cloudflare usually takes a new one within a few minutes'],
+      [{ notReady: true, why: 'setup' }, 'Peter or Holly can see what’s left on Board → Members'],
+      [{ sent: 1, again: true, unsure: true, at: new Date(Date.now() - 11 * 60 * 1000).toISOString() }, 'may have gone. It’s counted as sent'],
+      [{ failed: 1 }, 'the email service didn’t take it'],
+      [{ tooSoon: true, at: new Date().toISOString() }, 'It can go again at'],
+    ]) {
+      w.rowAnswer = answer;
+      const again = await page.evaluateHandle((n) => [...document.querySelectorAll('.ar-signin button')].find((b) => b.getAttribute('aria-label') === `Send it again, ${n}`), second);
+      await again.evaluate((x) => x.scrollIntoView({ block: 'center' }));
+      await again.click();
+      await settle(400);
+      check((await page.evaluate(() => [...document.querySelectorAll('.bp-toast')].map((t) => t.textContent).join(' | '))).includes(words), `row (${width}): ${JSON.stringify(answer)} says “${words}”`);
+    }
+    await page.close();
+  }
 }
 {
   // A new paper's file doesn't publish it; the web address warning clears; the starter has no dollars

@@ -121,7 +121,7 @@ export function AdvisoryArea({ tab = 'meetings', onTab = null, embedded = false,
       setBusy((n) => n - 1);
     }
   };
-  const ctx = { data, load, act, tell, busy: busy > 0, noteDirty };
+  const ctx = { data, setData, load, act, tell, busy: busy > 0, noteDirty };
   const body = error && !data ? html`<div class="ar-card ar-empty" role="alert"><p class="ar-empty__t">${error.signedOut ? 'Your sign-in ended' : 'This didn’t open'}</p><p class="ar-muted">${error.error || 'Try again.'}</p>${error.signedOut ? html`<button type="button" class="ar-btn ar-btn--go" onClick=${() => location.reload()}>Reload</button>` : html`<button type="button" class="ar-btn" onClick=${load}>Try again</button>`}</div>`
     : !data ? html`<p class="ar-muted ar-loading">Opening…</p>`
       : tab === 'documents' ? html`<${DocsTab} ctx=${ctx} />`
@@ -578,7 +578,7 @@ function GroupCard({ ctx }) {
     ${missing ? html`<p class="ar-note">No email on file for ${g.missing.map((p) => p.name).join(', ')}.</p>` : null}
     ${g?.error ? html`<div class="ar-btns"><button type="button" class="ar-btn" disabled=${busy} onClick=${async () => { setBusy(true); await act({ action: 'sync-group' }, 'Tried again'); setBusy(false); }}>Try again</button></div>` : null}
     <div class="ar-sub">
-      <${Toggle} checked=${data.settings.emails} label="Email the Advisory Board" sub="Each new member’s sign-in email, the monthly ask, updates on introductions, and invites to meetings and Demo Days. Turned on, sign-in emails that waited while it was off go too. Off, it all stays on the page."
+      <${Toggle} checked=${data.settings.emails} label="Email the Advisory Board" sub="Each new member’s sign-in email, the monthly ask, updates on introductions, and invites to meetings and Demo Days. Turned on, sign-in emails that waited while it was off go too. Off, it all stays on the page, except a sign-in email sent from someone’s row under The Advisory Board."
         onChange=${(on) => act({ action: 'save-settings', settings: { emails: on } }, on ? 'Emails are on' : 'Emails are off')} />
       ${data.settings.emails && unsent.length ? html`<div class="ar-btns"><${Sure} label=${`Send the sign-in email to ${unsent.length}`} yes="Yes, send it" note=${`To ${unsent.map((a) => first(a.name)).join(', ')}: how to open the page.`} onYes=${welcome} /></div>` : null}
     </div>
@@ -587,18 +587,96 @@ function GroupCard({ ctx }) {
 }
 
 // ─── The people ─────────────────────────────────────────────────────
+// Their sign-in email goes again only this long after the last one (the server's AGAIN_MS, as Board's)
+const AGAIN_MS = 10 * 60 * 1000;
+const timeOf = (t) => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
+/** Why their email can't be their sign-in (emailWhy from the server), in words */
+const notSignIn = (why) => (why === 'none' ? 'No email on file' : why === 'staff' ? 'Their email is a SOARD address, which signs in as staff'
+  : why === 'group' ? 'Their email is a SOARD group inbox' : why === 'bad' ? 'Their email isn’t a whole address' : '');
+/** What a press of Send the sign-in email did, from the server's answer */
+const sentWords = (j, a, me) => (j.sent && j.unsure ? `The email service didn’t answer, so ${a.name}’s sign-in email may have gone. It’s counted as sent: wait ten minutes before sending it again.`
+  : j.sent ? `Sign-in email sent to ${a.name}${j.again ? ' again' : ''}.`
+  : j.signedIn ? `${a.name} has signed in already, so they weren’t emailed.`
+    : j.going ? `The sign-in email is going out to ${a.name} right now.`
+      : j.tooSoon ? `${a.name} was sent it at ${timeOf(j.at)}. It can go again at ${timeOf(Date.parse(j.at) + AGAIN_MS)}.`
+        : j.notReady && j.why === 'setup' ? `Nothing was sent: the sign-in isn’t set up all the way, so the email’s link wouldn’t work yet. ${me?.kind === 'admin' ? 'Board → Members says what’s left.' : 'Peter or Holly can see what’s left on Board → Members in the staff admin.'}`
+          : j.notReady ? `Nothing was sent: the sign-in doesn’t know ${a.name}’s email yet. Cloudflare usually takes a new one within a few minutes, so try again then.`
+            : j.noEmail ? `Nothing was sent. ${j.why === 'none' ? `There’s no email for ${a.name} on People.` : `${a.name}’s email on People ${j.why === 'staff' ? 'is a SOARD address, which signs in as staff' : j.why === 'group' ? 'is a SOARD group inbox' : 'isn’t a whole address'}, so it can’t be their sign-in.`} Put their own on their People page.`
+              : j.gone ? `${a.name} isn’t on the Advisory Board now.`
+                : 'It didn’t go: the email service didn’t take it. Try again in a few minutes.');
 function People({ ctx }) {
-  const { data } = ctx;
+  const { data, setData, act, tell, load } = ctx;
   const agreement = data.docs.find((d) => d.kind === 'agreement' && d.shared !== false);
+  // The one being sent now: every row's button waits for it
+  const [sending, setSending] = useState('');
+  // One clock for every row: "Send it again" comes back the minute its ten minutes are up
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const at = Date.now();
+    const ends = data.advisors.map((a) => Date.parse(a.welcome?.at || '') + AGAIN_MS).filter((t) => t > at);
+    if (!ends.length) return undefined;
+    const t = setTimeout(() => setNow(Date.now()), Math.min(60 * 1000, ...ends.map((e) => e - at + 50)));
+    return () => clearTimeout(t);
+  }, [now, data.advisors]);
+  // One going out from somewhere else (another tab, Add, the site): its row looked at again until it's gone, a light look
+  // at the sign-in emails alone (nothing else on the page reloads, so nothing being typed is touched). The server stops
+  // calling one "going" ten minutes on, so this stops by itself
+  const going = data.advisors.some((a) => a.welcome?.going);
+  useEffect(() => {
+    if (!going || sending) return undefined;
+    const t = setTimeout(async () => {
+      if (document.visibilityState !== 'visible') { setNow(Date.now()); return; }
+      const j = await call(null, { query: '?welcomes=1' });
+      if (j.ok) setData((d) => (d ? { ...d, advisors: d.advisors.map((a) => (a.slug in j.welcomes ? { ...a, welcome: j.welcomes[a.slug] } : a)) } : d));
+      else setNow(Date.now());
+    }, 5000);
+    return () => clearTimeout(t);
+  }, [going, sending, data, now]);
+  const send = async (a) => {
+    if (sending) return;
+    setSending(a.slug);
+    try {
+      const j = await act({ action: 'send-welcome-to', slug: a.slug }, '', { raw: true });
+      if (!j) return;
+      if (!j.ok) { tell(j.error || 'That didn’t go. Try again in a moment.', true); await load(); return; }
+      tell(sentWords(j, a, data.me), !j.sent || !!j.unsure);
+      setNow(Date.now());
+    } finally {
+      setSending('');
+      // The button goes once it's sent (it waits its ten minutes): focus stays on their row, never the page
+      requestAnimationFrame(() => {
+        const el = document.activeElement;
+        if (!el || el === document.body || !el.isConnected) document.querySelector(`.ar-signin[data-slug="${CSS.escape(a.slug)}"]`)?.focus();
+      });
+    }
+  };
   return html`<${Card} title="The Advisory Board" count=${data.advisors.length} sub="Added and removed on People in the staff admin. Each person’s sign-in and the group’s list follow by themselves.">
     ${data.missing.length ? html`<p class="ar-note">Can’t sign in yet, no email on file: ${data.missing.map((p) => p.name).join(', ')}.</p>` : null}
     ${data.advisors.length ? html`<div class="ar-table" role="table" aria-label="Advisory Board members">
       <div class="ar-tr ar-tr--h" role="row"><span role="columnheader">Member</span><span role="columnheader">Last signed in</span><span role="columnheader">Agreement</span><span role="columnheader">Term ends</span></div>
-      ${data.advisors.map((a) => html`<${PersonRow} a=${a} agreement=${agreement} ctx=${ctx} key=${a.slug} />`)}
+      ${data.advisors.map((a) => html`<${PersonRow} a=${a} agreement=${agreement} ctx=${ctx} now=${now} sending=${sending} onSend=${send} key=${a.slug} />`)}
     </div>` : html`<p class="ar-muted">Nobody’s on the Advisory Board yet.</p>`}
   <//>`;
 }
-function PersonRow({ a, agreement, ctx }) {
+/**
+ * Last signed in, or, until they have: their sign-in email (sent when, or going now) and the button to send it, with the
+ * Advisory Board's emails on or off. As Board's: never to someone who has signed in, and again only after ten minutes
+ */
+function SignIn({ a, now, sending, onSend }) {
+  if (a.lastSeen) return dayOf(a.lastSeen);
+  const w = a.welcome || {};
+  const soon = !!w.at && now - Date.parse(w.at) < AGAIN_MS;
+  const label = sending === a.slug ? 'Sending…' : w.at ? 'Send it again' : 'Send the sign-in email';
+  return html`<span class="ar-signin" data-slug=${a.slug} tabindex="-1" role="group" aria-label=${`${a.name}’s sign-in email`}>
+    <span class="ar-muted">Not yet</span>
+    ${w.going ? html`<span class="ar-muted ar-small">Sign-in email going out now</span>`
+      : w.at ? html`<span class="ar-muted ar-small">Sign-in email sent ${dayOf(w.at)}${w.unconfirmed ? ' (not confirmed)' : ''}</span>`
+        : a.emailWhy ? html`<span class="ar-muted ar-small">${notSignIn(a.emailWhy)}</span>` : null}
+    ${!a.emailWhy && !w.going && !soon ? html`<button type="button" class="ar-btn ar-btn--small" aria-disabled=${sending ? 'true' : null} aria-label=${`${label}, ${a.name}`}
+      onClick=${() => { if (!sending) onSend(a); }}>${label}</button>` : null}
+  </span>`;
+}
+function PersonRow({ a, agreement, ctx, now, sending, onSend }) {
   const { act } = ctx;
   // null until someone types: tabbing through saves nothing, and the group's own date keeps coming through
   const [typed, setTyped] = useState(null);
@@ -612,7 +690,7 @@ function PersonRow({ a, agreement, ctx }) {
   };
   return html`<div class="ar-tr" role="row">
     <span class="ar-who" role="cell"><${Face} p=${a} /><span><strong>${a.name}</strong>${a.organization ? html`<span class="ar-muted">${a.organization}</span>` : null}</span></span>
-    <span role="cell" data-label="Last signed in">${a.lastSeen ? dayOf(a.lastSeen) : html`<span class="ar-muted">Not yet</span>`}</span>
+    <span role="cell" data-label="Last signed in"><${SignIn} a=${a} now=${now} sending=${sending} onSend=${onSend} /></span>
     <span role="cell" data-label="Agreement">${!agreement ? html`<span class="ar-muted">Not written yet</span>` : signedNow(sig, agreement, a.term) ? `Signed ${dayOf(sig.at)}` : sig ? html`<span class="ar-muted">Asked to sign again</span>` : html`<span class="ar-muted">Not yet</span>`}</span>
     <span role="cell" data-label=${ended ? 'Term ended' : 'Term ends'}><input class="ar-input ar-input--date" type="date" aria-label=${`${a.name}’s term ${ended ? 'ended' : 'ends'}`} value=${ends} onInput=${(e) => setTyped(e.currentTarget.value)} onBlur=${leave} />${ended ? html`<span class="ar-tag">Ended</span>` : null}${a.term.renewedOn ? html`<span class="ar-muted ar-small">Renewed ${shortDate(a.term.renewedOn)}</span>` : null}</span>
   </div>`;
@@ -887,7 +965,7 @@ textarea.ar-input { resize: vertical; }
 .ar-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 2px; }
 .ar-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 42px; padding: 6px 15px; border: 1px solid var(--ar-line-2); border-radius: 10px; background: #fff; color: var(--ar-ink); font: inherit; font-weight: 600; cursor: pointer; }
 .ar-btn:hover:not(:disabled) { border-color: var(--ar-ink-2); }
-.ar-btn:disabled { opacity: 0.5; cursor: default; }
+.ar-btn:disabled, .ar-btn[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .ar-btn--go { background: var(--ar-yellow); border-color: var(--ar-yellow); color: #1E1F1C; }
 .ar-btn--go:hover:not(:disabled) { background: var(--ar-yellow-2); border-color: var(--ar-yellow-2); }
 .ar-btn--quiet { background: none; border-color: transparent; }
@@ -946,6 +1024,10 @@ textarea.ar-input { resize: vertical; }
 .ar-tr--h { border-top: 0; padding-top: 0; color: var(--ar-muted); font-size: 0.86em; font-weight: 600; }
 .ar-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .ar-who > span { display: grid; min-width: 0; }
+.ar-signin { display: grid; justify-items: start; gap: 3px; min-width: 0; }
+.ar-signin:focus { outline: none; }
+.ar-signin:focus-visible { outline: 3px solid var(--ar-ink); outline-offset: 3px; border-radius: 6px; }
+.ar-signin .ar-btn { margin-top: 3px; }
 .ar-face { flex: none; width: var(--s, 36px); height: var(--s, 36px); border-radius: 50%; object-fit: cover; }
 .ar-face--i { display: grid; place-items: center; background: var(--ar-warm); color: var(--ar-ink-2); font-size: 0.8em; font-weight: 700; }
 @container (max-width: 640px) {
@@ -953,6 +1035,7 @@ textarea.ar-input { resize: vertical; }
   .ar-tr { grid-template-columns: minmax(0, 1fr); }
   .ar-tr > [data-label] { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 2px 10px; font-size: 0.95em; }
   .ar-tr > [data-label]::before { content: attr(data-label); color: var(--ar-muted); }
+  .ar-signin { justify-items: end; text-align: right; flex: 0 1 auto; max-width: min(64%, 270px); }
 }
 .ar-editor { display: grid; grid-template-columns: minmax(0, 1fr); gap: 11px; margin: 7px 0; padding: 14px; border: 1px solid var(--ar-line-2); border-radius: 12px; background: #FEFCF5; min-width: 0; }
 .ar-files { display: grid; gap: 7px; justify-items: start; }
