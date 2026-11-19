@@ -203,7 +203,8 @@ test('the question names the kid and the time, in one plain text; a test\'s open
   assert.equal(notify.clockTime(at, 'America/New_York', now), '4:21 PM');
   assert.equal(notify.clockTime(at, 'America/New_York', Date.parse('2026-11-19T15:00:00Z')), 'Wed, Nov 18 at 4:21 PM', 'another day says which');
   const q = notify.overQuestionText({ kidName: 'Dylan', at, tz: 'America/New_York' });
-  assert.equal(q, `SOARD: The stream from Dylan's reveal stopped at ${notify.clockTime(at, 'America/New_York')}. Is the reveal over? Reply Y if it's over, or N if the signal dropped (viewers see Reconnecting).`);
+  // (the time alone, whatever day the test runs: the question never names the day, as the last check below says)
+  assert.equal(q, `SOARD: The stream from Dylan's reveal stopped at 4:21 PM. Is the reveal over? Reply Y if it's over, or N if the signal dropped (viewers see Reconnecting).`);
   assert.ok(q.length <= 160 && /^[\x20-\x7E]+$/.test(q), 'one plain text segment');
   assert.match(notify.overQuestionText({ kidName: null, at, tz: 'America/New_York', test: true }), /^Test: The reveal's stream stopped at \d{1,2}:\d\d [AP]M\. Is the reveal over\? /);
   assert.match(notify.overQuestionText({ kidName: 'José Ramírez', at }), /^SOARD: The stream from Jose's reveal stopped/, 'the first name, in plain letters');

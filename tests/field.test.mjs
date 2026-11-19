@@ -296,6 +296,11 @@ test('the schedule: late and coming up; a new start keeps the task’s length; d
 const data = (r) => r.structuredContent;
 
 test('through Claude: not connected gives the link; connected, a log opens the photo box on that day’s log', async () => {
+  // The tools read the clock themselves (the schedule shows the weeks around today), so the fixture's week is held as
+  // today: run on a later day, the job's Nov 11 to 18 tasks were all in the past and the schedule came back short
+  const realNow = Date.now;
+  Date.now = () => NOW;
+  try {
   // Not connected: an answer, not a failure, so the chat still opens the box or the window, with the button in it
   for (const [tool, args] of [['daily_log', { job: 'Lizzie', notes: 'Demo done.' }], ['add_photos', { job: 'Lizzie' }], ['job_tasks', { job: 'Lizzie' }]]) {
     const none = await callTool(env, tool, args, ME);
@@ -321,6 +326,9 @@ test('through Claude: not connected gives the link; connected, a log opens the p
   assert.ok(sched.tasks.length >= 3);
   const conn = data(await callTool(env, 'jobtread_connection', {}, ME));
   assert.equal(conn.as, 'Christian Nielsen');
+  } finally {
+    Date.now = realNow;
+  }
 });
 
 test('the photo box: drawn by the chat under daily_log and add_photos; its two tools are the box’s only; it sends only to JobTread’s storage', async () => {
