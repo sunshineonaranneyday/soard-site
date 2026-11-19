@@ -12,6 +12,8 @@
  * Who posted is a random id this endpoint sets as an HttpOnly cookie on the
  * first post (a clientId the browser sends is ignored), plus the address.
  * Screening, limits and the hub relay live in _live-messages.js.
+ * GET ?b=<broadcast id> → that reveal's shown messages (a child's own page shows their past reveal for good,
+ *                 functions/live/_past-reveal.js); open only when it's the current reveal's
  * ?rehearsal (GET and POST): a staff rehearsal's own messages (_broadcast-rehearsal.js), for signed-in staff only:
  * 403 for anyone else, 409 when no rehearsal is on.
  */
@@ -22,6 +24,7 @@ import { clientIp } from './_secure.js';
 import { b64u, SITE_ORIGIN } from './_broadcast-notify.js';
 import { isAuthenticated } from './_middleware.js';
 import { rehearsalFor } from './_broadcast-rehearsal.js';
+import { BROADCAST_ID_RE } from '../live/_past-reveal.js';
 
 const noStore = { 'Cache-Control': 'no-store' };
 const VISITOR_COOKIE = 'soard_live_visitor';
@@ -53,7 +56,9 @@ export async function onRequestGet(context) {
   try {
     const rehearsal = await rehearsalOf(context);
     if (rehearsal instanceof Response) return rehearsal;
-    const r = await listShown(context.env, { rehearsal: rehearsal || null });
+    const b = context.request?.url ? new URL(context.request.url).searchParams.get('b') : null;
+    const broadcastId = !rehearsal && b && BROADCAST_ID_RE.test(b) ? b : null;
+    const r = await listShown(context.env, { rehearsal: rehearsal || null, broadcastId });
     return Response.json(r, { headers: noStore });
   } catch (err) {
     return Response.json({ ok: false, messages: [], error: err.message }, { status: 500, headers: noStore });

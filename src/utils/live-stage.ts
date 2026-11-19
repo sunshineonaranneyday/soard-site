@@ -36,6 +36,11 @@ export interface StageView {
   ended?: boolean;
   /** The replay is on its way (the note says it will be here in a few minutes); false: it's overdue, nothing is promised */
   replaySoon?: boolean;
+  /**
+   * The broadcast this view is of, when it isn't the current one: a child's own past reveal on their page, for good
+   * (functions/live/_past-reveal.js). Its replay's moment, captions, watching and clicks are that reveal's
+   */
+  broadcastId?: string | null;
 }
 export interface Stage {
   update(view: StageView): void;
@@ -219,10 +224,12 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     root.dataset.orientation = shape();
 
     // The broadcast is part of the key: the live input is the same for every reveal, and each reveal's watching is its own
-    const key = party && next.player ? `${next.player.kind}:${next.player.uid}:${client.state?.id || ''}` : '';
+    // (a past reveal is its own broadcast: the current one changing never takes its replay away)
+    const bidNow = next.broadcastId || client.state?.id || '';
+    const key = party && next.player ? `${next.player.kind}:${next.player.uid}:${bidNow}` : '';
     if (key !== mounted && playerEl) {
       mounted = key;
-      mountedFor = client.state?.id || '';
+      mountedFor = bidNow;
       unmount();
       if (key && next.player) {
         kind = next.player.kind;
@@ -240,7 +247,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
         attachMedia();
         if (kind === 'replay') { metaSince = Date.now(); loadReplayMeta(); }
         // Reveal stats: seconds actually watched, for the broadcast this player belongs to
-        const bid = client.state?.id || null;
+        const bid = bidNow || null;
         const watchKind = kind === 'live' ? 'live' : 'replay';
         meter = watchMeter({
           kind: watchKind,
@@ -345,7 +352,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // Only say "loading" when it is actually slow
     // (after a moment: a blank frame with no words reads as broken; the note fades in, LiveStage.astro)
     if (st === 'connecting') connectingTimer = setTimeout(() => { slowConnect = true; paint(); }, 800);
-    if (st === 'playing' && kind === 'replay' && !replayBeacon) { replayBeacon = true; client.beacon('click_replay'); }
+    if (st === 'playing' && kind === 'replay' && !replayBeacon) { replayBeacon = true; client.beacon('click_replay', undefined, pastBid()); }
     if (st === 'iframe') attachMedia();
     // The phone back on while "That's the reveal!" is up with the broadcast still live (it never went off): the live
     // video playing again takes the note away
@@ -748,11 +755,14 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   }
 
   // ── Replay: the reveal moment and captions ──────────────────────
+  // (a child's own past reveal: asked for by its broadcast id; the current replay as always)
+  const pastBid = () => (view.broadcastId && view.broadcastId !== client.state?.id ? view.broadcastId : null);
+  const pastQuery = (join: string) => { const b = pastBid(); return b ? `${join}b=${encodeURIComponent(b)}` : ''; };
   async function loadReplayMeta() {
     clearTimeout(metaTimer);
     if (kind !== 'replay') return;
     try {
-      const res = await fetch('/api/live-replay', { cache: 'no-store' });
+      const res = await fetch(`/api/live-replay${pastQuery('?')}`, { cache: 'no-store' });
       const data = res.ok ? await res.json() : null;
       if (data?.ok && data.uid === view.player?.uid) {
         revealAt = typeof data.revealAt === 'number' ? data.revealAt : null;
@@ -767,7 +777,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   async function loadCues() {
     if (cues) return;
     try {
-      const res = await fetch('/api/live-replay?vtt=en');
+      const res = await fetch(`/api/live-replay?vtt=en${pastQuery('&')}`);
       cues = res.ok ? parseVtt(await res.text()) : [];
     } catch { cues = []; }
     paintCaption(video()?.currentTime ?? 0);
@@ -780,7 +790,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     seekVideo(Math.max(0, revealAt - JUMP_LEAD), true);
     player?.setMuted(false);
     player?.play();
-    client.beacon('click_replay', { how: 'jump' });
+    client.beacon('click_replay', { how: 'jump' }, pastBid());
   }
 
   // ── Controls ────────────────────────────────────────────────────

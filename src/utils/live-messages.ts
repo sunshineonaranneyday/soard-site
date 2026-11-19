@@ -23,6 +23,11 @@ export interface MessagesView {
   kidName: string | null;
   /** Watch party: the panel goes beside the video */
   party: boolean;
+  /**
+   * A child's own past reveal on their page (functions/live/_past-reveal.js): its messages, read by its id, read-only;
+   * the hub's messages are the current reveal's, never these
+   */
+  archive?: boolean;
 }
 interface Options {
   client: LiveClient;
@@ -51,6 +56,7 @@ export function createMessages(opts: Options) {
   const setHidden = (el: Element | null, hidden: boolean) => { if (el) (el as HTMLElement).hidden = hidden; };
 
   let view: MessagesView = { active: false, broadcastId: null, kidName: null, party: false };
+  let archived = false;
   let broadcast = '';
   // The server may have put the box in its section already, open and with the messages so far
   // (functions/live/[[path]].js): it starts from that, so the first paint stays as it is until the API answers
@@ -181,7 +187,7 @@ export function createMessages(opts: Options) {
     if (loading) return;
     loading = true;
     try {
-      const res = await fetch(MESSAGES_URL, { cache: 'no-store' });
+      const res = await fetch(view.archive && broadcast ? `/api/live-messages?b=${encodeURIComponent(broadcast)}` : MESSAGES_URL, { cache: 'no-store' });
       const data = await res.json().catch(() => null);
       if (!data || !res.ok) return;
       enabled = !!data.enabled;
@@ -199,13 +205,13 @@ export function createMessages(opts: Options) {
   }
 
   const offs = [
-    client.on('msg', ({ message }) => { if (broadcast) add(message); }),
+    client.on('msg', ({ message }) => { if (broadcast && !view.archive) add(message); }),
     client.on('msg-hide', ({ id }) => remove(id)),
     client.on('connection', ({ connected }) => { if (connected && broadcast) load(false); }),
     // A hub that counts viewers also relays messages
     client.on('viewers', () => { relayed = true; }),
   ];
-  const poll = setInterval(() => { if (broadcast && !(client.connected && relayed) && !document.hidden && shown) load(false); }, POLL_MS);
+  const poll = setInterval(() => { if (broadcast && !view.archive && !(client.connected && relayed) && !document.hidden && shown) load(false); }, POLL_MS);
 
   // ── The box, docked at the bottom of a phone's screen (LiveMessages.astro) ──
   // Its height at rest is the page's to know (LiveMessages.astro sets --live-dock from the first paint: the page's foot
@@ -368,8 +374,9 @@ export function createMessages(opts: Options) {
       fitPlaceholder();
       const empty = $('empty-text');
       if (empty) empty.textContent = latestLine(next.kidName, null, true)?.text || 'Be the first to leave a message';
+      // (the same reveal becoming the page's past one, its replay window over: read again, read-only now)
       if (!next.active) { broadcast = ''; open = false; }
-      else if (next.broadcastId !== broadcast) { broadcast = next.broadcastId || ''; load(true); }
+      else if (next.broadcastId !== broadcast || !!next.archive !== archived) { broadcast = next.broadcastId || ''; archived = !!next.archive; if (archived) open = false; load(true); }
       paint();
     },
     /** The page is being swapped out by a client-side navigation */

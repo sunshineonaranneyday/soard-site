@@ -846,6 +846,12 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     const drawnFrom = scheduleOnPage(hero);
     let upcoming: UpcomingReveal[] = drawnFrom?.upcoming ?? upcomingAtBuild();
     let upcomingLoaded = !!drawnFrom;
+    // A child's own page once their broadcast isn't the current one: their own last reveal, in the Theater, for good
+    // (Peter, Nov 18 2026: "can it be there forever as dylans?"; functions/live/_past-reveal.js). The server leaves it on
+    // the hero (data-past); a page open through the child's replay window keeps that replay as it (drawPage)
+    let past: LiveState | null = (() => {
+      try { const v = JSON.parse(hero.dataset.past || 'null'); return v && v.id && v.player?.kind === 'replay' ? v as LiveState : null; } catch { return null; }
+    })();
 
     const stage = createStage(stageEl, {
       client,
@@ -1132,9 +1138,14 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     }
     /** What the page shows for a state: the moment, and whether it's the watch party */
     function decide(state: LiveState | null) {
-      const s = state || ({ phase: 'idle' } as LiveState);
+      const now = state || ({ phase: 'idle' } as LiveState);
       // A stream with no kid known yet only counts as this kid's on the day of this kid's reveal
-      const forThisKid = !pageKid || s.kidSlug === pageKid || (!s.kidSlug && revealIsToday(pageKid, upcoming.filter((r) => r.confirmed)));
+      const own = !pageKid || now.kidSlug === pageKid || (!now.kidSlug && revealIsToday(pageKid, upcoming.filter((r) => r.confirmed)));
+      // This child's broadcast not the current one (or nothing on): their own past reveal, if they have one (never while
+      // the live video still plays its last seconds)
+      const archive = !!pageKid && !!past && (!own || now.phase === 'idle') && !stage.playingLive;
+      const s = archive ? past! : now;
+      const forThisKid = archive || own;
       const phase = forThisKid ? s.phase : 'idle';
       let view = phase === 'live' || phase === 'ending' ? 'live' : phase === 'replay' ? 'replay' : phase === 'scheduled' || phase === 'armed' ? 'upcoming' : 'idle';
       // The reveal's last seconds: viewers watch about 20 s behind the phone, so when the broadcast moves on the live
@@ -1151,12 +1162,14 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       const after = afterReveal({ view, hasPlayer, source: s.source, endedAt: s.endedAt });
       // (party held for "That's the reveal!" both while it shows and when this very drawing brings it up: decided here,
       // before the stage hears of it, so the layout never drops for a moment and an open give form stays open)
-      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer || after.ended || stage.endsWith(view as 'idle' | 'upcoming' | 'live' | 'replay'), player, after };
+      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer || after.ended || stage.endsWith(view as 'idle' | 'upcoming' | 'live' | 'replay'), player, after, archive };
     }
 
     function drawPage(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
       last = state; lastMeta = meta;
-      const { s, forThisKid, phase, view, kidSlug, hasPlayer, party, player, after } = decide(state);
+      const { s, forThisKid, phase, view, kidSlug, hasPlayer, party, player, after, archive } = decide(state);
+      // (this child's own replay, current now: kept as their past reveal for when it no longer is)
+      if (!archive && pageKid && s.kidSlug === pageKid && s.phase === 'replay' && s.player?.kind === 'replay' && s.source === 'stream' && s.id) past = { ...s, replayUntil: null };
       if ((phase === 'live' || phase === 'ending') && s.player?.kind === 'live' && s.id) liveSeen = { id: s.id, player: s.player };
       display = view;
       hero.dataset.phase = display;
@@ -1257,8 +1270,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         badge,
         ended: after.ended,
         replaySoon: after.replaySoon,
+        broadcastId: s.id,
       });
-      messages?.update({ active: forThisKid && !!s.id && view !== 'idle', broadcastId: s.id, kidName: s.kidName, party });
+      messages?.update({ active: forThisKid && !!s.id && view !== 'idle', broadcastId: s.id, kidName: s.kidName, party, archive });
       if (!party) give?.close();
 
       // The reminder block, by the rules the server drew it with (remindParts, remindWords: live-hero-text.ts)
@@ -1335,8 +1349,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       if (!viewed) {
         viewed = true;
         const src = new URLSearchParams(location.search).get('src') || '';
-        client.beacon('view_live_page', { phase: display, kid: pageKid || s.kidSlug || '', ...(src ? { src: src.slice(0, 24) } : {}) });
-        if (src === 'qr') client.beacon('qr_scan', { kid: s.kidSlug || '' });
+        // (a child's own past reveal on their page: a visit to that reveal)
+        const bid = archive ? s.id : null;
+        client.beacon('view_live_page', { phase: display, kid: pageKid || s.kidSlug || '', ...(src ? { src: src.slice(0, 24) } : {}) }, bid);
+        if (src === 'qr') client.beacon('qr_scan', { kid: s.kidSlug || '' }, bid);
       }
     }
 

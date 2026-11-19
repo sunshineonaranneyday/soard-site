@@ -13,6 +13,7 @@
  * the rest of /live/ does. A hidden (draft) or unknown kid is a 404.
  */
 import { readState } from './_broadcast.js';
+import { ownCurrent, pastReveal } from '../live/_past-reveal.js';
 import { nearEnv } from './_read-copy.js';
 import { cachedReveals } from './_reveals.js';
 import { revealSlides, designWindow } from '../../public/admin/reveal-design.js';
@@ -50,7 +51,11 @@ export async function onRequestGet({ env, request }) {
   kid.slug ||= slug;
 
   const now = Date.now();
-  const { open, after } = designWindow({ kid, reveal: revealOf(schedule, slug), broadcast, now });
+  // The child's own past reveal counts as their broadcast once it isn't the current one: their page shows that reveal
+  // for good (functions/live/_past-reveal.js), its room and plans with it, long after the schedule has let it go
+  const current = broadcast && ownCurrent({ kidSlug: broadcast.kidSlug, phase: broadcast.phase }, slug) ? broadcast : null;
+  const theirs = current || (await pastReveal(near.DB, slug, null).catch(() => null))?.state || broadcast;
+  const { open, after } = designWindow({ kid, reveal: revealOf(schedule, slug), broadcast: theirs, now });
   // Not confirmed yet: kept for a minute at most, so the confirm shows on the next ask
   if (!open) return json({ open: false }, 200, 60);
   // after: the reveal has started, so the room is "before", not "today"
