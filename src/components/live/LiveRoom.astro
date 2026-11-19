@@ -6,19 +6,24 @@
  * the live page is three columns. The story on the left (the kid's name and
  * this), the video in the middle with its rail, the messages on the right.
  * This is the story's picture: one big picture of the room as it is, or the
- * plan, with a switch between them and the rest as small pictures under it.
+ * plan, with a switch between them and the rest as small pictures in a column
+ * beside it (Peter, Nov 18 2026: "why not have the plans in a vertical single
+ * column with slider next to it? same for before photos?", picked C1). The big
+ * one takes the column's height down to the buttons, about square at most.
  *
  *   [ The room before | The plan ]
- *   ┌──────────────────────────┐
- *   │ BEFORE                   │   a click opens the design viewer, beside the
- *   │                          │   video (the reveal keeps playing)
- *   └──────────────────────────┘
- *   The room before        1 of 5 · click to see it big
- *   ▢ ▢ ▢ ▢ ▢                     a click shows that one above
+ *   ┌─────────────────────┐ ▢     a click on a small one shows it big (the
+ *   │ BEFORE              │ ▢     arrows up and down go through them); more
+ *   │                     │ ▢     than fit scroll, faded at the edge that has
+ *   │                     │ ▢     more. A click on the big one opens the design
+ *   └─────────────────────┘ ▢     viewer beside the video (the reveal plays on)
+ *   1 of 5 · click to see it big
  *
  * The plan's first picture is its compare (Peter, Nov 18 2026): the floor
  * plan today and the new one on one picture, a line between them to drag
- * (plan-compare.ts, compare-slider.ts), then the designer's two sheets.
+ * (plan-compare.ts, compare-slider.ts), then the designer's two sheets, their
+ * small pictures cut to the drawing (a whole sheet that small is white paper
+ * with a speck on it).
  *
  * The same pictures and badges as the design section under the hero and the
  * viewer: live-design.ts fills all three (createLiveDesign's room). Shown only
@@ -32,15 +37,17 @@
   <h2 class="sr-only" id="lrm-name" data-lrm="name">The design</h2>
   <div class="lrm-tabs" role="tablist" aria-labelledby="lrm-name" data-lrm="tabs"></div>
   <div class="lrm-stage" id="lrm-stage" data-lrm="stage" role="tabpanel" aria-labelledby="lrm-name">
-    <button class="lrm-big" type="button" data-lrm="big">
-      <span class="lrm-pic" data-lrm="pic"></span>
-      <span class="lrm-badge" data-lrm="badge" hidden></span>
-    </button>
-    <!-- The plan's compare, in the big picture's place when it's the one showing (live-design.ts fills it: drag the line;
-         its corner button, or a click that isn't a drag, opens it big) -->
-    <div class="lrm-cmp" data-lrm="cmp" hidden></div>
+    <div class="lrm-row">
+      <button class="lrm-big" type="button" data-lrm="big">
+        <span class="lrm-pic" data-lrm="pic"></span>
+        <span class="lrm-badge" data-lrm="badge" hidden></span>
+      </button>
+      <!-- The plan's compare, in the big picture's place when it's the one showing (live-design.ts fills it: drag the line;
+           its corner button, or a click that isn't a drag, opens it big) -->
+      <div class="lrm-cmp" data-lrm="cmp" hidden></div>
+      <ul class="lrm-thumbs" data-lrm="thumbs" aria-label="Pictures"></ul>
+    </div>
     <p class="lrm-cap"><b data-lrm="cap"></b><span data-lrm="count"></span></p>
-    <ul class="lrm-thumbs" data-lrm="thumbs"></ul>
   </div>
 </section>
 
@@ -91,30 +98,54 @@
   .lrm-cap b { color: var(--c-text); font-weight: 700; }
   .lrm-cap b:empty { display: none; }
   .lrm-cap span { white-space: nowrap; }
-  /* The rest, small: a click shows one above */
-  .lrm-thumbs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
-  .lrm-thumbs[data-paper] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  /* The big one and, beside it, the rest small in a column as tall as it (LivePage sizes the row in the story column) */
+  .lrm { --lrm-rail: 76px; --lrm-gap: 10px; }
+  .lrm-row { display: flex; gap: var(--lrm-gap); align-items: stretch; }
+  .lrm-row > .lrm-big, .lrm-row > .lrm-cmp { flex: 1 1 0; min-width: 0; }
+  /* The rest, small: a click shows one big. Each as tall as a fifth of the column at most (five photos fit beside the
+     picture), never shorter than 44px: more than fit scroll, the edge with more faded (data-more, live-design.ts). Its
+     rings and focus need the 4px around them, so the column is 4px bigger each way than it looks */
+  .lrm-thumbs {
+    position: relative; flex: none; display: flex; flex-direction: column; gap: 8px; width: calc(var(--lrm-rail) + 8px);
+    margin: -4px -4px -4px 0; padding: 4px; list-style: none; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+  }
+  .lrm-thumbs::-webkit-scrollbar { display: none; }
+  /* (a part with one picture: its column's place kept, empty) */
+  .lrm-thumbs[data-one] { visibility: hidden; }
+  .lrm-thumbs li { flex: 0 1 64px; min-height: 44px; display: flex; }
+  .lrm-thumbs[data-more='down'] { mask-image: linear-gradient(to bottom, #000 calc(100% - 36px), transparent calc(100% - 4px)); }
+  .lrm-thumbs[data-more='up'] { mask-image: linear-gradient(to top, #000 calc(100% - 36px), transparent calc(100% - 4px)); }
+  .lrm-thumbs[data-more='both'] { mask-image: linear-gradient(to bottom, transparent 4px, #000 36px, #000 calc(100% - 36px), transparent calc(100% - 4px)); }
   .lrm-thumb {
-    position: relative; display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
+    position: relative; display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
     background: #fff; box-shadow: 0 0 0 1px var(--c-border); transition: box-shadow 160ms ease, transform 160ms ease;
   }
   /* (all at full strength: a dimmed one reads as switched off; the one showing big has the ring) */
   .lrm-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
-  .lrm-thumbs[data-paper] .lrm-thumb img { object-fit: contain; padding: 4px; }
+  /* (a plan's: its drawing, cut to it, whole on white, and under it which it is, in its badge's colours) */
+  .lrm-thumbs[data-paper] .lrm-thumb img { object-fit: contain; padding: 5px; }
+  .lrm-thumbs[data-paper] .lrm-thumb:has(.lrm-thumb-tag) img { padding-bottom: 17px; }
+  .lrm-thumb-tag {
+    position: absolute; left: 50%; bottom: 4px; transform: translateX(-50%); padding: 2px 5px 1px; border-radius: 4px; white-space: nowrap; pointer-events: none;
+    background: var(--c-dark); color: #fff; font-size: 8.5px; font-weight: 800; line-height: 1.2; letter-spacing: 0.08em; text-transform: uppercase;
+  }
+  .lrm-thumb-tag[data-kind='proposed'] { background: var(--c-yellow); color: var(--c-dark); }
   /* The compare in the big picture's place: as big as the room allows at its own shape, centred */
   .lrm-cmp { position: relative; width: 100%; aspect-ratio: 4 / 3; container-type: size; display: grid; place-items: center; }
   .lrm-cmp[hidden] { display: none; }
+  /* As big as the photo: the plan's card fills the same box the room's photo does, the drawing as big as it fits on it
+     (Peter, Nov 18 2026: "theres more room on the left side we can use right?") */
   .lrm-cmp .pcmp {
-    width: min(100cqw, calc(100cqh / var(--pcmp-r, 1))); border-radius: 18px;
+    width: 100%; height: 100%; aspect-ratio: auto; border-radius: 18px;
     box-shadow: 0 18px 44px rgba(30, 31, 37, 0.1), 0 0 0 1px rgba(30, 31, 37, 0.06);
   }
   /* Its small picture: the two plans, half and half, with the line */
-  .lrm-thumbs .lrm-thumb--cmp img { position: absolute; inset: 0; object-fit: contain; padding: 4px; background: #fff; }
+  .lrm-thumbs .lrm-thumb--cmp img { position: absolute; inset: 0; object-fit: contain; padding: 5px; background: #fff; }
   .lrm-thumb--cmp .lrm-half { clip-path: inset(0 50% 0 0); }
   .lrm-thumb--cmp::after { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--c-dark); }
   .lrm-thumb:hover { transform: translateY(-1px); }
   .lrm-thumb[aria-current='true'] { box-shadow: 0 0 0 2px var(--c-yellow), 0 0 0 3px var(--c-dark); }
-  .lrm-thumb:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 3px; }
+  .lrm-thumb:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) {
     .lrm-pic img, .lrm-thumb, .lrm-thumb img, .lrm-tab { transition: none; }
     .lrm { animation: none !important; }

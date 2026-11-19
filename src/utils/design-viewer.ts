@@ -72,6 +72,8 @@ interface Pane {
   loaded: number;
   /** How big the picture showing is (1 small, 2 big, 3 the biggest): a later, smaller one never replaces it */
   shownLevel: number;
+  /** Opened at its drawing (toDrawing): the pane's size settling keeps it there, until it's zoomed by hand or left */
+  drawing?: boolean;
   img?: HTMLImageElement;
   cmp?: { root: HTMLElement; handle: CompareHandle | null; ready: boolean };
 }
@@ -142,6 +144,7 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     p.zoom.style.height = `${p.ch}px`;
     p.k = 1;
     p.x = (pw - p.cw) / 2; p.y = (ph - p.ch) / 2;
+    if (p.drawing) { zoomIn(p, pw / 2, ph / 2, false); return; }
     paint(p, false);
   }
   function layout() {
@@ -171,6 +174,7 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     if (p.k > 1.4) sharpen(p);
   }
   function zoomAt(p: Pane, k: number, cx: number, cy: number, animate = true) {
+    p.drawing = false;
     // The point under (cx, cy) stays there: the scale's limits first, then the move about the point, then the edges
     const k1 = Math.max(1, Math.min(maxK(p), k));
     const f = k1 / p.k;
@@ -180,16 +184,16 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     clamp(p);
     paint(p, animate);
   }
-  function reset(p: Pane, animate = true) { p.k = 1; clamp(p); paint(p, animate); }
+  function reset(p: Pane, animate = true) { p.drawing = false; p.k = 1; clamp(p); paint(p, animate); }
   /** A whole sheet's drawing filling the pane (its Zoom in), else twice as big about the middle */
-  function zoomIn(p: Pane, cx = pw / 2, cy = ph / 2) {
+  function zoomIn(p: Pane, cx = pw / 2, cy = ph / 2, animate = true) {
     const f = p.item.kind === 'slide' ? focusOf(p.item.s) : null;
     if (f) {
       p.k = Math.max(1, Math.min(pw / (f.w * p.cw), ph / (f.h * p.ch)) * 0.94);
       p.x = pw / 2 - p.k * (f.x + f.w / 2) * p.cw;
       p.y = ph / 2 - p.k * (f.y + f.h / 2) * p.ch;
       clamp(p);
-      paint(p, true);
+      paint(p, animate);
       return;
     }
     // (a point outside the picture zooms about the nearest point of it)
@@ -382,6 +386,8 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     const p = panes[at];
     if (!g || !p) return;
     if (g.mode === 'line') return;
+    // (moved or pinched by hand: it stays where it's put)
+    if (g.mode === 'pinch' || g.mode === 'pan') p.drawing = false;
     if (g.mode === 'pinch') {
       if (pointers.size < 2) return;
       const [a, b] = [...pointers.values()];
@@ -480,7 +486,7 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     e.preventDefault();
     const l = local(e.clientX, e.clientY);
     if (e.ctrlKey || e.metaKey) { zoomAt(p, p.k * Math.exp(-e.deltaY * 0.01), l.x, l.y, false); return; }
-    if (p.k > 1.01) { p.x -= e.deltaX; p.y -= e.deltaY; clamp(p); paint(p, false); }
+    if (p.k > 1.01) { p.drawing = false; p.x -= e.deltaX; p.y -= e.deltaY; clamp(p); paint(p, false); }
   };
   stage.addEventListener('pointerdown', onDown);
   stage.addEventListener('pointermove', onMove);
@@ -528,6 +534,9 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     get zoomed() { return (panes[at]?.k || 1) > 1.01; },
     get wasDrag() { return lastWasDrag; },
     toggleZoom: () => toggleZoom(),
+    /** The sheet showing opened at its drawing, at once (opened from a picture of only its drawing: "see it big" is
+     *  bigger, never the drawing smaller on its whole sheet); Zoom out shows the whole sheet */
+    toDrawing() { const p = panes[at]; if (p && p.item.kind === 'slide' && focusOf(p.item.s)) { p.drawing = true; if (p.cw) zoomIn(p, pw / 2, ph / 2, false); } },
     zoomBy(f: number) { const p = panes[at]; if (p) zoomAt(p, p.k * f, pw / 2, ph / 2); },
     layout,
     flyFrom,

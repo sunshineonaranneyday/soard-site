@@ -535,15 +535,17 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         font-size: 15.5px; line-height: 1.55; margin-bottom: 20px; opacity: 1; animation: none;
       }
       .hero[data-party][data-orientation='portrait'] .hero-lead :global(.lead-s ~ .lead-s) { display: none; }
-      /* The room takes the room that's left: its big picture grows into it on a tall screen (to about square, then the
-         buttons simply sit lower) and gives way first on a short one; on a shorter one still, the small pictures step
-         aside (the big one still opens them all), and then the story's sentence. Nothing ever runs into the buttons */
+      /* The room takes the room that's left: its big picture, with the small ones in a column beside it, grows into it
+         down to the buttons (to about square, then the buttons simply sit lower) and gives way first on a short screen;
+         on a shorter one still, the story's sentence. Nothing ever runs into the buttons */
       .hero[data-party][data-orientation='portrait'] .hero-text { container: story / size; }
       .hero[data-party][data-orientation='portrait'] .hero-text > * { flex-shrink: 0; }
       .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm:not([hidden])) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; }
       .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-stage) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-row) { flex: 1 1 0; min-height: 150px; max-height: 100cqi; }
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-row:has(> .lrm-thumbs:not([hidden]))) { max-height: calc(100cqi - var(--lrm-rail) - var(--lrm-gap)); }
       .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-big),
-      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-cmp) { flex: 1 1 0; aspect-ratio: auto; min-height: 150px; max-height: 100cqi; height: auto; }
+      .hero[data-party][data-orientation='portrait'] .hero-text :global(.lrm-cmp) { aspect-ratio: auto; height: auto; }
       .hero[data-party][data-orientation='portrait'] .hero-ctas { margin-top: auto; padding-top: 16px; flex-wrap: nowrap; gap: 10px; }
       .hero[data-party][data-orientation='portrait'] .hero-ctas > * { flex: 0 1 auto; min-width: 0; padding-inline: clamp(16px, 1.6vw, 24px); white-space: nowrap; }
     }
@@ -638,13 +640,12 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     :global(.hero[data-party]:has([data-stage][data-rail])) .hero-status { display: none; }
     :global(.hero[data-party]:has([data-stage][data-rail])) .hero-ctas { grid-area: ctas; margin-top: 20px; justify-content: flex-start; }
   }
-  /* The Theater's story column (above): on a tall screen the whole story; on a short one, first the small pictures
-     step aside, then the sentence */
+  /* The Theater's story column (above): on a tall screen the whole story; on a short one the sentence steps aside (the
+     small pictures beside the big one take no height of their own: they stay, and scroll when they don't fit) */
   @container story (min-height: 860px) {
     .hero[data-party][data-orientation='portrait'] .hero-lead :global(.lead-s ~ .lead-s) { display: inline; }
     .hero[data-party][data-orientation='portrait'] .hero-lead { -webkit-line-clamp: unset; line-clamp: none; display: block; }
   }
-  @container story (max-height: 640px) { .hero-text :global(.lrm-thumbs) { display: none; } }
   @container story (max-height: 540px) { .hero-text .hero-lead { display: none; } }
   @media (prefers-reduced-motion: reduce) {
     .hero-text h1, .hero-lead, .hero-status, .hero-ctas, .hero-frame { animation: none; opacity: 1; }

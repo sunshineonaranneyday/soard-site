@@ -23,11 +23,11 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   <!-- On a phone, under the video: the newest message, one line (a tap goes to them all, below) -->
   <button class="msgs__latest" type="button" data-msgs="latest" hidden>
     <span class="msg__av" data-msgs="latest-av" aria-hidden="true"></span>
-    <span class="msgs__latest-name" data-msgs="latest-name"></span>
-    <span class="msgs__latest-text" data-msgs="latest-text"></span>
+    <span class="msgs__latest-words"><span class="msgs__latest-name" data-msgs="latest-name"></span> <span class="msgs__latest-text" data-msgs="latest-text"></span></span>
   </button>
-  <!-- In the Theater on a computer, beside that line under the video: opens the card in the right column (LivePage) -->
-  <button class="msgs__write" type="button" data-msgs="write">Write to the family</button>
+  <!-- In the Theater on a computer, beside that line under the video: opens the card in the right column (LivePage).
+       "Write" with a pen where the line is narrow, so the message beside it has the room -->
+  <button class="msgs__write" type="button" data-msgs="write" aria-label="Write to the family"><svg class="msgs__write-pen" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.17 6.81a2.82 2.82 0 0 0-3.98-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/></svg><span class="msgs__write-long">Write to the family</span><span class="msgs__write-short">Write</span></button>
   <div class="msgs__head">
     <!-- (the Theater, opened from the line under the video: back to the line and the sponsors) -->
     <button class="msgs__close" type="button" data-msgs="close" aria-label="Close the messages"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
@@ -202,6 +202,8 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .msgs__latest .msg__av[data-tone='2'] { background: #ECE8DC; color: var(--c-text); }
   .msgs__latest .msg__av[data-tone='3'] { background: var(--c-dark); color: var(--c-yellow); }
   .msgs__latest .msg__av[data-tone='4'] { background: #fff; color: var(--c-text); box-shadow: inset 0 0 0 1px var(--c-border); }
+  /* (no box of its own but in the Theater, below: on a phone the name and the message are the line's own, as ever) */
+  .msgs__latest-words { display: contents; }
   .msgs__latest-name { flex: none; max-width: 40%; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .msgs__latest-text { min-width: 0; flex: 1; color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .msgs__latest.is-new { animation: latestIn 2.4s ease-out; }
@@ -221,9 +223,26 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; height: 100%; margin: 0; padding: 0 14px 0 10px;
       border: 1px solid var(--c-border); border-radius: 16px; background: #fff; color: var(--c-text); font: inherit; font-size: 14.5px; text-align: left; cursor: pointer;
     }
+    /* The newest message in two lines, its writer's name leading into it as in a chat's list, so the line under a
+       narrow video still reads (one line at 1330 wide showed "Ms. Lee W...") */
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__latest-words {
+      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
+      font-size: 13.5px; line-height: 1.32;
+    }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] :is(.msgs__latest-name, .msgs__latest-text) {
+      display: inline; max-width: none; overflow: visible; white-space: normal;
+    }
     :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__write {
-      display: inline-flex; align-items: center; flex: none; height: 100%; padding: 0 18px; border: 0; border-radius: 16px;
+      display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: none; height: 100%; padding: 0 18px; border: 0; border-radius: 16px;
       background: var(--c-yellow); color: var(--c-dark); font: inherit; font-size: 14.5px; font-weight: 700; white-space: nowrap; cursor: pointer;
+    }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] { container: msgbar / inline-size; }
+    .msgs__write-pen, .msgs__write-short { display: none; }
+    /* (a narrow line: "Write" and its pen, unless there's no message beside it to make room for) */
+    @container msgbar (max-width: 479px) {
+      .msgs[data-place='hero'] .msgs__latest:not([hidden]) + .msgs__write { padding: 0 16px; }
+      .msgs[data-place='hero'] .msgs__latest:not([hidden]) + .msgs__write :is(.msgs__write-pen, .msgs__write-short) { display: inline; }
+      .msgs[data-place='hero'] .msgs__latest:not([hidden]) + .msgs__write .msgs__write-long { display: none; }
     }
     /* (the box closed to new messages, after the reveal: no Write, the newest message has the bar) */
     :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero']:has(.msg-form[hidden]) .msgs__write { display: none; }

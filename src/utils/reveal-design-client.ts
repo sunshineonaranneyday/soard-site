@@ -115,7 +115,8 @@ export function planPairOf(slides: DesignSlide[]): PlanPair | null {
 export function compareBox(pair: PlanPair): { x: number; y: number; w: number; h: number } {
   const a = focusOf(pair.existing)!, b = focusOf(pair.proposed)!;
   const W = Number(pair.existing.w), H = Number(pair.existing.h);
-  const padX = 0.03, padY = (0.03 * W) / H;
+  // (just clear of its outermost lines: the drawing as big as its card allows, Peter, Nov 18 2026: "the drawing trimmed to its lines")
+  const padX = 0.008, padY = (0.008 * W) / H;
   const x0 = Math.max(0.028, Math.min(a.x, b.x) - padX), x1 = Math.min(0.972, Math.max(a.x + a.w, b.x + b.w) + padX);
   const y0 = Math.max(0.04, Math.min(a.y, b.y) - padY), y1 = Math.min(0.915, Math.max(a.y + a.h, b.y + b.h) + padY);
   // In whole pixels of the sheet, so every place that cuts it cuts the same rectangle
@@ -174,6 +175,26 @@ export async function slideSrc(slide: DesignSlide, w: number): Promise<string | 
   if (!r) return null;
   const h = Math.max(32, Math.round(width * r * (1 - TITLE_BLOCK)));
   return cfRaw(slide.url, `w=${width},h=${h},fit=cover,gravity=top,q=90`);
+}
+
+/** The part of a whole sheet its drawing's pictures show (just clear of its lines, never its border or title block: a
+ * whole sheet that small is white paper with a speck on it), as fractions of the sheet in whole pixels of it; null when
+ * its drawing's place or its size isn't known */
+export function drawingBox(slide: DesignSlide): { x: number; y: number; w: number; h: number } | null {
+  const f = focusOf(slide);
+  const W = Number(slide.w) || 0, H = Number(slide.h) || 0;
+  if (!f || !(W > 0 && H > 0)) return null;
+  const padX = 0.01, padY = (0.01 * W) / H;
+  const left = Math.round(Math.max(0, f.x - padX) * W), top = Math.round(Math.max(0, f.y - padY) * H);
+  const right = Math.round(Math.min(1, f.x + f.w + padX) * W), bottom = Math.round(Math.min(1, f.y + f.h + padY) * H);
+  return { x: left / W, y: top / H, w: (right - left) / W, h: (bottom - top) / H };
+}
+
+/** A sheet cut to a box of it (fractions, as drawingBox and compareBox give), at about w pixels across */
+export function cutSrc(slide: DesignSlide, box: { x: number; y: number; w: number; h: number }, w: number): string {
+  const W = Number(slide.w) || 0, H = Number(slide.h) || 0;
+  const left = Math.round(box.x * W), top = Math.round(box.y * H), width = Math.round(box.w * W), height = Math.round(box.h * H);
+  return cfRaw(slide.url, `trim.left=${left},trim.top=${top},trim.width=${width},trim.height=${height},w=${Math.max(64, Math.round(w))},fit=scale-down,q=85`);
 }
 
 /** Load a picture fully before it's shown; false when it can't be */

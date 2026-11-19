@@ -47,7 +47,7 @@
  * player in its top corner (a tap on it goes back). Otherwise it's a plain
  * full-screen viewer. The page holds still behind it either way.
  */
-import { fetchDesign, slideSrc, designSignature, isWholeSheet, knownRatio, planPairOf, type DesignSlide, type PlanPair } from './reveal-design-client';
+import { fetchDesign, slideSrc, drawingBox, cutSrc, compareBox, designSignature, isWholeSheet, knownRatio, planPairOf, type DesignSlide, type PlanPair } from './reveal-design-client';
 import { designPartsHtml, designPartsOf, designName, designLead, gridClass, partNote, partTitle, possessive, straight, compareHtml, COMPARE_NOTE, type PartKey } from './live-design-html';
 import { compareFor } from './plan-compare';
 import { attachCompare, type CompareHandle } from './compare-slider';
@@ -118,6 +118,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   // show starts there; null until one has swept in or been moved
   let cmpPos: number | null = null;
   let compares: { root: HTMLElement; handle: CompareHandle; near: IntersectionObserver | null }[] = [];
+  // The compare's two pictures once made, for what can use them at once (the room's sheets)
+  let madeNow: { p: PlanPair; before: string; after: string } | null = null;
   let askTimer: ReturnType<typeof setTimeout> | undefined;
   let alive = true;
   let asking: AbortController | null = null;
@@ -278,6 +280,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     return compareFor(p).then((made) => {
       if (pair !== p) return null;
       if (!made) { dropCompare(); return null; }
+      madeNow = { p, before: made.before, after: made.after };
       for (const im of document.querySelectorAll<HTMLImageElement>('img[data-cmp-half]')) {
         const want = im.dataset.cmpHalf === 'before' ? made.before : made.after;
         if (im.getAttribute('src') !== want) im.src = want;
@@ -511,6 +514,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   type RoomEntry = DesignSlide | 'cmp';
   const rq = <T extends HTMLElement = HTMLElement>(k: string) => room?.querySelector<T>(`[data-lrm="${k}"]`) || null;
   const touchy = matchMedia('(hover: none)');
+  const still = matchMedia('(prefers-reduced-motion: reduce)');
   let roomPart: PartKey | '' = '';
   const roomAt = new Map<PartKey, number>();
   let roomAfter = false;
@@ -526,13 +530,33 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   // Every big picture is fetched the first time the room shows, so a switch never waits on the network
   let roomWarm = '';
   const roomWant = (big: HTMLElement) => Math.min(1600, Math.max(480, Math.round(big.clientWidth * (devicePixelRatio || 1))));
+  /** Which of the compare's two pictures a sheet is (its drawing, lined up and the pig taken out), if it's one of them */
+  const halfOf = (s: DesignSlide) => (pair && s === pair.existing ? 'before' : pair && s === pair.proposed ? 'after' : '');
+  /** The compare's own picture of a sheet, when it's made already */
+  const madeOf = (s: DesignSlide) => { const h = halfOf(s); return h && madeNow && madeNow.p === pair ? (h === 'before' ? madeNow.before : madeNow.after) : ''; };
+  /**
+   * The part of a sheet the room shows (fractions of it), or null for the whole picture. A plan's sheet shows as its
+   * drawing, as big as the photo's place allows (Peter, Nov 18 2026: "the drawing trimmed to its lines"; the viewer
+   * still opens the whole sheet): the compare's two sheets cut as the compare is, so its own pictures (lined up, the
+   * pig taken out) take their place without a jump; another sheet cut to its drawing
+   */
+  const cutOf = (s: DesignSlide) => (halfOf(s) && pair ? compareBox(pair) : drawingBox(s));
+  /** A picture of the room at about `want` across: the compare's when made, else cut as cutOf says, else as it is */
+  function roomSrc(s: DesignSlide, want: number): Promise<string | null> {
+    const made = madeOf(s);
+    if (made) return Promise.resolve(made);
+    const box = cutOf(s);
+    return box ? Promise.resolve(cutSrc(s, box, want)) : slideSrc(s, want);
+  }
   function warmRoom(big: HTMLElement) {
     const want = roomWant(big);
     const sig = `${want}|${slides.map((x) => x.url).join(',')}`;
     if (sig === roomWarm) return;
     roomWarm = sig;
-    for (const p of designPartsOf(slides)) for (const x of p.slides) void slideSrc(x, want).then((src) => { if (src) { const i = new Image(); i.decoding = 'async'; i.src = src; } });
+    for (const p of designPartsOf(slides)) for (const x of p.slides) void roomSrc(x, want).then((src) => { if (src && !/^blob:/.test(src)) { const i = new Image(); i.decoding = 'async'; i.src = src; } });
   }
+  // The part of the sheet each big picture shows, for the viewer's way in and out (rectOf)
+  const cutBoxes = new WeakMap<HTMLImageElement, { x: number; y: number; w: number; h: number }>();
   function roomPicture(s: DesignSlide) {
     const pic = rq('pic');
     const big = rq('big');
@@ -552,22 +576,35 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     }
     const want = roomWant(big);
     warmRoom(big);
-    void slideSrc(s, want).then((src) => {
-      if (roomShown !== s) return;
-      if (!src) { drop(s); return; }
+    const box = cutOf(s);
+    // (only the last asked for takes the place: the cut, loading late, never covers the compare's picture again)
+    let last: HTMLImageElement | null = null;
+    const show = (src: string) => {
       const img = el('img');
+      last = img;
       img.alt = straight(s.alt);
       img.decoding = 'async';
       img.dataset.kind = s.kind;
+      if (box) cutBoxes.set(img, box);
       img.addEventListener('error', () => drop(s), { once: true });
       img.addEventListener('load', () => {
-        if (roomShown !== s) { img.remove(); return; }
+        if (roomShown !== s || img !== last) { img.remove(); return; }
         img.classList.add('is-in');
         // The one it replaces goes once the new one has faded in over it
         for (const old of [...pic.querySelectorAll('img')]) if (old !== img) setTimeout(() => old.remove(), 400);
       }, { once: true });
       img.src = src;
       pic.append(img);
+    };
+    void roomSrc(s, want).then((src) => {
+      if (roomShown !== s) return;
+      if (!src) { drop(s); return; }
+      show(src);
+      // One of the compare's sheets, shown before the compare was made: its own picture fades in over it once it is
+      // (the same cut, so only the pig goes); never made, the cut stays
+      if (halfOf(s) && !/^blob:/.test(src)) {
+        void wantCompare().then(() => { const made = madeOf(s); if (made && roomShown === s) show(made); });
+      }
     });
   }
   /** The compare in the big picture's place (drawn the first time it's wanted), or the big picture back */
@@ -633,7 +670,6 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     if (sig !== roomSig) {
       roomSig = sig;
       thumbs.toggleAttribute('data-paper', part.key !== 'photos');
-      thumbs.hidden = entries.length < 2;
       thumbs.replaceChildren(...entries.map((x, i) => {
         const li = el('li');
         const b = el('button', `lrm-thumb${x === 'cmp' ? ' lrm-thumb--cmp' : ''}`);
@@ -644,16 +680,37 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
           const img = el('img');
           img.alt = '';
           img.decoding = 'async';
+          // (the compare's two sheets: their drawings as the compare has them, lined up and the pig taken out, once made)
+          const half = halfOf(x);
+          if (half) img.dataset.cmpHalf = half;
           img.addEventListener('error', () => drop(x), { once: true });
           b.append(img);
+          // (a plan's says which it is: the existing and the proposed look alike that small)
+          if (x.kind !== 'before' && x.badge) { const t = el('span', 'lrm-thumb-tag', x.badge); t.dataset.kind = x.kind; b.append(t); }
         }
         b.addEventListener('click', () => { roomAt.set(part.key, i); drawRoom(); });
         li.append(b);
         return li;
       }));
+      thumbs.scrollTop = 0;
     }
-    // The one showing big is marked among the small ones
-    [...thumbs.querySelectorAll<HTMLButtonElement>('.lrm-thumb')].forEach((b, i) => { if (i === at) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); });
+    // The small ones' column shows while any part has more than one picture; a part with one keeps its place empty, so
+    // the big picture is the same size whichever part shows (nothing moves at a switch)
+    thumbs.hidden = !partsNow.some((p) => entriesOf(p).length > 1);
+    thumbs.toggleAttribute('data-one', entries.length < 2);
+    // The one showing big is marked among the small ones (the one the Tab key stops at: the arrows go through the
+    // rest), and kept in sight among them, clear of a faded edge
+    const tbs = [...thumbs.querySelectorAll<HTMLButtonElement>('.lrm-thumb')];
+    tbs.forEach((b, i) => { if (i === at) b.setAttribute('aria-current', 'true'); else b.removeAttribute('aria-current'); b.tabIndex = i === at ? 0 : -1; });
+    const cur = tbs[at]?.parentElement;
+    if (cur && thumbs.scrollHeight > thumbs.clientHeight + 1) {
+      const room = 36;
+      const top = cur.offsetTop - room, bottom = cur.offsetTop + cur.offsetHeight + room;
+      const most = thumbs.scrollHeight - thumbs.clientHeight;
+      const to = top < thumbs.scrollTop ? Math.max(0, top) : bottom > thumbs.scrollTop + thumbs.clientHeight ? Math.min(most, bottom - thumbs.clientHeight) : null;
+      if (to != null && Math.abs(to - thumbs.scrollTop) > 1) thumbs.scrollTo({ top: to, behavior: still.matches ? 'auto' : 'smooth' });
+    }
+    railMore();
     const how = touchy.matches ? 'tap' : 'click';
     const cap = rq('cap');
     const count = rq('count');
@@ -669,7 +726,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     } else {
       roomCompare(false);
       big.toggleAttribute('data-paper', e.kind !== 'before');
-      big.toggleAttribute('data-sheet', isWholeSheet(e));
+      // (a sheet shows whole only when its drawing's place isn't known: its badge then goes in the sheet's empty corner)
+      big.toggleAttribute('data-sheet', isWholeSheet(e) && !cutOf(e));
       big.setAttribute('aria-label', `See it big: ${e.badge ? `${e.badge}, ` : ''}${title}${entries.length > 1 ? `, ${at + 1} of ${entries.length}` : ''}`);
       if (b) { b.textContent = e.badge || ''; b.dataset.kind = e.kind; b.hidden = !e.badge; }
       if (count) count.textContent = entries.length > 1 ? `${at + 1} of ${entries.length} · ${how} to see it big` : `${how[0].toUpperCase()}${how.slice(1)} to see it big`;
@@ -681,8 +739,12 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
         const x = entries[i];
         const img = tb.querySelector('img');
         if (!x || x === 'cmp' || !img || img.getAttribute('src')) return;
-        void slideSrc(x, 220).then((src) => { if (src && !img.getAttribute('src')) { img.src = src; img.addEventListener('load', () => roomSmall.set(x, src), { once: true }); } else if (!src) drop(x); });
+        // (cut as its big picture is: it stands in for it while that comes)
+        void roomSrc(x, 220).then((src) => {
+          if (src && !img.getAttribute('src')) { img.src = src; img.addEventListener('load', () => roomSmall.set(x, img.currentSrc || src), { once: true }); } else if (!src) drop(x);
+        });
       });
+      if (pair && thumbs.querySelector('img[data-cmp-half]')) void wantCompare();
     }
     railFace();
   }
@@ -702,6 +764,32 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     drawRoom();
     rq('tabs')?.querySelector<HTMLElement>('[aria-selected="true"]')?.focus();
   });
+  // The small ones' column: the arrows up and down go through them (Home and End to the first and the last), as the
+  // switch's left and right go through the parts
+  rq('thumbs')?.addEventListener('keydown', (e) => {
+    if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+    const part = designPartsOf(slides).find((p) => p.key === roomPart);
+    const n = part ? entriesOf(part).length : 0;
+    if (!part || n < 2) return;
+    e.preventDefault();
+    // (from the one with the focus: a click or Tab can have put it elsewhere)
+    const btns = [...(rq('thumbs')?.querySelectorAll<HTMLElement>('.lrm-thumb') || [])];
+    const f = btns.indexOf(document.activeElement as HTMLElement);
+    const i = f >= 0 ? f : roomAt.get(part.key) ?? 0;
+    const j = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : Math.max(0, Math.min(n - 1, i + (e.key === 'ArrowDown' ? 1 : -1)));
+    roomAt.set(part.key, j);
+    drawRoom();
+    rq('thumbs')?.querySelectorAll<HTMLElement>('.lrm-thumb')[j]?.focus({ preventScroll: true });
+  });
+  // More of them than fit: the edge that has more is faded
+  function railMore() {
+    const t = rq('thumbs');
+    if (!t) return;
+    const up = t.scrollTop > 2, down = t.scrollTop + t.clientHeight < t.scrollHeight - 2;
+    const v = up && down ? 'both' : up ? 'up' : down ? 'down' : '';
+    if ((t.dataset.more || '') !== v) { if (v) t.dataset.more = v; else delete t.dataset.more; }
+  }
+  rq('thumbs')?.addEventListener('scroll', railMore, { passive: true });
   // Its pictures come the moment it shows (the watch party starting, a window widened past the phone layout); the
   // rail's way in steps aside while it shows
   const roomWatch = room && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => { if (roomShowing()) drawRoom(); else railFace(); }) : null;
@@ -907,7 +995,20 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     if (!e || !e.isConnected) return null;
     const pic = e.matches('img, .pcmp') ? e : e.querySelector('.pcmp, .lrm-pic img.is-in, img') || e;
     const r = pic.getBoundingClientRect();
-    return r.width && r.height ? r : null;
+    if (!r.width || !r.height) return null;
+    // The room's sheet shows only its drawing, and the viewer the whole sheet: where the whole sheet would be, its
+    // drawing exactly on the picture, so it flies out of it (and back) without a jump
+    const box = pic instanceof HTMLImageElement ? cutBoxes.get(pic) : undefined;
+    if (box && pic instanceof HTMLImageElement && pic.naturalWidth && pic.naturalHeight) {
+      const cs = getComputedStyle(pic);
+      const pl = parseFloat(cs.paddingLeft) || 0, pr = parseFloat(cs.paddingRight) || 0, pt = parseFloat(cs.paddingTop) || 0, pb = parseFloat(cs.paddingBottom) || 0;
+      const cw = r.width - pl - pr, ch = r.height - pt - pb;
+      const k = Math.min(cw / pic.naturalWidth, ch / pic.naturalHeight);
+      const dw = pic.naturalWidth * k, dh = pic.naturalHeight * k;
+      const W = dw / box.w, H = dh / box.h;
+      return new DOMRect(r.left + pl + (cw - dw) / 2 - box.x * W, r.top + pt + (ch - dh) / 2 - box.y * H, W, H);
+    }
+    return r;
   };
 
   function open(target: RoomEntry, from?: Element | null) {
@@ -943,6 +1044,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     items = list;
     gallery.setItems(items, i);
     paintBar(i);
+    // (the room's sheet showed only its drawing: the viewer opens at it, bigger, its whole sheet a Zoom out away)
+    if (origin && origin === rq('big') && target !== 'cmp' && cutOf(target)) gallery.toDrawing();
     gallery.flyFrom(rectOf(origin));
   }
   /** The pictures changed while it's open (one couldn't load, the design was redrawn): the same one stays if it can */
