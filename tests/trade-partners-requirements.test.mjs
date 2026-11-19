@@ -4,13 +4,16 @@
  * /api/trade-partner?config gives the page script, so nothing moves after load.
  * Run: node --test tests/trade-partners-requirements.test.mjs
  */
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildSync } from 'esbuild';
 
 // The module imports the page's own TypeScript words: bundle it for node
 const code = buildSync({ entryPoints: ['functions/trade-partners/_middleware.js'], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent' }).outputFiles[0].text;
 const { minimums, onRequest } = await import(`data:text/javascript,${encodeURIComponent(code)}`);
+// Lets the code run up to its next wait (setImmediate isn't one of the mocked timers)
+const turns = async (n = 8) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
+
 const { DEFAULTS } = await import('../functions/api/_vendor-defaults.js');
 const { DEFAULTS: VENDOR_DEFAULTS } = await import('../functions/api/_vendors.js');
 
@@ -69,7 +72,21 @@ test('other pages, other methods, a database that fails or is slow: the page as 
   for (const c of [ctx(db({}), '/trade-partners/account/'), { ...ctx(db({})), request: new Request('https://example.org/trade-partners/', { method: 'POST' }) }, ctx({ prepare() { throw new Error('no table'); } }), ctx(undefined)]) {
     assert.equal(await (await onRequest(c)).text(), 'as built');
   }
-  const t0 = Date.now();
-  assert.equal(await (await onRequest(ctx(db({}, { slow: true })), 50)).text(), 'as built');
-  assert.ok(Date.now() - t0 < 500, 'gave up quickly');
+  // A database that never answers: the page waits exactly its time, then goes out as built. The timer is the test's
+  // (node:test's mock timers), so this holds however busy the machine is (a stopwatch here failed under the full run)
+  mock.timers.enable({ apis: ['setTimeout'] });
+  try {
+    let done = false;
+    const page = onRequest(ctx(db({}, { slow: true })), 50).then((r) => { done = true; return r; });
+    await turns();
+    mock.timers.tick(49);
+    await turns();
+    assert.equal(done, false, 'still waiting just before its time');
+    mock.timers.tick(1);
+    await turns();
+    assert.equal(done, true, 'gave up at its time');
+    assert.equal(await (await page).text(), 'as built', 'the page as built');
+  } finally {
+    mock.timers.reset();
+  }
 });

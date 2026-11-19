@@ -3,7 +3,7 @@
  * the same words the page script would write, so nothing moves after load.
  * Run: node --test tests/kid-reveal.test.mjs
  */
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { buildSync } from 'esbuild';
@@ -11,6 +11,9 @@ import { buildSync } from 'esbuild';
 // The module imports the page's own TypeScript helpers: bundle it for node
 const code = buildSync({ entryPoints: ['functions/_kid-reveal.js'], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent' }).outputFiles[0].text;
 const { badgeText, revealLine, upcomingReveals } = await import(`data:text/javascript,${encodeURIComponent(code)}`);
+// Lets the code run up to its next wait (setImmediate isn't one of the mocked timers)
+const turns = async (n = 8) => { for (let i = 0; i < n; i++) await new Promise((r) => setImmediate(r)); };
+
 
 const max = { slug: 'max', name: 'Max', confirmed: true, date: '2026-11-20', time: '16:00', startsAt: '2026-11-20T21:00:00.000Z', liveUrl: '/live/max/', window: null };
 const colin = { slug: 'colin', name: "Colin O'Neil", confirmed: false, date: null, time: null, startsAt: null, liveUrl: '/live/colin/', window: { part: 'early', month: '2026-12', through: '2026-12-10', label: 'early December' } };
@@ -44,9 +47,23 @@ test('the schedule comes from the cached answer, and a slow one never holds the 
     globalThis.fetch = async () => Response.json({ reveals: [{ ...max }] });
     assert.equal((await upcomingReveals({ request: new Request('https://example.org/kids/max/') }))[0].confirmed, true, 'an older answer shape still reads');
     globalThis.fetch = () => new Promise(() => {}); // never answers
-    const t0 = Date.now();
-    assert.equal(await upcomingReveals({ request: new Request('https://example.org/kids/max/'), waitUntil() {} }, 50), null);
-    assert.ok(Date.now() - t0 < 500, 'gave up quickly');
+    // The page waits exactly its time, then goes on without the schedule. The timer is the test's (node:test's mock
+    // timers), so this holds however busy the machine is (a stopwatch here failed under the full run)
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let done = false;
+      const got = upcomingReveals({ request: new Request('https://example.org/kids/max/'), waitUntil() {} }, 50).then((v) => { done = true; return v; });
+      await turns();
+      mock.timers.tick(49);
+      await turns();
+      assert.equal(done, false, 'still waiting just before its time');
+      mock.timers.tick(1);
+      await turns();
+      assert.equal(done, true, 'gave up at its time');
+      assert.equal(await got, null, 'and went on without the schedule');
+    } finally {
+      mock.timers.reset();
+    }
     globalThis.fetch = async () => new Response('nope', { status: 500 });
     assert.equal(await upcomingReveals({ request: new Request('https://example.org/kids/max/') }), null);
   } finally {
@@ -73,9 +90,16 @@ test('after the edge copy expires, the last schedule this edge read answers at o
     assert.ok(store.has('https://example.org/api/reveals?edge=last-known'), 'kept as the last known schedule');
     // The 3-minute copy has gone and JobTread is slow: the page doesn't wait at all
     globalThis.fetch = () => { asked++; return new Promise(() => {}); };
-    const t0 = Date.now();
-    assert.deepEqual(await upcomingReveals(page([]), 5000), [max]);
-    assert.ok(Date.now() - t0 < 100, 'answered from the last known schedule, not after the wait');
+    // No time passes on the test's timer, so an answer here can only be the last known schedule, not one after the wait
+    mock.timers.enable({ apis: ['setTimeout'] });
+    try {
+      let got;
+      upcomingReveals(page([]), 5000).then((v) => { got = v; });
+      await turns();
+      assert.deepEqual(got, [max], 'answered from the last known schedule, without the wait');
+    } finally {
+      mock.timers.reset();
+    }
     assert.equal(asked, 2, 'and a fresh one was asked for, for the next visitor');
     // A fresh answer replaces it
     const colinOnly = { upcoming: [colin], source: 'jobtread' };

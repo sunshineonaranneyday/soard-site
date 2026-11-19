@@ -6,7 +6,7 @@
  * when picked after that, and stays off when taken off after; the site's own writes are one change on what JobTread has now; launch
  * changes no invite; the admin door writes JobTread. Run: node --test tests/
  */
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import { syncCredits, maybeSyncCredits, setCredit, settleHeld, creditsView, setNotCompany, grantForSponsor, readJobRows, addBack, pageOf, followRoom, SECOND_LOOK_MS } from '../functions/api/_room-credits.js';
@@ -1199,14 +1199,18 @@ test('a run cut short by its time budget is taken up where it stopped, and launc
   const kids = Array.from({ length: N }, (_, i) => ({ slug: `kid-${i}`, name: `Kid${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(97 + Math.floor(i / 26))} Zed`, year: 2026 }));
   const jobs = kids.map((k, i) => ({ id: `j-${i}`, name: `${k.name} (2026)`, values: {}, access: [] }));
   const w = await world({ kids, jobs });
-  // Each row write takes a while, as D1 can
+  // Each row write takes a while, as D1 can: 25 ms of the run's own clock (node:test's mock Date, moved on by each write),
+  // not of the machine's, so the budget is spent by the writes alone and every run does the same work however busy the
+  // machine is (real 25 ms waits failed under the full run, the run's other work eating the budget)
+  mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  try {
   const prep = w.DB.prepare.bind(w.DB);
   let writes = 0;
   w.DB.prepare = (sql) => {
     const st = prep(sql);
     if (!/INTO room_credit_jobs/.test(sql)) return st;
     const bind = st.bind.bind(st);
-    st.bind = (...a) => { const b = bind(...a); const run = b.run.bind(b); b.run = async () => { writes += 1; await new Promise((r) => setTimeout(r, 25)); return run(); }; return b; };
+    st.bind = (...a) => { const b = bind(...a); const run = b.run.bind(b); b.run = async () => { writes += 1; mock.timers.tick(25); return run(); }; return b; };
     return st;
   };
   const runs = [];
@@ -1222,6 +1226,9 @@ test('a run cut short by its time budget is taken up where it stopped, and launc
   w.later(SECOND_LOOK_MS);
   await syncCredits(w.env, { fetchImpl: w.jt.fetchImpl, now: w.now(), deps: w.deps });
   assert.equal(writes, 0, 'nothing written when nothing changed');
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test('Same as reaches every room whose field says the name at once, its page too, and puts nobody on', async () => {
