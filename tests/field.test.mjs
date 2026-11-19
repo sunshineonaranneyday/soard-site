@@ -4,7 +4,8 @@
  * daily logs under their name, photos onto the day's log once each, and schedule changes. JobTread is faked.
  * Run: node --test tests/field.test.mjs
  */
-import { test, beforeEach } from 'node:test';
+import { test, beforeEach, afterEach } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import {
@@ -131,6 +132,11 @@ function fakeJobTread() {
 }
 
 const NOW = Date.parse('2026-11-12T16:00:00Z');
+// Every test here runs on the fixture's day: the tools read the clock themselves (the schedule shows the weeks around
+// today), and the world's logs and tasks are the week of Nov 11
+let restoreClock = () => {};
+beforeEach(() => { restoreClock = holdClockAt(NOW); });
+afterEach(() => restoreClock());
 let env;
 let jt;
 let realFetch;
@@ -296,11 +302,6 @@ test('the schedule: late and coming up; a new start keeps the task’s length; d
 const data = (r) => r.structuredContent;
 
 test('through Claude: not connected gives the link; connected, a log opens the photo box on that day’s log', async () => {
-  // The tools read the clock themselves (the schedule shows the weeks around today), so the fixture's week is held as
-  // today: run on a later day, the job's Nov 11 to 18 tasks were all in the past and the schedule came back short
-  const realNow = Date.now;
-  Date.now = () => NOW;
-  try {
   // Not connected: an answer, not a failure, so the chat still opens the box or the window, with the button in it
   for (const [tool, args] of [['daily_log', { job: 'Lizzie', notes: 'Demo done.' }], ['add_photos', { job: 'Lizzie' }], ['job_tasks', { job: 'Lizzie' }]]) {
     const none = await callTool(env, tool, args, ME);
@@ -326,9 +327,6 @@ test('through Claude: not connected gives the link; connected, a log opens the p
   assert.ok(sched.tasks.length >= 3);
   const conn = data(await callTool(env, 'jobtread_connection', {}, ME));
   assert.equal(conn.as, 'Christian Nielsen');
-  } finally {
-    Date.now = realNow;
-  }
 });
 
 test('the photo box: drawn by the chat under daily_log and add_photos; its two tools are the box’s only; it sends only to JobTread’s storage', async () => {

@@ -6,6 +6,7 @@
  * Run: node --test tests/
  */
 import { test, beforeEach, afterEach } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import { onRequest, isAuthenticated, _resetKeyCacheForTests } from '../functions/api/_middleware.js';
@@ -514,7 +515,10 @@ test('a signature is the member’s own name: any case or spacing, a middle name
   for (const [typed, name] of [['Mickey Mouse', 'Sam Rivers'], ['Mickey Rivers', 'Sam Rivers'], ['Tom Rivers', 'Sam Rivers'], ['x Rivers', 'Sam Rivers'], ['Rivers Rivers', 'Sam Rivers'], ['Sam Rivers 2', 'Sam Rivers'], ['Sam Mickey Rivers', 'Sam Rivers'], ['Joe Ann', 'Mary Ann Smith'], ['Mary Ann', 'Mary Ann Smith'], ['Sam Rivres', 'Sam Rivers'], ['Sam', 'Sam Rivers'], ['Rivers Sam', 'Sam Rivers'], ['Sam Rivers Sam Rivers', 'Sam Rivers'], ['', 'Sam Rivers']]) ok(typed, name, '');
 });
 
-test('who’s coming is the calendar invite’s alone: the emails ask only who’s on it without an answer, by whose invite; old one-tap links record nothing', async () => {
+test('who’s coming is the calendar invite’s alone: the emails ask only who’s on it without an answer, by whose invite; old one-tap links record nothing', async (t) => {
+  // Its meeting is Nov 19 2026 and its old link runs to Nov 20: the test is set the week before (as when it was written),
+  // so it holds true after those days have gone by
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const { meeting } = await sharedMeetingWithFiles();
   // Board's invite, from Jane: Alex hasn't answered it, Sam said no
   const onCalendar = (replies) => patchMeeting(env.DB, meeting.id, (m) => ({ ...m, invite: { eventId: 'evq4', organizer: FOUNDER, sentAt: new Date().toISOString(), replies } }));
@@ -583,7 +587,10 @@ test('who’s coming is the calendar invite’s alone: the emails ask only who�
   assert.deepEqual(await answerLink(env, tok, { now: Date.parse('2026-11-21T17:00:00Z') }), { expired: true });
 });
 
-test('the invite’s replies: Board’s invite’s, none once it’s deleted or before it goes out; old links go by the meeting’s own date', async () => {
+test('the invite’s replies: Board’s invite’s, none once it’s deleted or before it goes out; old links go by the meeting’s own date', async (t) => {
+  // Its meetings are dated (Nov 2026, Jan 2027): the test is set the week before Nov 19, as when it was written, so it
+  // holds true after those days have gone by
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const { meeting } = await sharedMeetingWithFiles();
   // No invite yet: nobody to remind, and the board page says it's on its way
   const early = await adminApi(FOUNDER, { action: 'remind-rsvp', id: meeting.id });
@@ -854,7 +861,10 @@ test('a meeting is added in Board only: an event on an admin’s calendar never 
   assert.match(JSON.stringify((await adminApi(FOUNDER)).body.calendar), /Backend Error/);
 });
 
-test('a meeting ahead older code took from Holly’s calendar becomes Board’s: nobody is emailed, its invite stays her event, and a new day, time or notes go onto it from Board', async () => {
+test('a meeting ahead older code took from Holly’s calendar becomes Board’s: nobody is emailed, its invite stays her event, and a new day, time or notes go onto it from Board', async (t) => {
+  // Its meetings are dated (Nov 2026, Jan 2027): the test is set the week before Nov 19, as when it was written, so it
+  // holds true after those days have gone by
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const day = inDays(50);
   const herPlace = 'Example Partners (140 Example Center Dr, Woodstock, GA 30188, United States)';
   const g = fakeGoogleWriter({ events: { [FOUNDER]: [ev('hol1', 'SOARD Q4 2026 Board Meeting', `${day}T13:00:00Z`, `${day}T15:00:00Z`, {

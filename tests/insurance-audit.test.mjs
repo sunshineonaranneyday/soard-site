@@ -4,6 +4,7 @@
  * Run: node --test tests/
  */
 import { test, beforeEach, after } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
 import { createD1 } from './lib/d1-shim.mjs';
@@ -434,7 +435,10 @@ test('a policy that just renewed is still asked about, so a payment in its last 
   assert.ok(world.emails.some((e) => /November 2026/.test(e.subject)), 'the old term’s last week, asked about after it renewed');
 });
 
-test('the admin route: the audit, its downloads, a call, and only the terms shown', async () => {
+test('the admin route: the audit, its downloads, a call, and only the terms shown', async (t) => {
+  // The route picks each policy's current term from today's date: held at the file's day, as its other checks are, so
+  // the liability term renewing at the end of November 2026 doesn't change what this checks
+  t.after(holdClockAt(NOW));
   const ctx = (url, init) => ({ env, request: new Request(`https://x.example/api/insurance-audit-admin${url}`, init), data: { userEmail: 'holly@example.org' }, waitUntil: () => {} });
   let r = await onRequestGet(ctx('?term=2026'));
   let j = await r.json();
