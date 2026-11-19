@@ -6,19 +6,24 @@
  *   whole    the two pictures' addresses: fetched, read, lined up and made into PNGs here, so the page only shows them
  *            (where a worker can draw: OffscreenCanvas; else it answers { ok: false, error: 'no-canvas' })
  *   pixels   the two pictures' pixels, read by the page: lined up here, the pixels handed back (an older browser)
+ *   sheet    a designer's whole sheet's address: fetched, the pig taken out, made into a PNG (the viewer's sheets;
+ *            no OffscreenCanvas: { ok: false, error: 'no-canvas' }, and the sheet shows as it is)
  */
-import { lineUp, type Pixels } from './plan-compare-core';
+import { lineUp, withoutPig, type Pixels } from './plan-compare-core';
 
 type Ask =
   | { id: number; kind: 'whole'; a: string; b: string; ox: number; oy: number; aw: number; ah: number; bw: number; bh: number }
-  | { id: number; kind: 'pixels'; A: Pixels; B: Pixels; ox: number; oy: number };
+  | { id: number; kind: 'pixels'; A: Pixels; B: Pixels; ox: number; oy: number }
+  | { id: number; kind: 'sheet'; a: string };
 
 const say = (msg: unknown, transfer: Transferable[] = []) => (self as unknown as Worker).postMessage(msg, transfer);
 
+/** A picture's pixels, read here; w, h: the size it must be (0: whatever size it comes at) */
 async function pixelsOf(url: string, w: number, h: number): Promise<Pixels> {
   const res = await fetch(url, { headers: { Accept: 'image/png' }, credentials: 'omit' });
   if (!res.ok) throw new Error(`${res.status}`);
   const bmp = await createImageBitmap(await res.blob());
+  if (!w || !h) { w = bmp.width; h = bmp.height; }
   if (bmp.width !== w || bmp.height !== h) throw new Error('size');
   const c = new OffscreenCanvas(w, h);
   const ctx = c.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D | null;
@@ -36,6 +41,12 @@ function png(p: Pixels): Promise<Blob> {
 self.onmessage = async (e: MessageEvent<Ask>) => {
   const ask = e.data;
   try {
+    if (ask.kind === 'sheet') {
+      if (typeof OffscreenCanvas === 'undefined') { say({ id: ask.id, ok: false, error: 'no-canvas' }); return; }
+      const sheet = await png(withoutPig(await pixelsOf(ask.a, 0, 0)));
+      say({ id: ask.id, ok: true, sheet });
+      return;
+    }
     if (ask.kind === 'whole') {
       if (typeof OffscreenCanvas === 'undefined') { say({ id: ask.id, ok: false, error: 'no-canvas' }); return; }
       const [A, B] = await Promise.all([pixelsOf(ask.a, ask.aw, ask.ah), pixelsOf(ask.b, ask.bw, ask.bh)]);

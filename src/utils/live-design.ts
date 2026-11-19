@@ -49,7 +49,7 @@
  */
 import { fetchDesign, slideSrc, drawingBox, cutSrc, compareBox, designSignature, isWholeSheet, knownRatio, planPairOf, type DesignSlide, type PlanPair } from './reveal-design-client';
 import { designPartsHtml, designPartsOf, designName, designLead, gridClass, partNote, partTitle, possessive, straight, compareHtml, COMPARE_NOTE, type PartKey } from './live-design-html';
-import { compareFor } from './plan-compare';
+import { compareFor, sheetWithoutPig } from './plan-compare';
 import { attachCompare, type CompareHandle } from './compare-slider';
 import { createGallery, type GalleryItem } from './design-viewer';
 import { holdPlace } from './hold-place';
@@ -281,6 +281,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       if (pair !== p) return null;
       if (!made) { dropCompare(); return null; }
       madeNow = { p, before: made.before, after: made.after };
+      // (the viewer's two sheets made ready behind it, the pig out of them too, so opening one never waits on it)
+      for (const x of [p.existing, p.proposed]) void viewerSrc(x, 0);
       for (const im of document.querySelectorAll<HTMLImageElement>('img[data-cmp-half]')) {
         const want = im.dataset.cmpHalf === 'before' ? made.before : made.after;
         if (im.getAttribute('src') !== want) im.src = want;
@@ -833,14 +835,30 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     return out;
   }
   const indexIn = (list: GalleryItem[], t: RoomEntry) => list.findIndex((x) => (t === 'cmp' ? x.kind === 'compare' : x.kind === 'slide' && x.s === t));
-  /** A small copy of a picture the page has already loaded (the strip's, a section card's, the room's), to show at once */
+  /** A small copy of a picture the page has already loaded (the strip's, a section card's, the room's), to show at once:
+   *  the same picture, whole (the room's small one of a sheet is its drawing only, a different shape: not that) */
   function smallOf(s: DesignSlide): string | null {
+    // (a sheet made ready without the pig: that, at once, so it flies in with its picture and never shows the pig)
+    const clean = cleanSheets.get(s);
+    if (clean) return clean;
     const imgs = [railCards.get(s)?.querySelector('img'), ...(cards.get(s) || []).map((li) => li.querySelector('img'))];
     for (const im of imgs) if (im && im.complete && im.naturalWidth && (im.currentSrc || im.src)) return im.currentSrc || im.src;
-    return roomSmall.get(s) || null;
+    return cutOf(s) ? null : roomSmall.get(s) || null;
+  }
+  /**
+   * The viewer's picture: a designer's whole sheet with the pig taken out, as the compare and the room's sheets have it
+   * (Peter, Nov 19 2026: "Yes, hide it"), at its own size or 3200 across at most (2400 on a phone: the worker's memory),
+   * whatever size is asked, so it's made once; anything else, or a sheet that can't be, as it is
+   */
+  const coarse = matchMedia('(pointer: coarse)');
+  const cleanSheets = new Map<DesignSlide, string>();
+  function viewerSrc(s: DesignSlide, w: number): Promise<string | null> {
+    if (!isWholeSheet(s)) return slideSrc(s, w);
+    const want = Math.min(Number(s.w) || 3200, coarse.matches ? 2400 : 3200);
+    return sheetWithoutPig(s.url, want).then((u) => { if (u) cleanSheets.set(s, u); return u || slideSrc(s, w || want); });
   }
   const gallery = stageEl ? createGallery(stageEl, {
-    src: (s, w) => slideSrc(s, w),
+    src: (s, w) => viewerSrc(s, w),
     small: smallOf,
     onChange: (i) => paintBar(i),
     onZoom: (z, sheet) => zoomUi(z, sheet),

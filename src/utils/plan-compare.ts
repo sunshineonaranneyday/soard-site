@@ -27,8 +27,8 @@
  *   3. The pig taken out: it's printed as the site's yellow (#FFDA24) at about
  *      15% over the drawing, so each of its pixels is the drawing's own colour
  *      mixed with that yellow, and the mix can be undone exactly (a grey wall
- *      under it is grey again, a black line black). It stays on the designer's
- *      whole sheets, which show as they are.
+ *      under it is grey again, a black line black). The viewer's whole sheets
+ *      have it taken out the same way (sheetWithoutPig, below).
  *
  * Steps 1 and 3 run in a background worker (plan-compare.worker.ts, the work
  * itself in plan-compare-core.ts): on the page they held it up for 0.4 s on a
@@ -87,7 +87,7 @@ function toUrl(img: Pixels): Promise<string> {
 // ── The worker: one for the page, made the first time it's wanted. It fetches, reads, lines up and draws the two
 // pictures itself where it can (OffscreenCanvas), so the page only shows them; in an older browser the page reads the
 // pixels and the worker lines them up; if no worker can be had (a blocked script), the page does it all, as before
-type Answer = { ok: boolean; error?: string; before?: Blob | Pixels; after?: Blob | Pixels; dx?: number; dy?: number; overlap?: number };
+type Answer = { ok: boolean; error?: string; before?: Blob | Pixels; after?: Blob | Pixels; sheet?: Blob; dx?: number; dy?: number; overlap?: number };
 let worker: Worker | null | undefined;
 let asks = 0;
 const waiting = new Map<number, (r: Answer) => void>();
@@ -150,6 +150,27 @@ export function compareFor(pair: PlanPair): Promise<PlanCompare | null> {
   if (!p) {
     p = build(pair).catch((e) => { console.info('plan compare unavailable:', e?.message || e); return null; });
     made.set(key, p);
+  }
+  return p;
+}
+
+// ── A whole sheet without the pig (Peter, Nov 19 2026, of the viewer opened at a sheet's drawing: "Yes, hide it") ──
+// The compare's two pictures and the room's sheets have the pig taken out; the viewer showed the designer's whole sheet
+// as it is, the pig across the drawing once zoomed to it. The same un-mixing (withoutPig), on the whole sheet, in the
+// worker. Once per sheet and size for the page's life
+const sheets = new Map<string, Promise<string | null>>();
+/** A whole sheet at w pixels across (its own size at most) with the pig taken out, as a blob: address; null when it
+ *  can't be (no worker that can draw, the picture can't be had): the sheet then shows as it is */
+export function sheetWithoutPig(url: string, w: number): Promise<string | null> {
+  const id = cfId(url);
+  if (!id) return Promise.resolve(null);
+  const key = `${id}|${Math.round(w)}`;
+  let p = sheets.get(key);
+  if (!p) {
+    p = ask({ kind: 'sheet', a: `${imagesBase()}/${id}/w=${Math.round(w)},fit=scale-down,q=100` })
+      .then((r) => (r.ok && r.sheet instanceof Blob ? URL.createObjectURL(r.sheet) : null))
+      .catch(() => null);
+    sheets.set(key, p);
   }
   return p;
 }
