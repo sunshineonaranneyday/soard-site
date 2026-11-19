@@ -4,9 +4,9 @@
  * ===============================================================================================
  * Peter, Nov 18 2026: "i want the sponsor shown by their tier, priority of screen should be the reveal, plans/before
  * and sponsors". On a computer with an upright live video (the Theater, LivePage) the right column is the build's
- * sponsors, biggest first: the room's sponsor, then Signature, Champion, Builder partners, then Friends, each tier's
- * logos smaller than the one above, all as big as the column has room for. The messages shrink to one line under the video (LiveMessages); a tap there
- * brings their card back to this column. Everywhere else (a phone, before the reveal, a replay) the build's partners
+ * sponsors by tier: the room's sponsor biggest, then Signature, Champion, Builder partners and Friends, every partner
+ * below the room's sponsor the same size, all as big as the column has room for. The messages shrink to one line under
+ * the video (LiveMessages); a tap there brings their card back to this column. Everywhere else (a phone, before the reveal, a replay) the build's partners
  * scroll under the video as before (LivePartners) and this isn't shown.
  *
  * The markup comes from src/utils/live-sponsors-html.ts, which the server also uses on /live/ for whichever reveal is
@@ -23,7 +23,7 @@ const { kid, inner } = Astro.props;
   /* (the Theater's width, LivePage: a computer's layout, DESK in src/utils/live-media.ts) */
   @media (min-width: 1200px) {
     .hero[data-party][data-orientation='portrait']:not([data-msgs-open]) .lsp:not([hidden]) {
-      grid-area: party; display: flex; flex-direction: column; gap: 14px; min-height: 0; align-self: stretch; contain: size; overflow-y: auto; overscroll-behavior: contain;
+      grid-area: party; display: flex; flex-direction: column; gap: 12px; min-height: 0; align-self: stretch; contain: size; overflow-y: auto; overscroll-behavior: contain;
       padding: 18px 16px; box-sizing: border-box; text-align: left;
       background: #fff; border: 1px solid var(--c-border); border-radius: 24px; box-shadow: 0 20px 50px rgba(30, 31, 37, 0.06);
       scrollbar-width: thin; animation: lspIn 0.45s ease-out both;
@@ -31,33 +31,28 @@ const { kid, inner } = Astro.props;
     @keyframes lspIn { from { opacity: 0; } }
   }
   .lsp-head { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-text-muted); }
-  .lsp-tier { display: grid; gap: 7px; }
+  .lsp-tier { display: grid; gap: 6px; }
   .lsp-label { margin: 0; font-size: 12.5px; font-weight: 700; color: var(--c-text); }
   .lsp-grid { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
   /* Logos big enough to read (Peter, Nov 18 2026: "on the theater the vendor logos are small, can yo make them larger,
-     more ledgable?"): no more than two across but for the Builder and Friend tiers, each logo filling its card, and
-     every card as tall as the column has room for. --h is a tier's card height and --lsp-s the column's scale, which
-     LivePage's script sets so the whole column just fills the video's height (no scrolling unless a build has more
-     sponsors than fit even at its smallest) */
+     more ledgable?"; Nov 19: "signature and down, the logos should be the same size"): every partner's card the same,
+     two across, each logo filling its card, every card as tall as the column has room for. --h is the card's height and
+     --lsp-s the column's scale, which LivePage's script sets so the whole column just fills the video's height (no
+     scrolling unless a build has more sponsors than fit even at its smallest) */
   .lsp-card {
-    --h: 58px; --pad: 7px;
+    --h: 64px; --pad: 5px;
     --logo-h: calc(var(--h) * var(--lsp-s, 1) - 2 * var(--pad));
     display: flex; align-items: center; justify-content: center; min-width: 0; height: calc(var(--h) * var(--lsp-s, 1)); padding: var(--pad); box-sizing: border-box;
     border-radius: 14px; background: var(--c-cream); border: 1px solid var(--c-border);
   }
   .lsp-card img { display: block; max-width: 100%; max-height: var(--logo-h); width: auto; height: auto; object-fit: contain; }
-  /* Logos of every shape weigh about the same within a tier (as the band under the video sizes them), a wide wordmark
+  /* Logos of every shape weigh about the same (as the band under the video sizes them), a wide wordmark
      kept wide enough to read: --r is width ÷ height, set once it loads */
   .lsp-card img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.15 / pow(var(--r), 0.4))); }
-  /* Biggest first: the room's sponsor a card of its own, Signature and Champion two across, Builder and Friends three */
+  /* The room's sponsor a bigger card of its own; every partner below it two across, the same size */
   .lsp-tier--room .lsp-grid { grid-template-columns: minmax(0, 1fr); }
-  .lsp-tier--room .lsp-card { --h: 112px; --pad: 12px; background: #fff; border-color: var(--c-yellow); box-shadow: 0 0 0 3px var(--c-yellow-soft); }
-  .lsp-tier--signature .lsp-grid, .lsp-tier--champion .lsp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .lsp-tier--signature[data-n='1'] .lsp-grid { grid-template-columns: minmax(0, 1fr); }
-  .lsp-tier--signature .lsp-card { --h: 70px; background: #fff; }
-  .lsp-tier--champion .lsp-card { --h: 62px; }
-  .lsp-tier--builder .lsp-grid, .lsp-tier--friend .lsp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .lsp-tier--builder .lsp-card { --h: 54px; }
-  .lsp-tier--friend .lsp-card { --h: 46px; --pad: 6px; border-radius: 10px; }
+  .lsp-tier--room .lsp-card { --h: 112px; --pad: 9px; background: #fff; border-color: var(--c-yellow); box-shadow: 0 0 0 3px var(--c-yellow-soft); }
+  .lsp-tier:not(.lsp-tier--room) .lsp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lsp-tier--signature .lsp-card { background: #fff; }
   @media (prefers-reduced-motion: reduce) { .lsp { animation: none !important; } }
 </style>

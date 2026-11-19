@@ -754,7 +754,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     });
     // Every card as tall as the column has room for (--lsp-s, LiveSponsors): the cards' heights are the only part that
     // scales, so the column's contents grow in a straight line with it; measured at two scales, the one that just fills
-    // the column follows. Between 0.7 and 1.35 of the cards' set heights: a build with more sponsors than fit even at
+    // the column follows. Between 0.55 and 1.35 of the cards' set heights: a build with more sponsors than fit even at
     // the smallest scrolls, one with a few doesn't blow them up. Again whenever the column's size changes (shown, the
     // window resized; its contents never change its size: size containment) and when a logo leaves
     function fitSponsors() {
@@ -767,7 +767,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         return el.lastElementChild!.getBoundingClientRect().bottom - el.firstElementChild!.getBoundingClientRect().top;
       };
       const at1 = used(1), per = used(2) - at1;
-      const s = per > 0 ? Math.min(1.35, Math.max(0.7, 1 + (room - at1) / per)) : 1;
+      const s = per > 0 ? Math.min(1.35, Math.max(0.55, 1 + (room - at1) / per)) : 1;
       el.style.setProperty('--lsp-s', s.toFixed(3));
     }
     if (sponsorsEl && 'ResizeObserver' in window) new ResizeObserver(fitSponsors).observe(sponsorsEl);
