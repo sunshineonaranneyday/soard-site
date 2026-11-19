@@ -1150,6 +1150,7 @@ const hero = {
 <script>
   import { navigate } from 'astro:transitions/client';
   import { onPageLoad } from '../utils/page-load';
+  import { playStreamInPage } from '../utils/stream-in-page';
 
   type LbItem = { src: string; srcset: string; alt: string; caption: string };
   let _cleanup: (() => void) | null = null;
@@ -1445,6 +1446,13 @@ const hero = {
       const play = () => {
         const stream = facade.dataset.stream;
         const yt = facade.dataset.yt;
+        // A Stream video plays in the page itself where it can, started by this tap (stream-in-page.ts)
+        if (playStreamInPage(stream, 'Reveal video', (video) => {
+          const wrap = document.createElement('div');
+          wrap.style.cssText = 'position:relative;aspect-ratio:16/9;background:#000';
+          wrap.appendChild(video);
+          facade.replaceWith(wrap);
+        })) return;
         const iframe = document.createElement('iframe');
         iframe.src = stream
           ? `https://iframe.videodelivery.net/${stream}?autoplay=true&preload=true`

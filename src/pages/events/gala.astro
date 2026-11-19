@@ -3614,6 +3614,7 @@ const hero = {
 
 <script>
   import { onPageLoad } from '../../utils/page-load';
+  import { playStreamInPage } from '../../utils/stream-in-page';
   function initGala() {
     // Only the gala before the event: the recap has its own scripts, and this
     // listener stays registered on every page after a visit
@@ -3745,6 +3746,8 @@ const hero = {
       const activate = () => {
         const streamId = videoFacade.dataset.streamId;
         const ytId = videoFacade.dataset.ytId;
+        // A Stream video plays in the page itself where it can, started by this tap (stream-in-page.ts)
+        if (playStreamInPage(streamId, 'Save-the-date video', (video) => videoFacade.replaceWith(video))) return;
         const iframe = document.createElement('iframe');
         iframe.title = 'Save-the-date video';
         iframe.allowFullscreen = true;

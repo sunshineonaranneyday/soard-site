@@ -1061,6 +1061,7 @@ const planOrientation = (() => {
 <script>
   import { onPageLoad } from '../../utils/page-load';
   import { lightboxPhoto } from '../../utils/lightbox-photo';
+  import { playStreamInPage } from '../../utils/stream-in-page';
   import { attachCompare } from '../../utils/compare-slider';
   let _kidObserver: IntersectionObserver | null = null;
   let _staggerObserver: IntersectionObserver | null = null;
@@ -1456,6 +1457,12 @@ const planOrientation = (() => {
         revealFrame?.classList.add('reveal__frame--loading');
         const wrapper = document.createElement('div');
         wrapper.style.cssText = 'position:relative;aspect-ratio:16/9;overflow:hidden';
+        // In the page itself where it can, started by this tap (stream-in-page.ts); otherwise Stream's iframe
+        if (playStreamInPage(id, streamFacade.getAttribute('aria-label') || 'Reveal video', (video) => {
+          revealFrame?.classList.remove('reveal__frame--loading'); // the video shows its own loading
+          wrapper.appendChild(video);
+          streamFacade.replaceWith(wrapper);
+        })) return;
         const iframe = document.createElement('iframe');
         iframe.src = `https://iframe.videodelivery.net/${id}?autoplay=true&preload=true`;
         iframe.allow = 'accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture';

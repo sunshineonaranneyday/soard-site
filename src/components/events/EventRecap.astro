@@ -547,12 +547,15 @@ const ytId: string | null = !series && !streamId && ev.videoUrl ? youTubeId(ev.v
 
 <script>
   import { onPageLoad } from '../../utils/page-load';
+  import { playStreamInPage } from '../../utils/stream-in-page';
   /* Video facade: the player loads only when someone presses play */
   function initRecapVideo() {
     document.querySelectorAll<HTMLButtonElement>('.rc-video__facade').forEach((b) => {
       if (b.dataset.ready) return;
       b.dataset.ready = '1';
       b.addEventListener('click', () => {
+        // A Stream video plays in the page itself where it can, started by this tap (stream-in-page.ts)
+        if (playStreamInPage(b.dataset.streamId, b.getAttribute('aria-label') || 'Event video', (video) => b.replaceWith(video))) return;
         const iframe = document.createElement('iframe');
         iframe.title = b.getAttribute('aria-label') || 'Event video';
         iframe.allowFullscreen = true;

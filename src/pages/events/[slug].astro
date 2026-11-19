@@ -630,6 +630,7 @@ const eventJsonLd = recap?.jsonLd ?? {
 
 <script>
   import { onPageLoad } from '../../utils/page-load';
+  import { playStreamInPage } from '../../utils/stream-in-page';
   /* Video facade — load the player iframe only on click */
   function initEventVideo() {
     const facade = document.querySelector<HTMLButtonElement>('.ev-video__facade');
@@ -637,6 +638,8 @@ const eventJsonLd = recap?.jsonLd ?? {
     facade.addEventListener('click', () => {
       const streamId = facade.dataset.streamId;
       const ytId = facade.dataset.ytId;
+      // A Stream video plays in the page itself where it can, started by this tap (stream-in-page.ts)
+      if (playStreamInPage(streamId, 'Event video', (video) => facade.replaceWith(video))) return;
       const iframe = document.createElement('iframe');
       iframe.title = 'Event video';
       iframe.allowFullscreen = true;

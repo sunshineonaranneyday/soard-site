@@ -175,6 +175,7 @@ function meta(r: Reveal) {
 
 <script>
   import { onPageLoad } from '../../utils/page-load';
+  import { playStreamInPage, stopVideos, streamIdFromEmbed } from '../../utils/stream-in-page';
   const LOCK_CLASS = 'rv-scroll-lock';
   const EMBED_ORIGINS = [
     'https://www.youtube-nocookie.com/',
@@ -247,22 +248,28 @@ function meta(r: Reveal) {
       dialog.style.setProperty('--rv-ar', String(aspect));
       dialog.classList.toggle('is-portrait', aspect < 1);
 
-      const iframe = document.createElement('iframe');
-      iframe.src = src;
-      iframe.title = `${d.title || 'Reveal'} video`;
-      iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
-      iframe.allowFullscreen = true;
-      iframe.referrerPolicy = 'strict-origin-when-cross-origin';
-      frame.replaceChildren(iframe);
-
       lockScroll();
       if (typeof dialog.showModal === 'function') dialog.showModal();
       else dialog.setAttribute('open', '');
+
+      // A Stream video plays in the page itself where it can, started by this tap (stream-in-page.ts: on iPhones
+      // Stream's iframe can't get the tap and spun); otherwise the player's iframe autoplays
+      const label = `${d.title || 'Reveal'} video`;
+      if (!playStreamInPage(streamIdFromEmbed(src), label, (video) => frame.replaceChildren(video))) {
+        const iframe = document.createElement('iframe');
+        iframe.src = src;
+        iframe.title = label;
+        iframe.allow = 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share';
+        iframe.allowFullscreen = true;
+        iframe.referrerPolicy = 'strict-origin-when-cross-origin';
+        frame.replaceChildren(iframe);
+      }
       closeBtn.focus();
     };
 
     // Runs on every close path (button, Esc, backdrop, dialog.close())
     const cleanup = () => {
+      stopVideos(frame);
       frame.replaceChildren(); // dropping the iframe stops playback
       unlockScroll();
       const back = opener;
@@ -291,7 +298,7 @@ function meta(r: Reveal) {
         return;
       }
       if (e.key !== 'Tab') return;
-      const items = Array.from(dialog.querySelectorAll<HTMLElement>('button, a[href], iframe'))
+      const items = Array.from(dialog.querySelectorAll<HTMLElement>('button, a[href], iframe, video'))
         .filter((el) => !el.closest('[hidden]'));
       if (!items.length) return;
       const first = items[0];
