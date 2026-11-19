@@ -37,6 +37,7 @@
 
 import { readState, readConfig, publicState, visibleState, publicReminders } from '../api/_broadcast.js';
 import { watchParty } from './_watch-party.js';
+import { ownCurrent, pastReveal } from './_past-reveal.js';
 import { revealSlides, designWindow } from '../../public/admin/reveal-design.js';
 import { revealOf } from '../api/reveal-design.js';
 import { cachedReveals } from '../api/_reveals.js';
@@ -265,6 +266,8 @@ function rewrite(res, { kid, party, messages, design, partnerList }) {
       .on('#live-hero [data-live="onair"]', setAttrs({ hidden: party.mode === 'live' ? null : '' }))
       // Full screen, live: there from the moment the player is in the frame (until it plays muted: then "Tap for sound")
       .on('#live-hero [data-s="livebar"] [data-full]', setAttrs({ hidden: party.mode === 'live' ? null : '' }));
+    // A child's own past reveal (_past-reveal.js): the page script starts from it, as the page was drawn
+    if (party.past) rw = rw.on('#live-hero', setAttrs({ 'data-past': JSON.stringify(party.past) }));
     if (party.ended) {
       // The reveal over, its replay not here yet: "That's the reveal!" over the soft photo, as the stage shows it
       // (live-stage.ts showEnd), and no bar under it (no video to control)
@@ -578,12 +581,22 @@ export async function onRequest(context) {
       }
     }
   } catch { broadcast = null; }
+  // A child's own page once their broadcast isn't the current one (its replay window over, or the next child's reveal
+  // on): their own last reveal, in the Theater, for good (_past-reveal.js). The current broadcast stays in rawState
+  if (broadcast && pageKid && !rehearsal && !ownCurrent(broadcast.pub, pageKid)) {
+    try {
+      const past = await pastReveal(near.DB, pageKid, broadcast.config);
+      if (past) broadcast = { ...broadcast, state: past.state, pub: past.pub, past: true };
+    } catch { /* the page between reveals, as before */ }
+  }
 
   try {
     const kid = isIndex && broadcast ? await currentKid(near, broadcast.state) : null;
     if (kid?.published) kid.card = await cardFor(context, `/live/${kid.slug}/`);
     const party = broadcast ? watchParty(broadcast.pub, { pageKid }) : null;
     if (party) { party.generic = !broadcast.pub.kidSlug; party.kidName = broadcast.pub.kidName || ''; }
+    // (the page script starts from the same past reveal, and keeps showing it: LivePage decide)
+    if (party && broadcast.past) party.past = broadcast.pub;
     let bar = null;
     const liveNow = !!broadcast?.pub?.live || party?.mode === 'live';
     if (isIndex && !liveNow) {
@@ -608,7 +621,8 @@ export async function onRequest(context) {
     const wantMessages = enabled && ((first?.view === 'upcoming' && messagesOpen(broadcast.state, broadcast.config)) || !!party);
     // (the broadcast is in hand, so only the messages are asked for)
     const messagesAsk = wantMessages
-      ? shownMessages(near.DB, broadcast.state.broadcastId).then((list) => ({ open: messagesOpen(broadcast.state, broadcast.config), messages: list })).catch(() => null)
+      // (a past reveal's messages are read-only: its box is closed)
+      ? shownMessages(near.DB, broadcast.state.broadcastId).then((list) => ({ open: !broadcast.past && messagesOpen(broadcast.state, broadcast.config), messages: list })).catch(() => null)
       : null;
     // The room's design: during the watch party the kid being watched (the strip beside the video and the section under
     // it); before or between reveals the page's own kid, or on /live/ the one coming up (drawPage: design.setKid)
@@ -626,7 +640,8 @@ export async function onRequest(context) {
     let heroMsgs = null;
     if (shown && first?.view === 'upcoming') messages = { kidName, list: shown.messages || [] };
     else if (party && enabled) heroMsgs = { enabled, open: !!shown?.open, kidName, list: shown?.messages || [] };
-    const design = designSlug ? designFor(designSlug, designData, broadcast.rawState, reveals) : null;
+    // (a child's own past reveal counts as their broadcast for its design, as /api/reveal-design has it)
+    const design = designSlug ? designFor(designSlug, designData, broadcast.past ? broadcast.state : broadcast.rawState, reveals) : null;
     const reminders = broadcast?.config?.reminders || {};
     const remindUsable = !!reminders.enabled && (emailConfigured(env) || (!!reminders.push && !!broadcast?.config?.vapid?.publicKey));
     if (party) {

@@ -9,6 +9,9 @@
  *                  sees the room (null until known, or when unsure)
  *                  captions: an English caption track is ready
  *   GET ?vtt=en  → that track as WebVTT, cached at the edge for an hour
+ *   ?b=<broadcast id> (with either) → the same for that past reveal's replay: a child's own page shows their reveal
+ *                  for good (functions/live/_past-reveal.js). Only a real reveal from our stream with a recording,
+ *                  never a test or any other video
  *
  * The reveal moment comes from the Instagram Reel pipeline when it found one
  * (state.reel: the admin's override, or captions + Workers AI). Reveals short
@@ -25,6 +28,7 @@ import { readState as readFullState, visibleState } from './_broadcast.js';
 const readState = (DB) => readFullState(DB).then(visibleState);
 import { parseVtt, detectByKeywords, detectByAi, chooseMoment } from './_broadcast-reel.js';
 import * as stream from './_stream-live.js';
+import { revealRow, pastStateOf } from '../live/_past-reveal.js';
 
 const RECHECK_MS = 2 * 60 * 1000;
 const metaKey = (uid) => `replay-meta:${uid}`;
@@ -95,7 +99,9 @@ export async function onRequestGet(context) {
   const { env, request } = context;
   if (!env.DB) return json({ ok: false, error: 'Not configured' }, 500);
   const url = new URL(request.url);
-  const state = await readState(env.DB);
+  // The current replay, or (?b=) a past reveal's, read from its broadcast row
+  const past = url.searchParams.has('b') ? await revealRow(env.DB, url.searchParams.get('b')).catch(() => null) : null;
+  const state = url.searchParams.has('b') ? (past ? pastStateOf(past) : { phase: 'idle' }) : await readState(env.DB);
   const uid = state.phase === 'replay' ? state.replayUid : null;
 
   if (url.searchParams.has('vtt')) {

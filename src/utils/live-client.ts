@@ -260,10 +260,11 @@ function createClient() {
     get reminders() { return reminders; },
     get timezone() { return timezone; },
     refresh: fetchState,
-    beacon(type: string, meta?: Record<string, string>) {
+    beacon(type: string, meta?: Record<string, string>, broadcastId?: string | null) {
       if (rehearsal || staffEnd) return;
       try {
-        const body = JSON.stringify({ type, broadcastId: state?.id || undefined, meta, ...sender() });
+        // (a child's own past reveal on their page counts as that reveal's, not the current one's: broadcastId)
+        const body = JSON.stringify({ type, broadcastId: broadcastId || state?.id || undefined, meta, ...sender() });
         const blob = new Blob([body], { type: 'application/json' });
         if (!(navigator.sendBeacon && navigator.sendBeacon('/api/broadcast-event', blob))) {
           fetch('/api/broadcast-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
