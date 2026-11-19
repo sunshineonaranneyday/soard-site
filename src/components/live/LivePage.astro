@@ -745,11 +745,32 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         img.closest('.lsp-card')?.remove();
         if (tier && !tier.querySelector('.lsp-card')) tier.remove();
         drawBand(shownKidNow);
+        fitSponsors();
       };
       img.addEventListener('load', weigh);
       img.addEventListener('error', drop);
       if (img.complete) { if (img.naturalWidth) weigh(); else if (img.getAttribute('src')) img.decode().then(weigh, () => { if (!img.naturalWidth) drop(); }); }
     });
+    // Every card as tall as the column has room for (--lsp-s, LiveSponsors): the cards' heights are the only part that
+    // scales, so the column's contents grow in a straight line with it; measured at two scales, the one that just fills
+    // the column follows. Between 0.7 and 1.35 of the cards' set heights: a build with more sponsors than fit even at
+    // the smallest scrolls, one with a few doesn't blow them up. Again whenever the column's size changes (shown, the
+    // window resized; its contents never change its size: size containment) and when a logo leaves
+    function fitSponsors() {
+      const el = sponsorsEl;
+      if (!el || !el.clientHeight || !el.firstElementChild) return;
+      const cs = getComputedStyle(el);
+      const room = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 1;
+      const used = (s: number) => {
+        el.style.setProperty('--lsp-s', String(s));
+        return el.lastElementChild!.getBoundingClientRect().bottom - el.firstElementChild!.getBoundingClientRect().top;
+      };
+      const at1 = used(1), per = used(2) - at1;
+      const s = per > 0 ? Math.min(1.35, Math.max(0.7, 1 + (room - at1) / per)) : 1;
+      el.style.setProperty('--lsp-s', s.toFixed(3));
+    }
+    if (sponsorsEl && 'ResizeObserver' in window) new ResizeObserver(fitSponsors).observe(sponsorsEl);
+    document.fonts?.ready.then(fitSponsors);
 
     // ── The messages in the Theater: one line under the video until someone opens them ──
     // (LiveMessages: the line and "Write to the family"; a tap on either brings the card to the right column in the

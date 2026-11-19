@@ -66,8 +66,9 @@ export function sponsorTiers(partnerLogos: unknown, roomSponsors: unknown, partn
   return ORDER.map((tier) => ({ tier, list: groups.get(tier)! })).filter((g) => g.list.length);
 }
 
-/** A logo as asked of Cloudflare: its white edges trimmed, at most 160 px tall (80 at 2×) */
-const LOGO_ASK = 'trim=border,h=160,fit=scale-down,q=85';
+/** A logo as asked of Cloudflare: its white edges trimmed, at most 256 px tall (128 at 2×: the room sponsor's card at
+ *  its biggest, LiveSponsors) */
+const LOGO_ASK = 'trim=border,h=256,fit=scale-down,q=85';
 
 /** The column's inside: its heading, then each tier's logos. '' when there's nobody */
 export function sponsorsInner(tiers: SponsorTier[]): string {
