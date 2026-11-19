@@ -31,7 +31,7 @@ async function graph(env, method, path, params = {}) {
   const url = new URL(`${FB_GRAPH}/${path}`);
   const body = new URLSearchParams({ ...params, access_token: env.FB_PAGE_TOKEN });
   const init = { method, signal: AbortSignal.timeout(15000) };
-  if (method === 'GET') url.search = body.toString();
+  if (method === 'GET' || method === 'DELETE') url.search = body.toString();
   else { init.body = body; init.headers = { 'Content-Type': 'application/x-www-form-urlencoded' }; }
   const res = await fetch(url, init);
   const data = await res.json().catch(() => ({}));
@@ -176,6 +176,76 @@ export async function createFbLiveVideo(env, { title, description }) {
       return { ok: false, error: r.error, code: r.code, needsReview };
     }
     return { ok: true, id: r.data.id, ingestUrl: r.data.secure_stream_url || r.data.stream_url || null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * API mode, ahead of the day: a scheduled live on the Page for a confirmed reveal (Peter, Nov 19 2026: "Yes, set it
+ * up", so followers can tap "Get reminder"), status SCHEDULED_UNPUBLISHED with its planned start (Facebook allows up
+ * to 7 days ahead). Facebook takes it live at that time if video is arriving, or when we set it LIVE_NOW. The start is
+ * sent as planned_start_time and, if Facebook refuses that, as event_params.start_time (its guides name both).
+ * → { ok, id, error, code }
+ */
+export async function createFbScheduledLive(env, { title, description, startAt }) {
+  if (!fbConfigured(env)) return { ok: false, error: 'not configured' };
+  const t = Math.floor(Date.parse(startAt) / 1000);
+  if (!Number.isFinite(t)) return { ok: false, error: 'no start time' };
+  const base = { status: 'SCHEDULED_UNPUBLISHED', title: String(title || '').slice(0, 254), description: String(description || '').slice(0, 5000) };
+  try {
+    let r = await graph(env, 'POST', `${env.FB_PAGE_ID}/live_videos`, { ...base, planned_start_time: String(t) });
+    if (!r.ok && /planned_start_time|deprecat|param/i.test(r.error || '')) r = await graph(env, 'POST', `${env.FB_PAGE_ID}/live_videos`, { ...base, event_params: JSON.stringify({ start_time: t }) });
+    return r.ok && r.data?.id ? { ok: true, id: r.data.id } : { ok: false, error: r.error || 'no id', code: r.code || null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** A scheduled live's new start time (the reveal moved in JobTread). → { ok, error } */
+export async function rescheduleFbLive(env, liveVideoId, startAt) {
+  if (!fbConfigured(env) || !liveVideoId) return { ok: false, error: 'not configured' };
+  const t = Math.floor(Date.parse(startAt) / 1000);
+  try {
+    let r = await graph(env, 'POST', liveVideoId, { planned_start_time: String(t) });
+    if (!r.ok && /planned_start_time|deprecat|param/i.test(r.error || '')) r = await graph(env, 'POST', liveVideoId, { event_params: JSON.stringify({ start_time: t }) });
+    return r.ok ? { ok: true } : { ok: false, error: r.error, code: r.code };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** A scheduled live that won't happen (the reveal cancelled or replaced): deleted, or failing that, cancelled. */
+export async function cancelFbScheduledLive(env, liveVideoId) {
+  if (!fbConfigured(env) || !liveVideoId) return { ok: false, error: 'not configured' };
+  try {
+    const d = await graph(env, 'DELETE', liveVideoId);
+    if (d.ok) return { ok: true, how: 'deleted' };
+    const c = await graph(env, 'POST', liveVideoId, { status: 'SCHEDULED_CANCELED' });
+    return c.ok ? { ok: true, how: 'cancelled' } : { ok: false, error: c.error || d.error, code: c.code || d.code };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** A live video's status and ingest address (for a scheduled one: where the stream goes). → { ok, status, ingestUrl, error } */
+export async function fbLiveVideoInfo(env, liveVideoId) {
+  if (!fbConfigured(env) || !liveVideoId) return { ok: false, error: 'not configured' };
+  try {
+    const r = await graph(env, 'GET', liveVideoId, { fields: 'status,secure_stream_url,stream_url' });
+    if (!r.ok) return { ok: false, error: r.error, code: r.code };
+    return { ok: true, status: r.data.status || null, ingestUrl: r.data.secure_stream_url || r.data.stream_url || null };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** A scheduled live goes live now (Facebook needs video arriving at its ingest). → { ok, error } */
+export async function setFbLiveNow(env, liveVideoId) {
+  if (!fbConfigured(env) || !liveVideoId) return { ok: false, error: 'not configured' };
+  try {
+    const r = await graph(env, 'POST', liveVideoId, { status: 'LIVE_NOW' });
+    return r.ok ? { ok: true } : { ok: false, error: r.error, code: r.code };
   } catch (e) {
     return { ok: false, error: e.message };
   }

@@ -81,7 +81,19 @@ export async function run(env, config, state, health, { hub = null } = {}) {
     const l = outputs?.ok ? (outputs.result || []).find((o) => o.uid === cfg.uid) : null;
     return { exists: outputs?.ok ? !!l : true, enabled: l ? l.enabled !== false : cfg.enabled !== false };
   };
-  if (fbMode === 'api') add('facebookOutput', 'ok', 'Facebook API mode creates the post and output when the phone connects');
+  if (fbMode === 'api') {
+    add('facebookOutput', 'ok', 'Facebook API mode creates the post and output when the phone connects');
+    // The Page's scheduled live for this reveal ("Get reminder" for followers; _broadcast.js fbPlanEffects)
+    const planned = state.quiet ? state.resume : state;
+    if (planned?.broadcastId && ['scheduled', 'armed'].includes(planned.phase)) {
+      const row = await env.DB.prepare("SELECT data FROM site_config WHERE key = 'broadcast-fb-plan'").first().catch(() => null);
+      let plan = {}; try { plan = JSON.parse(row?.data || '{}') || {}; } catch { plan = {}; }
+      const mine = plan.broadcastId === planned.broadcastId;
+      if (mine && plan.id) add('facebookPlan', 'ok', 'Facebook has the scheduled live up (followers can tap "Get reminder")');
+      else if (mine && plan.error) add('facebookPlan', 'warn', 'Facebook refused the scheduled live', plan.error, 'Nothing to do for the reveal itself: Facebook still goes live when the phone connects. The site tries again every hour.');
+      else add('facebookPlan', 'unknown', 'No scheduled live on Facebook yet', 'It is made once the reveal is within 7 days.', null);
+    }
+  }
   else {
     const o = listed('facebook');
     if (!o) add('facebookOutput', 'fail', 'Facebook isn\'t set up', null, 'Settings → Facebook: paste the persistent stream key from Live Producer.');

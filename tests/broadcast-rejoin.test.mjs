@@ -75,7 +75,7 @@ before(async () => {
   await b.ensureSchema(DB);
   const cfg = await b.readConfig(DB);
   cfg.liveInput = { uid: 'in1' };
-  cfg.facebook = { mode: 'api', pageUrl: 'https://www.facebook.com/SunshineOnaRanneyDay' };
+  cfg.facebook = { mode: 'api', pageUrl: 'https://www.facebook.com/SunshineOnaRanneyDay', scheduleAhead: false }; // the post-per-go-live path (the fallback); scheduled lives: broadcast-fb-plan.test.mjs
   cfg.outputs = { facebook: { uid: 'fbout', enabled: true } };
   await b.writeConfig(DB, cfg);
   await DB.prepare(`INSERT INTO broadcast_reminders (id, channel, address, kid_slug, token, created_at, confirmed_at) VALUES ('r1', 'email', 'fan@example.com', NULL, 'tok1', ?, ?)`).bind(iso(), iso()).run().catch(() => {});

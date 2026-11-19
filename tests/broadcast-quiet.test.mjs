@@ -98,7 +98,7 @@ before(async () => {
   await b.ensureSchema(DB);
   const cfg = await b.readConfig(DB);
   cfg.liveInput = { uid: 'in1' };
-  cfg.facebook = { mode: 'api', pageUrl: 'https://www.facebook.com/SunshineOnaRanneyDay' };
+  cfg.facebook = { mode: 'api', pageUrl: 'https://www.facebook.com/SunshineOnaRanneyDay', scheduleAhead: false }; // test mode itself; scheduled lives around a test: broadcast-fb-plan.test.mjs
   cfg.outputs = { facebook: { uid: 'fbout', enabled: true }, youtube: { uid: 'ytout', enabled: false } };
   cfg.reels = { ...cfg.reels, enabled: true };
   await b.writeConfig(DB, cfg);

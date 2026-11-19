@@ -1741,6 +1741,220 @@ function applyKid(state, kid, via, work) {
 
 // ─── Facebook side effects ──────────────────────────────────────────
 
+// ─── Facebook: a scheduled live for a confirmed reveal ──────────────
+//
+// Peter, Nov 19 2026 ("Yes, set it up"): once a reveal is confirmed (JobTread → the schedule), the Page gets a
+// scheduled live for it, with real words and a link to the website, so followers can tap "Get reminder" ahead of
+// the day. API mode only. It is kept in its own record (site_config FB_PLAN_KEY), never in the broadcast state, so
+// no state change can lose it: { broadcastId, id, at (the start it was made for), createdAt, usedAt, liveNowAt,
+// error, errorAt }. When the phone connects, fbOnLive sends the video to it instead of opening a new post; anything
+// wrong with it (gone, expired, no ingest, Stream refusing the output) falls back to opening one, as before.
+export const FB_PLAN_KEY = 'broadcast-fb-plan';
+const FB_PLAN_MAX_AHEAD_MS = 7 * 24 * 3600e3 - 3600e3; // Facebook: up to 7 days ahead (an hour's margin)
+const FB_PLAN_MIN_AHEAD_MS = 15 * 60e3;                // closer than this, the go-live opens its post as before
+const FB_PLAN_RETRY_MS = 60 * 60e3;                    // a refused plan is tried again after this
+export const readFbPlan = (DB) => readJson(DB, FB_PLAN_KEY, () => ({}));
+const writeFbPlan = (DB, p) => writeJson(DB, FB_PLAN_KEY, p);
+
+/** The words on the Facebook post: the kid's own summary (the live page's lead), when, and the link to our page */
+export async function fbWords(DB, state, config, { now = false } = {}) {
+  // A broadcast with no kid (an emergency or unplanned one): staff's own words, as before
+  if (!state.kidSlug) return { title: state.title || 'Live now', description: state.message || '' };
+  const name = state.kidName || null;
+  let summary = '';
+  if (state.kidSlug) {
+    const row = await DB.prepare('SELECT data FROM kids WHERE slug = ?').bind(state.kidSlug).first().catch(() => null);
+    try { summary = String(JSON.parse(row?.data || '{}').summary || '').trim(); } catch { summary = ''; }
+  }
+  const when = state.scheduledAt ? notify.formatWhen(state.scheduledAt, config?.timezone) : null;
+  const title = name ? `${name}'s room reveal, live` : (state.title || 'Live room reveal');
+  const parts = [];
+  if (summary) parts.push(summary);
+  parts.push(`${now ? 'Live now: watch' : when ? `Live on ${when}: watch` : 'Watch'} ${name || 'the family'} see the new room for the first time.`);
+  parts.push(`Watch on our website too, and leave a message for the family: ${liveLinkFor(state, 'facebook')}`);
+  return { title, description: parts.join('\n\n') };
+}
+
+/** The reveal a scheduled live is for right now: the planned one (a test on the main feed carries it in resume) */
+function plannedReveal(state) {
+  const p = state?.quiet ? state.resume : state;
+  return p && !p.test && ['scheduled', 'armed'].includes(p.phase) && p.scheduledAt && p.kidSlug && p.broadcastId && p.source !== 'manual' ? p : null;
+}
+
+/**
+ * Every tick: the Page's scheduled live follows the planned reveal. Made once it is within 7 days (and over 15
+ * minutes off), moved when the reveal moves, taken down when the reveal is cancelled or replaced (never one already
+ * used for going live). Staff hear once if Facebook refuses it; the reveal still goes to Facebook as before.
+ */
+async function fbPlanEffects(env, config, state, work, now = Date.now()) {
+  // (config.facebook.scheduleAhead false: none, the go-live opens its own post as before)
+  if (config.facebook?.mode !== 'api' || config.facebook?.scheduleAhead === false || !fb.fbConfigured(env)) return;
+  // A test on the main feed sets off nothing outside the website: the plan waits until it is over
+  if (state.quiet) return;
+  const { DB } = env;
+  let plan = await readFbPlan(DB);
+  // Its reveal on air or ending: the go-live has it (fbOnLive)
+  if (plan.broadcastId && plan.broadcastId === state.broadcastId && ['live', 'ending'].includes(state.phase) && !state.quiet) return;
+  const want = plannedReveal(state);
+  // The same child's reveal planned again under a new broadcast (taken down and confirmed again): the post stays, so
+  // nobody's "Get reminder" is lost; it takes the new broadcast and moves to its time
+  if (plan.id && !plan.usedAt && want && want.broadcastId !== plan.broadcastId && plan.kidSlug && plan.kidSlug === want.kidSlug) {
+    plan = { ...plan, broadcastId: want.broadcastId };
+    await writeFbPlan(DB, plan);
+    work.push('fb-plan-kept-for-kid');
+  }
+  // Not wanted any more (cancelled, moved to another reveal, or this one ended without using it): taken down
+  if (plan.id && !plan.usedAt && (!want || want.broadcastId !== plan.broadcastId)) {
+    if (plan.cancelTriedAt && now - Date.parse(plan.cancelTriedAt) < 5 * 60e3) return;
+    // Only one Facebook still has as scheduled: a live or ended video (its use not noted here) is the reveal's own
+    const info = await fb.fbLiveVideoInfo(env, plan.id);
+    if (info.ok && !/^SCHEDULED_/.test(info.status || '')) { await writeFbPlan(DB, {}); work.push('fb-plan-let-go'); return; }
+    const r = await fb.cancelFbScheduledLive(env, plan.id);
+    work.push(r.ok ? 'fb-plan-cancelled' : 'fb-plan-cancel-failed');
+    // Gone, already let go by Facebook, tried three times, or its time is past: the record goes (nothing more to do)
+    if (r.ok || r.code === 100 || (plan.cancelTries || 0) >= 2 || Date.parse(plan.at || 0) < now) { await writeFbPlan(DB, {}); plan = {}; }
+    else { await writeFbPlan(DB, { ...plan, cancelTries: (plan.cancelTries || 0) + 1, cancelTriedAt: nowIso() }); return; }
+  }
+  if (!want) return;
+  const at = Date.parse(want.scheduledAt);
+  const ahead = at - now;
+  if (plan.id && plan.broadcastId === want.broadcastId) {
+    // Moved in JobTread: Facebook's start moves with it
+    if (!plan.usedAt && plan.at !== want.scheduledAt && ahead > FB_PLAN_MIN_AHEAD_MS && !(plan.moveTriedAt && now - Date.parse(plan.moveTriedAt) < 5 * 60e3)) {
+      const r = await fb.rescheduleFbLive(env, plan.id, want.scheduledAt);
+      if (r.ok) { await writeFbPlan(DB, { ...plan, at: want.scheduledAt }); work.push('fb-plan-moved'); }
+      else {
+        // Couldn't move it: taken down, and the next tick makes one for the new time. If it can't be taken down
+        // either, it stays (never two on the Page) and the go-live still uses it
+        const c = await fb.cancelFbScheduledLive(env, plan.id).catch(() => ({ ok: false }));
+        if (c.ok || c.code === 100) { await writeFbPlan(DB, {}); work.push('fb-plan-move-failed'); }
+        else { await writeFbPlan(DB, { ...plan, moveTriedAt: nowIso() }); work.push('fb-plan-move-failed-kept'); }
+      }
+    }
+    return;
+  }
+  if (ahead > FB_PLAN_MAX_AHEAD_MS || ahead < FB_PLAN_MIN_AHEAD_MS) return;
+  if (plan.error && plan.broadcastId === want.broadcastId && plan.at === want.scheduledAt && now - Date.parse(plan.errorAt || 0) < FB_PLAN_RETRY_MS) return;
+  // One per reveal and start time, whichever tick gets there first
+  const claimKey = `fb-plan:${want.scheduledAt}`;
+  if (!(await claimOnce(DB, want.broadcastId, claimKey))) return;
+  const words = await fbWords(DB, want, config);
+  const made = await fb.createFbScheduledLive(env, { ...words, startAt: want.scheduledAt });
+  if (made.ok) {
+    await writeFbPlan(DB, { broadcastId: want.broadcastId, kidSlug: want.kidSlug, id: made.id, at: want.scheduledAt, createdAt: nowIso() });
+    work.push('fb-plan-made');
+    await recordEvent(DB, want.broadcastId, 'fb_plan', { id: made.id });
+  } else {
+    await writeFbPlan(DB, { broadcastId: want.broadcastId, at: want.scheduledAt, error: String(made.error || 'refused').slice(0, 300), errorAt: nowIso() });
+    await DB.prepare('DELETE FROM broadcast_claims WHERE broadcast_id = ? AND key = ?').bind(want.broadcastId, claimKey).run().catch(() => {});
+    work.push('fb-plan-failed');
+    if (await claimOnce(DB, want.broadcastId, `fb-plan-alert:${want.scheduledAt}`)) {
+      await notify.alertAdmins(env, config, { level: 'warn', title: `Facebook didn't take the scheduled live for ${want.kidName || 'the reveal'}`, detail: `Facebook said: ${String(made.error || 'no reason given').slice(0, 200)}. Followers won't get a "Get reminder" for it. The reveal still goes to Facebook when the phone connects, as before. The site tries again every hour.`, url: `${SITE_ORIGIN}/admin/#broadcast` }).catch(() => {});
+    }
+  }
+}
+
+const FB_PLAN_LIVE_GRACE_MS = 90e3; // not live this long after it should be: a post of its own instead
+
+/**
+ * When the scheduled live should go live: 30 s before its start, or once this stretch on air has run long enough to be
+ * the reveal itself, run early (PRE_SHOW_MAX_MS: preShow's line between a framing check and the reveal). → ms
+ */
+function planLiveFrom(state) {
+  const at = Date.parse(state.scheduledAt || '');
+  const began = Date.parse(state.liveAt || '');
+  // (never more than an hour before the start: earlier is a phone test whatever its length, as preShow judges)
+  const byLength = Number.isFinite(began) ? Math.max(began + PRE_SHOW_MAX_MS, Number.isFinite(at) ? at - PRE_SHOW_ALWAYS_MS : -Infinity) : Infinity;
+  return Math.min(Number.isFinite(at) ? at - 30e3 : Infinity, byLength);
+}
+
+/**
+ * The go-live: this reveal's scheduled live, if it's there and usable, takes the video (a Stream output to its ingest),
+ * and goes live when it should (fbPlanLiveNow); before then (a framing check) it is fed unseen. → the state with fb set,
+ * or null when it can't be used (the caller opens a post as before). Once the output exists it is never null: a second
+ * post on top of a fed plan could make two lives
+ */
+async function fbUsePlan(env, config, s, work, now = Date.now()) {
+  if (config.facebook?.scheduleAhead === false) return null;
+  const plan = await readFbPlan(env.DB);
+  if (!plan.id || plan.broadcastId !== s.broadcastId || plan.abandonedAt || !stream.streamConfigured(env)) return null;
+  const info = await fb.fbLiveVideoInfo(env, plan.id);
+  if (!info.ok || !/^(SCHEDULED_UNPUBLISHED|SCHEDULED_LIVE|LIVE)$/.test(info.status || '') || !info.ingestUrl) { work.push(`fb-plan-unusable:${info.status || info.error || 'none'}`); return null; }
+  const split = fb.splitIngestUrl(info.ingestUrl);
+  const out = split ? await stream.createOutput(env, config.liveInput.uid, { url: split.url, streamKey: split.streamKey, enabled: true }) : null;
+  if (!out?.ok) { work.push('fb-plan-output-failed'); return null; }
+  const fedAt = nowIso();
+  let next = { ...s, fb: { ...s.fb, liveVideoId: plan.id, outputUid: out.result?.uid || null, planned: true, fedAt, liveNowAt: info.status === 'LIVE' ? fedAt : null } };
+  work.push('fb-live-post', 'fb-plan-used');
+  try {
+    await settleClaim(env.DB, s.broadcastId, 'fb-live-post', { liveVideoId: plan.id, outputUid: next.fb.outputUid, planned: true });
+    await writeFbPlan(env.DB, { ...plan, usedAt: fedAt, ...(info.status === 'LIVE' ? { liveNowAt: fedAt } : {}) });
+  } catch (e) { work.push(`fb-plan-note-error: ${e.message}`); }
+  next = await fbPlanLiveNow(env, config, next, work, now).catch(() => next);
+  return next;
+}
+
+/**
+ * The scheduled live fed by this reveal goes live when it should (planLiveFrom), on air with the phone sending (never
+ * during a drop), decided from the plan record. Retried every 10 s; if Facebook still hasn't taken it live a minute and
+ * a half later, the reveal gets a post of its own (fbPlanGiveUp), as without a plan.
+ */
+async function fbPlanLiveNow(env, config, state, work, now = Date.now()) {
+  const f = state.fb || {};
+  if (!f.liveVideoId || state.phase !== 'live' || state.gapSince || state.quiet || state.source !== 'stream') return state;
+  const plan = await readFbPlan(env.DB);
+  if (plan.id !== f.liveVideoId || plan.broadcastId !== state.broadcastId) return state;
+  // Let go for a post of its own while a slower tick still held it: follow the post (its claim says which)
+  if (plan.abandonedAt) {
+    const made = await freshResult(env.DB, state.broadcastId, 'fb-live-post', state.fbSessionAt);
+    if (made?.liveVideoId && made.liveVideoId !== plan.id) { work.push('fb-plan-followed-own-post'); return { ...state, fb: { ...f, liveVideoId: made.liveVideoId, outputUid: made.outputUid || null, planned: false } }; }
+    return state;
+  }
+  if (plan.liveNowAt) return state;
+  const from = planLiveFrom(state);
+  if (now < from) return state;
+  if (plan.liveNowTriedAt && now - Date.parse(plan.liveNowTriedAt) < 10e3) return state;
+  const r = await fb.setFbLiveNow(env, plan.id);
+  if (r.ok) {
+    await writeFbPlan(env.DB, { ...plan, liveNowAt: nowIso() });
+    work.push('fb-plan-live-now');
+    return { ...state, fb: { ...f, planned: true, liveNowAt: nowIso() } };
+  }
+  // Refused: maybe it is live already (Facebook started it at its time, or took an earlier ask that timed out here)
+  const info = await fb.fbLiveVideoInfo(env, plan.id);
+  if (info.ok && info.status === 'LIVE') {
+    await writeFbPlan(env.DB, { ...plan, liveNowAt: nowIso() });
+    work.push('fb-plan-already-live');
+    return { ...state, fb: { ...f, planned: true, liveNowAt: nowIso() } };
+  }
+  const tries = (plan.liveNowTries || 0) + 1;
+  await writeFbPlan(env.DB, { ...plan, liveNowTries: tries, liveNowTriedAt: nowIso(), liveNowError: String(r.error || '').slice(0, 200) });
+  work.push('fb-plan-live-now-failed');
+  // A minute and a half of refusals with the phone sending (counted from when it came back after a drop), three
+  // tries at least: the reveal gets a post of its own
+  const due = Math.max(from, Date.parse(plan.usedAt || 0) || 0, Date.parse(state.segmentAt || 0) || 0);
+  if (tries >= 3 && now - due > FB_PLAN_LIVE_GRACE_MS) return fbPlanGiveUp(env, config, state, { ...plan, liveNowError: r.error || null }, work);
+  return state;
+}
+
+/** Facebook wouldn't take the scheduled live live: the reveal opens a post of its own, as without a plan. Once */
+async function fbPlanGiveUp(env, config, state, plan, work) {
+  // Never a live that's public: one more look first
+  const info = await fb.fbLiveVideoInfo(env, plan.id);
+  if (info.ok && info.status === 'LIVE') { await writeFbPlan(env.DB, { ...plan, liveNowAt: nowIso() }); work.push('fb-plan-already-live'); return { ...state, fb: { ...(state.fb || {}), planned: true, liveNowAt: nowIso() } }; }
+  if (!(await claimOnce(env.DB, state.broadcastId, `fb-plan-giveup:${plan.id}`))) return state;
+  await writeFbPlan(env.DB, { ...plan, abandonedAt: nowIso() });
+  const f = state.fb || {};
+  if (f.outputUid && config.liveInput?.uid) await stream.deleteOutput(env, config.liveInput.uid, f.outputUid).catch(() => {});
+  await fb.cancelFbScheduledLive(env, plan.id).catch(() => {});
+  // The post claim goes with it, so fbOnLive opens the reveal's own (fbUsePlan skips an abandoned plan)
+  await env.DB.prepare("DELETE FROM broadcast_claims WHERE broadcast_id = ? AND key = 'fb-live-post'").bind(state.broadcastId).run();
+  work.push('fb-plan-gave-up');
+  const s = await fbOnLive(env, config, { ...state, fb: { ...defaultState().fb } }, work);
+  await notify.alertAdmins(env, config, { level: 'warn', title: `Facebook didn't start the scheduled live for ${state.kidName || 'the reveal'}`, detail: `It wouldn't go live${plan.liveNowError ? ` (Facebook said: ${String(plan.liveNowError).slice(0, 160)})` : ''}, so the site opened a new Facebook live post for the reveal${s.fb?.liveVideoId ? '' : ', which also failed: check Facebook in Live Producer'}.`, url: `${SITE_ORIGIN}/admin/#broadcast` }).catch(() => {});
+  return s;
+}
+
 async function fbOnLive(env, config, state, work) {
   const s = { ...state, fb: { ...(state.fb || {}) } };
   if (!fb.fbConfigured(env) || state.quiet) return s;
@@ -1749,10 +1963,13 @@ async function fbOnLive(env, config, state, work) {
     // from an earlier stretch (fbSessionAt) is never this one's: it gives way, and is never read back
     if (!(await claimFresh(env.DB, s.broadcastId, 'fb-live-post', s.fbSessionAt))) {
       const made = await freshResult(env.DB, s.broadcastId, 'fb-live-post', s.fbSessionAt);
-      if (made?.liveVideoId) { s.fb.liveVideoId = made.liveVideoId; s.fb.outputUid = made.outputUid || null; }
+      if (made?.liveVideoId) { s.fb.liveVideoId = made.liveVideoId; s.fb.outputUid = made.outputUid || null; if (made.planned) s.fb.planned = true; }
       return s;
     }
-    const created = await fb.createFbLiveVideo(env, { title: s.title, description: s.message });
+    // The Page's scheduled live for this reveal, when it's there and usable; else a post of its own, as before
+    const used = await fbUsePlan(env, config, s, work).catch((e) => { work.push(`fb-plan-error: ${e.message}`); return null; });
+    if (used) return used;
+    const created = await fb.createFbLiveVideo(env, await fbWords(env.DB, s, config, { now: true }).catch(() => ({ title: s.title, description: s.message })));
     if (created.ok) {
       s.fb.liveVideoId = created.id;
       await settleClaim(env.DB, s.broadcastId, 'fb-live-post', { liveVideoId: created.id, outputUid: null });
@@ -1910,7 +2127,11 @@ async function preShowEffects(env, config, state, work, health = null) {
         await DB.prepare("DELETE FROM broadcast_claims WHERE broadcast_id = ? AND key IN ('fb-live-post', 'fb-ended')").bind(s.broadcastId).run();
       }
       if (s.preShowFb) {
-        if (config.facebook?.mode === 'api' && fb.fbConfigured(env) && s.preShowFb.liveVideoId) {
+        // The Page's scheduled live, fed early and never taken live: kept for the real start (only its video stops)
+        const plan = s.preShowFb.liveVideoId ? await readFbPlan(DB).catch(() => ({})) : {};
+        const keepPlan = !!plan.id && plan.id === s.preShowFb.liveVideoId && !plan.liveNowAt;
+        if (keepPlan) { await writeFbPlan(DB, { ...plan, usedAt: null }); work.push('fb-plan-kept'); }
+        else if (config.facebook?.mode === 'api' && fb.fbConfigured(env) && s.preShowFb.liveVideoId) {
           const r = await fb.endFbLiveVideo(env, s.preShowFb.liveVideoId).catch(() => ({ ok: false }));
           work.push(r.ok ? 'pre-show-fb-ended' : 'pre-show-fb-end-failed');
         }
@@ -2394,10 +2615,13 @@ async function tick(env, { source, force, by, keepLease = async () => true, answ
     async () => {
       if (live() && !state.quiet && config.facebook?.mode === 'api' && !state.fb?.liveVideoId && !state.fbReopen) {
         const made = await freshResult(env.DB, state.broadcastId, 'fb-live-post', state.fbSessionAt);
-        if (made?.liveVideoId) { state = { ...state, fb: { ...(state.fb || {}), liveVideoId: made.liveVideoId, outputUid: made.outputUid || null } }; work.push('fb-read-back'); }
+        if (made?.liveVideoId) { state = { ...state, fb: { ...(state.fb || {}), liveVideoId: made.liveVideoId, outputUid: made.outputUid || null, ...(made.planned ? { planned: true } : {}) } }; work.push('fb-read-back'); }
       }
     },
     async () => { state = await goLiveEffects(env, config, state, work, by); },
+    // The Page's scheduled live: made, moved and taken down with the planned reveal; one fed early goes live at its start
+    async () => { await fbPlanEffects(env, config, state, work).catch((e) => work.push(`fb-plan-error: ${e.message}`)); },
+    async () => { if (live() && !state.quiet) state = await fbPlanLiveNow(env, config, state, work).catch(() => state); },
     async () => { state = await endedEffects(env, config, state, health, work, by); },
     async () => { if (live() && !state.quiet) state = await fbRefreshPermalink(env, state, work); },
     // Feed watch, go/no-go and mic checks only report; nothing they do may stop the state machine (a test pings nobody)
