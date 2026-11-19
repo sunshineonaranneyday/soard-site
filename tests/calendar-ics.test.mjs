@@ -6,6 +6,7 @@
  * Run: node --test tests/calendar-ics.test.mjs
  */
 import { test, beforeEach, after } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
@@ -176,7 +177,9 @@ test('old links to an event are served as the event is now', async () => {
   await refused(link.toString());
 });
 
-test('a rehearsal (a TEST job) resolves from the broadcast’s plan, marked TEST; a real reveal comes first', async () => {
+test('a rehearsal (a TEST job) resolves from the broadcast’s plan, marked TEST; a real reveal comes first', async (t) => {
+  // Held at its sample data's day (tests/lib/clock.mjs): its reveals are dated November 2026, and a calendar file is only for a reveal still ahead
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const rehearsal = { jobId: 'job1', jobName: 'TEST Isla Example (2027)', slug: 'isla-test', name: 'Isla', startsAt: '2027-02-02T16:00:00.000Z', date: '2027-02-02', time: '11:00', test: true };
   await env.DB.prepare("INSERT INTO site_config (key, data) VALUES ('broadcast-schedule', ?)").bind(JSON.stringify({ checkedAt: new Date().toISOString(), next: rehearsal, waiting: [], last: null })).run();
   const { field } = await ics('reveal=isla-test');

@@ -7,6 +7,7 @@
  * Run: node --test tests/board-mail.test.mjs
  */
 import { test, beforeEach, afterEach } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
@@ -112,7 +113,9 @@ const by = (meetings, date) => meetings.find((m) => m.date === date);
 /** A past meeting's record, as older code brought them in from the calendars */
 const record = (date, extra = {}) => saveMeeting(env.DB, cleanMeeting({ date, start: '08:00', end: '10:00', ...extra }), { by: 'the calendar' });
 
-test('past meetings’ records get their agendas, minutes and financials from email', async () => {
+test('past meetings’ records get their agendas, minutes and financials from email', async (t) => {
+  // Held at its sample data's day (tests/lib/clock.mjs): its meetings are Aug 31 and Nov 29 2026, and which ones are past decides where each paper is filed
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const q1 = day(-260); const q2 = day(-170); const q3 = day(-80);
   for (const [date, extra] of [[q1], [q2], [q3, { location: 'Example Hall', address: '1 Example St, Roswell, GA' }]]) await record(date, extra);
   // The Q3 packet: its agenda and financials (the board's), the last meeting's minutes, and things that aren't board material

@@ -7,7 +7,8 @@
  * Mercury, Resend and Slack; made-up companies only (12-3456789 is the IRS's
  * own example EIN).
  */
-import { test, beforeEach, after } from 'node:test';
+import { test, beforeEach, afterEach, after } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
 import { createD1 } from './lib/d1-shim.mjs';
@@ -30,6 +31,11 @@ import { onRequestPost as post, onRequestGet as get } from '../functions/api/tra
 import { onRequestGet as docsGet } from '../functions/api/vendor-docs.js';
 
 const NOW = Date.parse('2026-10-29T15:00:00Z');
+// Every test here runs on the file's day: its W-9s and certificates are dated around it (policies running into 2027) and
+// the code reads the clock itself, so once those dates pass the site rightly says "Expired" (tests/lib/clock.mjs)
+let restoreClock = () => {};
+beforeEach(() => { restoreClock = holdClockAt(NOW); });
+afterEach(() => restoreClock());
 const DAY = 864e5;
 const VENDOR = 'ACC-TKO';
 // JobTread's vendor contact fields: a family's (customerContact) Email is refused on a vendor's contact

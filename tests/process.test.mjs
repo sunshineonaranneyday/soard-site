@@ -5,6 +5,7 @@
  * Run: node --test tests/
  */
 import { test, beforeEach } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
@@ -738,7 +739,9 @@ test('a review coming due is emailed to the founders once, with what to look at'
 
 // ─── On the map ───────────────────────────
 
-test('the map’s “Process from Google Docs” entry follows the Docs’ last read', () => {
+test('the map’s “Process from Google Docs” entry follows the Docs’ last read', (t) => {
+  // Held at its sample data's day (tests/lib/clock.mjs): which Doc is due for its yearly review first depends on today's date
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const entry = entries.find((n) => n.t === 'Process from Google Docs');
   applyFacts({ processDocs: { makeover: { name: '2026 Sunshine Makeover Process', readAt: '2026-10-29T15:00:00Z', checkedAt: '2026-10-29T15:05:00Z', steps: 14, error: null }, community: { name: '2026 Sunshine Community Project Process', readAt: '2026-10-29T15:00:00Z', checkedAt: '2026-10-29T15:04:00Z', steps: 16, error: null } } });
   assert.equal(entry.es, 'live');

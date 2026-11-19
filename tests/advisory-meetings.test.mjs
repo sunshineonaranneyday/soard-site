@@ -8,6 +8,7 @@
  */
 
 import { test, beforeEach, afterEach } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
@@ -384,7 +385,9 @@ test('with no calendar key it says so; a meeting gone says so', async () => {
   await assert.rejects(sendAdvisoryInvite(env, 'm_nothere', { fetchImpl: g.fetchImpl, now: NOW }), (e) => e.status === 404);
 });
 
-test('a new time goes to Google once it has stood two minutes; words alone go quietly', async () => {
+test('a new time goes to Google once it has stood two minutes; words alone go quietly', async (t) => {
+  // Held at its sample data's day (tests/lib/clock.mjs): its meetings are dated around the file's day (Nov 5 2026), and a meeting gone by is made anew rather than changed
+  t.after(holdClockAt(NOW));
   const { meeting: m } = await createAdvisoryMeeting(env, { date: FUTURE }, { now: NOW });
   const sent = await sendAdvisoryInvite(env, m.id, { fetchImpl: g.fetchImpl, now: NOW });
   const before = writes().length;

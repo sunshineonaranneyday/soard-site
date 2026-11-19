@@ -6,6 +6,7 @@
  */
 
 import { test, beforeEach } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import { checkinView } from '../functions/api/_kid-checkin.js';
@@ -436,7 +437,9 @@ test('Nov 10 live check: a line read as one whole part takes each thing ordered 
   assert.equal(lineValues(l.items, { allowance: l.allowance }).status, 'Ordered', 'what’s ordered for it says where the line is');
 });
 
-test('check-out: a scanned label sends its check-in to the house once; when all of it is out the shelf frees, and JobTread says where', async () => {
+test('check-out: a scanned label sends its check-in to the house once; when all of it is out the shelf frees, and JobTread says where', async (t) => {
+  // Held at its sample data's day (tests/lib/clock.mjs): its items were ordered Oct 30 and are checked in and out today, which it reads as November
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const { checkOut } = await import('../functions/api/_kid-record.js');
   await env.DB.prepare("INSERT INTO staff_state (key, data) VALUES ('directory', ?)").bind(JSON.stringify({ accounts: [{ name: 'Pat Lee', email: 'pat@soardcharity.com' }, { name: 'Sam Fox', email: 'sam@soardcharity.com' }] })).run();
   const v0 = await view();

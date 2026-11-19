@@ -1,5 +1,6 @@
 // The board's next four meetings stay on everyone's calendar, forever (functions/api/_board-schedule.js)
 import { test, beforeEach, afterEach } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
@@ -77,7 +78,9 @@ test('each meeting goes out the day after the same quarter the year before', () 
   assert.deepEqual(daysAhead('2027-11-30'), ['2028-01-13', '2028-04-13', '2028-07-13', '2028-10-12']);
 });
 
-test('shipping it sends nothing: not before the day after Jan 14 2027, whatever the hour', async () => {
+test('shipping it sends nothing: not before the day after Jan 14 2027, whatever the hour', async (t) => {
+  // Held at its sample data's day (tests/lib/clock.mjs): it checks the days before Jan 14 2027, when the schedule's sends begin, so it is set in that stretch
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   for (const when of [Date.now(), at('2026-11-06'), at('2027-01-13'), at('2027-01-14'), at('2027-01-14', 23)]) assert.equal(await run(when), null);
   assert.deepEqual(await listMeetings(env.DB), []);
   assert.deepEqual(created, []);

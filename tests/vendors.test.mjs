@@ -3,7 +3,8 @@
  * (functions/api/_vendors.js, _vendor-read.js, vendor-docs.js)
  * Run: node --test tests/
  */
-import { test, beforeEach, after } from 'node:test';
+import { test, beforeEach, afterEach, after } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import { createR2 } from './lib/r2-shim.mjs';
@@ -21,6 +22,12 @@ import { onRequestGet as pageGet, onRequestPost as pagePost } from '../functions
 import { filesOf, readPapers, savePapers } from '../functions/api/_vendor-files.js';
 
 const NOW = Date.parse('2026-10-28T15:00:00Z');
+// Every test here runs on the file's day: its links, W-9s and certificates are dated around it (links that expire,
+// policies running into 2027), and the code reads the clock itself, so after those dates the site rightly says
+// "expired". Held, the tests check the same thing on any day (tests/lib/clock.mjs)
+let restoreClock = () => {};
+beforeEach(() => { restoreClock = holdClockAt(NOW); });
+afterEach(() => restoreClock());
 const DAY = 86400e3;
 const RELAY_KEY = 'relay-key:test';
 const VENDOR = 'ACC-TKO';
