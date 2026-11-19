@@ -264,7 +264,9 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   // tap's own play() still goes at once: that is what lets the second one play with sound.
   // Only a reset counts: a pause pressed while it was starting refuses the play the same way (AbortError, nothing
   // loaded), but always fires 'pause' first, and a reset never does; so a play refused with no pause since it was asked
-  // for was called off by a reset (a viewer's play then pause before it had loaded used to start it anyway, the review)
+  // for was called off by a reset (a viewer's play then pause before it had loaded used to start it anyway, the review).
+  // (a pause() followed in the same task by a source change loses its 'pause' event, so it would be taken for a reset:
+  // never pause and reset in one go; nothing does today, Chrome and WebKit both measured, Nov 19 2026)
   let playAborted = false;
   let pauses = 0;
   function tryPlay() {
@@ -768,8 +770,9 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     setMuted(muted: boolean) {
       video.muted = muted;
       if (!muted && video.volume === 0) video.volume = 1;
-      // (never while holding the last frame: that would play on with no cushion)
-      if (video.paused && !video.ended && (live || !muted) && !holding) tryPlay();
+      // (never while holding the last frame: that would play on with no cushion). Live plays on with its sound turned on
+      // or off; a replay is only ever started by a play (pressing M twice on a paused replay used to start it, a review)
+      if (video.paused && !video.ended && live && !holding) tryPlay();
     },
     play() {
       // Played again after the end: from the start, unless a place has been picked since (Jump to the reveal sets one

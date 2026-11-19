@@ -546,7 +546,8 @@ try {
     await page.click('[data-s="end-replay"]');
     await sleep(900);
     const waiting = await page.evaluate(() => ({ label: document.querySelector('[data-s="play"]').getAttribute('aria-label'), paused: document.querySelector('.stage__player video')?.paused, rs: document.querySelector('.stage__player video')?.readyState }));
-    ok(waiting.label === 'Pause' && waiting.rs === 0, `while the replay loads after the press, the button says Pause (${JSON.stringify(waiting)})`);
+    // (paused: the press's play was called off by the reset as the replay's source came, and waits: the case this is for)
+    ok(waiting.label === 'Pause' && waiting.rs === 0 && waiting.paused === true, `while the replay loads after the press, the button says Pause (${JSON.stringify(waiting)})`);
     feed.replayDelay = 0;
     await waitFor(page, ['paused', 'playing'], 20000); await sleep(1000);
     e = await end();
@@ -713,8 +714,9 @@ try {
   feed.replayDelay = 2500;
   await page.setViewport({ width: 1280, height: 800 });
   await open(page);
-  await page.waitForFunction(() => document.querySelector('[data-stage]')?.dataset.pkind === 'replay' && !!document.querySelector('.stage__player video'), { timeout: 15000 }).catch(() => {});
-  await sleep(300);
+  // (the video has its source first, so the press isn't reset by it arriving: this is the viewer's own pause, the 'pause'
+  // counter's case, not the Watch the replay reset's)
+  await page.waitForFunction(() => { const v = document.querySelector('.stage__player video'); return !!v && (v.src.startsWith('blob:') || !!v.querySelector('source')); }, { timeout: 15000 }).catch(() => {});
   await page.click('[data-s="play"]'); await sleep(250);
   const beforeLoad = await page.evaluate(() => ({ rs: document.querySelector('.stage__player video').readyState, label: document.querySelector('[data-s="play"]').getAttribute('aria-label') }));
   await page.click('[data-s="play"]');
@@ -722,6 +724,11 @@ try {
   feed.replayDelay = 0;
   const kept = await page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { paused: v.paused, t: v.currentTime, rs: v.readyState, label: document.querySelector('[data-s="play"]').getAttribute('aria-label') }; });
   ok(beforeLoad.rs === 0 && kept.paused && kept.t === 0 && kept.rs >= 1 && kept.label === 'Play', `pressed play then pause while it loaded (${beforeLoad.label}): it loaded and stayed paused (${JSON.stringify(kept)})`);
+  // Sound off and on again (M twice) on a paused replay: only the sound changes, it doesn't start (a review, Nov 19 2026)
+  await page.focus('[data-s="seek"]');
+  await page.keyboard.press('m'); await sleep(200); await page.keyboard.press('m'); await sleep(1200);
+  const mm = await page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { paused: v.paused, muted: v.muted }; });
+  ok(mm.paused && !mm.muted, `M twice on a paused replay: sound off and on, still paused (${JSON.stringify(mm)})`);
 
   // The progress line and the play button (Peter, Nov 18 2026: "top tier, best in class ... motion"): the handle and the
   // line glide with the picture (they jumped 4 times a second), the icon turns from play into pause, the buttons give

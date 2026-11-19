@@ -1167,8 +1167,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   $('undock')?.addEventListener('click', (e) => {
     e.stopPropagation();
     dockOff = true;
-    // Closing the mini player stops the sound too, the way every mini player works
-    if (kind === 'live') player?.setMuted(true); else video()?.pause();
+    // Closing the mini player stops the sound too, the way every mini player works (a replay waiting to play, its source
+    // reloading, doesn't play when it can either: an independent review, Nov 19 2026)
+    if (kind === 'live') player?.setMuted(true); else { player?.cancelPlay(); video()?.pause(); }
     updateDock();
   });
   // ── The small player's corner: dragged, it springs to the nearest one (LiveStage.astro data-corner) ──
