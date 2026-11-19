@@ -16,24 +16,26 @@
  * under it (live-stage.ts), so even a replay has no native control bar.
  *
  * LIVE (Peter, Nov 18 2026, after that morning's test broadcasts):
- *   - Viewers watch LIVE_DELAY_S behind the phone. A phone whose signal drops and is back within that never shows a
- *     freeze, only a small skip, and the end of a reveal plays out in full before the page moves on.
+ *   - Viewers watch LIVE_DELAY_S behind the phone (Stream's newest piece), every viewer the same: a phone signal that
+ *     slows without dropping never shows, and the end of a reveal plays out in full before the page moves on.
  *   - The whole broadcast so far can be watched from its start (Stream's DVR playlist, `dvrEnabled=true`), so a
  *     late arrival can go back to the beginning and come back to the live moment (seekToStart, toLive).
- *   - Nothing ever plays twice. On Nov 18 the page replayed its last few seconds over and over when the feed
- *     stalled (hls.js moving the picture back to "catch up" with a low-latency playlist whose end the picture had
- *     passed; every start-over also began several seconds back), then, once Stream had closed the feed into a
- *     recording, played the whole broadcast from 0:00. Now the player remembers where it is in which recording
- *     (`seen`): a start-over goes on from exactly there, a recording Stream has closed is played only up to its
- *     last frame and never from its start again, and a move back over what was shown, while the picture is stalled
- *     at the newest piece, is taken for the feed stopping (start over from where the viewer was, once there is
- *     more).
- * What Stream does (measured on the real feed, Nov 18 2026): the live input's own playlist names the recording in
- * its piece addresses (/<video id>/video/...); a recording's DVR playlist starts at its first piece and only grows,
+ *   - Nothing ever plays twice, and nothing is skipped. On Nov 18 the page replayed its last few seconds over and over
+ *     when the feed stalled (hls.js moving the picture back to "catch up"), then played the whole broadcast again from
+ *     0:00 once Stream had closed the recording; during Dylan's reveal that evening a viewer on a phone saw it go back
+ *     about 20 s, three times. So the live picture has one owner, this player (placePicture): hls.js and Safari load
+ *     and play it, but a move hls.js makes by itself is refused unless it's a small step forward over a gap, and a move
+ *     back over what was shown that Safari makes by itself is undone. Only the viewer goes back (From the start, the
+ *     phone's own full-screen controls or lock screen), and every start-over goes on from exactly where they were
+ *     (`seen`: the recording, and the furthest second of it shown). A recording Stream has closed is played only up to
+ *     its last frame, never from its start again.
+ * What Stream does (measured on the real feed, Nov 18 and 19 2026): the live input's own playlist names the recording
+ * in its piece addresses (/<video id>/video/...); a recording's DVR playlist starts at its first piece and only grows,
  * so a place in it (seconds from its start) is the same for every player; DVR doesn't work with low latency (HTTP
- * 500), and the plain live playlist keeps only about 18 s, so the delay needs DVR; the phone stopping freezes the
- * playlist, the recording closes `recording.timeoutSeconds` later (its DVR playlist gains an end; the input's
- * playlist answers 204 again), and a phone back after that starts a new recording.
+ * 500), and the plain live playlist keeps only about 18 s, so the delay needs DVR. When the phone's connection drops,
+ * Stream closes the recording within seconds, even with recording.timeoutSeconds at 120 (its DVR playlist gains an
+ * end; the input's playlist answers 204), and the phone back starts a new recording about 13 s later; a clean stop
+ * with a quick reconnect can stay one recording (Stream bridges the gap with the last frame).
  * A feed that isn't there yet (204/404) is looked at again every few seconds for as long as the page keeps the
  * player mounted. If neither playback path exists, the Stream iframe takes over.
  */
@@ -74,11 +76,26 @@ export interface PlayerHandle {
   readonly playPending: boolean;
   /** Don't play when it can after all (pause pressed while it waits) */
   cancelPlay(): void;
+  /** Live: what this player has been through (tests, and the reveal's health numbers) */
+  readonly health: PlayerHealth;
   /** Live: to the first second of this broadcast's recording, playing on from there (no catching up, no jump to live) */
   seekToStart(): void;
   /** Live: back to the live moment (the usual delay) */
   toLive(): void;
   destroy(): void;
+}
+
+/** Live: what a viewer's player has been through */
+export interface PlayerHealth {
+  /** Seconds behind the recording's newest piece at the first picture (null: no picture yet) */
+  startBehind: number | null;
+  /** Times the last frame was held (Reconnecting), and how long in all */
+  holds: number;
+  heldMs: number;
+  /** Moves of the live picture that hls.js or Safari made by themselves, refused or undone */
+  refused: number;
+  /** Start-overs */
+  restarts: number;
 }
 
 interface Options {
@@ -95,7 +112,7 @@ interface Options {
 
 /** Live: how far behind the phone viewers watch (Peter, Nov 18 2026: "about 20 seconds") */
 export const LIVE_DELAY_S = 20;
-/** Live: further behind than this, and not by choice, the picture jumps to the usual delay */
+/** Live: further behind than this, and not by choice, the picture jumps to the usual delay (the player's own rule: hls.js never moves the live picture) */
 const LIVE_MAX_BEHIND_S = LIVE_DELAY_S + 30;
 /** Live: within this many seconds of the usual delay counts as at the live moment (the delay's own drift never shows) */
 const AT_LIVE_SLACK_S = 6;
@@ -105,6 +122,18 @@ const SEEK_MIN_S = 30;
 const REBUILD_RATE = 0.97;
 const REBUILD_BELOW_S = LIVE_DELAY_S - 5;
 const REBUILD_TO_S = LIVE_DELAY_S - 1;
+/**
+ * Live: later than the usual delay by more than a few seconds (the viewer's own signal, a phone busy for a moment), the
+ * picture plays this much faster until it's back, just as gently (the sound keeps its pitch). Measured on the real feed,
+ * Nov 19 2026: without it viewers drifted to 25 to 32 s behind and stayed there
+ */
+const CATCH_UP_RATE = 1.03;
+const CATCH_UP_ABOVE_S = LIVE_DELAY_S + 3;
+const CATCH_UP_TO_S = LIVE_DELAY_S + 1;
+/** Live: the only move hls.js may make by itself once the picture is up: forward, over a gap in what's loaded, by at most this */
+const ENGINE_STEP_MAX_S = 3;
+/** Live, Safari's own player: how often it reads the recording's playlist for its newest second (Safari's own seekable end trails that by three pieces or more) */
+const NATIVE_EDGE_MS = 4000;
 /** Looks at the feed in a row Stream doesn't answer as it should before the plain live playlist is played instead */
 const LOOK_FAILS_MAX = 3;
 /** A stall this long reads as the feed dropping, not a hiccup */
@@ -126,6 +155,14 @@ const BACK_OVER_SHOWN_S = 0.5;
 const RESUME_NEW_S = 1;
 /** A recording newer than the one the viewer was on, and no longer than this: watched from its first second (nothing was filmed between) */
 const NEW_RECORDING_FROM_START_S = LIVE_DELAY_S + 30;
+/**
+ * Live: a viewer's first start waits until the recording reaches this far (the usual delay and a little more), then
+ * starts exactly LIVE_DELAY_S behind its newest moment. Peter's test, Nov 18 2026: viewers there before the video
+ * started were started by the player's own guess at the live moment, only 5 to 15 s behind, and stayed there; now
+ * "Waiting for the camera" stays up those few seconds longer instead (the crew films before the reveal moment, so
+ * nobody misses anything)
+ */
+const FIRST_START_S = LIVE_DELAY_S + 2;
 /** Reading Stream's playlists before a start: past this, start anyway and let the player find out */
 const FEED_CHECK_MS = 5000;
 
@@ -245,11 +282,18 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   let nativePlace: (() => void) | null = null; // Safari's own player: put the picture in place once it has loaded
   let startToken = 0; // the start under way (start)
   let lookFails = 0; // looks at the feed in a row that Stream didn't answer as it should (lookAtFeed)
-  let rebuilding = false; // live: playing a touch slower to rebuild the cushion (rebuild)
-  let edgeAt = 0; // the newest second the running player's playlist reached
+  let rebuilding: '' | 'slower' | 'faster' = ''; // live: playing a touch slower to rebuild the cushion, or faster to catch up (rebuild)
   let holding = false; // live: holding the last frame until the feed has the usual delay's worth again
   let holdTimer: ReturnType<typeof setInterval> | undefined;
   let holdLooks = 0;
+  let heldSince = 0;
+  let returnTo: number | null = null; // live, Safari's own player: the second to go back to once it can (a move back undone)
+  let fresh = true; // live: a start's first placing of the picture is the engine's to make (hls.js puts it on its start piece)
+  let ownPause = false; // live: the pause under way is one of ours (a hold)
+  let viewerPaused = false; // live: the last pause was the viewer's or the phone's, not ours
+  let nativeEdge: number | null = null; // live, Safari's own player: the newest second of its recording, read every NATIVE_EDGE_MS
+  let nativeEdgeTimer: ReturnType<typeof setInterval> | undefined;
+  const health: PlayerHealth = { startBehind: null, holds: 0, heldMs: 0, refused: 0, restarts: 0 };
 
   const set = (s: PlayerStatus) => {
     if (s === status || dead) return;
@@ -280,12 +324,45 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     });
   }
 
-  /** A seek of our own: the guard below leaves it alone */
+  // ── Live: the picture has one owner ──
+  // hls.js and Safari load and play the live picture; only this player moves it (a start-over, the live moment, the
+  // viewer's own going back). hls.js moves it by setting currentTime, so on the live video that goes through
+  // engineMove: the first placing after each start, and a small step forward over a gap in what's loaded, go through;
+  // any other move is refused. A move back means it has run out where the viewer is (Nov 18 2026: hls.js moving the
+  // picture back to "catch up" replayed the same seconds over and over; that evening a phone viewer saw about 20 s
+  // again, three times): the last frame is held until the feed has more, then it plays on from that very frame. Safari's
+  // own player moves the picture without currentTime; the 'seeking' listener below undoes those moves.
+  const timeProp = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime')!;
+  const pictureAt = () => timeProp.get!.call(video) as number;
+  const placePicture = (t: number) => { timeProp.set!.call(video, t); };
+  if (live) {
+    Object.defineProperty(video, 'currentTime', {
+      configurable: true,
+      enumerable: true,
+      get: pictureAt,
+      set: (t: number) => engineMove(+t),
+    });
+  }
+  function engineMove(t: number) {
+    const now = pictureAt();
+    // (over a gap: from little or nothing in hand to loaded picture further on, a piece that never came)
+    const overGap = t > now && ahead() < 0.5 && loadedAt(t);
+    // (the plain-playlist fallback has no recording to place by: forward, any size, as its window slides)
+    if (fresh || (t >= now - 0.05 && (!playingVideo || t - now <= ENGINE_STEP_MAX_S || overGap))) { placePicture(t); return; }
+    health.refused++;
+    // (back because it has run out where the viewer is: hold that frame. With picture still in hand it plays on, and
+    // the stall, if one comes, holds it there)
+    if (t < now && everPlayed && !holding && !chosen && ahead() < 0.5) hold();
+  }
+
+  let lastPlaced = 0; // live: where the player last put the picture itself
+  /** A move of our own: the guard below leaves it alone */
   function seekTo(t: number) {
+    lastPlaced = t;
     selfSeek = true;
     clearTimeout(selfSeekTimer);
     selfSeekTimer = setTimeout(() => { selfSeek = false; }, 1500); // (if the browser fires no seeked)
-    video.currentTime = t;
+    placePicture(t);
   }
 
   function stopEngine() {
@@ -297,6 +374,10 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     clearTimeout(stallTimer);
     clearTimeout(nativeTimer);
     clearTimeout(managedTimer);
+    clearInterval(nativeEdgeTimer);
+    nativeEdge = null;
+    ownPause = false;
+    returnTo = null;
     restarting = true;
     if (hls) { try { hls.destroy(); } catch { /* already gone */ } hls = null; }
     if (video.getAttribute('src')) { video.removeAttribute('src'); video.load(); }
@@ -306,6 +387,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   function restart(delay = failures > 15 ? RETRY_SLOW_MS : RETRY_MS) {
     if (dead) return;
     failures++;
+    if (everPlayed) health.restarts++;
     stopEngine();
     set(everPlayed ? 'reconnecting' : 'waiting');
     pending = true;
@@ -345,29 +427,33 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
    *   - first look: the live moment; a recording already closed is never played live (the replay follows)
    * Anything unexpected (an error, no answer in FEED_CHECK_MS) lets the player try, as before.
    */
+  // Stream's playlists, read by the player itself (never from the browser's cache: Stream lets a closed recording's
+  // playlists be kept 10 minutes)
+  async function readFeed(u: string, signal: AbortSignal) {
+    const r = await fetch(u, { signal, cache: 'no-store' });
+    return { status: r.status, ok: r.ok, text: r.ok ? await r.text() : '' };
+  }
+  /** A playlist, through its master's first variant (every variant has the same pieces) */
+  async function readMedia(u: string, signal: AbortSignal) {
+    const res = await readFeed(u, signal);
+    if (!res.ok || !res.text.includes('#EXT-X-STREAM-INF')) return res;
+    const lines = res.text.split('\n').map((l) => l.trim());
+    const at = lines.findIndex((l) => l.startsWith('#EXT-X-STREAM-INF'));
+    const uri = lines.slice(at + 1).find((l) => l && !l.startsWith('#'));
+    return uri ? readFeed(new URL(uri, u).href, signal) : { status: 0, ok: false, text: '' };
+  }
+  /** A recording's DVR playlist: how far it reaches, whether it has closed (null: unreadable) */
+  async function reachOf(rec: string, signal: AbortSignal) {
+    const res = await readMedia(urls.dvr(rec), signal);
+    return res.ok && res.text.includes('#EXTM3U') ? playlistSpan(res.text) : null;
+  }
+
   async function lookAtFeed(): Promise<FeedLook> {
     if (!urls.input) return { go: { src: urls.hls, video: null, startAt: -1 }, closed: false };
     const stop = new AbortController();
     const timer = setTimeout(() => stop.abort(), FEED_CHECK_MS);
-    const read = async (u: string) => {
-      // (never from the browser's cache: Stream lets a closed recording's playlists be kept 10 minutes)
-      const r = await fetch(u, { signal: stop.signal, cache: 'no-store' });
-      return { status: r.status, ok: r.ok, text: r.ok ? await r.text() : '' };
-    };
-    // A playlist, through its master's first variant (every variant has the same pieces)
-    const media = async (u: string) => {
-      const res = await read(u);
-      if (!res.ok || !res.text.includes('#EXT-X-STREAM-INF')) return res;
-      const lines = res.text.split('\n').map((l) => l.trim());
-      const at = lines.findIndex((l) => l.startsWith('#EXT-X-STREAM-INF'));
-      const uri = lines.slice(at + 1).find((l) => l && !l.startsWith('#'));
-      return uri ? read(new URL(uri, u).href) : { status: 0, ok: false, text: '' };
-    };
-    /** A recording's DVR playlist: how far it reaches, whether it has closed (null: unreadable) */
-    const reach = async (rec: string) => {
-      const res = await media(urls.dvr(rec));
-      return res.ok && res.text.includes('#EXTM3U') ? playlistSpan(res.text) : null;
-    };
+    const media = (u: string) => readMedia(u, stop.signal);
+    const reach = (rec: string) => reachOf(rec, stop.signal);
     const play = (rec: string | null, startAt: number): FeedLook => {
       lookFails = 0;
       return { go: { src: rec ? urls.dvr(rec) : urls.hls, video: rec, startAt }, closed: false };
@@ -404,12 +490,16 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
         return { go: null, closed: span.ended };
       }
       if (span.ended) return { go: null, closed: true }; // a closed recording is never played as live
-      // A recording (the first, or a newer one) starts once it has the usual delay's worth: a viewer there from the
-      // very start sits the full delay behind too. A newer one plays from its first second if it's short (nothing
-      // was filmed between)
-      if (span.total < need) return { go: null, closed: false };
-      if (seen) return play(rec, span.total <= NEW_RECORDING_FROM_START_S ? 0 : -1);
-      return play(rec, -1);
+      // A recording (the first, or a newer one) starts once it has the usual delay's worth and a little more, from
+      // exactly the usual delay behind its newest moment (never the player's own guess, which on a young recording
+      // landed only a few seconds behind): a viewer there from the very start sits the full delay behind too. A newer
+      // one plays from its first second if it's short (nothing was filmed between)
+      if (seen) {
+        if (span.total < need) return { go: null, closed: false };
+        return play(rec, span.total <= NEW_RECORDING_FROM_START_S ? 0 : Math.max(0, span.total - LIVE_DELAY_S));
+      }
+      if (span.total < FIRST_START_S) return { go: null, closed: false };
+      return play(rec, Math.max(0, span.total - LIVE_DELAY_S));
     } catch {
       return unsure();
     } finally {
@@ -422,14 +512,39 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     video.disableRemotePlayback = false;
     video.src = src;
     if (!live) return;
-    // Where to start: where the viewer was, or the usual delay behind the newest moment (Safari picks less)
+    // Where to start: where the viewer was, or the usual delay behind the newest moment (Safari picks less). Safari may
+    // have no end for it yet when the playlist first loads (it reported Infinity, and the picture was put there): then
+    // it waits for one, as the picture loads
     nativePlace = () => {
+      if (video.readyState < 1) return; // (a place set before Safari has the picture's details can be dropped)
+      if (startAt >= 0) { nativePlace = null; seekTo(startAt); return; }
+      // (the plain playlist, no recording to place by: only before the picture is up, never back over what was shown)
+      if (!fresh) { nativePlace = null; return; }
+      const end = newestSecond();
+      if (end == null) return;
       nativePlace = null;
       const s = video.seekable;
-      if (startAt >= 0) seekTo(startAt);
-      else if (s.length) seekTo(Math.max(s.start(0), s.end(s.length - 1) - LIVE_DELAY_S));
+      seekTo(Math.max(s.length ? s.start(0) : 0, end - LIVE_DELAY_S));
     };
     video.addEventListener('loadedmetadata', () => nativePlace?.(), { once: true });
+    video.addEventListener('progress', function place() { if (nativePlace) nativePlace(); else video.removeEventListener('progress', place); });
+    // Safari's own player then puts a live picture at its own live point once it has the first pieces, over ours: on
+    // iPhone Simulator Safari (Nov 19 2026) a new recording placed at 0 started at 10.7 to 14.9 s, its first seconds
+    // skipped, with the player before this too. Until the picture is up, put it back where it belongs (a few times at most)
+    if (startAt >= 0) {
+      const token = startToken;
+      const kinds = ['timeupdate', 'durationchange', 'loadeddata', 'canplay'];
+      let tries = 0;
+      const off = () => { for (const k of kinds) video.removeEventListener(k, keep); };
+      function keep() {
+        if (dead || token !== startToken || !fresh || tries >= 4) { off(); return; }
+        if (nativePlace || video.readyState < 1) return; // (not placed by us yet)
+        // (where the player last put it: the start, or the viewer's own move since, Back to live or the lock screen)
+        if (Math.abs(pictureAt() - lastPlaced) > 0.5) { tries++; seekTo(lastPlaced); }
+      }
+      for (const k of kinds) video.addEventListener(k, keep);
+    }
+    if (playingVideo) watchNativeEdge(playingVideo);
     tryPlay();
     // Safari may neither error nor play while the camera is off; start over until a frame shows. A refused autoplay
     // (Low Power Mode) isn't the camera: wait on the tap, then start counting again
@@ -442,13 +557,35 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     watchNative();
   }
 
+  /**
+   * Live, Safari's own player: the newest second of the recording, from its own playlist every NATIVE_EDGE_MS. Safari's
+   * seekable end trails it by three pieces or more, so measured from there the cushion looked 8 s short: the picture
+   * held too soon and played slower all the way through (measured, Nov 19 2026)
+   */
+  function watchNativeEdge(rec: string) {
+    clearInterval(nativeEdgeTimer);
+    nativeEdge = null;
+    const token = startToken;
+    const readEdge = async () => {
+      const stop = new AbortController();
+      const timer = setTimeout(() => stop.abort(), FEED_CHECK_MS);
+      try {
+        const sp = await reachOf(rec, stop.signal);
+        if (sp && token === startToken && !dead) { nativeEdge = sp.total; nativePlace?.(); report(); }
+      } catch { /* the next read */ } finally { clearTimeout(timer); }
+    };
+    readEdge();
+    nativeEdgeTimer = setInterval(readEdge, NATIVE_EDGE_MS);
+  }
+
   function viaHls(Hls: HlsClass, src: string, startAt: number) {
     const h = new Hls({
       enableWorker: false, // the site CSP allows workers from 'self' only
       // The plain DVR playlist (no low latency) with our own delay; hls.js never changes the speed (it would play a
-      // stopped feed's last seconds faster, eating the cushion): the cushion is ours too (rebuild, below)
+      // stopped feed's last seconds faster, eating the cushion) nor jumps to its own idea of the live moment: the delay
+      // is the player's (rebuild, below), and so is every move of the live picture (engineMove)
       lowLatencyMode: false,
-      ...(live ? { liveSyncDuration: LIVE_DELAY_S, liveMaxLatencyDuration: LIVE_MAX_BEHIND_S, startPosition: startAt } : {}),
+      ...(live ? { liveSyncDuration: LIVE_DELAY_S, liveMaxLatencyDuration: 1e9, startPosition: startAt } : {}),
       maxLiveSyncPlaybackRate: 1,
       backBufferLength: 30,
       capLevelToPlayerSize: true,
@@ -457,7 +594,6 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       fragLoadingMaxRetry: 4,
     });
     hls = h;
-    if (live && chosen) relax(h, true);
     let parsed = false;
     const watchStart = () => {
       clearTimeout(managedTimer);
@@ -473,9 +609,8 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       if (managedOnly && !everPlayed) watchStart();
     });
     // Live: how far the recording reaches, and whether it has closed (then it plays out to its last frame: 'ended')
-    h.on(Hls.Events.LEVEL_UPDATED, (_e, d) => {
+    h.on(Hls.Events.LEVEL_UPDATED, () => {
       if (!live || hls !== h) return;
-      edgeAt = d.details.edge;
       report(true);
     });
     h.on(Hls.Events.ERROR, (_e, d) => {
@@ -506,6 +641,8 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     const token = ++startToken;
     const stale = () => dead || token !== startToken;
     furthest = 0;
+    fresh = true;
+    liveAfterPlace = false;
     const native = !!video.canPlayType('application/vnd.apple.mpegurl');
     // An iPhone has no classic Media Source, only Managed Media Source (iOS 17.1 on). Its own HLS played the live reveal
     // about 11 s later than iPads and computers (16 s behind the moment to their 4 to 5) and fell further behind with
@@ -533,7 +670,6 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       }
       src = look.go.src;
       startAt = look.go.startAt;
-      if (look.go.video !== playingVideo) edgeAt = 0;
       playingVideo = look.go.video;
       if (feedEnded) feedEnded = false; // a newer recording: the feed is on again
     }
@@ -547,47 +683,54 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   }
 
   // ── Live: the going-back controls ──
+  /** Picture loaded at this second */
+  const loadedAt = (t: number) => {
+    const b = video.buffered;
+    for (let i = 0; i < b.length; i++) if (b.start(i) - 0.2 <= t && t < b.end(i)) return true;
+    return false;
+  };
   /** Seconds of picture in hand past the one on screen */
   const ahead = () => {
     const b = video.buffered;
     for (let i = 0; i < b.length; i++) if (b.start(i) <= video.currentTime + 0.1 && b.end(i) > video.currentTime) return b.end(i) - video.currentTime;
     return 0;
   };
-  /** Gone back on purpose: no jump to the live moment (hls.js reads its config on every check) */
-  function relax(h: InstanceType<HlsClass>, on: boolean) {
-    h.config.liveMaxLatencyDuration = on ? 1e9 : LIVE_MAX_BEHIND_S;
-  }
+  /** Gone back on purpose (no catching up, no jump to the live moment), or back at the live moment */
   function setChosen(on: boolean) {
     if (chosen === on) return;
     chosen = on;
-    if (hls) relax(hls, on);
     rebuild();
   }
   /**
-   * The cushion: each short drop the delay hides uses some of it up (nothing was filmed while the phone was away),
-   * and once it's gone the next blip would hold. At the live moment with less than REBUILD_BELOW_S of it, the picture
-   * plays REBUILD_RATE as fast (too little to notice; the sound keeps its pitch) until it's back to REBUILD_TO_S
+   * The delay, kept by the player alone (hls.js never moves the live picture nor changes its speed):
+   *   - the cushion: each short stop of the feed uses some of it up (nothing was filmed meanwhile), and once it's gone
+   *     the next would hold. With less than REBUILD_BELOW_S of it the picture plays REBUILD_RATE as fast (too little to
+   *     notice; the sound keeps its pitch) until it's back to REBUILD_TO_S
+   *   - later than the delay by more than a few seconds (the viewer's own signal), CATCH_UP_RATE until it's back
+   *   - further behind than LIVE_MAX_BEHIND_S, straight to the live moment
+   * Never for a viewer who went back on purpose, nor while the last frame is held
    */
   function rebuild() {
     let want = 1;
-    if (live && !chosen && !holding && everPlayed) {
+    if (live && !chosen && !holding && everPlayed && !fresh) {
       const edge = newestSecond();
       const cushion = edge == null ? null : edge - video.currentTime;
-      if (cushion != null) want = cushion < REBUILD_BELOW_S || (rebuilding && cushion < REBUILD_TO_S) ? REBUILD_RATE : 1;
+      if (cushion != null && cushion > LIVE_MAX_BEHIND_S) { seekTo(edge! - LIVE_DELAY_S); return; }
+      if (cushion != null) {
+        if (cushion < REBUILD_BELOW_S || (rebuilding === 'slower' && cushion < REBUILD_TO_S)) want = REBUILD_RATE;
+        else if (cushion > CATCH_UP_ABOVE_S || (rebuilding === 'faster' && cushion > CATCH_UP_TO_S)) want = CATCH_UP_RATE;
+      }
     }
-    rebuilding = want !== 1;
+    rebuilding = want < 1 ? 'slower' : want > 1 ? 'faster' : '';
     if (video.playbackRate !== want) video.playbackRate = want;
   }
-  /** The first second there is to go back to, and the live moment, on this player's timeline */
+  /** The first second there is to go back to, and the live moment (the usual delay behind the newest second) */
   function span(): { first: number; live: number } | null {
-    if (hls) {
-      const d = hls.latestLevelDetails;
-      const sync = hls.liveSyncPosition;
-      return d && sync != null ? { first: d.fragmentStart, live: sync } : null;
-    }
+    const edge = newestSecond();
+    if (edge == null) return null;
     const s = video.seekable;
-    if (!s.length) return null;
-    return { first: s.start(0), live: Math.max(s.start(0), s.end(s.length - 1) - LIVE_DELAY_S) };
+    const first = hls ? hls.latestLevelDetails?.fragmentStart ?? 0 : s.length ? s.start(0) : 0;
+    return { first, live: Math.max(first, edge - LIVE_DELAY_S) };
   }
   /** Work out canSeek and behind, and tell the page when they change (force: re-check now) */
   function report(force = false) {
@@ -617,16 +760,45 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     if (playAborted && video.paused && !dead) tryPlay();
   });
   video.addEventListener('resize', size);
+  // Live: the video reset (hls.js recovering from a media error detaches and re-attaches it, then puts the picture back
+  // where it was; our own start-overs reset it too): that placing is the engine's, as at a start, and unless the viewer
+  // had paused it plays on by itself once it can (not left to the autoplay attribute, which Low Power Mode refuses)
+  let playAfterReset = false;
+  let liveAfterPlace = false; // live: a viewer's play came while the engine was putting the picture back: to the live moment once it has
+  video.addEventListener('emptied', () => {
+    if (!live || dead) return;
+    fresh = true;
+    playAfterReset = everPlayed && !viewerPaused && status !== 'blocked';
+    if (viewerPaused) liveAfterPlace = true; // (their play, once the engine has put the picture back, goes to the live moment)
+  });
+  video.addEventListener('canplay', () => {
+    if (!playAfterReset) return;
+    playAfterReset = false;
+    if (live && video.paused && !holding && !dead) tryPlay();
+  });
   video.addEventListener('volumechange', () => opts.onMuted?.(video.muted));
   video.addEventListener('playing', () => {
+    if (live && video.paused) return; // (one from before a pause of ours: nothing is playing)
+    // (played from outside the page, the lock screen or the phone's own controls, while the picture waits to go back to
+    // a second Safari can't reach yet: there first, or held on)
+    if (holding && returnTo != null) {
+      const s = video.seekable;
+      if (s.length && s.end(s.length - 1) >= returnTo - 0.05) { seekTo(returnTo); returnTo = null; } else { ownPause = true; video.pause(); return; }
+    }
     clearTimeout(stallTimer);
+    if (live && fresh) {
+      fresh = false;
+      if (liveAfterPlace) { liveAfterPlace = false; if (!chosen) toLiveMoment(); }
+      const edge = newestSecond();
+      if (health.startBehind == null && edge != null) health.startBehind = Math.round((edge - video.currentTime) * 10) / 10;
+    }
     everPlayed = true;
     failures = 0;
     lastMove = Date.now();
     closed = false;
     set('playing');
-    // Playing again by any road (a tap for sound included): no longer holding
-    if (holding) unhold();
+    // Playing again by any road (a tap for sound included): no longer holding (an old 'playing' from before the hold aside)
+    if (holding && !video.paused) unhold();
   });
   video.addEventListener('waiting', () => {
     if (status !== 'playing') return;
@@ -643,24 +815,26 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     // (paused on purpose: a play the browser called off earlier isn't asked again, nor one it refuses after this)
     pauses++;
     playAborted = false;
+    // (live: a pause that isn't one of ours is the viewer's or the phone's; playing again then goes to the live moment)
+    // (not the pause that comes with the end of a recording: that's the browser's, and 'ended' takes it from there)
+    if (live && !ownPause && !restarting && !dead && everPlayed && !video.ended) { viewerPaused = true; playAfterReset = false; }
+    ownPause = false;
     if (restarting || video.ended || dead || holding) return;
     if (status === 'playing' || status === 'buffering') set('paused');
   });
   // Playing again, or a tap getting past a refused autoplay: "Tap to watch" goes, and the start watches count from here
   video.addEventListener('play', () => {
     if (status === 'paused' || status === 'ended' || status === 'blocked') set(everPlayed ? 'buffering' : 'connecting');
-    if (live && everPlayed && !chosen) toLiveMoment();
+    if (live && viewerPaused && !chosen) { if (fresh) liveAfterPlace = true; else toLiveMoment(); }
+    viewerPaused = false;
   });
-  // Live, playing again after a pause (the lock screen, a call, another app, leaving full screen): straight back to the
-  // live moment, unless the viewer had gone back on purpose (then on from where they paused, as Stream's own DVR does)
+  // Live, playing again after the viewer's or the phone's pause (the lock screen, a call, another app, leaving full
+  // screen): forward to the live moment, unless they had gone back on purpose (then on from where they paused, as
+  // Stream's own DVR does). Never after a hold of the player's own: that plays on from the very frame it held (it
+  // used to jump about 6 s ahead there, measured Nov 19 2026)
   function toLiveMoment() {
-    const h = hls;
-    if (!h) return;
-    const sync = h.liveSyncPosition;
-    const target = h.targetLatency;
-    const step = h.latestLevelDetails?.targetduration;
-    if (sync == null || target == null || !step) return;
-    if (h.latency > target + step) seekTo(sync);
+    const sp = span();
+    if (sp && sp.live - video.currentTime > AT_LIVE_SLACK_S) seekTo(sp.live);
   }
   video.addEventListener('ended', () => {
     if (!live) { set('ended'); return; }
@@ -682,19 +856,43 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     if (Date.now() - lastMove < 100 || t !== lastTime) { report(); rebuild(); }
   });
   video.addEventListener('seeked', () => { selfSeek = false; clearTimeout(selfSeekTimer); report(true); });
-  // Live: the picture moved back over what this player has shown. While stalled at the newest piece that's hls.js
-  // "catching up" with a feed that has stopped (Nov 18 2026: the same seconds over and over): start over, which goes
-  // on from where the viewer was once there's more. Anywhere else it's the viewer (Safari's full-screen scrubber):
-  // they've gone back on purpose
+  // Live: a move back over what was shown that nobody here asked for (hls.js's own go through engineMove, above). With
+  // the phone's own controls on the picture (an iPhone's full screen, picture in picture: the page puts none there),
+  // it's the viewer going back on purpose. Otherwise it's Safari's own player moving the picture by itself: undone,
+  // the picture back where it was, and the last frame held there if there's nothing more yet. (Before Nov 19 2026 a
+  // move back while the picture was playing was taken for the viewer's, and the seconds played again)
   video.addEventListener('seeking', () => {
-    if (!live || dead || pending || restarting || !everPlayed || selfSeek) return;
-    if (video.currentTime >= furthest - BACK_OVER_SHOWN_S) return;
-    const stalled = status === 'buffering' || status === 'reconnecting';
-    const atNewest = !hls || !edgeAt || furthest >= edgeAt - 1.5;
-    if (stalled && atNewest) { if (seen) seen = { ...seen, pos: Math.max(seen.pos, furthest) }; restart(0); return; }
-    setChosen(true);
-    furthest = video.currentTime;
+    if (!live || dead || pending || restarting || !everPlayed || selfSeek || fresh || !playingVideo) return;
+    const t = pictureAt();
+    if (browserControls()) {
+      const sp = span();
+      if (sp && t >= sp.live - AT_LIVE_SLACK_S) setChosen(false);
+      else if (t < furthest - BACK_OVER_SHOWN_S || chosen) { setChosen(true); furthest = t; }
+      report(true);
+      return;
+    }
+    if (t >= furthest - BACK_OVER_SHOWN_S) return;
+    health.refused++;
+    const back = furthest;
+    if (seen && seen.video === playingVideo) seen = { ...seen, pos: Math.max(seen.pos, back) };
+    const s = video.seekable;
+    const reach = s.length ? s.end(s.length - 1) : back;
+    // (past Safari's own seekable end it can't go back there yet: held where it is, and back there once it can, in
+    // checkHold; a viewer who went back on purpose isn't held, so for them it goes as far as Safari allows)
+    if (back <= reach + 0.05 || chosen) {
+      seekTo(Math.min(back, reach));
+      if (!chosen && !holding) { const edge = newestSecond(); if (edge == null || edge - back < 1.5) hold(); }
+      return;
+    }
+    returnTo = back;
+    if (!holding) hold();
   });
+  /** The browser's own controls are on the picture: an iPhone's full screen, or picture in picture */
+  function browserControls(): boolean {
+    const v = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean; webkitPresentationMode?: string };
+    return !!v.webkitDisplayingFullscreen || v.webkitPresentationMode === 'picture-in-picture'
+      || document.pictureInPictureElement === video || document.fullscreenElement === video;
+  }
 
   // ── Live: holding the last frame while the feed is stopped ──
   // The usual delay is a broadcast delay: viewers see each moment LIVE_DELAY_S after it's filmed. When the feed stops
@@ -704,21 +902,31 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   /** The newest second the feed reaches, on this player's timeline */
   function newestSecond(): number | null {
     if (hls) return hls.latestLevelDetails?.edge ?? null;
-    return video.seekable.length ? video.seekable.end(video.seekable.length - 1) : null;
+    if (nativeEdge != null) return nativeEdge;
+    const s = video.seekable;
+    const end = s.length ? s.end(s.length - 1) : NaN;
+    return Number.isFinite(end) ? end : null;
   }
   function hold() {
     if (holding || dead) return;
     holding = true;
     holdLooks = 0;
+    health.holds++;
+    heldSince = Date.now();
+    furthest = Math.max(furthest, pictureAt());
+    if (seen && seen.video === playingVideo) seen = { ...seen, pos: Math.max(seen.pos, pictureAt()) };
     clearTimeout(stallTimer);
     set('reconnecting');
+    ownPause = !video.paused; // (a 'pause' comes only if it was playing)
     video.pause(); // (the pause listener leaves the status alone while holding)
     clearInterval(holdTimer);
     holdTimer = setInterval(checkHold, 1000);
     report(true);
   }
   function unhold() {
+    if (holding) health.heldMs += Date.now() - heldSince;
     holding = false;
+    returnTo = null;
     clearInterval(holdTimer);
   }
   /** The recording's last frame has been shown: as 'ended' (look for a newer recording, else the feed has ended) */
@@ -729,8 +937,12 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   }
   async function checkHold() {
     if (!holding || dead || pending) return;
+    if (returnTo != null) {
+      const s = video.seekable;
+      if (s.length && s.end(s.length - 1) >= returnTo - 0.05) { seekTo(returnTo); returnTo = null; }
+    }
     const edge = newestSecond();
-    if (edge != null && edge - video.currentTime >= LIVE_DELAY_S - 2) { unhold(); tryPlay(); return; }
+    if (!fresh && returnTo == null && edge != null && edge - video.currentTime >= LIVE_DELAY_S - 2) { unhold(); tryPlay(); return; }
     const details = hls?.latestLevelDetails;
     if (details && !details.live && (edge == null || edge - video.currentTime < 1)) { endHere(); return; }
     // Every few seconds, read the feed too: a newer recording (the phone back after Stream closed the last one),
@@ -757,10 +969,37 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     else lastMove = Date.now() - FROZEN_MS + RETRY_MS; // look again in a few seconds
   }, 2000) : undefined;
 
+  // The phone's lock screen and Control Center (and a headset's or keyboard's media keys) move the picture through
+  // these: on the live video they're the viewer's own going back or forward, through the player like From the start,
+  // never a move it would undo
+  const session = live && 'mediaSession' in navigator ? navigator.mediaSession : null;
+  const sessionActions: MediaSessionAction[] = ['seekbackward', 'seekforward', 'seekto'];
+  function viewerMove(t: number) {
+    const sp = span();
+    if (!sp || !Number.isFinite(t)) return;
+    if (t > pictureAt() && t >= sp.live - AT_LIVE_SLACK_S) { handle.toLive(); return; }
+    unhold();
+    const to = Math.max(sp.first + 0.1, t);
+    setChosen(to < sp.live - AT_LIVE_SLACK_S);
+    seekTo(to);
+    furthest = to;
+    if (seen && seen.video === playingVideo) seen = { ...seen, pos: to };
+    if (video.paused) tryPlay();
+    report(true);
+  }
+  if (session) {
+    const handlers: Record<string, MediaSessionActionHandler> = {
+      seekbackward: (d) => viewerMove(pictureAt() - (d.seekOffset || 10)),
+      seekforward: (d) => viewerMove(pictureAt() + (d.seekOffset || 10)),
+      seekto: (d) => { if (d.seekTime != null) viewerMove(d.seekTime); },
+    };
+    for (const a of sessionActions) { try { session.setActionHandler(a, handlers[a]); } catch { /* not offered here */ } }
+  }
+
   opts.onStatus?.(status);
   start();
 
-  return {
+  const handle: PlayerHandle = {
     get video() { return status === 'iframe' ? null : video; },
     get status() { return status; },
     get canSeek() { return canSeek; },
@@ -783,6 +1022,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     },
     get playPending() { return playAborted && video.paused && !dead; },
     cancelPlay() { playAborted = false; },
+    get health() { return { ...health, heldMs: health.heldMs + (holding ? Date.now() - heldSince : 0) }; },
     seekToStart() {
       if (!live) return;
       const sp = span();
@@ -799,8 +1039,9 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       setChosen(false);
       // (holding the last frame: that is the live moment, and it plays on by itself)
       if (holding) { report(true); return; }
+      // (forward only: a viewer short of the full delay is already at the live moment, never sent back over what they saw)
       const sp = span();
-      if (sp) seekTo(sp.live);
+      if (sp && sp.live > pictureAt() + 0.5) seekTo(sp.live);
       if (video.paused) tryPlay();
       report(true);
     },
@@ -810,7 +1051,9 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       clearInterval(holdTimer);
       clearTimeout(selfSeekTimer);
       stopEngine();
+      if (session) for (const a of sessionActions) { try { session.setActionHandler(a, null); } catch { /* not offered here */ } }
       container.innerHTML = '';
     },
   };
+  return handle;
 }

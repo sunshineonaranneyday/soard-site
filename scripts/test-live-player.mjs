@@ -438,6 +438,54 @@ try {
     ok(again <= 1 && after.length > 0 && after[0] >= heldAt - 0.5 && after[0] <= heldAt + 2.5, `back: on from exactly where it stopped, nothing shown twice or skipped (${again} frames again; held at ${heldAt.toFixed(1)}, went on at ${after[0]?.toFixed(1)})`);
     ok(b != null && b > 14, `back with the usual delay to spare again (${b?.toFixed(1)} s behind the newest piece)`);
 
+    // The live picture has one owner (Nov 19 2026: during Dylan's reveal a phone viewer saw it go back about 20 s and
+    // replay to the same spot, three times; the player used to take any move back while playing for the viewer's own)
+    const nowAt = () => page.evaluate(() => document.querySelector('.stage__player video').currentTime);
+    const offeredBack = () => page.evaluate(() => { const e = document.querySelector('[data-s="to-live"]'); return !!e && !e.closest('[hidden]') && e.getBoundingClientRect().width > 0; });
+    // hls.js (or anything but the player) setting currentTime back while it plays: refused
+    await sleep(2000);
+    from = await frameCount();
+    const engBefore = await nowAt();
+    await page.evaluate(() => { const v = document.querySelector('.stage__player video'); v.currentTime = v.currentTime - 12; });
+    await sleep(3000);
+    const engAfter = await nowAt();
+    g = await probe(page);
+    const engAgain = await seenAgain(from);
+    ok(engAgain === 0 && engAfter >= engBefore && g.pstatus === 'playing' && !(await offeredBack()), `the engine moving the live picture back by itself: refused, nothing shown twice (${engBefore.toFixed(1)} s, then ${engAfter.toFixed(1)} s, ${engAgain} frames again, ${g.pstatus})`);
+    // The browser moving it back inside itself (Safari's own player does, without currentTime): put back
+    from = await frameCount();
+    const uaBefore = await nowAt();
+    await page.evaluate(() => { const v = document.querySelector('.stage__player video'); Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime').set.call(v, v.currentTime - 12); });
+    await sleep(3000);
+    const uaAfter = await nowAt();
+    g = await probe(page);
+    const uaAgain = await seenAgain(from);
+    ok(uaAgain <= 2 && uaAfter >= uaBefore && g.pstatus === 'playing' && !(await offeredBack()), `the browser moving it back by itself: put back at once, nothing shown again (${uaBefore.toFixed(1)} s, then ${uaAfter.toFixed(1)} s, ${uaAgain} frames again, ${g.pstatus})`);
+
+    // The viewer's own signal: the pieces come late, the picture runs out while the feed goes on; once they come it
+    // plays a touch faster until it's back near the usual delay (on the real feed, Nov 19 2026, viewers drifted to 25 to
+    // 32 s behind and stayed there)
+    const trueLate = async () => {
+      let most = null;
+      for (let k = 0; k < 12; k++) {
+        const ct = await nowAt();
+        if (ct != null) { const late = recordings.get(feed.rec).count * 2 - ct; if (most == null || late > most) most = late; }
+        await sleep(200);
+      }
+      return most;
+    };
+    feed.held = [];
+    await sleep(30000);
+    for (const send of feed.held.splice(0)) send();
+    feed.held = null;
+    await waitFor(page, ['playing'], 45000);
+    let rate = 1;
+    for (let i = 0; i < 20 && (rate = await page.evaluate(() => document.querySelector('.stage__player video').playbackRate)) === 1; i++) await sleep(1000);
+    const lateA = await trueLate();
+    await sleep(30000);
+    const lateB = await trueLate();
+    ok(rate === 1.03 && lateA > 23 && lateB < lateA - 0.4, `late from the viewer's own signal: plays 3% faster to catch up (${rate}x; ${lateA?.toFixed(1)} s behind, then ${lateB?.toFixed(1)} s 30 s later)`);
+
     // Stream closes the recording: the last frame, then nothing (never the recording from its start)
     phoneOff();
     await waitFor(page, ['reconnecting'], 45000);
@@ -488,9 +536,26 @@ try {
     await sleep(4000);
     const before = await early.evaluate(() => document.querySelector('[data-stage]')?.dataset.pstatus);
     await waitFor(early, ['playing'], 45000); await sleep(1500);
-    const eb = await early.evaluate(() => { const v = document.querySelector('.stage__player video'); return v?.seekable.length ? v.seekable.end(v.seekable.length - 1) - v.currentTime : null; });
+    // (behind the recording's newest moment as the fake Stream has it: its length grows a 2 s piece at a time, so a
+    // single reading is short by up to a piece; the largest over just more than one piece is the real distance, the
+    // reading taken just as a piece lands. The player's own seekable end trails further, by a playlist reload)
+    const trueBehind = async () => {
+      let most = null;
+      for (let k = 0; k < 12; k++) {
+        const ct = await early.evaluate(() => document.querySelector('.stage__player video')?.currentTime ?? null);
+        if (ct != null) { const b = recordings.get(feed.rec).count * 2 - ct; if (most == null || b > most) most = b; }
+        await sleep(200);
+      }
+      return most;
+    };
+    const eb = await trueBehind();
     const es = await early.evaluate(() => document.querySelector('[data-stage]')?.dataset.pstatus);
-    ok(before === 'waiting' && es === 'playing' && eb != null && eb > 15, `there from the start: waits for the delay's worth (${before}), then plays the full delay behind (${eb?.toFixed(1)} s), through a passing DVR error`);
+    // (Peter's test, Nov 18 2026: viewers there before the video started sat only 5 to 15 s behind, and stayed there;
+    // the full delay, give or take a second, and still there a while later)
+    ok(before === 'waiting' && es === 'playing' && eb != null && eb >= 19 && eb <= 25, `there from the start: waits for the delay's worth (${before}), then plays the full delay behind (${eb?.toFixed(1)} s), through a passing DVR error`);
+    await sleep(10000);
+    const eb2 = await trueBehind();
+    ok(eb2 != null && eb2 >= 19 && eb2 <= 25, `there from the start: still the full delay behind 10 s later (${eb2?.toFixed(1)} s)`);
     await early.close();
     feed.dvrFails = 0;
   }
