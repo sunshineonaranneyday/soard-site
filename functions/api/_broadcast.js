@@ -82,9 +82,12 @@ const DEPLOY_COOLDOWN_MS = 10 * 60 * 1000;
 const KIT_LIVE_EARLY_MS = 30 * 60 * 1000;
 // Kit wants a future send_at; a minute out keeps it effectively immediate.
 const KIT_SEND_DELAY_MS = 60 * 1000;
-// The stream must stay up this long in one unbroken stretch before the list is
-// emailed, so a quick phone test or an accidental tap emails nobody.
-const KIT_LIVE_STEADY_MS = 3 * 60 * 1000;
+// The stream must stay up this long in one unbroken stretch before the list is emailed, so an accidental tap emails
+// nobody. A planned reveal: one minute, and never before its planned start (liveNewsFrom), so a framing check before
+// the start emails nobody (Peter, Nov 19 2026: Dylan's 10-minute reveal emailed the list at 4:04 after the old three
+// minutes, and most people arrived as it ended). With no plan there is no start to wait for: three minutes, as before.
+const KIT_LIVE_STEADY_MS = 60 * 1000;
+const KIT_LIVE_STEADY_UNPLANNED_MS = 3 * 60 * 1000;
 // Past this far into a broadcast a "come watch" email is too late to send by itself.
 const KIT_LIVE_LATE_MS = 30 * 60 * 1000;
 // How often to look for clues about which kid an unscheduled reveal is for.
@@ -99,6 +102,13 @@ const HOOK_ENV_VARS = ['CF_PAGES_DEPLOY_HOOK', 'CF_DEPLOY_HOOK', 'DEPLOY_HOOK_UR
 // often a tick looks at Stream's outputs while it is on (or puts them back after)
 const QUIET_HOURS = 2;
 const QUIET_OUTPUTS_CHECK_MS = 30 * 1000;
+// Staff hear this long before the switch turns itself off, and again when it has (Peter, Nov 18 2026: his ran out at
+// 11:20 with no word, and the phone he connected at 11:48 went out as Dylan's real reveal)
+const QUIET_WARN_MS = 10 * 60 * 1000;
+// A switch that ran out longer ago than this is old news (a deploy never brings up yesterday's)
+const QUIET_ENDED_NEWS_MS = 15 * 60 * 1000;
+// broadcast_claims holds the warnings' once-only keys under this name (they belong to the switch, not a broadcast)
+const QUIET_CLAIMS = 'test-mode';
 // While a broadcast is on air, the phone counts as gone once Stream has had it disconnected this long
 // (sensePhone). A test ends quickly; a reveal waits 2 minutes, so a phone on weak signal that drops and
 // reconnects stays one reveal (one "we're live", and the 3-minute wait before the Kit list email doesn't
@@ -223,6 +233,7 @@ export function defaultState() {
     holdUntil: null,       // the crew texted N ("the signal dropped"): on air, Reconnecting, until the phone is back or this passes
     recordings: [],        // every Stream recording of this broadcast, in order (the replay is the longest)
     rejoinUntil: null,     // a reveal ended by its phone stopping: a phone back before this picks it up again (REJOIN_MS)
+    overSaid: false,       // the crew answered Y to "Is the reveal over?": what reaches people goes at once (rejoin still open)
     endedBy: null,         // who ended it (an admin's email, "text from …1234"); null when it ended on its own
     closedAt: null,        // when that window closed and the reveal was over for good (the final effects run from then)
     replayPieces: null,    // { count, minutes } when the reveal was recorded in more than one piece
@@ -860,6 +871,11 @@ function withFbPost(list, fb) {
 }
 
 /** Is a reveal that ended by its phone stopping still waiting to see whether a phone comes back? */
+/** What reaches people after a reveal waits for the rejoin window, unless the crew said it's over (overSaid) */
+export function waitsForPhone(state, now = Date.now()) {
+  return rejoinOpen(state, now) && !state.overSaid;
+}
+
 export function rejoinOpen(state, now = Date.now()) {
   return state?.phase === 'replay' && !!state.rejoinUntil && now < Date.parse(state.rejoinUntil);
 }
@@ -872,7 +888,9 @@ export function tRejoin(state, { videoUid } = {}) {
   return {
     ...state, phase: 'live', segmentAt: nowIso(), disconnectedAt: null, endedAt: null, endedBy: null,
     replayUntil: null, replayUid: null, replayReadyAt: null, replayStartedAt: null,
-    rejoinUntil: null, closedAt: null, replayOut: false, gapSince: null, holdUntil: null,
+    rejoinUntil: null, closedAt: null, replayOut: false, gapSince: null, holdUntil: null, overSaid: false,
+    // A Reel not yet posted was cut from the first part: it starts again from the whole reveal when it ends
+    reel: state.reel?.stage === 'done' ? state.reel : null,
     // Its Facebook post was closed when the site ended it: a new one opens for the rest (preShowEffects, once).
     // The closed one stays the reveal's: History adds its numbers to the new one's (refreshPlatforms)
     fbEarlier: withFbPost(state.fbEarlier, state.fb),
@@ -912,6 +930,7 @@ export function tEnd(state, config, { by, rejoin = false } = {}) {
   const at = Date.parse(state.scheduledAt || '');
   s.rejoinUntil = rejoin ? new Date(Math.max(Date.now() + REJOIN_MS, Number.isFinite(at) ? at + REJOIN_MS : 0)).toISOString() : null;
   s.closedAt = rejoin ? null : nowIso();
+  s.overSaid = false;
   s.replayOut = false;
   s.replayUntil = new Date(Date.now() + hours * 3600e3).toISOString();
   s.manual = null;
@@ -1037,7 +1056,8 @@ async function findTestReplay(env, state, work) {
  * Only a stream on air whose phone is away (a gap, or ending), and only once that stop was asked about
  * (`asked`: its over-ask claim exists; an answer to an earlier stop never ends a newer one), is changed:
  *  'yes' ends it now, the way the automatic end would after its wait: a test puts back what it interrupted, a
- *        framing check goes back to waiting, a reveal goes to its replay, open REJOIN_MS to its phone coming back
+ *        framing check goes back to waiting, a reveal goes to its replay, open REJOIN_MS to its phone coming back,
+ *        and what reaches people (replay email, the kid's page, "Ended") doesn't wait for that window (overSaid)
  *  'no'  keeps it on air, Reconnecting, for REJOIN_MS from now (tHold)
  * → { state, outcome, save } (save: changed, to be saved at once like a phase change)
  */
@@ -1051,7 +1071,13 @@ export function tAnswer(state, answer, config, { by = null, now = Date.now(), as
   if (answer === 'no') return { state: tHold(state, new Date(now + REJOIN_MS).toISOString()), outcome: state.quiet ? 'test-held' : 'held', save: true };
   if (state.quiet) return { state: tEndQuiet(s, by), outcome: 'test-ended', save: true };
   if (preShow(s)) return { state: tPreShowOver(s), outcome: 'pre-show', save: true };
-  return { state: tEnd(s, config, { by, rejoin: true }), outcome: 'ended', save: true };
+  // Over, said the crew: its replay, the kid's page, the replay email and "Ended" go as soon as the recording is ready,
+  // not 15 minutes on (Peter, Nov 19 2026). The phone can still pick it up again (rejoin), in case the Y was a slip.
+  // Not for a stop before the planned start: that was setup footage, and the real start is the same reveal (tEnd keeps
+  // it open until 15 minutes after the start), so nothing goes out from it
+  const stop = Date.parse(s.disconnectedAt || '');
+  const afterStart = !state.scheduledAt || !Number.isFinite(stop) || stop >= Date.parse(state.scheduledAt);
+  return { state: { ...tEnd(s, config, { by, rejoin: true }), overSaid: afterStart }, outcome: 'ended', save: true };
 }
 
 // ─── Reminders ──────────────────────────────────────────────────────
@@ -1361,7 +1387,7 @@ function stillOnTime(kind, state, now = Date.now()) {
   if (kind === 'scheduled' || kind === 'moved') return lead !== null && lead > 26 * 3600e3;
   if (kind === 'day') return lead !== null && lead > 2 * 3600e3;
   if (kind === 'hour') return lead !== null && lead > 5 * 60e3;
-  if (kind === 'live') return !!state.liveAt && now - Date.parse(state.liveAt) <= 30 * 60e3;
+  if (kind === 'live') return !!state.liveAt && now - liveNewsFrom(state) <= 30 * 60e3;
   return true;
 }
 
@@ -1379,8 +1405,11 @@ async function dueReminderKinds(DB, state, config, { kit = true } = {}) {
     if (hours.includes(24) && lead <= 24 * 3600e3 && lead > 2 * 3600e3) kinds.push('day');
     if (hours.includes(1) && lead <= 3600e3 && lead > 5 * 60e3) kinds.push('hour');
   }
-  // "We're live": due from the tick that saves the go-live until it has started (see EFFECTS_RETRY_MS)
-  if ((state.phase === 'live' || state.phase === 'ending') && state.source === 'stream' && state.liveAt && now - Date.parse(state.liveAt) <= EFFECTS_RETRY_MS) kinds.push('live');
+  // "We're live": due from the tick that saves the go-live until it has started (see EFFECTS_RETRY_MS). Not for a phone
+  // that went live more than 30 minutes before the planned start: held like the list's email (kitAutoLive), as it may be
+  // a phone test (Nov 18 2026: one at 11:48 emailed Dylan's sign-ups "we're live" four hours early)
+  // Before the planned start it waits for the start (liveNewsFrom): a framing check emails nobody
+  if ((state.phase === 'live' || state.phase === 'ending') && state.source === 'stream' && state.liveAt && now >= liveNewsFrom(state) && now - liveNewsFrom(state) <= EFFECTS_RETRY_MS && !wentLiveEarly(state)) kinds.push('live');
   const res = await DB.prepare('SELECT kind, channel, error, created_at FROM broadcast_sends WHERE broadcast_id = ?').bind(state.broadcastId).all();
   const rows = res?.results || [];
   // The sign-ups' Kit email that failed (or died on its way) is tried again while it would still be on time: a
@@ -1517,7 +1546,7 @@ async function checkReplayReady(env, config, state, health, work) {
   // A replay already showing from before replayOut existed went out back then (its claims say so too)
   if (state.replayOut == null && state.replayUid) return state;
   if (!state.replayUid) state = await findReplay(env, config, state, health, work);
-  if (!state.replayUid || rejoinOpen(state) || state.replayOut === true) return state;
+  if (!state.replayUid || waitsForPhone(state) || state.replayOut === true) return state;
   return replayOutward(env, config, state, health, work);
 }
 
@@ -1614,6 +1643,22 @@ async function replayOutward(env, config, state, health, work) {
  * when no kid turns up in the first 30 minutes. "Email the list now" in the
  * admin covers every held case.
  */
+/**
+ * When "we're live" may go out (the sign-ups' and the list's): the go-live, or for a planned reveal its planned start
+ * if the phone came on before it. A framing check before the start emails nobody; a phone still on at the start is the
+ * reveal, and everyone hears then. → ms
+ */
+export function liveNewsFrom(state) {
+  const live = Date.parse(state?.liveAt || '');
+  const at = Date.parse(state?.scheduledAt || '');
+  return Number.isFinite(at) && at > live ? at : live;
+}
+
+/** Went live more than KIT_LIVE_EARLY_MS before its planned start: maybe a phone test, so no "we're live" goes by itself */
+export function wentLiveEarly(state) {
+  return !!state?.scheduledAt && !!state.liveAt && Date.parse(state.liveAt) < Date.parse(state.scheduledAt) - KIT_LIVE_EARLY_MS;
+}
+
 async function kitAutoLive(env, config, state, work) {
   // Nothing during a gap (the phone dropped and may be gone): the unbroken stretch starts again when it is back
   if (state.phase !== 'live' || state.quiet || state.gapSince || !kitConfigured(env) || state.kit?.live || !kitLiveWanted(state, config)) return state;
@@ -1625,10 +1670,12 @@ async function kitAutoLive(env, config, state, work) {
     if (await claimOnce(env.DB, state.broadcastId, `kit-live-held:${state.liveAt || ''}`)) await notify.alertAdmins(env, config, { level: 'warn', title, detail, url: `${SITE_ORIGIN}/admin/` });
     return { ...state, kit: { ...(state.kit || {}), live: { id: null, held: true, error } } };
   };
-  if (state.scheduledAt && Date.parse(state.liveAt) < Date.parse(state.scheduledAt) - KIT_LIVE_EARLY_MS) {
-    return hold('Went live more than 30 minutes early; not sent automatically', 'Went live early: Kit email held', `${state.title || 'The reveal'} went live more than 30 minutes before its scheduled time, so the "we're live" email to the Kit list was not sent automatically (it could be a phone test). If this is the real reveal, press "Email the list now" in Admin → Broadcast.`);
+  if (wentLiveEarly(state)) {
+    return hold('Went live more than 30 minutes early; not sent automatically', 'Went live early: "we\'re live" emails held', `${state.title || 'The reveal'} went live more than 30 minutes before its scheduled time, so the "we're live" emails (to the Kit list and to the people who signed up for this reveal) were not sent automatically: it could be a phone test. If this is the real reveal, press "Email the list now" in Admin → Broadcast.`);
   }
-  if (now - Date.parse(state.segmentAt || state.liveAt) < KIT_LIVE_STEADY_MS) return state;
+  if (now - Date.parse(state.segmentAt || state.liveAt) < (state.scheduledAt ? KIT_LIVE_STEADY_MS : KIT_LIVE_STEADY_UNPLANNED_MS)) return state;
+  // Before the planned start the phone may be a framing check: the list hears at the start, if it's still on
+  if (now < liveNewsFrom(state)) return state;
 
   let s = state;
   if (!s.kidSlug) s = await identifyKid(env, s, work);
@@ -1787,6 +1834,8 @@ async function runHealth(env, config, state, health, work, { force = false } = {
   const h = await hubStatus(env);
   health.hub = { ok: !!h.ok, clients: h.clients || 0, at: nowIso(), error: h.error || null, lastTick: h.lastTick || null };
   if (!h.ok) problems.push(`Real-time hub unreachable: ${h.error || 'unknown'}`);
+  const wh = await preflight.webhookProblem(env.DB, health).catch(() => null);
+  if (wh) problems.push(`${wh}. Check that the Cloudflare webhook's secret matches STREAM_WEBHOOK_SECRET in Cloudflare Pages`);
 
   const key = problems.length ? problems.join(' | ') : '';
   const prev = health.flags?.problems || '';
@@ -1907,8 +1956,9 @@ async function endedEffects(env, config, state, health, work, by) {
   // Facebook's post closes when the site ends the reveal: Facebook keeps a dropped stream's post open only
   // 2–3 minutes, and a phone back later (tRejoin) opens a new one
   if ((!done.has('fb-ended') || (state.fb?.liveVideoId && !state.fb?.ended)) && await claimFresh(DB, state.broadcastId, 'fb-ended', state.fbSessionAt)) state = await fbOnEnd(env, config, state, work);
-  // The "Ended" announcement and its health report wait while a phone may still pick the reveal up again
-  if (rejoinOpen(state) || !recent(state.closedAt || state.endedAt)) return state;
+  // The "Ended" announcement and its health report wait while a phone may still pick the reveal up again (not once the
+  // crew has said it's over)
+  if (waitsForPhone(state) || !recent(state.closedAt || state.endedAt)) return state;
   if (!done.has('ended-announce') && await claimOnce(DB, state.broadcastId, 'ended-announce')) {
     const mins = state.liveAt ? Math.round((Date.parse(state.endedAt || nowIso()) - Date.parse(state.liveAt)) / 60000) : null;
     await recordEvent(DB, state.broadcastId, 'live_end', { minutes: mins });
@@ -1985,6 +2035,37 @@ export async function overAskDueIn(env, now = Date.now()) {
   if (!(due > 0) || due > OVER_ASK_AFTER_MS) return null;
   if (await claimExists(env.DB, state.broadcastId, overAskKey(state))) return null;
   return due;
+}
+
+/**
+ * Test mode is about to turn itself off, or just has: staff hear it (Slack and a text), once per switch-on. Turned
+ * off by hand says nothing (they know); a reveal going on air clears the switch (no "off" note then either).
+ * → the record as saved (warnedFor / endedFor: the end time each note was about)
+ */
+export async function warnQuietEnding(env, config, q, state, work, now = Date.now()) {
+  const until = quietUntil(q, state);
+  if (until == null) return q;
+  const key = new Date(until).toISOString();
+  const when = notify.formatWhen(key, config.timezone);
+  const testing = !!state.quiet && ['live', 'ending'].includes(state.phase);
+  // Ended by the planned reveal's own window (30 minutes before it), not the 2-hour timer: a phone streaming then IS
+  // the reveal (quietReachedReveal), and turning the switch on again can't move that
+  const own = Date.parse(q?.until || '');
+  const byReveal = plannedAt(state) != null && Number.isFinite(own) && until < own - 1000;
+  const planned = state.quiet ? state.resume : state;
+  const reveal = planned?.kidName ? `${planned.kidName}'s reveal` : 'the reveal';
+  const warn = now < until;
+  if (warn ? until - now > QUIET_WARN_MS : now - until > QUIET_ENDED_NEWS_MS) return q;
+  // Once per end time, whichever tick or isolate gets there first (a claim, not a rewrite of the switch's record)
+  if (!(await claimOnce(env.DB, QUIET_CLAIMS, `${warn ? 'quiet-warn' : 'quiet-ended'}:${key}`))) return q;
+  const mins = Math.max(1, Math.round((until - now) / 60000));
+  const title = warn ? `Test mode ends in ${mins} minute${mins === 1 ? '' : 's'}` : 'Test mode is off';
+  const detail = byReveal
+    ? `${warn ? 'Test mode ends' : 'Test mode ended'} at ${when}, 30 minutes before ${reveal}. ${warn ? 'From then' : 'Now'} a phone on the main feed is the reveal itself: the website, Facebook and the "we're live" emails.${testing ? ` The phone streaming now ${warn ? 'becomes' : 'is'} the reveal${warn ? ' then: stop it before then if it is only a test' : ': stop it if it was only a test'}.` : ''} Check sound on the rehearsal feed instead.`
+    : `${warn ? 'Test mode turns itself off' : 'Test mode turned itself off'} at ${when}. ${warn ? 'After that' : 'Now'}, a phone that connects on the main feed goes out for real: the website, Facebook and the "we're live" emails.${testing ? ' The test streaming now stays a test until the phone stops.' : ''} ${warn ? 'To keep testing, turn Test mode on again' : 'To test again, turn Test mode on first'} in Admin → Broadcast → Now.`;
+  await notify.alertAdmins(env, config, { level: 'warn', title, detail, url: `${SITE_ORIGIN}/admin/#broadcast`, text: true });
+  work.push(warn ? 'test-ending-warned' : 'test-ended-warned');
+  return q;
 }
 
 /**
@@ -2171,7 +2252,13 @@ async function tick(env, { source, force, by, keepLease = async () => true, answ
         const startOff = (s2) => (sensed.sameRecording && vid ? { ...s2, endedVideoUid: null, endedVideoAt: null } : s2);
         if (rejoinOpen(state, now) && state.source === 'stream' && !state.quiet) {
           // The phone is back within REJOIN_MS: the same reveal goes on
+          const wentOut = state.replayOut === true ? { kidSlug: state.kidSlug, kidName: state.kidName, endedAt: state.endedAt } : null;
           state = startOff(tRejoin(state, { videoUid: vid })); work.push('rejoined');
+          // ...after the crew's Y already sent its replay out (overSaid): the kid's page has the first part. Staff fix it
+          if (wentOut && await claimOnce(DB, state.broadcastId, `rejoin-after-out:${wentOut.endedAt || ''}`)) {
+            work.push('rejoined-after-replay');
+            await notify.alertAdmins(env, config, { level: 'warn', title: `${wentOut.kidName || 'The'}${wentOut.kidName ? "'s" : ''} reveal picked up again after it was called over`, detail: `The phone is streaming again after the crew answered Y. The replay email, "Ended" and ${wentOut.kidName ? `${wentOut.kidName}'s` : "the kid's"} page already went out with the first part. When it ends, put the full recording on the kid's page: Admin → Kids → ${wentOut.kidName || 'the kid'} → Video → Live reveal replay.`, url: `${SITE_ORIGIN}/admin/`, text: true }).catch(() => {});
+          }
         } else if (quietReachedReveal(state, now) && !gap) {
           // A test still streaming when its reveal is 30 minutes off: that phone is the reveal now
           state = tStartLive(tEndQuiet(state), { videoUid: vid, source: 'stream' }, config); work.push('test-became-reveal');
@@ -2298,6 +2385,8 @@ async function tick(env, { source, force, by, keepLease = async () => true, answ
     // Test mode: Facebook and YouTube paused while it is on or a test streams, put back after
     // (at once when a test has just started, ended or become the reveal)
     async () => { quiet = await syncQuietOutputs(env, config, quiet, state, work, { force: !!read.quiet !== !!state.quiet }).catch((e) => { work.push(`test-outputs-error: ${e.message}`); return quiet; }); },
+    // Test mode about to turn itself off, or just did: staff hear it
+    async () => { quiet = await warnQuietEnding(env, config, quiet, state, work).catch((e) => { work.push(`test-warn-error: ${e.message}`); return quiet; }); },
     // A framing check's Facebook post is released before a go-live opens the reveal's own
     async () => { state = await preShowEffects(env, config, state, work, health); },
     // A Facebook post opened by a tick whose save didn't land (it lost the lease, or was cut off): read it back from
@@ -2618,6 +2707,8 @@ async function runAdminAction(env, action, body, userEmail) {
       if (state.quiet) return fail('This is a test on the main feed: nobody is emailed');
       if (!kitConfigured(env)) return fail('Kit is not connected (KIT_API_KEY)');
       const work = [];
+      // The sign-ups' own "we're live" first (held with the list's on an early start; once only, like every reminder)
+      if (state.source === 'stream') await sendReminders(env, config, state, 'live', work).catch((e) => work.push(`live-reminder-error: ${e.message}`));
       state = await sendKitLive(env, config, state, work, { by: userEmail });
       if (!work.includes('kit-live')) return fail(state.kit?.live?.error || 'Already emailed for this broadcast');
       await writeState(DB, state);
@@ -2631,7 +2722,12 @@ async function runAdminAction(env, action, body, userEmail) {
         // phone still connected starts another test, never the reveal (inside the reveal's own window it is the reveal)
         const q = await readQuiet(DB);
         const keep = Date.now() + 10 * 60e3;
-        if (!(Date.parse(q.until || '') > keep)) await writeQuiet(DB, { ...q, until: new Date(keep).toISOString() });
+        if (!(Date.parse(q.until || '') > keep)) {
+          await writeQuiet(DB, { ...q, until: new Date(keep).toISOString() });
+          // (staff just ended it: no "Test mode ends in 10 minutes" for this tail; "Test mode is off" still comes)
+          const tail = quietUntil({ ...q, until: new Date(keep).toISOString() }, state);
+          if (tail != null) await claimOnce(DB, QUIET_CLAIMS, `quiet-warn:${new Date(tail).toISOString()}`);
+        }
         await recordEvent(DB, state.broadcastId, 'test_end', { by: userEmail });
         state = tEndQuiet(state, userEmail);
         await logAudit(DB, { userEmail, action: 'updated', entityType: 'live-status', entitySlug: 'test-mode', entityName: 'Test on the main feed ended by admin', gitStatus: 'ok' });

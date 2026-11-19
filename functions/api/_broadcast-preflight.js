@@ -24,7 +24,24 @@ const ago = (iso) => {
   return min < 1 ? 'just now' : min < 60 ? `${min} min ago` : min < 36 * 60 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} days ago`;
 };
 
-const VERDICT_WORDS = { quiet: 'very quiet', loud: 'very loud', onesided: 'sound on one side only', silent: 'no sound', none: 'no audio track', unknown: 'not measured' };
+/**
+ * Stream's notifications (connected, disconnected, errored) reaching /api/stream-webhook: a phone that went live with
+ * none arriving for it means they're being turned away or never sent. From Oct 14 to Nov 19 2026 every one was refused
+ * (the site had a webhook secret and Cloudflare's sender had none) and nothing said so. → a sentence, or null when fine
+ */
+export async function webhookProblem(DB, health, now = Date.now()) {
+  // (an ended one: a test that becomes the reveal goes live after its connect notification, while still on)
+  const row = await DB.prepare("SELECT MAX(live_at) AS at FROM broadcasts WHERE source = 'stream' AND live_at IS NOT NULL AND ended_at IS NOT NULL").first().catch(() => null);
+  const lastLive = Date.parse(row?.at || '');
+  if (!Number.isFinite(lastLive) || now - lastLive > 30 * 86400e3) return null; // no phone lately: nothing to judge by
+  const lastHeard = Date.parse(health?.webhook?.lastReceivedAt || '');
+  // The connect notification lands within seconds of the phone connecting, before the site calls it live
+  if (Number.isFinite(lastHeard) && lastHeard >= lastLive - 5 * 60e3) return null;
+  const day = (t) => new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' });
+  return `Stream's notifications aren't reaching the site: a phone went live ${day(lastLive)}, and the last one to arrive was ${Number.isFinite(lastHeard) ? day(lastHeard) : 'never'}`;
+}
+
+const VERDICT_WORDS = { low: 'a little quiet', quiet: 'very quiet', loud: 'very loud', onesided: 'sound on one side only', silent: 'no sound', none: 'no audio track', unknown: 'not measured' };
 
 /**
  * Run every check. `hub` is hubStatus(env) from the caller (the hub lives
@@ -103,6 +120,10 @@ export async function run(env, config, state, health, { hub = null } = {}) {
   if (env.SLACK_BOT_TOKEN && !slackChannel?.id && !env.SLACK_WEBHOOK_URL) add('slack', 'fail', 'No Slack channel is picked for alerts', 'Nobody hears about silent audio or a frozen picture unless they are watching.', 'Pick the channel in Settings → Alerts.');
   else if (notify.slackConfigured(env)) add('slack', 'ok', `Problems during the reveal post to Slack${slackChannel?.name ? ` (#${slackChannel.name})` : ''}`);
   else add('slack', 'fail', 'Slack alerts aren\'t set up', 'Nobody hears about silent audio or a frozen picture unless they are watching.', 'Add the Slack app\'s SLACK_BOT_TOKEN in Cloudflare Pages, then pick the channel in Settings → Alerts.');
+
+  // Stream's notifications reach the site (they make reactions instant and bring Stream's input errors to staff)
+  const wh = await webhookProblem(env.DB, health).catch(() => null);
+  if (wh) add('webhook', 'warn', wh, null, 'Cloudflare → Notifications → Destinations: the "stream-webhook" webhook\'s secret must match STREAM_WEBHOOK_SECRET in Cloudflare Pages (docs/live-broadcast.md).');
 
   // Site plumbing
   if (hub) add('hub', hub.ok ? 'ok' : 'warn', hub.ok ? 'The live page updates instantly' : 'The real-time hub isn\'t answering', hub.ok ? null : `${hub.error || 'unreachable'}. Pages fall back to checking every 10 seconds.`, hub.ok ? null : 'Redeploy workers/live-hub, then the site.');

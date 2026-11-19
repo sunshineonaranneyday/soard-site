@@ -498,7 +498,7 @@ test('a number not on the alert list is not heard; STOP, END, HELP and START are
 
 // ─── Y ──────────────────────────────────────────────────────────────
 
-test('Y during a drop ends it at once, the way the automatic end would: open 15 minutes to the phone; Facebook closed, "Ended", the kid page and the replay email each once', async () => {
+test('Y during a drop ends it at once: open 15 minutes to the phone, but Facebook closed, "Ended", the kid page and the replay email go as soon as the recording is ready, each once', async () => {
   await fresh();
   const id = await goLiveRemi('vid4');
   const fb0 = fbEnds();
@@ -521,17 +521,22 @@ test('Y during a drop ends it at once, the way the automatic end would: open 15 
   assert.equal(questions(t0).length + texts.slice(t0).filter((t) => /ended by a text/i.test(t.body)).length, 0, 'never by text');
   const answers = await events(id, 'over_answer');
   assert.deepEqual(answers.map((a) => [a.answer, a.outcome, a.from]), [['yes', 'ended', '…0123']]);
-  // Nothing final for 15 minutes, then once
+  // The crew said it's over: what reaches people goes once the recording is ready, not 15 minutes on (Peter, Nov 19
+  // 2026: Dylan's page, the replay email and "Ended" waited until 4:26 after a 4:10 Y)
+  assert.equal(st.overSaid, true);
+  assert.equal(b.waitsForPhone(st), false, 'nothing waits on the phone after a Y');
   sim.videoState = 'ready'; sim.live = false;
-  for (let i = 0; i < 5; i++) { travel(60 * S); await tick(); }
-  assert.equal(slack(/Ended: /), ended0, 'no "Ended" yet');
-  assert.equal(await replaySends(id), 0);
-  travel(11 * M); const c = await tick();
+  for (let i = 0; i < 4; i++) { travel(31 * S); await tick(); }
+  assert.equal(b.rejoinOpen(await b.readState(env.DB)), true, 'still open to the phone');
+  assert.equal(slack(/Ended: /), ended0 + 1, '"Ended" once, within about 2 minutes');
+  assert.equal(await kidVideo(), 'https://watch.cloudflarestream.com/vid4');
+  assert.equal(await replaySends(id), 1, 'one replay email');
+  // The window closing later sends nothing again
+  travel(15 * M); const c = await tick();
   assert.ok(c.work.includes('closed'), c.work.join(','));
   for (let i = 0; i < 4; i++) { travel(31 * S); await tick(); }
   assert.equal(fbEnds(), fb0 + 1, 'Facebook closed once');
   assert.equal(slack(/Ended: /), ended0 + 1, '"Ended" once');
-  assert.equal(await kidVideo(), 'https://watch.cloudflarestream.com/vid4');
   assert.equal(await replaySends(id), 1, 'one replay email');
 });
 
@@ -548,6 +553,7 @@ test('a Y sent by mistake: the phone back within 15 minutes picks the same revea
   assert.equal(st.phase, 'live');
   assert.equal(st.broadcastId, id, 'the same reveal');
   assert.equal(st.endedBy, null);
+  assert.equal(st.overSaid, false, 'back on air: the Y no longer stands');
 });
 
 test('Y with the phone sending again ends nothing, even before a tick has seen it back', async () => {

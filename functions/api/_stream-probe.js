@@ -22,6 +22,8 @@ const TIMEOUT_MS = 6000;
 export const AUDIO = {
   silentShare: 90,   // % of frames below SILENT_DB that makes a window silent
   quietLufs: -33,    // integrated loudness under this = very quiet
+  micLowLufs: -24,   // a mic check under this is "a little quiet": the crew runbook asks for speech from -24 to -12 (the
+                     // reveal itself only alerts under quietLufs, so pauses in talking never set it off)
   loudLufs: -9,      // integrated loudness over this = very loud
   loudMomentary: -6, // any 400 ms block over this = very loud
   oneSidedDb: 20,    // left/right difference that means one side is dead

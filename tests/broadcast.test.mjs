@@ -200,6 +200,7 @@ test('arms 30 minutes before', async () => {
 });
 
 test('phone connects → live within one tick, live reminder sent, player exposed', async () => {
+  travel(15 * M); // the phone on at the start time ("we're live" never goes before it: a framing check emails nobody)
   sim.live = true; sim.videoUID = 'vid1';
   calls.length = 0;
   const r = await b.runTick(env, { source: 'test', force: true });

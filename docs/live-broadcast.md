@@ -22,7 +22,7 @@ soard-live-hub Durable Object (alarm every 8–60 s) ──▶ /api/broadcast-ho
         (LIVE pill, live page, admin)                  Kit drafts, audit log, analytics rows
 ```
 
-**Kit "we're live" email.** Checked every tick while live (`kitAutoLive` in `_broadcast.js`). It goes out once two things are true: the stream has stayed up 3 unbroken minutes (`state.segmentAt` resets on every reconnect, so a quick phone test emails no one), and the kid is known. The kid comes from, in order: a schedule, the admin's "Which kid is this?" picker (or anything else that sets `state.kidSlug`, such as a waiting screen), the Facebook live post's title/description, then the Page's own posts from the last day, newest first (`fbRevealClues` + the archiver's `matchKids`, open kids only: no reveal video yet, this year or last; a clue naming two kids is skipped). `state.kidVia` records which. Kit sends it about a minute later (`send_at`) to `broadcast-config.kitLive.audience` (default: all subscribers), once per broadcast (`broadcast_sends` kind `live`, channel `kit`). Held with an admin alert when: a scheduled reveal starts more than 30 minutes early, no kid turns up within 30 minutes, or the kid is found by Facebook clues after 30 minutes. The emergency manual banner never sends by itself. "Email the list now" in Admin → Broadcast → Now covers every held case and retries a failed send. Each reveal also has an on/off switch (`state.kitLiveEmail`).
+**Kit "we're live" email.** Checked every tick while live (`kitAutoLive` in `_broadcast.js`). It goes out once two things are true: the stream has stayed up 1 unbroken minute (`state.segmentAt` resets on every reconnect, so an accidental tap emails no one; it was 3 minutes until Nov 19 2026, when Dylan's 10-minute reveal emailed the list at 4:04 and most readers arrived as it ended), and the kid is known. The kid comes from, in order: a schedule, the admin's "Which kid is this?" picker (or anything else that sets `state.kidSlug`, such as a waiting screen), the Facebook live post's title/description, then the Page's own posts from the last day, newest first (`fbRevealClues` + the archiver's `matchKids`, open kids only: no reveal video yet, this year or last; a clue naming two kids is skipped). `state.kidVia` records which. Kit sends it about a minute later (`send_at`) to `broadcast-config.kitLive.audience` (default: all subscribers), once per broadcast (`broadcast_sends` kind `live`, channel `kit`). Held with an admin alert when: a scheduled reveal starts more than 30 minutes early (the sign-ups' own "we're live" is held then too, `wentLiveEarly`), no kid turns up within 30 minutes, or the kid is found by Facebook clues after 30 minutes. The emergency manual banner never sends by itself. "Email the list now" in Admin → Broadcast → Now covers every held case and retries a failed send. Each reveal also has an on/off switch (`state.kitLiveEmail`).
 
 Stream is the origin because it gives us an authoritative "is video arriving" signal, an instant permanent recording, simulcast without a third-party service, and a player we control. Facebook stays the social destination.
 
@@ -105,7 +105,9 @@ what it interrupted (`state.resume`); when the phone stops (45 s grace) or "End 
 that comes back as it was, so a scheduled reveal is scheduled again with its reminders untouched.
 
 The switch (site_config `broadcast-quiet`) turns itself off after 2 hours, and always 30 minutes before a
-scheduled reveal; it can't be turned on inside 35 minutes of one. A test still streaming at 30 minutes
+scheduled reveal; it can't be turned on inside 35 minutes of one. Staff get a Slack note and a text 10 minutes
+before it turns itself off and again when it has (`warnQuietEnding`; Nov 18 2026 it ran out unnoticed and an
+11:48 test went out as Dylan's real reveal). A test still streaming at 30 minutes
 before becomes the reveal itself (emails, Facebook and all), since that phone is the reveal by then.
 Turning the switch off mid-test keeps that test quiet until the phone stops. "End the test" keeps the
 switch on 10 more minutes, so a phone still connected starts another test, never the reveal. If Stream
@@ -127,7 +129,7 @@ which changes the moment the phone connects or disconnects. `sensePhone()` in `_
   names the old recording; the same connection carries on only as a test or as the same reveal coming back.
 - On air, the input decides. A drop under 2 minutes (15 s for a test) is a gap (`state.gapSince`): still
   live, one reveal, nothing sent twice, but nothing new is set off during it either: the Kit list email's
-  unbroken 3 minutes start again from the reconnect, and a test doesn't become the reveal. After 2 minutes
+  unbroken minute starts again from the reconnect, and a test doesn't become the reveal. After 2 minutes
   the site shows the reveal ended (the 45 s grace counts from the real stop). If Stream's API doesn't
   answer, nothing changes on a guess; a status the site doesn't know leaves it to the lifecycle.
 - A reveal ended by its phone stopping stays open for 15 minutes (`state.rejoinUntil`). A phone back in
@@ -193,8 +195,9 @@ final full stop or the like):
 
 - **Y**, yes, yep, yeah, yup, "yes it's over", "it's over", "over", "done", 👍: if the phone is still away, the site ends it at once, just as it
   would have after its 2-minute wait: viewers see the last moments, then Thank you for watching, and the replay.
-  It stays open 15 minutes, so if that was a mistake, the phone streaming again picks the same reveal back up. A
-  test puts back what it interrupted. If the phone is sending again, nothing ends and the reply says so.
+  It stays open 15 minutes, so if that was a mistake, the phone streaming again picks the same reveal back up, but
+  what reaches people (the kid's page, the replay email, "Ended") doesn't wait those 15 minutes after a Y
+  (`state.overSaid`, `waitsForPhone`): it goes as soon as the recording is ready. A test puts back what it interrupted. If the phone is sending again, nothing ends and the reply says so.
 - **N**, no, nope, "not over", "not yet", "dropped", "signal dropped", "keep going": the reveal stays on air and viewers see Reconnecting for up to 15
   minutes from the answer (`state.holdUntil`); the 2-minute rule (15 s for a test) waits. The phone coming back
   ends the hold. If no phone comes back by then, it ends the usual way. A Y later still ends it at once.
@@ -215,7 +218,8 @@ How it works: `askIfOver` in `_broadcast.js` sends the question (claimed once pe
 `/api/twilio-inbound` (`functions/api/twilio-inbound.js`), signed by Twilio exactly like `/api/twilio-status`. The
 answer goes to `answerByText`, which runs a tick that first looks at the phone, then applies the answer (`tAnswer`)
 and saves it the way it saves any phase change, before anything else happens. Everything an automatic end sets off
-(Facebook's post closed, the History row, the "Ended" note after the 15 minutes) then follows from that same tick.
+(Facebook's post closed, the History row, and after a Y the "Ended" note and the replay's way out as soon as the
+recording is ready) then follows from that same tick.
 
 Setup, once: Twilio's Messaging Service must send incoming texts to `https://sunshineonaranneyday.com/api/twilio-inbound`.
 POST `{ "action": "textRepliesStatus" }` to `/api/broadcast` (staff sign-in) shows where replies go now;

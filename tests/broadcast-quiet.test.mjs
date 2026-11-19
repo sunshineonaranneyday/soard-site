@@ -269,7 +269,7 @@ test('a reveal under 35 minutes away refuses test mode; one a little further cli
   assert.equal(Date.parse(r.quiet.until), at - 30 * M, 'off 30 minutes before the reveal');
 });
 
-test('a test still streaming at 30 minutes before becomes the reveal: emails, Facebook and all', async () => {
+test('a test still streaming at 30 minutes before becomes the reveal: Facebook and all, and the "we\'re live" emails at its start time', async () => {
   const posts = kit.posts.length;
   sim.live = true; sim.videoUID = 'vid3';
   travel(5 * S);
@@ -285,8 +285,11 @@ test('a test still streaming at 30 minutes before becomes the reveal: emails, Fa
   assert.equal(st.phase, 'live');
   assert.equal(outputs.get('fbout').enabled, true, 'Facebook back on for the reveal');
   assert.ok(r.work.includes('fb-live-post'), `Facebook post made: ${r.work.join(',')}`);
-  const live = await env.DB.prepare(`SELECT * FROM broadcast_sends WHERE broadcast_id = ? AND kind = 'live'`).bind(st.broadcastId).first();
-  assert.ok(live, 'the sign-ups get "we\'re live"');
+  // "We're live" waits for the planned start (Nov 19 2026): before it, a phone may still be a framing check
+  const liveSend = () => env.DB.prepare(`SELECT * FROM broadcast_sends WHERE broadcast_id = ? AND kind = 'live'`).bind(st.broadcastId).first();
+  assert.equal(await liveSend(), null, 'nobody emailed 29 minutes early');
+  travel(29 * M + 5 * S); r = await tick();
+  assert.ok(await liveSend(), 'the sign-ups get "we\'re live" at the start');
   assert.ok(kit.posts.length > posts, 'from Kit');
   const row = await env.DB.prepare('SELECT phase FROM broadcasts WHERE id = ?').bind(st.broadcastId).first();
   assert.equal(row.phase, 'live', 'History shows the reveal');

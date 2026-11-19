@@ -92,10 +92,11 @@ test('scheduled reveal going live emails the whole Kit list once', async () => {
   const r = await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 10 * M).toISOString() }, 'peter@test');
   assert.equal(r.success, true, r.error);
   kitPosts.length = 0;
+  travel(10 * M); // the phone on at the start time
   const first = await goLive();
   assert.equal(first.state.phase, 'live');
-  assert.equal(liveKitPosts().length, 0, 'nothing in the first 3 minutes');
-  travel(3 * M + 5 * S);
+  assert.equal(liveKitPosts().length, 0, 'nothing in the first minute');
+  travel(1 * M + 5 * S);
   const t = await tick();
   assert.ok(t.work.includes('kit-live'), t.work.join(','));
   const sends = liveKitPosts();
@@ -129,6 +130,7 @@ test('per-reveal opt out skips the automatic send; manual button still works', a
   const r = await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 5 * M).toISOString(), kitLiveEmail: false }, 'peter@test');
   assert.equal(r.success, true, r.error);
   kitPosts.length = 0;
+  travel(5 * M);
   const t = await goLiveSteady();
   assert.ok(!t.work.includes('kit-live'));
   assert.equal(liveKitPosts().length, 0);
@@ -161,7 +163,10 @@ test('going live well before showtime (a phone test) holds the email', async () 
   assert.ok(t.work.includes('kit-live-held'), 'held on the first tick: ' + t.work.join(','));
   travel(5 * M); await tick();
   assert.equal(liveKitPosts().length, 0);
+  // The sign-ups' own "we're live" is held as well (Nov 18 2026: an 11:48 phone test emailed Dylan's sign-ups)
+  assert.equal(signupPosts().length, 0, 'the sign-ups are not emailed either');
   const st = await b.readState(env.DB);
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM broadcast_sends WHERE broadcast_id = ? AND kind = 'live' AND channel = 'kit-signups'").bind(st.broadcastId).first()).n, 0);
   assert.equal(st.kit.live.held, true);
   const m = await b.adminAction(env, 'sendKitLive', {}, 'peter@test');
   assert.equal(m.success, true, 'admin can still send it for real');
@@ -179,7 +184,7 @@ test('a quick phone test that stops early emails nobody', async () => {
   assert.equal(liveKitPosts().length, 0);
 });
 
-test('the 3 minutes must be unbroken: a dropped signal restarts the clock', async () => {
+test('unplanned, the 3 minutes must be unbroken: a dropped signal restarts the clock', async () => {
   sim.fbPosts = [{ message: 'Reveal day for Remi!', created_time: new Date(Date.now() - H).toISOString() }];
   kitPosts.length = 0;
   await goLive();
@@ -264,6 +269,7 @@ test('Kit failure releases the claim so a retry can send', async () => {
   await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 5 * M).toISOString() }, 'peter@test');
   sim.kitFail = true;
   kitPosts.length = 0;
+  travel(5 * M);
   const t = await goLiveSteady();
   assert.ok(t.work.includes('kit-live-failed'), t.work.join(','));
   let st = await b.readState(env.DB);
@@ -283,6 +289,7 @@ test('the "we\'re live" email is always the whole list less who asked for less, 
   await b.writeConfig(env.DB, cfg);
   await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 5 * M).toISOString() }, 'peter@test');
   kitPosts.length = 0;
+  travel(5 * M);
   await goLiveSteady();
   const sends = liveKitPosts();
   assert.equal(sends.length, 1, 'sent, once');
@@ -301,6 +308,7 @@ test('with reveal reminders off, the whole list\'s "we\'re live" reaches the sig
   try {
     await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 5 * M).toISOString() }, 'peter@test');
     kitPosts.length = 0;
+    travel(5 * M);
     await goLiveSteady();
     assert.equal(signupPosts().length, 0, 'no copy of their own');
     const k = liveKitPosts()[0];

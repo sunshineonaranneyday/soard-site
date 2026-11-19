@@ -515,7 +515,7 @@ test('a framing check whose Facebook post failed to open still leaves the reveal
 test('staff hear about a second early-start Kit hold after a framing check', async () => {
   await fresh();
   await b.adminAction(env, 'schedule', { kidSlug: 'remi', scheduledAt: new Date(Date.now() + 55 * M).toISOString() }, 'jobtread');
-  const held = () => slack(/Kit email held/);
+  const held = () => slack(/emails held/);
   const before = held();
   phoneOn('vid64'); travel(5 * S); await tick();
   for (let i = 0; i < 5; i++) { travel(60 * S); await tick(); } // T-50

@@ -29,7 +29,7 @@ import * as stream from './_stream-live.js';
 import * as fb from './_broadcast-fb.js';
 import * as yt from './_youtube.js';
 import * as notify from './_broadcast-notify.js';
-import { probeFeed, deadSide } from './_stream-probe.js';
+import { probeFeed, deadSide, AUDIO } from './_stream-probe.js';
 
 const SITE_ORIGIN = 'https://sunshineonaranneyday.com';
 export const ADMIN_URL = `${SITE_ORIGIN}/admin/#broadcast/control-room`;
@@ -585,15 +585,18 @@ export function noteRehearsal(health, probe) {
   const a = probe.audio;
   const prev = health.rehearsal || {};
   const at = probe.at || nowIso();
+  // A mic check passes only in the range the crew aims for: "ok" under -24 LUFS is "a little quiet" here (Nov 17 2026's
+  // passed at -30.5, and Dylan's reveal then ran quiet, -22 on average against the -16 aimed for)
+  const verdict = a.verdict === 'ok' && a.lufs != null && a.lufs < AUDIO.micLowLufs ? 'low' : a.verdict;
   health.rehearsal = {
     lastAt: at,
-    verdict: a.verdict,
+    verdict,
     lufs: a.lufs ?? null,
     leftDb: a.leftDb ?? null,
     rightDb: a.rightDb ?? null,
     video: probe.video ? { width: probe.video.width, height: probe.video.height } : null,
-    goodAt: a.verdict === 'ok' ? at : (prev.goodAt || null),
-    goodLufs: a.verdict === 'ok' ? (a.lufs ?? null) : (prev.goodLufs ?? null),
+    goodAt: verdict === 'ok' ? at : (prev.goodAt || null),
+    goodLufs: verdict === 'ok' ? (a.lufs ?? null) : (prev.goodLufs ?? null),
     checkedAt: at,
   };
   return true;

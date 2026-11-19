@@ -36,6 +36,7 @@ const TARGET = [-20, -12];        // where speech should sit (short-term LUFS)
 // Verdict thresholds; the server uses the same numbers (_stream-probe.js AUDIO)
 const SOUND_DB = -60;             // any channel above this counts as sound
 const QUIET_LUFS = -33;           // short-term under this for 10 s = very quiet
+const MIC_LOW_LUFS = -24;         // mic check only: short-term under this for 10 s = a little quiet (AUDIO.micLowLufs, _stream-probe.js)
 const LOUD_LUFS = -9;             // short-term over this for 5 s = very loud
 const CLIP_PEAK = 0.9886;         // sample peak at -0.1 dBFS or a true peak over 0 dBTP = distorting
 const ONE_SIDED_DB = 20;
@@ -177,6 +178,7 @@ const AUDIO_WORDS = {
   ok: ['ok', 'Sound is good', null],
   waiting: ['wait', 'Listening…', 'Waiting for the first sound from the mic.'],
   quiet: ['warn', 'Sound is very quiet', 'Move the mic closer to whoever is talking, or turn up the gain on the mic transmitter.'],
+  low: ['warn', 'A little quiet', 'Move the mic closer to whoever is talking, or turn up the gain on the mic transmitter, until this says "Sound is good".'],
   loud: ['warn', 'Sound is very loud', 'Turn the gain down on the mic transmitter, or move the mic a little further from the loudest voice.'],
   clipping: ['bad', 'Too loud: the sound is distorting', 'Turn the gain down on the mic transmitter right away.'],
   silent: ['bad', 'No sound', 'Check the mic: receiver plugged into the phone, transmitter switched on and unmuted, Larix not muted.'],
@@ -436,7 +438,7 @@ function useMeter(videoRef, on, bars) {
       const now = Date.now();
       // Buffering isn't silence: stop the clocks while nothing plays
       if (!video || video.paused || video.readyState < 3) { st.pausedAt ||= now; return; }
-      if (st.pausedAt) { const d = now - st.pausedAt; st.lastSound += d; if (st.loudSince) st.loudSince += d; if (st.quietSince) st.quietSince += d; st.pausedAt = 0; }
+      if (st.pausedAt) { const d = now - st.pausedAt; st.lastSound += d; if (st.loudSince) st.loudSince += d; if (st.quietSince) st.quietSince += d; if (st.lowSince) st.lowSince += d; st.pausedAt = 0; }
       const k = b.kms[0] + b.kms[1];
       st.blocks.push(k);
       if (st.blocks.length > 30) st.blocks.shift();
@@ -452,6 +454,7 @@ function useMeter(videoRef, on, bars) {
       if (shortTerm != null) {
         st.loudSince = shortTerm > LOUD_LUFS ? (st.loudSince || now) : null;
         st.quietSince = shortTerm < QUIET_LUFS ? (st.quietSince || now) : null;
+        st.lowSince = shortTerm < MIC_LOW_LUFS ? (st.lowSince || now) : null;
       }
       for (let c = 0; c < 2; c++) { st.chE[c].push(b.ms[c]); if (st.chE[c].length > 80) st.chE[c].shift(); }
 
@@ -488,7 +491,8 @@ function useMeter(videoRef, on, bars) {
       else if (oneSided) verdict = 'onesided';
       else if (st.quietSince && now - st.quietSince > QUIET_WARN_MS) verdict = 'quiet';
       else if (!st.everSound) verdict = 'waiting';
-      setM((x) => ({ ...x, verdict, silentFor, oneSided, momentary, shortTerm, integrated: st.integrated, truePeak: st.tpMax ? 20 * Math.log10(st.tpMax) : null, chDb: e, hist: s.hist.slice(), running: true, needsGesture: false }));
+      const lowFor = st.lowSince ? now - st.lowSince : 0;
+      setM((x) => ({ ...x, verdict, lowFor, silentFor, oneSided, momentary, shortTerm, integrated: st.integrated, truePeak: st.tpMax ? 20 * Math.log10(st.tpMax) : null, chDb: e, hist: s.hist.slice(), running: true, needsGesture: false }));
     };
     ensureGraph();
     return () => { s.onBlock = null; };
@@ -771,12 +775,14 @@ export function ControlRoom({ feed = 'live', phase, refreshKey = 0 }) {
   if (probe?.audio?.present === false || (player.hasAudio === false && player.state !== 'loading')) audioKey = 'none';
   else if (player.state === 'native' || meter.unsupported) audioKey = 'native';
   else if (!meter.running && meter.needsGesture) audioKey = null;
+  // The mic check holds out for the range the crew aims for; the reveal itself only warns when it's very quiet
+  if (feed === 'rehearsal' && audioKey === 'ok' && meter.lowFor > QUIET_WARN_MS) audioKey = 'low';
   const words = audioKey ? AUDIO_WORDS[audioKey] : null;
   let detail = words?.[2];
   if (audioKey === 'ok' && meter.shortTerm != null) detail = `${fmtDb(meter.shortTerm, 'LUFS')} over the last 3 seconds. Speech sits best between ${TARGET[0]} and ${TARGET[1]}.`;
   if (audioKey === 'silent' && meter.silentFor) detail = `Nothing for ${Math.round(meter.silentFor / 1000)} s. ${words[2]}`;
   if (audioKey === 'onesided') detail = `Only the ${meter.oneSided} side has sound. ${words[2]}`;
-  if ((audioKey === 'quiet' || audioKey === 'loud') && meter.shortTerm != null) detail = `${fmtDb(meter.shortTerm, 'LUFS')} (speech sits best between ${TARGET[0]} and ${TARGET[1]}). ${words[2]}`;
+  if ((audioKey === 'quiet' || audioKey === 'loud' || audioKey === 'low') && meter.shortTerm != null) detail = `${fmtDb(meter.shortTerm, 'LUFS')} (speech sits best between ${TARGET[0]} and ${TARGET[1]}). ${words[2]}`;
 
   const issues = feed === 'live' ? mergeIssues({ report, audioKey, pic, phase, live, since }) : [];
   const fresh = useAttention(feed === 'live' ? issues : [], prefs);

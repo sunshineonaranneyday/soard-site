@@ -6054,7 +6054,7 @@
       }
       if (kit && live && !testing) sub.push(html`<span>Kit email: ${kitStatus}</span>`);
       // Ended by its phone stopping: a phone back in time picks the same reveal up again (REJOIN_MS in _broadcast.js)
-      if (phase === 'replay' && st.rejoinUntil && Date.parse(st.rejoinUntil) > Date.now()) sub.push(html`<span><strong>If the phone reconnects by ${new Date(st.rejoinUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, the reveal picks up where it left off.</strong> Until then the "Ended" note, the kid's page and the replay email wait${c.facebook?.mode === 'api' ? '. Facebook closed its live post; a phone back opens a new one' : ''}.</span>`);
+      if (phase === 'replay' && st.rejoinUntil && Date.parse(st.rejoinUntil) > Date.now()) sub.push(html`<span><strong>If the phone reconnects by ${new Date(st.rejoinUntil).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}, the reveal picks up where it left off.</strong> Until then the "Ended" note, the kid's page and the replay email wait${st.overSaid ? ' (not after the crew\'s Y: they go as soon as the recording is ready)' : ''}${c.facebook?.mode === 'api' ? '. Facebook closed its live post; a phone back opens a new one' : ''}.</span>`);
       if (live && pub.kidName && kitVia) sub.push(html`<span>Kid: ${kitVia}</span>`);
       if (st.source === 'manual' && phase !== 'idle') sub.push(html`<span>Emergency banner (no stream)</span>`);
       const links = [];
