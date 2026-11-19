@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { summarizeDeploys, summarizeChanges, toSqliteTimestamp, onRequestGet } from '../functions/api/pending-changes.js';
-import { checkStreamUid } from '../functions/api/stream-check.js';
+import { checkStreamUid, streamCheck } from '../functions/api/stream-check.js';
 
 const build = (id, created, stage, status, ended = null) => ({
   id, environment: 'production', created_on: created, url: `https://${id}.soard-site.pages.dev`,
@@ -146,4 +146,16 @@ test('stream check: playable, gone, unknown, and bad ids never fetched', async (
   const before = seen.length;
   assert.equal(await checkStreamUid('not-a-uid', reply(200)), 'gone');
   assert.equal(seen.length, before);
+});
+
+test('stream check: the video\'s shape from its manifest, so the Preview frames an upright reveal as the page does', async () => {
+  const uid = 'b'.repeat(32);
+  const manifest = (body, status = 200) => async () => new Response(body, { status });
+  const upright = '#EXTM3U\n#EXT-X-STREAM-INF:RESOLUTION=1080x1920,CODECS="avc1"\nv1.m3u8\n#EXT-X-STREAM-INF:RESOLUTION=720x1280\nv2.m3u8';
+  assert.deepEqual(await streamCheck(uid, manifest(upright)), { state: 'playable', aspect: 0.563 });
+  assert.deepEqual(await streamCheck(uid, manifest('#EXT-X-STREAM-INF:RESOLUTION=1920x1080')), { state: 'playable', aspect: 1.778 });
+  // Playable but no size listed: the shape is left to the page's default
+  assert.deepEqual(await streamCheck(uid, manifest('#EXTM3U')), { state: 'playable', aspect: null });
+  assert.deepEqual(await streamCheck(uid, manifest('', 404)), { state: 'gone', aspect: null });
+  assert.deepEqual(await streamCheck(uid, async () => { throw new Error('offline'); }), { state: 'unknown', aspect: null });
 });
