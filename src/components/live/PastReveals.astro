@@ -23,11 +23,14 @@ const {
 } = Astro.props;
 
 const all = await getReveals();
+// On a kid's own live page, their reveal is the page itself: their card would only link back to it
+const here = Astro.url.pathname.replace(/\/?$/, '/');
 // A kid with a live replay often has a recorded video too; in a short row,
 // show each kid once (the live replay wins, since it sorts first)
 const seen = new Set<string>();
 const reveals = all
   .filter((r) => {
+    if (r.theaterUrl === here) return false;
     if (r.kids.every((k) => seen.has(k.slug))) return false;
     r.kids.forEach((k) => seen.add(k.slug));
     return true;

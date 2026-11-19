@@ -126,17 +126,22 @@ const hero = {
         {latest?.image && (
           <a
             class="hero-photo rh-latest"
-            href={latest.watchUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-haspopup="dialog"
-            aria-label={`Play the latest reveal: ${latest.title}`}
-            data-rv-open
-            data-embed={latest.embedUrl}
-            data-aspect={String(latest.source.aspect)}
-            data-title={latest.title}
-            data-meta={latestMeta}
-            data-kids={JSON.stringify(latest.kids.map((k) => [k.slug, k.name]))}
+            {...(latest.theaterUrl
+              // A kid with a Theater: their live page, where the reveal plays for good (Peter, Nov 19 2026)
+              ? { href: latest.theaterUrl, 'aria-label': `Watch the latest reveal: ${latest.title}`, 'data-rv-theater': '' }
+              : {
+                href: latest.watchUrl,
+                target: '_blank',
+                rel: 'noopener noreferrer',
+                'aria-haspopup': 'dialog',
+                'aria-label': `Play the latest reveal: ${latest.title}`,
+                'data-rv-open': '',
+                'data-embed': latest.embedUrl,
+                'data-aspect': String(latest.source.aspect),
+                'data-title': latest.title,
+                'data-meta': latestMeta,
+                'data-kids': JSON.stringify(latest.kids.map((k) => [k.slug, k.name])),
+              })}
             style={`background-image:url('${cfLqip(latest.image)}')`}
           >
             <img

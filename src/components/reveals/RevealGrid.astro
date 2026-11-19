@@ -125,6 +125,10 @@ function meta(r: Reveal) {
           </div>
           <div class="rv-card__body">
             <Heading class="rv-card__title">
+              {/* A kid with a Theater: the card opens their live page, where their reveal plays for good (Peter, Nov 19 2026) */}
+              {r.theaterUrl ? (
+                <a class="rv-card__link" href={r.theaterUrl} data-rv-theater aria-label={`Watch ${r.title}`}>{r.heading}</a>
+              ) : (
               <a
                 class="rv-card__link"
                 href={r.watchUrl}
@@ -139,6 +143,7 @@ function meta(r: Reveal) {
                 data-kids={JSON.stringify(r.kids.map((k) => [k.slug, k.name]))}
                 aria-label={`Play ${r.title}${r.kind === 'live' ? ' (live stream replay)' : ''}`}
               >{r.heading}</a>
+              )}
             </Heading>
             {r.kids.length > 3 && <p class="rv-card__names">{r.names}</p>}
             {(r.yearLabel || r.rooms.length > 0) && (
