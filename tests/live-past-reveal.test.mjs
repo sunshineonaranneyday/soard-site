@@ -119,3 +119,15 @@ test('/api/live-messages?b= lists that past reveal\'s shown messages, closed; an
   const odd = await get("?b=live-1'--");
   assert.notEqual(odd.broadcastId, "live-1'--");
 });
+
+test('one rule for the live page and the reveal cards: the children with a past reveal, from the same rows', async () => {
+  const { isPastReveal, pastRevealKids, PAST_REVEALS_SQL } = await load('functions/live/_past-reveal-rule.js');
+  const rows = [
+    row(), row({ id: 'live-2', kid_slug: 'max' }), row({ id: 'live-3', kid_slug: 'axel', data: JSON.stringify({ test: true }) }),
+    row({ id: 'live-4', kid_slug: 'colin', source: 'manual' }), row({ id: 'live-5', kid_slug: 'dylan-2026' }), row({ id: 'live-6', kid_slug: null }),
+  ];
+  assert.deepEqual(pastRevealKids(rows), ['dylan-2026', 'max'], 'tests and Facebook-only never; each child once');
+  // The live page picks by the very same predicate
+  for (const r of rows) assert.equal(pickPastRow([r]) === r, isPastReveal(r), r.id);
+  assert.match(PAST_REVEALS_SQL, /FROM broadcasts WHERE kid_slug IS NOT NULL AND replay_uid IS NOT NULL AND ended_at IS NOT NULL/);
+});

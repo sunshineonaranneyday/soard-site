@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import { COLLECTION_MAP, isSiteDocKey, withoutScriptLinks } from '../functions/api/_collections.js';
 import { SETTINGS_DEFAULTS } from './settings-defaults.js';
 import { stillAhead, todayEastern, carryPast } from '../functions/api/_reveals.js';
+import { pastRevealKids } from '../functions/live/_past-reveal-rule.js';
 
 export const __dirname = fileURLToPath(new URL('.', import.meta.url));
 export const ROOT = join(__dirname, '..');
@@ -226,6 +227,20 @@ export function writeSiteConfig(siteRows) {
     writeFileSync(filePath, JSON.stringify(data, null, 2) + '\n');
   }
   writeUpcomingReveals(siteRows);
+}
+
+// ── Children whose live page is their Theater ──────────────────────
+// Their reveal cards (/reveals/, the past reveals on /live/) open /live/<slug>/
+// instead of the video pop-up (Peter, Nov 19 2026: "yes pointing to their
+// theater"). Decided by the live page's own rule (functions/live/_past-reveal-rule.js)
+// from the broadcasts rows, so a card never opens a Theater that isn't there.
+export const THEATER_FILE = join(ROOT, 'src', 'data', 'theater-kids.json');
+export function writeTheaterKids(rows) {
+  const json = JSON.stringify({ kids: pastRevealKids(rows) }, null, 2) + '\n';
+  // Unchanged: leave the file alone (no rebuild in dev)
+  if (existsSync(THEATER_FILE) && readFileSync(THEATER_FILE, 'utf8') === json) return;
+  ensureDir(join(ROOT, 'src', 'data'));
+  writeFileSync(THEATER_FILE, json);
 }
 
 // ── Upcoming reveals for build-time pages ──────────────────────────

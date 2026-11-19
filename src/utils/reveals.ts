@@ -16,6 +16,16 @@ import type { CollectionEntry } from 'astro:content';
 import { getPublishedKids } from './collections';
 import { cfId } from './cf-image';
 
+// Children whose live page is their Theater, as of this build (scripts/d1-helpers.js writeTheaterKids, by the live
+// page's own rule). Missing file = none yet: every card keeps the video pop-up.
+const theaterFiles = import.meta.glob<{ kids?: string[] }>('../data/theater-kids.json', { eager: true, import: 'default' });
+const theaterKids = new Set((Object.values(theaterFiles)[0]?.kids || []).filter((k) => typeof k === 'string'));
+
+/** One kid's Theater (their live page, showing their reveal for good), or null */
+export function theaterUrlFor(slugs: string[]): string | null {
+  return slugs.length === 1 && theaterKids.has(slugs[0]) ? `/live/${encodeURIComponent(slugs[0])}/` : null;
+}
+
 export const STREAM_CUSTOMER_HOST = 'customer-cuav5h47lgfe96ql.cloudflarestream.com';
 const STREAM_ORIGIN = `https://${STREAM_CUSTOMER_HOST}`;
 
@@ -67,6 +77,9 @@ export interface Reveal {
   heading: string;
   /** Every kid name, in prose: "Ben, Caleb and Kyle" */
   names: string;
+  /** The kid's Theater (/live/<slug>/), when this is one kid's video and their live page shows their reveal for good;
+   *  the card opens it instead of the video pop-up (Peter, Nov 19 2026). Null otherwise. */
+  theaterUrl: string | null;
 }
 
 // ── URL parsing ──────────────────────────────────────────────
@@ -345,6 +358,7 @@ async function buildReveals(): Promise<Reveal[]> {
       title,
       heading: names.length > 3 ? title : joinShort(names),
       names: joinNames(names),
+      theaterUrl: theaterUrlFor(revealKids.map((k) => k.slug)),
     };
   });
 

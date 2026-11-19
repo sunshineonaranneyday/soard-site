@@ -14,6 +14,7 @@
  * Facebook-only broadcast (no video here to show).
  */
 import { publicState } from '../api/_broadcast.js';
+import { PAST_REVEAL_COLUMNS, PAST_REVEAL_CANDIDATES, isPastReveal } from './_past-reveal-rule.js';
 
 /** A broadcast id as the site makes them (as broadcast-event.js and live-watch.js check it; what ?b= may name) */
 export const BROADCAST_ID_RE = /^live-\d{1,16}$/;
@@ -27,14 +28,9 @@ const rowData = (row) => {
   try { return JSON.parse(row?.data || '{}') || {}; } catch { return {}; }
 };
 
-/** The row a child's page falls back to: their latest ended reveal from our own stream with a recording, not a test */
+/** The row a child's page falls back to: their latest past reveal (_past-reveal-rule.js: the cards decide by it too) */
 export function pickPastRow(rows) {
-  for (const row of rows || []) {
-    if (!row?.id || !row.replay_uid || !row.ended_at || row.source !== 'stream') continue;
-    if (rowData(row).test) continue;
-    return row;
-  }
-  return null;
+  return (rows || []).find(isPastReveal) || null;
 }
 
 /** The broadcast state a past reveal's row stands for: its replay, ended, no window (it's for good) */
@@ -53,7 +49,7 @@ export function pastStateOf(row) {
 /** A broadcast row by id when it's a real reveal with a recording (what ?b= may name), else null */
 export async function revealRow(DB, id) {
   if (!DB || typeof id !== 'string' || !BROADCAST_ID_RE.test(id)) return null;
-  const row = await DB.prepare('SELECT id, kid_slug, kid_name, title, message, image, scheduled_at, live_at, ended_at, replay_uid, source, data FROM broadcasts WHERE id = ?').bind(id).first();
+  const row = await DB.prepare(`SELECT ${PAST_REVEAL_COLUMNS} FROM broadcasts WHERE id = ?`).bind(id).first();
   return pickPastRow(row ? [row] : []);
 }
 
@@ -63,8 +59,7 @@ export async function revealRow(DB, id) {
  */
 export async function pastReveal(DB, pageKid, config) {
   if (!DB || !pageKid) return null;
-  const r = await DB.prepare(`SELECT id, kid_slug, kid_name, title, message, image, scheduled_at, live_at, ended_at, replay_uid, source, data
-      FROM broadcasts WHERE kid_slug = ? AND replay_uid IS NOT NULL AND ended_at IS NOT NULL ORDER BY ended_at DESC LIMIT 10`)
+  const r = await DB.prepare(`SELECT ${PAST_REVEAL_COLUMNS} FROM broadcasts WHERE kid_slug = ? AND ${PAST_REVEAL_CANDIDATES} ORDER BY ended_at DESC LIMIT 10`)
     .bind(pageKid).all();
   const row = pickPastRow(r?.results);
   if (!row) return null;

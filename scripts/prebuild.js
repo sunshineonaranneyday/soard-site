@@ -18,8 +18,9 @@ import { join } from 'path';
 import {
   CONTENT, loadEnv, getD1Credentials, getD1ApiUrl,
   queryD1, collections, ensureDir, countExistingFiles,
-  writeCollection, writeSiteConfig,
+  writeCollection, writeSiteConfig, writeTheaterKids,
 } from './d1-helpers.js';
+import { PAST_REVEALS_SQL } from '../functions/live/_past-reveal-rule.js';
 
 loadEnv();
 
@@ -81,6 +82,16 @@ try {
   writeSiteConfig(siteRows);
   console.log(`  site: ${siteRows.length} config files`);
   totalFiles += siteRows.length;
+
+  // ─── Children with a Theater (their reveal cards open it) ───────────
+  // Unreadable: the file is left as it was (none yet = every card keeps the pop-up)
+  try {
+    const rows = await query(PAST_REVEALS_SQL);
+    writeTheaterKids(rows);
+    console.log(`  theater kids: ${new Set(rows.map((r) => r.kid_slug)).size} with a recording`);
+  } catch (err) {
+    console.warn(`  ⚠ theater kids: skipped (${err.message})`);
+  }
 
   // ─── Validation ────────────────────────────────────────────────────
   const kidsResult = collectionResults.find(r => r.dir === 'kids');
