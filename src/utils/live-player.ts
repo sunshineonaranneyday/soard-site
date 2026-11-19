@@ -70,6 +70,10 @@ export interface PlayerHandle {
   readonly closed: boolean;
   setMuted(muted: boolean): void;
   play(): void;
+  /** A play asked for, called off by the video being reset as its source came, waiting to go once it can play */
+  readonly playPending: boolean;
+  /** Don't play when it can after all (pause pressed while it waits) */
+  cancelPlay(): void;
   /** Live: to the first second of this broadcast's recording, playing on from there (no catching up, no jump to live) */
   seekToStart(): void;
   /** Live: back to the live moment (the usual delay) */
@@ -257,16 +261,20 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   // soon as the new source can play. Watch the replay mounts the replay and plays it in the same tap, before hls.js has
   // attached its source; attaching resets the element, which pauses it and refuses the ask (AbortError), and it sat at
   // 0:00 until the bar's play was pressed (Chrome and the other Media Source browsers; Peter's test, Nov 18 2026). The
-  // tap's own play() still goes at once: that is what lets the second one play with sound
+  // tap's own play() still goes at once: that is what lets the second one play with sound.
+  // Only a reset counts: a pause pressed while it was starting refuses the play the same way (AbortError, nothing
+  // loaded), but always fires 'pause' first, and a reset never does; so a play refused with no pause since it was asked
+  // for was called off by a reset (a viewer's play then pause before it had loaded used to start it anyway, the review)
   let playAborted = false;
+  let pauses = 0;
   function tryPlay() {
     playAborted = false;
+    const asked = pauses;
     const pr = video.play();
     pr?.catch((err: DOMException) => {
       if (dead) return;
       if (err?.name === 'NotAllowedError') set('blocked');
-      // (called off by the element being reset, nothing loaded any more; not by a pause pressed while it was starting)
-      else if (err?.name === 'AbortError' && video.paused && video.readyState === 0) playAborted = true;
+      else if (err?.name === 'AbortError' && video.paused && video.readyState === 0 && pauses === asked) playAborted = true;
     });
   }
 
@@ -630,7 +638,8 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     }
   });
   video.addEventListener('pause', () => {
-    // (paused on purpose: a play the browser called off earlier isn't asked again)
+    // (paused on purpose: a play the browser called off earlier isn't asked again, nor one it refuses after this)
+    pauses++;
     playAborted = false;
     if (restarting || video.ended || dead || holding) return;
     if (status === 'playing' || status === 'buffering') set('paused');
@@ -769,6 +778,8 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       if (holding) return; // live, holding the last frame: it plays on by itself
       tryPlay();
     },
+    get playPending() { return playAborted && video.paused && !dead; },
+    cancelPlay() { playAborted = false; },
     seekToStart() {
       if (!live) return;
       const sp = span();

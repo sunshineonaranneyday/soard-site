@@ -139,7 +139,12 @@ async function mock(page) {
       if (url.pathname.includes('/thumbnails/')) return req.respond({ status: 404, headers: cors, body: '' });
       if (url.pathname.startsWith('/rep1/')) {
         const name = url.pathname.split('/').pop();
-        if (name.endsWith('.m3u8')) return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: readFileSync(`${FIX}${feed.shape}/video.m3u8`, 'utf8') });
+        // (feed.replayDelay: the replay's playlist answers that much later, as on a slow phone, so its loading can be seen)
+        if (name.endsWith('.m3u8')) {
+          const send = () => req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: readFileSync(`${FIX}${feed.shape}/video.m3u8`, 'utf8') }).catch(() => {});
+          if (feed.replayDelay) { setTimeout(send, feed.replayDelay); return; }
+          return send();
+        }
         return req.respond({ status: 200, contentType: 'video/mp2t', headers: cors, body: readFileSync(`${FIX}${feed.shape}/${name}`) });
       }
       const name = url.pathname.split('/').pop();
@@ -536,7 +541,13 @@ try {
     state = { ...STATES.replay, kidName: 'Axel' }; await refresh(); await sleep(2500);
     e = await end();
     ok(e.shown && e.replay && !e.wait && e.pkind === 'live', `the replay ready: Watch the replay, not started by itself (${e.pkind})`);
+    // (a slow replay: the press waits on its source; the button says what's coming, Pause)
+    feed.replayDelay = 2500;
     await page.click('[data-s="end-replay"]');
+    await sleep(900);
+    const waiting = await page.evaluate(() => ({ label: document.querySelector('[data-s="play"]').getAttribute('aria-label'), paused: document.querySelector('.stage__player video')?.paused, rs: document.querySelector('.stage__player video')?.readyState }));
+    ok(waiting.label === 'Pause' && waiting.rs === 0, `while the replay loads after the press, the button says Pause (${JSON.stringify(waiting)})`);
+    feed.replayDelay = 0;
     await waitFor(page, ['paused', 'playing'], 20000); await sleep(1000);
     e = await end();
     ok(!e.shown && e.pkind === 'replay', `Watch the replay: the replay, from its beginning (${e.pkind})`);
@@ -695,6 +706,22 @@ try {
   const tabStops = await page.evaluate(() => [...document.querySelectorAll('[data-stage] button, [data-stage] input')].filter((el) => !el.closest('[hidden]') && el.getBoundingClientRect().width > 0 && el.tabIndex >= 0).map((el) => el.getAttribute('aria-label') || el.textContent.trim()));
   // (The reveal's star is a marker on the line, not a stop: Jump to the reveal is the button)
   ok(tabStops.length >= 5 && tabStops.every(Boolean) && tabStops.some((t) => t.startsWith('Jump to the reveal')), `every control is a labelled tab stop (${tabStops.join(', ')})`);
+
+  // A press on play, then on pause, before the replay has loaded: it stays paused once it loads (the review of the
+  // one-press fix: a pause pressed while a play was starting was taken for the video being reset, and it played anyway)
+  console.log('\n▶ replay: play then pause before it has loaded');
+  feed.replayDelay = 2500;
+  await page.setViewport({ width: 1280, height: 800 });
+  await open(page);
+  await page.waitForFunction(() => document.querySelector('[data-stage]')?.dataset.pkind === 'replay' && !!document.querySelector('.stage__player video'), { timeout: 15000 }).catch(() => {});
+  await sleep(300);
+  await page.click('[data-s="play"]'); await sleep(250);
+  const beforeLoad = await page.evaluate(() => ({ rs: document.querySelector('.stage__player video').readyState, label: document.querySelector('[data-s="play"]').getAttribute('aria-label') }));
+  await page.click('[data-s="play"]');
+  await sleep(4500);
+  feed.replayDelay = 0;
+  const kept = await page.evaluate(() => { const v = document.querySelector('.stage__player video'); return { paused: v.paused, t: v.currentTime, rs: v.readyState, label: document.querySelector('[data-s="play"]').getAttribute('aria-label') }; });
+  ok(beforeLoad.rs === 0 && kept.paused && kept.t === 0 && kept.rs >= 1 && kept.label === 'Play', `pressed play then pause while it loaded (${beforeLoad.label}): it loaded and stayed paused (${JSON.stringify(kept)})`);
 
   // The progress line and the play button (Peter, Nov 18 2026: "top tier, best in class ... motion"): the handle and the
   // line glide with the picture (they jumped 4 times a second), the icon turns from play into pause, the buttons give

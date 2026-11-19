@@ -339,6 +339,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   function onStatus(st: PlayerStatus) {
     pstatus = st;
     root.dataset.pstatus = st;
+    repaintPlay?.();
     clearTimeout(connectingTimer);
     slowConnect = false;
     // Only say "loading" when it is actually slow
@@ -475,6 +476,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       issueSeek(v, seekWant.t, seekWant.exact);
     }, 500);
   }
+  // (the play button's state, said again: called whenever the player's status changes, so a play waiting on its source
+  // that the browser then refuses shows Play with Tap to watch, not Pause)
+  let repaintPlay: (() => void) | null = null;
   function attachMedia() {
     detach?.(); detach = null;
     const v = video();
@@ -500,7 +504,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     };
     // (scrubbing, the video is paused, but the button keeps saying what it will do when the finger lifts)
     const playing = () => {
-      showPlaying(scrub?.on ? scrub.wasPlaying : (!v.paused && !v.ended) || playAfterSeek);
+      // (a play asked for and waiting on the replay's source counts as playing: the button says Pause, and pressing it
+      // means don't)
+      showPlaying(scrub?.on ? scrub.wasPlaying : (!v.paused && !v.ended) || playAfterSeek || !!player?.playPending);
       if (!v.paused && !v.ended) { startGlide(); return; }
       // (stopped: drawn exactly where, the glide having been up to a moment ahead of the video's last report)
       cancelAnimationFrame(raf); raf = 0;
@@ -514,9 +520,12 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const evs: [string, () => void][] = [
       ['timeupdate', tick], ['durationchange', () => { tick(); paintMark(); }], ['seeked', seeked], ['progress', paintLoaded],
       ['play', playing], ['playing', playing], ['pause', playing], ['ended', () => { playing(); tick(); }],
+      // (the video reset as its source came, a play asked for waiting on it: shown as playing, playing.playPending)
+      ['emptied', playing],
     ];
     for (const [e, fn] of evs) v.addEventListener(e, fn);
-    detach = () => { for (const [e, fn] of evs) v.removeEventListener(e, fn); cancelAnimationFrame(raf); raf = 0; };
+    detach = () => { for (const [e, fn] of evs) v.removeEventListener(e, fn); cancelAnimationFrame(raf); raf = 0; repaintPlay = null; };
+    repaintPlay = () => showPlaying(scrub?.on ? scrub.wasPlaying : (!v.paused && !v.ended) || playAfterSeek || !!player?.playPending);
     tick(); playing();
   }
 
@@ -784,8 +793,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   function togglePlay() {
     const v = video();
     if (!v || !player) return;
-    // (waiting to play on after a scrub, the button says Pause: pressed, it stays paused)
+    // (waiting to play on after a scrub, or for the replay's source after Watch the replay, the button says Pause:
+    // pressed, it stays paused)
     if (playAfterSeek) { playAfterSeek = false; showPlaying(false); updateDock(); return; }
+    if (player.playPending) { player.cancelPlay(); showPlaying(false); return; }
     if (v.paused || v.ended) { player.setMuted(false); player.play(); } else v.pause();
   }
   function toggleCaptions() {
