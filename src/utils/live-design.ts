@@ -801,9 +801,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   // The rail beside a live upright video sits where the design's strip did, so it carries a button with the room's first
   // picture for its face; it opens the viewer at that picture (the video kept small in the corner). Not while the room
   // beside the video (a computer's Theater) shows the design already
-  // (and the replay's, in its rail on a phone held upright: one layout, live and in the replay. The viewer opens from
-  // whichever was pressed, and goes back into it)
-  const railBtns = [...(frame?.querySelectorAll<HTMLButtonElement>('[data-s="design"], [data-s="design-r"]') || [])];
+  const railBtns = [...(frame?.querySelectorAll<HTMLButtonElement>('[data-s="design"]') || [])];
   function railFace() {
     if (!stage) return;
     const first = slides.find((x) => x.kind === 'before') || slides[0];

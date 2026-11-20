@@ -259,21 +259,26 @@ try {
     ok(Math.abs(g.picture.w / g.picture.h - 0.5625) < 0.02, `9:16 frame (${g.picture.w}x${g.picture.h})`);
     ok(!g.covered, `nothing drawn on the picture${g.covered ? ` (hit ${g.covered})` : ''}`);
     ok(g.stage.y >= 0 && g.stage.b <= g.vh, `video and bar all on screen (stage ${g.stage.y}-${g.stage.b} of ${g.vh})`);
-    // A live upright picture: the controls are a rail beside it, exactly as tall as it
-    ok(g.rail && g.bar.x >= g.picture.r && g.bar.x - g.picture.r <= 16 && Math.abs(g.bar.y - g.picture.y) <= 2 && Math.abs(g.bar.b - g.picture.b) <= 2,
+    // A live upright picture: on a computer the controls are a rail beside it, exactly as tall as it; on a phone held
+    // upright they're the bar under it, the room's pictures keeping their place beside it (Peter, Nov 20 2026: "Keep
+    // pictures beside video")
+    if (phone) ok(!g.rail && g.bar.y >= g.picture.b - 1 && g.bar.x <= g.picture.x + 1, `the controls are the bar under the picture, no rail (bar ${g.bar.x},${g.bar.y}; picture ${g.picture.x}, to ${g.picture.b})`);
+    else ok(g.rail && g.bar.x >= g.picture.r && g.bar.x - g.picture.r <= 16 && Math.abs(g.bar.y - g.picture.y) <= 2 && Math.abs(g.bar.b - g.picture.b) <= 2,
       `the controls are a rail beside the picture, as tall as it (rail ${g.bar.x},${g.bar.y}-${g.bar.b}; picture to ${g.picture.r}, ${g.picture.y}-${g.picture.b})`);
     ok(g.overflowX <= 0, `no sideways scroll (${g.overflowX})`);
     // The hero clips overflow, so scroll width alone can't see a stage that runs off the side
     ok([g.stage, g.bar].every((b) => b.x >= 8 && b.r <= g.vw - 8), `video and bar inside the screen's gutters (stage ${g.stage.x}-${g.stage.r} of ${g.vw})`);
-    ok(g.status === 'Live' && g.soundCta && g.heart && !g.mute && g.full, 'muted: Tap for sound first in the rail, with the heart and full screen there too');
+    if (phone) ok(g.status === 'Live' && g.soundCta && !g.mute, 'muted: "Live" and Tap for sound first in the bar');
+    else ok(g.status === 'Live' && g.soundCta && g.heart && !g.mute && g.full, 'muted: Tap for sound first in the rail, with the heart and full screen there too');
     const pill = await page.evaluate(() => { const v = (el) => !!el && el.getBoundingClientRect().height > 0; return { eyebrow: document.querySelector('[data-live="eyebrow"]')?.textContent, onair: v(document.querySelector('[data-live="onair"]')) }; });
-    ok(pill.eyebrow === 'Live now' && (vp.width < 961 ? pill.onair : true), `"Live" said by the page, where the rail has no room for it (${JSON.stringify(pill)})`);
+    // ("Live" said by the page beside the rail on a computer, its eyebrow; on a phone by the bar itself, never twice)
+    ok(pill.eyebrow === 'Live now' && (phone ? !pill.onair : true), `"Live" said once, where there's room for it (${JSON.stringify(pill)})`);
     ok(g.leaveLinks === 0, `nothing sends viewers off to watch somewhere else (${g.leaveLinks} links)`);
     if (phone) {
       ok(g.h1.b <= g.picture.y && g.h1.y >= 0, `kid's name above the video (${g.h1.y}-${g.h1.b})`);
-      // (one layout, live and in the replay: the row kept under the picture for the replay's timeline costs live about
-      // 27px of width on a phone, 252 to 225 at 420×713; Peter, Nov 20 2026: "Yes, one layout")
-      ok(g.picture.w >= 225, `video at least 225px wide (${g.picture.w})`);
+      // (the bar under it and the room's pictures beside it: the picture as tall as the rest leaves, about 190 wide at
+      // 390×664 with the partners under it)
+      ok(g.picture.w >= (g.vh < 740 ? 180 : 210), `video as big as the bar and the room's pictures leave (${g.picture.w})`);
       // Touch screens get 44px minimum buttons site-wide: the round controls must stay round at that size
       const odd = await page.evaluate(() => [...document.querySelectorAll('[data-stage]:not([data-rail]) .bar__btn:not(.bar__cc), [data-stage] .bar__play, [data-stage][data-rail] .bar__ico')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => el.getBoundingClientRect()).filter((b) => Math.abs(b.width - b.height) > 1 || b.height < 44).length);
       ok(odd === 0, `round controls are 44px circles (at least) on a touch screen (${odd} out of shape)`);
@@ -320,7 +325,8 @@ try {
     g = await probe(page);
     ok(!g.covered, 'sending love draws nothing over the picture');
     const hearts = await page.evaluate(() => { const pic = document.querySelector('.stage__picture').getBoundingClientRect(); const f = [...document.querySelectorAll('[data-s="rise"] .float')]; return { n: f.length, onPicture: f.filter((h) => { const b = h.getBoundingClientRect(); return b.left < pic.right && b.right > pic.left && b.top < pic.bottom && b.bottom > pic.top; }).length }; });
-    ok(hearts.n > 0 && hearts.onPicture === 0, `hearts float up the rail beside the picture (${hearts.n}, ${hearts.onPicture} on it)`);
+    // (on a computer they float up the rail; a phone's bar has no column for them: the heart beats, nothing floats)
+    ok(phone ? hearts.n === 0 : hearts.n > 0 && hearts.onPicture === 0, phone ? `a phone's bar: the heart answers, nothing floats (${hearts.n})` : `hearts float up the rail beside the picture (${hearts.n}, ${hearts.onPicture} on it)`);
 
     await page.evaluate(() => window.scrollTo(0, document.querySelector('.hero').offsetHeight + 400));
     await sleep(900);

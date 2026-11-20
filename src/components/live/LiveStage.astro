@@ -155,9 +155,6 @@ const ICON = {
       <span class="bar__time" data-s="time"><span data-s="time-now">0:00</span><span class="bar__total" data-s="time-total"></span></span>
       <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden><span class="bar__cc-ico">CC</span><span class="bar__lbl" aria-hidden="true">Captions</span></button>
       <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)"><span class="bar__full-ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
-      <!-- The replay's way into the room, in its rail on a phone held upright, where the live rail has its own (the room's
-           first picture for its face; live-design.ts opens the viewer from either) -->
-      <button class="bar__btn bar__design" type="button" data-s="design-r" aria-label="See the room and the plan" title="The room and the plan" hidden><span class="bar__ico"><img data-s="design-face-r" alt="" decoding="async" /></span><span class="bar__lbl" aria-hidden="true">The room</span></button>
     </div>
   </div>
 
@@ -450,10 +447,13 @@ const ICON = {
      Theater layout, Peter, Nov 17 2026): sound and full screen at the top, each with its word under it, and the heart
      at the bottom, where the hearts everyone sends float up the column beside the picture (never on it). The picture
      gets the room the bar took, so it's taller. LIVE and the number watching are the page's to show (its eyebrow on a
-     computer, beside the kid's name on a phone). live-stage.ts decides when (data-rail): a live portrait picture, out
-     of full screen, not on a phone held sideways. A replay keeps its bar: its progress line needs the width ── */
-  /* (a phone held sideways too: the server marks the rail before the page's script runs, for any screen) */
-  @media all {
+     computer). live-stage.ts decides when (data-rail): a live portrait picture, out of full screen, on a computer or a
+     phone held sideways. Never on a phone held upright: there the room's pictures stay beside the video all through the
+     reveal and the controls run in the bar under both (Peter, Nov 20 2026: "why does the at 4pm drop the before pics
+     and plan on the right side?!?!", then "Keep pictures beside video") ── */
+  /* (the server marks the rail before the page's script runs, for any screen: so this is everything but a phone held
+     upright, PHONE_UPRIGHT in src/utils/live-media.ts, where the mark does nothing) */
+  @media (min-width: 961px), (min-width: 560px) and (min-aspect-ratio: 7/4) and (max-height: 540px) {
     .stage[data-party][data-rail] {
       --rail: 56px; --rail-gap: 12px; --below: var(--under, 0px);
       grid-template-columns: minmax(0, 1fr) minmax(0, var(--pic)) var(--rail-gap) var(--rail) minmax(0, 1fr);
@@ -535,16 +535,16 @@ const ICON = {
     .stage[data-rail] .bar__heart:active, .stage[data-rail] .bar__heart.is-pop, .stage[data-rail] .bar__heart.is-beat { transform: none; }
   }
 
-  /* ── One layout, live and in the replay: on a computer's Theater (Peter, Nov 19 2026: yes to "one layout for live and
-     the replay") and on a phone or tablet held upright (Nov 20 2026: "Yes, one layout"). The picture, the rail of its
-     controls beside it (live's, above; the replay's play, captions and full screen in the same place, and on a phone
-     its way into the room), and under the picture a row for the replay's timeline, kept empty while live. The picture
-     is the same size in both, so nothing moves when the reveal ends and its replay starts. (A computer narrower than
-     the Theater and a phone held sideways keep the replay's bar, their own layouts; full screen is full screen.) On a
-     phone, "That's the reveal!" keeps its own layout (the design beside the note, the note centred: Peter's iPhone,
-     Nov 18 2026); the Theater keeps the rail's place for it (LivePage) ── */
-  /* (the Theater's width and PHONE_UPRIGHT, word for word as in LivePage and src/utils/live-media.ts) */
-  @media (min-width: 1200px), (max-width: 559px), (max-width: 960px) and (max-aspect-ratio: 1749/1000), (max-width: 960px) and (min-height: 541px) {
+  /* ── One layout, live and in the replay, on a computer's Theater (Peter, Nov 19 2026: yes to "one layout for live and
+     the replay"). The picture, the rail of its controls beside it (live's, above; the replay's play, captions and full
+     screen in the same place), and under the picture a row for the replay's timeline, kept empty while live. The
+     picture is the same size in both, so nothing moves when the reveal ends and its replay starts. (A computer
+     narrower than the Theater and a phone held sideways keep the replay's bar, their own layouts, and a phone held
+     upright has the room's pictures beside the video and its controls in the bar under both, live and in the replay
+     alike: Peter, Nov 20 2026, "Keep pictures beside video". Full screen is full screen.) The Theater keeps the rail's
+     place for "That's the reveal!" (LivePage) ── */
+  /* (the Theater's width, as in LivePage) */
+  @media (min-width: 1200px) {
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) { --line: 48px; --rail: 56px; --rail-gap: 12px; }
     .stage[data-party][data-orientation='portrait'][data-rail]:not([data-fullscreen]) {
       --below: calc(var(--line) + var(--under, 0px));
@@ -593,12 +593,8 @@ const ICON = {
     /* (a press: the round part gives under it and springs back, the word staying put) */
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button[data-press] > :first-child { transform: scale(0.88); transition: transform 90ms ease-out; }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__cc[aria-pressed='true'] .bar__cc-ico { background: var(--c-dark); border-color: var(--c-dark); color: #fff; }
-    /* (the room: its first picture in the circle, ringed in ink, as in the live rail) */
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__design .bar__ico { padding: 0; overflow: hidden; border: 2px solid var(--c-dark); box-shadow: 0 0 0 2px #fff, 0 4px 12px rgba(30, 31, 37, 0.14); }
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__design img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 50%; }
     @media (hover: hover) {
       .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:hover :is(.bar__cc-ico, .bar__full-ico) { border-color: var(--c-dark); }
-      .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__design:hover .bar__ico { transform: scale(1.06); }
     }
     /* (the site's two-tone focus ring, on the round part only, as the live rail's) */
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:focus-visible { outline: none; box-shadow: none; }
@@ -617,15 +613,14 @@ const ICON = {
     }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__time { height: 14px; }
   }
-  /* A short rail (a small phone, or captions on): step by step until it fits the picture's height, as the live rail
-     does (live-stage.ts measures it, data-rail-fit): the words go and the circles sit closer, then the circles are smaller,
-     then The room steps out (the design is further down the page) */
+  /* A short rail (a short window, or captions on, whose line takes its room from the picture): step by step until it
+     fits the picture's height, as the live rail does (live-stage.ts measures it, data-rail-fit): the words go and the
+     circles sit closer, then the circles are smaller */
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit]:not([hidden]) { gap: 10px; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit] .bar__lbl { display: none; }
-  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:is([data-rail-fit='tight'], [data-rail-fit='tiny']):not([hidden]) { gap: 7px; }
-  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:is([data-rail-fit='tight'], [data-rail-fit='tiny']) > button { grid-template-rows: 40px; }
-  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:is([data-rail-fit='tight'], [data-rail-fit='tiny']) :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { width: 40px; height: 40px; }
-  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tiny'] > .bar__design { display: none; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight']:not([hidden]) { gap: 7px; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight'] > button { grid-template-rows: 40px; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight'] :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { width: 40px; height: 40px; }
 
   /* One heart floating up the column: it rises from the button, sways a little and fades near the top
      (--up: the column's height, --s1..3 and --r1..2: its own sway, set by live-stage.ts) */

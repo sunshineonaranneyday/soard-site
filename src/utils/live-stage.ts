@@ -151,7 +151,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const { client } = opts;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const sideways = matchMedia(SIDE);
-  // (a phone or tablet held upright: the replay's rail carries its own way into the room there, LiveStage)
+  // (a phone or tablet held upright: never the rail there, the room's pictures stay beside the video, LiveStage)
   const upright = matchMedia(PHONE_UPRIGHT);
   const picture = $('picture');
   const screen = root.querySelector<HTMLElement>('.stage__screen');
@@ -620,7 +620,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // (not under "That's the reveal!": the live video kept under the note has nothing left in the rail, and its empty
     // column left the note off centre (Peter's iPhone, Nov 18 2026). The page is then laid out as for everyone arriving
     // after the end: the design beside the note, the kid's name centred)
-    const rail = party && live && !endShown && shape() === 'portrait' && document.fullscreenElement !== root;
+    // (never on a phone held upright: the room's pictures stay beside the video all through the reveal, its controls in
+    // the bar under both; Peter, Nov 20 2026: "Keep pictures beside video")
+    const rail = party && live && !endShown && shape() === 'portrait' && document.fullscreenElement !== root && !upright.matches;
     flag('data-rail', rail);
 
     // Photo badge, before the watch party only
@@ -685,8 +687,6 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       [$('heart'), live && roomy && (onAir || !isVideo) && !endShown],
       ...[...root.querySelectorAll<HTMLElement>('[data-full]')].map((b) => [b, !endShown && isVideo && (kind === 'replay' || (live && roomy))] as [HTMLElement, boolean]),
       [$('design'), rail && !!designFace && !endShown],
-      // (the replay's, in its rail on a phone held upright: one layout, live and in the replay, Peter, Nov 20 2026)
-      [$('design-r'), replayControls && party && !endShown && !!designFace && upright.matches && shape() === 'portrait' && document.fullscreenElement !== root],
     ]);
     railChange(shows);
     // "That's the reveal!": whose, and the replay when there's one (until then, when it will be)
@@ -713,14 +713,12 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     fitRail();
   }
 
-  // The replay's rail beside the picture (one layout, live and in the replay: LiveStage) on a short picture, a small
-  // phone's (shorter still with captions on, whose line takes its room from the picture): step by step, as the live
-  // rail does, until its buttons fit the picture's height: first the words go and the buttons sit closer (data-rail-fit
-  // 'short'), then the circles are smaller ('tight'), then The room steps out ('tiny': the design is further down the
-  // page). Measured, not guessed from the screen's height: the picture's height turns on the page's header, the
-  // phone's toolbars, the box docked at its foot and the captions. Only when the rail's height or its buttons change
-  // (the rail is the picture's height, never its own content's: LiveStage contains it; the steps hide by CSS, not by
-  // [hidden], so they never change what's counted here)
+  // The replay's rail beside the picture (one layout, live and in the replay, on a computer's Theater: LiveStage) on a
+  // short picture (a short window, or captions on, whose line takes its room from the picture): step by step, as the
+  // live rail does, until its buttons fit the picture's height: first the words go and the buttons sit closer
+  // (data-rail-fit 'short'), then the circles are smaller ('tight'). Measured, not guessed from the window's height.
+  // Only when the rail's height or its buttons change (the rail is the picture's height, never its own content's:
+  // LiveStage contains it; the steps hide by CSS, not by [hidden], so they never change what's counted here)
   let railSig = '';
   function fitRail() {
     const bar = $('replaybar');
@@ -732,7 +730,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     railSig = sig;
     delete bar.dataset.railFit;
     if (!railed) return;
-    for (const step of ['short', 'tight', 'tiny']) {
+    for (const step of ['short', 'tight']) {
       if (bar.scrollHeight <= bar.clientHeight + 1) break;
       bar.dataset.railFit = step;
     }
@@ -1350,10 +1348,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     setDesign(face: string) {
       if (face === designFace) return;
       designFace = face;
-      for (const k of ['design-face', 'design-face-r']) {
-        const img = $(k) as HTMLImageElement | null;
-        if (img && face && img.getAttribute('src') !== face) img.src = face;
-      }
+      const img = $('design-face') as HTMLImageElement | null;
+      if (img && face && img.getAttribute('src') !== face) img.src = face;
       paint();
     },
     pin(on: boolean, where: 'give' | 'design' = 'give') {
