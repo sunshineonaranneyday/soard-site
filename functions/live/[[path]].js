@@ -259,7 +259,8 @@ function rewrite(res, { kid, party, messages, design, partnerList }) {
       // A live upright picture has its controls in a rail beside it (LiveStage, live-stage.ts's data-rail; its styles never
       // apply to a phone held sideways, which the server can't know): the page is laid out for that from the first paint
       .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': null, 'data-rail': party.mode === 'live' && party.orientation === 'portrait' ? '' : null }))
-      .on('#live-hero [data-s="bar"]', setAttrs({ hidden: null }))
+      // (before the reveal, nothing to control: no bar, and when it goes live under the photo instead, below)
+      .on('#live-hero [data-s="bar"]', setAttrs({ hidden: party.waiting ? '' : null }))
       .on('#live-hero [data-live="eyebrow"]', { element(e) { e.setInnerContent(words.eyebrow); } })
       // The status line: the video says it all once it plays
       .on('#live-hero [data-live="status"]', { element(e) { e.setInnerContent(words.status); e.setAttribute('aria-live', 'polite'); } })
@@ -273,6 +274,15 @@ function rewrite(res, { kid, party, messages, design, partnerList }) {
       .on('#live-hero [data-live="onair"]', setAttrs({ hidden: party.mode === 'live' ? null : '' }))
       // Full screen, live: there from the moment the player is in the frame (until it plays muted: then "Tap for sound")
       .on('#live-hero [data-s="livebar"] [data-full]', setAttrs({ hidden: party.mode === 'live' ? null : '' }));
+    // Before the reveal, in the Theater: when it goes live, under the photo (live-stage.ts StageView.waiting)
+    if (party.waiting && party.when) {
+      const w = party.when;
+      rw = rw
+        .on('#live-hero [data-stage]', setAttrs({ 'data-today': w.today ? '' : null }))
+        .on('#live-hero [data-s="when"]', setAttrs({ hidden: null }))
+        .on('#live-hero [data-s="when-when"]', { element(e) { e.setInnerContent(w.when); } })
+        .on('#live-hero [data-s="when-sub"]', { element(e) { e.setInnerContent(w.sub); } });
+    }
     // A child's own past reveal (_past-reveal.js): the page script starts from it, as the page was drawn
     if (party.past) rw = rw.on('#live-hero', setAttrs({ 'data-past': JSON.stringify(party.past) }));
     if (party.ended) {
@@ -612,7 +622,7 @@ export async function onRequest(context) {
   try {
     const kid = isIndex && broadcast ? await currentKid(near, broadcast.state) : null;
     if (kid?.published) kid.card = await cardFor(context, `/live/${kid.slug}/`);
-    const party = broadcast ? watchParty(broadcast.pub, { pageKid }) : null;
+    const party = broadcast ? watchParty(broadcast.pub, { pageKid, tz: visitorZone(request) }) : null;
     if (party) { party.generic = !broadcast.pub.kidSlug; party.kidName = broadcast.pub.kidName || ''; }
     // (the page script starts from the same past reveal, and keeps showing it: LivePage decide)
     if (party && broadcast.past) party.past = broadcast.pub;
@@ -667,10 +677,13 @@ export async function onRequest(context) {
       // The hero's words and buttons for the watch party, by the page script's rules (momentWords, ctasThatApply)
       const pub = broadcast.pub;
       const view = party.mode;
-      // (a video, except once the reveal is over with its replay not here yet: "That's the reveal!" holds the frame)
-      const hasPlayer = !party.ended;
+      // (a video, except once the reveal is over with its replay not here yet: "That's the reveal!" holds the frame, and
+      // before the reveal, the photo)
+      const hasPlayer = !party.ended && !party.waiting;
       party.words = momentWords({ view, scheduledAt: pub.scheduledAt || null, hasPlayer, source: pub.source, endedAt: pub.endedAt, party: true, tz: visitorZone(request) });
       party.ctas = { display: party.mode, view, scheduledAt: pub.scheduledAt || null, remindUsable, pageKid, inSchedule: false, pastOnPage: false, hasPlayer, source: pub.source };
+      // (before the reveal: when it goes live, the watch card's words, as drawPage gives the stage)
+      if (party.waiting) party.when = watchWords({ view: 'upcoming', scheduledAt: pub.scheduledAt || null, pageKid, tz: visitorZone(request) });
     }
     // The messages box moves first (it needs the page's text); the rest are streamed rewrites
     const ctaFacts = first ? {
@@ -686,12 +699,14 @@ export async function onRequest(context) {
     if (rows && isIndex) page = addHeroRows(page, { list: rows, zone: visitorZone(request), between: !!broadcast && !kid && !ACTIVE.has(broadcast.state?.phase) });
     if (line) page = addAfterLine(page, line);
     if (schedule) page = addSchedule(page, schedule, { zone: visitorZone(request), current: showingKid(broadcast?.pub, pageKid) });
-    // The reminder block, before a reveal or between reveals, once the schedule says whose day it is
-    if (first && schedule) {
+    // The reminder block, before a reveal or between reveals, once the schedule says whose day it is (before a reveal in
+    // the Theater too)
+    const remindView = first ? first.view : party?.waiting ? 'upcoming' : '';
+    if (remindView && schedule) {
       const pub = broadcast.pub || {};
-      const inviteKid = pageKid || (first.view !== 'idle' ? pub.kidSlug || '' : '');
+      const inviteKid = pageKid || (remindView !== 'idle' ? pub.kidSlug || '' : '');
       page = addRemind(page, remindFirstPaint({
-        reminders: publicReminders(broadcast.config || {}, env), canPush: true, view: first.view, pageKid,
+        reminders: publicReminders(broadcast.config || {}, env), canPush: true, view: remindView, pageKid,
         scheduledAt: pub.scheduledAt || null, kidName: pub.kidName || '', kidSlug: pub.kidSlug || '',
         inviteFor: inviteKid ? schedule.upcoming.find((r) => r.slug === inviteKid) : undefined,
       }));

@@ -41,6 +41,13 @@ export interface StageView {
    * (functions/live/_past-reveal.js). Its replay's moment, captions, watching and clicks are that reveal's
    */
   broadcastId?: string | null;
+  /**
+   * Before the reveal, in the Theater (Peter, Nov 20 2026, of the photo and its play button on Max's page that morning:
+   * "why not go ahead and show the theater mode"): the watch party's layout already, the child's photo where the video
+   * will be, and when to watch under it, never on it. Upcoming mode, no player. The page sets it for the child the
+   * broadcast is set for (LivePage decide), and the server drew the page that way (functions/live/_watch-party.js)
+   */
+  waiting?: { when: string; sub: string; today: boolean } | null;
 }
 export interface Stage {
   update(view: StageView): void;
@@ -226,7 +233,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const wasParty = party;
     // (the reveal over, its replay not here yet: the watch party's layout, with the note in the frame: showEnd below)
     const after = !!next.ended && next.mode === 'replay' && !next.player;
-    party = (!!next.player && (next.mode === 'live' || next.mode === 'replay')) || after;
+    party = (!!next.player && (next.mode === 'live' || next.mode === 'replay')) || after || (next.mode === 'upcoming' && !!next.waiting);
     root.dataset.mode = next.mode;
     flag('data-party', party);
     root.dataset.orientation = shape();
@@ -629,9 +636,19 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // iPhone's lock screen, a call, AirPods out, Control Center, a media key): playing again goes to the live moment
     setHidden($('tap'), !(isVideo && !endShown && (pstatus === 'blocked' || (kind === 'live' && pstatus === 'paused'))));
 
+    // Before the reveal, in the Theater: when to watch, under the photo in the video's place (no bar: nothing to control)
+    const waiting = party && view.mode === 'upcoming' && view.waiting ? view.waiting : null;
+    setHidden($('when'), !waiting);
+    if (waiting) {
+      const ww = $('when-when'); const ws = $('when-sub');
+      if (ww && ww.textContent !== waiting.when) ww.textContent = waiting.when;
+      if (ws && ws.textContent !== waiting.sub) ws.textContent = waiting.sub;
+      flag('data-today', waiting.today);
+    } else flag('data-today', false);
+
     // Bar
     // (none under "That's the reveal!": nothing in it is shown then, the live video kept under the note included)
-    setHidden($('bar'), !party || endShown);
+    setHidden($('bar'), !party || endShown || !!waiting);
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);

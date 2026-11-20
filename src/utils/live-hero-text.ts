@@ -78,7 +78,22 @@ export function momentWords(f: MomentFacts): { eyebrow: string; status: string; 
     };
   }
   // (no badge on the photo before a reveal: the watch card says when, and the photo has its play button: watchWords)
-  return { ...plannedText(f.scheduledAt, f.tz, now), badge: '' };
+  const planned = plannedText(f.scheduledAt, f.tz, now);
+  // (in the Theater before the reveal, the line under the photo says when: no sentence as well, waitingFor)
+  return { eyebrow: planned.eyebrow, status: f.party ? '' : planned.status, badge: '' };
+}
+
+/**
+ * Before the reveal, the Theater already, all through the reveal's day (Peter, Nov 20 2026, of the photo with a play
+ * button on Max's page that morning: "why not go ahead and show the theater mode", then "i want all reveals to have
+ * theater the day of the reveal"): the broadcast set for a named child at a time, upright, on that child's page or
+ * /live/, from midnight of that day in the viewer's zone. The photo is where the video will be, when it goes live under
+ * it (live-stage.ts StageView.waiting), and at the start only the picture changes. The page script (LivePage decide)
+ * and the server's first paint (functions/live/_watch-party.js) both decide by this
+ */
+export function waitingFor(f: { view: string; forThisKid: boolean; kidSlug?: string | null; scheduledAt?: string | null; orientation?: string | null; tz?: string; now?: number }): boolean {
+  return f.view === 'upcoming' && f.forThisKid && !!f.kidSlug && !!f.scheduledAt && f.orientation !== 'landscape'
+    && daysUntil(f.scheduledAt, f.tz, f.now ?? Date.now()) <= 0;
 }
 
 // ── The watch card ──────────────────────────────────────────────────

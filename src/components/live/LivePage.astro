@@ -617,6 +617,15 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-rail] .bar__end > button:not(.bar__heart)),
       .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > button) { min-height: 78px; justify-content: flex-start; }
 
+      /* Before the reveal (the Theater all through its day): its two buttons as quiet as Fund and Share are then, the
+         reminder a soft yellow and the calendar an outline */
+      .hero[data-party][data-orientation='portrait'] .hero-ctas [data-live='cta-remind'] { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); color: var(--c-dark); }
+      .hero[data-party][data-orientation='portrait'] .hero-ctas [data-live='cta-calendar'] { background: transparent; border-color: var(--c-border); color: var(--c-dark); }
+      @media (hover: hover) {
+        .hero[data-party][data-orientation='portrait'] .hero-ctas [data-live='cta-remind']:hover { background: var(--c-yellow); border-color: var(--c-yellow); }
+        .hero[data-party][data-orientation='portrait'] .hero-ctas [data-live='cta-calendar']:hover { border-color: var(--c-dark); background: transparent; }
+      }
+
       /* The room: what the name and the messages leave of the column, its pictures taking what its switch leaves (never
          taller than the photo's own shape needs), giving way first on a short screen; on a tall one, with room to spare,
          it sits in the middle of its share */
@@ -815,7 +824,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   import { cfRaw } from '../../utils/cf-image';
   import { readUpcoming, loadSignup, inviteData, inviteLinks, scheduleOnPage, type UpcomingReveal } from '../../utils/reveals-client';
   import { heroRowsHtml, rowsSignature, afterLine } from '../../utils/upcoming-rows';
-  import { afterReveal, momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences, watchWords } from '../../utils/live-hero-text';
+  import { afterReveal, momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences, watchWords, waitingFor } from '../../utils/live-hero-text';
   import { onPageLoad } from '../../utils/page-load';
 
   // The hero's buttons, two at most, and which apply when: src/utils/live-hero-text.ts (HERO_CTAS, ctasThatApply), shared
@@ -1155,7 +1164,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       if (morphDraw) { morphDraw = draw; return; }
       // (and when this drawing brings up "That's the reveal!", which changes the stage's shape: see reshape above)
       const next = rendered ? decide(state) : null;
-      if (next && (next.party !== hero.hasAttribute('data-party') || (next.party && !stage.ended && stage.endsWith(next.view as 'idle' | 'upcoming' | 'live' | 'replay')))) morph(draw); else draw();
+      // (and the Theater before the reveal going live, or back to the countdown: the rail's controls come in beside the
+      // picture and the buttons change, a crossfade rather than a cut)
+      const tilted = !!next && next.party && hero.hasAttribute('data-party') && (display === 'upcoming') !== (next.view === 'upcoming');
+      if (next && (next.party !== hero.hasAttribute('data-party') || tilted || (next.party && !stage.ended && stage.endsWith(next.view as 'idle' | 'upcoming' | 'live' | 'replay')))) morph(draw); else draw();
     }
 
     // ── The reveal starts with the page open: everyone is brought up to the video ──
@@ -1320,14 +1332,18 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       // The reveal over and its replay not here yet: the watch party's layout all the same, "That's the reveal!" in the
       // frame, for everyone (arriving after the end too)
       const after = afterReveal({ view, hasPlayer, source: s.source, endedAt: s.endedAt });
+      // Before the reveal, the Theater already (Peter, Nov 20 2026, of Max's page that morning: "why not go ahead and show
+      // the theater mode"): the broadcast set for a named child, at a time, upright, on their page or /live/; the photo in
+      // the video's place and when under it (live-stage.ts StageView.waiting). The server drew it so (_watch-party.js)
+      const waiting = waitingFor({ view, forThisKid: forThisKid && !archive, kidSlug: s.kidSlug, scheduledAt: s.scheduledAt, orientation: s.orientation });
       // (party held for "That's the reveal!" both while it shows and when this very drawing brings it up: decided here,
       // before the stage hears of it, so the layout never drops for a moment and an open give form stays open)
-      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer || after.ended || stage.endsWith(view as 'idle' | 'upcoming' | 'live' | 'replay'), player, after, archive };
+      return { s, forThisKid, phase, view, kidSlug, hasPlayer, party: hasPlayer || after.ended || waiting || stage.endsWith(view as 'idle' | 'upcoming' | 'live' | 'replay'), player, after, archive, waiting };
     }
 
     function drawPage(state: LiveState | null, meta: { reminders: ReminderOptions | null }) {
       last = state; lastMeta = meta;
-      const { s, forThisKid, phase, view, kidSlug, hasPlayer, party, player, after, archive } = decide(state);
+      const { s, forThisKid, phase, view, kidSlug, hasPlayer, party, player, after, archive, waiting } = decide(state);
       // (this child's own replay, current now: kept as their past reveal for when it no longer is)
       if (!archive && pageKid && s.kidSlug === pageKid && s.phase === 'replay' && s.player?.kind === 'replay' && s.source === 'stream' && s.id) past = { ...s, replayUntil: null };
       if ((phase === 'live' || phase === 'ending') && s.player?.kind === 'live' && s.id) liveSeen = { id: s.id, player: s.player };
@@ -1433,7 +1449,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         const text = afterLine(upcoming, kidSlug, s.kidSlug === kidSlug ? s.kidName || '' : '');
         const t = q<HTMLElement>('next-text');
         if (t && t.textContent !== text) t.textContent = text;
-        setHidden(nextLine, !text || !(display === 'upcoming' || display === 'idle'));
+        setHidden(nextLine, !text || party || !(display === 'upcoming' || display === 'idle'));
       }
 
       stage.update({
@@ -1445,6 +1461,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         ended: after.ended,
         replaySoon: after.replaySoon,
         broadcastId: s.id,
+        // (when it goes live, under the photo: the watch card's words, as the server wrote them)
+        waiting: waiting ? watchWords({ view: 'upcoming', scheduledAt: s.scheduledAt || null, pageKid, upcoming }) : null,
       });
       messages?.update({ active: forThisKid && !!s.id && view !== 'idle', broadcastId: s.id, kidName: s.kidName, party, archive });
       if (!party) give?.close();

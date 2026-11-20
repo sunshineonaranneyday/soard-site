@@ -9,19 +9,26 @@
  *
  * Mirrors render() in src/components/live/LivePage.astro: keep them in step.
  */
-import { afterReveal } from '../../src/utils/live-hero-text.ts';
+import { afterReveal, waitingFor } from '../../src/utils/live-hero-text.ts';
 
 /**
- * How the page should look at first paint, or null when it is the plain hero.
+ * How the page should look at first paint, or null when it is the plain hero. Live, the replay, the end, and before
+ * the reveal for the child the broadcast is set for (mode 'upcoming', waiting: the Theater with the photo).
  * @param pub   publicState() of the broadcast
- * @param opts  { pageKid: kid slug of the page ('' for /live/) }
+ * @param opts  { pageKid: kid slug of the page ('' for /live/), tz: the visitor's zone, now }
  */
-export function watchParty(pub, { pageKid = '' } = {}) {
+export function watchParty(pub, { pageKid = '', tz, now = Date.now() } = {}) {
   if (!pub) return null;
   // A stream with no kid named yet is decided in the browser, which has the schedule
   const forThisKid = !pageKid || pub.kidSlug === pageKid;
   if (!forThisKid) return null;
   const phase = pub.phase;
+  // Before the reveal, the Theater already: the child's photo in the video's place, when under it (waitingFor)
+  if (phase === 'scheduled' || phase === 'armed') {
+    // (all through the reveal's day, in the visitor's zone)
+    const waiting = waitingFor({ view: 'upcoming', forThisKid, kidSlug: pub.kidSlug, scheduledAt: pub.scheduledAt, orientation: pub.orientation, tz, now });
+    return waiting ? { mode: 'upcoming', orientation: 'portrait', eyebrow: '', ended: false, replaySoon: false, waiting: true } : null;
+  }
   const view = phase === 'live' || phase === 'ending' ? 'live' : phase === 'replay' ? 'replay' : '';
   if (!view) return null;
   // The reveal over and its replay not here yet: the watch party's layout all the same, "That's the reveal!" in the

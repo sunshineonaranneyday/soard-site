@@ -48,10 +48,24 @@ test('replay with a video', () => {
   assert.deepEqual(r, { mode: 'replay', orientation: 'landscape', eyebrow: 'Replay', ended: false, replaySoon: false });
 });
 
-test('before the camera comes on it is the plain hero, however close the start (the starting-soon screen is gone)', () => {
-  assert.equal(watchParty(pub({ phase: 'armed', scheduledAt: at(10) }), { now }), null);
-  assert.equal(watchParty(pub({ phase: 'armed', scheduledAt: at(-35) }), { pageKid: 'axel', now }), null, 'running late too');
-  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(45) }), { now }), null);
+test('on the reveal\'s day, before the camera comes on: the Theater with the photo (Peter, Nov 20 2026: "i want all reveals to have theater the day of the reveal")', () => {
+  const tz = 'America/New_York'; // now is 2 PM there
+  const waiting = { mode: 'upcoming', orientation: 'portrait', eyebrow: '', ended: false, replaySoon: false, waiting: true };
+  assert.deepEqual(watchParty(pub({ phase: 'scheduled', scheduledAt: at(45) }), { tz, now }), waiting, 'on /live/');
+  assert.deepEqual(watchParty(pub({ phase: 'armed', scheduledAt: at(10) }), { pageKid: 'axel', tz, now }), waiting, "on the child's own page, camera connected");
+  assert.deepEqual(watchParty(pub({ phase: 'armed', scheduledAt: at(-35) }), { pageKid: 'axel', tz, now }), waiting, 'running late too');
+  // From midnight of the day, in the visitor's zone
+  assert.deepEqual(watchParty(pub({ phase: 'scheduled', scheduledAt: '2026-10-14T23:30:00Z' }), { tz, now: Date.parse('2026-10-14T04:05:00Z') }), waiting, '12:05 AM, the reveal at 7:30 PM');
+  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: '2026-10-14T23:30:00Z' }), { tz, now: Date.parse('2026-10-14T03:55:00Z') }), null, '11:55 PM the night before: the plain hero');
+  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(24 * 60) }), { tz, now }), null, 'the day before');
+});
+
+test('before the reveal, the plain hero on another child\'s page, with no child named, no time, or a sideways broadcast', () => {
+  const tz = 'America/New_York';
+  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(45) }), { pageKid: 'dana', tz, now }), null);
+  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(45), kidSlug: null }), { tz, now }), null);
+  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: null }), { tz, now }), null);
+  assert.equal(watchParty(pub({ phase: 'scheduled', scheduledAt: at(45), orientation: 'landscape' }), { tz, now }), null);
 });
 
 test('idle is the plain hero', () => {
