@@ -607,6 +607,12 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       /* The page's two buttons under it, small and quiet: Fund the next room a soft yellow, Share an outline. Actions, not
          the headline (Peter: "fund the next room takes visual priority") */
       .hero[data-party][data-orientation='portrait'] .hero-ctas { grid-area: ctas; justify-self: start; flex-wrap: nowrap; gap: 8px; margin: 14px 0 0; }
+      /* Share and Fund the next room are in the video's rail while it shows them (LiveStage, Peter, Nov 20 2026: "can you
+         move the share and fund a room in the rail where play and full screen etc are?"): not here as well. The row goes
+         when nothing else is in it, and the room has its place */
+      :global(.hero[data-party][data-orientation='portrait']:has([data-stage] .stage__bar:not([hidden]) > :not([hidden]) [data-act='fund']:not([hidden]))) .hero-ctas [data-live='cta-donate'],
+      :global(.hero[data-party][data-orientation='portrait']:has([data-stage] .stage__bar:not([hidden]) > :not([hidden]) [data-act='share']:not([hidden]))) .hero-ctas [data-live='cta-share'] { display: none !important; }
+      :global(.hero[data-party][data-orientation='portrait']:has([data-stage] .stage__bar:not([hidden]) > :not([hidden]) [data-act='fund']:not([hidden])):has([data-stage] .stage__bar:not([hidden]) > :not([hidden]) [data-act='share']:not([hidden]))) .hero-ctas:not(:has(> [data-live^='cta-']:not([data-live='cta-donate']):not([data-live='cta-share']):not([hidden]):not([data-capped]))) { display: none; }
       .hero[data-party][data-orientation='portrait'] .hero-ctas > * { flex: none; white-space: nowrap; height: 40px; min-height: 40px; padding: 0 16px; font-size: 14px; border-width: 1.5px; box-shadow: none; }
       .hero[data-party][data-orientation='portrait'] .hero-ctas > * :global(svg) { width: 16px; height: 16px; }
       /* (always in this order: the page orders the hero's buttons by the moment for its other layouts, inline; here the
@@ -1723,6 +1729,24 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       }
     });
 
+    // ── Share and Fund the next room in the Theater's rail (LiveStage; Peter, Nov 20 2026: "can you move the share and fund
+    // a room in the rail where play and full screen etc are?") ──
+    // The rail's buttons are the head's, moved: each shows while its head button applies (hidden, capped), and a press on
+    // it is a press on the head's, so the Zeffy link, the give form beside the video and the share sheet stay one thing
+    const acts = [...hero.querySelectorAll<HTMLButtonElement>('[data-act]')];
+    const actSource = (b: HTMLElement) => q<HTMLElement>(b.dataset.act === 'share' ? 'cta-share' : 'cta-donate');
+    const mirrorActs = () => {
+      for (const b of acts) {
+        const src = actSource(b);
+        const on = !!src && !src.hidden && !src.hasAttribute('data-capped');
+        if (b.hidden === on) b.hidden = !on;
+      }
+    };
+    for (const b of acts) b.addEventListener('click', () => actSource(b)?.click());
+    const actWatch = new MutationObserver(mirrorActs);
+    for (const k of ['cta-share', 'cta-donate']) { const el = q(k); if (el) actWatch.observe(el, { attributes: true, attributeFilter: ['hidden', 'data-capped'] }); }
+    mirrorActs();
+
     // Share
     // Shared without ?src= (a friend's visit isn't the sharer's email or QR scan)
     const pageUrl = () => shareable(location.href.split('#')[0]);
@@ -1740,7 +1764,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         onShare: (how) => client.beacon('share', { how }),
       });
       if (opened) return;
-      try { await navigator.clipboard.writeText(pageUrl()); if (label) { label.textContent = 'Link copied'; setTimeout(() => { label.textContent = 'Share'; }, 2000); } client.beacon('share', { how: 'copy' }); } catch { /* blocked */ }
+      // (said on the head's button and on the rail's, wherever it was pressed)
+      const labels = [label, ...hero.querySelectorAll<HTMLElement>('[data-act-label]')].filter(Boolean) as HTMLElement[];
+      try { await navigator.clipboard.writeText(pageUrl()); for (const l of labels) l.textContent = 'Link copied'; setTimeout(() => { for (const l of labels) l.textContent = 'Share'; }, 2000); client.beacon('share', { how: 'copy' }); } catch { /* blocked */ }
     });
 
     // Last, so everything render() touches is declared before the first (possibly synchronous) call

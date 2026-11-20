@@ -53,6 +53,9 @@ const ICON = {
   heart: svg('<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>'),
   play: svg('<path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor"/>'),
   close: svg('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'),
+  // Share (as the page's own Share button), and Fund the next room: a gift, not a heart (the heart is love sent)
+  share: svg('<path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><path d="m16 6-4-4-4 4"/><path d="M12 2v13"/>'),
+  fund: svg('<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M12 8v13"/><path d="M19 12v7a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-7"/><path d="M7.5 8a2.5 2.5 0 0 1 0-5A4.8 8 0 0 1 12 8a4.8 8 0 0 1 4.5-5 2.5 2.5 0 0 1 0 5"/>'),
   eye: svg('<path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/>'),
   spark: svg('<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>'),
 };
@@ -123,6 +126,11 @@ const ICON = {
         <!-- The room's before photos and plans (live-design.ts opens its viewer; the video stays small in the corner): the
              rail sits where the design's strip did, so it's the way in. Its face is the room's first picture -->
         <button class="bar__btn bar__design" type="button" data-s="design" aria-label="See the room and the plan" title="The room and the plan" hidden><span class="bar__ico"><img data-s="design-face" alt="" decoding="async" /></span><span class="bar__lbl" aria-hidden="true">The room</span></button>
+        <!-- Share and Fund the next room, in the Theater's rail on a computer (Peter, Nov 20 2026: "can you move the share
+             and fund a room in the rail where play and full screen etc are?"): the head's own buttons, pressed from here
+             (LivePage mirrors whether each applies and passes the press on); never in a phone's bar -->
+        <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
+        <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund the next room</span></button>
         <!-- In the rail beside a portrait picture (data-rail): the hearts everyone sends float up here, beside the picture, never on it -->
         <span class="bar__rise" data-s="rise" aria-hidden="true"></span>
         <button class="bar__btn bar__heart" type="button" data-s="heart" aria-label="Send love to the family" title="Send love" hidden><span class="bar__ico"><Fragment set:html={ICON.heart} /></span></button>
@@ -155,6 +163,9 @@ const ICON = {
       <span class="bar__time" data-s="time"><span data-s="time-now">0:00</span><span class="bar__total" data-s="time-total"></span></span>
       <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden><span class="bar__cc-ico">CC</span><span class="bar__lbl" aria-hidden="true">Captions</span></button>
       <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)"><span class="bar__full-ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
+      <!-- (Share and Fund the next room, in the replay's rail as in live's) -->
+      <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
+      <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund the next room</span></button>
     </div>
   </div>
 
@@ -442,6 +453,8 @@ const ICON = {
   .full-out, .stage[data-fullscreen] .full-in { display: none; }
   .stage[data-fullscreen] .full-out { display: grid; }
   .bar__lbl, .bar__rise, .bar__behind { display: none; }
+  /* Share and Fund the next room: in the Theater's rail only (below); anywhere else the page's own buttons do it */
+  .stage .bar__act { display: none !important; }
 
   /* ── The rail: a live portrait picture has its controls in a slim column beside it, not in a bar under it (the
      Theater layout, Peter, Nov 17 2026): sound and full screen at the top, each with its word under it, and the heart
@@ -612,12 +625,32 @@ const ICON = {
       position: absolute; left: 0; right: calc(var(--rail) + var(--rail-gap)); width: auto; bottom: calc(var(--under, 0px) + 4px);
     }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__time { height: 14px; }
+    /* Share and Fund the next room, under the video's own controls in the rail, live and in the replay (Peter, Nov 20
+       2026: "can you move the share and fund a room in the rail where play and full screen etc are?"): a circle with its
+       word under it, as the rest; Fund's a soft yellow, the page's one yellow, still a quiet action beside the reveal */
+    .stage[data-party][data-orientation='portrait'][data-rail]:not([data-fullscreen]) .bar__end > .bar__act:not([hidden]) { display: flex !important; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__act:not([hidden]) { display: grid !important; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--fund .bar__ico { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); }
+    @media (hover: hover) {
+      .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--fund:hover .bar__ico { background: var(--c-yellow); border-color: var(--c-yellow); }
+      .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--share:hover .bar__ico { border-color: var(--c-dark); }
+    }
+    /* (live, with them there: on a shorter window the slots take their own heights and sit closer, then the words go,
+       Tap for sound's kept, so the heart still sits at the picture's foot) */
+    @container rail (max-height: 560px) {
+      .bar__end:has(> .bar__act:not([hidden])) { gap: 10px !important; }
+      .bar__end:has(> .bar__act:not([hidden])) > button { min-height: 0 !important; }
+    }
+    @container rail (max-height: 440px) {
+      .bar__end:has(> .bar__act:not([hidden])) :is(.bar__lbl, .bar__behind) { display: none !important; }
+    }
   }
   /* A short rail (a short window, or captions on, whose line takes its room from the picture): step by step until it
      fits the picture's height, as the live rail does (live-stage.ts measures it, data-rail-fit): the words go and the
      circles sit closer, then the circles are smaller */
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit]:not([hidden]) { gap: 10px; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit] .bar__lbl { display: none; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit] > button { min-height: 0 !important; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight']:not([hidden]) { gap: 7px; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight'] > button { grid-template-rows: 40px; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight'] :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { width: 40px; height: 40px; }

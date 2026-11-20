@@ -153,6 +153,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const sideways = matchMedia(SIDE);
   // (a phone or tablet held upright: never the rail there, the room's pictures stay beside the video, LiveStage)
   const upright = matchMedia(PHONE_UPRIGHT);
+  // (a computer's Theater: its rail also carries Share and Fund the next room, so it stays through "That's the reveal!")
+  const theater = matchMedia('(min-width: 1200px)');
   const picture = $('picture');
   const screen = root.querySelector<HTMLElement>('.stage__screen');
   const playerEl = $('player');
@@ -622,7 +624,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // after the end: the design beside the note, the kid's name centred)
     // (never on a phone held upright: the room's pictures stay beside the video all through the reveal, its controls in
     // the bar under both; Peter, Nov 20 2026: "Keep pictures beside video")
-    const rail = party && live && !endShown && shape() === 'portrait' && document.fullscreenElement !== root && !upright.matches;
+    // (in a computer's Theater it stays through "That's the reveal!", holding only Share and Fund the next room then: the
+    // rail's place is kept there anyway, LivePage, and the two aren't lost at the moment they matter most)
+    const rail = party && live && (!endShown || theater.matches) && shape() === 'portrait' && document.fullscreenElement !== root && !upright.matches;
     flag('data-rail', rail);
 
     // Photo badge, before the watch party only
@@ -649,8 +653,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     } else flag('data-today', false);
 
     // Bar
-    // (none under "That's the reveal!": nothing in it is shown then, the live video kept under the note included)
-    setHidden($('bar'), !party || endShown || !!waiting);
+    // (none under "That's the reveal!": nothing in it is shown then, the live video kept under the note included; but the
+    // Theater's rail, which still holds Share and Fund the next room. And none before the reveal: nothing to control)
+    setHidden($('bar'), !party || (endShown && !rail) || !!waiting);
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);
@@ -1217,6 +1222,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const onSideways = () => paint();
   sideways.addEventListener('change', onSideways);
   upright.addEventListener('change', onSideways);
+  theater.addEventListener('change', onSideways);
   document.addEventListener('fullscreenchange', onFullscreen);
 
   // The captions line and the progress line, when their width changes (a turn, full screen, the layout chosen below,
@@ -1366,6 +1372,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       document.removeEventListener('fullscreenchange', onFullscreen);
       sideways.removeEventListener('change', onSideways);
       upright.removeEventListener('change', onSideways);
+      theater.removeEventListener('change', onSideways);
       document.removeEventListener('focusin', onTyping);
       document.removeEventListener('focusout', onTypingOut);
       phone.removeEventListener('change', onTyping);

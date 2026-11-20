@@ -303,8 +303,20 @@ try {
     ok(!g.soundCta && g.mute && g.heart && g.full, 'sound on: the bar shows sound, a heart and full screen');
 
 
+    // In the Theater on a computer, Share and Fund the next room are in the rail, under the video's own controls, not in
+    // the head as well (Peter, Nov 20 2026: "can you move the share and fund a room in the rail where play and full
+    // screen etc are?"); a phone keeps them in the page
+    const acts = await page.evaluate(() => {
+      const seen = (el) => !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+      const rail = document.querySelector('[data-stage] .stage__bar').getBoundingClientRect();
+      const inRail = [...document.querySelectorAll('[data-act]')].filter(seen).map((el) => { const r = el.getBoundingClientRect(); return { k: el.dataset.act, inside: r.left >= rail.left - 1 && r.right <= rail.right + 1 && r.bottom <= rail.bottom + 1 }; });
+      return { inRail, head: ['cta-donate', 'cta-share'].filter((k) => seen(document.querySelector(`[data-live="${k}"]`))) };
+    });
+    if (vp.width >= 1200) ok(acts.inRail.map((a) => a.k).join(',') === 'share,fund' && acts.inRail.every((a) => a.inside) && !acts.head.length, `Share and Fund the next room in the rail, inside it, not in the head (${JSON.stringify(acts)})`);
+    else ok(!acts.inRail.length, `no Share or Fund in the video's controls here: the page keeps them (${JSON.stringify(acts)})`);
+
     if (name === 'desktop' || name === 'phone') {
-      await page.click('[data-live="cta-donate"]');
+      await page.click(vp.width >= 1200 ? '[data-stage] .bar__live [data-act="fund"]' : '[data-live="cta-donate"]');
       await sleep(700);
       g = await probe(page);
       const apart = (a, b) => a.r <= b.x || b.r <= a.x || a.b <= b.y || b.b <= a.y;
