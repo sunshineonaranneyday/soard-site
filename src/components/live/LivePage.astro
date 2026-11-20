@@ -91,7 +91,14 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     <div class="hero-text">
       <!-- The name with its label and the story's line: together across the Theater's top (elsewhere not a box of its own) -->
       <div class="hero-head">
-        <p class="hero-eyebrow"><span class="hero-eyebrow__dot" aria-hidden="true"></span><span data-live="eyebrow">Live reveal</span><span class="hero-eyebrow__n" data-live="watching" hidden></span></p>
+        <!-- The label, and across from it in the Theater the site's reveal news (elsewhere this row isn't a box of its own) -->
+        <div class="hero-eyerow">
+          <p class="hero-eyebrow"><span class="hero-eyebrow__dot" aria-hidden="true"></span><span data-live="eyebrow">Live reveal</span><span class="hero-eyebrow__n" data-live="watching" hidden></span></p>
+          <!-- The site's reveal news (another kid's reveal day, live now, its replay: LiveIndicator fills it), where the
+               Theater gives it a place: across from the label, one quiet line, never floating over the reveal, its rail
+               and timeline, or the sponsors (Peter, Nov 20 2026: "keep it off the sponsors") -->
+          <a class="hero-news" data-banner-home href="/live/" hidden><span class="hero-news__dot" aria-hidden="true"></span><span class="hero-news__label" data-banner-home-label></span><span class="hero-news__text" data-banner-home-text></span><span class="hero-news__go" aria-hidden="true">→</span></a>
+        </div>
         <!-- The kid's name, and on a phone during a live reveal the "Live" the video's rail has no room for (LiveStage) -->
         <div class="hero-titlerow">
           <h1 data-live="title">
@@ -422,6 +429,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .hero[data-party] .hero-lead { display: none; }
   /* (what the room is: only in the Theater, below) */
   .hero-room { display: none; }
+  /* (the reveal news's own place: only the Theater has one, below) */
+  .hero-news { display: none; }
+  .hero-eyerow { display: contents; }
   .hero[data-party] .hero-status:empty { display: none; }
   .hero[data-party] .hero-status { margin-bottom: 20px; min-height: 0; }
   .hero[data-party] .hero-text h1 { font-size: clamp(2rem, 3.4vw, 3.1rem); margin-bottom: 16px; }
@@ -562,6 +572,30 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       .hero[data-party][data-orientation='portrait'] .hero-text { display: contents; }
       .hero[data-party][data-orientation='portrait'] .hero-head { grid-area: head; display: block; min-width: 0; }
       .hero[data-party][data-orientation='portrait'] .hero-eyebrow { margin: -4px 0 8px; }
+      /* The site's reveal news gets its place here, across from the label (LiveIndicator: --banner-home says so, and the
+         card doesn't float over the Theater): a quiet white chip, its label in ink by a yellow dot, whose and when, and
+         the way there. Nothing of it on the reveal, its rail and timeline, or the sponsors */
+      .hero[data-party][data-orientation='portrait'] .hero-head { --banner-home: 1; }
+      .hero[data-party][data-orientation='portrait'] .hero-eyerow { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; margin: -4px 0 8px; }
+      .hero[data-party][data-orientation='portrait'] .hero-eyerow > .hero-eyebrow { flex: none; margin: 0; }
+      .hero[data-party][data-orientation='portrait'] .hero-news:not([hidden]) {
+        display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; box-sizing: border-box; height: 28px;
+        margin: 0; padding: 0 12px 0 11px; border-radius: 100px; background: #fff; border: 1px solid var(--c-border);
+        color: var(--c-text); text-decoration: none; font-size: 12.5px; font-weight: 600; line-height: 1; white-space: nowrap;
+        transition: border-color 150ms ease;
+      }
+      .hero[data-party][data-orientation='portrait'] .hero-news__dot { position: relative; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c-yellow); }
+      .hero[data-party][data-orientation='portrait'] .hero-news[data-state='live'] .hero-news__dot::after {
+        content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--c-yellow); opacity: 0; animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+      }
+      .hero[data-party][data-orientation='portrait'] .hero-news__label { flex: none; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+      .hero[data-party][data-orientation='portrait'] .hero-news__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--c-text-muted); }
+      .hero[data-party][data-orientation='portrait'] .hero-news__go { flex: none; transition: transform 150ms ease; }
+      .hero[data-party][data-orientation='portrait'] .hero-news:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
+      @media (hover: hover) {
+        .hero[data-party][data-orientation='portrait'] .hero-news:hover { border-color: var(--c-dark); }
+        .hero[data-party][data-orientation='portrait'] .hero-news:hover .hero-news__go { transform: translateX(2px); }
+      }
       .hero[data-party][data-orientation='portrait'] .hero-titlerow { min-width: 0; margin: 0; }
       .hero[data-party][data-orientation='portrait'] .hero-text h1 { font-size: clamp(2rem, 2.5vw, 2.7rem); line-height: 1.08; margin: 0; text-wrap: balance; }
       /* What the room is, under the name, as the kid's own page says it ("Therapy Room · 2026"), in place of the story's
@@ -803,7 +837,8 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   }
   @media (prefers-reduced-motion: reduce) {
     .hero-text h1, .hero-lead, .hero-status, .hero-watch, .hero-ctas, .hero-frame { animation: none; opacity: 1; }
-    .hero-eyebrow__dot::after, .hero-onair__dot::after { animation: none; }
+    .hero-eyebrow__dot::after, .hero-onair__dot::after, .hero-news__dot::after { animation: none !important; }
+    .hero-news__go { transition: none !important; }
     .hero[data-enter] :is(.hero-head, .hero-ctas, .hero-frame, .hero-party, :global(.lrm), :global(.lsp)), .hero :global(.lrm) { animation: none !important; }
   }
 </style>

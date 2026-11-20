@@ -121,6 +121,33 @@ export function bannerWords(s: Status, stage: BannerStage, next: NextReveal[], {
   return words(stage === 'today' ? 'Reveal day' : 'Coming up', msg, thenLine(s, next, now), cta);
 }
 
+/**
+ * The same news in one short line, for a page that gives it a place of its own instead of the floating card (the
+ * Theater's head: LivePage, Peter, Nov 20 2026: "keep it off the sponsors"): its label, then whose and when, never
+ * the card's whole sentence, so it fits across from the page's own label
+ */
+export function bannerShort(s: Status, stage: BannerStage, { now = Date.now() } = {}): { label: string; text: string; aria: string } {
+  const whose = s.kidName ? `${possessive(s.kidName)} reveal` : 'The reveal';
+  const label = stage === 'live' ? 'Live now' : stage === 'ended' ? 'Just ended' : stage === 'replay' ? 'Replay ready' : stage === 'today' ? 'Reveal day' : 'Coming up';
+  let text = whose;
+  if (stage === 'live') text = `${whose} is on now`;
+  else if (stage === 'ended') text = `${whose} just ended`;
+  else if (stage === 'replay') text = `Watch ${s.kidName ? possessive(s.kidName) : 'the'} reveal`;
+  else if (s.scheduledAt && Number.isFinite(Date.parse(s.scheduledAt))) {
+    const at = Date.parse(s.scheduledAt);
+    // (past its start and still waiting on the stream: as the card says it)
+    if (at <= now) text = runningLate(s.scheduledAt, now) ? `${whose} is running a little late` : `${whose} is starting soon`;
+    else text = `${whose} ${stage === 'today' ? '' : `${onDay(s.scheduledAt, now)} `}at ${clock(s.scheduledAt)}`;
+  }
+  return { label, text, aria: `${label}. ${text}.` };
+}
+
+/**
+ * On a live page, what the floating card never sits on either, pressable or not: the reveal's stage (the picture, its
+ * rail and timeline, the partners under it) and the sponsors' column (Peter, Nov 20 2026: "keep it off the sponsors")
+ */
+export const LIVE_AREAS = '[data-stage][data-party], .lsp:not([hidden])';
+
 /** Reminders only count as on when there's a way to sign up for them */
 export const remindersUsable = (r: ReminderOptions | null | undefined, canPush = true) => !!r?.enabled && !!(r.email || (r.push && r.pushKey && canPush));
 

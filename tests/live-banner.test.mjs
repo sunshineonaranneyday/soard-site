@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs';
 import { transformSync } from 'esbuild';
 
 const code = transformSync(readFileSync('src/utils/live-banner.ts', 'utf8'), { loader: 'ts', format: 'esm' }).code;
-const { bannerStage, bannerWords, revealsAfter, dismissValue, sitsOn, pageShowsIt, revealIsToday, replayOverdue, easternDay, remindersUsable, remindPromise, runningLate, MAIN_CONTROLS, PICTURES, BANNER_LEAD_DAYS } = await import(`data:text/javascript,${encodeURIComponent(code)}`);
+const { bannerStage, bannerWords, bannerShort, LIVE_AREAS, revealsAfter, dismissValue, sitsOn, pageShowsIt, revealIsToday, replayOverdue, easternDay, remindersUsable, remindPromise, runningLate, MAIN_CONTROLS, PICTURES, BANNER_LEAD_DAYS } = await import(`data:text/javascript,${encodeURIComponent(code)}`);
 
 const H = 3600e3, D = 24 * H, M = 60e3;
 // Wednesday, November 4, 2026, 3:00 PM on the viewer's own clock
@@ -296,4 +296,33 @@ test('the banner keeps clear of a form’s fresh answer, as of anything you can 
 
 test('the banner keeps clear of a reveal card (the whole card opens the story)', () => {
   assert.ok(MAIN_CONTROLS.split(',').includes('.upn-card'));
+});
+
+test('the short line for a page with its own place for the news (the Theater): whose and when, as the card says it', () => {
+  const max = (o = {}) => planned({ kidSlug: 'max', kidName: 'Max', title: "Max's room reveal", ...o });
+  const short = (st) => bannerShort(st, bannerStage(st, now), { now });
+  // (today at 4 PM, an hour from now; the time as the card writes it, with its zone)
+  const today = short(max({ scheduledAt: local(4, 16) }));
+  assert.equal(today.label, 'Reveal day');
+  assert.match(today.text, /^Max’s reveal at 4:00 PM [A-Z]{2,5}$/);
+  assert.equal(today.aria, `Reveal day. ${today.text}.`);
+  assert.match(short(max({ scheduledAt: local(5, 16) })).text, /^Max’s reveal tomorrow at 4:00 PM /);
+  assert.equal(short(max({ scheduledAt: local(5, 16) })).label, 'Coming up');
+  assert.match(short(max({ scheduledAt: local(6, 16) })).text, /^Max’s reveal on Friday at 4:00 PM /);
+  // Past its start, waiting on the stream: never a time gone by
+  assert.equal(short(max({ scheduledAt: local(4, 14, 50) })).text, 'Max’s reveal is starting soon');
+  assert.equal(short(max({ scheduledAt: local(4, 14, 0) })).text, 'Max’s reveal is running a little late');
+  // Live, just ended, the replay
+  assert.deepEqual(bannerShort(max({ live: true, upcoming: false }), 'live', { now }), { label: 'Live now', text: 'Max’s reveal is on now', aria: 'Live now. Max’s reveal is on now.' });
+  assert.equal(bannerShort(max(), 'ended', { now }).text, 'Max’s reveal just ended');
+  assert.equal(bannerShort(max(), 'replay', { now }).text, 'Watch Max’s reveal');
+  assert.equal(bannerShort(max(), 'replay', { now }).label, 'Replay ready');
+  // No child named: the reveal; a name ending in s
+  assert.match(bannerShort(max({ kidName: null, scheduledAt: local(4, 16) }), 'today', { now }).text, /^The reveal at 4:00 PM /);
+  assert.equal(bannerShort(max({ kidName: 'James' }), 'replay', { now }).text, 'Watch James’ reveal');
+});
+
+test('on a live page the card never sits on the reveal\'s stage or the sponsors, pressable or not', () => {
+  assert.ok(LIVE_AREAS.includes('[data-stage][data-party]'));
+  assert.ok(LIVE_AREAS.includes('.lsp'));
 });

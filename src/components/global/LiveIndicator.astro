@@ -16,6 +16,12 @@
  * Behavior:
  *   - Never sits on a button or a video: when one is under it at rest, it steps
  *     aside until that's gone, and it stays above a bar fixed to the bottom.
+ *     On a live page it never sits on the reveal's stage (the picture, its rail
+ *     and timeline, the partners under it) or the sponsors' column either
+ *   - A page that gives the news a place of its own gets it there instead, as one
+ *     short line (the Theater's head, LivePage: [data-banner-home], where CSS
+ *     sets --banner-home: 1), and the card doesn't float (Peter, Nov 20 2026:
+ *     "keep it off the sponsors")
  *     "Live now" moves up under the header instead, if that's clear. Stepped
  *     aside it stays in the tab order, and coming into focus brings it back.
  *   - Closing it is remembered per reveal and per stage, so "Live now" still shows
@@ -149,7 +155,7 @@
   import { cfRaw } from '../../utils/cf-image';
   import { getLiveClient, type LiveState } from '../../utils/live-client';
   import { readReveals } from '../../utils/reveals-client';
-  import { bannerStage, bannerWords, revealsAfter, dismissValue, sitsOn, pageShowsIt, MAIN_CONTROLS, PICTURES, type Box, type NextReveal } from '../../utils/live-banner';
+  import { bannerStage, bannerWords, bannerShort, revealsAfter, dismissValue, sitsOn, pageShowsIt, MAIN_CONTROLS, PICTURES, LIVE_AREAS, type Box, type NextReveal } from '../../utils/live-banner';
   import { onPageLoad } from '../../utils/page-load';
 
   const DISMISS_KEY = 'soard-live-dismissed';
@@ -169,6 +175,17 @@
   const SETTLE_MS = 700;
   let lastScroll = 0;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
+  let homeSeen = false;                    // the page's layout had its own place for the news when last drawn
+
+  /** The page's own place for the news, when its layout has one right now (the Theater's head) */
+  function homeNow(): HTMLAnchorElement | null {
+    const home = document.querySelector<HTMLAnchorElement>('[data-banner-home]');
+    return home && getComputedStyle(home).getPropertyValue('--banner-home').trim() === '1' ? home : null;
+  }
+  function hideHome() {
+    const home = document.querySelector<HTMLAnchorElement>('[data-banner-home]');
+    if (home && !home.hidden) home.hidden = true;
+  }
 
   function readClosed() {
     if (closed !== null) return closed; // what was just closed beats an older stored value
@@ -215,6 +232,12 @@
       const shown = c.checkVisibility ? c.checkVisibility({ checkOpacity, checkVisibilityCSS: true }) : getComputedStyle(c).visibility !== 'hidden';
       if (shown && getComputedStyle(c).pointerEvents !== 'none') return true;
     }
+    // (a live page's stage and sponsors, pressable or not: not even a sliver)
+    for (const a of document.querySelectorAll(LIVE_AREAS)) {
+      if (el.contains(a)) continue;
+      const r = a.getBoundingClientRect();
+      if (r.width && r.height && sitsOn(box, r, 0)) return true;
+    }
     return false;
   }
 
@@ -252,6 +275,9 @@
   }
 
   function keepClear() {
+    // The page's layout gained or lost its own place for the news (a window widened into the Theater, or the reveal
+    // started): it moves there, or back to floating
+    if (!pressing && !!homeNow() !== homeSeen && document.getElementById('live-indicator')) { render(); return; }
     const el = document.getElementById('live-indicator');
     if (!el || el.hidden || pressing) return; // never moves out from under a press
     clearBottomBars(el);
@@ -317,6 +343,7 @@
     const el = document.getElementById('live-indicator');
     if (!el || pressing) return; // what's under the press stays what was pressed
     clearTimeout(hideTimer);
+    homeSeen = !!homeNow();
     // A stream with no kid named, on a kid's own live page: the schedule says whether it's theirs
     if (status?.live && !status.kidSlug && reveals === null && /^\/live\/[^/]+/.test(location.pathname)) { readSchedule(); return; }
     const stage = currentStage();
@@ -325,8 +352,27 @@
       moveFocusOut(el);
       el.classList.remove('is-visible');
       el.hidden = true;
+      hideHome();
       return;
     }
+    // The page has its own place for it: one short line there, and nothing floating over the page
+    const home = homeNow();
+    if (home) {
+      const short = bannerShort(status, stage);
+      const href = status.url || status.liveUrl || '/live/';
+      if (home.getAttribute('href') !== href) home.href = href;
+      home.dataset.state = stage;
+      const hl = home.querySelector<HTMLElement>('[data-banner-home-label]'); if (hl) put(hl, short.label);
+      const ht = home.querySelector<HTMLElement>('[data-banner-home-text]'); if (ht) put(ht, short.text);
+      if (home.getAttribute('aria-label') !== short.aria) home.setAttribute('aria-label', short.aria);
+      home.onclick = () => client.beacon('banner_click', { state: stage });
+      home.hidden = false;
+      moveFocusOut(el);
+      el.classList.remove('is-visible');
+      el.hidden = true;
+      return;
+    }
+    hideHome();
     // One banner on screen at a time: the application bar has the top of the page, so the card
     // waits for it to scroll away or be closed. "Live now" can't wait.
     if (stage !== 'live' && applicationBarInView()) {
