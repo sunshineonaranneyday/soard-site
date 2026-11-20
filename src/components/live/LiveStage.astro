@@ -254,6 +254,8 @@ const ICON = {
     /* (Share and Fund the next room in it on every screen it shows on, the computer Theater's rule below: before the
        reveal they're all it holds, never an empty column) */
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__end > .bar__act:not([hidden]) { display: flex !important; }
+    /* (each slot one height, a one-line word or two, so the circles step evenly down the rail) */
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__end > :is(button, a):not(.bar__heart) { min-height: 78px; justify-content: flex-start; }
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--fund .bar__ico { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); }
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop { text-decoration: none; color: var(--c-dark); }
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico { padding: 0; overflow: hidden; border-color: transparent; background: #3E9EBE; }
@@ -629,7 +631,7 @@ const ICON = {
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:not([hidden]) {
       display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; height: 100%; position: static;
     }
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button {
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act) {
       /* (one column the rail's whole width: an auto column was only as wide as the button's word, so a short word ("Play")
          left its circle at the rail's left and a long one ("Fund the next room") centred it, 5px apart; Peter, Nov 20
          2026: "the play rail is not centered") */
@@ -645,16 +647,16 @@ const ICON = {
     }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__play-ico { border: 0; background: var(--c-dark); color: #fff; box-shadow: 0 6px 16px rgba(30, 31, 37, 0.16); }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__morph { width: 17px; height: 17px; }
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button :global(svg) { width: 19px; height: 19px; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act) :global(svg) { width: 19px; height: 19px; }
     /* (a press: the round part gives under it and springs back, the word staying put) */
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button[data-press] > :first-child { transform: scale(0.88); transition: transform 90ms ease-out; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act)[data-press] > :first-child { transform: scale(0.88); transition: transform 90ms ease-out; }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__cc[aria-pressed='true'] .bar__cc-ico { background: var(--c-dark); border-color: var(--c-dark); color: #fff; }
     @media (hover: hover) {
-      .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:hover :is(.bar__cc-ico, .bar__full-ico) { border-color: var(--c-dark); }
+      .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act):hover :is(.bar__cc-ico, .bar__full-ico) { border-color: var(--c-dark); }
     }
     /* (the site's two-tone focus ring, on the round part only, as the live rail's) */
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:focus-visible { outline: none; box-shadow: none; }
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:focus-visible > :first-child { outline: 2px solid var(--c-dark); outline-offset: 2px; box-shadow: 0 0 0 5px var(--c-yellow); }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act):focus-visible { outline: none; box-shadow: none; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act):focus-visible > :first-child { outline: 2px solid var(--c-dark); outline-offset: 2px; box-shadow: 0 0 0 5px var(--c-yellow); }
     /* (the words, as the live rail's; play's says Pause while it plays) */
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__lbl {
       display: block; grid-row: 2; max-width: 100%; font-size: 10.5px; font-weight: 700; line-height: 1.2; text-align: center; color: var(--c-text-muted);
@@ -673,7 +675,9 @@ const ICON = {
        word under it, as the rest; Fund's a soft yellow, the page's one yellow, still a quiet action beside the reveal */
     .stage[data-party][data-orientation='portrait'][data-rail]:not([data-fullscreen]) .bar__end > .bar__act:not([hidden]) { display: flex !important; }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__act:not([hidden]) { display: grid !important; }
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--fund .bar__ico { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); }
+    /* (in every rail, live, the replay's and before the reveal: stated strongly enough to win over each rail's own white
+       circles, the replay's included, where it had stayed white; Peter, Nov 20 2026: the page's one yellow, wherever it shows) */
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > .bar__act.bar__act--fund .bar__ico { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); }
     /* (the shop: its own round logo fills the circle; a link, so no underline and the rail's ink) */
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop { text-decoration: none; color: var(--c-dark); }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop .bar__ico { padding: 0; overflow: hidden; border-color: transparent; background: #3E9EBE; }
@@ -684,14 +688,16 @@ const ICON = {
     .stage[data-rail] .bar__end[data-rail-fit] > :is(button, a) { min-height: 0 !important; }
     .stage[data-rail] .bar__end[data-rail-fit] :is(.bar__lbl, .bar__behind) { display: none !important; }
     @media (hover: hover) {
-      .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--fund:hover .bar__ico { background: var(--c-yellow); border-color: var(--c-yellow); }
+      .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > .bar__act.bar__act--fund:hover .bar__ico { background: var(--c-yellow); border-color: var(--c-yellow); }
       .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--share:hover .bar__ico { border-color: var(--c-dark); }
     }
     /* (live, with them there: on a shorter window the slots take their own heights and sit closer, then the words go,
        Tap for sound's kept, so the heart still sits at the picture's foot) */
     @container rail (max-height: 560px) {
       .bar__end:has(> .bar__act:not([hidden])) { gap: 10px !important; }
-      .bar__end:has(> .bar__act:not([hidden])) > button { min-height: 0 !important; }
+      /* (every slot stays one height, so the circles sit at even steps down the rail, Peter, Nov 20 2026: "make sure the
+         play rail buttons are aligned vertically!"; a rail that still runs past the picture's foot loses its words and
+         the slots close up evenly: live-stage.ts fitLiveRail) */
     }
     @container rail (max-height: 440px) {
       .bar__end:has(> .bar__act:not([hidden])) :is(.bar__lbl, .bar__behind) { display: none !important; }
@@ -702,9 +708,9 @@ const ICON = {
      circles sit closer, then the circles are smaller */
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit]:not([hidden]) { gap: 10px; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit] .bar__lbl { display: none; }
-  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit] > button { min-height: 0 !important; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit] > :is(button, a.bar__act) { min-height: 0 !important; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight']:not([hidden]) { gap: 7px; }
-  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight'] > button { grid-template-rows: 40px; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight'] > :is(button, a.bar__act) { grid-template-rows: 40px; }
   .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tight'] :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { width: 40px; height: 40px; }
 
   /* One heart floating up the column: it rises from the button, sways a little and fades near the top
