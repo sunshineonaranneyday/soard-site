@@ -700,6 +700,8 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     // the big picture is the same size whichever part shows (nothing moves at a switch)
     thumbs.hidden = !partsNow.some((p) => entriesOf(p).length > 1);
     thumbs.toggleAttribute('data-one', entries.length < 2);
+    // Previous and next on the big one's edges, while the part has more than one picture
+    for (const k of ['prev', 'next']) { const n = rq(k); if (n) n.hidden = entries.length < 2; }
     // The one showing big is marked among the small ones (the one the Tab key stops at: the arrows go through the
     // rest), and kept in sight among them, clear of a faded edge
     const tbs = [...thumbs.querySelectorAll<HTMLButtonElement>('.lrm-thumb')];
@@ -750,6 +752,23 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     }
     railFace();
   }
+  // Previous and next (and the left and right arrow keys on the big picture): one picture along within the part
+  // showing, round at the ends (Peter, Nov 20 2026: "why arent there left and right toggle on the before images for
+  // users to easliy click through?"). The compare's own keys move its line, so they're left alone
+  const roomStep = (by: number) => {
+    const part = designPartsOf(slides).find((p) => p.key === roomPart);
+    const n = part ? entriesOf(part).length : 0;
+    if (!part || n < 2) return;
+    roomAt.set(part.key, ((roomAt.get(part.key) ?? 0) + by + n) % n);
+    drawRoom();
+  };
+  rq('prev')?.addEventListener('click', () => roomStep(-1));
+  rq('next')?.addEventListener('click', () => roomStep(1));
+  rq('big')?.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    e.preventDefault();
+    roomStep(e.key === 'ArrowRight' ? 1 : -1);
+  });
   rq('big')?.addEventListener('click', () => {
     const part = designPartsOf(slides).find((p) => p.key === roomPart);
     const e = part ? entriesOf(part)[roomAt.get(part.key) ?? 0] : null;

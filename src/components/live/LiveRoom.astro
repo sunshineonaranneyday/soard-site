@@ -19,6 +19,9 @@
  *   └─────────────────────┘ ▢     viewer beside the video (the reveal plays on)
  *   1 of 5 · click to see it big
  *
+ * Previous and next on the big one's edges go through the part's pictures one at a time (Nov 20 2026), and so do the
+ * left and right arrow keys on it.
+ *
  * The plan's first picture is its compare (Peter, Nov 18 2026): the floor
  * plan today and the new one on one picture, a line between them to drag
  * (plan-compare.ts, compare-slider.ts), then the designer's two sheets, their
@@ -45,6 +48,11 @@
       <!-- The plan's compare, in the big picture's place when it's the one showing (live-design.ts fills it: drag the line;
            its corner button, or a click that isn't a drag, opens it big) -->
       <div class="lrm-cmp" data-lrm="cmp" hidden></div>
+      <!-- Through the pictures one at a time, from the big one's edges (Peter, Nov 20 2026: "why arent there left and right
+           toggle on the before images for users to easliy click through?"): round at the ends, the small ones' ring
+           and the count following (live-design.ts). Only when the part showing has more than one -->
+      <button class="lrm-nav lrm-nav--prev" type="button" data-lrm="prev" aria-label="Previous picture" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg></button>
+      <button class="lrm-nav lrm-nav--next" type="button" data-lrm="next" aria-label="Next picture" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></button>
       <ul class="lrm-thumbs" data-lrm="thumbs" aria-label="Pictures"></ul>
     </div>
     <p class="lrm-cap"><b data-lrm="cap"></b><span data-lrm="count"></span></p>
@@ -116,7 +124,25 @@
   .lrm-cap span { white-space: nowrap; }
   /* The big one and, beside it, the rest small in a column as tall as it (LivePage sizes the row in the story column) */
   .lrm { --lrm-rail: 76px; --lrm-gap: 10px; }
-  .lrm-row { display: flex; gap: var(--lrm-gap); align-items: stretch; }
+  .lrm-row { position: relative; display: flex; gap: var(--lrm-gap); align-items: stretch; }
+  /* Previous and next: white circles on the big picture's left and right edges, half way down, clear of its badge
+     (the next one left of the small ones' column when it shows: that column is the rail plus its gap, and 4px of its
+     focus room past the row) */
+  .lrm-nav {
+    position: absolute; top: 50%; z-index: 2; width: 42px; height: 42px; margin-top: -21px; padding: 0; border: 0; border-radius: 50%;
+    display: grid; place-items: center; background: rgba(255, 255, 255, 0.95); color: var(--c-dark); cursor: pointer;
+    box-shadow: 0 0 0 1px rgba(30, 31, 37, 0.06), 0 6px 18px rgba(30, 31, 37, 0.18); transition: transform 160ms ease, background-color 160ms ease;
+  }
+  .lrm-nav[hidden] { display: none; }
+  .lrm-nav svg { width: 20px; height: 20px; }
+  .lrm-nav--prev { left: 12px; }
+  .lrm-nav--prev svg { margin-left: -2px; }
+  .lrm-nav--next { right: 12px; }
+  .lrm-nav--next svg { margin-right: -2px; }
+  .lrm-row:has(> .lrm-thumbs:not([hidden])) .lrm-nav--next { right: calc(var(--lrm-rail) + var(--lrm-gap) + 4px + 12px); }
+  .lrm-nav:hover { background: #fff; transform: scale(1.06); }
+  .lrm-nav:active { transform: scale(0.94); }
+  .lrm-nav:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; box-shadow: 0 0 0 5px var(--c-yellow); }
   .lrm-row > .lrm-big, .lrm-row > .lrm-cmp { flex: 1 1 0; min-width: 0; }
   /* The rest, small: a click shows one big. Each as tall as a fifth of the column at most (five photos fit beside the
      picture), never shorter than 44px: more than fit scroll (no fade at the edge: a fade is a gradient, Peter's never). Its
@@ -160,7 +186,8 @@
   .lrm-thumb[aria-current='true'] { box-shadow: 0 0 0 2px var(--c-dark); }
   .lrm-thumb:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) {
-    .lrm-pic img, .lrm-thumb, .lrm-thumb img, .lrm-tab, .lrm-tabs::before { transition: none; }
+    .lrm-pic img, .lrm-thumb, .lrm-thumb img, .lrm-tab, .lrm-tabs::before, .lrm-nav { transition: none; }
+    .lrm-nav:hover, .lrm-nav:active { transform: none; }
     .lrm { animation: none !important; }
     .lrm-thumb:hover { transform: none; }
   }
