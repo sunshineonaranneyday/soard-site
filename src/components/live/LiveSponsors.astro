@@ -27,13 +27,13 @@ const { kid, inner } = Astro.props;
        size two across under it, the tiers one after another, the room's sponsor's cell the biggest, all of it as big as
        the column's height allows (--lsp-s, LivePage's script) */
     .hero[data-party][data-orientation='portrait']:not([data-msgs-open]) .lsp:not([hidden]) {
-      grid-area: side; grid-row: 1 / -1; display: flex; flex-direction: column; gap: 11px; min-height: 0; align-self: stretch; contain: size; margin-top: -4px;
+      grid-area: side; grid-row: 1 / -1; display: flex; flex-direction: column; gap: 8px; min-height: 0; align-self: stretch; contain: size; margin-top: -4px;
       overflow-y: auto; overscroll-behavior: contain; padding: 0; box-sizing: border-box; text-align: left; scrollbar-width: thin;
       container: lsp / inline-size;
     }
     /* (each logo in a cell of a soft tint, so the rows read as rows; no border, no shadow. A logo's own white goes into the
        tint, never a white box on it; and a cell keeps a margin round its logo however big it grows) */
-    .hero[data-party][data-orientation='portrait'] .lsp-card { background: #F8F7F2; --pad: max(5px, calc(var(--h) * var(--lsp-s, 1) * 0.12)); }
+    .hero[data-party][data-orientation='portrait'] .lsp-card { background: #F8F7F2; --pad: max(4px, calc(var(--h) * var(--lsp-s, 1) * 0.09)); }
     .hero[data-party][data-orientation='portrait'] .lsp-card img { mix-blend-mode: multiply; }
     /* (an empty cell is no cell: its tint comes with its logo, never a grey box waiting for one) */
     .hero[data-party][data-orientation='portrait'] .lsp-card { transition: background-color 320ms ease-out; }
@@ -45,9 +45,11 @@ const { kid, inner } = Astro.props;
     @keyframes lspLate { to { opacity: 1; } }
   }
   .lsp-head { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-text-muted); }
-  .lsp-tier { display: grid; gap: 5px; }
-  .lsp-label { margin: 0; font-size: 12.5px; font-weight: 700; line-height: 1.3; color: var(--c-text); }
-  .lsp-grid { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+  /* (the tiers' names and the gaps kept tight, Nov 20 2026: every pixel of the column's height they don't take is the
+     logos', and with a build's twenty sponsors they took a fifth of it) */
+  .lsp-tier { display: grid; gap: 4px; }
+  .lsp-label { margin: 0; font-size: 12px; font-weight: 700; line-height: 1.2; color: var(--c-text); }
+  .lsp-grid { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
   /* Logos big enough to read (Peter, Nov 18 2026: "on the theater the vendor logos are small, can yo make them larger,
      more ledgable?"; Nov 19: "signature and down, the logos should be the same size"): every partner's cell the same,
      two across, each logo filling its cell, every cell as tall as the column has room for. --h is the cell's height and
@@ -60,13 +62,18 @@ const { kid, inner } = Astro.props;
     border-radius: 12px; background: none; border: 0;
   }
   .lsp-card img { display: block; max-width: 100%; max-height: var(--logo-h); width: auto; height: auto; object-fit: contain; }
-  /* Logos of every shape weigh about the same (as the band under the video sizes them), a wide wordmark
-     kept wide enough to read: --r is width ÷ height, set once it loads */
-  .lsp-card img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.15 / pow(var(--r), 0.4))); }
+  /* Each logo as big as its cell allows, its own shape kept (Peter, Nov 20 2026, of Max's twenty in the column: "the vendor
+     logos are still really small! cant read some of them, need this best in class!"). They used to be evened out by shape
+     (a wordmark's height times 1.15 ÷ its width-to-height^0.4), which held a wide wordmark to two thirds of its cell's
+     height: Randall Brothers 74×20 in a 126×40 cell, now 110×30. Only the very widest still give a touch, so a long
+     wordmark never outweighs a square mark beside it. --r is width ÷ height, set once it loads */
+  .lsp-card img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.06 / pow(var(--r), 0.12))); }
   /* The room's sponsor a bigger cell of its own, the column's width; every partner below it two across, the same size
      (no yellow: the Theater's one yellow is Fund the next room, Peter, Nov 19 2026) */
   .lsp-tier--room .lsp-grid { grid-template-columns: minmax(0, 1fr); }
-  .lsp-tier--room .lsp-card { --h: 104px; --pad: 8px; }
+  /* (its cell 88px at full size, the partners' 64: still the biggest, its wordmark as wide as the column, and room for
+     the partners below it) */
+  .lsp-tier--room .lsp-card { --h: 88px; --pad: 7px; }
   .lsp-tier:not(.lsp-tier--room) .lsp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   /* (a column wide enough for three of them at that size: three across) */
   @container lsp (min-width: 390px) {
