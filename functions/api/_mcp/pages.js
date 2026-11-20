@@ -5,7 +5,7 @@
  *
  * A change is saved exactly as the admin saves it (save-content: the same conflict check, every version kept to
  * restore, a History entry, its follow-ups) and goes live only when someone presses Publish. Before it's saved it
- * is checked against the build's own rules (src/content/config.ts, bundled as ./content-schema.gen.js), so nothing
+ * is checked against the build's own rules (src/content.config.ts, bundled as ./content-schema.gen.js), so nothing
  * saved here can stop a Publish.
  *
  * Stays in the admin: photos, logos and videos (its uploads); every Zeffy link (Site Config → Zeffy); whether a page
@@ -144,13 +144,21 @@ const unwrap = (s) => {
 const shapeOf = (rules) => { const s = unwrap(collections[rules]?.schema); return typeof s?.shape === 'object' ? s.shape : typeof s?._def?.shape === 'function' ? s._def.shape() : null; };
 const optional = (s) => s?.isOptional?.() || s?._def?.typeName === 'ZodDefault';
 
+/** An enum's words (Zod 4: .options; Zod 3: _def.values), never a union's list of schemas */
+const enumWords = (x) => {
+  const list = Array.isArray(x?.options) ? x.options : x?._def?.values;
+  return Array.isArray(list) && list.length && list.every((v) => typeof v === 'string') ? list : null;
+};
+/** A list field's item (Zod 4: _def.element; Zod 3: _def.type, which in Zod 4 is the word 'array') */
+const itemOf = (u) => u?._def?.element || (typeof u?._def?.type === 'object' ? u._def.type : null);
+
 /** The build's choices for a field, where it has a fixed list ("national-tv", "local-tv"…) */
 function choicesOf(rules) {
   const out = {};
   for (const [k, s] of Object.entries(shapeOf(rules) || {})) {
     const u = unwrap(s);
-    const list = u?._def?.values || unwrap(u?._def?.type)?._def?.values;
-    if (Array.isArray(list)) out[k] = [...list];
+    const list = enumWords(u) || enumWords(unwrap(itemOf(u)));
+    if (list) out[k] = [...list];
   }
   return out;
 }

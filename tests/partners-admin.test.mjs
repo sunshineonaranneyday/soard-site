@@ -103,7 +103,7 @@ test('changes to many: Save’s rules for the fields changed, nothing else', () 
 });
 
 test('the shared lists match the site’s schema', () => {
-  const cfg = readFileSync(new URL('../src/content/config.ts', import.meta.url), 'utf8');
+  const cfg = readFileSync(new URL('../src/content.config.ts', import.meta.url), 'utf8');
   const partners = cfg.slice(cfg.indexOf('const partners = defineCollection'), cfg.indexOf('const medialogos'));
   const ids = (re) => [...partners.match(re)[1].matchAll(/'([a-z-]+)'/g)].map((m) => m[1]);
   assert.deepEqual(ids(/level: z\.enum\(\[([^\]]+)\]/), LEVELS.map((l) => l.id));

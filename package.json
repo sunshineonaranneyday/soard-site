@@ -11,20 +11,20 @@
     "preview": "astro preview",
     "astro": "astro",
     "build:admin-vendor": "node scripts/build-admin-vendor.mjs",
-    "test": "node --test tests/"
+    "test": "node --test \"tests/**/*.test.mjs\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@astrojs/sitemap": "^3.7.0",
-    "@cloudflare/puppeteer": "^1.4.0",
+    "@astrojs/sitemap": "^3.7.6",
+    "@cloudflare/puppeteer": "^2.0.1",
     "@shuding/opentype.js": "1.4.0-beta.0",
-    "astro": "^5.18.0",
+    "astro": "^7.4.13",
     "path-to-regexp": "6.3.0",
     "pdf-lib": "^1.17.1",
-    "satori": "^0.25.0",
-    "sharp": "^0.34.5"
+    "satori": "^0.63.2",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@tiptap/core": "2.11.5",
@@ -65,5 +65,8 @@
     "sortablejs": "1.15.6",
     "sql.js": "^1.14.2",
     "tus-js-client": "4.3.1"
+  },
+  "overrides": {
+    "fflate": "0.7.5"
   }
 }

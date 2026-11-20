@@ -10,7 +10,8 @@
  *   CLOUDFLARE_API_TOKEN   — API token with D1:Read permission
  *   CLOUDFLARE_D1_ID       — the D1 database ID
  *
- * These are auto-available in Cloudflare Pages builds, or set them in your .env for local dev.
+ * These are auto-available in Cloudflare Pages builds. On a Mac, local builds read them from the
+ * Keychain (service "soard-site", see loadEnv in ./d1-helpers.js), never from a file in the repo.
  */
 
 import { existsSync, readdirSync } from 'fs';
@@ -31,7 +32,9 @@ if (!creds.accountId || !creds.apiToken || !creds.dbId) {
   if (!creds.accountId) console.error('  - CLOUDFLARE_ACCOUNT_ID');
   if (!creds.apiToken) console.error('  - CLOUDFLARE_API_TOKEN');
   if (!creds.dbId) console.error('  - CLOUDFLARE_D1_ID');
-  console.error('\nSet them in .env for local dev, or in CF Pages environment variables for production.');
+  console.error('\nFor local builds, add each to the Mac Keychain (it asks for the value):');
+  console.error('  security add-generic-password -U -s soard-site -a CLOUDFLARE_API_TOKEN -w');
+  console.error('For production they are set in Cloudflare Pages → Settings → Variables and Secrets.');
   process.exit(1);
 }
 

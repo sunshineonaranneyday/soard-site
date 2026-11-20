@@ -1,5 +1,16 @@
-import { defineCollection, z } from 'astro:content';
-import { isWebLink, scriptLinks, linkScheme } from '../../functions/api/_collections.js';
+import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
+import { glob } from 'astro/loaders';
+import { isWebLink, scriptLinks, linkScheme } from '../functions/api/_collections.js';
+
+// Each collection is the JSON files prebuild writes to src/content/<dir>/ (scripts/d1-helpers.js).
+// An entry's id is its file name without .json, exactly as before Astro 6 (no lowercasing,
+// and never the record's own slug field), so every page keeps its address.
+const data = (dir: string) => glob({
+  pattern: '**/[^_]*.json',
+  base: `./src/content/${dir}`,
+  generateId: ({ entry }) => entry.replace(/\.json$/, ''),
+});
 
 // Every link a page renders: an http(s) address, a path on this site or an
 // image ID, never javascript:, data: or any other scheme (the same rule
@@ -10,10 +21,10 @@ const link = () => z.preprocess((v) => {
   if (typeof v !== 'string' || isWebLink(v)) return v;
   console.warn(`  ⚠ content: left out a link that isn't a web address: ${JSON.stringify(v.slice(0, 60))}`);
   return '';
-}, z.string().refine(isWebLink, (v) => ({ message: `must be an http(s) address or a path on this site, not ${linkScheme(v)}:` })));
+}, z.string().refine(isWebLink, { error: (issue) => `must be an http(s) address or a path on this site, not ${linkScheme(issue.input)}:` }));
 
 const kids = defineCollection({
-  type: 'data',
+  loader: data('kids'),
   schema: z.object({
     name: z.string(),
     slug: z.string(),
@@ -107,7 +118,7 @@ const kids = defineCollection({
 });
 
 const partners = defineCollection({
-  type: 'data',
+  loader: data('partners'),
   schema: z.object({
     name: z.string(),
     slug: z.string(),
@@ -128,7 +139,7 @@ const partners = defineCollection({
 // strip shows the ones with a logo and strip not false; press stories point
 // at one by slug (press.outletLogo) and show its name.
 const medialogos = defineCollection({
-  type: 'data',
+  loader: data('medialogos'),
   schema: z.object({
     name: z.string(),
     slug: z.string(),
@@ -142,7 +153,7 @@ const medialogos = defineCollection({
 });
 
 const team = defineCollection({
-  type: 'data',
+  loader: data('team'),
   schema: z.object({
     name: z.string(),
     slug: z.string().optional(),
@@ -171,7 +182,7 @@ const team = defineCollection({
 });
 
 const articles = defineCollection({
-  type: 'data',
+  loader: data('articles'),
   schema: z.object({
     title: z.string(),
     slug: z.string(),
@@ -199,7 +210,7 @@ const articles = defineCollection({
 });
 
 const events = defineCollection({
-  type: 'data',
+  loader: data('events'),
   schema: z.object({
     title: z.string(),
     slug: z.string(),
@@ -247,7 +258,7 @@ const events = defineCollection({
 });
 
 const press = defineCollection({
-  type: 'data',
+  loader: data('press'),
   schema: z.object({
     outlet: z.string(),
     outletLogo: z.string().default(''),
@@ -273,8 +284,8 @@ const press = defineCollection({
   }),
 });
 
-const communityPartners = defineCollection({
-  type: 'data',
+const communityPartners = (dir: string) => defineCollection({
+  loader: data(dir),
   schema: z.object({
     name: z.string(),
     slug: z.string(),
@@ -293,14 +304,14 @@ const communityPartners = defineCollection({
 // Site docs are free-form, so every link-named field in them (url, href, link,
 // website, *Url, *Link...) is checked: none may run script when clicked
 const site = defineCollection({
-  type: 'data',
-  schema: z.record(z.any()).superRefine((doc, ctx) => {
-    for (const bad of scriptLinks(doc)) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [bad.path], message: `must be an http(s) address or a path on this site, not ${linkScheme(bad.value)}:` });
+  loader: data('site'),
+  schema: z.record(z.string(), z.any()).superRefine((doc, ctx) => {
+    for (const bad of scriptLinks(doc)) ctx.addIssue({ code: 'custom', path: [bad.path], message: `must be an http(s) address or a path on this site, not ${linkScheme(bad.value)}:` });
   }),
 });
 
 const community = defineCollection({
-  type: 'data',
+  loader: data('community'),
   schema: z.object({
     name: z.string(),
     slug: z.string(),
@@ -349,4 +360,4 @@ const community = defineCollection({
   }),
 });
 
-export const collections = { kids, partners, medialogos, team, articles, press, events, community, community_partners: communityPartners, communityPartners, site };
+export const collections = { kids, partners, medialogos, team, articles, press, events, community, community_partners: communityPartners('community_partners'), communityPartners: communityPartners('communityPartners'), site };

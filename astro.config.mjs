@@ -22,19 +22,23 @@ const devLiveMock = isDev ? (await import(`./scripts/dev-live-mock.js?t=${Date.n
 const SHARED_CHUNKS = [
   ['shared', /[\\/]node_modules[\\/]astro[\\/]dist[\\/]|[\\/]src[\\/]utils[\\/](page-load|cf-image|live-client|live-banner|reveals-client|signup-check)\.ts$/],
 ];
+// Since Astro 6 the hook runs once for every build at the same time, and the browser's build is
+// vite.environments.client (it was a call of its own, target 'client'): only that one is split this way.
+// Astro 7 builds with Vite 8's Rolldown, which reads rolldownOptions (not rollupOptions) and groups
+// modules into a chunk with codeSplitting.groups (what Rollup's manualChunks did)
 function sharedScriptChunks() {
   return {
     name: 'shared-script-chunks',
     hooks: {
-      'astro:build:setup': ({ target, updateConfig }) => {
-        if (target !== 'client') return;
-        updateConfig({
-          build: {
-            rollupOptions: {
-              output: { manualChunks: (id) => SHARED_CHUNKS.find(([, re]) => re.test(id))?.[0] },
-            },
-          },
-        });
+      'astro:build:setup': ({ vite }) => {
+        const client = vite.environments?.client;
+        if (!client) throw new Error('shared-script-chunks: no client build to configure (Astro changed its build setup)');
+        client.build ??= {};
+        client.build.rolldownOptions ??= {};
+        client.build.rolldownOptions.output = {
+          ...client.build.rolldownOptions.output,
+          codeSplitting: { groups: SHARED_CHUNKS.map(([name, test]) => ({ name, test })) },
+        };
       },
     },
   };

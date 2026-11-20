@@ -232,6 +232,10 @@ export async function onRequestPost(context) {
 
   if (action === 'resume') {
     if (body.reminders === 'off') await stopReminders(env.DB, draft.id);
+    // Sent in: the link only says so. The answers (a child's diagnosis, the family's contact details) and photos
+    // live on with the application, and a submitted draft never expires, so a forwarded or old link must not
+    // read them back. The page needs nothing else: it shows "finished" (the address line is left out)
+    if (draft.submitted_id) return json({ ok: true, kind: kindOf(draft.kind), year: draft.year, lang: draft.lang || 'en', submitted: true });
     // The last area check, placed against today's area, so the map shows the home again
     // (none on a community project form that takes organizations from anywhere)
     let area = null;
@@ -244,6 +248,7 @@ export async function onRequestPost(context) {
   }
   // A photo they added, its small preview: the page shows it again after a reload or from the emailed link
   if (action === 'thumb') {
+    if (draft.submitted_id) return fail('This application has already been submitted.', 409, { code: 'submitted' });
     const f = draft.files?.[String(body.field || '')];
     const store = applicantFiles(env);
     const obj = f?.thumbKey && store ? await store.get(f.thumbKey) : null;

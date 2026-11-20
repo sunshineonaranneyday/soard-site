@@ -6,6 +6,7 @@
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync, unlinkSync, readdirSync } from 'fs';
 import { join } from 'path';
+import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { COLLECTION_MAP, isSiteDocKey, withoutScriptLinks } from '../functions/api/_collections.js';
 import { SETTINGS_DEFAULTS } from './settings-defaults.js';
@@ -20,8 +21,27 @@ export const CONTENT = join(ROOT, 'src', 'content');
 
 export const collections = Object.values(COLLECTION_MAP).map(table => ({ table, dir: table }));
 
-// ── .env loader ────────────────────────────────────────────────────
-export function loadEnv() {
+// ── Local credentials ──────────────────────────────────────────────
+// Keys never sit in a file in the repo. On a Mac they live in the login
+// Keychain under the service "soard-site", one item per name, added once with:
+//   security add-generic-password -U -s soard-site -a CLOUDFLARE_API_TOKEN -w
+// (it asks for the value). Cloudflare Pages builds get them from the project's
+// own settings instead. A .env, if someone still has one, is read first.
+export const KEYCHAIN_SERVICE = 'soard-site';
+export const LOCAL_KEYS = ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_D1_ID'];
+
+/** One value from the macOS Keychain, or null (not a Mac, no such item, or access refused) */
+export function keychainValue(name, { run = execFileSync, platform = process.platform } = {}) {
+  if (platform !== 'darwin') return null;
+  try {
+    const out = run('security', ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', name, '-w'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return String(out).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function loadEnv({ keychain = keychainValue } = {}) {
   const envPath = join(ROOT, '.env');
   if (existsSync(envPath)) {
     const envContent = readFileSync(envPath, 'utf8');
@@ -31,6 +51,11 @@ export function loadEnv() {
         process.env[match[1]] = match[2].replace(/^["']|["']$/g, '');
       }
     }
+  }
+  for (const name of LOCAL_KEYS) {
+    if (process.env[name]) continue;
+    const value = keychain(name);
+    if (value) process.env[name] = value;
   }
 }
 

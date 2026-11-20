@@ -607,8 +607,10 @@ function titleLine(line: Word[], st: TextStyle, look: Look, weight: 400 | 700, m
     const pad = EM_PAD * st.size;
     return div({ position: 'relative', whiteSpace: 'pre', paddingLeft: pad, paddingRight: pad }, [
       div({ position: 'absolute', left: 0, right: 0, top: top + content * markerFrom, height: content * (1 - markerFrom), backgroundColor: look.highlight }),
-      // The site's headlines are bold and the italic face is regular, so the browser thickens it: do the same
-      div({ fontFamily: SERIF_ITALIC, fontStyle: 'italic', fontWeight: 400, ...(weight === 700 ? { WebkitTextStroke: `${(st.size * 0.026).toFixed(2)}px ${look.ink}` } : {}) }, r.text),
+      // The site's headlines are bold and the italic face is regular, so the browser thickens it: do the same.
+      // Positioned like the marker so it's painted after it, on top: positioned boxes paint over in-flow ones
+      // (CSS's order, which satori follows since 0.26), and the see-through marker would tint the word
+      div({ position: 'relative', fontFamily: SERIF_ITALIC, fontStyle: 'italic', fontWeight: 400, ...(weight === 700 ? { WebkitTextStroke: `${(st.size * 0.026).toFixed(2)}px ${look.ink}` } : {}) }, r.text),
     ]);
   }));
 }

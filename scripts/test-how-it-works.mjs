@@ -47,7 +47,9 @@ let SITE = process.env.SITE?.replace(/\/$/, '');
 let dev = null;
 if (!SITE) {
   const port = 4300 + Math.floor(Math.random() * 600);
-  dev = spawn('npx', ['astro', 'dev', '--port', String(port)], { cwd: ROOT, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  // --ignore-lock: a one-off server in the foreground printing "Local http…", even when an AI agent runs this
+  // (Astro 7 otherwise moves an agent's dev server to the background) and beside another dev server
+  dev = spawn('npx', ['astro', 'dev', '--port', String(port), '--ignore-lock'], { cwd: ROOT, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   SITE = `http://localhost:${port}`;
   await new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error('astro dev did not start within 2 minutes')), 120000);

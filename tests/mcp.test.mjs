@@ -539,7 +539,7 @@ test('automations: Site → Automations’ own verdicts on the live facts, the o
   assert.ok(zeffy.automations.every((x) => /zeffy/i.test(`${x.name} ${x.area} ${x.uses.join(' ')}`)));
 });
 
-test('the build’s rules the connection checks against are src/content/config.ts as it is now (run scripts/mcp-content-schema.mjs after changing it)', async () => {
+test('the build’s rules the connection checks against are src/content.config.ts as it is now (run scripts/mcp-content-schema.mjs after changing it)', async () => {
   assert.equal(readFileSync(SCHEMA_OUT, 'utf8'), await contentSchemaSource());
 });
 

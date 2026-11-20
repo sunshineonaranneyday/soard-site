@@ -11,7 +11,7 @@
  *   3. If a table changed since last check, re-fetches its rows and
  *      writes only the changed files.  Deleted items are removed.
  *
- * Uses the same D1 REST API and .env credentials as prebuild.js.
+ * Uses the same D1 REST API and credentials as prebuild.js (the Mac Keychain, see loadEnv in d1-helpers.js).
  */
 
 import {
@@ -125,7 +125,7 @@ export default function devSyncIntegration() {
 
         const creds = getD1Credentials();
         if (!creds.accountId || !creds.apiToken || !creds.dbId) {
-          console.warn('[dev-sync] Missing D1 credentials in .env — skipping live sync.');
+          console.warn('[dev-sync] Missing D1 credentials (Keychain service "soard-site"), skipping live sync.');
           return;
         }
 

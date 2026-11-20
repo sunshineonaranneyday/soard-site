@@ -68,13 +68,15 @@ git clone <repo-url> && cd soard-site-main
 npm install
 ```
 
-Create a `.env` file:
+Keys never go in a file in the repo. On a Mac, add the three D1 values to your Keychain once (each command asks for the value):
 
-```env
-CLOUDFLARE_ACCOUNT_ID=your-account-id
-CLOUDFLARE_API_TOKEN=your-api-token       # needs D1:Read permission
-CLOUDFLARE_D1_ID=your-d1-database-id
+```bash
+security add-generic-password -U -s soard-site -a CLOUDFLARE_ACCOUNT_ID -w
+security add-generic-password -U -s soard-site -a CLOUDFLARE_API_TOKEN -w   # a token with D1 Read only
+security add-generic-password -U -s soard-site -a CLOUDFLARE_D1_ID -w
 ```
+
+The build reads them from there (`loadEnv` in `scripts/d1-helpers.js`). Cloudflare Pages builds get them from the project's settings.
 
 ### Run
 

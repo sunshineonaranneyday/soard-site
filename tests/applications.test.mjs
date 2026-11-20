@@ -564,6 +564,17 @@ test('the whole flow over HTTP: start, save, photo, video, resume, submit', asyn
   assert.ok(Object.values(w.world.accounts)[0], 'loaded into JobTread right away');
   assert.equal((await call({ action: 'save', token, answers: {} })).body.code, 'submitted');
   assert.equal((await call({ action: 'submit', token })).body.id, sub.body.id);
+
+  // Once sent, the link says so and nothing more: no answers, photos or files for whoever holds an old link
+  const after = await call({ action: 'resume', token });
+  assert.equal(after.status, 200);
+  assert.equal(after.body.submitted, true);
+  assert.equal(after.body.answers, undefined, 'no answers after it is sent');
+  assert.equal(after.body.files, undefined, 'no files after it is sent');
+  assert.equal(JSON.stringify(after.body).includes('Avery'), false, 'not a word of the application');
+  const thumb = await call({ action: 'thumb', token, field: PHOTOS[0] });
+  assert.equal(thumb.status, 409);
+  assert.equal(thumb.body.code, 'submitted');
 });
 
 test('a replaced video deletes the old one; uploads need a real photo type', async () => {
