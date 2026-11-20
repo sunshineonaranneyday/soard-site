@@ -19,8 +19,7 @@
  *   └──────────────┘
  *   captions line                        (replay, when switched on)
  *   ● LIVE · 34 watching    [Tap for sound]   then   [sound] [♥] [full screen]
- *   or  [▶] seek bar with the reveal marked, time under it  [CC] [full screen]   (replay)
- *   [ Jump to the reveal ]               (replay, once the moment is known)
+ *   or  [▶] seek bar with the reveal's ★ (tap it: the reveal), times under it  [CC] [full screen]   (replay)
  *
  * The only things ever shown over the frame are for when there is no
  * picture: "The camera is getting ready", "Reconnecting", "Tap to watch".
@@ -131,6 +130,8 @@ const ICON = {
       <!-- One icon that turns from play into pause and back (play-morph.ts), never one blinking out for the other -->
       <button class="bar__play" type="button" data-s="play" aria-label="Play">
         <svg class="bar__morph" viewBox="0 0 24 24" aria-hidden="true"><path data-s="morph" d={morphPath(0)} /></svg>
+        <!-- (its word, in the Theater's rail only: "Play", "Pause" while it plays) -->
+        <span class="bar__lbl bar__lbl--play" aria-hidden="true">Play</span><span class="bar__lbl bar__lbl--pause" aria-hidden="true">Pause</span>
       </button>
       <!-- The progress line. A finger or the mouse works it anywhere along it (live-stage.ts): the picture follows the
            finger, the handle grows under it. The slider is there for the keyboard and screen readers; the line, how much
@@ -138,19 +139,20 @@ const ICON = {
       <div class="seek" data-s="seekcell">
         <input class="seek__range" type="range" min="0" max="1000" step="1" value="0" data-s="seek" aria-label="Seek" aria-valuetext="0:00" />
         <span class="seek__line" aria-hidden="true"><span class="seek__loaded"></span><span class="seek__played"></span></span>
-        <span class="seek__mark" data-s="mark" aria-hidden="true" hidden><Fragment set:html={ICON.spark} /></span>
+        <!-- The reveal's star: the way to the reveal (Peter, Nov 19 2026: "i dont like how much room the jump to reveal
+             takes on the screen"). A tap or click on it plays from the reveal (through the line's own handling, so a press
+             that moves still drags); the keyboard reaches it as a button. Its time under it, when that fits clear of the
+             line's two times (never moving them) -->
+        <button class="seek__mark" type="button" data-s="mark" aria-label="Jump to the reveal" hidden><Fragment set:html={ICON.spark} /></button>
+        <span class="seek__at" data-s="mark-at" aria-hidden="true" hidden></span>
         <span class="seek__glide" aria-hidden="true"><span class="seek__knob"></span></span>
         <span class="seek__ring" aria-hidden="true"></span>
       </div>
       <span class="bar__time" data-s="time"><span data-s="time-now">0:00</span><span class="bar__total" data-s="time-total"></span></span>
-      <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden>CC</button>
-      <button class="bar__btn" type="button" data-full aria-label="Full screen" title="Full screen (F)"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></button>
+      <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden><span class="bar__cc-ico">CC</span><span class="bar__lbl" aria-hidden="true">Captions</span></button>
+      <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)"><span class="bar__full-ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
     </div>
   </div>
-
-  <button class="stage__jump" type="button" data-s="jump" hidden>
-    <Fragment set:html={ICON.spark} /><span class="stage__jump-label" data-s="jump-label">Jump to the reveal</span><span class="stage__jump-at" data-s="jump-at"></span>
-  </button>
 
   <!-- Something that goes with the picture (the page's design strip). The grid places it beside the picture; it comes
        last so the keyboard reaches the video's own controls first -->
@@ -209,24 +211,23 @@ const ICON = {
   .stage[data-party] {
     /* The picture: as big as the height allows at its shape (--pic). Beside it, whatever the page puts there (it says
        how wide with --beside and --beside-gap: the design strip, as tall as the picture). The captions line, the bar
-       and Jump run under both. The stage is as wide as that, or as wide as its controls need (--controls-min) when
+       run under both. The stage is as wide as that, or as wide as its controls need (--controls-min) when
        that's more, never wider than the column: on a phone a portrait picture is sized by the screen's height, so it
        can be narrower than its bar needs, and then the picture and what's beside it keep their size in the middle and
        the bar takes the room (Peter, Nov 11 2026: the video stays full size, no shortcuts) */
     --pic: calc((var(--fh, 640px) - var(--below)) * var(--ar));
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, var(--pic)) var(--beside-gap, 0px) var(--beside, 0px) minmax(0, 1fr);
-    grid-template-areas: '. screen . beside .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'jump jump jump jump jump' 'under under under under under';
+    grid-template-areas: '. screen . beside .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'under under under under under';
     width: min(var(--stage-max, 100%), max(calc(var(--pic) + var(--beside-gap, 0px) + var(--beside, 0px)), var(--controls-min, 0px)));
     margin-inline: auto;
   }
   /* A landscape picture fills the width: what goes with it sits under everything */
-  .stage[data-party][data-orientation='landscape'] { grid-template-areas: '. screen . . .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'jump jump jump jump jump' 'beside beside beside beside beside' 'under under under under under'; }
+  .stage[data-party][data-orientation='landscape'] { grid-template-areas: '. screen . . .' 'cc cc cc cc cc' 'bar bar bar bar bar' 'beside beside beside beside beside' 'under under under under under'; }
   .stage[data-party] .stage__screen { grid-area: screen; }
   .stage[data-party] .stage__beside { grid-area: beside; position: relative; min-width: 0; }
   .stage[data-party] .stage__cc { grid-area: cc; }
   .stage[data-party] .stage__bar { grid-area: bar; container: bar / inline-size; }
-  .stage[data-party] .stage__jump { grid-area: jump; }
   .stage[data-party] .stage__under { grid-area: under; margin-top: var(--gap); }
   /* The partners take their own height out of the picture's, so the picture, its bar and they all fit the screen */
   .stage[data-party][data-partners] { --under: calc(var(--lpb-h) + var(--gap)); }
@@ -235,8 +236,6 @@ const ICON = {
   /* Live: "Live", the count and three buttons (or Tap for sound) */
   .stage[data-party][data-mode='live'] { --controls-min: 270px; }
   .stage[data-party][data-cc] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + var(--under, 0px)); }
-  .stage[data-party][data-jump] { --below: calc(var(--bar) + var(--gap) + 46px + var(--gap) + var(--under, 0px)); }
-  .stage[data-party][data-cc][data-jump] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + 46px + var(--gap) + var(--under, 0px)); }
   .stage[data-party] .stage__screen { aspect-ratio: var(--ar); }
   .stage[data-party] .stage__picture { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 20px; }
   /* While the video connects or reconnects, the kid's photo, soft and dim, sits behind the note; the video fades in
@@ -282,7 +281,7 @@ const ICON = {
   .stage__end-btn {
     /* (one line in the narrowest frame: an iPhone's, beside the design strip, is about 215px wide) */
     display: inline-flex; align-items: center; gap: 8px; margin: 20px 0 0; padding: 0 clamp(14px, 6cqi, 20px); height: 46px; border: 0; border-radius: 100px;
-    background: var(--c-yellow); color: var(--c-dark); font: inherit; font-size: clamp(13px, 5.8cqi, 15px); font-weight: 800; white-space: nowrap; cursor: pointer;
+    background: #fff; color: var(--c-dark); font: inherit; font-size: clamp(13px, 5.8cqi, 15px); font-weight: 800; white-space: nowrap; cursor: pointer;
     box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25); animation: noteIn 0.4s ease-out both;
   }
   .stage__end-btn[hidden] { display: none; }
@@ -291,9 +290,9 @@ const ICON = {
   .stage__end-wait { margin: 18px auto 0; font-size: 13px; line-height: 1.5; max-width: 28ch; color: rgba(255, 255, 255, 0.75); }
   .stage__end-wait[hidden] { display: none; }
   /* While the replay is being made: a thin line under those words, filling slowly (live-stage.ts paintEndLine). Flat
-     yellow on a soft track, never full until the replay is here; it goes with the words when Watch the replay comes */
+     white on a soft track, never full until the replay is here; it goes with the words when Watch the replay comes */
   .stage__end-line { display: block; width: min(168px, 72cqi); height: 3px; margin: 12px auto 0; border-radius: 3px; background: rgba(255, 255, 255, 0.24); overflow: hidden; }
-  .stage__end-fill { display: block; width: 100%; height: 100%; border-radius: inherit; background: var(--c-yellow); transform: scaleX(0); transform-origin: left center; transition: transform 1s linear; }
+  .stage__end-fill { display: block; width: 100%; height: 100%; border-radius: inherit; background: #fff; transform: scaleX(0); transform-origin: left center; transition: transform 1s linear; }
   .stage__end-short { display: none; }
   /* A small frame (a short phone's, beside the design strip: an iPhone SE's is about 120px wide): the note scaled to it,
      and the button one short line, "Replay" (its name for a screen reader stays "Watch the replay") */
@@ -322,7 +321,7 @@ const ICON = {
     border: 0; background: rgba(0, 0, 0, 0.35); color: #fff; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
   }
   .stage__tap[hidden] { display: none; }
-  .stage__tap-icon { width: 76px; height: 76px; border-radius: 50%; background: var(--c-yellow); color: var(--c-dark); display: grid; place-items: center; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
+  .stage__tap-icon { width: 76px; height: 76px; border-radius: 50%; background: #fff; color: var(--c-dark); display: grid; place-items: center; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
   .stage__tap-icon :global(svg) { width: 32px; height: 32px; margin-left: 4px; }
   .stage__tap:focus-visible .stage__tap-icon { outline: 3px solid #fff; outline-offset: 3px; }
 
@@ -336,7 +335,7 @@ const ICON = {
 
   /* ── Bar ── */
   /* Above the yellow accent that peeks out from behind the video */
-  .stage__bar, .stage__cc, .stage__jump { position: relative; z-index: 1; }
+  .stage__bar, .stage__cc { position: relative; z-index: 1; }
   .stage__bar {
     margin-top: var(--gap); height: var(--bar); display: flex; align-items: center;
     padding: 0 6px 0 16px; border-radius: 100px; background: #fff; border: 1px solid var(--c-border); min-width: 0;
@@ -376,7 +375,7 @@ const ICON = {
   .bar__end [hidden] { display: none; }
   .bar__sound {
     display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 16px 0 12px;
-    border: 0; border-radius: 100px; background: var(--c-yellow); color: var(--c-dark);
+    border: 0; border-radius: 100px; background: var(--c-dark); color: #fff;
     font: inherit; font-size: 14px; font-weight: 800; cursor: pointer; white-space: nowrap;
     animation: soundNudge 2.8s ease-in-out 1.5s 3;
   }
@@ -394,7 +393,7 @@ const ICON = {
   .bar__off, .stage[data-muted] .bar__on { display: none; }
   .bar__on, .stage[data-muted] .bar__off { display: grid; }
   .bar__heart { color: var(--c-dark); }
-  .bar__heart :global(svg) { fill: var(--c-yellow); }
+  .bar__heart :global(svg) { fill: var(--c-dark); }
   .bar__heart:active, .bar__heart.is-pop { transform: scale(0.84); }
   /* Others watching sent love: the heart beats (no numbers, nothing over the picture) */
   .bar__heart.is-beat { animation: heartBeat 0.6s ease-out; }
@@ -403,6 +402,9 @@ const ICON = {
   /* (the icons' own boxes, and the words that go under them in the rail: none in the bar) */
   .bar__ico { display: grid; place-items: center; }
   /* Full screen's icon: out to the corners, then, while full screen, back in (live-stage.ts names it to match) */
+  /* (the round part and the word of captions and full screen: the Theater's rail draws them, LivePage; anywhere else
+     the button is the round part, as ever) */
+  .bar__cc-ico, .bar__full-ico { display: contents; }
   .full-in, .full-out { display: grid; place-items: center; }
   .full-out, .stage[data-fullscreen] .full-in { display: none; }
   .stage[data-fullscreen] .full-out { display: grid; }
@@ -449,9 +451,9 @@ const ICON = {
       display: block; max-width: 100%; font-size: 10.5px; font-weight: 700; line-height: 1.2; text-align: center; letter-spacing: 0;
       white-space: normal; overflow-wrap: normal; color: var(--c-text-muted);
     }
-    /* Behind the live moment by your own choice: Back to live is the one that matters, in yellow like Tap for sound,
+    /* Behind the live moment by your own choice: Back to live is the one that matters, filled in ink like Tap for sound,
        with how far behind you are under its words */
-    .stage[data-rail] .bar__tolive .bar__ico { background: var(--c-yellow-soft); border: 1.5px solid var(--c-yellow); }
+    .stage[data-rail] .bar__tolive .bar__ico { background: var(--c-dark); border-color: var(--c-dark); color: #fff; }
     .stage[data-rail] .bar__tolive .bar__lbl { color: var(--c-text); }
     .stage[data-rail] .bar__behind { display: block; margin-top: -3px; font-size: 10px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--c-text-muted); }
     .stage[data-rail] .bar__behind:empty { display: none; }
@@ -459,21 +461,22 @@ const ICON = {
        kept (it's the one that matters first) */
     .stage[data-rail] .bar__live { container: rail / size; }
     @container rail (max-height: 330px) { .bar__lbl, .bar__behind { display: none !important; } .bar__end { gap: 10px !important; } }
-    /* The room: its first picture in the circle, ringed in yellow so it reads as a picture to open, not a control.
+    /* The room: its first picture in the circle, ringed in ink so it reads as a picture to open, not a control.
        On a shorter rail its word goes first, then (where even the round ones only just fit) the button: the design is
        then under the video, as it is on a computer */
     .stage[data-rail] .bar__design { flex-shrink: 0; }
-    .stage[data-rail] .bar__design .bar__ico { padding: 0; overflow: hidden; border: 2px solid var(--c-yellow); box-shadow: 0 0 0 2px #fff, 0 4px 12px rgba(30, 31, 37, 0.14); }
+    .stage[data-rail] .bar__design .bar__ico { padding: 0; overflow: hidden; border: 2px solid var(--c-dark); box-shadow: 0 0 0 2px #fff, 0 4px 12px rgba(30, 31, 37, 0.14); }
     .stage[data-rail] .bar__design img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 50%; }
-    .stage[data-rail] .bar__design:hover .bar__ico { transform: scale(1.06); border-color: var(--c-yellow); }
+    .stage[data-rail] .bar__design:hover .bar__ico { transform: scale(1.06); }
     /* With it there, the rail's buttons sit a little closer, so it keeps its word on an ordinary phone (390×664); on a short
        rail, where the words go anyway, the round buttons are a little smaller, so it still fits (375×553) */
     .stage[data-rail] .bar__end:has(> .bar__design:not([hidden])) { gap: 10px; }
     @container rail (max-height: 385px) { .bar__design .bar__lbl { display: none !important; } }
     @container rail (max-height: 330px) { .bar__end:has(> .bar__design:not([hidden])) { gap: 7px !important; } .bar__end:has(> .bar__design:not([hidden])) .bar__ico { width: 40px; height: 40px; } }
     @container rail (max-height: 250px) { .bar__design { display: none !important; } }
-    /* Muted: the one control that matters first, in yellow, with its words under it */
-    .stage[data-rail] .bar__sound .bar__ico { background: var(--c-yellow-soft); border: 1.5px solid var(--c-yellow); animation: soundNudge 2.8s ease-in-out 1.5s 3; }
+    /* Muted: the one control that matters first, filled in ink (the page's one yellow button is Fund the next room,
+       Peter, Nov 19 2026), with its words under it */
+    .stage[data-rail] .bar__sound .bar__ico { background: var(--c-dark); border-color: var(--c-dark); color: #fff; animation: soundNudge 2.8s ease-in-out 1.5s 3; }
     .stage[data-rail] .bar__sound .bar__txt { color: var(--c-text); }
     /* The site's two-tone focus ring, on the round part only (not around its word too) */
     .stage[data-rail] .bar__btn:focus-visible, .stage[data-rail] .bar__sound:focus-visible { outline: none; box-shadow: none; }
@@ -482,15 +485,15 @@ const ICON = {
     .stage[data-rail] .bar__rise { display: block; position: relative; flex: 1 1 0; min-height: 0; width: 100%; margin: 0 0 -14px; overflow: hidden; pointer-events: none; }
     .stage[data-rail] .bar__heart { order: 9; }
     .stage[data-rail] .bar__heart .bar__ico {
-      width: 52px; height: 52px; border: 0; background: var(--c-yellow); box-shadow: 0 10px 24px rgba(30, 31, 37, 0.16);
+      width: 52px; height: 52px; border: 0; background: var(--c-dark); box-shadow: 0 10px 24px rgba(30, 31, 37, 0.16);
     }
-    .stage[data-rail] .bar__heart :global(svg) { width: 24px; height: 24px; fill: var(--c-dark); }
+    .stage[data-rail] .bar__heart :global(svg) { width: 24px; height: 24px; fill: #fff; }
     /* A tap: down under the finger, then a springy bounce back as the hearts go up; with reduced motion, it goes dark
        for a moment instead (live-stage.ts is-sent), and "Love sent" is said */
     .stage[data-rail] .bar__heart:active .bar__ico { transform: scale(0.88); }
     .stage[data-rail] .bar__heart.is-pop .bar__ico { animation: heartPress 0.38s cubic-bezier(0.34, 1.56, 0.64, 1); }
     @keyframes heartPress { 0% { transform: scale(0.88); } 45% { transform: scale(1.12); } 100% { transform: none; } }
-    .stage[data-rail] .bar__heart.is-sent .bar__ico { background: var(--c-dark); }
+    .stage[data-rail] .bar__heart.is-sent .bar__ico { background: var(--c-dark-deep); }
     .stage[data-rail] .bar__heart.is-sent :global(svg) { fill: var(--c-yellow); }
     /* (the round part shrinks for a tap, above, not the whole button; and its entrance never runs again for one) */
     .stage[data-rail] .bar__heart:active, .stage[data-rail] .bar__heart.is-pop, .stage[data-rail] .bar__heart.is-beat { transform: none; }
@@ -520,12 +523,12 @@ const ICON = {
      buttons beside it give the same way */
   .bar__play {
     width: 40px; height: 40px; flex-shrink: 0; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
-    background: var(--c-yellow); color: var(--c-dark); margin-left: -10px; -webkit-tap-highlight-color: transparent;
+    background: var(--c-dark); color: #fff; margin-left: -10px; -webkit-tap-highlight-color: transparent;
     transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1), background-color 150ms ease;
   }
   .bar__play[data-press], .bar__replay .bar__btn[data-press] { transform: scale(0.88); transition: transform 90ms ease-out, background-color 150ms ease; }
   .bar__replay .bar__btn { -webkit-tap-highlight-color: transparent; transition: background-color 150ms ease, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1); }
-  @media (hover: hover) { .bar__play:hover { background-color: var(--c-yellow-hover); } }
+  @media (hover: hover) { .bar__play:hover { background-color: var(--c-dark-deep); } }
   .bar__morph { width: 16px; height: 16px; display: block; overflow: visible; }
   .bar__morph path { fill: currentColor; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; }
   .bar__play:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
@@ -610,29 +613,28 @@ const ICON = {
   .seek__range:focus-visible ~ .seek__ring { display: block; }
   .seek[data-pointer] .seek__ring { display: none; }
   .seek__mark {
-    /* In the line's gap, under the handle, clear of play and captions. Drawn, not a button: every tap and drag goes to
-       the line (a drag that starts on the star still drags), and a tap on the star plays from the reveal, as Jump to
-       the reveal does (live-stage.ts). Jump, under the bar, is the button, and the keyboard's way there */
+    /* In the line's gap, under the handle, clear of play and captions. Every tap and drag goes to the line (a drag that
+       starts on the star still drags; pointer-events none), and a tap on the star plays from the reveal (live-stage.ts,
+       a finger's reach round it). A button for the keyboard and screen readers: the way to the reveal */
     position: absolute; top: calc((100% - var(--seek-pad)) / 2); left: var(--mark-x);
-    width: 26px; height: 26px; margin: -13px 0 0 -13px; padding: 0; border: 0; border-radius: 50%;
-    display: grid; place-items: center; background: var(--c-yellow); color: var(--c-dark); box-shadow: 0 0 0 3px #fff; pointer-events: none;
+    /* (its own size on a phone too, where the site gives buttons a 44px minimum: a finger's 44pt reach round it is
+       live-stage.ts's, onStar, so the star itself stays round and clear of the times under it) */
+    width: 26px; height: 26px; min-width: 0; min-height: 0; margin: -13px 0 0 -13px; padding: 0; border: 0; border-radius: 50%; font: inherit; line-height: 0;
+    display: grid; place-items: center; background: var(--c-dark); color: #fff; box-shadow: 0 0 0 3px #fff; pointer-events: none;
+    /* (over the handle: the reveal stays marked when the handle reaches it, the handle passing under it) */
+    z-index: 3;
   }
   .seek__mark[hidden] { display: none; }
   .seek__mark :global(svg) { width: 14px; height: 14px; }
-
-  /* One line, always: on a narrow video the reveal's time steps aside onto a line that is never shown (and at the
-     very narrowest the words end in "…"), instead of the words wrapping out of the button */
-  .stage__jump {
-    margin-top: var(--gap); height: 46px; display: inline-flex; flex-wrap: wrap; align-items: center; align-content: flex-start; justify-content: center;
-    column-gap: 10px; row-gap: 24px; padding: 12px 16px 0; overflow: hidden;
-    border: 0; border-radius: 100px; background: var(--c-yellow); color: var(--c-dark);
-    font: inherit; font-size: 15px; font-weight: 800; line-height: 22px; cursor: pointer; box-shadow: 0 8px 24px rgba(253, 216, 53, 0.35);
+  .seek__mark:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 3px; }
+  /* The reveal's time, under the star in the times' row: only when it fits clear of both times (live-stage.ts), so
+     the two times never move for it */
+  .seek__at {
+    position: absolute; bottom: 0; left: var(--mark-x); transform: translateX(-50%); height: 14px; line-height: 14px;
+    font-size: 12px; font-weight: 700; color: var(--c-dark); font-variant-numeric: tabular-nums; white-space: nowrap; pointer-events: none;
   }
-  .stage__jump-label { min-width: 0; max-width: calc(100% - 28px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .stage__jump[hidden] { display: none; }
-  .stage__jump :global(svg) { width: 18px; height: 18px; }
-  .stage__jump-at { font-weight: 600; opacity: 0.75; font-variant-numeric: tabular-nums; }
-  .stage__jump:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
+  .seek__at[hidden] { display: none; }
+
 
   /* ── Full screen: the whole stage, so captions and the bar stay off the picture ── */
   /* (data-fullscreen, set by live-stage.ts while the stage is full screen, rather than :fullscreen: Safari before 16.4 can't
@@ -644,7 +646,7 @@ const ICON = {
     align-content: center; justify-content: center;
     /* Just the picture, with its controls as wide as they need under it */
     grid-template-columns: min(calc(100vw - 32px), max(var(--pic), var(--controls-min, 0px)));
-    grid-template-areas: 'screen' 'cc' 'bar' 'jump';
+    grid-template-areas: 'screen' 'cc' 'bar';
   }
   .stage[data-party][data-fullscreen] .stage__screen { width: min(100%, var(--pic)); justify-self: center; }
   .stage[data-party][data-fullscreen] .stage__beside { display: none; }
@@ -674,10 +676,17 @@ const ICON = {
        it is exactly that tall too (--fh), even when the controls beside them are taller */
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) {
       grid-template-columns: var(--pic) var(--beside-gap, 0px) var(--beside, 0px) 16px minmax(0, 1fr);
-      grid-template-rows: auto auto auto minmax(0, 1fr);
-      grid-template-areas: 'screen . beside . cc' 'screen . beside . bar' 'screen . beside . jump' 'screen . beside . .';
+      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-areas: 'screen . beside . cc' 'screen . beside . bar' 'screen . beside . .';
     }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) .stage__beside { height: var(--fh); }
+    /* "That's the reveal!" has no controls, so nothing for their column: the stage is the note and the design beside it,
+       and the page puts the kid's name and the messages beside them, as while it was live (LivePage). The controls'
+       empty column left half the screen bare */
+    .stage[data-party][data-ended][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) {
+      width: calc(var(--pic) + var(--beside-gap, 0px) + var(--beside, 0px));
+      grid-template-columns: var(--pic) var(--beside-gap, 0px) var(--beside, 0px) 0px 0px;
+    }
     /* The first control beside the picture starts level with its top */
     .stage[data-party][data-orientation]:not([data-fullscreen]) .stage__cc:not([hidden]), .stage[data-party][data-orientation]:not([data-fullscreen]) .stage__cc[hidden] + .stage__bar,
     .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc:not([hidden]), .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc[hidden] + .stage__bar { margin-top: 0; }
@@ -688,19 +697,22 @@ const ICON = {
     .stage[data-party][data-orientation='landscape']:not([data-fullscreen]) {
       --side-min: max(min(var(--controls-min, 0px), 260px), 250px);
       grid-template-columns: minmax(0, var(--pic)) 16px minmax(var(--side-min), 1fr);
-      grid-template-rows: auto auto auto minmax(0, 1fr);
-      grid-template-areas: 'screen . cc' 'screen . bar' 'screen . jump' 'screen . beside';
+      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-areas: 'screen . cc' 'screen . bar' 'screen . beside';
     }
     /* With captions on, beside a wide picture that has the design with it, there's no room for the captions, controls
        and design all down the side. Either the captions go under the picture (here) or the design takes a column of
        its own (LiveDesignRail), whichever leaves the picture bigger on this screen (data-fit, below). Under the
        picture, the captions leave it the height the controls and the design take beside it, at least */
+    /* (the captions' line a touch smaller here, 14px: under a wide picture on a small phone held sideways it's the
+       picture's height that pays for it, and a 15px line cost the picture a tenth of its width at 568×320) */
     .stage[data-party][data-orientation='landscape'][data-fit='under']:not([data-fullscreen]) {
       --right: calc(var(--bar) + var(--beside-row, 0px));
-      --pic: calc((max(var(--fh, 640px), var(--right)) - 3.4em - var(--gap)) * var(--ar));
-      grid-template-areas: 'screen . bar' 'screen . jump' 'screen . beside' 'cc . beside';
+      --cc-h: calc(2 * 1.3 * 14px + 12px);
+      --pic: calc((max(var(--fh, 640px), var(--right)) - var(--cc-h) - var(--gap)) * var(--ar));
+      grid-template-areas: 'screen . bar' 'screen . beside' 'cc . beside';
     }
-    .stage[data-party][data-orientation='landscape'][data-fit='under'][data-jump]:not([data-fullscreen]) { --right: calc(var(--bar) + var(--gap) + 46px + var(--beside-row, 0px)); }
+    .stage[data-party][data-orientation='landscape'][data-fit='under']:not([data-fullscreen]) .stage__cc { font-size: 14px; line-height: 1.3; height: var(--cc-h); }
     .stage[data-party][data-orientation='landscape'][data-fit='under']:not([data-fullscreen]) .stage__cc:not([hidden]) { margin-top: var(--gap); }
     .stage[data-party][data-orientation='landscape'][data-fit='under']:not([data-fullscreen]) .stage__bar { margin-top: 0; }
     /* Full screen held sideways: the controls beside the picture at the screen's full height, when that leaves it
@@ -709,8 +721,8 @@ const ICON = {
       --pic: calc(var(--fh) * var(--ar));
       --side-min: max(var(--controls-min, 0px), 280px);
       grid-template-columns: minmax(0, var(--pic)) 16px minmax(var(--side-min), 1fr);
-      grid-template-rows: auto auto auto minmax(0, 1fr);
-      grid-template-areas: 'screen . cc' 'screen . bar' 'screen . jump' 'screen . .';
+      grid-template-rows: auto auto minmax(0, 1fr);
+      grid-template-areas: 'screen . cc' 'screen . bar' 'screen . .';
       align-items: start;
     }
     .stage[data-party][data-fit='side'][data-orientation='landscape'][data-fullscreen] { --side-min: max(min(var(--controls-min, 0px), 260px), 250px); }
@@ -799,8 +811,9 @@ const ICON = {
     /* (a little smaller on a phone, and no more than about a quarter of a short one's height: it floats over the page) */
     .stage[data-party] .stage__picture.is-docked { --mini-h: min(176px, 24svh); }
     .stage[data-party] .stage__picture { border-radius: 16px; }
-    .stage[data-party] .stage__accent { display: none; }
   }
+  /* (no yellow block behind the video during the watch party, anywhere: the page's one yellow is Fund the next room) */
+  .stage[data-party] .stage__accent { display: none; }
   @media (max-width: 400px) {
     .stage__bar { padding-left: 12px; }
   }

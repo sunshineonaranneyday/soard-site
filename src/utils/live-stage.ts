@@ -75,6 +75,12 @@ interface Options {
   onAir?: (onAir: boolean | null, watching: number | null) => void;
   /** playingLive or ended changed: the page draws itself again */
   onEnd?: () => void;
+  /**
+   * The live video has played its last frame: "That's the reveal!" changes the page's shape (an upright phone's rail
+   * gives way to the design beside the note), so the page makes the change (end) and glides into it. Without it the
+   * note just comes up
+   */
+  reshape?: (end: () => void) => void;
 }
 
 /** Below this the count reads as lonely rather than lively, so it stays hidden. */
@@ -240,8 +246,17 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
           onLive: (st) => { liveSeek = st; paint(); },
           // (the feed over: the end only once the broadcast itself has moved on to its replay, or to nothing. While it's
           // still live or ending, a phone that dropped may yet come back: the player says Reconnecting meanwhile)
-          onFeedEnd: () => { if (kind === 'live' && (view.phase === 'replay' || view.phase === 'idle')) showEnd(null); else tellPage(); },
+          onFeedEnd: () => {
+            if (!(kind === 'live' && (view.phase === 'replay' || view.phase === 'idle'))) { tellPage(); return; }
+            // (whatever the page draws meanwhile brings the note up all the same: its next view is the replay or nothing)
+            const end = () => { if (kind === 'live' && player?.feedEnded) showEnd(null); };
+            if (opts.reshape) opts.reshape(end); else end();
+          },
         });
+        // A replay's own first picture (Stream's thumbnail of it) while it loads, never a black box
+        if (kind === 'replay' && player.video && next.player.customerCode && next.player.uid && !player.video.poster) {
+          player.video.poster = `https://customer-${next.player.customerCode}.cloudflarestream.com/${encodeURIComponent(next.player.uid)}/thumbnails/thumbnail.jpg?time=1s&height=960`;
+        }
         // Live starts muted, a replay doesn't; after that, volume events keep this current
         muted = player.video?.muted ?? true;
         attachMedia();
@@ -395,9 +410,22 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // The finger lifted while the picture was still moving: it plays on once the exact move is under way, never first from
   // wherever the quick move got to
   let playAfterSeek = false;
+  // The reveal's star: the picture goes there at once, and the handle glides there with it, 320 ms on the house curve,
+  // rather than blinking from one place to the other. The time goes straight to its new value, never counting along
+  // (Peter: no counting numbers). While it glides, whatever else asks to draw the line draws the glide; a finger on the
+  // line ends it. None for someone who asked for less motion
+  let leap: { from: number; to: number; at: number } | null = null;
+  const LEAP_MS = 320;
   function paintAt(t: number, d: number) {
     if (!cell || !Number.isFinite(d) || d <= 0) return;
-    cell.style.setProperty('--f', Math.min(1, Math.max(0, t / d)).toFixed(5));
+    let at = t;
+    if (leap) {
+      const k = (performance.now() - leap.at) / LEAP_MS;
+      if (k < 1) at = leap.from + (leap.to - leap.from) * (1 - Math.pow(1 - k, 3));
+      t = leap.to;
+      if (k >= 1) leap = null;
+    }
+    cell.style.setProperty('--f', Math.min(1, Math.max(0, at / d)).toFixed(5));
     const sec = Math.floor(Math.max(0, t));
     if (sec !== lastSec) { lastSec = sec; const now = $('time-now'); if (now) now.textContent = formatTime(t); }
   }
@@ -580,7 +608,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // heart and full screen even before the sound is on
     // (a phone held sideways too, Nov 18 2026: the picture as tall as the screen, its controls in the rail beside it, the
     // messages beside that, where a long bar of controls used to leave most of the screen empty)
-    const rail = party && live && shape() === 'portrait' && document.fullscreenElement !== root;
+    // (not under "That's the reveal!": the live video kept under the note has nothing left in the rail, and its empty
+    // column left the note off centre (Peter's iPhone, Nov 18 2026). The page is then laid out as for everyone arriving
+    // after the end: the design beside the note, the kid's name centred)
+    const rail = party && live && !endShown && shape() === 'portrait' && document.fullscreenElement !== root;
     flag('data-rail', rail);
 
     // Photo badge, before the watch party only
@@ -597,8 +628,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     setHidden($('tap'), !(isVideo && !endShown && (pstatus === 'blocked' || (kind === 'live' && pstatus === 'paused'))));
 
     // Bar
-    // (none under "That's the reveal!" when there's no video at all: someone arriving after the end has nothing to control)
-    setHidden($('bar'), !party || (endShown && !player));
+    // (none under "That's the reveal!": nothing in it is shown then, the live video kept under the note included)
+    setHidden($('bar'), !party || endShown);
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);
@@ -700,17 +731,31 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       if (edge) cell.dataset.markEdge = edge; else delete cell.dataset.markEdge;
     }
   }
+  // The reveal's star is the way to it (Peter, Nov 19 2026: "i dont like how much room the jump to reveal takes on the
+  // screen, especially mobile"): its name for the keyboard and screen readers, and its time under it, shown only where
+  // it fits clear of the line's two times (they never move for it; a reveal near either end has the star alone)
   function paintJump(t: number) {
-    const show = party && kind === 'replay' && revealAt != null && !!player && pstatus !== 'iframe';
-    flag('data-jump', show);
-    setHidden($('jump'), !show);
-    if (!show) return;
-    const label = $('jump-label'); const at = $('jump-at');
-    // After the moment has played, the button offers it again
-    const text = t > revealAt! + 30 ? 'Watch the reveal again' : 'Jump to the reveal';
-    if (label) label.textContent = text;
-    if (at) at.textContent = formatTime(revealAt!);
-    $('jump')?.setAttribute('aria-label', `${text}, at ${formatTime(revealAt!)}`);
+    const mark = $('mark');
+    const at = $('mark-at');
+    if (!mark || mark.hidden || revealAt == null) { setHidden(at, true); return; }
+    const when = formatTime(revealAt);
+    // After the moment has played, the star offers it again
+    mark.setAttribute('aria-label', `${t > revealAt + 30 ? 'Watch the reveal again' : 'Jump to the reveal'}, at ${when}`);
+    if (!at) return;
+    // (its name with its time, so someone new to it knows what the star is: "The reveal · 5:29")
+    const label = `The reveal · ${when}`;
+    if (at.textContent !== label) at.textContent = label;
+    const cell = mark.parentElement;
+    const nowEl = $('time-now'); const totalEl = $('time-total');
+    if (!cell) return;
+    setHidden(at, false);
+    const w = cell.clientWidth;
+    const x = 16 + (w - 32) * Math.min(1, Math.max(0, revealAt / (video()?.duration || revealAt || 1)));
+    const half = at.offsetWidth / 2;
+    // (the times sit 8px in from each end of the cell; the played time widens as it goes, so its widest is counted)
+    const left = 8 + Math.max(nowEl?.offsetWidth ?? 0, totalEl?.offsetWidth ?? 0) + 8;
+    const right = w - 8 - (totalEl?.offsetWidth ?? 0) - 8;
+    setHidden(at, !(w > 0 && x - half >= left && x + half <= right));
   }
   // The captions line is two lines tall, always. A cue too long for that is shown a page at a time, each for its
   // share of the cue's time (by its share of the words), so the line never grows: a long cue used to take four lines,
@@ -789,7 +834,14 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (!v || revealAt == null) return;
     // (in turn, like every move: what was waiting is dropped, the reveal is where they asked to go)
     seekWant = null; playAfterSeek = false;
-    seekVideo(Math.max(0, revealAt - JUMP_LEAD), true);
+    const to = Math.max(0, revealAt - JUMP_LEAD);
+    if (!reduced && Number.isFinite(v.duration) && v.duration > 0) {
+      const d = v.duration;
+      leap = { from: shownAt || v.currentTime, to, at: performance.now() };
+      const step = () => { if (!leap) return; paintAt(to, d); requestAnimationFrame(step); };
+      requestAnimationFrame(step);
+    }
+    seekVideo(to, true);
     player?.setMuted(false);
     player?.play();
     client.beacon('click_replay', { how: 'jump' }, pastBid());
@@ -836,7 +888,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   $('cc-toggle')?.addEventListener('click', toggleCaptions);
   root.querySelectorAll('[data-full]').forEach((b) => b.addEventListener('click', toggleFullscreen));
   $('play')?.addEventListener('click', togglePlay);
-  $('jump')?.addEventListener('click', jumpToReveal);
+  // (the keyboard's press on the star: a finger's or the mouse's goes through the line, onStar)
+  $('mark')?.addEventListener('click', jumpToReveal);
   // Tapping the picture: sound on for a muted live video, play / pause for a replay
   playerEl?.addEventListener('click', () => {
     if (docked) return;
@@ -858,8 +911,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const m = $('mark');
     if (!m || m.hidden) return false;
     const r = m.getBoundingClientRect();
-    // (its 3px white ring included)
-    return Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) <= r.width / 2 + 3;
+    // (its 3px white ring included; a finger gets a 44pt target round it, the star being the way to the reveal)
+    const reach = Math.max(r.width / 2 + 3, e.pointerType === 'touch' ? 22 : 0);
+    return Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) <= reach;
   };
   const durationOk = () => { const d = video()?.duration ?? NaN; return Number.isFinite(d) && d > 0; };
   // (the handle's centre runs from 16px in to 16px short of the cell's end)
@@ -905,6 +959,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (scrub && scrub.id !== e.pointerId && !cell.hasPointerCapture(scrub.id)) endScrub(true);
     if (kind !== 'replay' || !durationOk() || scrub || (e.pointerType === 'mouse' && e.button !== 0)) return;
     const v = video()!;
+    leap = null;
     scrub = { id: e.pointerId, x0: e.clientX, y0: e.clientY, star: onStar(e), on: false, t: v.currentTime, wasPlaying: false, mouse: e.pointerType === 'mouse' };
     try { cell.setPointerCapture(e.pointerId); } catch { /* (gone already) */ }
     // Held: the handle grows at once, before anything moves
@@ -1173,7 +1228,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   addEventListener('resize', refit);
   // What changes the choice: captions, Jump, the picture's shape, the mode, and the design being shown (on the page)
   const fitWatch = new MutationObserver(refit);
-  fitWatch.observe(root, { attributes: true, attributeFilter: ['data-party', 'data-mode', 'data-orientation', 'data-cc', 'data-jump', 'style'] });
+  fitWatch.observe(root, { attributes: true, attributeFilter: ['data-party', 'data-mode', 'data-orientation', 'data-cc', 'style'] });
   const host = root.closest('.hero');
   if (host) fitWatch.observe(host, { attributes: true, attributeFilter: ['data-party', 'data-design', 'data-orientation'] });
   $('undock')?.addEventListener('click', (e) => {

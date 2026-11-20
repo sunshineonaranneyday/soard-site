@@ -139,7 +139,16 @@ export function createMessages(opts: Options) {
     text.textContent = m.body;
     card.append(who, text);
     li.append(av, card);
+    // Where a list shows only its newest few and doesn't scroll (the Theater's two, under the room), the ones it keeps
+    // glide up to their new places as the new one rises in, rather than jumping there (360 ms, the rise's own curve). A
+    // wall that scrolls moves by its scroll instead
+    const glide = animate && !reduced && !!wall && wall.scrollHeight <= wall.clientHeight + 1;
+    const was = glide ? [...list.children].map((el) => [el as HTMLElement, el.getBoundingClientRect().top] as const) : [];
     holdReading(() => list.append(li), stick);
+    for (const [el, top] of was) {
+      const dy = top - el.getBoundingClientRect().top;
+      if (dy && el.getClientRects().length) el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 360, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+    }
     while (list.children.length > MAX) list.firstElementChild?.remove();
     setHidden($('empty'), true);
     if (stick) toEnd(); else setHidden($('jump'), false);

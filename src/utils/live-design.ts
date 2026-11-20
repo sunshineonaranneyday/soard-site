@@ -957,7 +957,13 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   const sideWidth = () => Math.floor((frame?.getBoundingClientRect().left || 0) - 24);
   const fitSide = () => {
     if (!viewer || mode !== 'side') return;
-    viewer.style.setProperty('--ldv-w', `${Math.max(SIDE_MIN_W, sideWidth())}px`);
+    // Over the Theater's left column exactly (the kid's name, the room and the messages, LivePage), so it never hangs past
+    // the panel's edge; anywhere else, from the window's edge to the video
+    const col = hero?.querySelector('.hero-head')?.getBoundingClientRect();
+    const f0 = frame?.getBoundingClientRect();
+    const onCol = !!col && !!f0 && col.width >= SIDE_MIN_W && col.right <= f0.left;
+    viewer.style.setProperty('--ldv-left', `${onCol ? Math.round(col!.left) : 12}px`);
+    viewer.style.setProperty('--ldv-w', `${onCol ? Math.round(col!.width) : Math.max(SIDE_MIN_W, sideWidth())}px`);
     // Top and bottom with the video (the Theater's columns are as tall as it), never past it onto the page below
     const f = frame?.getBoundingClientRect();
     const head = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-height')) || 80;
