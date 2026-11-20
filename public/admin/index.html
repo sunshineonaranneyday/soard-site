@@ -8770,7 +8770,8 @@
         setLive(ls || {});
         setReveals(rv.reveals);
         setJtJobs(rv.jobs || {});
-        setLastDeploy(dp?.success ? (dp.deploys || [])[0] || null : null);
+        // The live site's last update: a production build, never a branch's preview (a preview that fails changes nothing live)
+        setLastDeploy(dp?.success ? (dp.deploys || []).find((d) => (d.environment || 'production') === 'production') || null : null);
       }, []);
       useEffect(() => {
         load();
