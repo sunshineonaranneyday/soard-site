@@ -487,9 +487,9 @@ const hero = {
        box steps aside so its parts and the photo take turns in the one column */
     .hero-inner { row-gap: 0; }
     .hero-text { display: contents; }
-    .hero-eyebrow { order: 1; }
-    .hero-text h1 { order: 2; margin-bottom: 18px; }
-    .rh-watch { order: 3; margin: 0 auto 20px; }
+    .hero-eyebrow { order: 1; margin-bottom: 14px; }
+    .hero-text h1 { order: 2; margin-bottom: 16px; }
+    .rh-watch { order: 3; margin: 0 auto 16px; }
     .hero-frame { order: 4; margin-bottom: 40px; }
     .hero-lead, .hero-lead:has(+ .rh-watch:not([hidden])) { order: 5; margin-bottom: 26px; }
     .hero-ctas { order: 6; }
@@ -501,7 +501,8 @@ const hero = {
   @media (max-width: 768px) {
     .hero { padding-top: var(--hero-space-top); padding-bottom: var(--space-xl); min-height: auto; }
     .hero-inner { padding: 0 var(--space-lg); }
-    .hero-text h1 { font-size: clamp(2rem, 9vw, 3rem); }
+    /* (a touch smaller with the photo coming after the card: his face on the first screen under the application bar) */
+    .hero-text h1 { font-size: clamp(1.9rem, 8.4vw, 3rem); }
     .hero-photo--small { display: none; }
     .hero-photo { border-radius: 18px; }
     .hero-frame { width: var(--frame-phone); }
