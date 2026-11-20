@@ -67,6 +67,18 @@ const SCHEMA = [
     series TEXT, sampled_at TEXT, reactions TEXT, facebook TEXT, youtube TEXT,
     next_check_at TEXT, updated_at TEXT
   )`,
+  // What each viewer's live video did (src/utils/live-player.ts health), one row per start of the player on a page
+  // (`mount`), so a page opened again adds to that browser's numbers instead of resetting them
+  `CREATE TABLE IF NOT EXISTS broadcast_player (
+    broadcast_id TEXT NOT NULL, vid TEXT NOT NULL, mount TEXT NOT NULL,
+    who TEXT, engine TEXT, device TEXT,
+    first_ms INTEGER, waited_ms INTEGER, start_behind REAL,
+    holds INTEGER NOT NULL DEFAULT 0, held_ms INTEGER NOT NULL DEFAULT 0,
+    refused INTEGER NOT NULL DEFAULT 0, restarts INTEGER NOT NULL DEFAULT 0,
+    fallbacks INTEGER NOT NULL DEFAULT 0, errors INTEGER NOT NULL DEFAULT 0,
+    reports INTEGER NOT NULL DEFAULT 0, first_at INTEGER, last_at INTEGER,
+    PRIMARY KEY (broadcast_id, vid, mount)
+  )`,
 ];
 
 export async function ensureStatsSchema(DB) {
@@ -179,6 +191,146 @@ export async function recordVisit(DB, { broadcastId, vid, who = null, src = 'dir
       before_live = MAX(broadcast_viewers.before_live, excluded.before_live),
       src = CASE WHEN broadcast_viewers.src IS NULL OR broadcast_viewers.src = 'direct' THEN excluded.src ELSE broadcast_viewers.src END`)
     .bind(broadcastId, vid, who, src, iso(now), beforeLive ? 1 : 0).run();
+}
+
+// ─── What each viewer's live video did ─────────────────────────────
+
+const PLAYER_ENGINES = new Set(['hls', 'mms', 'native', 'iframe']);
+const PLAYER_DEVICES = new Set(['iphone', 'ipad', 'android', 'computer']);
+const whole = (v, max) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? Math.min(Math.round(n), max) : 0; };
+
+/**
+ * The player's numbers a live page sent (src/utils/live-stats.ts playerReport) → clean values, or null. Only known
+ * words; every number whole (start delay to a tenth), never negative, capped at what one reveal could reach.
+ */
+export function cleanPlayer(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const mount = typeof raw.m === 'string' && /^[a-z0-9]{6,16}$/.test(raw.m) ? raw.m : null;
+  if (!mount) return null;
+  const first = Number(raw.f);
+  const behind = Number(raw.s);
+  return {
+    mount,
+    engine: PLAYER_ENGINES.has(raw.e) ? raw.e : null,
+    device: PLAYER_DEVICES.has(raw.d) ? raw.d : null,
+    firstMs: Number.isFinite(first) && first >= 0 ? Math.min(Math.round(first), 30 * 60e3) : null,
+    waitedMs: raw.w == null ? null : whole(raw.w, 4 * 3600e3),
+    startBehind: Number.isFinite(behind) && behind >= -5 && behind <= 600 ? Math.round(behind * 10) / 10 : null,
+    holds: whole(raw.h, 1000),
+    heldMs: whole(raw.hm, 4 * 3600e3),
+    refused: whole(raw.r, 100000),
+    restarts: whole(raw.x, 1000),
+    fallbacks: whole(raw.b, 10),
+    errors: whole(raw.er, 1000),
+  };
+}
+
+/** A browser's starts of the player on one reveal that are kept (a page opened over and over adds nothing more) */
+export const PLAYER_MOUNTS_MAX = 10;
+
+/**
+ * A viewer's player numbers for a live reveal. They only grow while a player runs, so a row keeps the largest of each
+ * (a report lost or arriving late changes nothing); the engine is the latest (an iPhone may go over to Safari's own).
+ * At most PLAYER_MOUNTS_MAX starts of the player per browser per reveal.
+ */
+export async function recordPlayer(DB, { broadcastId, vid, who = null, player, now = Date.now() }) {
+  const p = player;
+  if (!broadcastId || !vid || !p?.mount) return;
+  await DB.prepare(`INSERT INTO broadcast_player (broadcast_id, vid, mount, who, engine, device, first_ms, waited_ms, start_behind,
+      holds, held_ms, refused, restarts, fallbacks, errors, reports, first_at, last_at)
+      SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?16, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1, ?15, ?15
+      WHERE EXISTS (SELECT 1 FROM broadcast_player WHERE broadcast_id = ?1 AND vid = ?2 AND mount = ?3)
+        OR (SELECT COUNT(*) FROM broadcast_player WHERE broadcast_id = ?1 AND vid = ?2) < ${PLAYER_MOUNTS_MAX}
+    ON CONFLICT(broadcast_id, vid, mount) DO UPDATE SET
+      who = COALESCE(broadcast_player.who, excluded.who),
+      engine = COALESCE(excluded.engine, broadcast_player.engine),
+      device = COALESCE(broadcast_player.device, excluded.device),
+      first_ms = COALESCE(broadcast_player.first_ms, excluded.first_ms),
+      waited_ms = MAX(COALESCE(broadcast_player.waited_ms, 0), COALESCE(excluded.waited_ms, 0)),
+      start_behind = COALESCE(broadcast_player.start_behind, excluded.start_behind),
+      holds = MAX(broadcast_player.holds, excluded.holds),
+      held_ms = MAX(broadcast_player.held_ms, excluded.held_ms),
+      refused = MAX(broadcast_player.refused, excluded.refused),
+      restarts = MAX(broadcast_player.restarts, excluded.restarts),
+      fallbacks = MAX(broadcast_player.fallbacks, excluded.fallbacks),
+      errors = MAX(broadcast_player.errors, excluded.errors),
+      reports = broadcast_player.reports + 1,
+      last_at = MAX(broadcast_player.last_at, excluded.last_at)`)
+    .bind(broadcastId, vid, p.mount, who, p.engine, p.device, p.firstMs, p.startBehind, p.holds, p.heldMs, p.refused,
+      p.restarts, p.fallbacks, p.errors, Math.round(now), p.waitedMs).run();
+}
+
+const median = (xs) => { if (!xs.length) return null; const a = [...xs].sort((x, y) => x - y); const m = a.length >> 1; return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; };
+
+/** "Never got a picture" means something to play for at least this long and still no picture (not someone who left first) */
+export const NEVER_AFTER_MS = 5000;
+
+/**
+ * Each public browser's live video on these reveals, summed over its starts of the player in the database (at most
+ * PLAYER_MOUNTS_MAX each), every total capped at what one reveal could reach. A browser marked staff or test anywhere
+ * (its viewer row, or any start) is left out entirely, as the rest of History does. The start delay and the engine
+ * come from its earliest picture and its latest start.
+ */
+export async function playerRows(DB, ids) {
+  if (!ids.length) return [];
+  const marks = ids.map((_, i) => `?${i + 1}`).join(',');
+  const res = await DB.prepare(`SELECT p.broadcast_id, p.vid,
+      MIN(p.first_ms) AS first_ms,
+      MAX(COALESCE(p.waited_ms, 0)) AS waited_ms,
+      (SELECT q.start_behind FROM broadcast_player q WHERE q.broadcast_id = p.broadcast_id AND q.vid = p.vid AND q.first_ms IS NOT NULL ORDER BY q.first_ms LIMIT 1) AS start_behind,
+      (SELECT q.engine FROM broadcast_player q WHERE q.broadcast_id = p.broadcast_id AND q.vid = p.vid AND q.engine IS NOT NULL ORDER BY q.last_at DESC LIMIT 1) AS engine,
+      MAX(p.device) AS device,
+      MIN(SUM(p.holds), 1000) AS holds,
+      MIN(SUM(p.held_ms), 4 * 3600 * 1000) AS held_ms,
+      MIN(SUM(p.refused), 10000) AS refused,
+      MIN(SUM(p.restarts), 1000) AS restarts,
+      MIN(SUM(p.fallbacks), 10) AS fallbacks,
+      MIN(SUM(p.errors), 1000) AS errors
+    FROM broadcast_player p
+    WHERE p.broadcast_id IN (${marks})
+      AND NOT EXISTS (SELECT 1 FROM broadcast_viewers v WHERE v.broadcast_id = p.broadcast_id AND v.vid = p.vid AND v.who IS NOT NULL)
+    GROUP BY p.broadcast_id, p.vid
+    HAVING MAX(p.who) IS NULL`).bind(...ids).all();
+  return res?.results || [];
+}
+
+/**
+ * One reveal's live video, over its public browsers (playerRows): how many reported, how many got a picture and how
+ * fast once there was something to play, how far behind the phone they started, who never got one though it was
+ * there to play, who froze (Reconnecting) and for how long, the moves the player stopped (hls.js or Safari moving the
+ * picture by itself: before Nov 19 2026 those replayed seconds), start-overs, iPhones going over to Safari's own
+ * player, errors, and what played it on what.
+ */
+export function summarizePlayers(rows) {
+  const vs = rows.map((r) => ({
+    first: r.first_ms == null ? null : Number(r.first_ms),
+    waited: Number(r.waited_ms) || 0,
+    behind: r.start_behind == null ? null : Number(r.start_behind),
+    holds: Number(r.holds) || 0, heldMs: Number(r.held_ms) || 0, refused: Number(r.refused) || 0,
+    restarts: Number(r.restarts) || 0, fallbacks: Number(r.fallbacks) || 0, errors: Number(r.errors) || 0,
+    engine: r.engine || null, device: r.device || null,
+  }));
+  if (!vs.length) return null;
+  const pictured = vs.filter((v) => v.first != null);
+  const froze = vs.filter((v) => v.holds > 0);
+  const count = (key) => { const o = {}; for (const v of vs) { const k = v[key] || 'unknown'; o[k] = (o[k] || 0) + 1; } return o; };
+  return {
+    viewers: vs.length,
+    pictured: pictured.length,
+    never: vs.filter((v) => v.first == null && v.waited >= NEVER_AFTER_MS).length,
+    firstSec: pictured.length ? Math.round(median(pictured.map((v) => v.first)) / 100) / 10 : null,
+    slowStart: pictured.filter((v) => v.first > 15e3).length,
+    startBehind: (() => { const b = pictured.map((v) => v.behind).filter((x) => x != null); return b.length ? Math.round(median(b) * 10) / 10 : null; })(),
+    froze: froze.length,
+    frozeSec: Math.round(froze.reduce((n, v) => n + v.heldMs, 0) / 1000),
+    frozeMedianSec: froze.length ? Math.round(median(froze.map((v) => v.heldMs)) / 1000) : null,
+    refused: vs.filter((v) => v.refused > 0).length,
+    restarted: vs.filter((v) => v.restarts > 0).length,
+    fellBack: vs.filter((v) => v.fallbacks > 0).length,
+    errored: vs.filter((v) => v.errors > 0).length,
+    engines: count('engine'),
+    devices: count('device'),
+  };
 }
 
 /**
@@ -605,7 +757,7 @@ export async function historyStats(DB, rows) {
   const since = json(sinceRow?.data)?.at || null;
   if (!ids.length) return { since, byId: {} };
   const marks = ids.map((_, i) => `?${i + 1}`).join(',');
-  const [people, sources, stats, metas] = await Promise.all([
+  const [people, sources, stats, metas, players] = await Promise.all([
     DB.prepare(`SELECT broadcast_id,
         SUM(CASE WHEN who IS NULL THEN 1 ELSE 0 END) AS people,
         SUM(CASE WHEN who IS NULL AND before_live = 1 THEN 1 ELSE 0 END) AS before_n,
@@ -624,7 +776,11 @@ export async function historyStats(DB, rows) {
       if (!uids.length) return Promise.resolve({ results: [] });
       return DB.prepare(`SELECT key, data FROM site_config WHERE key IN (${uids.map((_, i) => `?${i + 1}`).join(',')})`).bind(...uids.map((u) => `replay-meta:${u}`)).all();
     })(),
+    // (the live video's numbers never take the rest of History down with them)
+    playerRows(DB, ids).catch(() => []),
   ]);
+  const playersBy = {};
+  for (const r of players || []) (playersBy[r.broadcast_id] ||= []).push(r);
   const by = (list, key = 'broadcast_id') => Object.fromEntries((list?.results || []).map((r) => [r[key], r]));
   const peopleBy = by(people);
   const statsBy = by(stats);
@@ -683,6 +839,8 @@ export async function historyStats(DB, rows) {
       heartsTotal: reactions ? Number(reactions.heart) || 0 : null,
       facebook: json(s.facebook),
       youtube: json(s.youtube),
+      // What the live video did for the public (counted since Nov 19 2026; null before, or nobody reported)
+      video: summarizePlayers(playersBy[row.id] || []),
       test: isTestReveal(row),
     };
   }

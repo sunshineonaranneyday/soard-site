@@ -94,8 +94,21 @@ export interface PlayerHealth {
   heldMs: number;
   /** Moves of the live picture that hls.js or Safari made by themselves, refused or undone */
   refused: number;
-  /** Start-overs */
+  /** Start-overs, other than going on to a newer recording when one closes (that's the feed, not the player) */
   restarts: number;
+  /** What plays it: hls.js on Media Source ('hls'), hls.js on an iPhone's Managed Media Source ('mms'), Safari's own player ('native'), Stream's own iframe */
+  engine: 'hls' | 'mms' | 'native' | 'iframe' | null;
+  /**
+   * Milliseconds from the moment there was something to play (the camera live and the usual delay's worth there) to
+   * the first picture (null: none yet). "Waiting for the camera" and the start's own wait for the delay aren't in it
+   */
+  firstMs: number | null;
+  /** Milliseconds there has been something to play without a picture yet (null: nothing to play yet; once the picture came, firstMs) */
+  waitedMs: number | null;
+  /** Times an iPhone went over from hls.js to Safari's own player */
+  fallbacks: number;
+  /** The engine's own fatal errors */
+  errors: number;
 }
 
 interface Options {
@@ -253,6 +266,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   // (straight to it, keeping "connecting" or "reconnecting" on screen: nothing is wrong with the camera)
   const toSafari = () => {
     if (dead) return;
+    if (!nativeOnly) health.fallbacks++;
     nativeOnly = true;
     stopEngine();
     pending = true;
@@ -293,11 +307,27 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   let viewerPaused = false; // live: the last pause was the viewer's or the phone's, not ours
   let nativeEdge: number | null = null; // live, Safari's own player: the newest second of its recording, read every NATIVE_EDGE_MS
   let nativeEdgeTimer: ReturnType<typeof setInterval> | undefined;
-  const health: PlayerHealth = { startBehind: null, holds: 0, heldMs: 0, refused: 0, restarts: 0 };
+  const mountedAt = Date.now();
+  let playableAt: number | null = null; // live: when there was first something to play
+  // Waits before the first picture that aren't the player's: Tap to watch (Low Power Mode refusing to start it) and the
+  // tab out of sight (the browser holds the video): left out of the time to the first picture
+  let notMine = 0;
+  let notMineSince: number | null = null;
+  const othersWait = () => status === 'blocked' || document.visibilityState === 'hidden';
+  const noteWait = () => {
+    if (health.firstMs != null) return;
+    const now = Date.now();
+    if (othersWait()) { if (notMineSince == null) notMineSince = now; }
+    else if (notMineSince != null) { notMine += now - notMineSince; notMineSince = null; }
+  };
+  const waitedSoFar = () => (playableAt == null ? null : Math.max(0, Date.now() - playableAt - notMine - (notMineSince != null ? Date.now() - notMineSince : 0)));
+  document.addEventListener('visibilitychange', noteWait);
+  const health: PlayerHealth = { startBehind: null, holds: 0, heldMs: 0, refused: 0, restarts: 0, engine: null, firstMs: null, waitedMs: null, fallbacks: 0, errors: 0 };
 
   const set = (s: PlayerStatus) => {
     if (s === status || dead) return;
     status = s;
+    noteWait();
     opts.onStatus?.(s);
   };
 
@@ -384,10 +414,10 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     restarting = false;
   }
 
-  function restart(delay = failures > 15 ? RETRY_SLOW_MS : RETRY_MS) {
+  function restart(delay = failures > 15 ? RETRY_SLOW_MS : RETRY_MS, counted = true) {
     if (dead) return;
     failures++;
-    if (everPlayed) health.restarts++;
+    if (everPlayed && counted) health.restarts++;
     stopEngine();
     set(everPlayed ? 'reconnecting' : 'waiting');
     pending = true;
@@ -615,6 +645,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     });
     h.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal || hls !== h) return;
+      health.errors++;
       if (managedOnly && d.type !== Hls.ErrorTypes.NETWORK_ERROR) {
         if (!everPlayed && (!parsed || ++hlsTrouble >= 2)) { toSafari(); return; }
         if (everPlayed) {
@@ -670,16 +701,17 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       }
       src = look.go.src;
       startAt = look.go.startAt;
+      if (playableAt == null) playableAt = Date.now();
       playingVideo = look.go.video;
       if (feedEnded) feedEnded = false; // a newer recording: the feed is on again
     }
     set(everPlayed ? 'reconnecting' : 'connecting');
-    if (onNative) { viaNative(src, startAt); return; }
+    if (onNative) { health.engine = 'native'; viaNative(src, startAt); return; }
     const Hls: HlsClass | null = await loading;
     if (stale()) return;
-    if (Hls?.isSupported()) viaHls(Hls, src, startAt);
-    else if (native) viaNative(src, startAt);
-    else useIframe();
+    if (Hls?.isSupported()) { health.engine = 'MediaSource' in window ? 'hls' : 'mms'; viaHls(Hls, src, startAt); }
+    else if (native) { health.engine = 'native'; viaNative(src, startAt); }
+    else { health.engine = 'iframe'; useIframe(); if (health.firstMs == null) health.firstMs = waitedSoFar() ?? 0; }
   }
 
   // ── Live: the going-back controls ──
@@ -786,6 +818,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       if (s.length && s.end(s.length - 1) >= returnTo - 0.05) { seekTo(returnTo); returnTo = null; } else { ownPause = true; video.pause(); return; }
     }
     clearTimeout(stallTimer);
+    if (health.firstMs == null) { if (playableAt == null) playableAt = mountedAt; health.firstMs = waitedSoFar(); }
     if (live && fresh) {
       fresh = false;
       if (liveAfterPlace) { liveAfterPlace = false; if (!chosen) toLiveMoment(); }
@@ -841,10 +874,11 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     // Live: the recording closed and its last frame has been shown. Look for a newer one (the phone back); if
     // there's none, the feed has ended for this viewer (lookAtFeed says so, and start() tells the page)
     if (seen) seen = { ...seen, pos: Math.max(seen.pos, video.currentTime) };
-    restart(0);
+    restart(0, false);
   });
   video.addEventListener('error', () => {
     if (restarting || dead || hls) return; // hls.js reports its own errors
+    health.errors++;
     if (video.getAttribute('src')) restart();
   });
   // Live: where the viewer is
@@ -933,7 +967,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   function endHere() {
     unhold();
     if (seen) seen = { ...seen, pos: Math.max(seen.pos, video.currentTime) };
-    restart(0);
+    restart(0, false);
   }
   async function checkHold() {
     if (!holding || dead || pending) return;
@@ -951,7 +985,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     looking = true;
     const look = await lookAtFeed().finally(() => { looking = false; });
     if (!holding || dead || pending) return;
-    if (look.go) { unhold(); restart(0); } else if (look.closed) endHere();
+    if (look.go) { unhold(); restart(0, look.go.video === playingVideo); } else if (look.closed) endHere();
   }
 
   // Live watchdog: a picture that stops moving. A feed that has stopped too leaves it where it is (Reconnecting, and
@@ -965,7 +999,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     const look = await lookAtFeed().finally(() => { looking = false; });
     if (dead || pending) return;
     if (look.closed) endFeed();
-    if (look.go) restart(0);
+    if (look.go) restart(0, look.go.video === playingVideo);
     else lastMove = Date.now() - FROZEN_MS + RETRY_MS; // look again in a few seconds
   }, 2000) : undefined;
 
@@ -1022,7 +1056,13 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     },
     get playPending() { return playAborted && video.paused && !dead; },
     cancelPlay() { playAborted = false; },
-    get health() { return { ...health, heldMs: health.heldMs + (holding ? Date.now() - heldSince : 0) }; },
+    get health() {
+      return {
+        ...health,
+        heldMs: health.heldMs + (holding ? Date.now() - heldSince : 0),
+        waitedMs: health.firstMs ?? waitedSoFar(),
+      };
+    },
     seekToStart() {
       if (!live) return;
       const sp = span();
@@ -1051,6 +1091,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
       clearInterval(holdTimer);
       clearTimeout(selfSeekTimer);
       stopEngine();
+      document.removeEventListener('visibilitychange', noteWait);
       if (session) for (const a of sessionActions) { try { session.setActionHandler(a, null); } catch { /* not offered here */ } }
       container.innerHTML = '';
     },

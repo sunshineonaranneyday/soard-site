@@ -16,6 +16,7 @@
  *   - a reload keeps the same id (one person, however often they reload)
  *   - a browser that has opened the admin says it's staff
  *   - the replay reports as replay
+ *   - live reports carry what the live video did (live-player.ts health), the replay's don't
  * Exits non-zero on any failure or console error.
  */
 import puppeteer from 'puppeteer';
@@ -145,6 +146,10 @@ try {
   await sleep(20500);
   const w2 = posts.filter((p) => p.path === '/api/live-watch');
   ok(w2.length === 2 && w2[1].body.sec >= 19 && w2[1].body.sec <= 21, `then one every 20 s (${w2.map((p) => p.body.sec).join(', ')})`);
+  // What the live video did rides along (Broadcast → History: The live video, Nov 19 2026)
+  const pl = w2.map((p) => p.body.player);
+  ok(pl.every((x) => x && /^[a-z0-9]{8}$/.test(x.m) && x.m === pl[0].m) && pl[0].e === 'hls' && pl[0].d === 'computer' && pl[0].f > 0 && pl[0].h === 0 && pl[0].r === 0,
+    `the live reports carry what the video did, one start of the player (${JSON.stringify(pl[0])})`);
 
   console.log('\n▶ sharing doesn\'t pass on where you came from');
   const shared = await page.evaluate(async () => {
@@ -154,9 +159,13 @@ try {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (t) => { got = t; } }, configurable: true });
     document.querySelector('[data-live="cta-share"]')?.click();
     await new Promise((r) => setTimeout(r, 300));
-    return { got, here: location.href };
+    // (Share opens the site's own share sheet when it can: its Copy link hands on the same link)
+    const sheet = document.querySelector('dialog[data-share-sheet]');
+    const viaSheet = !!sheet?.open;
+    if (viaSheet) { sheet.querySelector('[data-how="copy"]')?.click(); await new Promise((r) => setTimeout(r, 300)); sheet.close(); }
+    return { got, here: location.href, viaSheet };
   });
-  ok(/\?src=email/.test(shared.here) && shared.got && !/src=/.test(shared.got) && /\/live\//.test(shared.got), `the Share link drops ?src= (${shared.got}); the address bar keeps it, so the page's own # links don't reload it`);
+  ok(/\?src=email/.test(shared.here) && shared.got && !/src=/.test(shared.got) && /\/live\//.test(shared.got), `the Share link drops ?src= (${shared.got}${shared.viaSheet ? ', from the share sheet\'s Copy link' : ''}); the address bar keeps it, so the page's own # links don't reload it`);
 
   console.log('\n▶ leaving sends what is left');
   const before = posts.length;
@@ -211,6 +220,7 @@ try {
   await page.goto(`${BASE}/donate/`, { waitUntil: 'domcontentloaded' });
   const r = (await sentBy(page)).slice(replaySentBefore).filter((p) => p.path === '/api/live-watch' && p.body?.kind === 'replay');
   ok(r.length >= 1 && r.every((p) => p.body.kind === 'replay' && p.body.broadcastId === 'live-9'), `the replay reports as replay (${JSON.stringify(r.map((p) => p.body.sec))})`);
+  ok(r.every((p) => !p.body.player), 'the replay reports carry no live video numbers');
   const replaySec = r.reduce((a, p) => a + p.body.sec, 0);
   ok(replaySec >= 3 && replaySec <= 5, `the paused five seconds weren't counted (${replaySec} s, sent when the pause began)`);
 

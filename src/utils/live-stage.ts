@@ -254,7 +254,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
           video: () => video(),
           // Stream's own iframe (no <video> to look at): showing counts only live, where it plays by itself
           iframe: () => watchKind === 'live' && pstatus === 'iframe',
-          report: (k, sec) => client.watched(k, sec, bid),
+          report: (k, sec, _final, numbers) => client.watched(k, sec, bid, numbers),
+          // (live: what the video has done, sent with the seconds; Broadcast → History shows it)
+          player: () => (watchKind === 'live' ? player?.health ?? null : null),
         });
       } else {
         playerEl.hidden = true;

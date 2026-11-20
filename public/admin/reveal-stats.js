@@ -489,6 +489,58 @@ function Platforms({ r, s, youtubeKey, youtubeOn, facebookOn }) {
   return html`<div class="rs-plats">${block('Facebook', fbNums, fbNote, readAt(f), f.error, fbPosts)}${block('YouTube', ytNums, ytNote, readAt(yt), yt.error)}</div>`;
 }
 
+// ─── What the live video did for viewers ────────────────────────────
+
+/** When the live page began sending what each viewer's video did (live-player.ts health) */
+export const VIDEO_SINCE = '2026-11-19T15:00:00.000Z';
+const DEVICE_WORDS = [['iphone', 'iPhone'], ['ipad', 'iPad'], ['android', 'Android'], ['computer', 'Computer']];
+const ENGINE_WORDS = [['mms', 'the site\'s player'], ['hls', 'the site\'s player'], ['native', 'Safari\'s own player'], ['iframe', 'Cloudflare\'s player']];
+
+/** "iPhone 14 · Android 6 · Computer 9", and which player played it */
+function playedOn(v) {
+  const d = DEVICE_WORDS.map(([k, w]) => [w, num(v.devices?.[k]) || 0]).filter(([, n]) => n > 0).map(([w, n]) => `${w} ${fmtN(n)}`);
+  const e = {};
+  for (const [k, w] of ENGINE_WORDS) { const n = num(v.engines?.[k]) || 0; if (n) e[w] = (e[w] || 0) + n; }
+  const players = Object.entries(e).map(([w, n]) => `${w} ${fmtN(n)}`);
+  return [d.length ? `On ${d.join(' · ')}.` : null, players.length > 1 || e['Safari\'s own player'] || e['Cloudflare\'s player'] ? `Played by ${players.join(', ')}.` : null].filter(Boolean).join(' ');
+}
+
+/**
+ * The live video, for the people who watched it: did they get a picture and how fast, how far behind the phone, did it
+ * freeze (Reconnecting) and for how long, the moves the player stopped (the video library or Safari moving the picture
+ * by itself: before Nov 19 2026 those replayed seconds), start-overs, iPhones going over to Safari's own player
+ */
+export function VideoHealth({ r, v }) {
+  if (!v) {
+    const old = r.live_at && Date.parse(r.live_at) < Date.parse(VIDEO_SINCE);
+    return html`<p class="rs-muted">${old ? 'The site began keeping what each viewer\'s video did on Nov 19 2026, after this reveal.' : !r.live_at || isLiveNow(r) ? 'Counted as people watch it live.' : 'No viewer\'s video reported.'}</p>`;
+  }
+  const never = num(v.never) || 0;
+  const start = [
+    ['Got a picture', `${fmtN(v.pictured)} of ${fmtN(v.viewers)}`],
+    ['Time to it', v.firstSec == null ? DASH : `${v.firstSec.toLocaleString('en-US', { maximumFractionDigits: 1 })} s`],
+    ['Took over 15 s', fmtN(v.slowStart)],
+    ['Never got one', fmtN(never)],
+    ['Behind the phone', v.startBehind == null ? DASH : `${Math.round(v.startBehind)} s`],
+  ];
+  const during = [
+    ['Froze', fmtN(v.froze)],
+    ['Frozen in all', fmtDur(v.frozeSec)],
+    ['Stopped going back', fmtN(v.refused)],
+    ['Started over', fmtN(v.restarted)],
+    ['To Safari\'s player', fmtN(v.fellBack)],
+    ['Errors', fmtN(v.errored)],
+  ];
+  const dl = (items) => html`<dl>${items.map(([k, val]) => html`<div><dt>${k}</dt><dd>${val}</dd></div>`)}</dl>`;
+  const froze = num(v.froze) ? `${plural(num(v.froze), 'person', 'people')} saw Reconnecting${v.frozeMedianSec != null ? `, typically for ${fmtDur(v.frozeMedianSec)}` : ''}.` : 'Nobody\'s video froze.';
+  const stopped = num(v.refused) ? ` For ${plural(num(v.refused), 'person', 'people')} the player stopped the video moving itself back (before Nov 19 2026 those seconds played again).` : '';
+  return html`<div class="rs-vplats">
+    <div class="rs-plat"><h5>Starting</h5>${dl(start)}<p class="rs-muted">Time to it counts from when there was something to play, not the wait for the camera. It and Behind the phone are the typical viewer's: half were above, half below.${never ? ` ${plural(never, 'person', 'people')} had it ready to play and never got a picture.` : ''}</p></div>
+    <div class="rs-plat"><h5>While it played</h5>${dl(during)}<p class="rs-muted">${froze}${stopped}</p></div>
+    ${playedOn(v) ? html`<p class="rs-muted">${playedOn(v)}</p>` : null}
+  </div>`;
+}
+
 /** "Site 120 · Facebook 160 · YouTube 18, 20:30 after going live": where the most-at-once crowd was */
 export function peakNote(a) {
   if (!(Number(a.peakAll) > 0)) return 'Nobody was watching at once.';
@@ -543,7 +595,8 @@ export function RevealDetail({ r, since, error, currentId, youtubeKey, youtubeOn
         <${Tile} label="There for the reveal" value=${fmtPct(there)} note=${thereNote} />
         <${Tile} label="Hearts" value=${fmtN(live ? s.heartsTotal : null)} note=${!live ? 'Counted while it\'s live.' : s.heartsTotal == null ? (isLiveNow(r) ? 'None yet.' : 'None recorded.') : null} />
       </div>
-      ${s.series?.length ? html`<section class="rs-sec"><h4>Watching at once</h4><${AtOnceChart} series=${s.series} revealAt=${num(s.revealAt)} /></section>` : null}` : null}
+      ${s.series?.length ? html`<section class="rs-sec"><h4>Watching at once</h4><${AtOnceChart} series=${s.series} revealAt=${num(s.revealAt)} /></section>` : null}
+      ${live && r.source !== 'manual' ? html`<section class="rs-sec"><h4>The live video</h4><${VideoHealth} r=${r} v=${s.video || null} /></section>` : null}` : null}
     ${platforms ? html`<div class="rs-cols">
         ${s.counted ? html`<section class="rs-sec"><h4>Where people came from</h4><${Sources} sources=${s.sources} /></section>` : null}
         <section class="rs-sec"><h4>On Facebook and YouTube</h4><${Platforms} r=${r} s=${s} youtubeKey=${youtubeKey} youtubeOn=${youtubeOn} facebookOn=${facebookOn} /></section>
@@ -869,7 +922,8 @@ const CSS = `
 .rs-bars__track > span { display: block; height: 100%; border-radius: 0 4px 4px 0; background: ${COLORS.site}; }
 .rs-bars__n { font-variant-numeric: tabular-nums; white-space: nowrap; text-align: right; min-width: 4.5rem; }
 .rs-bars__n small { color: var(--color-text-muted); font-size: var(--fs-xs); }
-.rs-plats { display: grid; gap: .9rem; }
+.rs-plats, .rs-vplats { display: grid; gap: .9rem; }
+.rs-vplats .rs-plat dl { grid-template-columns: repeat(auto-fill, minmax(10.5rem, 1fr)); }
 .rs-plat h5 { margin: 0 0 .3rem; font-size: var(--fs-sm); }
 .rs-plat dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); gap: .4rem .9rem; margin: 0; }
 .rs-plat dt { font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--color-text-secondary); }
