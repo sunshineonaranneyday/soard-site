@@ -181,6 +181,24 @@ export async function createFbLiveVideo(env, { title, description }) {
   }
 }
 
+/**
+ * The Page's own comment on its live post (the website link: a link in the post itself makes Facebook show it to
+ * fewer people, one in a comment doesn't). It goes on the live video's video, as Facebook's comments edge takes
+ * it, or on the live video itself while Facebook gives no video yet. Needs pages_manage_engagement on the token.
+ */
+export async function commentOnFbLive(env, liveVideoId, message) {
+  if (!fbConfigured(env) || !liveVideoId) return { ok: false, error: 'not configured' };
+  try {
+    const lv = await graph(env, 'GET', liveVideoId, { fields: 'video{id}' });
+    const target = (lv.ok && lv.data?.video?.id) || liveVideoId;
+    const r = await graph(env, 'POST', `${target}/comments`, { message: String(message || '').slice(0, 8000) });
+    if (!r.ok) return { ok: false, error: r.error, code: r.code, permission: r.code === 10 || r.code === 200 || /permission/i.test(r.error || '') };
+    return { ok: true, id: r.data?.id || null, on: target };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
 export async function endFbLiveVideo(env, liveVideoId) {
   if (!fbConfigured(env) || !liveVideoId) return { ok: false, error: 'not configured' };
   try {

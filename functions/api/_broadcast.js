@@ -1741,6 +1741,66 @@ function applyKid(state, kid, via, work) {
 
 // ─── Facebook side effects ──────────────────────────────────────────
 
+/**
+ * The words on the Facebook live post, made when the phone goes live (never ahead of it): the kid's story, as
+ * the live page's lead has it (heroSummary, else shortDescription), then "Live now". No link in the post: the
+ * link to watch on our website and leave the family a message is the Page's first comment on it (`comment`,
+ * fbFirstComment), because Facebook shows posts with a link to fewer people (Peter, Nov 20 2026). Staff's own
+ * message, when they wrote one, takes the place of the "Live now" line; a broadcast with no kid keeps staff's own
+ * words and gets no comment, as before. The title is unchanged.
+ */
+export async function fbLiveWords(DB, state, config) {
+  const title = state.title || config?.defaults?.title || 'Live now';
+  if (!state.kidSlug) return { title, description: state.message || '', comment: null };
+  const name = state.kidName || null;
+  let story = '';
+  const row = await DB.prepare('SELECT data FROM kids WHERE slug = ?').bind(state.kidSlug).first().catch(() => null);
+  try { const d = JSON.parse(row?.data || '{}'); story = String(d.heroSummary || d.shortDescription || '').replace(/\s+/g, ' ').trim(); } catch { story = ''; }
+  const own = state.message && state.message !== `Watch ${name}'s room reveal live` && state.message !== config?.defaults?.message ? state.message : null;
+  const line = own || `Live now: watch the moment ${name || 'a child'} sees the new room for the first time.`;
+  const comment = `Watch on our website too, and leave a message for the family: ${liveLinkFor(state, 'facebook')}`;
+  return { title, description: [story, line].filter(Boolean).join('\n\n'), comment };
+}
+
+/**
+ * The website link as the Page's first comment on its live post, once per post. Tried on the tick that made the
+ * post and the ticks after (Facebook may not take a comment the second the post exists), FB_COMMENT_TRIES times
+ * at most, each try its own claim so racing ticks never comment twice. If Facebook won't take it (a missing
+ * permission at once, anything else after the last try), staff are told once, with the words to paste by hand.
+ * The post stands either way. goLiveEffects runs it while the go-live is recent, as it does the post.
+ */
+const FB_COMMENT_TRIES = 3;
+async function fbFirstComment(env, config, state, work) {
+  const id = state.fb?.liveVideoId;
+  const bid = state.broadcastId;
+  if (config.facebook?.mode !== 'api' || !id || !bid || state.quiet || !fb.fbConfigured(env)) return state;
+  const done = await claimedKeys(env.DB, bid);
+  if (done.has(`fb-comment-done:${id}`) || done.has(`fb-comment-alert:${id}`)) return state;
+  let n = 1;
+  while (done.has(`fb-comment:${id}:${n}`)) n++;
+  if (n > FB_COMMENT_TRIES) return state;
+  if (!(await claimOnce(env.DB, bid, `fb-comment:${id}:${n}`))) return state; // another tick has this try
+  const words = await fbLiveWords(env.DB, state, config).catch(() => null);
+  if (!words?.comment) { await claimOnce(env.DB, bid, `fb-comment-done:${id}`); return state; }
+  const r = await fb.commentOnFbLive(env, id, words.comment);
+  if (r.ok) {
+    await claimOnce(env.DB, bid, `fb-comment-done:${id}`);
+    await settleClaim(env.DB, bid, `fb-comment-done:${id}`, { commentId: r.id, on: r.on });
+    work.push('fb-comment');
+    return state;
+  }
+  await settleClaim(env.DB, bid, `fb-comment:${id}:${n}`, { error: r.error || 'unknown', code: r.code || null });
+  work.push('fb-comment-failed');
+  if ((r.permission || n >= FB_COMMENT_TRIES) && await claimOnce(env.DB, bid, `fb-comment-alert:${id}`)) {
+    await notify.alertAdmins(env, config, {
+      level: 'warn', title: 'Facebook: the website link comment didn\'t post',
+      detail: `The live post is up; only the Page's first comment failed (${r.error || 'unknown error'}${r.permission ? ': the Facebook token needs the pages_manage_engagement permission' : ''}). Post this as a comment from the Page on the live video:\n\n${words.comment}`,
+      url: `${SITE_ORIGIN}/admin/#broadcast/control-room`,
+    }).catch(() => {});
+  }
+  return state;
+}
+
 async function fbOnLive(env, config, state, work) {
   const s = { ...state, fb: { ...(state.fb || {}) } };
   if (!fb.fbConfigured(env) || state.quiet) return s;
@@ -1752,7 +1812,8 @@ async function fbOnLive(env, config, state, work) {
       if (made?.liveVideoId) { s.fb.liveVideoId = made.liveVideoId; s.fb.outputUid = made.outputUid || null; }
       return s;
     }
-    const created = await fb.createFbLiveVideo(env, { title: s.title, description: s.message });
+    const words = await fbLiveWords(env.DB, s, config).catch(() => ({ title: s.title, description: s.message }));
+    const created = await fb.createFbLiveVideo(env, words);
     if (created.ok) {
       s.fb.liveVideoId = created.id;
       await settleClaim(env.DB, s.broadcastId, 'fb-live-post', { liveVideoId: created.id, outputUid: null });
@@ -1870,6 +1931,8 @@ async function goLiveEffects(env, config, state, work, by) {
   // Also when the post was claimed but this state lacks its id (the tick that made it lost its save): fbOnLive reads it back.
   // Not while a Facebook release is still pending (preShowEffects opens the post once it is done)
   if (!state.fbReopen && !state.preShowFb && (!done.has('fb-live-post') || (config.facebook?.mode === 'api' && !state.fb?.liveVideoId))) state = await fbOnLive(env, config, state, work);
+  // The website link as the post's first comment (never in the post itself)
+  if (!state.fbReopen && !state.preShowFb && state.fb?.liveVideoId) state = await fbFirstComment(env, config, state, work);
   if (!done.has('live-announce') && await claimOnce(DB, state.broadcastId, 'live-announce')) {
     await recordEvent(DB, state.broadcastId, 'live_start', { source: state.source, videoUid: state.liveVideoUid });
     await logAudit(DB, { userEmail: by || 'live-broadcast', action: 'published', entityType: 'live-status', entitySlug: state.broadcastId, entityName: state.title || 'Live broadcast', gitStatus: 'ok' });
