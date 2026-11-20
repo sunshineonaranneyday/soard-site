@@ -36,6 +36,8 @@ const WHY = {
   'not-photo': HEADSHOT_NOT_PHOTO,
   cut: HEADSHOT_CUT,
   converter: 'This photo couldn’t be opened just now: the part of the page that reads phone photos (HEIC) didn’t load. Check your connection, reload the page (your answers are kept), and choose it again.',
+  // (where this browser keeps nothing, a reload would lose their answers: never suggested)
+  'converter-unkept': 'This photo couldn’t be opened just now: the part of the page that reads phone photos (HEIC) didn’t load. Check your connection and choose it again, or choose a JPEG or PNG photo instead.',
   unreadable: 'That photo couldn’t be read just now (it may have changed or moved while it was being opened). Please choose it again.',
 };
 
@@ -90,7 +92,7 @@ function nextSeq(atLeast = 0) {
   return n;
 }
 
-export function photoField(el, { id, onChange = () => {}, announce = () => {}, signal } = {}) {
+export function photoField(el, { id, onChange = () => {}, announce = () => {}, signal, keepsAnswers = () => true } = {}) {
   const box = el.querySelector('[data-photo]');
   const input = el.querySelector('input[type="file"]');
   const img = box.querySelector('.adv-photo-img');
@@ -203,7 +205,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     try { got = await busy; } catch { got = { error: 'not-photo' }; } finally { clearTimeout(slow); }
     if (my !== gen) return; // a newer pick is being got ready
     setBusy(null);
-    if (!got?.photo) { wont(WHY[got?.error] || WHY['not-photo']); return; }
+    if (!got?.photo) { wont(WHY[got?.error === 'converter' && !keepsAnswers() ? 'converter-unkept' : got?.error] || WHY['not-photo']); return; }
     const drawn = got.photo;
     // Judged on what it really is: too small, or (drawn within Cloudflare's limits) too wide and narrow to use
     const real = { width: drawn.sourceWidth || drawn.width, height: drawn.sourceHeight || drawn.height };
@@ -223,7 +225,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
       say(addedNote());
       announce(''); // (an earlier refusal said there isn't left for a screen reader: this note says it's added)
       paint();
-      onChange({});
+      onChange({ fresh: true }); // (a new photo in: what was said about one turned down before is over)
       reveal();
       ok = !!(await photoStore.put(id, { blob: drawn.file, name: drawn.file.name, width: drawn.width, height: drawn.height, sourceWidth: real.width, sourceHeight: real.height, at: pickedAt, seq }));
     } finally { saving--; }
@@ -256,7 +258,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
       say('');
     }
     paint();
-    onChange({ silent: true });
+    onChange({ silent: true, fresh: true }); // (another tab's photo, or none: what was said here about one turned down is over)
   }
 
   async function clear({ keep = false } = {}) {
@@ -280,7 +282,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
   remove.addEventListener('click', async () => {
     await clear();
     say('Photo removed.');
-    onChange({});
+    onChange({ fresh: true });
     input.focus();
   }, { signal });
   // Dragged in on a computer: the whole card takes it. Dropped anywhere else on the page (just missing the card), it's

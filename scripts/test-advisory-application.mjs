@@ -665,6 +665,129 @@ await phone.close();
   await pb.close();
 }
 {
+  // Round 12. Being deleted in another tab right now: the panel says so (never that it stopped), shows no Add, and finds
+  // it gone by itself once it goes
+  const bd = (await submitApplication(env, { ...base, fullName: 'Bo Deleting', email: 'bo.del@example.org', signature: 'Bo Deleting' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  await DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), bd.id).run();
+  await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  await DB.prepare('INSERT OR REPLACE INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind(`del:${bd.id}`, Date.now(), `app:${bd.id}`, Date.now()).run();
+  const pn = await open(1280, `/admin/__advisory.html#advisory-applications/${bd.id}`, 900);
+  await pn.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 }); await sleep(300);
+  const now = { said: await text(pn, '.ava-drawer .ava-callout'), shot: await text(pn, '.ava-drawer section[aria-label="Headshot"]'), add: await pn.$$eval('.ava-drawer button', (bs) => bs.some((b) => /^Add to Advisory Board$/.test(b.textContent.trim()))) };
+  ok(/being deleted right now/.test(now.said) && !/didn’t finish/.test(now.said) && /Not shown: this application is being deleted/.test(now.shot) && !now.add, `being deleted in another tab right now: the panel says so, never that it stopped, with no Add (${JSON.stringify(now)})`);
+  await DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(bd.id).run();
+  await DB.prepare('DELETE FROM advisory_add_holds').run();
+  ok(await pn.waitForFunction(() => document.querySelector('.ava-drawer h2')?.textContent.trim() === 'Application not found', { timeout: 8000 }).then(() => true, () => false), 'and once that delete finishes, the panel says it’s gone by itself');
+  await pn.close();
+}
+{
+  // A delete that stops after its headshot went: the panel shows it as it is now (stopped partway, no Add, the headshot
+  // said to be deleted), never the copy from before the press with Add still offered
+  const bf = (await submitApplication(env, { ...base, fullName: 'Fay Failing', email: 'fay.fail@example.org', signature: 'Fay Failing' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pf = await open(1280, `/admin/__advisory.html#advisory-applications/${bf.id}`, 900);
+  await pf.waitForSelector('.ava-drawer .ava-shot', { timeout: 8000 });
+  const real = DB.prepare.bind(DB);
+  DB.prepare = (sql) => (/^DELETE FROM advisory_applications WHERE id = \?$/.test(sql) ? { bind: () => ({ run: async () => { throw new Error('D1_ERROR: busy'); } }) } : real(sql));
+  await clickText(pf, '.ava-drawer button', /^Delete application$/);
+  await pf.waitForSelector('.ava-dialog', { timeout: 4000 });
+  await clickText(pf, '.ava-dialog button', /^Delete application$/);
+  await pf.waitForFunction(() => /didn’t finish/.test(document.querySelector('.ava-drawer .ava-callout')?.textContent || ''), { timeout: 8000 }).catch(() => null);
+  DB.prepare = real;
+  await clickText(pf, '.ava-dialog button', /^Keep it$/);
+  await sleep(400);
+  const after = { said: await text(pf, '.ava-drawer .ava-callout'), shot: await text(pf, '.ava-drawer section[aria-label="Headshot"]'), img: !!(await pf.$('.ava-drawer .ava-shot')), add: await pf.$$eval('.ava-drawer button', (bs) => bs.some((b) => /^Add to Advisory Board$/.test(b.textContent.trim()))) };
+  ok(/Deleting this application didn’t finish/.test(after.said) && !after.add && !after.img && /Not shown: deleting this application didn’t finish/.test(after.shot) && !/applied before the form asked/.test(after.shot),
+    `a delete that stopped after its headshot went: the open panel shows it so at once, no Add, the headshot said as deleted (${JSON.stringify(after)})`);
+  await pf.close();
+}
+{
+  // A note saved as the application is deleted in another tab: the panel says it's gone, never stuck on "Loading…"
+  const bn = (await submitApplication(env, { ...base, fullName: 'Nia Noting', email: 'nia.note@example.org', signature: 'Nia Noting' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pz = await open(1280, `/admin/__advisory.html#advisory-applications/${bn.id}`, 900);
+  await pz.waitForSelector('#ava-note', { timeout: 8000 });
+  await pz.type('#ava-note', 'Called them today.');
+  const real = DB.prepare.bind(DB);
+  DB.prepare = (sql) => {
+    if (!/^UPDATE advisory_applications SET notes/.test(sql)) return real(sql);
+    DB.prepare = real;
+    return { bind: (...p) => ({ run: async () => { await real('DELETE FROM advisory_applications WHERE id = ?').bind(bn.id).run(); return real(sql).bind(...p).run(); } }) };
+  };
+  await clickText(pz, '.ava-drawer button', /^Add note$/);
+  const said = await pz.waitForFunction(() => document.querySelector('.ava-drawer h2')?.textContent.trim() === 'Application not found', { timeout: 8000 }).then(() => true, () => false);
+  DB.prepare = real;
+  const stuck = await pz.evaluate(() => /Loading…/.test(document.querySelector('.ava-drawer')?.textContent || ''));
+  ok(said && !stuck && !errors.some((e) => /reading 'id'/.test(e)), `a note saved as the application was deleted elsewhere: the panel says it's gone, never stuck loading (${JSON.stringify({ said, stuck })})`);
+  await pz.close();
+}
+{
+  // Round 13. The Add box waiting on a delete in another tab that then stops partway: the wait ends, the box closes with
+  // why, and the panel shows the application as it is now (never "being deleted" for a minute, then "taking longer")
+  const bs = (await submitApplication(env, { ...base, fullName: 'Stu Stopping', email: 'stu.stop@example.org', signature: 'Stu Stopping' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const ps = await open(1280, `/admin/__advisory.html#advisory-applications/${bs.id}`, 900);
+  await ps.waitForSelector('.ava-drawer .ava-shot', { timeout: 8000 });
+  await DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), bs.id).run();
+  await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  await DB.prepare('INSERT OR REPLACE INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind(`del:${bs.id}`, Date.now(), `app:${bs.id}`, Date.now()).run();
+  await clickText(ps, '.ava-drawer button', /^Add to Advisory Board$/);
+  await ps.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+  const waiting = await text(ps, '.ava-dialog h2').catch(() => '');
+  await DB.prepare('DELETE FROM advisory_add_holds').run(); // (the delete stops: its holds let go, the mark stays)
+  const closed = await ps.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).then(() => true, () => false);
+  await sleep(500);
+  const after = { said: await text(ps, '.ava-drawer .ava-callout'), add: await ps.$$eval('.ava-drawer button', (bs) => bs.some((b) => /^Add to Advisory Board$/.test(b.textContent.trim()))), img: !!(await ps.$('.ava-drawer .ava-shot')) };
+  ok(waiting === 'This application is being deleted' && closed && /Deleting this application didn’t finish/.test(after.said) && !after.add && !after.img,
+    `the Add box waiting on a delete that then stops: it closes and the panel says the delete didn't finish, no Add, no headshot (${JSON.stringify({ waiting, closed, ...after })})`);
+  await ps.close();
+}
+{
+  // Round 14. An Add box already open, then a delete in another tab stops partway: pressing Add them closes the box with
+  // why, and the panel shows it stopped (never a box left offering Add them to every press)
+  const bo = (await submitApplication(env, { ...base, fullName: 'Opal Open', email: 'opal.open@example.org', signature: 'Opal Open' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const po = await open(1280, `/admin/__advisory.html#advisory-applications/${bo.id}`, 900);
+  await po.waitForSelector('.ava-drawer .ava-shot', { timeout: 8000 });
+  await clickText(po, '.ava-drawer button', /^Add to Advisory Board$/);
+  await po.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
+  await DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), bo.id).run(); // (stopped partway, its holds gone)
+  await sleep(500);
+  await clickText(po, '.ava-dialog button', /^Add them$/);
+  const shut = await po.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).then(() => true, () => false);
+  await sleep(500);
+  const now = { said: await text(po, '.ava-drawer .ava-callout').catch(() => ''), focus: await po.evaluate(() => document.activeElement?.matches('.ava-drawer') || false), people: (await DB.prepare("SELECT COUNT(*) AS n FROM team WHERE slug LIKE 'opal-open%'").first()).n };
+  ok(shut && /Deleting this application didn’t finish/.test(now.said) && now.people === 0, `an open Add box pressed after a delete in another tab stopped: it closes, the panel says it stopped, nobody added (${JSON.stringify({ shut, ...now })})`);
+  await po.close();
+}
+{
+  // Round 14. Another People record being given the web address a new applicant would get: the box says that, never
+  // "their record" (they have none)
+  const bw = (await submitApplication(env, { ...base, fullName: 'Wren Waiting', email: 'wren.wait@example.org', signature: 'Wren Waiting' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  await DB.prepare('INSERT OR REPLACE INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind('slug:wren-waiting', Date.now(), 'edit:wren-waiting', Date.now()).run();
+  const pw = await open(1280, `/admin/__advisory.html#advisory-applications/${bw.id}`, 900);
+  await pw.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pw, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pw.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null); await sleep(300);
+  const box = { title: await text(pw, '.ava-dialog h2').catch(() => ''), said: await text(pw, '.ava-dialog [role="status"]').catch(() => '') };
+  ok(box.title === 'The web address they’d get is being used on People' && /changing a People record to the web address this box would give them/.test(box.said) && !/their People record/.test(box.said),
+    `another record taking the address a new applicant would get: the box says that, never "their record" (${JSON.stringify(box)})`);
+  await DB.prepare('DELETE FROM advisory_add_holds').run();
+  await pw.close();
+}
+{
+  // Their People record being renamed or deleted on People right now: the box says that, never that someone is adding them
+  await onPeople('eve-edit', { name: 'Eve Edit', group: 'advisory', publishStatus: 'published' });
+  await DB.prepare("INSERT INTO reveal_board_emails VALUES ('eve-edit', 'eve.work@example.org', null)").run();
+  const be = (await submitApplication(env, { ...base, fullName: 'Eve Edit', email: 'eve.home@example.org', signature: 'Eve Edit' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  await DB.prepare('INSERT OR REPLACE INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind('slug:eve-edit', Date.now(), 'edit:eve-edit', Date.now()).run();
+  const pe = await open(1280, `/admin/__advisory.html#advisory-applications/${be.id}`, 900);
+  await pe.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pe, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pe.waitForSelector('.ava-dialog', { timeout: 4000 }); await sleep(300);
+  const box = { title: await text(pe, '.ava-dialog h2'), said: await text(pe, '.ava-dialog [role="status"]') };
+  ok(box.title === 'Eve Edit’s People record is being changed' && /Someone is changing Eve Edit’s People record right now/.test(box.said), `their People record being changed: the box says that, never "someone is adding" (${JSON.stringify(box)})`);
+  await DB.prepare('DELETE FROM advisory_add_holds').run();
+  await pe.close();
+}
+{
   // Two members with one name: each button and line says which (their organization), never two that read the same
   await onPeople('uma-same', { name: 'Uma Same', group: 'advisory', organization: 'Acme', publishStatus: 'published' });
   await onPeople('uma-same-2', { name: 'Uma Same', group: 'advisory', organization: 'Beta', status: 'alumni', publishStatus: 'published' });
@@ -1230,11 +1353,18 @@ if (DIST) {
     }
     {
       const x = await hungPage('198.51.100.77');
+      await x.evaluate(() => { window.__bar = []; const b = document.getElementById('adv-saved'); new MutationObserver(() => window.__bar.push(b.textContent)).observe(b, { childList: true, characterData: true, subtree: true }); });
       await (await x.$('#adv-headshot')).uploadFile(GOOD_JPG);
       await x.waitForFunction(() => /can’t keep it/.test(document.getElementById('adv-headshot-status').textContent), { timeout: 10000 }).catch(() => null);
-      await x.waitForFunction(() => document.getElementById('adv-saved').textContent === 'Saved on this device, except your photo', { timeout: 3000 }).catch(() => null);
+      await x.waitForFunction(() => document.getElementById('adv-saved').textContent === 'Saved, except your photo', { timeout: 3000 }).catch(() => null);
       const bar = await text(x, '#adv-saved');
-      ok(bar === 'Saved on this device, except your photo', `the bar across the top never says the photo is saved when this browser can't keep it (${bar})`);
+      ok(bar === 'Saved, except your photo', `the bar across the top never says the photo is saved when this browser can't keep it (${bar})`);
+      const said = await x.evaluate(() => window.__bar.filter(Boolean));
+      ok(!said.includes('Saved on this device') && said.includes('Saving on this device…'), `and never "Saved on this device" while the photo is still being kept: "Saving…" until it's known (${JSON.stringify(said)})`);
+      // The smallest phone: the bar's words on one line, inside the bar, over nothing
+      await x.setViewport({ width: 320, height: 568, deviceScaleFactor: 2, isMobile: true, hasTouch: true }); await sleep(400);
+      const fit = await x.evaluate(() => { const s = document.getElementById('adv-saved').getBoundingClientRect(); const top = document.querySelector('.adv-top-inner').getBoundingClientRect(); const t = document.getElementById('adv-top-title') || document.querySelector('.adv-top-title'); return { lines: Math.round(s.height / 17), inside: s.right <= top.right + 0.5 && s.top >= top.top && s.bottom <= top.bottom, titleTop: Math.round(t.getBoundingClientRect().top - top.top), wide: document.documentElement.scrollWidth > innerWidth + 1 }; });
+      ok(fit.lines === 1 && fit.inside && fit.titleTop >= 0 && !fit.wide, `at 320px the bar's words are one line, inside the bar (${JSON.stringify(fit)})`);
       await x.close();
     }
   }
@@ -1552,6 +1682,11 @@ if (DIST) {
       await sleep(300);
       const hub = { title: await text(sp, '#adv-hub-title'), lead: await text(sp, '#adv-hub-lead'), heard: await text(sp, '#adv-hub-live') };
       ok(/^Your photo didn’t go in: /.test(hub.lead) && /Your photo didn’t go in: /.test(hub.heard), `a photo turned down while they're on the overview: it says the photo didn't go in, and why, read out (${JSON.stringify(hub)})`);
+      // Round twelve: Start over (pressed twice: the second deletes) takes the note with the answers it was about
+      await sp.click('#adv-start-over'); await sleep(500);
+      await sp.click('#adv-start-over'); await sleep(800);
+      const fresh = { lead: await text(sp, '#adv-hub-lead'), title: await text(sp, '#adv-hub-title') };
+      ok(!/didn’t go in/.test(fresh.lead) && fresh.title === 'Six steps, about 20 minutes', `after Start over, the overview never says a photo of deleted answers didn't go in (${JSON.stringify(fresh)})`);
       await sp.close();
     }
     {
@@ -1597,6 +1732,241 @@ if (DIST) {
       const said = await sp.evaluate(() => { const e = document.getElementById('adv-send-error'); return { shown: !e.hidden && !!e.getClientRects().length, text: e.textContent, role: e.getAttribute('role'), title: document.getElementById('adv-title').textContent.trim() }; });
       const stored = (await DB.prepare('SELECT COUNT(*) AS n FROM advisory_applications WHERE email = ?').bind('sen.stop@example.org').first()).n;
       ok(said.shown && said.role === 'alert' && /Your earlier headshot is still here/.test(said.text) && said.title === 'Review and send' && stored === 0, `a new photo turned down while Send waits: Send stops with its words over it, read out, nothing sent (${JSON.stringify({ ...said, stored })})`);
+      await sp.close();
+    }
+    {
+      // Round fourteen. One helper: the review, its answers seeded (and a photo kept earlier), at a width
+      const reviewAt = async (ip, who, { width = 1280, height = 800, mobile = false, sending = false, block = null } = {}) => {
+        const sp = await browser.newPage();
+        await sp.setViewport({ width, height, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile });
+        await sp.setCacheEnabled(false);
+        await sp.setRequestInterception(true);
+        sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) { await sleep(block ?? SLOW_MS); return req.abort('failed'); } if (await answer(req, ip) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+        await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+        await sp.evaluate(async (answers, b64, sendingNow) => {
+          localStorage.clear();
+          await new Promise((res) => { const d = indexedDB.deleteDatabase('soard-advisory'); d.onsuccess = d.onerror = d.onblocked = () => res(); });
+          localStorage.setItem('soard-advisory-application', JSON.stringify({ answers, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+          if (sendingNow) localStorage.setItem('soard-advisory-sending', JSON.stringify({ at: Date.now(), id: 'x' }));
+          const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+          await new Promise((res) => { const o = indexedDB.open('soard-advisory', 1); o.onupgradeneeded = () => o.result.createObjectStore('photos'); o.onsuccess = () => { const tx = o.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new File([bytes], 'h.jpg', { type: 'image/jpeg' }), name: 'h.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { o.result.close(); res(); }; }; });
+          localStorage.setItem('soard-advisory-photo-seq', '1');
+        }, { ...base, ...who }, readFileSync(GOOD_JPG).toString('base64'), sending);
+        await sp.reload({ waitUntil: 'networkidle0' }); await sleep(400);
+        await sp.click('#adv-go');
+        await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 6000 }).catch(() => null);
+        const all = await sp.$('#adv-review-all'); if (all) { await all.click(); await sleep(300); }
+        return sp;
+      };
+      const title = (sp) => text(sp, '#adv-title');
+      const photoShown = (sp) => sp.evaluate(() => !!document.querySelector('[data-field="headshot"]')?.getClientRects().length);
+      const overSend = (sp) => sp.evaluate(() => { const e = document.getElementById('adv-send-error'); return !e.hidden && e.getClientRects().length ? e.textContent : ''; });
+      // (1) A photo turned down on another screen of its own step (About you's first, on a laptop): never wiped as they
+      // leave the step, said over Send on the review
+      {
+        const sp = await reviewAt('198.51.100.99', { fullName: 'Part One', email: 'part.one@example.org', signature: 'Part One' });
+        await sp.evaluate(() => document.querySelector('#adv-review .adv-review-edit[data-edit="0"]')?.click()); await sleep(900);
+        for (let k = 0; k < 6 && !(await photoShown(sp)); k++) { await sp.click('#adv-next'); await sleep(800); }
+        await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+        await sp.click('#adv-back').catch(() => {}); await sleep(700); // (back to Part 1, the photo still being got ready)
+        const where = await sp.evaluate(() => ({ part: document.getElementById('adv-part')?.textContent, photo: !!document.querySelector('[data-field="headshot"]')?.getClientRects().length }));
+        await sleep(SLOW_MS + 2500);
+        for (let k = 0; k < 6 && (await title(sp)) !== 'Review and send'; k++) { await sleep(500); await sp.click('#adv-back').catch(() => {}); await sleep(800); }
+        await sleep(500);
+        const said = { title: await title(sp), over: await overSend(sp) };
+        ok(!where.photo && said.title === 'Review and send' && /Your earlier headshot is still here/.test(said.over),
+          `a photo turned down on another screen of its own step (${where.part}): back on the review it's said over Send (${JSON.stringify(said)})`);
+        await sp.close();
+      }
+      // (7) Seen on its card, then Save and exit: gone from Send when they come back to the review
+      {
+        const sp = await reviewAt('198.51.100.100', { fullName: 'Seen Once', email: 'seen.once@example.org', signature: 'Seen Once' });
+        await sp.evaluate(() => document.querySelector('#adv-review [data-answer="headshot"]')?.click()); await sleep(900);
+        await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+        await sp.click('#adv-back').catch(() => {});
+        await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 4000 }).catch(() => null);
+        await sleep(500);
+        await sp.evaluate(() => document.querySelector('#adv-review .adv-review-edit[data-edit="1"]')?.click()); await sleep(SLOW_MS + 2500); // (turned down on Your interest)
+        // (back on the review, then its Change for the headshot: the warning on its card, on screen)
+        await sp.click('#adv-back').catch(() => {});
+        await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 4000 }).catch(() => null);
+        await sleep(600);
+        await sp.evaluate(() => document.querySelector('#adv-review [data-answer="headshot"]')?.click()); await sleep(900);
+        const card = (await photoShown(sp)) ? await text(sp, '#adv-headshot-status') : '(the photo never came on screen)';
+        await sleep(500);
+        await sp.click('#adv-exit');
+        await sp.waitForFunction(() => !document.documentElement.classList.contains('adv-focus'), { timeout: 4000 }).catch(() => null);
+        await sleep(600);
+        await sp.click('#adv-go');
+        await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 6000 }).catch(() => null);
+        await sleep(600);
+        const over = await overSend(sp);
+        ok(/Your earlier headshot is still here/.test(card) && !/earlier headshot/.test(over), `seen on its card, then Save and exit: never said again over Send (${JSON.stringify({ card: card.slice(0, 60), over })})`);
+        await sp.close();
+      }
+      // (8) "This may already have been sent" and a photo turned down: both said over Send, never one wiping the other
+      {
+        const sp = await reviewAt('198.51.100.101', { fullName: 'Both Notes', email: 'both.notes@example.org', signature: 'Both Notes' }, { sending: true });
+        const first = await overSend(sp);
+        await sp.evaluate(() => document.querySelector('#adv-review [data-answer="headshot"]')?.click()); await sleep(900);
+        await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+        await sp.click('#adv-back').catch(() => {});
+        await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 4000 }).catch(() => null);
+        await sleep(SLOW_MS + 2500);
+        const both = await overSend(sp);
+        ok(/may already have been sent/.test(first) && /may already have been sent/.test(both) && /Your earlier headshot is still here/.test(both), `"may already have been sent" and a photo turned down: both said over Send (${JSON.stringify(both)})`);
+        // (9) a step opened from the review while those words show: its screens as many as ever
+        const normal = await sp.evaluate(() => document.getElementById('adv-part')?.textContent);
+        await sp.evaluate(() => document.querySelector('#adv-review .adv-review-edit[data-edit="0"]')?.click()); await sleep(900);
+        const parts = await sp.evaluate(() => document.getElementById('adv-part')?.textContent || '');
+        ok(/of 2$/.test(parts), `About you opened from the review with words over Send: its usual 2 screens on a laptop, never more (${parts}; ${normal})`);
+        // (11) and Back on its first screen, opened from the review, goes back to the review
+        const back = await sp.evaluate(() => ({ shown: !document.getElementById('adv-back').hidden && !!document.getElementById('adv-back').getClientRects().length }));
+        await sleep(500);
+        await sp.click('#adv-back').catch(() => {});
+        await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 5000 }).catch(() => null);
+        ok(back.shown && (await title(sp)) === 'Review and send', `About you opened from the review: Back is there on its first screen, and goes back to the review (${JSON.stringify(back)})`);
+        await sp.close();
+      }
+      // (10) A browser that keeps the answers but can't keep the photo: never told a reload keeps everything
+      {
+        const sp = await browser.newPage();
+        await sp.setViewport({ width: 1280, height: 800 });
+        await sp.setCacheEnabled(false);
+        await sp.setRequestInterception(true);
+        sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) return req.abort('failed'); if (await answer(req, '198.51.100.102') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+        await sp.evaluateOnNewDocument(() => { indexedDB.open = () => { throw new DOMException('denied', 'SecurityError'); }; if (!sessionStorage.getItem('kp')) { localStorage.clear(); sessionStorage.setItem('kp', '1'); localStorage.setItem('soard-advisory-application', JSON.stringify({ answers: { fullName: 'Keeps Words', email: 'keeps.words@example.org', phone: '404 555 0178' }, step: 0, screen: 0, field: null, furthest: 0, startedAt: Date.now() - 60000, session: crypto.randomUUID(), savedAt: Date.now() })); } });
+        await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+        await sp.click('#adv-go'); await sleep(700);
+        for (let i = 0; i < 6 && !(await photoShown(sp)); i++) { await sp.click('#adv-next'); await sleep(700); }
+        await (await sp.$('#adv-headshot')).uploadFile(GOOD_JPG);
+        await sp.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 10000 }).catch(() => null);
+        await sleep(1500);
+        await (await sp.$('#adv-headshot')).uploadFile(HEIC);
+        await sp.waitForFunction(() => /couldn’t be opened/.test(document.getElementById('adv-headshot-status')?.textContent || ''), { timeout: 15000 }).catch(() => null);
+        const words = await text(sp, '#adv-headshot-status');
+        ok(/couldn’t be opened/.test(words) && !/reload/i.test(words), `a browser that can't keep the photo is never told to reload (the photo would go) (${words})`);
+        await sp.close();
+      }
+    }
+    for (const route of ['review', 'own-step']) {
+      // Round thirteen: a new photo picked (Change from the review), then they go on to another step (Your interest) and
+      // it's turned down there, out of sight. Back on the review: said over Send, never sent with the earlier photo without
+      // a word. Back on its own step: its warning still there, never wiped to "Added." by a step they passed through
+      const sp = await browser.newPage();
+      await sp.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await sp.setCacheEnabled(false);
+      await sp.setRequestInterception(true);
+      sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) { await sleep(SLOW_MS); return req.abort('failed'); } if (await answer(req, `198.51.100.${route === 'review' ? 96 : 97}`) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      await sp.evaluate(async (answers, b64) => {
+        localStorage.clear();
+        await new Promise((res) => { const d = indexedDB.deleteDatabase('soard-advisory'); d.onsuccess = d.onerror = d.onblocked = () => res(); });
+        localStorage.setItem('soard-advisory-application', JSON.stringify({ answers, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        await new Promise((res) => { const o = indexedDB.open('soard-advisory', 1); o.onupgradeneeded = () => o.result.createObjectStore('photos'); o.onsuccess = () => { const tx = o.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new File([bytes], 'h.jpg', { type: 'image/jpeg' }), name: 'h.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { o.result.close(); res(); }; }; });
+        localStorage.setItem('soard-advisory-photo-seq', '1');
+      }, { ...base, fullName: `Away ${route}`, email: `away.${route}@example.org`, signature: `Away ${route}` }, readFileSync(GOOD_JPG).toString('base64'));
+      await sp.reload({ waitUntil: 'networkidle0' }); await sleep(400);
+      await sp.click('#adv-go');
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 6000 }).catch(() => null);
+      const all = await sp.$('#adv-review-all'); if (all) { await all.click(); await sleep(300); }
+      await sp.evaluate(() => document.querySelector('#adv-review [data-answer="headshot"]')?.click()); await sleep(900);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-back');
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 4000 }).catch(() => null);
+      await sleep(500);
+      await sp.evaluate(() => document.querySelector('#adv-review .adv-review-edit[data-edit="1"]')?.click());
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() !== 'Review and send', { timeout: 4000 }).catch(() => null);
+      const onStep = await text(sp, '#adv-title');
+      await sleep(SLOW_MS + 2500); // (turned down while they're on Your interest)
+      if (route === 'review') {
+        for (let k = 0; k < 10 && (await text(sp, '#adv-title')) !== 'Review and send'; k++) { await sleep(500); await sp.click('#adv-next'); await sleep(700); }
+        await sleep(500);
+        const said = await sp.evaluate(() => { const e = document.getElementById('adv-send-error'); return { title: document.getElementById('adv-title').textContent.trim(), shown: !e.hidden && !!e.getClientRects().length, text: e.textContent }; });
+        ok(onStep !== 'About you' && said.title === 'Review and send' && said.shown && /Your earlier headshot is still here/.test(said.text),
+          `a photo turned down while they're on another step (${onStep}): back on the review it's said over Send (${JSON.stringify(said)})`);
+      } else {
+        for (let k = 0; k < 6 && !(await sp.evaluate(() => !!document.querySelector('[data-field="headshot"]')?.getClientRects().length)); k++) { await sleep(500); await sp.click('#adv-back'); await sleep(700); }
+        await sleep(400);
+        const card = await text(sp, '#adv-headshot-status');
+        ok(/Your earlier headshot is still here/.test(card) && !/^Added\./.test(card), `a photo turned down while they're on another step: back on its own step, its warning is still there, never wiped to "Added." (${card})`);
+      }
+      await sp.close();
+    }
+    {
+      // Round thirteen: a browser that keeps nothing, the reader for iPhone photos not loading: never told to reload
+      // ("your answers are kept" would be false: a reload loses them)
+      const sp = await browser.newPage();
+      await sp.setViewport({ width: 1280, height: 800 });
+      await sp.setCacheEnabled(false);
+      await sp.setRequestInterception(true);
+      sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) return req.abort('failed'); if (await answer(req, '198.51.100.98') === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await sp.evaluateOnNewDocument(() => {
+        const deny = () => { throw new DOMException('denied', 'SecurityError'); };
+        for (const k of ['localStorage', 'sessionStorage']) Object.defineProperty(window, k, { get: deny, configurable: true });
+        indexedDB.open = deny;
+      });
+      await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      await sp.click('#adv-go'); await sleep(700);
+      await sp.type('#adv-fullName', 'Blocked Browser'); await sleep(200);
+      for (let i = 0; i < 6 && await sp.evaluate(() => !!document.querySelector('[data-field="headshot"]').closest('[data-off]')); i++) {
+        for (const [id, v] of [['email', 'blocked@example.org'], ['phone', '404 555 0177']]) if (await sp.evaluate((x) => !!document.getElementById(`adv-${x}`)?.getClientRects().length && !document.getElementById(`adv-${x}`).value, id)) await sp.type(`#adv-${id}`, v);
+        await sp.click('#adv-next'); await sleep(700);
+      }
+      await sleep(500);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC);
+      await sp.waitForFunction(() => /couldn’t be opened/.test(document.getElementById('adv-headshot-status')?.textContent + document.querySelector('[data-field="headshot"] .adv-error')?.textContent), { timeout: 15000 }).catch(() => null);
+      const words = await sp.evaluate(() => `${document.getElementById('adv-headshot-status')?.textContent} ${document.querySelector('[data-field="headshot"] .adv-error')?.textContent}`);
+      ok(/couldn’t be opened/.test(words) && !/reload/i.test(words) && /JPEG or PNG/.test(words), `a browser that keeps nothing is never told to reload (its answers would go), and is offered another way (${words.trim()})`);
+      await sp.close();
+    }
+    for (const earlier of [true, false]) {
+      // Round twelve: at the review, a new photo picked (Change, or Answer it) and turned down while they're on the review.
+      // With an earlier photo, before Send is pressed: said over Send and heard, once (never only in the step out of sight),
+      // and Send then goes with the earlier photo, as it says. With none, while Send waits: heard once, never twice
+      const sp = await browser.newPage();
+      await sp.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+      await sp.setCacheEnabled(false);
+      await sp.setRequestInterception(true);
+      sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) { await sleep(SLOW_MS); return req.abort('failed'); } if (await answer(req, `198.51.100.${earlier ? 94 : 95}`) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      const who = earlier ? { fullName: 'Rev Earlier', email: 'rev.earlier@example.org', signature: 'Rev Earlier' } : { fullName: 'Rev None', email: 'rev.none@example.org', signature: 'Rev None' };
+      await sp.evaluate(async (answers, b64, withPhoto) => {
+        localStorage.clear();
+        await new Promise((res) => { const d = indexedDB.deleteDatabase('soard-advisory'); d.onsuccess = d.onerror = d.onblocked = () => res(); });
+        localStorage.setItem('soard-advisory-application', JSON.stringify({ answers, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+        if (!withPhoto) return;
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        await new Promise((res) => { const o = indexedDB.open('soard-advisory', 1); o.onupgradeneeded = () => o.result.createObjectStore('photos'); o.onsuccess = () => { const tx = o.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new File([bytes], 'h.jpg', { type: 'image/jpeg' }), name: 'h.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { o.result.close(); res(); }; }; });
+        localStorage.setItem('soard-advisory-photo-seq', '1');
+      }, { ...base, ...who }, readFileSync(GOOD_JPG).toString('base64'), earlier);
+      await sp.reload({ waitUntil: 'networkidle0' }); await sleep(400);
+      await sp.click('#adv-go');
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 6000 }).catch(() => null);
+      const all = await sp.$('#adv-review-all'); if (all) { await all.click(); await sleep(300); }
+      await sp.evaluate(() => { window.__heard = []; new MutationObserver(() => window.__heard.push(document.getElementById('adv-live').textContent)).observe(document.getElementById('adv-live'), { childList: true, characterData: true, subtree: true }); });
+      await sp.evaluate(() => (document.querySelector('#adv-review [data-answer="headshot"]') || document.querySelector('#adv-review [data-fix="headshot"], #adv-review [data-review-fix]'))?.click()); await sleep(900);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-back');
+      await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 4000 }).catch(() => null);
+      await sleep(500);
+      if (!earlier) await sp.click('#adv-next'); // (Send, waiting on the photo)
+      await sp.waitForFunction(() => { const e = document.getElementById('adv-send-error'); return e && !e.hidden && e.textContent; }, { timeout: SLOW_MS + 15000 }).catch(() => null);
+      await sleep(600);
+      const said = await sp.evaluate(() => { const e = document.getElementById('adv-send-error'); return { shown: !e.hidden && !!e.getClientRects().length, text: e.textContent, role: e.getAttribute('role'), title: document.getElementById('adv-title').textContent.trim(), live: window.__heard.filter(Boolean) }; });
+      const twice = said.live.some((t) => said.text && t.includes(said.text.split('.')[0]));
+      if (earlier) {
+        ok(said.shown && said.role === 'alert' && /Your earlier headshot is still here/.test(said.text) && said.title === 'Review and send' && !twice,
+          `a new photo turned down while they're on the review (Send not pressed): its words over Send, read out once (${JSON.stringify(said)})`);
+        await sleep(500);
+        await sp.click('#adv-next');
+        await sp.waitForFunction(() => document.getElementById('adv-done') && !document.getElementById('adv-done').hidden, { timeout: 15000 }).catch(() => null);
+        const row = await DB.prepare('SELECT headshot FROM advisory_applications WHERE email = ?').bind('rev.earlier@example.org').first();
+        ok(!!row && !!JSON.parse(row.headshot || 'null')?.id, `and Send, pressed after reading it, sends the application with the earlier photo, as it says (${JSON.stringify(!!row)})`);
+      } else {
+        ok(said.shown && said.role === 'alert' && !twice, `a photo turned down while Send waits, none earlier: said over Send and read out once, never twice (${JSON.stringify(said)})`);
+      }
       await sp.close();
     }
     {

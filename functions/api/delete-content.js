@@ -43,9 +43,10 @@ export async function onRequestPost(context) {
     return Response.json({ success: true, gitCommit });
   } catch (err) {
     console.error("[delete-content]", err);
+    // (refused in words, a 409 for one being changed right now, never a 500)
     return Response.json(
       { success: false, error: err.message || "An unexpected error occurred" },
-      { status: 500 }
+      { status: err.status >= 400 && err.status < 500 ? err.status : 500 }
     );
   }
 }
@@ -66,9 +67,26 @@ async function unlinkApplications(DB, slug, name, by) {
 }
 
 export async function deleteItem(env, { path, message }, userEmail = 'unknown', waitUntil = (p) => p) {
-  const { DB } = env;
   const parsed = parsePath(path);
   if (!parsed) throw Object.assign(new Error('Path not allowed'), { status: 403 });
+  // Someone on People: held for the whole delete, the way a press of Add to Advisory Board holds the record it adds to,
+  // so an Add never links an application to someone deleted meanwhile (Joined, pointing at nobody)
+  if (parsed.table !== 'team') return deleteHeld(env, { path, message, parsed }, userEmail, waitUntil);
+  const { holdForPeople, whyHeld, letGo } = await import('./_advisory-add.js');
+  const keys = await holdForPeople(env.DB, [parsed.slug]);
+  if (!keys) {
+    throw Object.assign(new Error((await whyHeld(env.DB, [parsed.slug])).some((h) => h.by === 'people') ? 'Someone is changing this person on People right now (their web address, or a delete). Try again in a moment.'
+      : 'Someone is adding this person to the Advisory Board right now, so they weren’t deleted. Try again in a moment.'), { status: 409 });
+  }
+  try {
+    return await deleteHeld(env, { path, message, parsed }, userEmail, waitUntil);
+  } finally {
+    await letGo(env.DB, keys);
+  }
+}
+
+async function deleteHeld(env, { path, message, parsed }, userEmail, waitUntil) {
+  const { DB } = env;
 
   // 0. Read old value before deleting (for audit trail)
   let oldData = null;

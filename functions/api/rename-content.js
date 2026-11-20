@@ -62,20 +62,42 @@ export async function rename(env, { collection, from, to } = {}, userEmail = 'un
     return { status: 400, body: { success: false, error: 'Use lowercase letters, numbers and single hyphens, like jane-smith' } };
   }
   if (from === to) return { status: 400, body: { success: false, error: 'That’s already the web address' } };
+  // Held for the whole rename, the way a press of Add to Advisory Board holds the record it adds to (or makes one at the
+  // new address): never one halfway through the other, so the record written back is never one read before an Add
+  // changed it, and an Add never goes on with the address it had (its application, email and welcome left at the old one)
+  let keys = null;
+  if (collection === 'team') {
+    // (an address someone already has is said as that first, whatever's holding it: trying again would never help)
+    if (await env.DB.prepare('SELECT slug FROM team WHERE slug = ?').bind(to).first()) {
+      return { status: 409, body: { success: false, error: `Someone already has the address “${to}”. Pick another.` } };
+    }
+    const { holdForPeople, whyHeld } = await import('./_advisory-add.js');
+    keys = await holdForPeople(env.DB, [from, to]);
+    if (!keys) {
+      // Said as what holds which: this person being changed or added, or the new address being given to someone else
+      const why = await whyHeld(env.DB, [from, to]);
+      const mine = why.find((h) => h.slug === from);
+      const theirs = why.find((h) => h.slug === to);
+      return { status: 409, body: { success: false, error: mine?.by === 'people' ? 'Someone is changing this person on People right now (their web address, or a delete). Try again in a moment.'
+        : mine?.by === 'add' ? 'Someone is adding this person to the Advisory Board right now. Change the address in a moment.'
+          : theirs?.by === 'people' ? `Someone is giving “${to}” to another People record right now. Pick another address, or try again in a moment.`
+            : `Someone is adding a new person to the Advisory Board at “${to}” right now. Pick another address, or try again in a moment.` } };
+    }
+  }
+  try {
+    return await renameHeld(env, { cfg, collection, from, to }, userEmail, fetchImpl);
+  } finally {
+    if (keys) await (await import('./_advisory-add.js')).letGo(env.DB, keys);
+  }
+}
+
+async function renameHeld(env, { cfg, collection, from, to }, userEmail, fetchImpl) {
   const { DB } = env;
   const table = collection;
   const row = await DB.prepare(`SELECT data FROM ${table} WHERE slug = ?`).bind(from).first();
   if (!row) return { status: 404, body: { success: false, error: 'Not found. Reload and try again.' } };
   if (await DB.prepare(`SELECT slug FROM ${table} WHERE slug = ?`).bind(to).first()) {
     return { status: 409, body: { success: false, error: `Someone already has the address “${to}”. Pick another.` } };
-  }
-  // A press of Add to Advisory Board adding to this record, or making one at the new address, right now: it goes on
-  // with the address it has, so the rename waits for it (never its application, email and welcome left at the old one)
-  if (table === 'team') {
-    const { addingTo } = await import('./_advisory-add.js');
-    if (await addingTo(DB, from) || await addingTo(DB, to)) {
-      return { status: 409, body: { success: false, error: 'Someone is adding this person to the Advisory Board right now. Change the address in a moment.' } };
-    }
   }
   // A former board member's board records are kept under their address (signatures, sign-ins): never someone else's.
   // Their own earlier address, nobody's since, is theirs to go back to (a rename undone)

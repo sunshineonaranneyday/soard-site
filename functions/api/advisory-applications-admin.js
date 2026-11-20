@@ -33,7 +33,7 @@ import {
 } from './_advisory-applications.js';
 import { logAudit } from './_audit.js';
 import { getSettings as getBoardSettings } from './_advisory.js';
-import { addPlan, addBusy, addToBoard, deleteWhenFree } from './_advisory-add.js';
+import { addPlan, addBusy, addToBoard, deleteWhenFree, deletingNow } from './_advisory-add.js';
 import { personStatus, personName } from './_team.js';
 import { signInWhy } from './_board-roles.js';
 
@@ -95,14 +95,17 @@ async function get(context) {
       // (busyName and busyOther: who that press is adding, and whether it's from another application; busyDeleting: it's
       // this application being deleted, not anyone being added)
       const busy = await addBusy(env.DB, plan);
-      return ok({ plan: { ...plan, busy: !!busy, ...(busy ? { busyName: busy.name, busyOther: busy.other, ...(busy.deleting ? { busyDeleting: true } : {}) } : {}) } });
+      return ok({ plan: { ...plan, busy: !!busy, ...(busy ? { busyName: busy.name, busyOther: busy.other, ...(busy.deleting ? { busyDeleting: true } : {}), ...(busy.editing ? { busyEditing: busy.editing } : {}) } : {}) } });
     } catch (e) { return failed(e); }
   }
   const id = url.searchParams.get('id');
   if (id) {
     if (!isApplicationId(id)) return fail('Bad id');
     const application = await getAdvisoryApplication(env.DB, id);
-    return application ? ok({ application: await withPerson(env.DB, application) }) : fail(GONE, 404);
+    if (!application) return fail(GONE, 404);
+    // (marked as being deleted: still under way in another tab, or stopped partway; the panel says which)
+    if (application.deleting && await deletingNow(env.DB, id)) application.deletingNow = true;
+    return ok({ application: await withPerson(env.DB, application) });
   }
   const imported = await importJotformApplications(env.DB).catch(() => 0);
   const [applications, settings, board, onBoard] = await Promise.all([listAdvisoryApplications(env.DB), getAdvisorySettings(env.DB), getBoardSettings(env.DB).catch(() => ({})), activeMembers(env.DB)]);

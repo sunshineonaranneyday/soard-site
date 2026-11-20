@@ -101,7 +101,7 @@ function fromRow(r, { full = false } = {}) {
     why: String(answers.why || '').replace(/\s+/g, ' ').slice(0, 220),
     // (a delete that stopped partway: its headshot may be gone already, so it's never shown or used as theirs)
     headshot: hs?.url && !r.deleting_at ? { url: hs.url, width: Number(hs.width) || null, height: Number(hs.height) || null } : null,
-    ...(r.deleting_at ? { deleting: true } : {}),
+    ...(r.deleting_at ? { deleting: true, hadHeadshot: !!hs?.url } : {}),
   };
   if (full) {
     out.answers = answers;
@@ -436,7 +436,8 @@ export function applicantEmail(app) {
     bodyHtml: mail.panel(qa) + `<div style="font-family:${mail.SANS};font-size:13px;margin-top:14px;">${mail.link('The Advisory Board overview (PDF)', OVERVIEW_PDF)}</div>`,
     footerHtml: 'Questions? Write to info@soardcharity.com.',
   });
-  const text = [`Thank you${first ? `, ${first}` : ''}.`, '', 'We have your application to join the Sunshine on a Ranney Day Advisory Board. We review applications on a rolling basis and will be in touch soon.', '',
+  // (a greeting that ends in its own full stop, "J.R.", never gets a second)
+  const text = [`Thank you${first ? `, ${first}` : ''}${/\.$/.test(first || '') ? '' : '.'}`, '', 'We have your application to join the Sunshine on a Ranney Day Advisory Board. We review applications on a rolling basis and will be in touch soon.', '',
     ...sections.flatMap((s) => [`${s.title.toUpperCase()}`, ...s.items.map((it) => `${it.label}\n${it.value}\n`), ...(s.id === 'you' && app.headshot ? ['A headshot\nSent with your application\n'] : [])]),
     `The Advisory Board overview: ${OVERVIEW_PDF}`, 'Questions? Write to info@soardcharity.com.'].join('\n');
   return { subject: 'We have your Advisory Board application', html, text };
@@ -576,7 +577,7 @@ export async function setAdvisoryStatus(DB, id, status, { by = null, now = Date.
   await ensureAdvisorySchema(DB);
   const r = await DB.prepare('UPDATE advisory_applications SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE id = ?').bind(status, iso(now), by, iso(now), id).run();
   if (!r?.meta?.changes) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
-  return getAdvisoryApplication(DB, id);
+  return stillHere(DB, id);
 }
 
 export const NOTE_MAX = 4000;
@@ -589,9 +590,17 @@ export async function addAdvisoryNote(DB, id, text, { by = null, now = Date.now(
   if (!app) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
   // (added to the list in the one statement, never the list read, added to and written back: two notes saved at the
   // same moment are both kept)
-  await DB.prepare("UPDATE advisory_applications SET notes = json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)), updated_at = ? WHERE id = ?")
+  const r = await DB.prepare("UPDATE advisory_applications SET notes = json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)), updated_at = ? WHERE id = ?")
     .bind(JSON.stringify({ at: iso(now), by, text: t }), iso(now), id).run();
-  return getAdvisoryApplication(DB, id);
+  // (deleted elsewhere while the note was saving: said as gone, never "saved" with no application to show)
+  if (!r?.meta?.changes) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
+  return stillHere(DB, id);
+}
+/** The application as it is now, after a change to it: deleted in the moment since (another tab) is said as gone */
+async function stillHere(DB, id) {
+  const app = await getAdvisoryApplication(DB, id);
+  if (!app) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
+  return app;
 }
 
 /** They're on People → Advisory now (Add to Advisory Board, or linked by hand): Joined */
@@ -602,7 +611,7 @@ export async function linkAdvisor(DB, id, slug, { by = null, now = Date.now() } 
   const r = await DB.prepare("UPDATE advisory_applications SET person_slug = ?, status = 'joined', status_at = ?, status_by = ?, updated_at = ? WHERE id = ?")
     .bind(slug, iso(now), by, iso(now), id).run();
   if (!r?.meta?.changes) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
-  return getAdvisoryApplication(DB, id);
+  return stillHere(DB, id);
 }
 
 /**
@@ -638,22 +647,31 @@ export async function deleteAdvisoryApplication(env, id, { fetchImpl = fetch } =
   await ensureAdvisorySchema(DB);
   const row = await DB.prepare('SELECT headshot, source, source_id FROM advisory_applications WHERE id = ?').bind(id).first();
   if (!row) return false;
-  // Marked first: once anything of it goes (its headshot), it's never used as if whole (never shown, never someone's
+  // Which of its pictures go: never one that's someone's People photo now. Checked before anything's marked or gone, so a
+  // check that can't be made stops it here, exactly as it was (no Add can make one theirs meanwhile: the delete holds
+  // the application, ./_advisory-add.js deleteWhenFree)
+  const hs = parse(row.headshot, null);
+  const pics = [];
+  for (const pic of [hs?.id, ...(hs?.older || [])].filter(Boolean)) if (!(await photoOnPeople(DB, pic))) pics.push(pic);
+  // Marked next: once anything of it goes (its headshot), it's never used as if whole (never shown, never someone's
   // photo by Add) until the delete finishes; the mark not saving (D1 busy) stops it before anything's gone
   await DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), id).run();
-  const unmark = () => DB.prepare('UPDATE advisory_applications SET deleting_at = NULL WHERE id = ?').bind(id).run().catch(() => {});
-  const hs = parse(row.headshot, null);
+  // (put back as it was when nothing went; the database not answering that either leaves it marked, said as that)
+  const unmark = () => DB.prepare('UPDATE advisory_applications SET deleting_at = NULL WHERE id = ?').bind(id).run().then(() => true, () => false);
   let gone = 0;
-  for (const pic of [hs?.id, ...(hs?.older || [])].filter(Boolean)) {
-    if (await photoOnPeople(DB, pic)) continue;
-    const ok = await deleteImage(env, pic, fetchImpl).catch(() => false);
-    if (!ok) {
-      // (nothing gone yet: it's left as it was; a picture gone already: left marked, and pressing Delete again finishes)
-      if (!gone) await unmark();
+  try {
+    for (const pic of pics) {
+      const ok = await deleteImage(env, pic, fetchImpl).catch(() => false);
       // (500, never 502: Cloudflare puts its own error page over a Function's 502, and these words would be lost)
-      throw Object.assign(new Error(gone ? UNFINISHED : 'Its headshot didn’t delete just now, so the application is still here. Please try again in a moment.'), { status: 500 });
+      if (!ok) throw Object.assign(new Error('Its headshot didn’t delete just now, so the application is still here. Please try again in a moment.'), { status: 500 });
+      gone++;
     }
-    gone++;
+  } catch (e) {
+    // (nothing gone yet, whatever stopped it: left as it was, unmarked; a picture gone already, or the mark not coming
+    // off: left marked, and pressing Delete again finishes)
+    if (!gone && await unmark()) throw e;
+    console.error('[advisory] delete stopped partway', e?.message || e);
+    throw Object.assign(new Error(hs?.id ? UNFINISHED : UNFINISHED_BARE), { status: 500 });
   }
   try {
     // One sent to the old form: its copy kept from Jotform goes too (else it would come back in on the next visit),
@@ -662,13 +680,16 @@ export async function deleteAdvisoryApplication(env, id, { fetchImpl = fetch } =
     const r = await DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(id).run();
     return !!r?.meta?.changes;
   } catch (e) {
-    if (!gone) { await unmark(); throw e; }
+    if (!gone && await unmark()) throw e;
     console.error('[advisory] delete stopped partway', e?.message || e);
-    throw Object.assign(new Error(UNFINISHED), { status: 500 });
+    throw Object.assign(new Error(hs?.id ? UNFINISHED : UNFINISHED_BARE), { status: 500 });
   }
 }
-// (said where a delete stopped after its headshot went: the application stays, marked, until Delete is pressed again)
-export const UNFINISHED = 'Deleting this application didn’t finish: its headshot is gone, and the rest is still here. Press Delete application again to finish it.';
+// (the same, for an application that never had a headshot)
+export const UNFINISHED_BARE = 'Deleting this application didn’t finish: it’s still here. Press Delete application again to finish it.';
+// (said where a delete stopped once it was under way: the application stays, marked, its headshot never shown or made
+// anyone's photo, until Delete is pressed again; never "its headshot is gone", which a delete stopped early can't say)
+export const UNFINISHED = 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application again to finish it.';
 
 /**
  * The Jotform backfill's copy of an Advisory Board application: its answers and its files gone, so it never comes

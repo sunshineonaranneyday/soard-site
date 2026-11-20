@@ -463,6 +463,15 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
           : 'It’s being deleted in another tab, or by someone else. This box closes if it goes, and shows what Add does if it doesn’t.'}</p>
       <//>`;
     }
+    if (plan.busyEditing) {
+      // (theirs, or someone they could be, being renamed or deleted; or another record taking the address they'd get)
+      const address = plan.busyEditing === 'address';
+      return html`<${Dialog} title=${address ? 'The web address they’d get is being used on People' : plan.busyName ? `${plan.busyName}’s People record is being changed` : 'A People record is being changed'} onClose=${onClose} footer=${cancel}>
+        <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and press Add to Advisory Board again in a minute.'
+          : address ? 'Someone is changing a People record to the web address this box would give them, right now. This box shows what Add does as soon as that’s done.'
+            : `Someone is changing ${plan.busyName ? `${plan.busyName}’s` : 'that'} People record right now (its web address, or a delete). This box shows what Add does as soon as that’s done.`}</p>
+      <//>`;
+    }
     return html`<${Dialog} title=${`Someone is adding ${(other && plan.busyName) || app.name} right now`} onClose=${onClose} footer=${cancel}>
       <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and press Add to Advisory Board again in a minute: it finishes whatever stopped partway, and never adds them twice.'
         : other ? `Another press is adding ${plan.busyName ? `${plan.busyName}, who this could be,` : 'someone new with this name'} to the Advisory Board from another application (in another tab, or by someone else). This box shows what’s left as soon as it’s done.`
@@ -590,6 +599,9 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
 // A note being written, by application: closing the panel (Escape, up or down) never throws it away
 const noteDrafts = new Map();
 
+// (the words the server uses everywhere for an application deleted elsewhere: _advisory-applications.js)
+const GONE_WORDS = 'This application isn’t here any more: it was deleted, maybe in another tab.';
+
 function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChanged, onRemoved, onGone, boardEmails = false, startOn = null }) {
   const [app, setApp] = useState(null);
   const [err, setErr] = useState(null);
@@ -605,8 +617,9 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
     call(`${API}?id=${encodeURIComponent(id)}`).then((j) => {
       if (!live) return;
       if (j.success) { setApp(j.application); setErr(null); return; }
-      setErr({ missing: j.status === 404, words: j.error || 'Couldn’t load it' });
-      if (j.status === 404) onGone?.(id); // (its row leaves the list, and the count with it)
+      // (deleted, found by a look again while it showed: said as gone, as any press finding it so says it, never the copy from before)
+      if (j.status === 404) { deletedNow(j); return; }
+      setErr({ missing: false, words: j.error || 'Couldn’t load it' });
     });
     return () => { live = false; };
   }, [id, tries]);
@@ -654,6 +667,8 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       else if (j.status === 409 && j.application) { setApp(j.application); onChanged(j.application); }
       return null;
     }
+    // (an answer about the application with none to show: deleted in the moment, said so, never a panel stuck loading)
+    if ('application' in j && !j.application) { lastFail.current = 404; deletedNow({ error: GONE_WORDS }); return null; }
     return j;
   };
   const [leaving, setLeaving] = useState(null); // a Joined application being moved to another status: asked first
@@ -676,7 +691,20 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
     const j = await post({ remove: { id } }, 'remove');
     if (j) { setConfirm(null); addToast?.(`${app.name}’s application was deleted from the site.`, 'info'); onRemoved(id); }
     else if (lastFail.current === 404) { setConfirm(null); onRemoved(id); } // (already deleted elsewhere: off the list too)
+    else {
+      // (it didn't go: the panel shows it as it is now, stopped partway with its headshot gone or just as it was, never
+      // the copy from before the press with Add still offered)
+      const r = await call(`${API}?id=${encodeURIComponent(id)}`);
+      if (r.success) { setApp(r.application); onChanged(r.application); }
+      else if (r.status === 404) deletedNow(r);
+    }
   };
+  // Being deleted in another tab right now: looked at again until it goes (the panel says so) or stops (said)
+  useEffect(() => {
+    if (!app?.deletingNow) return undefined;
+    const t = setTimeout(() => setTries((n) => n + 1), 2000);
+    return () => clearTimeout(t);
+  }, [app, tries]);
 
   // Add to Advisory Board: the server works out who they are on People (by their email, then their name) and says
   // what it would do; the box says that; then the server does it in one go (functions/api/_advisory-add.js)
@@ -708,6 +736,16 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       if (!again.success) {
         // Deleted meanwhile: the box closes and the panel says so. Anything else: asked again, and "taking longer" in time
         if (again.status === 404) { deletedNow(again); return; }
+        // A refusal in words (a delete in another tab that stopped partway): the wait is over, the box closes with them,
+        // and the panel shows the application as it is now. Anything else: asked again, and "taking longer" in time
+        if (again.status === 409 && again.error) {
+          setConfirm(null); setPlan(null);
+          addToast?.(again.error, 'error');
+          const fresh = await call(`${API}?id=${encodeURIComponent(id)}`);
+          if (fresh.success) { setApp(fresh.application); onChanged(fresh.application); } else if (fresh.status === 404) deletedNow(fresh);
+          requestAnimationFrame(() => panel.current?.focus());
+          return;
+        }
         setPlan((was) => (was ? { ...was, ...(busyTries.current >= 40 ? { stuck: true } : {}) } : was));
         return;
       }
@@ -759,9 +797,13 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       // What Add would do now (a press that stopped partway changes it): the box says it, and the next press does it
       const again = await call(`${API}?plan=${encodeURIComponent(id)}`);
       if (again.success) setPlan(again.plan);
+      // (nothing can be added from it now, a delete in another tab that stopped partway: the box closes, its words said,
+      // never left offering Add them to every press)
+      else if (again.status === 409) { setConfirm(null); setPlan(null); }
       const fresh = await call(`${API}?id=${encodeURIComponent(id)}`);
       if (fresh.success) { setApp(fresh.application); onChanged(fresh.application); }
-      return; // (the box stays open, the keys still on its button)
+      if (!again.success && again.status === 409) requestAnimationFrame(() => panel.current?.focus());
+      return; // (else the box stays open, the keys still on its button)
     }
     const p = j.person || {};
     setApp(j.application);
@@ -818,7 +860,9 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
               })}
             </div>
             ${linked ? html`<div class="ava-callout is-good" tabindex="-1">On People → Advisory as ${linked.name}${linked.publishStatus === 'draft' ? ' (hidden from the public site for now)' : ''}${app.status !== 'joined' ? '. This application isn’t marked Joined: Add to Advisory Board below finishes adding them (their sign-in and welcome) and marks it Joined' : ''}. ${kit.onOpenPerson ? html`<button class="btn btn-ghost btn-sm" onClick=${() => kit.onOpenPerson(linked.slug)}>Open their page</button>` : ''}</div>` : null}
-            ${app.deleting ? html`<div class="ava-callout" role="alert">Deleting this application didn’t finish: its headshot is gone, and the rest is still here. Press Delete application below to finish it.</div>`
+            ${app.deleting ? html`<div class="ava-callout" role="alert">${app.deletingNow ? 'This application is being deleted right now, in another tab or by someone else.'
+                : app.hadHeadshot ? 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application below to finish it.'
+                  : 'Deleting this application didn’t finish: it’s still here. Press Delete application below to finish it.'}</div>`
               : linked && app.status === 'joined' ? null
               : html`${linked ? null : gone ? html`<p class="ava-note">This was linked to someone who isn’t on People any more.</p>`
                   : left ? html`<p class="ava-note">This was linked to ${person.name}, who isn’t on the Advisory Board now.</p>`
@@ -837,7 +881,8 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
                   <a class="link ava-full" href=${shot.url} target="_blank" rel="noopener noreferrer">Open full size<span class="ava-sr"> (${app.name}’s headshot)</span></a>
                 </div>
               </div>`
-              : html`<p class="text-sm" style="margin:0;color:var(--color-text-muted)">${app.source === 'jotform' ? 'None: they applied on the old form, which didn’t ask for one.' : 'None: they applied before the form asked for one.'}</p>`}
+              : html`<p class="text-sm" style="margin:0;color:var(--color-text-muted)">${app.deleting && app.hadHeadshot ? (app.deletingNow ? 'Not shown: this application is being deleted.' : 'Not shown: deleting this application didn’t finish (see above).')
+                : app.source === 'jotform' ? 'None: they applied on the old form, which didn’t ask for one.' : 'None: they applied before the form asked for one.'}</p>`}
           </section>
 
           <section class="ava-panel" aria-label="How to reach them">

@@ -95,19 +95,23 @@ const card = (p, emails, welcomedAt = () => false) => ({
  */
 // (letters no accent comes off, as they're written without one: team-shared.js PLAIN, as People's addresses read them)
 const wordOf = (w) => w.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(/[øłđðæœßþıħŋĸ]/g, (c) => PLAIN[c]).replace(/[^\p{L}\p{N}]+/gu, '');
-// (a middle initial and a generation never count; a first initial does: "J. Ames" might be Jordan Ames)
-const keyWords = (words) => words.map(wordOf).filter((x, k) => x && (k === 0 || !/^[a-z]$/.test(x)) && !/^(jr|sr|ii|iii|iv)$/.test(x));
+// (a middle initial and a generation never count; a first initial does: "J. Ames" might be Jordan Ames, and so might
+// "J.R. Ames", initials with dots before the name being a first initial too, never "Jr")
+// ("JR Smithers" too: two or three capitals first in a name written in small letters)
+const firstInitials = (w, words) => /^(\p{L}\.)+\p{L}?\.?$/u.test(w) || (/^\p{Lu}{2,3}$/u.test(w) && words.some((x) => /\p{Ll}/u.test(x)));
+const keyWords = (words) => words.map((w, k) => (k === 0 && firstInitials(w, words) ? wordOf(w).slice(0, 1) : wordOf(w)))
+  .filter((x, k) => x && (k === 0 || (!/^[a-z]$/.test(x) && !/^(jr|sr|ii|iii|iv)$/.test(x))));
 /** A name as people would match it, first name first, without titles or letters after it (_advisory-form.js readName) */
 const nameWords = (n) => keyWords(readName(personName({ name: n })).words);
 /**
  * Each way the name might be read: also with a last word that may be a family name in capitals kept ("Anh Van DO"),
- * and ä, ö, ü as German writes them without the dots ("Müller" is Mueller as well as Muller)
+ * last name first when it might be written so ("Garcia Lopez, Maria"), and ä, ö, ü as German writes them without the dots ("Müller" is Mueller as well as Muller)
  */
 const GERMAN = { ä: 'ae', ö: 'oe', ü: 'ue' };
 const nameWays = (n) => {
   const name = personName({ name: n }).normalize('NFC');
   const dotless = /[äöü]/i.test(name) ? [name.replace(/[äöü]/gi, (c) => { const p = GERMAN[c.toLowerCase()]; return c === c.toLowerCase() ? p : p[0].toUpperCase() + p[1]; })] : [];
-  return [name, ...dotless].map(readName).flatMap((r) => [keyWords(r.words), ...(r.could ? [keyWords(r.could)] : [])]);
+  return [name, ...dotless].map(readName).flatMap((r) => [keyWords(r.words), ...(r.could ? [keyWords(r.could)] : []), ...(r.also ? [keyWords(r.also)] : [])]);
 };
 const nameKey = (n) => nameWords(n).join(' ');
 /**
@@ -260,7 +264,8 @@ export async function addBusy(DB, plan, now = Date.now()) {
   const mine = [`app:${app.id}`, ...(app.email ? [`email:${normEmail(app.email)}`] : [])];
   const keys = [...mine, ...peopleKeys(plan)];
   await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
-  const asked = [`del:${app.id}`, ...keys];
+  // (with People's own changes to those records and addresses: a rename, a delete)
+  const asked = [`del:${app.id}`, ...keys, ...peopleKeys(plan).map((k) => k.replace(/^slug:/, 'edit:'))];
   const rows = (await DB.prepare(`SELECT key FROM advisory_add_holds WHERE at >= ? AND key IN (${asked.map(() => '?').join(', ')})`).bind(now - HOLD_MS, ...asked).all()).results || [];
   if (!rows.length) return null;
   // (being deleted, not added: said as that)
@@ -268,6 +273,11 @@ export async function addBusy(DB, plan, now = Date.now()) {
   // (a press from this application holds its People record too: said as this one)
   if (rows.some((r) => mine.includes(r.key))) return { name: app.name || '', other: false };
   const someone = [plan.person, ...(plan.others || [])].find((x) => x && rows.some((r) => r.key === `slug:${x.slug}`));
+  // (a People record being renamed or deleted on People right now, not someone being added: said as which. One this
+  // could be, by name; else another record being given the address a new one would take)
+  const edited = [plan.person, ...(plan.others || [])].find((x) => x && rows.some((r) => r.key === `edit:${x.slug}`));
+  if (edited) return { name: edited.name || '', other: true, editing: 'person' };
+  if (rows.some((r) => r.key.startsWith('edit:'))) return { name: '', other: true, editing: 'address' };
   return { name: someone?.name || '', other: true };
 }
 
@@ -276,8 +286,9 @@ async function planOf(env, id, now = Date.now()) {
   await ensureAdvisorySchema(DB);
   const app = await getAdvisoryApplication(DB, id);
   if (!app) throw err(GONE, 404);
-  // (a delete that stopped partway, its headshot gone: nobody's added from it until it's finished)
-  if (app.deleting) throw err('Deleting this application didn’t finish, so nobody can be added from it. Press Delete application to finish deleting it.');
+  // (a delete that stopped partway, its headshot gone: nobody's added from it until it's finished. One still under way,
+  // in another tab, is waited on by the box, never said to have stopped: addBusy says it's being deleted)
+  if (app.deleting && !(await deletingNow(DB, app.id, now))) throw err('Deleting this application didn’t finish, so nobody can be added from it. Press Delete application to finish deleting it.');
   const [{ people, emails }, welcomes, intent, settings] = await Promise.all([peopleAndEmails(DB), welcomeRecords(DB), intentOf(DB, app.id), advisorySettings(DB)]);
   const email = normEmail(app.email);
   // An email the sign-in can't use (one an old application came with), or SOARD's own group inbox (everyone in the
@@ -414,12 +425,48 @@ async function hold(DB, keys, now) {
   }
   return got;
 }
-const release = async (DB, keys) => { for (const key of keys || []) await DB.prepare('DELETE FROM advisory_add_holds WHERE key = ?').bind(key).run().catch(() => {}); };
+// (each tried again after an error, so one the database didn't answer never holds presses for its 2 minutes)
+const release = async (DB, keys) => {
+  for (const key of keys || []) {
+    for (let t = 0; t < 3; t++) {
+      try { await DB.prepare('DELETE FROM advisory_add_holds WHERE key = ?').bind(key).run(); break; } catch (e) {
+        if (t === 2) console.error('[advisory-add] a hold wasn’t let go (it lapses in 2 minutes)', key, e?.message || e);
+        else await new Promise((r) => setTimeout(r, 50 * (t + 1)));
+      }
+    }
+  }
+};
 
 const held = async (DB, key, now) => !!(await DB.prepare('SELECT key FROM advisory_add_holds WHERE key = ? AND at >= ?').bind(key, now - HOLD_MS).first());
 /** Whether a press of Add to Advisory Board is adding to this People record (or making one there) right now */
 export async function addingTo(DB, slug, now = Date.now()) {
   try { return await held(DB, `slug:${slug}`, now); } catch (e) { if (/no such table/i.test(e?.message || '')) return false; throw e; }
+}
+/** Whether this application is being deleted right now (a delete under way holds it), not stopped partway */
+export async function deletingNow(DB, id, now = Date.now()) {
+  try { return await held(DB, `del:${id}`, now); } catch (e) { if (/no such table/i.test(e?.message || '')) return false; throw e; }
+}
+/**
+ * People's own change to these records (a rename, a delete), held the way a press of Add holds the record it adds to:
+ * never one halfway through the other (a rename writing back the record as it read it before an Add, an Add linking to
+ * someone deleted meanwhile). → the keys held (let go with letGo), or null when an Add, or another change, has one
+ */
+export async function holdForPeople(DB, slugs, now = Date.now()) {
+  const list = [...new Set(slugs.filter(Boolean))];
+  return hold(DB, [...list.map((x) => `slug:${x}`), ...list.map((x) => `edit:${x}`)], now);
+}
+export const letGo = (DB, keys) => release(DB, keys);
+/**
+ * Why holdForPeople couldn't, for each of its records: another change on People (a rename, a delete) holds it, else an
+ * Add does → [{ slug, by: 'people' | 'add' }] for the ones held
+ */
+export async function whyHeld(DB, slugs, now = Date.now()) {
+  const out = [];
+  for (const x of slugs.filter(Boolean)) {
+    if (await held(DB, `edit:${x}`, now).catch(() => false)) out.push({ slug: x, by: 'people' });
+    else if (await held(DB, `slug:${x}`, now).catch(() => false)) out.push({ slug: x, by: 'add' });
+  }
+  return out;
 }
 
 export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by = '', now = Date.now(), fetchImpl = fetch } = {}) {
@@ -468,9 +515,13 @@ export async function deleteWhenFree(DB, app, remove, now = Date.now()) {
   const keys = [...del, ...mine];
   try {
     const out = await remove();
-    // (the address a press that stopped partway wrote down for it: nobody's now, so it's free for someone else)
-    await DB.prepare(INTENTS).run();
-    await DB.prepare('DELETE FROM advisory_add_intents WHERE app_id = ?').bind(app.id).run();
+    // (the address a press that stopped partway wrote down for it: nobody's now, so it's free for someone else. Its
+    // tidy-up not answering never makes the delete, done, read as failed: a press finding it later reads it as nobody's,
+    // its application gone)
+    try {
+      await DB.prepare(INTENTS).run();
+      await DB.prepare('DELETE FROM advisory_add_intents WHERE app_id = ?').bind(app.id).run();
+    } catch (e) { console.error('[advisory] delete tidy-up', e?.message || e); }
     return out;
   } finally {
     await release(DB, keys);
@@ -518,6 +569,10 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
   const target = targetOf(plan, as, to);
   if (target) {
     if (!(await holdAlso([`slug:${target.slug}`, ...(target.also || []).map((x) => `slug:${x}`)]))) {
+      if (await held(DB, `edit:${target.slug}`, now)) {
+        throw err(target.made ? 'Someone is changing a People record to the web address they’d be given, right now, so nobody was added. Give it a moment, then look at the box again.'
+          : `${target.name}’s People record is being changed right now (its web address, or a delete), so nobody was added. Give it a moment, then look at the box again.`);
+      }
       throw err(target.made ? 'Someone is adding a person with this name right now. Give it a moment, then look at the box again.'
         : `Someone is adding ${target.name} right now, from another application. Give it a moment, then look at the box again.`);
     }

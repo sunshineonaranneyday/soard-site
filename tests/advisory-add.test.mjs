@@ -1344,7 +1344,7 @@ test('a delete marked before anything goes: the mark not saving deletes nothing;
   const r = await remove(a.id);
   env.DB.prepare = real;
   assert.equal(r.success, false);
-  assert.equal(r.error, 'Deleting this application didn’t finish: its headshot is gone, and the rest is still here. Press Delete application again to finish it.');
+  assert.equal(r.error, 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application again to finish it.');
   assert.equal(deleted.length, 1);
   const half = await getAdvisoryApplication(env.DB, a.id);
   assert.deepEqual([half.deleting, half.headshot], [true, null]);
@@ -1405,4 +1405,367 @@ test('a People record a press is adding to (or making) can’t have its web addr
   const r = await rename(env, { collection: 'team', from: 'rita-rename', to: 'rita-r' }, 'linzi@soardcharity.com');
   assert.deepEqual([r.status, r.body.error], [409, 'Someone is adding this person to the Advisory Board right now. Change the address in a moment.']);
   assert.ok(await rec('rita-rename'), 'still at its address');
+});
+
+// ─── Round twelve ───────────────────────────────────────────────────
+
+test('what someone does, their company or a place, or letters the site didn’t know, after a comma is never their first name: greeted by their own, asked about the same person, and a different person is named as written', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  await person('jordan-quill', { name: 'Jordan Quill', group: 'advisory' }, 'jq.work@x.org');
+  const after = ['Realtor', 'Owner', 'President', 'Broker', 'Designer', 'Interior Designer', 'Retired', 'Senior', 'Junior', 'Esquire', 'Pastor', 'Coach', 'McKinsey', 'Atlanta', 'Realtor®', 'Acme Inc.', 'Inc.', 'DrPH', 'BSc'];
+  for (const [k, w] of after.entries()) {
+    const n = `Jordan Quill, ${w}`;
+    // (a name after the comma that could be a first name, "McKinsey", "Atlanta", can't say which is theirs: greeted
+    // without one, never a guess; matching still finds Jordan Quill)
+    assert.equal(greetName({ fullName: n }), ['McKinsey', 'Atlanta'].includes(w) ? '' : 'Jordan', n);
+    const p = await plan((await applied(n, `jq${k}@x.org`)).id);
+    assert.deepEqual([p.kind, p.person?.slug], ['choose', 'jordan-quill'], n);
+  }
+  // A different person: under the name as written, at an address from their name (never "realtor-jordan-quill")
+  const other = await applied('Jordan Quill, Realtor', 'jq.other@x.org');
+  const r = await add(other.id, 'new');
+  assert.equal(r.success, true, r.error);
+  assert.equal(r.person.slug, 'jordan-quill-2');
+  assert.equal((await rec('jordan-quill-2')).name, 'Jordan Quill, Realtor');
+  // Written last name first with letters after the first name: the letters are set apart, after the whole name
+  const amy = await add((await applied('Quill, Amy MD', 'amy.q@x.org')).id, 'new');
+  assert.equal(amy.success, true, amy.error);
+  assert.deepEqual([amy.person.slug, (await rec('amy-quill')).name, greetName({ fullName: 'Quill, Amy MD' })], ['amy-quill', 'Amy Quill MD', 'Amy']);
+  // An initial never ends the greeting with a full stop of its own ("Thank you, J.." was said)
+  assert.equal(greetName({ fullName: 'J. Ames' }), 'J');
+});
+
+test('two capitals after a comma that aren’t letters it knows are a first name ("Quill, TJ"); "Lee, MD" is still letters', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  await person('tj-quill', { name: 'TJ Quill', group: 'advisory' }, 'tj.work@x.org');
+  for (const [k, n] of ['Quill, TJ', 'Quill, AJ', 'Quill, MJ'].entries()) {
+    assert.equal(greetName({ fullName: n }), n.split(', ')[1], n);
+    if (k === 0) assert.deepEqual(await plan((await applied(n, 'tj.home@x.org')).id).then((p) => [p.kind, p.person?.slug]), ['choose', 'tj-quill']);
+  }
+  assert.equal(greetName({ fullName: 'Lee, MD' }), 'Lee');
+  assert.equal(greetName({ fullName: 'Jane Doe, RD' }), 'Jane');
+});
+
+test('initials with dots before a name ("J.R. Smithers") are a first initial: asked about Jordan Smithers, as "J. Smithers" is', async () => {
+  for (const [slug, name, applying] of [['jordan-smithers', 'Jordan Smithers', 'J.R. Smithers'], ['sara-lindqvist', 'Sara Lindqvist', 'S.R. Lindqvist'], ['tom-jarrow', 'Tom Jarrow', 'T.J. Jarrow']]) {
+    await person(slug, { name, group: 'advisory' }, `${slug}@x.org`);
+    const p = await plan((await applied(applying, `a.${slug}@x.org`)).id);
+    assert.deepEqual([p.kind, p.person?.slug], ['choose', slug], applying);
+  }
+});
+
+test('a delete that stops before anything goes, whatever stopped it (People or its history couldn’t be checked), leaves it exactly as it was: unmarked, its headshot shown, Add offered', async () => {
+  const deleted = [];
+  const f = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => { if (init.method === 'DELETE') { deleted.push(String(input)); return Response.json({ success: true, result: {} }); } return f(input, init); };
+  const real = env.DB.prepare.bind(env.DB);
+  const remove = async (id) => adminApi.onRequestPost(ctx('POST', { remove: { id } }));
+  const failing = (re) => { env.DB.prepare = (sql) => (re.test(sql) ? { bind: () => ({ all: async () => { throw new Error('D1_ERROR: busy'); }, first: async () => { throw new Error('D1_ERROR: busy'); }, run: async () => { throw new Error('D1_ERROR: busy'); } }) } : real(sql)); };
+  await env.DB.exec("CREATE TABLE content_versions (id INTEGER PRIMARY KEY, collection TEXT, slug TEXT, data TEXT)");
+  for (const [re, words] of [[/SELECT data FROM team WHERE instr/, 'The site couldn’t check People just now, so nothing was deleted. Please try again in a moment.'],
+    [/FROM content_versions WHERE collection = 'team' AND instr/, 'The site couldn’t check People’s history just now, so nothing was deleted. Please try again in a moment.']]) {
+    const a = await applied('Pia People', `pia.${deleted.length}.${re.source.length}@example.org`);
+    failing(re);
+    const res = await remove(a.id);
+    env.DB.prepare = real;
+    assert.deepEqual([res.status, (await res.json()).error], [503, words]);
+    assert.equal(deleted.length, 0, 'its headshot never touched');
+    const still = await getAdvisoryApplication(env.DB, a.id);
+    assert.ok(still.headshot && !still.deleting, 'unmarked, its headshot shown');
+    assert.equal((await plan(a.id)).kind, 'new', 'Add offered');
+  }
+});
+
+test('an Add pressed, or a panel opened, while another tab’s delete is under way waits for it ("being deleted"), never says the delete stopped', async () => {
+  const f = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => (init.method === 'DELETE' ? Response.json({ success: true, result: {} }) : f(input, init));
+  const a = await applied('Wes Waiting', 'wes@example.org');
+  const g = gate(/^DELETE FROM advisory_applications WHERE id = \?$/);
+  const removing = adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }));
+  await g.reached;
+  const box = await plan(a.id);
+  assert.deepEqual([box?.busy, box?.busyDeleting], [true, true], 'the box waits on the delete');
+  const panel = await (await adminApi.onRequestGet(ctx('GET', undefined, `?id=${a.id}`))).json();
+  assert.deepEqual([panel.application.deleting, panel.application.deletingNow], [true, true], 'the panel says it’s being deleted, not that it stopped');
+  g.open();
+  assert.equal((await (await removing).json()).success, true);
+  assert.equal((await adminApi.onRequestGet(ctx('GET', undefined, `?plan=${a.id}`))).status, 404, 'then gone');
+  // One that stopped partway (no delete under way): said as stopped
+  const b = await applied('Sid Stopped', 'sid@example.org');
+  await env.DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), b.id).run();
+  const stopped = await (await adminApi.onRequestGet(ctx('GET', undefined, `?id=${b.id}`))).json();
+  assert.deepEqual([stopped.application.deleting, stopped.application.deletingNow], [true, undefined]);
+  assert.match((await (await adminApi.onRequestGet(ctx('GET', undefined, `?plan=${b.id}`))).json()).error, /^Deleting this application didn’t finish/);
+});
+
+test('a note, or a status, saved as the application is deleted in another tab is said as deleted (404), never a success with nothing to show', async () => {
+  for (const body of [(id) => ({ note: { id, text: 'Hello.' } }), (id) => ({ status: { id, status: 'talking' } })]) {
+    const a = await applied('Ned Note', `ned.${Math.random()}@example.org`);
+    const g = gate(/^UPDATE advisory_applications SET (notes|status)/);
+    const saving = adminApi.onRequestPost(ctx('POST', body(a.id)));
+    await g.reached;
+    await env.DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(a.id).run();
+    g.open();
+    const res = await saving;
+    assert.deepEqual([res.status, (await res.json()).error], [404, GONE]);
+  }
+});
+
+test('a web address changed on People while a press adds them: one waits for the other, never the rename writing back the record it read before the Add', async () => {
+  const { rename } = await import('../functions/api/rename-content.js');
+  await person('rex-old', { name: 'Rex Old', group: 'advisory', status: 'alumni', until: '2024' }, 'rex@example.org');
+  const app = await applied('Rex Old', 'rex@example.org');
+  const box = await plan(app.id);
+  const g = gate(/^SELECT data FROM team WHERE slug = \?$/);
+  const renaming = rename(env, { collection: 'team', from: 'rex-old', to: 'rex-new' }, 'linzi@soardcharity.com');
+  await g.reached;
+  const r = await add(app.id, 'same', box.key);
+  assert.equal(r.success, false);
+  assert.equal(r.error, 'Rex Old’s People record is being changed right now (its web address, or a delete), so nobody was added. Give it a moment, then look at the box again.');
+  g.open();
+  assert.equal((await renaming).status, 200);
+  // then added at the address it has now: active, linked, never put back as it was before
+  const done = await add(app.id, 'same');
+  assert.equal(done.success, true, done.error);
+  assert.equal(done.person.slug, 'rex-new');
+  assert.equal((await rec('rex-new')).status, 'active');
+  assert.equal((await getAdvisoryApplication(env.DB, app.id)).personSlug, 'rex-new');
+  // and a rename while another rename holds it: refused in words
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind('slug:rex-new', Date.now(), 'edit:rex-new', Date.now()).run();
+  const twice = await rename(env, { collection: 'team', from: 'rex-new', to: 'rex-newer' }, 'linzi@soardcharity.com');
+  assert.deepEqual([twice.status, twice.body.error], [409, 'Someone is changing this person on People right now (their web address, or a delete). Try again in a moment.']);
+});
+
+test('someone deleted from People while a press adds them: refused in words until the press is done, never an application Joined to nobody', async () => {
+  const { deleteItem } = await import('../functions/api/delete-content.js');
+  await person('dot-deleted', { name: 'Dot Deleted', group: 'advisory' }, 'dot@example.org');
+  const app = await applied('Dot Deleted', 'dot@example.org');
+  const g = gate(/^UPDATE advisory_applications SET person_slug/);
+  const pressing = add(app.id, 'same');
+  await g.reached;
+  await assert.rejects(deleteItem(env, { path: 'src/content/team/dot-deleted.json', message: 'x' }, 'linzi@soardcharity.com'),
+    (e) => e.status === 409 && e.message === 'Someone is adding this person to the Advisory Board right now, so they weren’t deleted. Try again in a moment.');
+  g.open();
+  assert.equal((await pressing).success, true);
+  assert.ok(await rec('dot-deleted'), 'still on People, the application linked to someone who’s there');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM advisory_add_holds').first()).n, 0, 'nothing left held');
+});
+
+test('titles a person goes by (Pastor, Rabbi, Coach, Det., Rep.), a first initial before the name they use, a title typed against the name, and degrees written with dots, are never what they’re called', async () => {
+  const { greetName, readName } = await import('../functions/api/_advisory-form.js');
+  for (const [n, g] of [['Pastor John Smith', 'John'], ['Father John Smith', 'John'], ['Rabbi Dana Levy', 'Dana'], ['Deacon Pat Ames', 'Pat'], ['Coach Jordan Ames', 'Jordan'], ['Senator Jordan Ames', 'Jordan'],
+    ['Chef Jordan Ames', 'Jordan'], ['Det. Jordan Ames', 'Jordan'], ['Rep. Jordan Ames', 'Jordan'], ['Bishop Jones', 'Bishop'], ['F. Scott Fitzgerald', 'Scott'], ['J. Jordan Ames', 'Jordan'],
+    ['Dr.Jordan Ames', 'Jordan'], ['Jane Doe, Pharm.D.', 'Jane'], ['Pat Lee, D.Min.', 'Pat'], ['Jane Doe, M.Arch.', 'Jane'], ['Doe, Pharm.D.', 'Doe'], ['Brooks, TJ', 'TJ'], ['Lee, BJ', 'BJ'],
+    // (names that are also titles without their dot stay names)
+    ['Amartya Sen', 'Amartya'], ['Sen Lee', 'Sen'], ['Hon Lam', 'Hon'], ['Ames, J.R.', 'J.R.']]) {
+    assert.equal(greetName({ fullName: n }), g, n);
+  }
+  assert.deepEqual(readName('Dr.Jordan Ames').words, ['Jordan', 'Ames']);
+  assert.deepEqual(readName('Jane Doe Pharm.D.').words, ['Jane', 'Doe']);
+});
+
+test('the applicant’s copy in plain text never ends their name with a second full stop ("Thank you, J.R..")', async () => {
+  const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
+  for (const [n, first] of [['Ames, J.R.', 'Thank you, J.R.'], ['Jordan Ames', 'Thank you, Jordan.']]) {
+    const app = await applied(n, `copy.${first.length}@x.org`);
+    assert.equal(applicantEmail(app).text.split('\n')[0], first, n);
+  }
+});
+
+
+// ─── Round thirteen ─────────────────────────────────────────────────
+
+test('names, round thirteen: van, de, la only start a family name written first; a title after the comma is set apart; a title that is also a name needs a whole name after it; family names that are also letters; JR; a couple', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  // Written first name first, then a company or place: asked about the same person, never flipped into a second record
+  // (a company or place after the comma that could be a first name: greeted without one, never a guess; matched as them)
+  for (const [slug, name, applying, greet] of [['maria-de-la-cruz', 'Maria de la Cruz', 'Maria de la Cruz, Wells Fargo', ''], ['mai-le-tran', 'Mai Le Tran', 'Mai Le Tran, Delta', ''],
+    ['martin-van-buren', 'Martin Van Buren', 'Martin Van Buren, Kinderhook', ''], ['jordan-quill', 'Jordan Quill', 'Quill, Pastor Jordan', 'Jordan'], ['dana-price', 'Dana Price', 'Price, Coach Dana', 'Dana'],
+    ['jordan-smithers', 'Jordan Smithers', 'JR Smithers', 'JR']]) {
+    await person(slug, { name, group: 'advisory' }, `${slug}@x.org`);
+    assert.equal(greetName({ fullName: applying }), greet, applying);
+    const p = await plan((await applied(applying, `a.${slug}@x.org`)).id);
+    assert.deepEqual([p.kind, p.person?.slug], ['choose', slug], applying);
+  }
+  // Names that look like a title or letters: their whole name, their own address
+  for (const [n, slug, greet] of [['Deacon Phillippe', 'deacon-phillippe', 'Deacon'], ['Bishop Briggs', 'bishop-briggs', 'Bishop'], ['Ken Iida', 'ken-iida', 'Ken'], ['Annalisa Cima', 'annalisa-cima', 'Annalisa'], ['Olive Senior', 'olive-senior', 'Olive']]) {
+    assert.equal(greetName({ fullName: n }), greet, n);
+    assert.equal((await plan((await applied(n, `${slug}@y.org`)).id)).slug, slug, n);
+  }
+  // ...and the same words as titles or letters, where they are
+  for (const [n, greet] of [['Bishop John Briggs', 'John'], ['Jordan Quill, Senior', 'Jordan'], ['Pastor John Smith', 'John']]) assert.equal(greetName({ fullName: n }), greet, n);
+  // A couple: both greeted, the first one's address, the name as written with its "&"
+  assert.equal(greetName({ fullName: 'Quill, Jordan & Amy' }), 'Jordan and Amy');
+  const couple = await plan((await applied('Rowe, Jordan & Amy', 'rowe@x.org')).id);
+  assert.deepEqual([couple.slug, couple.asName ?? couple.name], ['jordan-rowe', couple.asName ?? couple.name]);
+  assert.equal((await add(couple.application.id, 'new')).success, true);
+  assert.equal((await rec('jordan-rowe')).name, 'Jordan & Amy Rowe');
+});
+
+test('a delete stopped by the database twice (People can’t be checked, nor the mark taken off): never marked with nothing gone; and a delete whose picture didn’t go and whose mark won’t come off says it stopped', async () => {
+  const f = globalThis.fetch;
+  let refuse = false;
+  globalThis.fetch = async (input, init = {}) => (init.method === 'DELETE' ? (refuse ? Response.json({ success: false }, { status: 500 }) : Response.json({ success: true, result: {} })) : f(input, init));
+  const real = env.DB.prepare.bind(env.DB);
+  const throwing = { bind: () => ({ all: async () => { throw new Error('D1_ERROR: busy'); }, first: async () => { throw new Error('D1_ERROR: busy'); }, run: async () => { throw new Error('D1_ERROR: busy'); } }) };
+  const a = await applied('Out Age', 'out.age@example.org');
+  env.DB.prepare = (sql) => (/SELECT data FROM team WHERE instr|SET deleting_at = NULL/.test(sql) ? throwing : real(sql));
+  const r = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }))).json();
+  env.DB.prepare = real;
+  assert.equal(r.error, 'The site couldn’t check People just now, so nothing was deleted. Please try again in a moment.');
+  const still = await getAdvisoryApplication(env.DB, a.id);
+  assert.ok(still.headshot && !still.deleting, 'never marked: nothing was deleted');
+  // The picture refuses to go and the mark won't come off: said as stopped (true: it's marked), never "still here as it was"
+  refuse = true;
+  env.DB.prepare = (sql) => (/SET deleting_at = NULL/.test(sql) ? throwing : real(sql));
+  const r2 = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }))).json();
+  env.DB.prepare = real;
+  assert.equal(r2.error, 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application again to finish it.');
+  assert.equal((await getAdvisoryApplication(env.DB, a.id)).deleting, true);
+  refuse = false;
+  assert.equal((await (await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }))).json()).success, true, 'Delete again finishes it');
+});
+
+test('a delete that happened is said as done, and written to History, even when tidying up after it doesn’t answer', async () => {
+  const f = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => (init.method === 'DELETE' ? Response.json({ success: true, result: {} }) : f(input, init));
+  const a = await applied('Tidy Up', 'tidy.up@example.org');
+  const real = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => (/DELETE FROM advisory_add_intents WHERE app_id/.test(sql) ? { bind: () => ({ run: async () => { throw new Error('D1_ERROR: busy'); } }) } : real(sql));
+  const res = await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }));
+  env.DB.prepare = real;
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).success, true);
+  assert.equal(await getAdvisoryApplication(env.DB, a.id), null);
+  assert.ok(await env.DB.prepare("SELECT id FROM audit_log WHERE action = 'deleted' AND entity_name LIKE ?").bind('%Tidy Up%').first(), 'in the audit log, as any delete is');
+});
+
+test('a People record being changed to the web address a new applicant would get: said as that, never "someone is adding"; a rename to an address an Add is making says someone new is being added there', async () => {
+  const { rename } = await import('../functions/api/rename-content.js');
+  await person('dee-dunn-team', { name: 'Dee Dunn', group: 'team' }, 'dee.team@example.org');
+  const app = await applied('Dee Dunn', 'dee.new@example.org');
+  const box = await plan(app.id);
+  assert.equal(box.slug, 'dee-dunn');
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind('slug:dee-dunn', Date.now(), 'edit:dee-dunn', Date.now()).run();
+  const during = await plan(app.id);
+  assert.deepEqual([during.busy, during.busyEditing], [true, 'address'], 'the box says the address they’d get is being given to another People record');
+  const pressed = await add(app.id, 'new', box.key);
+  assert.equal(pressed.error, 'Someone is changing a People record to the web address they’d be given, right now, so nobody was added. Give it a moment, then look at the box again.');
+  await env.DB.prepare('DELETE FROM advisory_add_holds').run();
+  // An Add making someone new at "dee-dunn": a rename of someone else to it is told someone new is being added there
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?)').bind('slug:dee-dunn', Date.now()).run();
+  const r = await rename(env, { collection: 'team', from: 'dee-dunn-team', to: 'dee-dunn' }, 'linzi@soardcharity.com');
+  assert.deepEqual([r.status, r.body.error], [409, 'Someone is adding a new person to the Advisory Board at “dee-dunn” right now. Pick another address, or try again in a moment.']);
+});
+
+test('greetings, round thirteen: two or more initials are the name they go by; more titles set apart (Doctor, Professor, Captain, Sr., Msgr., Atty., Dra., Lic., Canon); a title against the name, twice or before a small letter; a preferred name that is a filler; a name typed in small letters', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  for (const [n, g] of [['J. K. Rowling', 'J.K.'], ['C. S. Lewis', 'C.S.'], ['A. J. Smith', 'A.J.'], ['T J Brooks', 'TJ'], ['C. J. Brooks, MD', 'C.J.'], ['F. Scott Fitzgerald', 'Scott'],
+    ['Doctor Jordan Ames', 'Jordan'], ['Professor Jordan Ames', 'Jordan'], ['Captain Jordan Ames', 'Jordan'], ['Sr. Mary Ames', 'Mary'], ['Msgr. John Ames', 'John'], ['Atty. Jordan Ames', 'Jordan'],
+    ['Dra. Maria Lopez', 'Maria'], ['Lic. Juan Perez', 'Juan'], ['Rev. Canon Jordan Ames', 'Jordan'], ['Rev.Dr.Jordan Ames', 'Jordan'], ['Dr.jordan Ames', 'Jordan'], ['jordan ames', 'Jordan'],
+    // (a place or company after the comma that could be a first name: greeted without one, never a guess)
+    ['de la cruz, maria', 'Maria'], ['Jordan Van Dyke, Atlanta', ''], ['Maria De La Cruz, Keller Williams', ''], ['Minh Van Tran, Emory Healthcare', ''], ['Anh Le Nguyen, Decatur', ''],
+    // (names that are also titles or words stay names)
+    ['Major Taylor', 'Major'], ['Dean Martin', 'Dean'], ['Gen Tanaka', 'Gen']]) {
+    assert.equal(greetName({ fullName: n }), g, n);
+  }
+  for (const pref of ['N/A', 'None', 'Same', '-', '.', 'n/a', 'Same as above']) assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: pref }), 'Jordan', pref);
+  assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: 'Jo' }), 'Jo');
+  // ...and the applicant's copy says the initials once, with one full stop
+  const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
+  assert.equal(applicantEmail(await applied('J. K. Rowling', 'jk@x.org')).text.split('\n')[0], 'Thank you, J.K.');
+});
+
+
+// ─── Round fourteen ─────────────────────────────────────────────────
+
+test('names, round fourteen: a first name that starts like a family name (Van, Del, La, Le) with a company after the comma stays first name first; a title word that’s a name, with letters after; a family name in parts in capitals', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  // (greeted without a first name, never a guess: "Dream Corps" could be one as far as the site can tell)
+  for (const [slug, name, applying, greet] of [['van-jones', 'Van Jones', 'Van Jones, Dream Corps', ''], ['del-taylor', 'Del Taylor', 'Del Taylor, Home Depot', ''],
+    ['la-donna-brown', 'La Donna Brown', 'La Donna Brown, Keller Williams', ''], ['le-thi-hoa', 'Le Thi Hoa', 'Le Thi Hoa, Delta Air Lines', ''], ['van-morrison', 'Van Morrison', 'Van Morrison, Wells Fargo', ''],
+    ['deacon-phillippe', 'Deacon Phillippe', 'Deacon Phillippe Jr.', 'Deacon'], ['bishop-briggs', 'Bishop Briggs', 'Bishop Briggs PhD', 'Bishop'], ['maria-de-la-cruz', 'Maria De La Cruz', 'DE LA CRUZ, MARIA', 'Maria']]) {
+    await person(slug, { name, group: 'advisory' }, `${slug}@x.org`);
+    assert.equal(greetName({ fullName: applying }), greet, applying);
+    const p = await plan((await applied(applying, `a.${slug}@x.org`)).id);
+    assert.deepEqual([p.kind, p.person?.slug], ['choose', slug], applying);
+  }
+  // ...and one first name after a family name in parts is still last name first
+  for (const [n, g] of [['Van Buren, Martin', 'Martin'], ['De La Cruz, Maria', 'Maria'], ['St. James, Jordan', 'Jordan'], ['Bishop John Briggs PhD', 'John']]) assert.equal(greetName({ fullName: n }), g, n);
+});
+
+test('the waiting box and People’s refusals say which record is held: someone this could be, or another record taking the address they’d get; a rename to an address someone has says that first', async () => {
+  const { rename } = await import('../functions/api/rename-content.js');
+  await person('jo-ames', { name: 'Jo Ames', group: 'advisory' }, 'jo@x.org');
+  await person('zed-other', { name: 'Zed Other', group: 'team' }, 'zed@x.org');
+  const app = await applied('Jo Ames', 'jo.new@x.org');
+  const box = await plan(app.id);
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  // Someone they could be, being changed: by name
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind('slug:jo-ames', Date.now(), 'edit:jo-ames', Date.now()).run();
+  assert.deepEqual(await plan(app.id).then((p) => [p.busyEditing, p.busyName]), ['person', 'Jo Ames']);
+  await env.DB.prepare('DELETE FROM advisory_add_holds').run();
+  // Another record taking the address "A different person" would get: never "Jo Ames's record"
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind(`slug:${box.slug}`, Date.now(), `edit:${box.slug}`, Date.now()).run();
+  assert.deepEqual(await plan(app.id).then((p) => [p.busyEditing, p.busyName]), ['address', '']);
+  await env.DB.prepare('DELETE FROM advisory_add_holds').run();
+  // A rename to an address someone already has: said as that, whatever holds it
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?)').bind('slug:jo-ames', Date.now()).run();
+  const taken = await rename(env, { collection: 'team', from: 'zed-other', to: 'jo-ames' }, 'linzi@soardcharity.com');
+  assert.deepEqual([taken.status, taken.body.error], [409, 'Someone already has the address “jo-ames”. Pick another.']);
+  await env.DB.prepare('DELETE FROM advisory_add_holds').run();
+  // Two renames to one new address at once: the second is told the address is being given to another record
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?), (?, ?)').bind('slug:new-spot', Date.now(), 'edit:new-spot', Date.now()).run();
+  const second = await rename(env, { collection: 'team', from: 'zed-other', to: 'new-spot' }, 'linzi@soardcharity.com');
+  assert.deepEqual([second.status, second.body.error], [409, 'Someone is giving “new-spot” to another People record right now. Pick another address, or try again in a moment.']);
+});
+
+test('a hold the database didn’t let go of at the first try is let go (never 2 minutes of "someone is adding them" after an Add that finished)', async () => {
+  const app = await applied('Rae Rook', 'rae.rook@example.org');
+  const real = env.DB.prepare.bind(env.DB);
+  let fails = 2;
+  env.DB.prepare = (sql) => (/^DELETE FROM advisory_add_holds WHERE key = \?$/.test(sql) && fails-- > 0 ? { bind: () => ({ run: async () => { throw new Error('D1_ERROR: busy'); } }) } : real(sql));
+  const r = await add(app.id, 'new');
+  env.DB.prepare = real;
+  assert.equal(r.success, true, r.error);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM advisory_add_holds').first()).n, 0, 'every hold let go');
+  assert.equal((await plan(app.id)).busy, false);
+});
+
+test('a delete that stops, of an application that never had a headshot, never says its headshot isn’t shown', async () => {
+  // (one sent before the form asked for a headshot: none on file)
+  const a = await applied('No Shot', 'no.shot@example.org');
+  await env.DB.prepare('UPDATE advisory_applications SET headshot = NULL WHERE id = ?').bind(a.id).run();
+  const real = env.DB.prepare.bind(env.DB);
+  const throwing = { bind: () => ({ run: async () => { throw new Error('D1_ERROR: busy'); } }) };
+  env.DB.prepare = (sql) => (/^DELETE FROM advisory_applications WHERE id = \?$|SET deleting_at = NULL/.test(sql) ? throwing : real(sql));
+  const r = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }))).json();
+  env.DB.prepare = real;
+  assert.equal(r.error, 'Deleting this application didn’t finish: it’s still here. Press Delete application again to finish it.');
+  const half = await getAdvisoryApplication(env.DB, a.id);
+  assert.deepEqual([half.deleting, half.hadHeadshot], [true, false]);
+});
+
+
+test('greetings, round fourteen: initials after a family name in parts; a couple with a title or initials on the second, or two family names; a title alone after the comma; couples’ titles; initials in small letters or typed against the name; a preferred name in small letters or a filler; nothing guessed', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  for (const [n, g] of [['Van Dyke, Jordan T.', 'Jordan'], ['Van Dyke, J. Robert', 'Robert'], ['Du Bois, W. E. B.', 'W.E.B.'], ['De La Cruz, M. J.', 'M.J.'], ['Van Dyke, TJ', 'TJ'],
+    ['Jordan & Dr. Amy Quill', 'Jordan and Amy'], ['Jordan & Mrs. Amy Quill', 'Jordan and Amy'], ['Quill, Jordan & Dr. Amy', 'Jordan and Amy'], ['Jordan & T. J. Quill', 'Jordan and T.J.'], ['Jordan Quill & Amy Lee', 'Jordan and Amy'],
+    ['Ames, Dr.', 'Dr. Ames'], ['Quill, Mrs.', 'Mrs. Quill'], ['Dr. and Mrs. Quill', 'Dr. and Mrs. Quill'], ['Mr. & Mrs. Ames', 'Mr. and Mrs. Ames'], ['Drs. Jordan and Amy Quill', 'Jordan and Amy'],
+    ['t.j. brooks', 'T.J.'], ['t j brooks', 'TJ'], ['j.k. rowling', 'J.K.'], ['e. e. cummings', 'E.E.'], ['J.K.Rowling', 'J.K.'], ['F.Scott Fitzgerald', 'Scott'], ['J.Ames', 'J'],
+    // (a degree written with its dots is never split as initials)
+    ['Dana Price M.Ed.', 'Dana'], ['Pat Lee, D.Min.', 'Pat'],
+    // (two family names, or a company, after a name of two words: no first name guessed)
+    ['Garcia Lopez, Maria', '']]) {
+    assert.equal(greetName({ fullName: n }), g, n);
+  }
+  for (const [pref, g] of [['jordan', 'Jordan'], ['jo-anne', 'Jo-Anne'], ['None.', 'Jordan'], ['NONE.', 'Jordan'], ['Same.', 'Jordan'], ['Same as above.', 'Jordan'], ['Same as full name', 'Jordan'], ['Not applicable', 'Jordan'], ['No preference', 'Jordan'], ['Nil', 'Nil']]) {
+    assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: pref }), g, pref);
+  }
+  // ...and the thank-you's copy, with no name guessed, thanks them for applying
+  const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
+  const copy = applicantEmail(await applied('Garcia Lopez, Maria', 'gl@x.org'));
+  assert.equal(copy.text.split('\n')[0], 'Thank you.');
+  assert.match(copy.html, /Thank you for applying/);
 });
