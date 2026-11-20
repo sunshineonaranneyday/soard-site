@@ -5,23 +5,24 @@
  * none planned, the latest reveal video. When a reveal was set, moved or passed since, the page script
  * (src/pages/reveals.astro, initRevealsHero) brought it up to date after load: the "Next live reveal" line
  * appeared or went and the buttons under it moved ~110px. Now the hero goes out the way that script would
- * leave it, by the same rules and with the same words (src/utils/reveals-client.ts) in the visitor's own time
- * zone, so the script finds nothing to change.
+ * leave it, by the same rules and with the same words (src/utils/reveals-watch.ts) in the visitor's own time
+ * zone, so the script finds nothing to change (but "Live now", which it reads from the broadcast).
  */
 
-import { revealWhen } from '../src/utils/reveals-client.ts';
+import { revealsWatch } from '../src/utils/reveals-watch.ts';
 import { cfRaw, cfSrcset } from '../src/utils/cf-image.ts';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
-/** The words and the photo for the next reveal, as the page script writes them */
-export function nextShown(n, tz, origin) {
+/** The words and the photo for the next reveal, as the page script writes them (the watch card's words without the
+ *  broadcast: the script adds "Live now" from it) */
+export function nextShown(n, tz, origin, now = Date.now()) {
   if (!n) return null;
   const src = n.image ? (/^https?:/.test(n.image) ? n.image : `${origin}${n.image}`) : null;
   return {
     href: n.liveUrl,
     name: n.name,
-    when: n.confirmed ? revealWhen(n, 'long', tz) : n.window.label,
+    watch: revealsWatch(n, null, tz, now),
     img: src && {
       src: cfRaw(src, 'w=640,h=800,fit=cover,gravity=face,q=82,metadata=none'),
       srcset: cfSrcset(src, [400, 640, 800, 1024], { fit: 'cover', gravity: 'face', aspectRatio: 1.25 }),
@@ -38,8 +39,8 @@ export const nextImgHtml = (img, sizes) => `<img src="${esc(img.src)}" srcset="$
  * Adds the hero's handlers to an HTMLRewriter. upcoming: the schedule as it is now (its first is next); signup: the
  * every-reveal email sign-up setting (null when not said)
  */
-export function onRevealsHero(rw, upcoming, tz, origin, signup = null) {
-  const n = nextShown(upcoming[0] || null, tz, origin);
+export function onRevealsHero(rw, upcoming, tz, origin, signup = null, now = Date.now()) {
+  const n = nextShown(upcoming[0] || null, tz, origin, now);
   let sizes = '';
   let hadImg = false;
   return rw
@@ -50,10 +51,13 @@ export function onRevealsHero(rw, upcoming, tz, origin, signup = null) {
         if (!n) { el.setAttribute('hidden', ''); return; }
         el.removeAttribute('hidden');
         el.setAttribute('href', n.href);
+        if (n.watch.today) el.setAttribute('data-today', '');
+        else el.removeAttribute('data-today');
       },
     })
-    .on('[data-rh-when-name]', { element(el) { if (n) el.setInnerContent(n.name); } })
-    .on('[data-rh-when-time]', { element(el) { if (n) el.setInnerContent(n.when); } })
+    .on('[data-rh-when-k]', { element(el) { if (n) el.setInnerContent(n.watch.kicker); } })
+    .on('[data-rh-when-time]', { element(el) { if (n) el.setInnerContent(n.watch.when); } })
+    .on('[data-rh-when-sub]', { element(el) { if (n) el.setInnerContent(n.watch.sub); } })
     .on('[data-rh]', {
       element(el) {
         sizes = el.getAttribute('data-sizes') || '';

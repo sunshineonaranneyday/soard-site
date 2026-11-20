@@ -31,7 +31,8 @@ import { getReveals } from '../utils/reveals';
 import { cfRaw, cfSrcset, cfLqip } from '../utils/cf-image';
 import siteSettings from '../content/site/settings.json';
 import { upcomingAtBuild } from '../utils/reveals-copy';
-import { revealWhen } from '../utils/reveals-client';
+import type { UpcomingReveal } from '../utils/reveals-client';
+import { revealsWatch } from '../utils/reveals-watch';
 import { getPublishedKids } from '../utils/collections';
 import { heroHtml, type HeroPart } from '../utils/hero-words';
 
@@ -43,8 +44,8 @@ const videos = reveals.filter((r) => r.kind === 'video');
 const next = upcomingAtBuild()[0] || null;
 const nextKid = next ? (await getPublishedKids()).find((k) => k.data.slug === next.slug)?.data : null;
 const nextPhoto = (nextKid?.heroImage as string | undefined) || next?.image || null;
-// "Wednesday, November 18 at 4:00 PM EST" once it's confirmed, "Mid November" before
-const nextWhen = next ? (next.confirmed ? revealWhen(next as any, 'long', 'America/New_York') : next.window?.label || '') : '';
+// The watch card's words as the build has them (the server and the page script bring them up to date)
+const watch = next ? revealsWatch(next as UpcomingReveal, null, 'America/New_York') : null;
 // The newest reveal on video: the latest live replay, else the newest recorded reveal
 const latest = live[0] || videos[0] || null;
 const latestMeta = latest ? [latest.yearLabel, latest.rooms.join(', ')].filter(Boolean).join(' · ') : '';
@@ -96,10 +97,12 @@ const hero = {
         <p class="hero-eyebrow">{hero.eyebrow}</p>
         <h1>{hero.title.map((p) => typeof p === 'string' ? p : <em>{p.em}</em>)}</h1>
         <p class="hero-lead" set:html={hero.lead} />
-        <!-- The next live reveal: who and when, beside the photo rather than on it; a link to their live page -->
-        <a class="rh-when" href={next?.liveUrl || '/live/'} data-rh-when hidden={!next}>
-          <span class="rh-when__kicker"><span class="rh-when__dot" aria-hidden="true"></span>Next live reveal</span>
-          <span class="rh-when__line"><strong class="rh-when__name" data-rh-when-name>{next?.name || ''}</strong><span class="rh-when__time" data-rh-when-time>{nextWhen}</span></span>
+        <!-- The next live reveal: who and when, beside the photo rather than on it, in the dark card with the play button
+             that the child's own live page has, the whole card a link to that page (Peter, Nov 20 2026: "theres no
+             obvioius play button?!?!"). Words: revealsWatch (src/utils/reveals-watch.ts), here, on the server and in the script -->
+        <a class="rh-watch" href={next?.liveUrl || '/live/'} data-rh-when hidden={!next} data-today={watch?.today ? '' : undefined}>
+          <span class="rh-watch__play" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor"/></svg></span>
+          <span class="rh-watch__txt"><span class="rh-watch__k" data-rh-when-k>{watch?.kicker || ''}</span> <span class="rh-watch__when" data-rh-when-time>{watch?.when || ''}</span> <span class="rh-watch__in" data-rh-when-sub>{watch?.sub || ''}</span></span>
         </a>
         <div class="hero-ctas">
           <a href={live.length ? '#live-replays' : '#all-reveals'} class="btn btn-primary btn-lg">Watch the reveals</a>
@@ -297,24 +300,32 @@ const hero = {
     margin-bottom: 40px;
     max-width: 500px;
   }
-  /* The next live reveal, in the text beside its photo */
-  .hero-lead:has(+ .rh-when:not([hidden])) { margin-bottom: 22px; }
-  .rh-when {
-    display: grid; gap: 4px; width: fit-content; max-width: 100%; margin: 0 0 30px; padding: 2px 0 2px 16px;
-    border-left: 3px solid var(--c-yellow); color: var(--c-text); text-decoration: none;
+  /* The next live reveal, in the text beside its photo: the live page's watch card (LivePage .hero-watch), a link */
+  .hero-lead:has(+ .rh-watch:not([hidden])) { margin-bottom: 26px; }
+  .rh-watch {
+    display: inline-flex; align-items: center; gap: 16px; max-width: 100%; margin: 0 0 30px; padding: 10px 30px 10px 10px;
+    border-radius: 999px; background: var(--c-dark-deep); color: var(--c-cream); text-align: left; text-decoration: none;
+    box-shadow: 0 16px 36px rgba(30, 31, 37, 0.16); transition: transform 0.2s ease, box-shadow 0.2s ease;
   }
-  .rh-when[hidden] { display: none; }
-  .rh-when__kicker {
-    display: inline-flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.14em;
-    text-transform: uppercase; color: var(--c-text-muted);
+  .rh-watch[hidden] { display: none; }
+  .rh-watch__play {
+    flex: none; position: relative; width: 58px; height: 58px; border-radius: 50%; background: var(--c-yellow); color: var(--c-dark);
+    display: grid; place-items: center; transition: transform 0.2s ease;
   }
-  .rh-when__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c-yellow); flex-shrink: 0; }
-  .rh-when__line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 10px; row-gap: 2px; }
-  .rh-when__name { font-family: var(--font-display); font-size: clamp(19px, 1.7vw, 22px); font-weight: 700; letter-spacing: -0.01em; }
-  .rh-when__time { font-size: 16px; color: var(--c-text-muted); }
-  .rh-when__time:empty { display: none; }
-  .rh-when:hover .rh-when__name { text-decoration: underline; text-decoration-color: var(--c-yellow); text-decoration-thickness: 2px; text-underline-offset: 4px; }
-  .rh-when:focus-visible { outline: 3px solid var(--c-yellow); outline-offset: 4px; border-radius: 4px; }
+  .rh-watch__play svg { width: 22px; height: 22px; margin-left: 3px; }
+  /* (on the day itself, a ring round it) */
+  .rh-watch[data-today] .rh-watch__play::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid rgba(255, 218, 36, 0.55); }
+  .rh-watch__txt { min-width: 0; text-wrap: balance; }
+  .rh-watch__k { display: block; margin-bottom: 5px; font-size: 11.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-yellow); }
+  .rh-watch__when, .rh-watch__in { font-family: var(--font-display); font-size: clamp(1.02rem, 1.5vw, 1.22rem); line-height: 1.35; }
+  .rh-watch__in { color: rgba(254, 252, 245, 0.66); white-space: nowrap; }
+  .rh-watch__in::before { content: '· '; }
+  .rh-watch__in:empty { display: none; }
+  @media (hover: hover) {
+    .rh-watch:hover { transform: translateY(-2px); box-shadow: 0 20px 44px rgba(30, 31, 37, 0.22); }
+    .rh-watch:hover .rh-watch__play { transform: scale(1.06); }
+  }
+  .rh-watch:focus-visible { outline: 3px solid var(--c-yellow); outline-offset: 4px; }
   .hero-ctas {
     display: flex;
     gap: 14px;
@@ -463,9 +474,12 @@ const hero = {
     .hero-eyebrow { justify-content: center; }
     .hero-lead { margin-inline: auto; }
     .hero-ctas { justify-content: center; }
-    /* Centred with the text: the yellow mark sits under it instead of beside it */
-    .rh-when { margin-inline: auto; padding: 0 0 10px; border-left: 0; border-bottom: 3px solid var(--c-yellow); justify-items: center; }
-    .rh-when__line { justify-content: center; }
+    /* Centred with the text, as the live page's on a phone: when to watch on its own line */
+    .rh-watch { width: 100%; max-width: 380px; padding-right: 20px; gap: 14px; }
+    .rh-watch__play { width: 52px; height: 52px; }
+    .rh-watch__when { font-size: 1.05rem; }
+    .rh-watch__in { display: block; margin-top: 2px; font-family: var(--font-body); font-size: 14px; white-space: normal; }
+    .rh-watch__in::before { content: none; }
     /* Its width from the first paint: the same numbers as the photos' sizes (FRAME above) */
     .hero-frame { width: var(--frame-tablet); max-width: var(--frame-max); margin: 0 auto; }
 
@@ -486,6 +500,11 @@ const hero = {
 
   @media (max-width: 480px) {
     .hero-ctas .btn { width: 100%; }
+    .rh-watch { border-radius: 24px; padding: 12px 16px 12px 12px; gap: 12px; }
+    .rh-watch__play { width: 44px; height: 44px; }
+    .rh-watch__play svg { width: 18px; height: 18px; }
+    .rh-watch__k { font-size: 10.5px; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .rh-watch__when { font-size: 0.98rem; }
   }
 
   /* ══════════════════════════════════════════
@@ -499,6 +518,7 @@ const hero = {
     .hero-accent { opacity: 0.35; animation: none; }
     .btn:hover { transform: none; }
     .rh-play, .rh-latest:hover .rh-play { transition: none; transform: none; }
+    .rh-watch, .rh-watch:hover, .rh-watch__play, .rh-watch:hover .rh-watch__play { transition: none; transform: none; }
     .lqip-img:not(.lqip-pending) { transition: none; }
     .lqip-img.lqip-pending { opacity: initial; }
   }
@@ -511,9 +531,30 @@ const hero = {
    * there is one, else the latest reveal video. A read that fails keeps what the build drew. The server already drew
    * it this way from the same schedule (functions/_reveals-hero.js), so normally nothing changes here.
    */
-  import { readUpcoming, loadSignup, revealWhen } from '../utils/reveals-client';
+  import { readUpcoming, loadSignup, type UpcomingReveal } from '../utils/reveals-client';
+  import { revealsWatch, type WatchStatus } from '../utils/reveals-watch';
+  import { getLiveClient } from '../utils/live-client';
   import { cfRaw, cfSrcset } from '../utils/cf-image';
   import { onPageLoad } from '../utils/page-load';
+
+  // The next reveal (null: none, or not read yet: the card stays as the server drew it) and the broadcast, when heard
+  let next: UpcomingReveal | null = null;
+  let status: WatchStatus | null = null;
+  /** The watch card's words: the schedule's next reveal with the broadcast ("Live now" while it's on), every minute */
+  function drawWatch() {
+    const card = document.querySelector<HTMLAnchorElement>('[data-rh-when]');
+    if (!card || !next) return;
+    const w = revealsWatch(next, status);
+    const put = (sel: string, t: string) => { const el = card.querySelector<HTMLElement>(sel); if (el && el.textContent !== t) el.textContent = t; };
+    put('[data-rh-when-k]', w.kicker);
+    put('[data-rh-when-time]', w.when);
+    put('[data-rh-when-sub]', w.sub);
+    card.toggleAttribute('data-today', w.today);
+    card.toggleAttribute('data-live', w.live);
+  }
+  // The live client is the site's one (the floating banner's): no second connection
+  getLiveClient().subscribe((s) => { status = s; drawWatch(); });
+  setInterval(drawWatch, 60_000);
 
   function initRevealsHero() {
     const frame = document.querySelector<HTMLElement>('[data-rh]');
@@ -528,17 +569,13 @@ const hero = {
       if (!list || !frame.isConnected) return;
       const n = list[0];
       // Who and when, beside the photo: the schedule as it is now
-      const when = document.querySelector<HTMLAnchorElement>('[data-rh-when]');
-      if (when) {
-        when.hidden = !n;
-        if (n) {
-          when.href = n.liveUrl;
-          const nm = when.querySelector<HTMLElement>('[data-rh-when-name]');
-          const tm = when.querySelector<HTMLElement>('[data-rh-when-time]');
-          if (nm) nm.textContent = n.name;
-          if (tm) tm.textContent = n.confirmed ? revealWhen(n) : n.window.label;
-        }
+      next = n || null;
+      const card = document.querySelector<HTMLAnchorElement>('[data-rh-when]');
+      if (card) {
+        card.hidden = !n;
+        if (n) card.href = n.liveUrl;
       }
+      drawWatch();
       if (!n) {
         if (frame.querySelector('.rh-latest')) frame.dataset.mode = 'latest';
         return;

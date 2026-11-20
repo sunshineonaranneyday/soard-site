@@ -127,15 +127,17 @@ test('nothing scheduled: a band goes, and one kept for sign-ups stays only while
 });
 
 test('the /reveals/ hero: the next reveal, in the visitor\'s zone, with their photo', () => {
-  const n = nextShown(max, 'America/Chicago', 'https://example.org');
-  assert.equal(n.when, 'Friday, November 20 at 2:00 PM CST');
+  const before = Date.parse('2026-11-20T15:00:00Z'); // 9 AM in Chicago, the reveal at 2 PM
+  const n = nextShown(max, 'America/Chicago', 'https://example.org', before);
+  assert.deepEqual(n.watch, { kicker: 'Watch Max’s reveal live', when: 'Today at 2:00 PM CST', sub: 'in 5 hours', today: true, live: false });
   assert.equal(n.href, '/live/max/');
   assert.equal(n.img.alt, 'Max, whose room reveal is next');
   assert.match(n.img.src, /^https:\/\/example\.org\/cdn-cgi\/image\/|max-photo/);
-  assert.equal(nextShown(colin, 'America/Chicago', 'https://example.org').when, 'early December');
+  assert.deepEqual(nextShown(max, 'America/Chicago', 'https://example.org', Date.parse('2026-11-18T15:00:00Z')).watch, { kicker: 'Watch Max’s reveal live', when: 'Friday, November 20 at 2:00 PM CST', sub: '', today: false, live: false });
+  assert.deepEqual(nextShown(colin, 'America/Chicago', 'https://example.org').watch, { kicker: 'Watch Colin O\'Neil’s reveal live', when: 'Early December', sub: 'Day and time to come', today: false, live: false });
   assert.equal(nextShown(null), null);
 
-  const rw = onRevealsHero(new Rw(), [max], 'America/Chicago', 'https://example.org', ON);
+  const rw = onRevealsHero(new Rw(), [max], 'America/Chicago', 'https://example.org', ON, before);
   const signup = rw.el('[data-rh-signup]', { href: '#up-next-mail' });
   assert.equal(signup.getAttribute('href'), '#up-next-mail', 'sign-ups open: to the band\'s card');
   const frame = rw.el('[data-rh]', { 'data-sizes': '(max-width: 475px) 80vw, 420px', 'data-mode': 'latest' });
@@ -143,8 +145,10 @@ test('the /reveals/ hero: the next reveal, in the visitor\'s zone, with their ph
   const when = rw.el('[data-rh-when]', { hidden: '', href: '/live/' });
   assert.equal(when.hasAttribute('hidden'), false);
   assert.equal(when.getAttribute('href'), '/live/max/');
-  assert.equal(rw.el('[data-rh-when-name]', {}).content.text, 'Max');
-  assert.equal(rw.el('[data-rh-when-time]', {}).content.text, 'Friday, November 20 at 2:00 PM CST');
+  assert.equal(when.hasAttribute('data-today'), true, 'the ring round the play button, on the day');
+  assert.equal(rw.el('[data-rh-when-k]', {}).content.text, 'Watch Max’s reveal live');
+  assert.equal(rw.el('[data-rh-when-time]', {}).content.text, 'Today at 2:00 PM CST');
+  assert.equal(rw.el('[data-rh-when-sub]', {}).content.text, 'in 5 hours');
   // The build had no photo for the link: it goes in at the link's end, at the frame's sizes
   const link = rw.el('[data-rh-next]', { href: '/live/' });
   assert.equal(link.getAttribute('href'), '/live/max/');
@@ -237,4 +241,24 @@ test('/live/\'s band leaves out the reveal the page is showing, as LivePage mark
   const live = readFileSync('src/components/live/LivePage.astro', 'utf8');
   assert.match(live, /const drawnFrom = scheduleOnPage\(hero\);\s+let upcoming: UpcomingReveal\[\] = drawnFrom\?\.upcoming \?\? upcomingAtBuild\(\);\s+let upcomingLoaded = !!drawnFrom;/);
   assert.match(live, /const showing = view !== 'idle' \? kidSlug : '';/, 'the rule showingKid mirrors');
+});
+
+test('the /reveals/ watch card follows the broadcast: live now, any moment, the replay; another child\'s broadcast changes nothing', async () => {
+  const { revealsWatch } = await load('src/utils/reveals-watch.ts');
+  const at = (iso) => Date.parse(iso);
+  const tz = 'America/New_York';
+  // Before: the day and time, and how long to go on the day itself
+  assert.equal(revealsWatch(max, null, tz, at('2026-11-20T19:20:00Z')).sub, 'in 40 minutes');
+  assert.equal(revealsWatch(max, { live: false, upcoming: true, kidSlug: 'max' }, tz, at('2026-11-20T19:20:00Z')).when, 'Today at 3:00 PM EST');
+  // Its time come, the crew getting ready: any moment; with no broadcast for him, just when
+  assert.equal(revealsWatch(max, { live: false, upcoming: true, kidSlug: 'max' }, tz, at('2026-11-20T20:05:00Z')).when, 'Any moment now');
+  assert.deepEqual(revealsWatch(max, null, tz, at('2026-11-20T20:05:00Z')), { kicker: 'Watch Max’s reveal live', when: 'Today at 3:00 PM EST', sub: '', today: true, live: false });
+  // Live, for him
+  assert.deepEqual(revealsWatch(max, { live: true, kidSlug: 'max' }, tz, at('2026-11-20T20:05:00Z')), { kicker: 'Max’s reveal is live', when: 'Watch it now', sub: '', today: true, live: true });
+  assert.equal(revealsWatch(max, { live: true, kidSlug: 'dylan-2026' }, tz, at('2026-11-20T19:20:00Z')).live, false, 'another child live: not his card');
+  // Over: the replay, or before it's ready, how it went
+  assert.equal(revealsWatch(max, { replay: true, kidSlug: 'max', player: { kind: 'replay' } }, tz, at('2026-11-20T21:00:00Z')).when, 'Watch the replay');
+  assert.equal(revealsWatch(max, { replay: true, kidSlug: 'max', player: null }, tz, at('2026-11-20T21:00:00Z')).when, 'See how it went');
+  // A day but no time yet
+  assert.deepEqual(revealsWatch({ ...max, time: null }, null, tz, at('2026-11-18T15:00:00Z')), { kicker: 'Watch Max’s reveal live', when: 'Friday, November 20', sub: 'Time to come', today: false, live: false });
 });
