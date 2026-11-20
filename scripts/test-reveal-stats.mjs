@@ -44,13 +44,15 @@ function summary(series) {
   const at = totals.indexOf(Math.max(...totals));
   return { peakAll: Math.max(...totals), peakAllAt: series[at][0], peakSplit: series[at].slice(1), avgAll: totals.reduce((a, b) => a + b, 0) / totals.length, peakSite: peak(1), peakFb: peak(2), peakYt: peak(3), hasFb: series.some((p) => Number.isFinite(p[2])), hasYt: series.some((p) => Number.isFinite(p[3])) };
 }
-const stats = (o) => ({ counted: true, partial: false, staff: 0, tests: 0, sources: {}, series: [], atOnce: null, hearts: null, heartsTotal: 0, facebook: null, youtube: null, test: false, revealAt: null, atReveal: null, avgReplaySec: null, ...o, ...(o.series ? { atOnce: summary(o.series) } : {}) });
+const stats = (o) => ({ counted: true, partial: false, staff: 0, tests: 0, sources: {}, series: [], atOnce: null, hearts: null, heartsTotal: 0, facebook: null, youtube: null, video: null, test: false, revealAt: null, atReveal: null, avgReplaySec: null, ...o, ...(o.series ? { atOnce: summary(o.series) } : {}) });
 
 const HISTORY = [
   { id: 'live-9', kid_slug: 'dylan-2026', kid_name: 'Dylan', title: "Dylan's room reveal", scheduled_at: new Date(Date.now() + 9 * DAY).toISOString(), phase: 'scheduled', source: null, data: {}, messageCount: 0, events: { view_live_page: 41, banner_click: 4, reminder_signup: 1, click_calendar: 1 },
     stats: stats({ partial: true, people: 37, before: 37, live: 0, replay: 0, sources: { direct: 20, email: 9, facebook: 6, site: 2 }, staff: 4 }) },
   { id: 'live-8', kid_slug: 'jordan-2026', kid_name: 'Jordan', title: "Jordan's room reveal", scheduled_at: ago(6), live_at: ago(6), ended_at: ago(6, 0.6), phase: 'idle', replay_uid: 'r8', fb_live_video_id: 'lv8', fb_permalink: 'https://www.facebook.com/x/videos/8', source: 'stream', data: { fbEarlier: [{ liveVideoId: 'lv81', permalink: null }] }, messageCount: 31, events: { click_donate: 9, reminder_signup: 14, share: 6, qr_scan: 11 },
     stats: stats({ people: 286, before: 120, live: 171, avgLiveSec: 812, atReveal: 149, revealAt: 1215, replay: 64, avgReplaySec: 402, heartsTotal: 640, hearts: { heart: 640 }, staff: 6, tests: 1,
+      video: { viewers: 171, pictured: 168, never: 3, firstSec: 4.6, slowStart: 3, startBehind: 20.4, froze: 22, frozeSec: 640, frozeMedianSec: 21, refused: 4, restarted: 9, fellBack: 2, errored: 1,
+        engines: { mms: 70, hls: 85, native: 13, unknown: 3 }, devices: { iphone: 83, android: 29, computer: 52, ipad: 7 } },
       sources: { email: 96, facebook: 88, direct: 51, qr: 22, push: 12, search: 7, site: 6, calendar: 4 }, series: line(36, 1215, { site: 120, fb: 160, yt: 18 }),
       facebook: { unique: 1840, views: 2610, avgSec: 74, liveUnique: 690, reactions: 212, comments: 48, checkedAt: ago(0, -2),
         // The first post was saved without its link, and staff have since deleted it on Facebook
@@ -162,6 +164,11 @@ try {
   ok(split && Number(split[1]) + Number(split[2]) + Number(split[3]) === Number(peakTile.match(/^Most at once ([\d,]+)/)[1].replace(/,/g, '')), `the peak's split adds up to it (${peakTile})`);
   ok(await page.$$eval('.rs-open .rs-chart polyline', (els) => new Set(els.map((e) => e.getAttribute('stroke'))).size === 3), 'three lines: site, Facebook, YouTube');
   ok(!!(await page.$('.rs-open .rs-reveal')), 'the reveal moment is marked');
+  // What the live video did for the people who watched (Nov 19 2026)
+  const vsec = await page.$eval('.rs-open', (el) => { const sec = [...el.querySelectorAll('.rs-sec')].find((x) => /The live video/.test(x.querySelector('h4')?.textContent || '')); return sec ? sec.textContent.replace(/\s+/g, ' ') : null; }).catch(() => null);
+  ok(!!vsec && /Got a picture ?168 of 171/.test(vsec) && /Time to it ?4\.6 s/.test(vsec) && /Behind the phone ?20 s/.test(vsec) && /Frozen in all ?10:40/.test(vsec) && /Stopped going back ?4/.test(vsec)
+    && /3 people had it ready to play and never got a picture/.test(vsec) && /22 people saw Reconnecting, typically for 0:21/.test(vsec) && /On iPhone 83 · iPad 7 · Android 29 · Computer 52\./.test(vsec) && /Safari's own player 13/.test(vsec),
+    `the live video: picture, time to it, delay, frozen, stopped going back, devices and players (${vsec?.slice(0, 220)})`);
   ok(await page.$$eval('.rs-open .rs-legend span', (els) => els.map((e) => e.textContent.trim()).join(',') === 'Site,Facebook,YouTube'), 'legend');
   const plot = await page.$('.rs-open .rs-plot');
   const box = await plot.boundingBox();

@@ -118,6 +118,32 @@ export function sender(): { vid: string; who?: string; src?: string; ref?: strin
 export const FIRST_REPORT_SEC = 10;
 export const LIVE_EVERY_SEC = 20;
 export const REPLAY_EVERY_SEC = 60;
+/** Live: the player's numbers go once by now even with nothing watched (a viewer who never got a picture counts too) */
+export const PLAYER_FIRST_SEC = 20;
+
+/** What the live player says it has done (live-player.ts PlayerHealth) */
+export interface PlayerNumbers {
+  engine: string | null; firstMs: number | null; waitedMs: number | null; startBehind: number | null;
+  holds: number; heldMs: number; refused: number; restarts: number; fallbacks: number; errors: number;
+}
+/** The kind of device, in four words (nothing that names a person or a model) */
+export function deviceKind(ua = typeof navigator === 'undefined' ? '' : navigator.userAgent, touch = typeof navigator === 'undefined' ? 0 : navigator.maxTouchPoints || 0): 'iphone' | 'ipad' | 'android' | 'computer' {
+  if (/iPhone|iPod/.test(ua)) return 'iphone';
+  if (/iPad/.test(ua) || (/Macintosh/.test(ua) && touch > 1)) return 'ipad';
+  if (/Android/.test(ua)) return 'android';
+  return 'computer';
+}
+/** The player's numbers as a report carries them (functions/api/_reveal-stats.js cleanPlayer reads them) */
+export function playerReport(h: PlayerNumbers | null, mount: string): Record<string, unknown> | null {
+  if (!h) return null;
+  return {
+    m: mount, e: h.engine, d: deviceKind(),
+    ...(h.firstMs != null ? { f: Math.round(h.firstMs) } : {}),
+    ...(h.waitedMs != null ? { w: Math.min(Math.round(h.waitedMs), 60_000) } : {}),
+    ...(h.startBehind != null ? { s: h.startBehind } : {}),
+    h: h.holds, hm: Math.round(h.heldMs), r: h.refused, x: h.restarts, b: h.fallbacks, er: h.errors,
+  };
+}
 
 export interface WatchMeterOptions {
   kind: 'live' | 'replay';
@@ -125,8 +151,10 @@ export interface WatchMeterOptions {
   video: () => HTMLVideoElement | null;
   /** True while Stream's own iframe plays instead (no <video> to look at): showing counts as watching */
   iframe?: () => boolean;
-  /** Send `sec` seconds of watching; `final` when the page is going away (use a beacon) */
-  report: (kind: 'live' | 'replay', sec: number, final: boolean) => void;
+  /** Send `sec` seconds of watching (0: only the player's numbers); `final` when the page is going away (use a beacon) */
+  report: (kind: 'live' | 'replay', sec: number, final: boolean, player: Record<string, unknown> | null) => void;
+  /** Live: the player's numbers so far, sent with every report (live-player.ts health) */
+  player?: () => PlayerNumbers | null;
   /** For tests: the clock and the timer */
   now?: () => number;
   every?: number;
@@ -146,6 +174,27 @@ export function watchMeter(opts: WatchMeterOptions): { stop: () => void; flush: 
   let acc = 0;
   let sent = false;
   let stopped = false;
+  // The player's numbers: this start of the player's own id, and what was sent last (sent again only when they change)
+  const mount = Math.random().toString(36).slice(2, 10).padEnd(8, '0');
+  const started = now();
+  let lastPlayer = '';
+  let lastSentAt = started;
+  const snapshot = (): Record<string, unknown> | null => { try { return playerReport(opts.player?.() ?? null, mount); } catch { return null; } };
+  const send = (sec: number, final: boolean) => {
+    lastSentAt = now();
+    const pl = snapshot();
+    if (pl) lastPlayer = JSON.stringify(pl);
+    opts.report(opts.kind, sec, final, pl);
+  };
+  // Only the player's numbers (nothing watched to report): the first time by PLAYER_FIRST_SEC, then when they've changed
+  const sendPlayer = (final: boolean) => {
+    const pl = snapshot();
+    if (!pl) return;
+    const key = JSON.stringify(pl);
+    if (key === lastPlayer) return;
+    lastPlayer = key;
+    opts.report(opts.kind, 0, final, pl);
+  };
   let still = 0; // seconds the picture hasn't moved
   const due = () => (sent ? (opts.kind === 'live' ? LIVE_EVERY_SEC : REPLAY_EVERY_SEC) : FIRST_REPORT_SEC);
   const showing = () => { try { return document.visibilityState === 'visible'; } catch { return true; } };
@@ -154,7 +203,7 @@ export function watchMeter(opts: WatchMeterOptions): { stop: () => void; flush: 
   const playing = () => {
     if (opts.iframe?.()) return showing() ? Infinity : 0;
     const v = opts.video();
-    if (!v) { lastTime = -1; return false; }
+    if (!v) { lastTime = -1; return 0; }
     const t = v.currentTime;
     const moved = lastTime >= 0 ? t - lastTime : 0;
     lastTime = t;
@@ -172,12 +221,15 @@ export function watchMeter(opts: WatchMeterOptions): { stop: () => void; flush: 
     // seconds watched go now, so "there for the reveal" counts the minutes they were really watched in
     const stalled = still >= 3 && acc >= 1;
     // Whole seconds go; the fraction stays for the next report, so rounding never adds up to time that didn't play
-    if ((acc >= due() || stalled) && Math.round(acc) >= 1) { const n = Math.round(acc); opts.report(opts.kind, n, false); acc -= n; sent = true; }
+    if ((acc >= due() || stalled) && Math.round(acc) >= 1) { const n = Math.round(acc); send(n, false); acc -= n; sent = true; return; }
+    // Live with nothing watched to report: the player's numbers by PLAYER_FIRST_SEC (no picture yet, or a long hold), and
+    // after that, changed ones every LIVE_EVERY_SEC
+    if (opts.player && (t - started) / 1000 >= (lastPlayer ? LIVE_EVERY_SEC : PLAYER_FIRST_SEC) && (t - lastSentAt) / 1000 >= LIVE_EVERY_SEC) { lastSentAt = t; sendPlayer(false); }
   };
   // What's left goes when the tab hides or the page goes away (a hidden tab isn't watching anyway)
   const flush = () => {
     tick();
-    if (Math.round(acc) >= 1) { opts.report(opts.kind, Math.round(acc), true); acc = 0; sent = true; }
+    if (Math.round(acc) >= 1) { send(Math.round(acc), true); acc = 0; sent = true; } else sendPlayer(true);
   };
   const onHide = () => { if (document.visibilityState === 'hidden') flush(); };
   const timer = setInterval(tick, opts.every ?? 1000);

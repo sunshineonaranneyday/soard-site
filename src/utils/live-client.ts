@@ -272,10 +272,11 @@ function createClient() {
       } catch { /* analytics only */ }
     },
     /** Reveal stats: this browser watched `sec` more seconds of the reveal (live) or its replay */
-    watched(kind: 'live' | 'replay', sec: number, broadcastId: string | null) {
-      if (rehearsal || staffEnd || !broadcastId || !(sec > 0)) return;
+    watched(kind: 'live' | 'replay', sec: number, broadcastId: string | null, player: Record<string, unknown> | null = null) {
+      if (rehearsal || staffEnd || !broadcastId || (!(sec > 0) && !player)) return;
       try {
-        const body = JSON.stringify({ broadcastId, kind, sec, ...sender() });
+        // (player: what this viewer's live video has done so far, live-stats.ts playerReport)
+        const body = JSON.stringify({ broadcastId, kind, sec: Math.max(0, sec), ...sender(), ...(player ? { player } : {}) });
         if (!(navigator.sendBeacon && navigator.sendBeacon('/api/live-watch', new Blob([body], { type: 'application/json' })))) {
           fetch('/api/live-watch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
         }
