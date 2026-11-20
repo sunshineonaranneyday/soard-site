@@ -211,7 +211,7 @@
   /* Beside the video on a laptop: down the left, over the messages; the video and the strip stay as they are */
   .ldv.ldv--side {
     /* (over the story column exactly: as tall as the video beside it, live-design.ts fitSide) */
-    position: fixed; z-index: 1200; inset: var(--ldv-top, calc(var(--header-height) + 12px)) auto auto 12px;
+    position: fixed; z-index: 1200; inset: var(--ldv-top, calc(var(--header-height) + 12px)) auto auto var(--ldv-left, 12px);
     width: var(--ldv-w, 640px); height: var(--ldv-h, calc(100dvh - var(--header-height) - 24px)); border-radius: 20px;
     box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32), 0 8px 24px rgba(0, 0, 0, 0.14);
     animation: ldv-side 0.32s cubic-bezier(0.16, 1, 0.3, 1);
@@ -257,7 +257,8 @@
   .ldv.ldv--pinned .ldv__kicker { display: table; margin: 0 0 8px; }
   .ldv__count { color: rgba(255, 255, 255, 0.7); font-size: 14px; font-variant-numeric: tabular-nums; }
   .ldv__count:empty { display: none; }
-  /* The parts: pills, the one showing yellow with where in it you are ("The room · 2 of 5"). One tap jumps to a part */
+  /* The parts: pills, the one showing white with where in it you are ("The room · 2 of 5"). One tap jumps to a part.
+     (Never yellow: the live page's one yellow button is Fund the next room, Peter, Nov 19 2026) */
   .ldv__parts { display: flex; flex-wrap: wrap; gap: 6px; }
   .ldv__parts:empty { display: none; }
   .ldv__part {
@@ -266,7 +267,7 @@
     transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
   }
   .ldv__part:hover { background: rgba(255, 255, 255, 0.14); }
-  .ldv__part[aria-current='true'] { background: var(--c-yellow); border-color: var(--c-yellow); color: var(--c-dark); }
+  .ldv__part[aria-current='true'] { background: #fff; border-color: #fff; color: var(--c-dark); }
   .ldv__part:focus-visible { outline: 3px solid var(--c-yellow); outline-offset: 2px; }
   .ldv__part-at { font-weight: 600; opacity: 0.75; margin-left: 6px; }
   /* The pictures always fit the space between the bar and the arrows, whatever their shape and the screen's. The page

@@ -59,21 +59,37 @@
     .hero[data-party][data-orientation='portrait'] .lrm:not([hidden]) { display: block; margin: 0 0 24px; animation: lrmIn 0.45s ease-out both; }
     @keyframes lrmIn { from { opacity: 0; } }
   }
-  /* The switch: the room, the plan, the look (whichever have pictures) */
-  .lrm-tabs { display: inline-flex; align-self: flex-start; gap: 2px; padding: 4px; margin: 0 0 14px; border-radius: 100px; background: #fff; border: 1px solid var(--c-border); max-width: 100%; }
+  /* The switch: the room, the plan, the look (whichever have pictures). A sliding toggle (Peter, Nov 19 2026: "the room
+     before and the plan had a really great slider toggle"): the parts the same width on a soft track, and the one showing
+     an ink pill that glides to the one picked (280 ms; at once for anyone who asked for less motion). Ink, not yellow:
+     the Theater's one yellow is Fund the next room */
+  .lrm-tabs {
+    --n: 1; --i: 0;
+    position: relative; display: inline-grid; grid-auto-flow: column; grid-auto-columns: 1fr; align-self: flex-start;
+    padding: 4px; margin: 0 0 14px; max-width: 100%; border-radius: 100px; background: #F2EFE7;
+  }
+  .lrm-tabs:has(> :nth-child(2):last-child) { --n: 2; }
+  .lrm-tabs:has(> :nth-child(3):last-child) { --n: 3; }
+  .lrm-tabs:has(> :nth-child(2)[aria-selected='true']) { --i: 1; }
+  .lrm-tabs:has(> :nth-child(3)[aria-selected='true']) { --i: 2; }
+  .lrm-tabs::before {
+    content: ''; position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / var(--n)); border-radius: 100px;
+    background: var(--c-dark); box-shadow: 0 2px 8px rgba(30, 31, 37, 0.18);
+    transform: translateX(calc(var(--i) * 100%)); transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
   .lrm-tabs[hidden], .lrm-thumbs[hidden] { display: none; }
   .lrm-tab {
-    height: 36px; padding: 0 16px; border: 0; border-radius: 100px; background: transparent; color: var(--c-text-muted);
-    font: inherit; font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: background 160ms ease, color 160ms ease;
+    position: relative; z-index: 1; height: 36px; padding: 0 18px; border: 0; border-radius: 100px; background: transparent; color: var(--c-text-muted);
+    font: inherit; font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: color 200ms ease;
   }
   .lrm-tab:hover { color: var(--c-text); }
-  .lrm-tab[aria-selected='true'] { background: var(--c-yellow); color: var(--c-dark); }
+  .lrm-tab[aria-selected='true'] { color: #fff; }
   .lrm-tab:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
   /* The picture: a photo fills its card; a plan sits whole on its white paper. Still: it's beside a video, and nothing
      next to the reveal moves but the reveal */
   .lrm-big {
     position: relative; display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; border-radius: 18px; overflow: hidden; cursor: zoom-in;
-    background: var(--c-warm-gray); box-shadow: 0 18px 44px rgba(30, 31, 37, 0.1), 0 0 0 1px rgba(30, 31, 37, 0.04);
+    background: var(--c-warm-gray); box-shadow: 0 1px 2px rgba(30, 31, 37, 0.06), 0 0 0 1px rgba(30, 31, 37, 0.05);
   }
   .lrm-big:focus-visible { outline: 3px solid var(--c-dark); outline-offset: 3px; }
   /* (the compare in its place: gone, not just covered) */
@@ -103,7 +119,7 @@
   .lrm-row { display: flex; gap: var(--lrm-gap); align-items: stretch; }
   .lrm-row > .lrm-big, .lrm-row > .lrm-cmp { flex: 1 1 0; min-width: 0; }
   /* The rest, small: a click shows one big. Each as tall as a fifth of the column at most (five photos fit beside the
-     picture), never shorter than 44px: more than fit scroll, the edge with more faded (data-more, live-design.ts). Its
+     picture), never shorter than 44px: more than fit scroll (no fade at the edge: a fade is a gradient, Peter's never). Its
      rings and focus need the 4px around them, so the column is 4px bigger each way than it looks */
   .lrm-thumbs {
     position: relative; flex: none; display: flex; flex-direction: column; gap: 8px; width: calc(var(--lrm-rail) + 8px);
@@ -113,9 +129,6 @@
   /* (a part with one picture: its column's place kept, empty) */
   .lrm-thumbs[data-one] { visibility: hidden; }
   .lrm-thumbs li { flex: 0 1 64px; min-height: 44px; display: flex; }
-  .lrm-thumbs[data-more='down'] { mask-image: linear-gradient(to bottom, #000 calc(100% - 36px), transparent calc(100% - 4px)); }
-  .lrm-thumbs[data-more='up'] { mask-image: linear-gradient(to top, #000 calc(100% - 36px), transparent calc(100% - 4px)); }
-  .lrm-thumbs[data-more='both'] { mask-image: linear-gradient(to bottom, transparent 4px, #000 36px, #000 calc(100% - 36px), transparent calc(100% - 4px)); }
   .lrm-thumb {
     position: relative; display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
     background: #fff; box-shadow: 0 0 0 1px var(--c-border); transition: box-shadow 160ms ease, transform 160ms ease;
@@ -137,17 +150,17 @@
      (Peter, Nov 18 2026: "theres more room on the left side we can use right?") */
   .lrm-cmp .pcmp {
     width: 100%; height: 100%; aspect-ratio: auto; border-radius: 18px;
-    box-shadow: 0 18px 44px rgba(30, 31, 37, 0.1), 0 0 0 1px rgba(30, 31, 37, 0.06);
+    box-shadow: 0 1px 2px rgba(30, 31, 37, 0.06), 0 0 0 1px rgba(30, 31, 37, 0.06);
   }
   /* Its small picture: the two plans, half and half, with the line */
   .lrm-thumbs .lrm-thumb--cmp img { position: absolute; inset: 0; object-fit: contain; padding: 5px; background: #fff; }
   .lrm-thumb--cmp .lrm-half { clip-path: inset(0 50% 0 0); }
   .lrm-thumb--cmp::after { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--c-dark); }
   .lrm-thumb:hover { transform: translateY(-1px); }
-  .lrm-thumb[aria-current='true'] { box-shadow: 0 0 0 2px var(--c-yellow), 0 0 0 3px var(--c-dark); }
+  .lrm-thumb[aria-current='true'] { box-shadow: 0 0 0 2px var(--c-dark); }
   .lrm-thumb:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 1px; }
   @media (prefers-reduced-motion: reduce) {
-    .lrm-pic img, .lrm-thumb, .lrm-thumb img, .lrm-tab { transition: none; }
+    .lrm-pic img, .lrm-thumb, .lrm-thumb img, .lrm-tab, .lrm-tabs::before { transition: none; }
     .lrm { animation: none !important; }
     .lrm-thumb:hover { transform: none; }
   }

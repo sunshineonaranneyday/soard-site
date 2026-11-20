@@ -55,10 +55,20 @@
      last row, under the controls */
   .hero[data-party][data-design][data-orientation='portrait'] { --beside: var(--hds-w); --beside-gap: var(--hds-gap); }
   .hero[data-party][data-design] .hds { width: 100%; height: 100%; }
+  /* A phone held upright (every phone, no tablet): the picture is sized by the screen's height, so its width leaves room
+     at the sides; the strip takes all of it, the picture at the left edge and the strip out to the right, with the bar
+     the whole width under them (Peter, Nov 18 2026: "can this take up more available space on the mobile?";
+     the picture and a 92px strip sat in the middle with 50px of cream either side). Bigger pictures of the room too */
+  @media (max-width: 559px) {
+    .hero[data-party][data-design][data-orientation='portrait'] [data-stage][data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) {
+      width: 100%;
+      grid-template-columns: 0px minmax(0, var(--pic)) var(--beside-gap) minmax(var(--beside), 1fr) 0px;
+    }
+  }
   .hero[data-party][data-design][data-orientation='landscape'] .hds { height: var(--hds-h); margin-top: var(--hds-gap); }
   /* Under a landscape picture's controls, the room it takes (LiveStage reads it when the captions go under the picture) */
   .hero[data-party][data-design] { --beside-row: calc(var(--hds-h) + var(--hds-gap)); }
-  /* A phone held sideways, a landscape picture with captions on: under the captions, bar and Jump there's no room left for
+  /* A phone held sideways, a landscape picture with captions on: under the captions and bar there's no room left for
      it, so it takes a column of its own beside them, as tall as they are, when that leaves the picture bigger than
      moving the captions under it (data-fit 'col': LiveStage tries both and lays out the rest) */
   @media (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 960px), (min-aspect-ratio: 7/4) and (max-height: 540px) and (min-width: 560px) and (max-width: 1023px) and (pointer: coarse) {

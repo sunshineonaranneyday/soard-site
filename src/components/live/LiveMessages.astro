@@ -12,8 +12,8 @@ import BotTrap from '../global/BotTrap.astro';
  * heading, the messages newest at the bottom like a chat, each with its
  * writer's first letter, and the box to write in at the bottom. The box asks
  * for a first name once ("Writing as"), grows with what's typed, and its
- * arrow turns yellow when there's something to send. A new message glows
- * yellow for a moment as it arrives.
+ * arrow turns ink when there's something to send. A new message warms for a
+ * moment as it arrives.
  */
 import { LATEST_HEART } from '../../utils/live-message-look';
 const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>';
@@ -25,8 +25,9 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     <span class="msg__av" data-msgs="latest-av" aria-hidden="true"></span>
     <span class="msgs__latest-words"><span class="msgs__latest-name" data-msgs="latest-name"></span> <span class="msgs__latest-text" data-msgs="latest-text"></span></span>
   </button>
-  <!-- In the Theater on a computer, beside that line under the video: opens the card in the right column (LivePage).
-       "Write" with a pen where the line is narrow, so the message beside it has the room -->
+  <!-- In the Theater on a computer, beside the messages' heading under the room: "See all" and "Write", each opening the
+       card in the right column (LivePage). "Write" with a pen where the column is narrow -->
+  <button class="msgs__all" type="button" data-msgs="all">See all</button>
   <button class="msgs__write" type="button" data-msgs="write" aria-label="Write to the family"><svg class="msgs__write-pen" viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21.17 6.81a2.82 2.82 0 0 0-3.98-3.99L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/></svg><span class="msgs__write-long">Write to the family</span><span class="msgs__write-short">Write</span></button>
   <div class="msgs__head">
     <!-- (the Theater, opened from the line under the video: back to the line and the sponsors) -->
@@ -87,10 +88,10 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .msg-empty { color: var(--c-text-muted); margin: 0; padding: 8px 4px; }
   .msg-empty[hidden] { display: none; }
   .msg-empty__heart { display: none; }
-  /* Beside the video: in the middle of the empty wall, under a yellow heart (the empty list steps aside so it's centred) */
+  /* Beside the video: in the middle of the empty wall, under a heart (the empty list steps aside so it's centred) */
   .msgs[data-place='hero'] .msg-list:empty { display: none; }
   .msgs[data-place='hero'] .msg-empty:not([hidden]) { margin: auto; padding: 0; max-width: 24ch; display: grid; justify-items: center; gap: 12px; text-align: center; font-size: 15px; line-height: 1.5; text-wrap: balance; }
-  .msgs[data-place='hero'] .msg-empty__heart { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--c-yellow); color: var(--c-dark-deep); }
+  .msgs[data-place='hero'] .msg-empty__heart { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 50%; background: var(--c-dark); color: #fff; }
   .msgs[data-place='hero'] .msg-empty__heart :global(svg) { width: 20px; height: 20px; }
   .msg-closed { color: var(--c-text-muted); line-height: 1.6; }
   .msg-closed[hidden] { display: none; }
@@ -100,22 +101,23 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .msg-list :global(.msg) { display: flex; align-items: flex-start; gap: 12px; animation: msgIn 360ms cubic-bezier(0.16, 1, 0.3, 1) both; }
   .msg-list :global(.msg__av) {
     flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
-    font-size: 14px; font-weight: 800; line-height: 1; background: var(--c-yellow); color: var(--c-dark-deep);
+    font-size: 14px; font-weight: 800; line-height: 1; background: var(--c-dark); color: #fff;
   }
-  /* (each writer's letter a colour of their own, from the brand's: the same in the server's markup and the script's) */
-  .msg-list :global(.msg__av[data-tone='1']) { background: #FFF1A8; }
+  /* (each writer's letter a colour of their own, from the page's quiet ones, never yellow: the live page's one yellow is
+     Fund the next room, Peter, Nov 19 2026. The same in the server's markup and the script's) */
+  .msg-list :global(.msg__av[data-tone='1']) { background: #E6E0D0; color: var(--c-dark); }
   .msg-list :global(.msg__av[data-tone='2']) { background: #ECE8DC; color: var(--c-text); }
-  .msg-list :global(.msg__av[data-tone='3']) { background: var(--c-dark); color: var(--c-yellow); }
+  .msg-list :global(.msg__av[data-tone='3']) { background: #D3CCB8; color: var(--c-dark); }
   .msg-list :global(.msg__av[data-tone='4']) { background: #fff; color: var(--c-text); box-shadow: inset 0 0 0 1px var(--c-border); }
   .msg-list :global(.msg__card) {
     min-width: 0; flex: 1; background: var(--c-cream); border: 1px solid var(--c-border); border-radius: 4px 16px 16px 16px; padding: 9px 14px 10px;
   }
   .msg-list :global(.msg__name) { display: block; font-weight: 700; font-size: 13.5px; color: var(--c-dark); }
   .msg-list :global(.msg__body) { margin: 2px 0 0; font-size: 15px; line-height: 1.5; color: var(--c-text); overflow-wrap: anywhere; text-wrap: pretty; }
-  /* Just arrived: it rises in and its bubble glows yellow for a moment, then settles */
+  /* Just arrived: it rises in and its bubble warms for a moment, then settles (never yellow: one yellow button) */
   .msg-list :global(.msg.is-new .msg__card) { animation: msgGlow 2.4s ease-out both; }
   @keyframes msgIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-  @keyframes msgGlow { 0%, 35% { background: #FFF6CC; border-color: #F2D45A; } 100% { background: var(--c-cream); border-color: var(--c-border); } }
+  @keyframes msgGlow { 0%, 35% { background: #F3EEDF; border-color: #CFC8B4; } 100% { background: var(--c-cream); border-color: var(--c-border); } }
 
   /* ── The box to write in: "Writing as" and a first name, then the message and its arrow ── */
   .msg-form { display: grid; gap: 8px; max-width: 520px; }
@@ -149,7 +151,7 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     background: var(--c-warm-gray); color: var(--c-text-muted); transition: background 160ms ease, color 160ms ease, transform 160ms ease;
   }
   .msg-send :global(svg) { width: 19px; height: 19px; }
-  .msg-send.is-ready { background: var(--c-yellow); color: var(--c-dark); }
+  .msg-send.is-ready { background: var(--c-dark); color: #fff; }
   .msg-send:active { transform: scale(0.9); }
   .msg-send:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
   .msg-send:disabled { cursor: progress; }
@@ -193,63 +195,82 @@ const ARROW = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 
   /* The newest message, one line: under the video on a phone held upright (below) and in the Theater on a computer */
   .msgs__latest { display: none; }
-  .msgs__write, .msgs__close { display: none; }
+  .msgs__write, .msgs__close, .msgs__all { display: none; }
   .msgs__latest .msg__av {
     flex: none; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font-size: 12.5px; font-weight: 800; line-height: 1;
-    background: var(--c-yellow); color: var(--c-dark-deep);
+    background: var(--c-dark); color: #fff;
   }
-  .msgs__latest .msg__av[data-tone='1'] { background: #FFF1A8; }
+  .msgs__latest .msg__av[data-tone='1'] { background: #E6E0D0; color: var(--c-dark); }
   .msgs__latest .msg__av[data-tone='2'] { background: #ECE8DC; color: var(--c-text); }
-  .msgs__latest .msg__av[data-tone='3'] { background: var(--c-dark); color: var(--c-yellow); }
+  .msgs__latest .msg__av[data-tone='3'] { background: #D3CCB8; color: var(--c-dark); }
   .msgs__latest .msg__av[data-tone='4'] { background: #fff; color: var(--c-text); box-shadow: inset 0 0 0 1px var(--c-border); }
   /* (no box of its own but in the Theater, below: on a phone the name and the message are the line's own, as ever) */
   .msgs__latest-words { display: contents; }
   .msgs__latest-name { flex: none; max-width: 40%; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .msgs__latest-text { min-width: 0; flex: 1; color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .msgs__latest.is-new { animation: latestIn 2.4s ease-out; }
-  @keyframes latestIn { 0% { background: #FFF6CC; border-color: #F2D45A; transform: translateY(6px); opacity: 0.4; } 12% { transform: none; opacity: 1; } 35% { background: #FFF6CC; border-color: #F2D45A; } 100% { background: #fff; border-color: var(--c-border); } }
+  @keyframes latestIn { 0% { background: #F3EEDF; border-color: #CFC8B4; transform: translateY(6px); opacity: 0.4; } 12% { transform: none; opacity: 1; } 35% { background: #F3EEDF; border-color: #CFC8B4; } 100% { background: #fff; border-color: var(--c-border); } }
 
-  /* ── The Theater on a computer with the build's sponsors beside it (LivePage, LiveSponsors; Peter, Nov 18 2026:
-     "priority of screen should be the reveal, plans/before and sponsors"): the messages are one line under the video,
-     the newest (or "Be the first to leave a message") with "Write to the family"; a tap on either brings the card to
-     the right column (the hero's data-msgs-open), its × back. (The Theater's width: DESK, src/utils/live-media.ts) ── */
+  /* ── The Theater on a computer with the build's sponsors (LivePage, LiveSponsors; Peter, Nov 18 2026: "priority of
+     screen should be the reveal, plans/before and sponsors"; one surface, Nov 19 2026): the messages under the room, on
+     the panel itself (nothing boxed): their heading in small capitals with "Write to the family" beside it (or, once
+     they're closed, "See all"), then the newest two, a line each: its writer's letter, name and words. A tap on a message, See all or Write opens every
+     message and the box to write in, in the sponsors' column (the hero's data-msgs-open), its × back. (The Theater's
+     width: DESK, src/utils/live-media.ts) ── */
   @media (min-width: 1200px) {
+    :global(.hero[data-party][data-orientation='portrait']) .msgs[data-place='hero'] { background: var(--c-cream); border: 1px solid var(--c-border); border-radius: 22px; box-shadow: none; }
     :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] {
-      flex-direction: row; align-items: center; gap: 8px; flex: 1 1 auto; height: 100%; min-height: 0;
-      background: none; border: 0; border-radius: 0; box-shadow: none; overflow: visible;
+      display: grid; grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: 'head all write' 'feed feed feed'; align-items: center;
+      gap: 8px 14px; min-height: 0; padding: 0; box-sizing: border-box; overflow: hidden; background: none; border: 0; border-radius: 0;
     }
-    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] > :is(.msgs__head, .msgs__feed, .msgs__compose) { display: none; }
-    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__latest:not([hidden]) {
-      display: flex; align-items: center; gap: 10px; flex: 1 1 auto; min-width: 0; height: 100%; margin: 0; padding: 0 14px 0 10px;
-      border: 1px solid var(--c-border); border-radius: 16px; background: #fff; color: var(--c-text); font: inherit; font-size: 14.5px; text-align: left; cursor: pointer;
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] > :is(.msgs__compose, .msgs__latest) { display: none; }
+    /* (its heading as the sponsors': small capitals) */
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__head { grid-area: head; min-width: 0; padding: 0; margin: 0; border: 0; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__head > :not(h2) { display: none; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__head h2 { margin: 0; font-family: inherit; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; line-height: 1.3; text-transform: uppercase; color: var(--c-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    /* The newest two: no bubbles, the words on the panel, a line each (the room above has the column's height) */
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__feed { grid-area: feed; flex: none; min-height: 0; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__wall { padding: 0; overflow: hidden; border-radius: 0; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list { gap: 8px; margin: 0; grid-template-columns: minmax(0, 1fr); }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list > :global(:not(:nth-last-child(-n + 2))) { display: none; }
+    /* (a tall screen, with the room: the newest three) */
+    @media (min-height: 1000px) { :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list > :global(:nth-last-child(3)) { display: flex; } }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list :global(.msg) { gap: 10px; align-items: center; cursor: pointer; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list :global(.msg__av) { width: 26px; height: 26px; font-size: 11.5px; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list :global(.msg__card) {
+      background: none; border: 0; border-radius: 0; padding: 0; animation: none;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; line-height: 1.45;
     }
-    /* The newest message in two lines, its writer's name leading into it as in a chat's list, so the line under a
-       narrow video still reads (one line at 1330 wide showed "Ms. Lee W...") */
-    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__latest-words {
-      display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere;
-      font-size: 13.5px; line-height: 1.32;
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list :global(.msg__name) { display: inline; font-size: 14px; margin-right: 0.35em; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list :global(.msg__body) { display: inline; margin: 0; font-size: 14px; color: var(--c-text-muted); text-wrap: nowrap; white-space: nowrap; }
+    @media (hover: hover) { :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-list :global(.msg:hover .msg__name) { text-decoration: underline; text-underline-offset: 3px; } }
+    /* No messages yet: the invitation, one quiet line */
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-empty:not([hidden]) { margin: 0; padding: 0; max-width: none; display: block; text-align: left; font-size: 14px; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msg-empty__heart { display: none; }
+    /* See all: words; Write: ink on white, never yellow (the Theater's one yellow button is Fund the next room) */
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__all {
+      grid-area: all; display: inline-flex; align-items: center; height: 32px; padding: 0 2px; border: 0; background: none; color: var(--c-text);
+      font: inherit; font-size: 13.5px; font-weight: 700; white-space: nowrap; cursor: pointer; text-decoration: underline; text-decoration-color: var(--c-border); text-underline-offset: 4px; text-decoration-thickness: 2px;
     }
-    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] :is(.msgs__latest-name, .msgs__latest-text) {
-      display: inline; max-width: none; overflow: visible; white-space: normal;
-    }
+    @media (hover: hover) { :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__all:hover { text-decoration-color: var(--c-dark); } }
+    /* (See all only once they're closed, after the reveal: while they're open, Write opens every message too) */
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero']:is(:not(:has(.msg-list > *)), :has(.msg-form:not([hidden]))) .msgs__all { display: none; }
     :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__write {
-      display: inline-flex; align-items: center; justify-content: center; gap: 7px; flex: none; height: 100%; padding: 0 18px; border: 0; border-radius: 16px;
-      background: var(--c-yellow); color: var(--c-dark); font: inherit; font-size: 14.5px; font-weight: 700; white-space: nowrap; cursor: pointer;
+      grid-area: write; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; padding: 0 13px; box-sizing: border-box;
+      border: 1.5px solid var(--c-dark); border-radius: 100px; background: #fff; color: var(--c-dark);
+      font: inherit; font-size: 13.5px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: background 160ms ease, color 160ms ease;
     }
-    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] { container: msgbar / inline-size; }
-    .msgs__write-pen, .msgs__write-short { display: none; }
-    /* (a narrow line: "Write" and its pen, unless there's no message beside it to make room for) */
-    @container msgbar (max-width: 479px) {
-      .msgs[data-place='hero'] .msgs__latest:not([hidden]) + .msgs__write { padding: 0 16px; }
-      .msgs[data-place='hero'] .msgs__latest:not([hidden]) + .msgs__write :is(.msgs__write-pen, .msgs__write-short) { display: inline; }
-      .msgs[data-place='hero'] .msgs__latest:not([hidden]) + .msgs__write .msgs__write-long { display: none; }
-    }
-    /* (the box closed to new messages, after the reveal: no Write, the newest message has the bar) */
+    @media (hover: hover) { :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__write:hover { background: var(--c-dark); color: #fff; } }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__write-long { display: none; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__write-pen { width: 15px; height: 15px; }
+    .msgs__write-short { display: none; }
+    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__write-short { display: inline; }
+    /* (the box closed to new messages, after the reveal: no Write; See all in its place) */
     :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero']:has(.msg-form[hidden]) .msgs__write { display: none; }
-    /* (no message to show yet, the line is hidden: Write fills the bar) */
-    :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__latest[hidden] + .msgs__write { flex: 1 1 auto; justify-content: center; }
-    .msgs__latest:focus-visible, .msgs__write:focus-visible, .msgs__close:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
-    /* Opened: the card in the right column, with its × */
+    .msgs__latest:focus-visible, .msgs__write:focus-visible, .msgs__close:focus-visible, .msgs__all:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
+    /* (the narrowest column, a 1200px window during a live reveal: the heading a size smaller, so it's whole) */
+    @container (max-width: 340px) { :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden])):not([data-msgs-open])) .msgs[data-place='hero'] .msgs__head h2 { font-size: 10px; letter-spacing: 0.1em; } }
+    /* Opened: the card in the whole right column, with its × */
     :global(.hero[data-party][data-orientation='portrait'][data-msgs-open]) .msgs[data-place='hero'] .msgs__head { position: relative; padding-right: 60px; }
     :global(.hero[data-party][data-orientation='portrait'][data-msgs-open]) .msgs[data-place='hero'] .msgs__close {
       display: grid; place-items: center; position: absolute; top: 14px; right: 14px; width: 36px; height: 36px; padding: 0;

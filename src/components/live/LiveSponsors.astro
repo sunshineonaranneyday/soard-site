@@ -22,37 +22,55 @@ const { kid, inner } = Astro.props;
   .lsp { display: none; }
   /* (the Theater's width, LivePage: a computer's layout, DESK in src/utils/live-media.ts) */
   @media (min-width: 1200px) {
+    /* The Theater's right column (LivePage), the whole height of the reveal beside it, on the panel itself. In order
+       (Peter, Nov 19 2026: "the sponsors look scattered"): each tier's name on one left edge, its logos in cells of one
+       size two across under it, the tiers one after another, the room's sponsor's cell the biggest, all of it as big as
+       the column's height allows (--lsp-s, LivePage's script) */
     .hero[data-party][data-orientation='portrait']:not([data-msgs-open]) .lsp:not([hidden]) {
-      grid-area: party; display: flex; flex-direction: column; gap: 12px; min-height: 0; align-self: stretch; contain: size; overflow-y: auto; overscroll-behavior: contain;
-      padding: 18px 16px; box-sizing: border-box; text-align: left;
-      background: #fff; border: 1px solid var(--c-border); border-radius: 24px; box-shadow: 0 20px 50px rgba(30, 31, 37, 0.06);
-      scrollbar-width: thin; animation: lspIn 0.45s ease-out both;
+      grid-area: side; grid-row: 1 / -1; display: flex; flex-direction: column; gap: 11px; min-height: 0; align-self: stretch; contain: size; margin-top: -4px;
+      overflow-y: auto; overscroll-behavior: contain; padding: 0; box-sizing: border-box; text-align: left; scrollbar-width: thin;
+      container: lsp / inline-size;
     }
-    @keyframes lspIn { from { opacity: 0; } }
+    /* (each logo in a cell of a soft tint, so the rows read as rows; no border, no shadow. A logo's own white goes into the
+       tint, never a white box on it; and a cell keeps a margin round its logo however big it grows) */
+    .hero[data-party][data-orientation='portrait'] .lsp-card { background: #F8F7F2; --pad: max(5px, calc(var(--h) * var(--lsp-s, 1) * 0.12)); }
+    .hero[data-party][data-orientation='portrait'] .lsp-card img { mix-blend-mode: multiply; }
+    /* (an empty cell is no cell: its tint comes with its logo, never a grey box waiting for one) */
+    .hero[data-party][data-orientation='portrait'] .lsp-card { transition: background-color 320ms ease-out; }
+    .hero[data-party][data-orientation='portrait'] .lsp-card:has(img:not([style*='--r'])) { background-color: transparent; }
+    /* Each logo fades in as it arrives (its shape known, --r: live-page script), never popping in; one that is slow to
+       weigh shows by 2.5 s all the same, and anyone who asked for less motion sees each as it comes */
+    .hero[data-party][data-orientation='portrait'] .lsp-card img { transition: opacity 320ms ease-out; }
+    .hero[data-party][data-orientation='portrait'] .lsp-card img:not([style*='--r']) { opacity: 0; animation: lspLate 0s linear 2.5s forwards; }
+    @keyframes lspLate { to { opacity: 1; } }
   }
   .lsp-head { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-text-muted); }
-  .lsp-tier { display: grid; gap: 6px; }
-  .lsp-label { margin: 0; font-size: 12.5px; font-weight: 700; color: var(--c-text); }
+  .lsp-tier { display: grid; gap: 5px; }
+  .lsp-label { margin: 0; font-size: 12.5px; font-weight: 700; line-height: 1.3; color: var(--c-text); }
   .lsp-grid { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
   /* Logos big enough to read (Peter, Nov 18 2026: "on the theater the vendor logos are small, can yo make them larger,
-     more ledgable?"; Nov 19: "signature and down, the logos should be the same size"): every partner's card the same,
-     two across, each logo filling its card, every card as tall as the column has room for. --h is the card's height and
+     more ledgable?"; Nov 19: "signature and down, the logos should be the same size"): every partner's cell the same,
+     two across, each logo filling its cell, every cell as tall as the column has room for. --h is the cell's height and
      --lsp-s the column's scale, which LivePage's script sets so the whole column just fills the video's height (no
      scrolling unless a build has more sponsors than fit even at its smallest) */
   .lsp-card {
     --h: 64px; --pad: 5px;
     --logo-h: calc(var(--h) * var(--lsp-s, 1) - 2 * var(--pad));
     display: flex; align-items: center; justify-content: center; min-width: 0; height: calc(var(--h) * var(--lsp-s, 1)); padding: var(--pad); box-sizing: border-box;
-    border-radius: 14px; background: var(--c-cream); border: 1px solid var(--c-border);
+    border-radius: 12px; background: none; border: 0;
   }
   .lsp-card img { display: block; max-width: 100%; max-height: var(--logo-h); width: auto; height: auto; object-fit: contain; }
   /* Logos of every shape weigh about the same (as the band under the video sizes them), a wide wordmark
      kept wide enough to read: --r is width ÷ height, set once it loads */
   .lsp-card img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.15 / pow(var(--r), 0.4))); }
-  /* The room's sponsor a bigger card of its own; every partner below it two across, the same size */
+  /* The room's sponsor a bigger cell of its own, the column's width; every partner below it two across, the same size
+     (no yellow: the Theater's one yellow is Fund the next room, Peter, Nov 19 2026) */
   .lsp-tier--room .lsp-grid { grid-template-columns: minmax(0, 1fr); }
-  .lsp-tier--room .lsp-card { --h: 112px; --pad: 9px; background: #fff; border-color: var(--c-yellow); box-shadow: 0 0 0 3px var(--c-yellow-soft); }
+  .lsp-tier--room .lsp-card { --h: 104px; --pad: 8px; }
   .lsp-tier:not(.lsp-tier--room) .lsp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .lsp-tier--signature .lsp-card { background: #fff; }
-  @media (prefers-reduced-motion: reduce) { .lsp { animation: none !important; } }
+  /* (a column wide enough for three of them at that size: three across) */
+  @container lsp (min-width: 390px) {
+    .lsp-tier:not(.lsp-tier--room) .lsp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
+  @media (prefers-reduced-motion: reduce) { .lsp { animation: none !important; } .lsp-card img { transition: none !important; } }
 </style>

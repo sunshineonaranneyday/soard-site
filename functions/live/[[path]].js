@@ -214,6 +214,13 @@ function rewrite(res, { kid, party, messages, design, partnerList }) {
       .on('#live-hero h1', { element(e) { e.setInnerContent(`${esc(kid.name)}'s <em>room reveal</em>`, { html: true }); } });
     // (in its sentences, as LivePage builds it: leadSentences)
     if (kid.summary) rw = rw.on('#live-hero [data-live="lead"]', { element(e) { e.setInnerContent(leadSentences(kid.summary).map((t) => `<span class="lead-s">${escHtml(t)}</span>`).join(' '), { html: true }); } });
+    // What the room is, under the name in the Theater, as LivePage builds it for a child's own page ("Therapy Room · 2026")
+    const roomTypes = Array.isArray(kid.data?.roomTypes) ? kid.data.roomTypes.filter((t) => typeof t === 'string' && t) : [];
+    const roomLine = roomTypes.length ? [roomTypes.join(', '), kid.data?.year].filter(Boolean).join(' · ') : '';
+    rw = rw.on('#live-hero [data-live="room"]', { element(e) {
+      e.setInnerContent(escHtml(roomLine), { html: true }); e.setAttribute('data-kid', kid.slug);
+      if (roomLine) e.removeAttribute('hidden'); else e.setAttribute('hidden', '');
+    } });
     // The build's partners, scrolling under the frame, as a child's own page has them from its build (LivePartners.astro)
     const partners = partnersBandInner(bandPartners(kid.data?.partnerLogos));
     if (partners) {

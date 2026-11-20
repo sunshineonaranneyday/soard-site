@@ -220,7 +220,7 @@ const probe = (page) => page.evaluate(() => {
     leaveLinks: [...document.querySelectorAll('.live-page a[href*="facebook.com"], .live-page a[href*="youtube.com"], .live-page a[href*="instagram.com"]')].filter((a) => vis(a) && !a.href.includes('sharer')).length,
     panelBeside: !!document.querySelector('[data-slot="hero"] [data-msgs="panel"]') && vis(document.querySelector('[data-msgs="panel"]')),
     form: r(document.querySelector('[data-msgs="form"]')), covered,
-    jump: vis(s('jump')) ? s('jump-label').textContent : null, mark: vis(s('mark')), cc: vis(s('cc')) ? s('cc-text').textContent : null,
+    jump: vis(s('mark')) ? s('mark').getAttribute('aria-label') : null, mark: vis(s('mark')), cc: vis(s('cc')) ? s('cc-text').textContent : null,
     give: vis(document.querySelector('.give__panel')) ? r(document.querySelector('.give__panel')) : null,
     overflowX: document.documentElement.scrollWidth - document.documentElement.clientWidth, vw: innerWidth, vh: innerHeight,
   };
@@ -738,12 +738,12 @@ try {
   console.log('\n▶ replay');
   state = STATES.replay;
   await open(page);
-  await page.waitForFunction(() => !document.querySelector('[data-s="jump"]')?.hidden, { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('[data-s="mark"]')?.hidden, { timeout: 15000 }).catch(() => {});
   await sleep(600);
   g = await probe(page);
   ok(g.mode === 'replay' && g.party && !g.heart, 'replay in the watch-party layout, no heart');
-  ok(g.mark && g.jump === 'Jump to the reveal', 'the reveal is marked on the seek bar, with a Jump button');
-  await page.click('[data-s="jump"]');
+  ok(g.mark && /^Jump to the reveal/.test(g.jump || ''), `the reveal is marked on the seek bar, its star the way there ("${g.jump}")`);
+  await page.click('[data-s="mark"]');
   await waitFor(page, ['playing']);
   await sleep(500);
   g = await probe(page);
@@ -978,7 +978,15 @@ try {
     const seen = (el) => !!el && !el.closest('[hidden]') && r(el).width > 0;
     const bar = r(document.querySelector('[data-s="bar"]'));
     const ctrls = [...document.querySelectorAll('[data-s="replaybar"] > *')].filter(seen);
-    const outside = ctrls.filter((el) => r(el).left < bar.left - 0.5 || r(el).right > bar.right + 0.5).map((el) => el.className.split(' ')[0]);
+    // (in the Theater on a computer, LivePage, the replay's buttons are a rail beside the picture and its line and time
+    // are under the picture, in the row kept for them: each is checked in its own place)
+    const pic0 = r(document.querySelector('.stage__picture'));
+    const railed = getComputedStyle(document.querySelector('.seek')).position === 'absolute';
+    const outside = ctrls.filter((el) => {
+      const b = r(el);
+      if (railed && el.matches('.seek, .bar__time')) return b.left < pic0.left - 0.5 || b.right > pic0.right + 0.5 || b.top < pic0.bottom - 0.5;
+      return b.left < bar.left - 0.5 || b.right > bar.right + 0.5;
+    }).map((el) => el.className.split(' ')[0]);
     const seek = r(document.querySelector('.seek'));
     const range = document.querySelector('[data-s="seek"]');
     const rr = r(range); const pad = parseFloat(getComputedStyle(range).paddingBottom) || 0;
@@ -991,9 +999,9 @@ try {
     const shown = [...time.children].filter((el) => r(el).width > 0 && r(el).top < tb.bottom - 1);
     const timeOut = shown.some((el) => r(el).left < seek.left - 0.5 || r(el).right > seek.right + 0.5);
     const timeText = shown.map((el) => el.textContent).join(' ');
-    const jump = document.querySelector('[data-s="jump"]');
-    const label = document.querySelector('[data-s="jump-label"]');
-    const jumpOk = !seen(jump) || (r(label).height <= 24 && r(label).top >= r(jump).top && r(label).bottom <= r(jump).bottom && r(label).right <= r(jump).right + 0.5);
+    // The reveal's time under its star, when it shows, never touches the line's two times (they never move for it)
+    const at = document.querySelector('[data-s="mark-at"]');
+    const atOk = !seen(at) || shown.every((el) => r(at).right <= r(el).left - 1 || r(at).left >= r(el).right + 1);
     const cc = document.querySelector('[data-s="cc-toggle"]');
     // The star stays on the line, clear of play and captions (its ring included), so it never takes their taps
     const ring = seen(mark) ? { l: r(mark).left - 3, r: r(mark).right + 3 } : null;
@@ -1002,12 +1010,12 @@ try {
     const mc = seen(mark) ? { x: r(mark).left + r(mark).width / 2, y: r(mark).top + r(mark).height / 2 } : null;
     const starTap = !mc || document.elementFromPoint(mc.x, mc.y) === document.querySelector('.seek');
     const pic = r(document.querySelector('.stage__picture'));
-    return { bar: Math.round(bar.width), outside, seek: Math.round(seek.width), markOff: Math.round(markOff * 10) / 10, timeOut, timeText, jumpOk, starIn, starTap, pic: Math.round(pic.width), ccShown: seen(cc), ccOn: cc?.getAttribute('aria-pressed') === 'true' };
+    return { bar: Math.round(bar.width), outside, seek: Math.round(seek.width), markOff: Math.round(markOff * 10) / 10, timeOut, timeText, atOk, starIn, starTap, pic: Math.round(pic.width), ccShown: seen(cc), ccOn: cc?.getAttribute('aria-pressed') === 'true' };
   });
   for (const [name, vp] of [['phone-toolbars', { width: 390, height: 664 }], ['small phone', { width: 360, height: 640 }], ['big phone', { width: 430, height: 740 }], ['laptop', { width: 1280, height: 720 }]]) {
     await page.setViewport({ ...vp, ...(vp.width < 500 ? { isMobile: true, hasTouch: true, deviceScaleFactor: 2 } : {}) });
     await open(page);
-    await page.waitForFunction(() => !document.querySelector('[data-s="jump"]')?.hidden, { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => !document.querySelector('[data-s="mark"]')?.hidden, { timeout: 15000 }).catch(() => {});
     await sleep(600);
     for (const want of [false, true]) {
       const before = await barFit();
@@ -1022,7 +1030,7 @@ try {
       ok(f.starTap, `a tap on the reveal mark goes to the line (${tag})`);
       // The bar takes the room it needs even when the picture is narrower (the picture keeps its size)
       ok(f.seek >= 100, `a line worth dragging (${tag}; picture ${f.pic})`);
-      ok(f.jumpOk, `Jump to the reveal stays on one line inside its button (${tag})`);
+      ok(f.atOk, `the reveal's time under its star stays clear of the line's two times (${tag})`);
       if (name === 'phone-toolbars') await page.screenshot({ path: `${OUT}replay-narrow-cc-${want ? 'on' : 'off'}.png` });
     }
     // Leave captions as a new visitor has them
@@ -1042,12 +1050,12 @@ try {
   for (const [w, h] of [[844, 390], [667, 375]]) {
     await page.setViewport({ width: w, height: h, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
     await open(page);
-    await page.waitForFunction(() => !document.querySelector('[data-s="jump"]')?.hidden, { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => !document.querySelector('[data-s="mark"]')?.hidden, { timeout: 15000 }).catch(() => {});
     await sleep(600);
     const sw = await page.evaluate(() => {
       const r = (s) => document.querySelector(s).getBoundingClientRect();
-      const pic = r('.stage__picture'), bar = r('[data-s="bar"]'), jump = r('[data-s="jump"]');
-      return { pic: [Math.round(pic.width), Math.round(pic.height)], picBottom: Math.round(pic.bottom), beside: bar.left >= pic.right, barTop: Math.round(bar.top), lowest: Math.round(Math.max(bar.bottom, jump.bottom, pic.bottom)), vh: innerHeight, sx: document.documentElement.scrollWidth - innerWidth };
+      const pic = r('.stage__picture'), bar = r('[data-s="bar"]');
+      return { pic: [Math.round(pic.width), Math.round(pic.height)], picBottom: Math.round(pic.bottom), beside: bar.left >= pic.right, barTop: Math.round(bar.top), lowest: Math.round(Math.max(bar.bottom, pic.bottom)), vh: innerHeight, sx: document.documentElement.scrollWidth - innerWidth };
     });
     ok(sw.beside && sw.pic[1] >= h * 0.6, `${w}×${h}: the picture is full height (${sw.pic.join('×')}) with the controls beside it`);
     ok(sw.lowest <= sw.vh && sw.sx <= 0, `${w}×${h}: all of it on the screen (lowest ${sw.lowest} of ${sw.vh}), no sideways scroll`);
@@ -1059,7 +1067,7 @@ try {
   feed.revealAt = 7.7;
   await page.setViewport({ width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   await open(page);
-  await page.waitForFunction(() => !document.querySelector('[data-s="jump"]')?.hidden && document.querySelector('video')?.duration > 0, { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('[data-s="mark"]')?.hidden && document.querySelector('video')?.duration > 0, { timeout: 15000 }).catch(() => {});
   await sleep(600);
   const star = await page.evaluate(() => {
     const m = document.querySelector('[data-s="mark"]').getBoundingClientRect();
@@ -1085,7 +1093,7 @@ try {
   // After the replay has ended, Jump (and the star) still go to the reveal, not back to 0:00
   await page.evaluate(() => { const v = document.querySelector('video'); v.currentTime = v.duration - 0.2; v.play(); });
   await page.waitForFunction(() => document.querySelector('[data-stage]')?.dataset.pstatus === 'ended', { timeout: 8000 }).catch(() => {});
-  await page.click('[data-s="jump"]');
+  await page.click('[data-s="mark"]');
   await sleep(700);
   g = await probe(page);
   ok(g.pstatus === 'playing' && g.time >= 2.5 && g.time < 4.5, `after the end, Jump plays from just before the reveal (${g.time?.toFixed(1)}s, ${g.pstatus})`);
@@ -1098,11 +1106,11 @@ try {
   for (const [w, h] of [[568, 320], [667, 375], [844, 390]]) {
     await page.setViewport({ width: w, height: h, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
     await open(page);
-    await page.waitForFunction(() => !document.querySelector('[data-s="jump"]')?.hidden && document.querySelector('.hero')?.hasAttribute('data-design'), { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => !document.querySelector('[data-s="mark"]')?.hidden && document.querySelector('.hero')?.hasAttribute('data-design'), { timeout: 15000 }).catch(() => {});
     await sleep(800);
     const look = () => page.evaluate(() => {
       const r = (s) => { const e = document.querySelector(s); if (!e || e.closest('[hidden]') || !e.getClientRects().length) return null; const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width }; };
-      const parts = { pic: r('.stage__picture'), cc: r('[data-s="cc"]'), bar: r('[data-s="bar"]'), jump: r('[data-s="jump"]'), strip: r('.hds') };
+      const parts = { pic: r('.stage__picture'), cc: r('[data-s="cc"]'), bar: r('[data-s="bar"]'), strip: r('.hds') };
       const list = Object.entries(parts).filter(([, b]) => b);
       const hit = [];
       for (let i = 0; i < list.length; i++) for (let j = i + 1; j < list.length; j++) { const [a, A] = list[i]; const [b, B] = list[j]; if (Math.min(A.r, B.r) - Math.max(A.l, B.l) > 0.5 && Math.min(A.b, B.b) - Math.max(A.t, B.t) > 0.5) hit.push(`${a}/${b}`); }
@@ -1119,22 +1127,24 @@ try {
 
   // Full screen held sideways, a wide picture: the controls beside it or under it, whichever leaves it bigger
   console.log('\n▶ full screen, sideways, a wide picture');
-  for (const [w, h, cc, beside] of [[844, 390, false, true], [844, 390, true, true], [667, 375, false, false], [667, 375, true, true]]) {
+  // (667×375 with captions: the controls fit under the picture since the Jump row went into the line as its star, Nov 19
+  // 2026, a bigger picture, 385×217, than beside it, 359×202)
+  for (const [w, h, cc, beside] of [[844, 390, false, true], [844, 390, true, true], [667, 375, false, false], [667, 375, true, false]]) {
     await page.setViewport({ width: w, height: h, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
     await open(page);
-    await page.waitForFunction(() => !document.querySelector('[data-s="jump"]')?.hidden, { timeout: 15000 }).catch(() => {});
+    await page.waitForFunction(() => !document.querySelector('[data-s="mark"]')?.hidden, { timeout: 15000 }).catch(() => {});
     await sleep(600);
     if ((await page.evaluate(() => document.querySelector('[data-s="cc-toggle"]').getAttribute('aria-pressed') === 'true')) !== cc) { await page.click('[data-s="cc-toggle"]'); await sleep(500); }
     await page.click('[data-s="replaybar"] [data-full]');
     await sleep(900);
     const fs = await page.evaluate(() => {
       const r = (s) => document.querySelector(s).getBoundingClientRect();
-      const pic = r('.stage__picture'), bar = r('[data-s="bar"]'), jump = r('[data-s="jump"]');
-      return { full: !!document.fullscreenElement, pic: [Math.round(pic.width), Math.round(pic.height)], beside: bar.left >= pic.right, lowest: Math.round(Math.max(pic.bottom, bar.bottom, jump.bottom)), vh: innerHeight };
+      const pic = r('.stage__picture'), bar = r('[data-s="bar"]');
+      return { full: !!document.fullscreenElement, pic: [Math.round(pic.width), Math.round(pic.height)], beside: bar.left >= pic.right, lowest: Math.round(Math.max(pic.bottom, bar.bottom)), vh: innerHeight };
     });
     // (stacked under it, the picture was 427×240 at 844×390, and 316×178 with captions)
     const stacked = Math.floor((h - 32 - 118 - (cc ? 59 : 0)) * 16 / 9);
-    ok(fs.full && fs.beside === beside && fs.pic[0] >= Math.min(stacked, w - 32) && fs.lowest <= fs.vh, `${w}×${h}${cc ? ', captions' : ''}: the picture ${fs.pic.join('×')}, controls ${fs.beside ? 'beside' : 'under'} it, all on the screen`);
+    ok(fs.full && fs.beside === beside && fs.pic[0] >= Math.min(stacked, w - 32) && fs.lowest <= fs.vh, `${w}×${h}${cc ? ', captions' : ''}: the picture ${fs.pic.join('×')}, controls ${fs.beside ? 'beside' : 'under'} it, all on the screen (lowest ${fs.lowest} of ${fs.vh})`);
     await page.evaluate(() => document.exitFullscreen());
     await sleep(400);
   }
@@ -1231,16 +1241,16 @@ try {
   feed.vtt = 'WEBVTT\n\n00:00:00.000 --> 00:00:07.900\nOkay everybody, on the count of three, open your eyes and take a look at your brand new room, we have been working on it for weeks and weeks\n';
   await page.setViewport({ width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   await open(page);
-  await page.waitForFunction(() => !document.querySelector('[data-s="jump"]')?.hidden, { timeout: 15000 }).catch(() => {});
+  await page.waitForFunction(() => !document.querySelector('[data-s="mark"]')?.hidden, { timeout: 15000 }).catch(() => {});
   await sleep(600);
   if (!(await page.evaluate(() => document.querySelector('[data-s="cc-toggle"]').getAttribute('aria-pressed') === 'true'))) { await page.click('[data-s="cc-toggle"]'); await sleep(700); }
   const capAt = async (t) => {
     await page.evaluate((t) => { const v = document.querySelector('video'); v.pause(); v.currentTime = t; }, t);
     await sleep(500);
-    return page.evaluate(() => { const c = document.querySelector('[data-s="cc"]').getBoundingClientRect(); const x = document.querySelector('[data-s="cc-text"]'); const j = document.querySelector('[data-s="jump"]').getBoundingClientRect(); return { h: Math.round(c.height), lines: Math.round(x.getBoundingClientRect().height / parseFloat(getComputedStyle(x).lineHeight)), text: x.textContent, jumpB: Math.round(j.bottom), vh: innerHeight }; });
+    return page.evaluate(() => { const c = document.querySelector('[data-s="cc"]').getBoundingClientRect(); const x = document.querySelector('[data-s="cc-text"]'); const j = document.querySelector('[data-s="bar"]').getBoundingClientRect(); return { h: Math.round(c.height), lines: Math.round(x.getBoundingClientRect().height / parseFloat(getComputedStyle(x).lineHeight)), text: x.textContent, jumpB: Math.round(j.bottom), vh: innerHeight }; });
   };
   const c1 = await capAt(0.5); const c2 = await capAt(7.5);
-  ok(c1.lines <= 2 && c2.lines <= 2 && c1.h === c2.h && c1.text !== c2.text && c2.jumpB <= c2.vh, `two lines at a time, the line one height (${c1.h}, ${c2.h}), Jump on the screen (${c2.jumpB} of ${c2.vh}): "${c1.text.slice(0, 30)}…" then "…${c2.text.slice(-30)}"`);
+  ok(c1.lines <= 2 && c2.lines <= 2 && c1.h === c2.h && c1.text !== c2.text && c2.jumpB <= c2.vh, `two lines at a time, the line one height (${c1.h}, ${c2.h}), the bar on the screen (${c2.jumpB} of ${c2.vh}): "${c1.text.slice(0, 30)}…" then "…${c2.text.slice(-30)}"`);
   // Paused on it, the phone turned: the caption is split again for its new width at once, never cut at a third line
   await page.setViewport({ width: 844, height: 390, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
   await sleep(900);
@@ -1326,10 +1336,17 @@ try {
         chips: el?.querySelectorAll('.lpb-chip').length || 0, shown: !!el && !el.hidden && el.getBoundingClientRect().height > 0,
         moving: !!row && getComputedStyle(row).transform !== t1, read: el?.querySelectorAll('img[alt]:not([alt=""])').length || 0,
         band: box(el), bar: box(document.querySelector('[data-s="bar"]')), pic: box(document.querySelector('.stage__picture')), stage: box(document.querySelector('[data-stage]')), vh: innerHeight,
+        col: (() => { const c = document.querySelector('.lsp'); return c && !c.hidden && c.getBoundingClientRect().height > 0 ? { ...box(c), logos: c.querySelectorAll('.lsp-card img').length, under: getComputedStyle(el.parentElement).visibility } : null; })(),
       };
     });
     if (!band.chips) { ok(true, `${KID} has no partners in this build: skipped`); break; }
     if (name === 'sideways') { ok(!band.shown, 'a phone held sideways: no partners under the picture, which keeps the screen’s height'); continue; }
+    // (the Theater on a computer: the build's sponsors in their own column beside the video, all on the screen, the band
+    // under the video giving its room back, unseen)
+    if (band.col) {
+      ok(band.col.logos > 0 && band.col.y >= 0 && band.col.b <= band.vh && band.col.under === 'hidden', `${name}: the partners in their column beside the video, on screen, the band under it put away (${band.col.logos} logos, column ${band.col.y}-${band.col.b} of ${band.vh})`);
+      continue;
+    }
     ok(band.shown && band.moving, `${name}: the partners scroll under the video (${band.chips} logos in the row, ${band.read} read out)`);
     ok(band.band.y >= band.bar.b && band.band.y >= band.pic.b && band.band.b <= band.vh, `${name}: under the bar, on screen with the video, never on it (band ${band.band.y}-${band.band.b}, bar to ${band.bar.b}, screen ${band.vh})`);
     ok(band.band.x >= band.stage.x - 1 && band.band.r <= band.stage.r + 1, `${name}: as wide as the video and what's beside it`);
