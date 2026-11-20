@@ -1731,16 +1731,24 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 
     // ── Share and Fund the next room in the Theater's rail (LiveStage; Peter, Nov 20 2026: "can you move the share and fund
     // a room in the rail where play and full screen etc are?") ──
-    // The rail's buttons are the head's, moved: each shows while its head button applies (hidden, capped), and a press on
-    // it is a press on the head's, so the Zeffy link, the give form beside the video and the share sheet stay one thing
+    // The rail's buttons are the head's, moved: each shows while its head button applies (not hidden), and a press on it
+    // is a press on the head's, so the Zeffy link, the give form beside the video and the share sheet stay one thing.
+    // (whether the head has room for it doesn't matter here: before the reveal the head's two are the reminder and the
+    // calendar, and Share and Fund are in the rail all the same; Peter, Nov 20 2026: "why doesnt fund the next room and
+    // share show before the reveal in the play rail?". Live and in the replay the head's two are these two anyway)
     const acts = [...hero.querySelectorAll<HTMLButtonElement>('[data-act]')];
     const actSource = (b: HTMLElement) => q<HTMLElement>(b.dataset.act === 'share' ? 'cta-share' : 'cta-donate');
+    // (Shop Sunny & Ranney, the rail's own link to the store, comes and goes with Fund the next room)
+    const shops = [...hero.querySelectorAll<HTMLElement>('[data-shop]')];
     const mirrorActs = () => {
       for (const b of acts) {
         const src = actSource(b);
-        const on = !!src && !src.hidden && !src.hasAttribute('data-capped');
+        const on = !!src && !src.hidden;
         if (b.hidden === on) b.hidden = !on;
       }
+      const donate = q<HTMLElement>('cta-donate');
+      const shopOn = !!donate && !donate.hidden;
+      for (const a of shops) if (a.hidden === shopOn) a.hidden = !shopOn;
     };
     for (const b of acts) b.addEventListener('click', () => actSource(b)?.click());
     const actWatch = new MutationObserver(mirrorActs);

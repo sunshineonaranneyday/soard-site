@@ -37,6 +37,10 @@
 import { cfRaw, cfSrcset, cfLqip } from '../../utils/cf-image';
 import { morphPath } from '../../utils/play-morph';
 
+// Sunny & Ranney, SOARD's store (its round logo: Gracie flying with her lamp, on the store's cyan)
+const SHOP = 'https://sunnyandranney.com/';
+const SHOP_LOGO = cfRaw('https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/partners/sunny-and-ranney/public', 'w=96,h=96,fit=cover,q=85');
+
 interface Props { photo: string; alt: string; partners?: boolean }
 const { photo, alt, partners = false } = Astro.props;
 
@@ -131,6 +135,10 @@ const ICON = {
              (LivePage mirrors whether each applies and passes the press on); never in a phone's bar -->
         <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
         <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund the next room</span></button>
+        <!-- Shop Sunny & Ranney, the store whose profits build the rooms (Peter, Nov 20 2026: "in the play rail, add a button
+             to shop at https://sunnyandranney.com/, use the logo with gracie holding lamp"): its own round logo, Gracie
+             flying with her lamp, under Fund; the store opens in a new tab, the reveal plays on. Shown with Fund (LivePage) -->
+        <a class="bar__btn bar__act bar__act--shop" href={SHOP} target="_blank" rel="noopener" data-shop aria-label="Shop Sunny & Ranney (opens the store in a new tab)" title="Shop Sunny & Ranney" hidden><span class="bar__ico"><img src={SHOP_LOGO} alt="" width="46" height="46" decoding="async" loading="lazy" /></span><span class="bar__lbl" aria-hidden="true">Shop</span></a>
         <!-- In the rail beside a portrait picture (data-rail): the hearts everyone sends float up here, beside the picture, never on it -->
         <span class="bar__rise" data-s="rise" aria-hidden="true"></span>
         <button class="bar__btn bar__heart" type="button" data-s="heart" aria-label="Send love to the family" title="Send love" hidden><span class="bar__ico"><Fragment set:html={ICON.heart} /></span></button>
@@ -166,6 +174,7 @@ const ICON = {
       <!-- (Share and Fund the next room, in the replay's rail as in live's) -->
       <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
       <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund the next room</span></button>
+      <a class="bar__btn bar__act bar__act--shop" href={SHOP} target="_blank" rel="noopener" data-shop aria-label="Shop Sunny & Ranney (opens the store in a new tab)" title="Shop Sunny & Ranney" hidden><span class="bar__ico"><img src={SHOP_LOGO} alt="" width="46" height="46" decoding="async" loading="lazy" /></span><span class="bar__lbl" aria-hidden="true">Shop</span></a>
     </div>
   </div>
 
@@ -231,6 +240,24 @@ const ICON = {
   }
   @media (min-width: 1200px) {
     .stage[data-party][data-orientation='portrait'][data-mode='upcoming']:not([data-fullscreen]) .stage__when:not([hidden]) { grid-area: auto; grid-row: 3; grid-column: 2; padding-top: 0; }
+  }
+  /* (with the rail beside the photo, holding Share and Fund the next room until the reveal: the rail's own rows, the
+     picture's and the line under it, where the replay's timeline goes; the server marks the rail from the first paint
+     wherever its styles apply, the same screens as live) */
+  @media (min-width: 961px), (min-width: 560px) and (min-aspect-ratio: 7/4) and (max-height: 540px) {
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) {
+      --below: calc(var(--line, 48px) + var(--under, 0px));
+      grid-template-rows: auto var(--line, 48px) auto;
+      grid-template-areas: '. screen . bar .' '. . . . .' 'under under under under under';
+    }
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .stage__when:not([hidden]) { grid-area: auto; grid-row: 2; grid-column: 2; padding-top: 0; }
+    /* (Share and Fund the next room in it on every screen it shows on, the computer Theater's rule below: before the
+       reveal they're all it holds, never an empty column) */
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__end > .bar__act:not([hidden]) { display: flex !important; }
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--fund .bar__ico { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); }
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop { text-decoration: none; color: var(--c-dark); }
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico { padding: 0; overflow: hidden; border-color: transparent; background: #3E9EBE; }
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; transform: scale(1.1); }
   }
   .stage__when-k {
     display: inline-flex; align-items: center; gap: 7px; font-size: 10.5px; font-weight: 800; letter-spacing: 0.14em;
@@ -487,7 +514,7 @@ const ICON = {
     .stage[data-rail] .bar__end > [hidden] { display: none; }
     /* One that comes (the picture starting, the sound going on, the heart once it's on air) grows in, a touch springy,
        while the others glide to their new places (live-stage.ts railChange) */
-    .stage[data-rail] .bar__end > button { animation: railIn 420ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+    .stage[data-rail] .bar__end > :is(button, a) { animation: railIn 420ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
     @keyframes railIn { from { opacity: 0; transform: scale(0.6); } }
     .stage[data-rail] .bar__btn:hover { background: none; }
     .stage[data-rail] .bar__ico {
@@ -634,6 +661,15 @@ const ICON = {
     .stage[data-party][data-orientation='portrait'][data-rail]:not([data-fullscreen]) .bar__end > .bar__act:not([hidden]) { display: flex !important; }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__act:not([hidden]) { display: grid !important; }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--fund .bar__ico { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); }
+    /* (the shop: its own round logo fills the circle; a link, so no underline and the rail's ink) */
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop { text-decoration: none; color: var(--c-dark); }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop .bar__ico { padding: 0; overflow: hidden; border-color: transparent; background: #3E9EBE; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop .bar__ico img { display: block; width: 100%; height: 100%; object-fit: cover; border-radius: 50%; transform: scale(1.1); }
+    /* (live, with Shop there too: a rail that still runs past the picture's foot loses its words, Tap for sound's kept,
+       and its buttons sit closer, as the replay's does; live-stage.ts measures it, data-rail-fit) */
+    .stage[data-rail] .bar__end[data-rail-fit] { gap: 10px !important; }
+    .stage[data-rail] .bar__end[data-rail-fit] > :is(button, a) { min-height: 0 !important; }
+    .stage[data-rail] .bar__end[data-rail-fit] :is(.bar__lbl, .bar__behind) { display: none !important; }
     @media (hover: hover) {
       .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--fund:hover .bar__ico { background: var(--c-yellow); border-color: var(--c-yellow); }
       .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--share:hover .bar__ico { border-color: var(--c-dark); }
@@ -992,7 +1028,7 @@ const ICON = {
   @media (prefers-reduced-motion: reduce) {
     .stage__accent { animation: none; opacity: 0.35; }
     .bar__sound, .bar__heart.is-beat, .stage[data-party] .stage__picture.is-docked { animation: none; }
-    .stage[data-rail] .bar__sound .bar__ico, .stage[data-rail] .bar__ico, .stage[data-rail] .bar__end > button { animation: none; transition: none; }
+    .stage[data-rail] .bar__sound .bar__ico, .stage[data-rail] .bar__ico, .stage[data-rail] .bar__end > :is(button, a) { animation: none; transition: none; }
     .bar__rise { display: none !important; }
     .stage__end, .stage__end-btn { animation: none; }
     .stage__end-fill { transition: none; }

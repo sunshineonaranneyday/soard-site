@@ -258,7 +258,9 @@ function rewrite(res, { kid, party, messages, design, partnerList }) {
       .on('#live-hero', setAttrs({ 'data-phase': party.mode, ...shape }))
       // A live upright picture has its controls in a rail beside it (LiveStage, live-stage.ts's data-rail; its styles never
       // apply to a phone held sideways, which the server can't know): the page is laid out for that from the first paint
-      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': null, 'data-rail': party.mode === 'live' && party.orientation === 'portrait' ? '' : null }))
+      // (before the reveal too, where Share and Fund the next room sit in it: the script shows the bar for them, keeping
+      // it hidden on a phone held upright, which this mark does nothing to)
+      .on('#live-hero [data-stage]', setAttrs({ 'data-mode': party.mode, ...shape, 'data-onair': null, 'data-rail': (party.mode === 'live' || party.waiting) && party.orientation === 'portrait' ? '' : null }))
       // (before the reveal, nothing to control: no bar, and when it goes live under the photo instead, below)
       .on('#live-hero [data-s="bar"]', setAttrs({ hidden: party.waiting ? '' : null }))
       .on('#live-hero [data-live="eyebrow"]', { element(e) { e.setInnerContent(words.eyebrow); } })

@@ -626,7 +626,11 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // the bar under both; Peter, Nov 20 2026: "Keep pictures beside video")
     // (in a computer's Theater it stays through "That's the reveal!", holding only Share and Fund the next room then: the
     // rail's place is kept there anyway, LivePage, and the two aren't lost at the moment they matter most)
-    const rail = party && live && (!endShown || theater.matches) && shape() === 'portrait' && document.fullscreenElement !== root && !upright.matches;
+    // (and before the reveal (StageView.waiting), holding just Share and Fund the next room, wherever the live picture will
+    // have its rail: the photo is where the video will be and the rail where its controls will be, so going live only
+    // fills it; Peter, Nov 20 2026: "why doesnt fund the next room and share show before the reveal in the play rail?")
+    const waitingNow = party && view.mode === 'upcoming' && !!view.waiting;
+    const rail = party && (live || waitingNow) && (!endShown || theater.matches) && shape() === 'portrait' && document.fullscreenElement !== root && !upright.matches;
     flag('data-rail', rail);
 
     // Photo badge, before the watch party only
@@ -654,8 +658,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
 
     // Bar
     // (none under "That's the reveal!": nothing in it is shown then, the live video kept under the note included; but the
-    // Theater's rail, which still holds Share and Fund the next room. And none before the reveal: nothing to control)
-    setHidden($('bar'), !party || (endShown && !rail) || !!waiting);
+    // Theater's rail, which still holds Share and Fund the next room. Before the reveal only as the rail, for those two:
+    // nothing to control yet)
+    setHidden($('bar'), !party || (endShown && !rail) || (!!waiting && !rail));
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);
@@ -716,6 +721,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     paintMark();
     paintJump(v?.currentTime ?? 0);
     fitRail();
+    fitLiveRail();
   }
 
   // The replay's rail beside the picture (one layout, live and in the replay, on a computer's Theater: LiveStage) on a
@@ -729,7 +735,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const bar = $('replaybar');
     if (!bar) return;
     const railed = !bar.hidden && getComputedStyle(bar).flexDirection === 'column';
-    const shown = [...bar.children].filter((el) => el.tagName === 'BUTTON' && (!(el as HTMLElement).hidden || el.matches('.bar__cc'))).length;
+    // (the shop is a link: it counts as a button here)
+    const shown = [...bar.children].filter((el) => (el.tagName === 'BUTTON' || el.matches('a.bar__act')) && (!(el as HTMLElement).hidden || el.matches('.bar__cc'))).length;
     const sig = railed ? `${bar.clientHeight}|${shown}` : '';
     if (sig === railSig) return;
     railSig = sig;
@@ -739,6 +746,28 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       if (bar.scrollHeight <= bar.clientHeight + 1) break;
       bar.dataset.railFit = step;
     }
+  }
+
+  // The live rail, the same way (Peter, Nov 20 2026: Shop Sunny & Ranney joined Share and Fund there): with every button
+  // it can have (From the start or Back to live, Share, Fund, Shop) a laptop's rail runs past the picture's foot by a
+  // little; then the words go, Tap for sound's kept, and the buttons sit closer (data-rail-fit). Measured, again only when
+  // the rail's height or which buttons show changes
+  let liveRailSig = '';
+  function fitLiveRail() {
+    const end = root.querySelector<HTMLElement>('[data-s="livebar"] .bar__end');
+    if (!end) return;
+    const railed = root.hasAttribute('data-rail') && !end.closest('[hidden]') && end.clientHeight > 0;
+    const shown = [...end.children].filter((el) => (el.tagName === 'BUTTON' || el.tagName === 'A') && !(el as HTMLElement).hidden && getComputedStyle(el).display !== 'none').length;
+    const sig = railed ? `${end.clientHeight}|${shown}` : '';
+    if (sig === liveRailSig) return;
+    liveRailSig = sig;
+    delete end.dataset.railFit;
+    if (!railed) return;
+    // (its last button past the rail's foot: the hearts' column between gives way first, so only a real overflow counts;
+    // the rail's own scroll height counted that column's spare room too, and said a rail of three buttons was full)
+    const shownEls = [...end.children].filter((el) => (el.tagName === 'BUTTON' || el.tagName === 'A') && !(el as HTMLElement).hidden && getComputedStyle(el).display !== 'none');
+    const lastEl = shownEls[shownEls.length - 1];
+    if (lastEl && lastEl.getBoundingClientRect().bottom > end.getBoundingClientRect().bottom + 1) end.dataset.railFit = 'short';
   }
 
   // The line while the replay is being made (END_LINE_MAX above): drawn every second, the transition between draws
@@ -1231,9 +1260,11 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const roomWatch = 'ResizeObserver' in window ? new ResizeObserver(() => { paintCaption(video()?.currentTime ?? 0); paintMark(); }) : null;
   for (const el of [$('cc'), seek?.parentElement]) if (el) roomWatch?.observe(el);
   // (the replay's rail, when the picture beside it changes height)
-  const railWatch = 'ResizeObserver' in window ? new ResizeObserver(() => fitRail()) : null;
+  const railWatch = 'ResizeObserver' in window ? new ResizeObserver(() => { fitRail(); fitLiveRail(); }) : null;
   const replayBar = $('replaybar');
   if (replayBar) railWatch?.observe(replayBar);
+  const liveEnd = root.querySelector<HTMLElement>('[data-s="livebar"] .bar__end');
+  if (liveEnd) railWatch?.observe(liveEnd);
 
   // ── Which way round, on a phone held sideways ──
   // LiveStage has more than one way to lay the stage out there (data-fit): in full screen, the controls beside the
