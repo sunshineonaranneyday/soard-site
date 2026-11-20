@@ -124,8 +124,8 @@ const ICON = {
         </button>
         <!-- Going back through the broadcast so far (Cloudflare keeps it as it goes): from its start, then back to the
              live moment, with how far behind you are -->
-        <button class="bar__btn bar__dvr" type="button" data-s="from-start" aria-label="Watch from the start" title="From the start" hidden><span class="bar__ico"><Fragment set:html={ICON.fromStart} /></span><span class="bar__lbl" aria-hidden="true">From the start</span></button>
-        <button class="bar__btn bar__dvr bar__tolive" type="button" data-s="to-live" aria-label="Back to live" title="Back to live" hidden><span class="bar__ico"><Fragment set:html={ICON.toLive} /></span><span class="bar__lbl" aria-hidden="true">Back to live</span><span class="bar__behind" data-s="behind" aria-hidden="true"></span></button>
+        <button class="bar__btn bar__dvr" type="button" data-s="from-start" aria-label="Watch from the start" title="From the start" hidden><span class="bar__ico"><Fragment set:html={ICON.fromStart} /></span><span class="bar__lbl" aria-hidden="true">Rewind</span></button>
+        <button class="bar__btn bar__dvr bar__tolive" type="button" data-s="to-live" aria-label="Back to live" title="Back to live" hidden><span class="bar__ico"><Fragment set:html={ICON.toLive} /></span><span class="bar__lbl" aria-hidden="true">Live</span><span class="bar__behind" data-s="behind" aria-hidden="true"></span></button>
         <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)" hidden><span class="bar__ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
         <!-- The room's before photos and plans (live-design.ts opens its viewer; the video stays small in the corner): the
              rail sits where the design's strip did, so it's the way in. Its face is the room's first picture -->
@@ -133,8 +133,8 @@ const ICON = {
         <!-- Share and Fund the next room, in the Theater's rail on a computer (Peter, Nov 20 2026: "can you move the share
              and fund a room in the rail where play and full screen etc are?"): the head's own buttons, pressed from here
              (LivePage mirrors whether each applies and passes the press on); never in a phone's bar -->
-        <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
-        <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund the next room</span></button>
+        <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" title="Share this reveal" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
+        <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" title="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund</span></button>
         <!-- Shop Sunny & Ranney, the store whose profits build the rooms (Peter, Nov 20 2026: "in the play rail, add a button
              to shop at https://sunnyandranney.com/, use the logo with gracie holding lamp"): its own round logo, Gracie
              flying with her lamp, under Fund; the store opens in a new tab, the reveal plays on. Shown with Fund (LivePage) -->
@@ -172,8 +172,8 @@ const ICON = {
       <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden><span class="bar__cc-ico">CC</span><span class="bar__lbl" aria-hidden="true">Captions</span></button>
       <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)"><span class="bar__full-ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
       <!-- (Share and Fund the next room, in the replay's rail as in live's) -->
-      <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
-      <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund the next room</span></button>
+      <button class="bar__btn bar__act bar__act--share" type="button" data-act="share" aria-label="Share" title="Share this reveal" hidden><span class="bar__ico"><Fragment set:html={ICON.share} /></span><span class="bar__lbl" aria-hidden="true" data-act-label>Share</span></button>
+      <button class="bar__btn bar__act bar__act--fund" type="button" data-act="fund" aria-label="Fund the next room" title="Fund the next room" hidden><span class="bar__ico"><Fragment set:html={ICON.fund} /></span><span class="bar__lbl" aria-hidden="true">Fund</span></button>
       <a class="bar__btn bar__act bar__act--shop" href={SHOP} target="_blank" rel="noopener" data-shop aria-label="Shop Sunny & Ranney (opens the store in a new tab)" title="Shop Sunny & Ranney" hidden><span class="bar__ico"><img src={SHOP_LOGO} alt="" width="46" height="46" decoding="async" loading="lazy" /></span><span class="bar__lbl" aria-hidden="true">Shop</span></a>
     </div>
   </div>
@@ -255,7 +255,7 @@ const ICON = {
        reveal they're all it holds, never an empty column) */
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__end > .bar__act:not([hidden]) { display: flex !important; }
     /* (each slot one height, a one-line word or two, so the circles step evenly down the rail) */
-    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__end > :is(button, a):not(.bar__heart) { min-height: 78px; justify-content: flex-start; }
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__end > :is(button, a):not(.bar__heart) { min-height: 0; justify-content: flex-start; }
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--fund .bar__ico { background: var(--c-yellow-soft); border-color: var(--c-yellow-soft); }
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop { text-decoration: none; color: var(--c-dark); }
     .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico { padding: 0; overflow: hidden; border-color: transparent; background: #3E9EBE; }
@@ -638,7 +638,7 @@ const ICON = {
       display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: 46px auto; justify-items: center; align-content: start; row-gap: 6px; flex-shrink: 0; width: 100%; height: auto; margin: 0; padding: 0;
       border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--c-dark); font: inherit; transform: none;
     }
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button[hidden] { display: none; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a)[hidden] { display: none; }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__cc[hidden] { display: grid; visibility: hidden; }
     /* (the round parts: play's ink with its icon on it, the others white with a hairline, as the live rail's) */
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) {
@@ -691,7 +691,31 @@ const ICON = {
       .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > .bar__act.bar__act--fund:hover .bar__ico { background: var(--c-yellow); border-color: var(--c-yellow); }
       .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--share:hover .bar__ico { border-color: var(--c-dark); }
     }
-    /* (live, with them there: on a shorter window the slots take their own heights and sit closer, then the words go,
+
+    /* ── The rail as one designed thing (Peter, Nov 20 2026: "can you improve the layout and design of the play rail? top
+       tier, best in class!"): two groups, the video's own controls, then what you can do for the family (Share, Fund,
+       Shop) with a hairline between; every word one line, every slot the same height and gap; one circle for all, Fund
+       the one soft yellow, the shop's logo inside the same ringed circle; each button's full name on hover and for a
+       screen reader. Never on the picture ── */
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a) .bar__lbl { white-space: nowrap; }
+    .stage[data-party][data-orientation='portrait'][data-rail]:not([data-fullscreen]) .bar__end { gap: 12px; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:not([hidden]) { gap: 12px; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--share { position: relative; margin-top: 10px; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--share::before { content: ''; position: absolute; left: 50%; top: -11px; width: 22px; height: 1px; margin-left: -11px; background: var(--c-border); }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__act--share:not([hidden]) { margin-top: 10px; }
+    /* (before the reveal the actions are all the rail holds: no gap or line above them) */
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--share { margin-top: 0; }
+    .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--share::before { display: none; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop .bar__ico, .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico { padding: 3px; border: 1px solid var(--c-border); background: #fff; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop .bar__ico img, .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico img { transform: none; }
+    /* hover: the ring goes ink and the circle lifts a touch; a press presses it in */
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a) :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1), border-color 150ms ease, background 150ms ease, box-shadow 150ms ease; }
+    @media (hover: hover) {
+      .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):hover :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(30, 31, 37, 0.12); }
+      .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):not(.bar__act--fund):hover :is(.bar__cc-ico, .bar__full-ico, .bar__ico) { border-color: var(--c-dark); }
+    }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):active :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { transform: scale(0.92); box-shadow: none; transition-duration: 80ms; }
+    @media (prefers-reduced-motion: reduce) { .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a) :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { transition: none; transform: none !important; } }    /* (live, with them there: on a shorter window the slots take their own heights and sit closer, then the words go,
        Tap for sound's kept, so the heart still sits at the picture's foot) */
     @container rail (max-height: 560px) {
       .bar__end:has(> .bar__act:not([hidden])) { gap: 10px !important; }

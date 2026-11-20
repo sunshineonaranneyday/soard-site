@@ -655,7 +655,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         width: min(var(--stage-max, 100%), calc(var(--pic) + var(--rail-gap) + var(--rail)));
       }
       .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-rail] .bar__end > :is(button, a):not(.bar__heart)),
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act)) { min-height: 78px; justify-content: flex-start; }
+      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act)) { min-height: 0; justify-content: flex-start; }
 
       /* Before the reveal (the Theater all through its day): its two buttons as quiet as Fund and Share are then, the
          reminder a soft yellow and the calendar an outline */
