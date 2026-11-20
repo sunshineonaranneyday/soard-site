@@ -239,7 +239,10 @@ The admin panel can also trigger deploys after content changes via the `/api/dep
 | Binding | Type | Name |
 |---------|------|------|
 | `DB` | D1 Database | soard-db |
-| `FILES` | R2 Bucket | soard-files |
+| `FILES` | R2 Bucket | soard-files (public: financials/ and advisory/ only) |
+| `VENDOR_FILES` | R2 Bucket | soard-vendor-docs (private) |
+| `APPLICANT_FILES` | R2 Bucket | soard-applicant-files (private) |
+| `BOARD_FILES` | R2 Bucket | soard-board-files (private) |
 | `AI` | Workers AI | — |
 
 ### Environment Variables (CF Pages Dashboard)

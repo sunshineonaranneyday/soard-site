@@ -498,7 +498,7 @@ export async function gatherFacts(env, { fetchImpl = fetch, now = Date.now() } =
   return {
     checkedAt: new Date(now).toISOString(),
     env: envFacts(env),
-    bindings: { db: !!env.DB, files: !!env.FILES, vendorFiles: !!env.VENDOR_FILES, ai: !!env.AI, hub: !!env.LIVE_HUB },
+    bindings: { db: !!env.DB, files: !!env.FILES, vendorFiles: !!env.VENDOR_FILES, applicantFiles: !!env.APPLICANT_FILES, boardFiles: !!env.BOARD_FILES, ai: !!env.AI, hub: !!env.LIVE_HUB },
     broadcast: broadcastFacts(ok(cfg), alertTexts),
     health: healthFacts(ok(health)),
     hub: hub?.error && !hub.bound

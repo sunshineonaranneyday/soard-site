@@ -25,6 +25,20 @@ bucket_name = "soard-files"
 binding = "VENDOR_FILES"
 bucket_name = "soard-vendor-docs"
 
+# Families' applications: their photos, the application PDF and the archived Jotform
+# applications (applications/, jotform-archive/; applicantFiles() in
+# functions/api/_applications.js). A bucket of its own with no public address, like
+# the vendor papers: a child's diagnosis and a family's home never sit in soard-files.
+[[r2_buckets]]
+binding = "APPLICANT_FILES"
+bucket_name = "soard-applicant-files"
+
+# The board's and the Advisory Board's papers: meeting files, signed copies, the
+# document library (board/; boardFiles() in functions/api/_board.js). No public address.
+[[r2_buckets]]
+binding = "BOARD_FILES"
+bucket_name = "soard-board-files"
+
 # A real browser (Cloudflare Browser Rendering) for pages that turn the server
 # away: Google answers plain requests from Workers with its "unusual traffic"
 # page, and some news sites answer 403. Used by the press monitor
