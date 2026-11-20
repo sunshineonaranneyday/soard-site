@@ -99,6 +99,13 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       <!-- (in its sentences: the story column beside a live video shows the first whole one) -->
       <p class="hero-lead" data-live="lead">{leadSentences(summary || GENERIC_LEAD).map((t, i) => <Fragment>{i ? ' ' : ''}<span class="lead-s">{t}</span></Fragment>)}</p>
       <p class="hero-status" data-live="status" aria-live="polite"></p>
+      <!-- Before a reveal: where and when to watch it, in place of the sentence above (watchWords in live-hero-text.ts; the
+           server writes it first). Not a button: it says where and when; nothing goes on the photo until it's the video
+           (Peter, Nov 19 2026: "Push the card only") -->
+      <p class="hero-watch" data-live="watch" hidden>
+        <span class="hero-watch__play"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5z" fill="currentColor"/></svg></span>
+        <span class="hero-watch__txt"><span class="hero-watch__k">Watch it live, right here</span> <span class="hero-watch__when" data-live="watch-when"></span> <span class="hero-watch__in" data-live="watch-sub"></span></span>
+      </p>
       <!-- The reveals after this one, on a child's page or while /live/ follows one: "After Dylan: Max on Friday, November 20 and Colin in early December" -->
       <p class="hero-next" data-live="next-line" hidden><span data-live="next-text"></span> <a href="#up-next">See every reveal</a></p>
       <!-- The room as it is and the plan, beside the video during the watch party on a computer (LiveRoom) -->
@@ -293,6 +300,28 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     opacity: 0; animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
   }
   .hero-status:empty { margin-bottom: 20px; }
+  .hero-status[hidden] { display: none; }
+  /* The watch card: a dark pill with a play mark, "Watch it live, right here" and when */
+  .hero-watch {
+    display: inline-flex; align-items: center; gap: 16px; max-width: 100%; margin: 4px 0 30px; padding: 10px 30px 10px 10px;
+    border-radius: 999px; background: var(--c-dark-deep); color: var(--c-cream); text-align: left;
+    box-shadow: 0 16px 36px rgba(30, 31, 37, 0.16);
+    opacity: 0; animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
+  }
+  .hero-watch[hidden] { display: none; }
+  .hero-watch__play { flex: none; position: relative; width: 58px; height: 58px; border-radius: 50%; background: var(--c-yellow); color: var(--c-dark); display: grid; place-items: center; }
+  .hero-watch__play svg { width: 22px; height: 22px; margin-left: 3px; }
+  /* (on the day itself, a ring round it) */
+  .hero-watch[data-today] .hero-watch__play::after { content: ''; position: absolute; inset: -5px; border-radius: 50%; border: 2px solid rgba(255, 218, 36, 0.55); }
+  .hero-watch__txt { min-width: 0; }
+  .hero-watch__k { display: block; margin-bottom: 5px; font-size: 11.5px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-yellow); }
+  .hero-watch__when, .hero-watch__in { font-family: var(--font-display); font-size: clamp(1.02rem, 1.5vw, 1.22rem); line-height: 1.35; }
+  /* (wrapped on the narrowest phones as "Today at / 4:00 PM EST", never leaving "EST" on a line of its own: set on the
+     box, as the time is an inline run in it) */
+  .hero-watch__txt { text-wrap: balance; }
+  .hero-watch__in { color: rgba(254, 252, 245, 0.66); white-space: nowrap; }
+  .hero-watch__in::before { content: '· '; }
+  .hero-watch__in:empty { display: none; }
   .hero-next { margin: -16px 0 28px; font-size: 15px; line-height: 1.6; color: var(--c-text-muted); max-width: 520px; }
   .hero-next[hidden] { display: none; }
   .hero-next a { color: var(--c-dark); font-weight: 600; text-decoration: underline; text-decoration-color: var(--c-yellow); text-decoration-thickness: 2px; text-underline-offset: 3px; white-space: nowrap; }
@@ -336,8 +365,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
      picture only ('old': morph() marks the page so until it draws the new): going live it folds away, and a named
      part that stops being drawn mid-way ends the whole morph there, the frame's glide cut short) */
   :global(html[data-live-morph='old']) .hero-status { view-transition-name: live-status; }
+  :global(html[data-live-morph='old']) .hero-watch { view-transition-name: live-watch; }
   :global(html[data-live-morph] .hero [data-live-partners]) { view-transition-name: live-partners; }
   :global(html[data-live-morph]::view-transition-group(live-status)),
+  :global(html[data-live-morph]::view-transition-group(live-watch)),
   :global(html[data-live-morph]::view-transition-group(live-partners)),
   :global(html[data-live-morph]::view-transition-group(live-eyebrow)),
   :global(html[data-live-morph]::view-transition-group(live-title)),
@@ -348,14 +379,15 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   :global(html[data-live-morph]::view-transition-old(live-title)), :global(html[data-live-morph]::view-transition-new(live-title)),
   :global(html[data-live-morph]::view-transition-old(live-lead)), :global(html[data-live-morph]::view-transition-new(live-lead)),
   :global(html[data-live-morph]::view-transition-old(live-ctas)), :global(html[data-live-morph]::view-transition-new(live-ctas)),
-  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-new(live-status)) {
+  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-new(live-status)),
+  :global(html[data-live-morph]::view-transition-old(live-watch)) {
     height: 100%; width: auto; object-fit: contain; object-position: left top;
   }
   /* (words one after the other, never both at once: the old out quickly as it starts to move, the new in as it
      arrives; the page behind them is the same cream either way, so nothing blinks) */
   :global(html[data-live-morph]::view-transition-old(live-eyebrow)), :global(html[data-live-morph]::view-transition-old(live-title)),
   :global(html[data-live-morph]::view-transition-old(live-lead)), :global(html[data-live-morph]::view-transition-old(live-ctas)),
-  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-old(live-partners)) { animation: 0.12s cubic-bezier(0.4, 0, 1, 1) both vt-fade-out; mix-blend-mode: normal; }
+  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-old(live-watch)), :global(html[data-live-morph]::view-transition-old(live-partners)) { animation: 0.12s cubic-bezier(0.4, 0, 1, 1) both vt-fade-out; mix-blend-mode: normal; }
   :global(html[data-live-morph]::view-transition-new(live-eyebrow)), :global(html[data-live-morph]::view-transition-new(live-title)),
   :global(html[data-live-morph]::view-transition-new(live-lead)), :global(html[data-live-morph]::view-transition-new(live-ctas)),
   :global(html[data-live-morph]::view-transition-new(live-status)), :global(html[data-live-morph]::view-transition-new(live-partners)) { animation: 0.24s cubic-bezier(0, 0, 0.2, 1) 0.1s both vt-fade-in; mix-blend-mode: normal; }
@@ -560,6 +592,39 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     .live-grid { grid-template-columns: 1fr; }
     .live-side { position: static; }
 
+    /* Before a reveal (the frame holding the child's photo, not the watch party): the child's name, when to watch, the
+       photo it plays in, then the story and the buttons (Peter, Nov 19 2026: "the mobile layout should be better
+       designed"; the story, the sentence and two buttons came first, the photo a screen further down). /live/ between
+       reveals, whose frame lists what's coming up, keeps its order */
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-inner { gap: 0; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-text { display: contents; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-eyebrow { order: 1; margin-bottom: 14px; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-titlerow,
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-text h1 { order: 2; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-text h1 { margin-bottom: 20px; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-status { order: 3; margin: 0 auto 28px; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-status:empty { display: none; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-watch { order: 3; width: 100%; max-width: 360px; margin: 0 auto 28px; padding-right: 20px; gap: 14px; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__play { width: 52px; height: 52px; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__when { font-size: 1.05rem; }
+    /* (how long to go on its own line under the time, in the page's own type) */
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__in { display: block; margin-top: 2px; font-family: var(--font-body); font-size: 14px; white-space: normal; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__in::before { content: none; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-frame { order: 4; max-width: min(340px, 82vw); }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-lead { order: 5; margin: 36px auto 16px; font-size: 16px; line-height: 1.65; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-next { order: 6; margin: 0 auto 26px; font-size: 14.5px; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-ctas { order: 7; flex-direction: column; align-items: stretch; gap: 10px; width: 100%; max-width: 360px; margin: 0 auto; }
+    .live-page:not([data-next]) .hero:not([data-party]) .hero-ctas > * { width: 100%; justify-content: center; }
+    /* The narrowest phones (320 wide): a smaller play button and type, and a card's rounded corners rather than a pill's,
+       so a label that still takes two lines sits in a tidy card, not a bulging oval */
+    @media (max-width: 374px) {
+      .live-page:not([data-next]) .hero:not([data-party]) .hero-watch { border-radius: 24px; padding: 12px 16px 12px 12px; gap: 12px; }
+      .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__play { width: 44px; height: 44px; }
+      .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__play svg { width: 18px; height: 18px; }
+      .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__k { font-size: 10.5px; letter-spacing: 0.1em; margin-bottom: 4px; }
+      .live-page:not([data-next]) .hero:not([data-party]) .hero-watch__when { font-size: 0.98rem; }
+    }
+
     /* Phones and tablets: the kid's name, then the video as big as fits under it, then the messages */
     .hero[data-party] .hero-inner, .hero[data-party][data-orientation='landscape'] .hero-inner { gap: 0; }
     .hero[data-party] .hero-text { display: contents; }
@@ -648,7 +713,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   }
   @container story (max-height: 540px) { .hero-text .hero-lead { display: none; } }
   @media (prefers-reduced-motion: reduce) {
-    .hero-text h1, .hero-lead, .hero-status, .hero-ctas, .hero-frame { animation: none; opacity: 1; }
+    .hero-text h1, .hero-lead, .hero-status, .hero-watch, .hero-ctas, .hero-frame { animation: none; opacity: 1; }
     .hero-eyebrow__dot::after, .hero-onair__dot::after { animation: none; }
   }
 </style>
@@ -669,7 +734,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   import { cfRaw } from '../../utils/cf-image';
   import { readUpcoming, loadSignup, inviteData, inviteLinks, scheduleOnPage, type UpcomingReveal } from '../../utils/reveals-client';
   import { heroRowsHtml, rowsSignature, afterLine } from '../../utils/upcoming-rows';
-  import { afterReveal, momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences } from '../../utils/live-hero-text';
+  import { afterReveal, momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences, watchWords } from '../../utils/live-hero-text';
   import { onPageLoad } from '../../utils/page-load';
 
   // The hero's buttons, two at most, and which apply when: src/utils/live-hero-text.ts (HERO_CTAS, ctasThatApply), shared
@@ -1223,6 +1288,20 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         if (eyebrow) eyebrow.textContent = 'Live reveal';
         setStatus(idleStatus());
       }
+      // The watch card before a reveal, in place of the sentence (watchWords: the server wrote the same)
+      // (between reveals only from the schedule as it is now, never the build's copy: refreshUpcoming draws again when it's in)
+      const ww = party || (view === 'idle' && !upcomingLoaded) ? null : watchWords({ view, scheduledAt: s.scheduledAt || null, pageKid, upcoming });
+      const watch = q<HTMLElement>('watch');
+      if (watch) {
+        setHidden(watch, !ww);
+        if (ww) {
+          setAttr(watch, 'data-today', ww.today);
+          const wWhen = q<HTMLElement>('watch-when'); const wSub = q<HTMLElement>('watch-sub');
+          if (wWhen && wWhen.textContent !== ww.when) wWhen.textContent = ww.when;
+          if (wSub && wSub.textContent !== ww.sub) wSub.textContent = ww.sub;
+        }
+      }
+      setHidden(status, !!ww);
 
       // What's coming up fills the frame on /live/ between reveals (as the build had it until the live list arrives)
       if (page && !pageKid) setAttr(page, 'data-next', display === 'idle' && (upcomingLoaded ? upcoming.length > 0 : page.hasAttribute('data-next')));

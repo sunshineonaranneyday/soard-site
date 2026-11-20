@@ -51,7 +51,7 @@ import { cardFor } from '../_og-cards.js';
 import { edgeSchedule, scheduleAttr } from '../_kid-reveal.js';
 import { onBands } from '../_upcoming-band.js';
 import { heroRowsHtml, rowsSignature, afterLine } from '../../src/utils/upcoming-rows.ts';
-import { momentWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences } from '../../src/utils/live-hero-text.ts';
+import { momentWords, watchWords, betweenText, ctasThatApply, ctaPicks, remindParts, remindWords, leadSentences } from '../../src/utils/live-hero-text.ts';
 import { inviteData, inviteLinks } from '../../src/utils/reveals-client.ts';
 import { messagesOpen, shownMessages } from '../api/_live-messages.js';
 import { messageInitial, messageTone, latestLine, LATEST_HEART } from '../../src/utils/live-message-look.ts';
@@ -410,9 +410,13 @@ export function firstView({ state, pub, pageKid = '', party = null, rows = null,
   if (party || !state) return null;
   const ours = !pageKid || pub?.kidSlug === pageKid;
   const phase = ours ? state.phase : 'idle';
-  if (phase === 'scheduled' || phase === 'armed') return { view: 'upcoming', ...momentWords({ view: 'upcoming', scheduledAt: state.scheduledAt || null, hasPlayer: false, tz, now }) };
+  // (the watch card before a reveal, in place of the status sentence: watchWords, as drawPage shows it)
+  if (phase === 'scheduled' || phase === 'armed') {
+    const scheduledAt = state.scheduledAt || null;
+    return { view: 'upcoming', ...momentWords({ view: 'upcoming', scheduledAt, hasPlayer: false, tz, now }), watch: watchWords({ view: 'upcoming', scheduledAt, pageKid, tz, now }) };
+  }
   if (phase === 'live' || phase === 'ending' || phase === 'replay') return null;
-  return { view: 'idle', eyebrow: null, status: rows ? betweenText(rows, pageKid, tz) : '', badge: '' };
+  return { view: 'idle', eyebrow: null, status: rows ? betweenText(rows, pageKid, tz) : '', badge: '', watch: rows ? watchWords({ view: 'idle', scheduledAt: null, pageKid, upcoming: rows, tz, now }) : null };
 }
 
 /** The messages box (between its markers) moved out of the hero into its section below → the page, or null when it can't be */
@@ -479,6 +483,14 @@ export async function addFirstView(res, first, messages = null, ctaFacts = null)
     rw = rw.on('#live-hero [data-live="cta-messages"]', setAttrs({ 'data-capped': picks.includes('cta-messages') ? null : '' }));
   }
   if (first.status) rw = rw.on('#live-hero [data-live="status"]', text(first.status));
+  // The watch card in place of the sentence (LivePage drawPage)
+  if (first.watch) {
+    rw = rw
+      .on('#live-hero [data-live="status"]', setAttrs({ hidden: '' }))
+      .on('#live-hero [data-live="watch"]', setAttrs({ hidden: null, 'data-today': first.watch.today ? '' : null }))
+      .on('#live-hero [data-live="watch-when"]', text(first.watch.when))
+      .on('#live-hero [data-live="watch-sub"]', text(first.watch.sub));
+  }
   if (moved) {
     const name = String(messages.kidName || '').trim();
     rw = rw
