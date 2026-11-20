@@ -192,6 +192,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   let connectingTimer: ReturnType<typeof setTimeout> | undefined;
   let soundBeacon = false;
   let replayBeacon = false;
+  // (this replay has played: before that, it waits for its first tap with the big play button on its picture)
+  let replayPlayed = false;
   // Replay extras
   let revealAt: number | null = null;
   let hasCaptions = false;
@@ -247,6 +249,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (key !== mounted && playerEl) {
       mounted = key;
       mountedFor = bidNow;
+      replayPlayed = false;
       unmount();
       if (key && next.player) {
         kind = next.player.kind;
@@ -381,6 +384,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // (after a moment: a blank frame with no words reads as broken; the note fades in, LiveStage.astro)
     if (st === 'connecting') connectingTimer = setTimeout(() => { slowConnect = true; paint(); }, 800);
     if (st === 'playing' && kind === 'replay' && !replayBeacon) { replayBeacon = true; client.beacon('click_replay', undefined, pastBid()); }
+    if (st === 'playing' && kind === 'replay') replayPlayed = true;
     if (st === 'iframe') attachMedia();
     // The phone back on while "That's the reveal!" is up with the broadcast still live (it never went off): the live
     // video playing again takes the note away
@@ -644,7 +648,15 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     if (note) { const t = $('note-title'); const x = $('note-text'); if (t) t.textContent = note[0]; if (x) x.textContent = note[1]; }
     // Tap to watch: the browser refused to start it, or a live video was paused by something other than the viewer (an
     // iPhone's lock screen, a call, AirPods out, Control Center, a media key): playing again goes to the live moment
-    setHidden($('tap'), !(isVideo && !endShown && (pstatus === 'blocked' || (kind === 'live' && pstatus === 'paused'))));
+    // ...and a replay that hasn't played yet, waiting for its first tap: a big play button in the middle of its picture,
+    // gone the moment it plays (the rail keeps play and pause after that). Never during the live reveal. The same button,
+    // so one tap plays it with sound, as Watch the replay does (Peter, Nov 20 2026)
+    const replayStart = kind === 'replay' && isVideo && !endShown && !replayPlayed && pstatus === 'paused';
+    flag('data-start', replayStart);
+    // (its words are the circle alone then: it says what it does to a screen reader)
+    const tapBtn = $('tap');
+    if (replayStart) tapBtn?.setAttribute('aria-label', 'Play the replay'); else tapBtn?.removeAttribute('aria-label');
+    setHidden($('tap'), !(isVideo && !endShown && (pstatus === 'blocked' || (kind === 'live' && pstatus === 'paused') || replayStart)));
 
     // Before the reveal, in the Theater: when to watch, under the photo in the video's place (no bar: nothing to control)
     const waiting = party && view.mode === 'upcoming' && view.waiting ? view.waiting : null;

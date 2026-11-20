@@ -95,7 +95,7 @@ const ICON = {
         </div>
         <button class="stage__tap" type="button" data-s="tap" hidden>
           <span class="stage__tap-icon"><Fragment set:html={ICON.play} /></span>
-          <span>Tap to watch</span>
+          <span class="stage__tap-word">Tap to watch</span>
         </button>
         <p class="stage__badge" data-s="badge" hidden><span class="stage__badge-dot" aria-hidden="true"></span><span data-s="badge-text"></span></p>
       </div>
@@ -395,6 +395,19 @@ const ICON = {
   .stage__tap-icon { width: 76px; height: 76px; border-radius: 50%; background: #fff; color: var(--c-dark); display: grid; place-items: center; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
   .stage__tap-icon :global(svg) { width: 32px; height: 32px; margin-left: 4px; }
   .stage__tap:focus-visible .stage__tap-icon { outline: 3px solid #fff; outline-offset: 3px; }
+  /* A replay waiting for its first tap (data-start, live-stage.ts): the picture as it is, not dimmed, and in its middle one
+     big ink play button, the rail's play at the size of a first press (ink, not yellow: the page's one yellow is Fund the
+     next room). Gone the moment it plays; never during the live reveal */
+  .stage[data-start] .stage__tap { background: none; }
+  .stage[data-start] .stage__tap-word { display: none; }
+  .stage[data-start] .stage__tap-icon { width: 84px; height: 84px; background: var(--c-dark); color: #fff; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 0 0 4px rgba(255, 255, 255, 0.92); transition: transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .stage[data-start] .stage__tap-icon :global(svg) { width: 34px; height: 34px; margin-left: 5px; }
+  @media (hover: hover) { .stage[data-start] .stage__tap:hover .stage__tap-icon { transform: scale(1.06); } }
+  .stage[data-start] .stage__tap:active .stage__tap-icon { transform: scale(0.94); }
+  /* (in the corner player, smaller) */
+  .stage[data-start] .stage__picture.is-docked .stage__tap-icon { width: 52px; height: 52px; }
+  .stage[data-start] .stage__picture.is-docked .stage__tap-icon :global(svg) { width: 22px; height: 22px; margin-left: 3px; }
+  @media (prefers-reduced-motion: reduce) { .stage[data-start] .stage__tap-icon { transition: none; } }
 
   /* ── Captions line (replay) ── */
   /* Always two lines tall (a longer cue is shown a page at a time, live-stage.ts), so nothing under it ever moves */
