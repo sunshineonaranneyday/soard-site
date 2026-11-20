@@ -482,6 +482,17 @@ const hero = {
     .rh-watch__in::before { content: none; }
     /* Its width from the first paint: the same numbers as the photos' sizes (FRAME above) */
     .hero-frame { width: var(--frame-tablet); max-width: var(--frame-max); margin: 0 auto; }
+    /* The child on the first screen (Peter, Nov 20 2026, on a phone: "reveals pag on moible needs kids in heor before
+       scroll!"): the page's name, when to watch, then the photo; the sentence and the buttons after it. The text's own
+       box steps aside so its parts and the photo take turns in the one column */
+    .hero-inner { row-gap: 0; }
+    .hero-text { display: contents; }
+    .hero-eyebrow { order: 1; }
+    .hero-text h1 { order: 2; margin-bottom: 18px; }
+    .rh-watch { order: 3; margin: 0 auto 20px; }
+    .hero-frame { order: 4; margin-bottom: 40px; }
+    .hero-lead, .hero-lead:has(+ .rh-watch:not([hidden])) { order: 5; margin-bottom: 26px; }
+    .hero-ctas { order: 6; }
 
     .rv-cta__inner { grid-template-columns: 1fr; }
     .rv-cta__actions { max-width: 460px; }
