@@ -39,6 +39,17 @@ async function get(url, kind = 'text') {
   return kind === 'bytes' ? new Uint8Array(await res.arrayBuffer()) : res.text();
 }
 
+/** A file's size without downloading it (null when it can't be read or the host doesn't say) */
+async function head(url) {
+  try {
+    const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(TIMEOUT_MS), cf: { cacheTtl: 0 } });
+    const n = Number(res.headers.get('content-length'));
+    return res.ok && Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 function attrs(line) {
   const out = {};
   const re = /([A-Z0-9-]+)=("([^"]*)"|[^,]*)/g;
@@ -175,6 +186,12 @@ export async function probeFeed(customerCode, uid, { audioSegments = 2 } = {}) {
     out.error = `Video playlist: ${videoPl.reason?.message || 'unreachable'}`;
   }
 
+  // How much picture the two newest pieces carry, read alongside the sound: a still frame (Larix's pause card) is a
+  // few percent of a camera's moving picture (bytesPerPixelSec, _broadcast-monitor.js PAUSE)
+  const sizes = videoPl.status === 'fulfilled' && top.width && top.height
+    ? Promise.all(videoPl.value.segments.slice(-2).map(async (s) => ({ bytes: await head(s.uri), sec: s.duration || 0 })))
+    : null;
+
   if (audioSegments > 0 && out.audio.present) {
     const pl = audioPl.status === 'fulfilled' && audioPl.value ? audioPl.value : (muxedAudio && videoPl.status === 'fulfilled' ? videoPl.value : null);
     if (pl?.segments.length) {
@@ -215,6 +232,15 @@ export async function probeFeed(customerCode, uid, { audioSegments = 2 } = {}) {
   }
   out.audio.verdict = audioVerdict(out.audio);
   out.audio.deadSide = deadSide(out.audio);
+  if (sizes) {
+    const read = (await sizes).filter((s) => s.bytes && s.sec > 0);
+    if (read.length) {
+      const bytes = read.reduce((a, s) => a + s.bytes, 0);
+      const sec = read.reduce((a, s) => a + s.sec, 0);
+      out.video.bytesPerSec = Math.round(bytes / sec);
+      out.video.bytesPerPixelSec = Math.round((bytes / sec / (top.width * top.height)) * 10000) / 10000;
+    }
+  }
   out.ok = !out.error;
   return out;
 }

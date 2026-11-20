@@ -122,6 +122,20 @@ test('setup live input via admin endpoint', async () => {
   assert.match(link, /srtstreamid%5D=sid123456789/);
   assert.match(link, /srtpass%5D=pass123456789/);
   assert.match(link, /enc%5Bvid%5D%5Bkeyframe%5D=2/);
+  // The thank-you card as Larix's pause picture only (never on the live picture), replaced on a second scan
+  const q = new URLSearchParams(link.slice('larix://set/v1?'.length));
+  assert.equal(q.get('overlay[][name]'), 'SOARD thank-you card');
+  assert.equal(q.get('overlay[][type]'), 'img');
+  assert.equal(q.get('overlay[][url]'), streamLive.PAUSE_CARD_URL);
+  assert.match(streamLive.PAUSE_CARD_URL, /^https:\/\/imagedelivery\.net\/[\w-]+\/live\/pause-card\/w=1080,h=1920,fit=contain$/);
+  assert.equal(q.get('overlay[][pause]'), 'on');
+  assert.equal(q.get('overlay[][standby]'), 'off', 'pause picture only, never the standby picture');
+  assert.equal(q.get('overlay[][active]'), 'off');
+  assert.doesNotMatch(link, /\+/, 'spaces as %20: Larix shows a + as a plus sign');
+  assert.match(link, /name%5D=SOARD%20thank-you%20card&/);
+  assert.equal(q.get('overlay[][overwrite]'), 'on');
+  assert.deepEqual([q.get('overlay[][size]'), q.get('overlay[][x]'), q.get('overlay[][y]')], ['1', '0', '0']);
+  assert.ok(link.length < 2000, `fits the admin's QR code (${link.length} characters)`);
 });
 
 test('schedule a reveal for a kid', async () => {

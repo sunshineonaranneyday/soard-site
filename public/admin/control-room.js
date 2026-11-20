@@ -185,6 +185,7 @@ const AUDIO_WORDS = {
   onesided: ['warn', 'Sound on one side only', 'Headphone listeners hear one ear. Set Larix audio to mono so both sides get the mic.'],
   none: ['bad', 'No audio track', 'The phone is sending video without sound. In Larix: Settings → Audio, turn audio on, then stop and restart.'],
   native: ['unknown', 'Meter not available in this browser', 'Use Chrome, Edge, Firefox, or Safari on a Mac for the sound meter. The server check below still runs.'],
+  paused: ['idle', 'Paused: viewers see the thank-you card', 'Larix is paused, so the silence is expected. To end the reveal: count one, two, three, then tap Stop. Or tap Resume to go on.'],
 };
 const AUDIO_ISSUE_KEY = { silent: 'silent', none: 'noAudio', quiet: 'quiet', loud: 'loud', clipping: 'loud', onesided: 'oneSided' };
 
@@ -568,11 +569,13 @@ function mergeIssues({ report, audioKey, pic, phase, live, since }) {
   const byKey = new Map(server.map((i) => [i.key, { ...i, source: 'server' }]));
   const local = [];
   const add = (key, level, title, fix) => { if (!byKey.has(key)) local.push({ key, level, title, fix, source: 'here' }); };
+  // Larix paused on the thank-you card: a still (or black) picture with silence is the point, not a problem
+  const paused = !!report?.paused;
   if (live) {
     const issueKey = AUDIO_ISSUE_KEY[audioKey];
     if (issueKey) add(issueKey, audioKey === 'silent' || audioKey === 'none' || audioKey === 'clipping' ? 'error' : 'warn', AUDIO_WORDS[audioKey][1], AUDIO_WORDS[audioKey][2]);
-    if (pic.frozen) add('frozen', 'error', 'The picture has stopped moving', 'The phone may be losing signal: switch Larix to the weak-signal profile, or move toward better coverage.');
-    if (pic.dark) add('dark', 'warn', 'The picture is black', 'Is the lens covered, or did the phone switch apps?');
+    if (pic.frozen && !paused) add('frozen', 'error', 'The picture has stopped moving', 'The phone may be losing signal: switch Larix to the weak-signal profile, or move toward better coverage.');
+    if (pic.dark && !paused) add('dark', 'warn', 'The picture is black', 'Is the lens covered, or did the phone switch apps?');
     if (report?.watch?.signal?.status === 'weak') add('weakSignal', 'warn', 'The phone\'s signal is weak', 'Switch Larix to the Weak signal profile (Settings → Phones), or move toward better coverage.');
     for (const [key, label] of [['facebook', 'Facebook'], ['youtube', 'YouTube']]) {
       const d = report?.destinations?.[key];
@@ -723,6 +726,7 @@ export function HealthReport({ report: x }) {
     x.yt != null ? `YouTube +${at(x.yt)}` : null,
     x.peak != null ? `peak ${x.peak} watching` : null,
     x.reconnects ? `${x.reconnects} reconnect${x.reconnects > 1 ? 's' : ''}` : null,
+    x.paused ? `paused on the card ${at(x.paused.s)}` : null,
   ].filter(Boolean);
   const series = (x.series || []).filter((p) => p[1] != null);
   const maxT = Math.max(1, ...(x.series || []).map((p) => p[0]));
@@ -772,7 +776,8 @@ export function ControlRoom({ feed = 'live', phase, refreshKey = 0 }) {
 
   // Audio verdict: the server knows "no track" for sure; the meter knows everything else
   let audioKey = meter.verdict;
-  if (probe?.audio?.present === false || (player.hasAudio === false && player.state !== 'loading')) audioKey = 'none';
+  if (report?.paused) audioKey = 'paused';
+  else if (probe?.audio?.present === false || (player.hasAudio === false && player.state !== 'loading')) audioKey = 'none';
   else if (player.state === 'native' || meter.unsupported) audioKey = 'native';
   else if (!meter.running && meter.needsGesture) audioKey = null;
   // The mic check holds out for the range the crew aims for; the reveal itself only warns when it's very quiet

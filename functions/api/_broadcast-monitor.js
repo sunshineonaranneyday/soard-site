@@ -55,6 +55,37 @@ export const RULES = {
   remindEvery: 10 * 60e3,
 };
 
+/**
+ * Larix's Pause, the crew's way to end a reveal (docs/live-runbook.md): viewers see the still thank-you card (or
+ * black) and the sound is digital silence, so the last words are kept (Stream drops what follows the phone's last
+ * keyframe when it hangs up). A pause is silence with a still picture. Measured Nov 19 2026 on Stream's top
+ * rendition: the still card 0.010 bytes per pixel-second, a moving picture about 0.2, Dylan's reveal never below
+ * 0.148. A muted Larix sends the moving picture with silence, so it still raises "Reveal audio is silent".
+ */
+export const PAUSE = {
+  stillBpps: 0.04,   // under this the picture is still
+  ofMoving: 0.25,    // and, once the reveal has a moving level of its own, under a quarter of it (the card is about 5%)
+  keep: 20,          // moving readings kept for that level
+};
+
+const median = (xs) => {
+  if (!xs?.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const i = s.length >> 1;
+  return s.length % 2 ? s[i] : (s[i - 1] + s[i]) / 2;
+};
+
+/** The newest pieces carry a still picture: `rate` bytes per pixel-second, `moving` the reveal's own level (or null) */
+export function pictureStill(rate, moving = null) {
+  if (rate == null || !Number.isFinite(rate)) return false;
+  return rate < PAUSE.stillBpps && (moving == null || rate < PAUSE.ofMoving * moving);
+}
+
+/** Larix paused: silence (or no sound track) with a still picture */
+export function isPaused({ verdict, rate, moving = null }) {
+  return (verdict === 'silent' || verdict === 'none') && pictureStill(rate, moving);
+}
+
 const FB_CACHE_MS = 20 * 1000;
 const INPUT_CACHE_MS = 10 * 1000;
 const LIVE_PRODUCER_URL = 'https://www.facebook.com/live/producer';
@@ -257,6 +288,9 @@ export async function report(env, config, state, health, { feed = 'live' } = {})
     orientation: config.orientation === 'portrait' ? 'portrait' : 'landscape',
     playback: { hls: `${host}/${input.uid}/manifest/video.m3u8`, llhls: input.preferLowLatency !== false ? `${host}/${input.uid}/manifest/video.m3u8?protocol=llhls` : null },
     probe,
+    // Larix paused on the thank-you card, read from this very probe (the watch keeps when it began)
+    paused: !!probe?.ok && isPaused({ verdict: probe.audio?.verdict, rate: probe.video?.bytesPerPixelSec ?? null, moving: median(m?.picture) }),
+    pausedSince: m?.pausedSince || null,
     destinations: feed === 'live' ? destinations({ config, state, phoneLive, liveForMs, probe, viewers, outputs: outputsRes?.ok ? outputsRes.result || [] : null, facebook, youtube }) : null,
     slack: notify.slackConfigured(env),
     watch: m ? { at: m.at, issues: Object.values(m.issues || {}), log: (m.log || []).slice(-20), signal: m.signal || null, audio: m.audio || null, peakViewers: m.peakViewers ?? null } : null,
@@ -399,6 +433,8 @@ export async function watch(env, config, state, health, work, record = async () 
   if (state.phase === 'ending' || state.gapSince) {
     // Facebook and YouTube aren't read while the phone is away: not known (a short gap carries the last reading)
     m.fbViewers = null; m.ytViewers = null;
+    // A pause ends when the phone stops
+    if (m.pausedSince) { m.pausedMs = (m.pausedMs || 0) + Math.max(0, c.now - Date.parse(m.pausedSince)); m.pausedSince = null; }
     await c.raise('disconnected', { level: 'error', after: RULES.disconnectedAfter, title: 'The phone lost its connection', detail: `The site keeps the reveal live for 2 minutes. After that it shows the reveal ended, and a phone back within 15 more minutes still picks the same reveal up again.${overQuestion ? ' Staff got a text asking if the reveal is over (Y ends it, N keeps it on air).' : ''}`, fix: 'Check that Larix is still streaming. If it stopped, tap Start: the reveal picks up where it left off.', text: !overQuestion });
     return;
   }
@@ -427,17 +463,36 @@ export async function watch(env, config, state, health, work, record = async () 
     const a = probe.audio || {};
     const verdict = a.verdict;
     m.audio = { verdict, lufs: a.lufs ?? null, levelDb: a.levelDb ?? null, leftDb: a.leftDb ?? null, rightDb: a.rightDb ?? null, channels: a.channels ?? null };
-    m.video = probe.video ? { width: probe.video.width, height: probe.video.height, fps: probe.video.fps, lastSequence: probe.video.lastSequence ?? null } : null;
-    m.stats[verdict] = (m.stats[verdict] || 0) + 1;
+    m.video = probe.video ? { width: probe.video.width, height: probe.video.height, fps: probe.video.fps, lastSequence: probe.video.lastSequence ?? null, bytesPerPixelSec: probe.video.bytesPerPixelSec ?? null } : null;
+
+    // Larix paused (the thank-you card): the silence is the point, so it's no sound problem
+    const rate = probe.video?.bytesPerPixelSec ?? null;
+    if (rate != null && rate >= PAUSE.stillBpps) m.picture = [...(m.picture || []), rate].slice(-PAUSE.keep);
+    const paused = isPaused({ verdict, rate, moving: median(m.picture) });
+    if (paused && !m.pausedSince) {
+      m.pausedSince = c.at;
+      m.pauses = (m.pauses || 0) + 1;
+      m.log.push({ at: c.at, kind: 'paused', title: 'Paused: viewers see the thank-you card' });
+      if (m.log.length > 40) m.log.splice(0, m.log.length - 40);
+    } else if (!paused && m.pausedSince) {
+      m.pausedMs = (m.pausedMs || 0) + Math.max(0, c.now - Date.parse(m.pausedSince));
+      m.pausedSince = null;
+    }
+
+    const reading = paused ? 'paused' : verdict;
+    m.stats[reading] = (m.stats[reading] || 0) + 1;
     if (a.lufs != null) { m.lufsPower += Math.pow(10, a.lufs / 10); m.lufsCount++; }
     const last = m.series[m.series.length - 1];
     if (!last || c.liveForMs / 1000 - last[0] >= 30) {
-      m.series.push([Math.round(c.liveForMs / 1000), a.lufs != null ? Math.round(a.lufs) : null, (verdict || 'u')[0]]);
+      m.series.push([Math.round(c.liveForMs / 1000), a.lufs != null ? Math.round(a.lufs) : null, (reading || 'u')[0]]);
       if (m.series.length > 240) m.series.shift();
     }
 
-    // Sound: each verdict is its own issue so a change of problem reads clearly in Slack
-    if (verdict === 'none') {
+    // Sound: each verdict is its own issue so a change of problem reads clearly in Slack. While paused nothing new
+    // is raised, and a wait that had begun starts over once the pause ends (an issue already posted stays as it is)
+    if (paused) {
+      for (const key of ['noAudio', 'silent', 'quiet']) delete m.pending[key];
+    } else if (verdict === 'none') {
       if (c.liveForMs > RULES.noAudioAfter) await c.raise('noAudio', { level: 'error', title: 'The reveal has no sound track', detail: 'Stream is getting video from the phone with no audio at all, so the site, Facebook and YouTube are silent.', fix: 'In Larix: Settings → Audio, turn audio on, then stop and start the stream.' });
     } else if (verdict !== 'unknown') await c.clear('noAudio');
     const sound = {
@@ -446,7 +501,7 @@ export async function watch(env, config, state, health, work, record = async () 
       onesided: ['oneSided', { level: 'warn', after: RULES.oneSidedAfter, title: `Sound is only on the ${deadSide(a) === 'left' ? 'right' : 'left'} side`, detail: 'Viewers with headphones hear it in one ear only.', fix: 'Set Larix audio to mono (Settings → Audio → Channels: 1), or reseat the mic receiver\'s cable in the phone.' }],
       quiet: ['quiet', { level: 'warn', after: RULES.quietAfter, title: 'Reveal audio is very quiet', detail: `Loudness ${lufsText(a.lufs)} (aim for about -16).`, fix: 'Move the mic closer to whoever is talking, or turn up the gain on the mic transmitter.' }],
     };
-    if (verdict !== 'unknown') {
+    if (verdict !== 'unknown' && !paused) {
       for (const [v, [key, spec]] of Object.entries(sound)) {
         if (verdict === v) await c.raise(key, spec); else await c.clear(key);
       }
@@ -537,7 +592,9 @@ export async function finish(env, config, state, health, record = async () => {}
     m.closed.push({ key, title: open.title, since: open.since, resolvedAt: new Date(end).toISOString(), seconds: Math.round((end - Date.parse(open.since)) / 1000), atEnd: true });
   }
   m.issues = {};
-  const probes = Object.values(m.stats).reduce((a, n) => a + n, 0);
+  if (m.pausedSince) { m.pausedMs = (m.pausedMs || 0) + Math.max(0, end - Date.parse(m.pausedSince)); m.pausedSince = null; }
+  // "Sound good" is about the sound while it was meant to be heard: the paused card's silence isn't counted
+  const probes = Object.entries(m.stats).reduce((a, [k, n]) => (k === 'paused' ? a : a + n), 0);
   const okPct = probes ? Math.round(((m.stats.ok || 0) / probes) * 100) : null;
   const lufs = m.lufsCount ? Math.round(10 * Math.log10(m.lufsPower / m.lufsCount) * 10) / 10 : null;
   const report = {
@@ -550,6 +607,7 @@ export async function finish(env, config, state, health, record = async () => {}
     yt: m.firsts.youtube ?? null,
     peak: m.peakViewers ?? null,
     reconnects: m.reconnects.length,
+    ...(m.pauses ? { paused: { n: m.pauses, s: Math.round((m.pausedMs || 0) / 1000) } } : {}),
     series: m.series.map(([t, l, v]) => [t, l, v]),
   };
   // Events hold 2000 characters: thin the loudness series until the report fits
@@ -571,6 +629,7 @@ export async function finish(env, config, state, health, record = async () => {}
   if (firsts.length) parts.push(`${firsts.join(', ')}.`);
   if (m.peakViewers != null) parts.push(`Peak ${m.peakViewers} watching on the site.`);
   if (m.reconnects.length) parts.push(`${m.reconnects.length} reconnect${m.reconnects.length > 1 ? 's' : ''}.`);
+  if (m.pauses) parts.push(`Paused on the thank-you card for ${fmtDur(m.pausedMs || 0)}${m.pauses > 1 ? ` (${m.pauses} times)` : ''}.`);
   return { report, summary: parts.join(' ') };
 }
 

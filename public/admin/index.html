@@ -6457,10 +6457,10 @@
             <h4>Set up a phone</h4>
             <p class="text-sm text-muted">Install <strong>Larix Broadcaster</strong> with a Premium subscription (the free version stamps a watermark on the video). Point the phone's camera at a code and tap the banner: Larix opens with the SOARD connection filled in. On reveal day, open Larix and tap record.</p>
             ${larix.standard ? html`<div class="bc-qrs">
-              <${QrCode} value=${larix.standard} size=${168} label="Standard · 1080p · 3.5 Mbps" />
-              <${QrCode} value=${larix.lowSignal} size=${168} label="Weak signal · 720p · 1.8 Mbps" />
+              <${QrCode} value=${larix.standard} size=${240} label="Standard · 1080p · 3.5 Mbps" />
+              <${QrCode} value=${larix.lowSignal} size=${240} label="Weak signal · 720p · 1.8 Mbps" />
               ${c.rehearsalInput && larix.rehearsal
-                ? html`<div class="bc-qr-col"><${QrCode} value=${larix.rehearsal} size=${168} label="Rehearsal · private mic checks" /><button class="bc-link text-sm" type="button" disabled=${!!busy} onClick=${() => setConfirm({ title: 'Delete the rehearsal feed?', message: 'Practice phones lose their connection until you create a new one.', danger: true, confirmLabel: 'Delete', fn: () => setup('deleteRehearsal', {}, 'Delete rehearsal') })}>Delete rehearsal feed</button></div>`
+                ? html`<div class="bc-qr-col"><${QrCode} value=${larix.rehearsal} size=${240} label="Rehearsal · private mic checks" /><button class="bc-link text-sm" type="button" disabled=${!!busy} onClick=${() => setConfirm({ title: 'Delete the rehearsal feed?', message: 'Practice phones lose their connection until you create a new one.', danger: true, confirmLabel: 'Delete', fn: () => setup('deleteRehearsal', {}, 'Delete rehearsal') })}>Delete rehearsal feed</button></div>`
                 : html`<div class="bc-qr-empty"><strong>Rehearsal feed</strong><p class="text-sm text-muted">A private second input for practice and mic checks. It never reaches the public, and its recordings delete themselves after 30 days.</p><button class="btn btn-primary btn-sm" type="button" disabled=${!!busy || !s.streamConfigured} onClick=${() => setup('setupRehearsal', {}, 'Rehearsal')}>Create rehearsal feed</button></div>`}
             </div>` : html`<p class="text-sm text-muted">Create the live input first.</p>`}
           </div>

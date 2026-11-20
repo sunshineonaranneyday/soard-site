@@ -261,6 +261,13 @@ export const ENCODER_PROFILES = {
 };
 
 /**
+ * The thank-you card viewers see while Larix is paused, the crew's end of a reveal (docs/live-runbook.md): the
+ * phone keeps sending, so the last words are kept (Stream drops what follows the phone's last keyframe when it
+ * hangs up). Cloudflare Images `live/pause-card`, full size for a 1080x1920 portrait frame.
+ */
+export const PAUSE_CARD_URL = 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/live/pause-card/w=1080,h=1920,fit=contain';
+
+/**
  * Build a Larix Grove deep link (larix://set/v1?…) that installs one SRT
  * connection plus encoder settings when scanned. SRT caller mode with a
  * 2000 ms latency budget rides out cellular hiccups; the passphrase and
@@ -292,7 +299,22 @@ export function larixSetupLink(input, { name = 'SOARD Live', profile = 'standard
   p.set('enc[aud][bitrate]', String(enc.audioBitrate));
   p.set('enc[aud][samples]', String(enc.samples));
   p.set('enc[aud][channels]', String(enc.channels));
-  return `larix://set/v1?${p.toString()}`;
+  // The thank-you card as Larix's pause picture only: never on the live picture (active off) and never the
+  // standby picture (Larix otherwise turns it on for standby too, as the reveal phone showed Nov 20 2026);
+  // scanning again replaces it
+  p.set('overlay[][name]', 'SOARD thank-you card');
+  p.set('overlay[][type]', 'img');
+  p.set('overlay[][url]', PAUSE_CARD_URL);
+  p.set('overlay[][pause]', 'on');
+  p.set('overlay[][standby]', 'off');
+  p.set('overlay[][active]', 'off');
+  p.set('overlay[][overwrite]', 'on');
+  p.set('overlay[][size]', '1');
+  p.set('overlay[][x]', '0');
+  p.set('overlay[][y]', '0');
+  // Spaces as %20: Larix shows a "+" as a plus sign (the card read "SOARD+thank-you+card" on the phone).
+  // URLSearchParams writes a real "+" as %2B, so every "+" here is a space.
+  return `larix://set/v1?${p.toString().replace(/\+/g, '%20')}`;
 }
 
 /** SRT URL for OBS or other encoders (Stream's documented form). */

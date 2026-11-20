@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { analyzeSegment, analyzeSegments, configFromInit } from '../functions/api/_aac-level.js';
 import { parseMaster, parseMedia, probeFeed, audioVerdict, deadSide } from '../functions/api/_stream-probe.js';
-import { destinations, watch, finish, noteRehearsal, RULES } from '../functions/api/_broadcast-monitor.js';
+import { destinations, watch, finish, noteRehearsal, RULES, PAUSE, pictureStill, isPaused, report as monitorReport } from '../functions/api/_broadcast-monitor.js';
 import * as preflight from '../functions/api/_broadcast-preflight.js';
 
 const fx = (name) => new Uint8Array(readFileSync(new URL(`./fixtures/aac/${name}`, import.meta.url)));
@@ -181,6 +181,8 @@ before(() => {
     if (file === 'v1080.m3u8') return new Response(livePlaylist(f.seq, 'v'));
     if (file === 'init.mp4') return new Response(INIT);
     if (/^a\d\.m4s$/.test(file)) return new Response(fx(f.audioSeg));
+    // Video pieces' sizes, for the pause rule (only when a test sets them: a feed without them reads as before)
+    if (/^v\d\.m4s$/.test(file) && f.videoBytes) return new Response(init.method === 'HEAD' ? null : new Uint8Array(8), { headers: { 'content-length': String(f.videoBytes) } });
     return new Response('no', { status: 404 });
   };
 });
@@ -611,4 +613,117 @@ test('go/no-go: posts an hour before, and again at 10 minutes only if something 
 
 test('rules: Slack waits long enough not to cry wolf', () => {
   assert.ok(RULES.silentAfter >= 30e3 && RULES.quietAfter >= 120e3 && RULES.remindFirst >= 180e3);
+});
+
+// ─── Larix paused on the thank-you card (the crew's end of a reveal) ─
+
+// Bytes in one 4 s piece of the 1080x1920 top rendition at a given bytes per pixel-second. Measured Nov 19 2026 on
+// Stream: a moving picture about 0.21, Dylan's reveal never below 0.148, the still thank-you card 0.010.
+const piece = (bpps) => Math.round(bpps * 1080 * 1920 * 4);
+const MOVING = piece(0.21), CAMERA_LOW = piece(0.148), CARD = piece(0.010);
+
+test('pause rule: the still card is a pause, a camera never is, sound is never a pause', () => {
+  assert.equal(pictureStill(0.010), true, 'the card');
+  assert.equal(pictureStill(0.148), false, 'Dylan\'s quietest camera moment');
+  assert.equal(pictureStill(0.039), true, 'under the line with no moving level yet');
+  assert.equal(pictureStill(0.010, 0.21), true, 'the card is about 5% of the moving level');
+  assert.equal(pictureStill(0.03, 0.1), false, 'under the line but not under a quarter of a dim reveal\'s own level');
+  assert.equal(pictureStill(null), false, 'no sizes: never a pause');
+  assert.equal(isPaused({ verdict: 'silent', rate: 0.010 }), true);
+  assert.equal(isPaused({ verdict: 'none', rate: 0.010 }), true, 'a pause that drops the sound track');
+  assert.equal(isPaused({ verdict: 'ok', rate: 0.010 }), false, 'a still picture with sound is not a pause');
+  assert.equal(isPaused({ verdict: 'silent', rate: 0.21 }), false, 'a muted Larix: moving picture, silence');
+  assert.equal(isPaused({ verdict: 'silent', rate: null }), false);
+  assert.ok(PAUSE.stillBpps > 0.010 * 3 && PAUSE.stillBpps < 0.148 / 3, 'the line leaves 3x either side of what was measured');
+});
+
+test('probe: how much picture the newest pieces carry', async () => {
+  feeds.pic = { master: masterWithAudio, audioSeg: 'pink-32.m4s', seq: 10, videoBytes: MOVING };
+  const r = await probeFeed('test', 'pic');
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.video.bytesPerSec, Math.round(MOVING / 4));
+  near(r.video.bytesPerPixelSec, 0.21, 0.001, 'bytes per pixel-second');
+  feeds.pic.videoBytes = null;
+  const none = await probeFeed('test', 'pic');
+  assert.equal(none.ok, true);
+  assert.equal(none.video.bytesPerPixelSec, undefined, 'sizes that can\'t be read leave it out');
+});
+
+test('watch: paused on the thank-you card raises no sound alarm; a muted Larix still does after 30 s', async () => {
+  const s = scenario('w-pause');
+  s.feed.videoBytes = MOVING;
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 4; i++) await s.step(15e3);            // a minute of the reveal
+    s.feed.audioSeg = 'silence.m4s'; s.feed.videoBytes = CARD;  // Pause
+    for (let i = 0; i < 6; i++) await s.step(15e3);            // 90 s on the card
+    assert.ok(!texts().some((x) => /silent|sound track/i.test(x)), texts().join(' | '));
+    const m = s.health.monitor;
+    assert.ok(m.pausedSince, 'the pause is on the monitor');
+    assert.equal(m.pauses, 1);
+    assert.ok(m.stats.paused >= 5, JSON.stringify(m.stats));
+    assert.ok(m.log.some((l) => l.kind === 'paused'));
+    assert.equal(Object.keys(m.pending).length, 0, 'nothing building up');
+
+    s.feed.videoBytes = CAMERA_LOW;                            // Resume with the mic muted: a moving picture, silence
+    await s.step(15e3); await s.step(15e3);
+    assert.ok(!texts().some((x) => /Reveal audio is silent/.test(x)), 'the 30 s wait starts over after the pause');
+    await s.step(15e3);
+    assert.ok(texts().some((x) => /Reveal audio is silent/.test(x)), texts().join(' | '));
+    assert.equal(m.pausedSince, null);
+    assert.equal(m.pausedMs, 90e3);
+  } finally { s.restore(); }
+});
+
+test('watch: a pause before the reveal has a moving level, and one with no sound track, are pauses', async () => {
+  const s = scenario('w-pause-cold', { audioSeg: 'silence.m4s' });
+  s.feed.videoBytes = CARD;
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    assert.ok(s.health.monitor.pausedSince);
+    s.feed.master = masterNoAudio;                              // the pause dropping the sound track altogether
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    assert.equal(slack.length, 0, texts().join(' | '));
+    s.feed.videoBytes = MOVING;                                // video with no sound track: a real problem again
+    await s.step(15e3);
+    assert.ok(texts().some((x) => /no sound track/.test(x)), texts().join(' | '));
+  } finally { s.restore(); }
+});
+
+test('end report: the pause is counted apart from the sound and named', async () => {
+  const s = scenario('w-pause-end');
+  s.feed.videoBytes = MOVING;
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    s.feed.audioSeg = 'silence.m4s'; s.feed.videoBytes = CARD;
+    for (let i = 0; i < 4; i++) await s.step(15e3);            // paused at the first of these, 45 s on
+    s.state.phase = 'ending';                                  // Stop
+    await s.step(15e3);
+    assert.equal(s.health.monitor.pausedSince, null, 'the stop ends the pause');
+    assert.equal(s.health.monitor.pausedMs, 60e3);
+    s.state.phase = 'replay'; s.state.endedAt = new Date(s.at() + 20e3).toISOString();
+    const { report, summary } = await finish(s.env, s.config, s.state, s.health, async (_db, id, type, meta) => s.events.push({ type, meta }));
+    assert.deepEqual(report.paused, { n: 1, s: 60 });
+    assert.equal(report.okPct, 100, 'the card\'s silence doesn\'t count against the sound');
+    assert.match(summary, /Paused on the thank-you card for 1:00/);
+    assert.ok(!report.issues.length, JSON.stringify(report.issues));
+  } finally { s.restore(); }
+});
+
+test('control room: the report says when Larix is paused', async () => {
+  const s = scenario('w-pause-room', { audioSeg: 'silence.m4s' });
+  s.feed.videoBytes = CARD;
+  try {
+    await s.step(1000); await s.step(15e3);
+    const r = await monitorReport(s.env, s.config, s.state, s.health);
+    assert.equal(r.paused, true);
+    assert.ok(r.pausedSince);
+    s.feed.videoBytes = MOVING;
+    assert.equal((await monitorReport(s.env, s.config, s.state, s.health)).paused, false, 'a muted Larix is not a pause');
+  } finally { s.restore(); }
 });
