@@ -14,6 +14,8 @@
  * (too small to read anything on).
  */
 import { cfRaw } from './cf-image';
+// @ts-ignore (plain JS, typed here)
+import * as pairs from '../../public/admin/plan-pair.js';
 
 export type DesignKind = 'before' | 'as-built' | 'proposed' | 'board';
 export interface DesignSlide {
@@ -30,6 +32,24 @@ export interface DesignSlide {
   h?: number;
   /** A whole sheet (its address painted out): where its drawing is on it, as fractions, for the views that zoom to it */
   focus?: { x: number; y: number; w: number; h: number };
+  /** On the existing plan: it and the proposed one lined up when they came in (public/admin/reveal-design.js
+   *  storedCompare), or none: they don't line up */
+  cmp?: StoredCompare;
+}
+export interface StoredCompare {
+  /** The proposed plan it was lined up with */
+  proposed: string;
+  none?: boolean;
+  /** Where the two pictures are cut from the existing sheet (fractions of it), their size, how far the proposed drawing
+   *  sat from the existing one, how much of their lines land on each other, and the two pictures, the pig taken out */
+  box?: { x: number; y: number; w: number; h: number };
+  width?: number;
+  height?: number;
+  dx?: number;
+  dy?: number;
+  overlap?: number;
+  before?: string;
+  after?: string;
 }
 export interface DesignAnswer {
   open: boolean;
@@ -59,12 +79,7 @@ const KINDS = new Set(['before', 'as-built', 'proposed', 'board']);
 export const validSlide = (s: any): s is DesignSlide => !!s && KINDS.has(s.kind) && typeof s.url === 'string' && !!s.url && !/^(blob|data):/.test(s.url);
 
 /** A whole sheet's drawing place, when it's a real one (fractions of the sheet, inside it); else null */
-export function focusOf(s: DesignSlide | null | undefined): { x: number; y: number; w: number; h: number } | null {
-  const f = s?.focus;
-  if (!f || ![f.x, f.y, f.w, f.h].every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
-  if (f.w <= 0.02 || f.h <= 0.02 || f.x < 0 || f.y < 0 || f.x + f.w > 1.0001 || f.y + f.h > 1.0001) return null;
-  return f;
-}
+export const focusOf: (s: DesignSlide | null | undefined) => { x: number; y: number; w: number; h: number } | null = pairs.focusOf;
 
 /**
  * A whole plan sheet: the designer's own, border, title block and wall legend, its address painted out (a -sheet file,
@@ -89,48 +104,23 @@ export function knownRatio(s: DesignSlide | null | undefined): number | null {
 }
 
 // ── The plan, before and after, on one picture (Peter, Nov 18 2026: "should we do a before/after plans slider?") ──
-// The designer draws the existing and the proposed floor plan on two sheets of the same plan set: the same paper, the
-// same scale, the drawing a few pixels apart (Dylan's 22 px, Max's 15 px of 3200). The compare slider shows the two
-// drawings one over the other, lined up on the drawing itself (plan-compare.ts measures how far apart they are), cut
-// to the part of the sheet where the drawing is, so it's big enough to read. Plain functions: the server draws the
-// card its shape from these too (live-design-html.ts)
+// The rules (which two plans compare, where it's cut) are public/admin/plan-pair.js, the same for the automatic import
+// that lines them up when they come in; here with their types. The server draws the card its shape from these too
+// (live-design-html.ts)
 
 export interface PlanPair { existing: DesignSlide; proposed: DesignSlide }
+type Box = { x: number; y: number; w: number; h: number };
 
-/** The existing and the proposed plan, when there's one of each, both whole sheets of the same paper: they compare */
-export function planPairOf(slides: DesignSlide[]): PlanPair | null {
-  const existing = slides.find((s) => s.kind === 'as-built');
-  const proposed = slides.find((s) => s.kind === 'proposed');
-  if (!existing || !proposed || !focusOf(existing) || !focusOf(proposed)) return null;
-  const w = Number(existing.w) || 0, h = Number(existing.h) || 0;
-  if (!(w > 0 && h > 0) || Math.abs((Number(proposed.w) || 0) - w) > 2 || Math.abs((Number(proposed.h) || 0) - h) > 2) return null;
-  return { existing, proposed };
-}
-
-/**
- * Where the compare is cut from the existing sheet, as fractions of it: both drawings' boxes together, with a margin,
- * inside the sheet's border and above its title block. The proposed sheet is cut the same size, moved by what lines
- * the drawings up
- */
-export function compareBox(pair: PlanPair): { x: number; y: number; w: number; h: number } {
-  const a = focusOf(pair.existing)!, b = focusOf(pair.proposed)!;
-  const W = Number(pair.existing.w), H = Number(pair.existing.h);
-  // (just clear of its outermost lines: the drawing as big as its card allows, Peter, Nov 18 2026: "the drawing trimmed to its lines")
-  const padX = 0.008, padY = (0.008 * W) / H;
-  const x0 = Math.max(0.028, Math.min(a.x, b.x) - padX), x1 = Math.min(0.972, Math.max(a.x + a.w, b.x + b.w) + padX);
-  const y0 = Math.max(0.04, Math.min(a.y, b.y) - padY), y1 = Math.min(0.915, Math.max(a.y + a.h, b.y + b.h) + padY);
-  // In whole pixels of the sheet, so every place that cuts it cuts the same rectangle
-  const px = (n: number, of: number) => Math.round(n * of);
-  const left = px(x0, W), top = px(y0, H), right = px(x1, W), bottom = px(y1, H);
-  return { x: left / W, y: top / H, w: (right - left) / W, h: (bottom - top) / H };
-}
-
+/** The existing and the proposed plan, when there's one of each, both whole sheets of the same paper, and not two
+ *  found not to line up when they came in: they compare */
+export const planPairOf: (slides: DesignSlide[]) => PlanPair | null = pairs.planPairOf;
+/** The pair's line-up made when they came in, with its two pictures, when it's this pair's; else null (made on the page) */
+export const storedCompareOf: (pair: PlanPair) => (StoredCompare & { box: Box; before: string; after: string }) | null = pairs.storedCompareOf;
+/** Where the compare is cut from the existing sheet, as fractions of it (both drawings, a margin, inside the border,
+ *  above the title block; as it was cut when they came in, when they were lined up then) */
+export const compareBox: (pair: PlanPair) => Box = pairs.compareBox;
 /** The compare's picture, in pixels of the sheet (left, top, width, height) */
-export function comparePixels(pair: PlanPair): { left: number; top: number; width: number; height: number } {
-  const W = Number(pair.existing.w), H = Number(pair.existing.h);
-  const b = compareBox(pair);
-  return { left: Math.round(b.x * W), top: Math.round(b.y * H), width: Math.round(b.w * W), height: Math.round(b.h * H) };
-}
+export const comparePixels: (pair: PlanPair) => { left: number; top: number; width: number; height: number } = pairs.comparePixels;
 
 /** height ÷ width of the compare's picture */
 export function compareRatio(pair: PlanPair): number {
@@ -139,7 +129,7 @@ export function compareRatio(pair: PlanPair): number {
 }
 
 /** Same slides, same order: nothing to redraw */
-export const designSignature = (slides: DesignSlide[]) => slides.map((s) => `${s.kind}|${s.url}|${s.crop ? 1 : 0}|${s.caption}|${focusOf(s) ? Object.values(focusOf(s)!).join(',') : ''}`).join('\n');
+export const designSignature = (slides: DesignSlide[]) => slides.map((s) => `${s.kind}|${s.url}|${s.crop ? 1 : 0}|${s.caption}|${focusOf(s) ? Object.values(focusOf(s)!).join(',') : ''}|${s.cmp ? (s.cmp.none ? 'none' : s.cmp.before) : ''}`).join('\n');
 
 const ratios = new Map<string, Promise<number | null>>();
 /** height ÷ width of a picture, read off a tiny copy */

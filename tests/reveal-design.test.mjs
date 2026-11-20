@@ -342,3 +342,42 @@ test('a Before & after pair is off the page with its before photo: kept off, or 
   assert.equal(beforeAfterUrls(kid).filter((u) => /after-/.test(u)).length, 2);
   assert.ok(!beforeAfterUrls(kid).some((u) => /l-2\.jpg|l-3\.jpg/.test(u)), 'never the kept-off or waiting before');
 });
+
+// ── The plans before and after, lined up when they came in (Peter, Nov 19 2026: "Yes, before Max") ──
+import { storedCompare } from '../public/admin/reveal-design.js';
+import { planPairOf as pairOfSlides, compareBox as boxOf, comparePixels as pixelsOf, storedCompareOf } from '../public/admin/plan-pair.js';
+
+const lineSheet = (kind, n) => ({ url: `https://imagedelivery.net/H/kids/k/plan-${n}-${kind}-drawing-sheet.png/public`, label: '', type: kind, w: 3200, h: 2071, addressCheck: 'wiped', focus: { x: 0.3, y: 0.2, w: 0.35, h: 0.5 } });
+const KEPT = (e, p) => ({ existing: e, proposed: p, box: { x: 0.25, y: 0.1, w: 0.4, h: 0.6 }, width: 1280, height: 1243, dx: -22, dy: 22, overlap: 0.776, before: 'https://imagedelivery.net/H/kids/k/plan-compare-1-x-existing.png/public', after: 'https://imagedelivery.net/H/kids/k/plan-compare-1-x-proposed.png/public' });
+
+test('the line-up kept on the profile rides on the existing plan’s slide, only for the two sheets it was made of', () => {
+  const e = lineSheet('as-built', 1), p = lineSheet('proposed', 2);
+  const kid = { name: 'K', plans: [e, p], planCompare: KEPT(e.url, p.url) };
+  const slides = revealSlides(kid);
+  const ex = slides.find((s) => s.kind === 'as-built');
+  assert.deepEqual(ex.cmp, { proposed: p.url, box: { x: 0.25, y: 0.1, w: 0.4, h: 0.6 }, width: 1280, height: 1243, dx: -22, dy: 22, overlap: 0.776, before: kid.planCompare.before, after: kid.planCompare.after });
+  assert.equal(slides.find((s) => s.kind === 'proposed').cmp, undefined);
+  // Another proposed sheet now, or another existing one: not this pair's
+  assert.equal(revealSlides({ ...kid, plans: [e, lineSheet('proposed', 3)] }).find((s) => s.kind === 'as-built').cmp, undefined);
+  assert.equal(revealSlides({ ...kid, plans: [lineSheet('as-built', 4), p] }).find((s) => s.kind === 'as-built').cmp, undefined);
+  // Unreadable: none
+  for (const bad of [{ box: { x: 0.9, y: 0.1, w: 0.4, h: 0.6 } }, { box: null }, { width: 'x' }, { before: '' }, { after: 'blob:x' }, { dx: NaN }]) {
+    assert.equal(storedCompare({ ...KEPT(e.url, p.url), ...bad }, e.url, p.url), null, JSON.stringify(bad));
+  }
+  // Two that don't line up
+  assert.deepEqual(storedCompare({ existing: e.url, proposed: p.url, none: true }, e.url, p.url), { proposed: p.url, none: true });
+});
+
+test('a pair kept as not lining up is no pair; one lined up cuts where it was cut, so the card is the shape of its pictures', () => {
+  const e = lineSheet('as-built', 1), p = lineSheet('proposed', 2);
+  const fresh = pairOfSlides(revealSlides({ plans: [e, p] }));
+  assert.ok(fresh, 'a pair, not lined up yet');
+  assert.equal(storedCompareOf(fresh), null);
+  const computed = boxOf(fresh);
+  assert.equal(pairOfSlides(revealSlides({ plans: [e, p], planCompare: { existing: e.url, proposed: p.url, none: true } })), null);
+  const kept = pairOfSlides(revealSlides({ plans: [e, p], planCompare: KEPT(e.url, p.url) }));
+  assert.deepEqual(boxOf(kept), { x: 0.25, y: 0.1, w: 0.4, h: 0.6 });
+  assert.notDeepEqual(boxOf(kept), computed);
+  assert.deepEqual(pixelsOf(kept), { left: 800, top: 207, width: 1280, height: 1243 });
+  assert.equal(storedCompareOf(kept).before, KEPT(e.url, p.url).before);
+});
