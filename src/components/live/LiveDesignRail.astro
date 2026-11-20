@@ -137,6 +137,20 @@
   .hds-cmp .hds-half { clip-path: inset(0 50% 0 0); }
   .hds-cmp::before { content: ''; position: absolute; z-index: 1; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--c-dark); pointer-events: none; }
   .hds-tag--cmp { background: var(--c-yellow); color: var(--c-dark); }
+  /* ...a real one, in place (live-design.ts railCompare): the compare fills the card, its line dragged sideways, the strip
+     still scrolled up and down; a tap or its corner button opens it big. Its knob, corner button and words at the
+     strip's size, "Before" and "After" on their sides (the line passing one fades it) */
+  .hds-cmp--live { cursor: ew-resize; }
+  .hds-cmp--live::before { content: none; }
+  .hds-cmp--live:hover { transform: none; }
+  .hds-cmp--live .pcmp { position: absolute; inset: 0; width: auto; aspect-ratio: auto; border-radius: inherit; background: transparent; }
+  .hds-cmp--live .pcmp__knob { width: 30px; height: 30px; margin: -15px 0 0 -15px; }
+  .hds-cmp--live .pcmp__knob svg { width: 15px; height: 15px; }
+  .hds-cmp--live .pcmp__tag { top: 5px; padding: 3px 6px 2px; border-radius: 5px; font-size: 9.5px; letter-spacing: 0.06em; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.92); }
+  .hds-cmp--live .pcmp__tag--before { left: 5px; }
+  .hds-cmp--live .pcmp__tag--after { right: 5px; }
+  .hds-cmp--live .pcmp__enlarge { right: 5px; bottom: 5px; width: 28px; height: 28px; }
+  .hds-cmp--live .pcmp__enlarge svg { width: 14px; height: 14px; }
 
   @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
     .hero { --hds-w: clamp(76px, 23vw, 92px); --hds-h: 88px; --hds-gap: 10px; }

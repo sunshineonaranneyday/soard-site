@@ -66,7 +66,7 @@ export function attachCompare(container: HTMLElement, opts: CompareOptions = {})
   let pos = 50;
   let vel = 0;
   let raf = 0;
-  let drag: { id: number; x0: number; y0: number; t0: number; moved: boolean; lastX: number; lastT: number; vels: number[] } | null = null;
+  let drag: { id: number; x0: number; y0: number; t0: number; moved: boolean; scrolled?: boolean; lastX: number; lastT: number; vels: number[] } | null = null;
   let lastTap = 0;
   let introPlayed = !opts.intro || reduced();
   const stop = () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
@@ -109,6 +109,8 @@ export function attachCompare(container: HTMLElement, opts: CompareOptions = {})
     if (opts.grabs && !opts.grabs(e)) return;
     stop();
     vel = 0;
+    // (someone has found the line: its sweep, still to come while its pictures load, never takes it from where they leave it)
+    if (!introPlayed) { introPlayed = true; io?.disconnect(); }
     drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, lastX: e.clientX, lastT: performance.now(), vels: [] };
     try { container.setPointerCapture(e.pointerId); } catch { /* a pointer already gone */ }
     container.classList.add('is-dragging');
@@ -119,7 +121,15 @@ export function attachCompare(container: HTMLElement, opts: CompareOptions = {})
   const onMove = (e: PointerEvent) => {
     if (!drag || e.pointerId !== drag.id) return;
     const now = performance.now();
-    if (!drag.moved && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < TAP_SLOP) return;
+    if (!drag.moved) {
+      const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+      if (Math.hypot(dx, dy) < TAP_SLOP) return;
+      // A finger going up or down is the page's (or a strip's) scroll, never the line: it waits for the browser to take
+      // it (pointercancel) and it's no tap either. Before, the line leapt to the finger in the moves before the browser
+      // took over (Nov 20 2026, the live page's plan on a phone). A mouse has no scroll to share: it always drags
+      if (e.pointerType !== 'mouse' && Math.abs(dy) > Math.abs(dx)) { drag.scrolled = true; return; }
+      if (drag.scrolled) return;
+    }
     drag.moved = true;
     const dt = now - drag.lastT, dx = e.clientX - drag.lastX;
     const r = container.getBoundingClientRect();
@@ -135,6 +145,7 @@ export function attachCompare(container: HTMLElement, opts: CompareOptions = {})
     container.classList.remove('is-dragging');
     if (e.type === 'pointercancel') return;
     if (!d.moved) {
+      if (d.scrolled) return;
       // A tap: the caller's, or (without one) a double tap centres the line
       if (opts.onTap) { opts.onTap(e); return; }
       const now = Date.now();

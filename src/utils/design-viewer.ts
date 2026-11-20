@@ -294,9 +294,12 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
 
   // ── The plan's compare ──
   /** Its line at the place it marks on the zoomed pictures, its labels on the pictures' visible corners */
-  function placeLine(p: Pane, animate = false) {
+  // (at: the line's place as the slider has just set it. While the slider is being made, the pane doesn't hold it yet, and
+  // a compare opened where the line was left on the page (not the middle) had its pictures cut there and its line and knob
+  // drawn in the middle until the first drag, Nov 20 2026)
+  function placeLine(p: Pane, animate = false, at?: number) {
     const root = p.cmp!.root;
-    const pos = p.cmp!.handle?.pos ?? 50;
+    const pos = at ?? p.cmp!.handle?.pos ?? 50;
     const left = Math.max(0, p.x), right = Math.min(pw, p.x + p.cw * p.k), top = Math.max(0, p.y), bottom = Math.min(ph, p.y + p.ch * p.k);
     const lineX = p.x + (p.k * p.cw * pos) / 100;
     root.style.setProperty('--line', `${lineX.toFixed(1)}px`);
@@ -318,7 +321,7 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
       // (it starts where the line was left on the page; it sweeps in only if no one has seen it yet)
       intro: from == null,
       onTap: () => {},
-      onMove: (pos) => { placeLine(p); hooks.onCompareMove(pos); },
+      onMove: (pos) => { placeLine(p, false, pos); hooks.onCompareMove(pos); },
       // A finger moves the line only from the line itself: anywhere else it swipes on to the next picture, drags down to
       // close, or (zoomed) moves the picture, as on any other. A mouse drags it from anywhere, unless it's zoomed
       grabs: (e) => grabsLine(p, e),

@@ -386,22 +386,27 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     return li;
   }
 
-  /** The strip's compare: the two plans half and half, a line between; it opens the compare big */
-  let railCmp: HTMLButtonElement | null = null;
+  /**
+   * The strip's compare: a real one, in place (Peter, Nov 20 2026, on a phone: "the plans slider doesnt seem to actually
+   * work"). It was a picture of one on a button: a finger's drag scrolled the strip and nothing moved. Now a sideways drag
+   * moves its line (up and down still scrolls the strip: the compare lets the page pan up and down), and a tap or its
+   * corner button opens it big, as the room's beside the video does on a computer. Its pictures are made once it's near
+   * the strip's view (mountCompare)
+   */
+  let railCmp: HTMLElement | null = null;
   function railCompare() {
     const li = el('li', 'hds-cmp-li');
-    const b = el('button', 'hds-item hds-paper hds-cmp');
-    b.type = 'button';
-    b.setAttribute('aria-label', 'See it big: the floor plan before and after, a line to drag between them');
-    b.append(...compareThumb('hds-half'), el('span', 'hds-tag hds-tag--cmp', 'Before & after'));
-    b.addEventListener('click', () => open('cmp', b));
-    li.append(b);
-    railCmp = b;
-    // Its pictures are made once it's in the strip's view (the strip shows, and it's scrolled to)
-    if (typeof IntersectionObserver !== 'undefined') {
-      const near = new IntersectionObserver((list) => { if (list.some((x) => x.isIntersecting)) { near.disconnect(); void wantCompare(); } }, { rootMargin: '200px' });
-      near.observe(b);
-      compares.push({ root: b, handle: { pos: 50, set() {}, intro() {}, cancel() {}, destroy() {} }, near });
+    const box = el('div', 'hds-item hds-paper hds-cmp hds-cmp--live');
+    li.append(box);
+    railCmp = box;
+    if (pair) {
+      box.innerHTML = compareHtml(pair, true, 'pcmp--strip');
+      // ("Before" and "After" on their sides at the strip's size, each stepping aside as the line comes to it; the viewer
+      // and the room keep the sheets' own EXISTING and PROPOSED)
+      const tb = box.querySelector('[data-pcmp="tag-before"]'); if (tb) tb.textContent = 'Before';
+      const ta = box.querySelector('[data-pcmp="tag-after"]'); if (ta) ta.textContent = 'After';
+      const root = box.querySelector<HTMLElement>('.pcmp');
+      if (root) mountCompare(root, () => open('cmp', box));
     }
     return li;
   }
