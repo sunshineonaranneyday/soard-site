@@ -700,8 +700,10 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
     // the big picture is the same size whichever part shows (nothing moves at a switch)
     thumbs.hidden = !partsNow.some((p) => entriesOf(p).length > 1);
     thumbs.toggleAttribute('data-one', entries.length < 2);
-    // Previous and next on the big one's edges, while the part has more than one picture
-    for (const k of ['prev', 'next']) { const n = rq(k); if (n) n.hidden = entries.length < 2; }
+    // Previous and next on the big one's edges: the room's photos only, while there's more than one (the plan has its own
+    // before-and-after line to drag, and nothing goes over it; Peter, Nov 20 2026: "do we need them on the plans??? dont
+    // want it to interfere with the plan view")
+    for (const k of ['prev', 'next']) { const n = rq(k); if (n) n.hidden = entries.length < 2 || part.key !== 'photos'; }
     // The one showing big is marked among the small ones (the one the Tab key stops at: the arrows go through the
     // rest), and kept in sight among them, clear of a faded edge
     const tbs = [...thumbs.querySelectorAll<HTMLButtonElement>('.lrm-thumb')];

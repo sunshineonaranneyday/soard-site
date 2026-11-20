@@ -19,8 +19,8 @@
  *   └─────────────────────┘ ▢     viewer beside the video (the reveal plays on)
  *   1 of 5 · click to see it big
  *
- * Previous and next on the big one's edges go through the part's pictures one at a time (Nov 20 2026), and so do the
- * left and right arrow keys on it.
+ * Previous and next on the room's photo's edges go through the photos one at a time, shown once the pointer is on the
+ * picture (Nov 20 2026); the left and right arrow keys on it do the same. Never on the plan: its line is dragged.
  *
  * The plan's first picture is its compare (Peter, Nov 18 2026): the floor
  * plan today and the new one on one picture, a line between them to drag
@@ -140,6 +140,15 @@
   .lrm-nav--next { right: 12px; }
   .lrm-nav--next svg { margin-right: -2px; }
   .lrm-row:has(> .lrm-thumbs:not([hidden])) .lrm-nav--next { right: calc(var(--lrm-rail) + var(--lrm-gap) + 4px + 12px); }
+  /* (out of sight until the pointer is on the picture or they're reached by the keyboard, so the photo is the photo;
+     Peter, Nov 20 2026: "the left and right arrows should be hidden until users is in the photo right?". A touch screen
+     can't point first, so there they stay) */
+  @media (hover: hover) {
+    .lrm-nav { opacity: 0; transition: opacity 180ms ease, transform 160ms ease, background-color 160ms ease; }
+    .lrm-row:has(> .lrm-big:hover, > .lrm-nav:hover) .lrm-nav,
+    .lrm-big:focus-visible ~ .lrm-nav,
+    .lrm-nav:focus-visible { opacity: 1; }
+  }
   .lrm-nav:hover { background: #fff; transform: scale(1.06); }
   .lrm-nav:active { transform: scale(0.94); }
   .lrm-nav:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; box-shadow: 0 0 0 5px var(--c-yellow); }
