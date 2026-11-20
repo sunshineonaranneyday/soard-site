@@ -602,71 +602,20 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden]))) .hero-frame :global([data-stage][data-party]) { --under: 0px; }
       :global(.hero[data-party][data-orientation='portrait']:has(.lsp:not([hidden]))) .hero-frame :global(.stage__under) { height: 0; margin: 0; overflow: hidden; visibility: hidden; }
 
-      /* ── One frame, live and in the replay (Peter: yes to "one layout for live and the replay"): the picture, the rail
-         of its controls beside it (LiveStage's live rail; the replay's play, captions and full screen in the same place),
-         and under the picture a row for the replay's timeline, kept empty while live. The picture is the same size in
-         both, so nothing moves when the reveal ends, nor when its replay starts. (Full screen is full screen: its own
-         layout, LiveStage) ── */
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait']:not([data-fullscreen])) { --line: 48px; --rail: 56px; --rail-gap: 12px; }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait'][data-rail]:not([data-fullscreen])) {
-        --below: calc(var(--line) + var(--under, 0px));
-        grid-template-rows: auto var(--line) auto;
-        grid-template-areas: '. screen . bar .' '. . . . .' 'under under under under under';
-      }
-      /* The replay (and "That's the reveal!" after the live picture): the same columns, the rail's place kept even when it
-         has nothing to show */
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen])) {
+      /* ── One frame, live and in the replay (Peter: yes to "one layout for live and the replay"): LiveStage lays it out,
+         on a computer's Theater as on a phone held upright. Here, what's the Theater's own: "That's the reveal!" after
+         the live picture keeps the rail's place, with nothing in it, so the picture never moves at the end; and every
+         slot in the rail is as tall live as in the replay (78px: a two-line word's), so nothing moves between them ── */
+      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-mode='replay']):not([data-fullscreen])),
+      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait'][data-ended]:not([data-rail]):not([data-fullscreen])) {
         --below: calc(var(--line) + var(--under, 0px));
         grid-template-columns: minmax(0, 1fr) minmax(0, var(--pic)) var(--rail-gap) var(--rail) minmax(0, 1fr);
         grid-template-rows: auto auto var(--line) auto;
         grid-template-areas: '. screen . bar .' '. cc . . .' '. . . . .' 'under under under under under';
         width: min(var(--stage-max, 100%), calc(var(--pic) + var(--rail-gap) + var(--rail)));
       }
-      /* (captions on: their line under the picture, which gives it the room, as anywhere else) */
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait'][data-cc]:not([data-rail]):not([data-fullscreen])) {
-        --below: calc(var(--line) + 3.4em + var(--gap) + var(--under, 0px));
-      }
-      /* The replay's rail, slot for slot the live one's: play where Tap for sound is (an ink circle), captions where From
-         the start is, full screen where full screen is; each a 46px circle with its word under it, every slot the same
-         height live and in the replay (78px: a two-line word's), so nothing moves between them. Captions keep their slot
-         until the replay has them, never pushing full screen along */
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .stage__bar:not([hidden])) {
-        grid-area: bar; position: static; align-self: stretch; height: auto; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; display: block;
-      }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:not([hidden])) {
-        display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; height: 100%; position: static;
-      }
       .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-party][data-rail] .bar__end > button:not(.bar__heart)),
       .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > button) { min-height: 78px; justify-content: flex-start; }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > button) {
-        display: grid; grid-template-rows: 46px auto; justify-items: center; align-content: start; row-gap: 6px; width: 100%; height: auto; margin: 0; padding: 0;
-        border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--c-dark); font: inherit; transform: none;
-      }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__cc[hidden]) { display: grid; visibility: hidden; }
-      /* (the round parts: play's ink with its icon on it, the others white with a hairline, as the live rail's) */
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__play::before) {
-        content: ''; grid-row: 1; grid-column: 1; width: 46px; height: 46px; border-radius: 50%; background: var(--c-dark); box-shadow: 0 6px 16px rgba(30, 31, 37, 0.16);
-      }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__play .bar__morph) { grid-row: 1; grid-column: 1; align-self: center; z-index: 1; width: 17px; height: 17px; color: #fff; }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay :is(.bar__cc-ico, .bar__full-ico)) {
-        grid-row: 1; display: grid; place-items: center; width: 46px; height: 46px; box-sizing: border-box; border-radius: 50%; border: 1px solid var(--c-border); background: #fff;
-        font-size: 12px; font-weight: 800; letter-spacing: 0.04em; transition: border-color 150ms ease, background 150ms ease;
-      }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__cc[aria-pressed='true'] .bar__cc-ico) { background: var(--c-dark); border-color: var(--c-dark); color: #fff; }
-      @media (hover: hover) { .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > button:hover :is(.bar__cc-ico, .bar__full-ico)) { border-color: var(--c-dark); } }
-      /* (the words, as the live rail's; play's says Pause while it plays) */
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__lbl) {
-        display: block; grid-row: 2; font-size: 10.5px; font-weight: 700; line-height: 1.2; text-align: center; color: var(--c-text-muted);
-      }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage[data-playing]:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__lbl--play),
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-playing]):not([data-rail]):not([data-fullscreen]) .bar__replay .bar__lbl--pause) { display: none; }
-      /* ...and its timeline under the picture, in the row kept for it: the line, the reveal's star, the time played under
-         its start and the length under its end, from the picture's left edge to the rail (the picture's own width, however
-         the panel holds it) */
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(.seek, .bar__time)) {
-        position: absolute; left: 0; right: calc(var(--rail) + var(--rail-gap)); width: auto; bottom: calc(var(--under, 0px) + 4px);
-      }
-      .hero[data-party][data-orientation='portrait'] .hero-frame :global(.stage:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__time) { height: 14px; }
 
       /* The room: what the name and the messages leave of the column, its pictures taking what its switch leaves (never
          taller than the photo's own shape needs), giving way first on a short screen; on a tall one, with room to spare,
@@ -796,9 +745,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     .hero-onair__n:empty { display: none; }
     /* The newest message's line and the 12px over it: the video leaves room for them on the screen (LiveMessages), on a
        phone at least 740px tall; a shorter one keeps the video's size and has the line further down. From the held
-       screen height, --live-vh, so a keyboard coming up never resizes the video: 64px or nothing */
-    :global(.hero[data-party]:has([data-stage][data-rail]):has([data-msgs='latest']:not([hidden]))) .hero-party { margin-top: clamp(12px, calc((739px - var(--live-vh, 100svh)) * 100), 24px); }
-    :global(.hero[data-party]:has([data-stage][data-rail]):has([data-msgs='latest']:not([hidden]))) .hero-frame { --fh-cut: clamp(0px, calc((var(--live-vh, 100svh) - 739px) * 100), 64px); }
+       screen height, --live-vh, so a keyboard coming up never resizes the video: 64px or nothing. Live and in the
+       replay alike (one layout, LiveStage), so the video is the same size in both */
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-mode='replay'][data-orientation='portrait']:not([data-ended]))):has([data-msgs='latest']:not([hidden]))) .hero-party { margin-top: clamp(12px, calc((739px - var(--live-vh, 100svh)) * 100), 24px); }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-mode='replay'][data-orientation='portrait']:not([data-ended]))):has([data-msgs='latest']:not([hidden]))) .hero-frame { --fh-cut: clamp(0px, calc((var(--live-vh, 100svh) - 739px) * 100), 64px); }
   }
   @media (max-width: 768px) {
     .hero { padding-top: var(--hero-space-top); padding-bottom: var(--space-xl); min-height: auto; }

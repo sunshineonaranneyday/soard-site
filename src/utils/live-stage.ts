@@ -13,7 +13,7 @@
 import type { LiveClient, LivePlayer } from './live-client';
 import { mountPlayer, type LiveSeek, type PlayerHandle, type PlayerStatus } from './live-player';
 import { watchMeter } from './live-stats';
-import { PHONE, SIDE, typingIn } from './live-media';
+import { PHONE, PHONE_UPRIGHT, SIDE, typingIn } from './live-media';
 import { morphEase, morphPath } from './play-morph';
 
 export type StageMode = 'loading' | 'idle' | 'upcoming' | 'live' | 'replay';
@@ -144,6 +144,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   const { client } = opts;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const sideways = matchMedia(SIDE);
+  // (a phone or tablet held upright: the replay's rail carries its own way into the room there, LiveStage)
+  const upright = matchMedia(PHONE_UPRIGHT);
   const picture = $('picture');
   const screen = root.querySelector<HTMLElement>('.stage__screen');
   const playerEl = $('player');
@@ -666,6 +668,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       [$('heart'), live && roomy && (onAir || !isVideo) && !endShown],
       ...[...root.querySelectorAll<HTMLElement>('[data-full]')].map((b) => [b, !endShown && isVideo && (kind === 'replay' || (live && roomy))] as [HTMLElement, boolean]),
       [$('design'), rail && !!designFace && !endShown],
+      // (the replay's, in its rail on a phone held upright: one layout, live and in the replay, Peter, Nov 20 2026)
+      [$('design-r'), replayControls && party && !endShown && !!designFace && upright.matches && shape() === 'portrait' && document.fullscreenElement !== root],
     ]);
     railChange(shows);
     // "That's the reveal!": whose, and the replay when there's one (until then, when it will be)
@@ -689,6 +693,32 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     setHidden($('cc'), !root.hasAttribute('data-cc'));
     paintMark();
     paintJump(v?.currentTime ?? 0);
+    fitRail();
+  }
+
+  // The replay's rail beside the picture (one layout, live and in the replay: LiveStage) on a short picture, a small
+  // phone's (shorter still with captions on, whose line takes its room from the picture): step by step, as the live
+  // rail does, until its buttons fit the picture's height: first the words go and the buttons sit closer (data-rail-fit
+  // 'short'), then the circles are smaller ('tight'), then The room steps out ('tiny': the design is further down the
+  // page). Measured, not guessed from the screen's height: the picture's height turns on the page's header, the
+  // phone's toolbars, the box docked at its foot and the captions. Only when the rail's height or its buttons change
+  // (the rail is the picture's height, never its own content's: LiveStage contains it; the steps hide by CSS, not by
+  // [hidden], so they never change what's counted here)
+  let railSig = '';
+  function fitRail() {
+    const bar = $('replaybar');
+    if (!bar) return;
+    const railed = !bar.hidden && getComputedStyle(bar).flexDirection === 'column';
+    const shown = [...bar.children].filter((el) => el.tagName === 'BUTTON' && (!(el as HTMLElement).hidden || el.matches('.bar__cc'))).length;
+    const sig = railed ? `${bar.clientHeight}|${shown}` : '';
+    if (sig === railSig) return;
+    railSig = sig;
+    delete bar.dataset.railFit;
+    if (!railed) return;
+    for (const step of ['short', 'tight', 'tiny']) {
+      if (bar.scrollHeight <= bar.clientHeight + 1) break;
+      bar.dataset.railFit = step;
+    }
   }
 
   // The line while the replay is being made (END_LINE_MAX above): drawn every second, the transition between draws
@@ -1171,6 +1201,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   };
   const onSideways = () => paint();
   sideways.addEventListener('change', onSideways);
+  upright.addEventListener('change', onSideways);
   document.addEventListener('fullscreenchange', onFullscreen);
 
   // The captions line and the progress line, when their width changes (a turn, full screen, the layout chosen below,
@@ -1178,6 +1209,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // once, paused or not (a paused caption was cut at its third line until it played again)
   const roomWatch = 'ResizeObserver' in window ? new ResizeObserver(() => { paintCaption(video()?.currentTime ?? 0); paintMark(); }) : null;
   for (const el of [$('cc'), seek?.parentElement]) if (el) roomWatch?.observe(el);
+  // (the replay's rail, when the picture beside it changes height)
+  const railWatch = 'ResizeObserver' in window ? new ResizeObserver(() => fitRail()) : null;
+  const replayBar = $('replaybar');
+  if (replayBar) railWatch?.observe(replayBar);
 
   // ── Which way round, on a phone held sideways ──
   // LiveStage has more than one way to lay the stage out there (data-fit): in full screen, the controls beside the
@@ -1298,8 +1333,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     setDesign(face: string) {
       if (face === designFace) return;
       designFace = face;
-      const img = $('design-face') as HTMLImageElement | null;
-      if (img && face && img.getAttribute('src') !== face) img.src = face;
+      for (const k of ['design-face', 'design-face-r']) {
+        const img = $(k) as HTMLImageElement | null;
+        if (img && face && img.getAttribute('src') !== face) img.src = face;
+      }
       paint();
     },
     pin(on: boolean, where: 'give' | 'design' = 'give') {
@@ -1315,12 +1352,14 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       io?.disconnect();
       document.removeEventListener('fullscreenchange', onFullscreen);
       sideways.removeEventListener('change', onSideways);
+      upright.removeEventListener('change', onSideways);
       document.removeEventListener('focusin', onTyping);
       document.removeEventListener('focusout', onTypingOut);
       phone.removeEventListener('change', onTyping);
       removeEventListener('resize', refit);
       fitWatch.disconnect();
       roomWatch?.disconnect();
+      railWatch?.disconnect();
       roomProbe.remove();
       for (const off of offs) off();
       for (const t of floats) clearTimeout(t);

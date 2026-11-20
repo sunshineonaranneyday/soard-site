@@ -271,7 +271,9 @@ try {
     ok(g.leaveLinks === 0, `nothing sends viewers off to watch somewhere else (${g.leaveLinks} links)`);
     if (phone) {
       ok(g.h1.b <= g.picture.y && g.h1.y >= 0, `kid's name above the video (${g.h1.y}-${g.h1.b})`);
-      ok(g.picture.w >= 250, `video at least 250px wide (${g.picture.w})`);
+      // (one layout, live and in the replay: the row kept under the picture for the replay's timeline costs live about
+      // 27px of width on a phone, 252 to 225 at 420×713; Peter, Nov 20 2026: "Yes, one layout")
+      ok(g.picture.w >= 225, `video at least 225px wide (${g.picture.w})`);
       // Touch screens get 44px minimum buttons site-wide: the round controls must stay round at that size
       const odd = await page.evaluate(() => [...document.querySelectorAll('[data-stage]:not([data-rail]) .bar__btn:not(.bar__cc), [data-stage] .bar__play, [data-stage][data-rail] .bar__ico')].filter((el) => el.getBoundingClientRect().width > 0).map((el) => el.getBoundingClientRect()).filter((b) => Math.abs(b.width - b.height) > 1 || b.height < 44).length);
       ok(odd === 0, `round controls are 44px circles (at least) on a touch screen (${odd} out of shape)`);
@@ -836,7 +838,8 @@ try {
   ok(loaded.buf > loaded.f, `how much has loaded shows past where it's at (${JSON.stringify(loaded)})`);
   // A press on play: it gives, then springs back when the finger lifts (and the tap pauses it)
   const pb = await page.$eval('[data-s="play"]', (b) => { const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
-  const scaleOf = () => page.$eval('[data-s="play"]', (b) => { const t = getComputedStyle(b).transform; return { on: b.hasAttribute('data-press'), scale: t === 'none' ? 1 : new DOMMatrix(t).a }; });
+  // (in the rail beside the picture, its round part gives, its word staying put; in a bar, the whole button)
+  const scaleOf = () => page.$eval('[data-s="play"]', (b) => { const ico = b.firstElementChild; const el = ico && getComputedStyle(ico).display !== 'contents' ? ico : b; const t = getComputedStyle(el).transform; return { on: b.hasAttribute('data-press'), scale: t === 'none' ? 1 : new DOMMatrix(t).a }; });
   await touch('touchStart', pb.x, pb.y); await sleep(160);
   const pressed = await scaleOf();
   await touch('touchEnd', pb.x, pb.y); await sleep(500);
@@ -945,9 +948,10 @@ try {
   await sleep(500);
   await page.evaluate(() => { const v = document.querySelector('.stage__player video'); v.currentTime = 0.3; document.querySelector('[data-s="play"]').click(); });
   await waitFor(page, ['playing']);
-  // (scrolled until the picture is docked while its bar is still on screen)
+  // (scrolled until the picture is docked while its line is still on screen: under the picture, its buttons in the rail
+  // beside it, one layout live and in the replay)
   const dockedAt = await page.evaluate(async () => {
-    const bar = document.querySelector('[data-s="bar"]');
+    const bar = document.querySelector('.seek');
     for (let y = 0; y < 1200; y += 20) {
       scrollTo(0, y); await new Promise((r) => setTimeout(r, 60));
       const b = bar.getBoundingClientRect();
@@ -955,7 +959,7 @@ try {
     }
     return null;
   });
-  if (dockedAt == null) ok(false, 'the corner player with the bar still on screen (no scroll position gives both here)');
+  if (dockedAt == null) ok(false, 'the corner player with the line still on screen (no scroll position gives both here)');
   else {
     const lnK = await page.$eval('.seek__line', (l) => { const r = l.getBoundingClientRect(); return { l: r.left + 8, r: r.right - 8, y: r.top + r.height / 2 }; });
     const atK = (f) => lnK.l + (lnK.r - lnK.l) * f;

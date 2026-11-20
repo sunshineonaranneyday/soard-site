@@ -801,18 +801,21 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
   // The rail beside a live upright video sits where the design's strip did, so it carries a button with the room's first
   // picture for its face; it opens the viewer at that picture (the video kept small in the corner). Not while the room
   // beside the video (a computer's Theater) shows the design already
-  const railBtn = frame?.querySelector<HTMLButtonElement>('[data-s="design"]') || null;
+  // (and the replay's, in its rail on a phone held upright: one layout, live and in the replay. The viewer opens from
+  // whichever was pressed, and goes back into it)
+  const railBtns = [...(frame?.querySelectorAll<HTMLButtonElement>('[data-s="design"], [data-s="design-r"]') || [])];
   function railFace() {
     if (!stage) return;
     const first = slides.find((x) => x.kind === 'before') || slides[0];
     if (!first || roomShowing()) { stage.setDesign(''); return; }
     void slideSrc(first, 140).then((src) => { if (alive && (slides.find((x) => x.kind === 'before') || slides[0]) === first && !roomShowing()) stage.setDesign(src || ''); });
   }
-  const onRailBtn = () => {
+  const onRailBtn = (e: Event) => {
+    const btn = e.currentTarget as HTMLButtonElement;
     const first = itemsNow()[0];
-    if (first) open(first.kind === 'compare' ? 'cmp' : first.s, railBtn?.querySelector('img') || railBtn);
+    if (first) open(first.kind === 'compare' ? 'cmp' : first.s, btn.querySelector('img') || btn);
   };
-  railBtn?.addEventListener('click', onRailBtn);
+  railBtns.forEach((b) => b.addEventListener('click', onRailBtn));
 
   // ── Viewer (its pictures: design-viewer.ts) ──
   let mode: ViewerMode = 'modal';
@@ -1095,7 +1098,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       return r && r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth ? r : null;
     };
     const originShows = origin && (it.kind === 'compare' ? !!origin.closest('.pcmp, .hds-cmp') || origin === rq('big') : origin === rq('big') || (cards.get(it.s) || []).some((li) => li.contains(origin)) || railCards.get(it.s)?.contains(origin));
-    if (originShows || origin === railBtn?.querySelector('img')) { const r = mine(origin); if (r) return r; }
+    if (originShows || railBtns.some((b) => origin === b.querySelector('img'))) { const r = mine(origin); if (r) return r; }
     if (roomShowing()) return mine(it.kind === 'compare' ? rq('cmp') : rq('big'));
     const cardEl = it.kind === 'compare' ? railCmp || parts.querySelector('.ldz-compare .pcmp') : railCards.get(it.s) || cards.get(it.s)?.[0];
     return mine(cardEl);
@@ -1207,7 +1210,7 @@ export function createLiveDesign(section: HTMLElement, opts: Options = {}) {
       vq('next')?.removeEventListener('click', onNext);
       vq('zoom')?.removeEventListener('click', onZoomClick);
       vq<HTMLElement>('close')?.removeEventListener('click', onCloseBtn);
-      railBtn?.removeEventListener('click', onRailBtn);
+      railBtns.forEach((b) => b.removeEventListener('click', onRailBtn));
       viewer?.removeEventListener('keydown', onKey);
       viewer?.removeEventListener('click', onBackdrop);
       viewer?.removeEventListener('cancel', onCancel);

@@ -58,9 +58,11 @@
   /* A phone held upright (every phone, no tablet): the picture is sized by the screen's height, so its width leaves room
      at the sides; the strip takes all of it, the picture at the left edge and the strip out to the right, with the bar
      the whole width under them (Peter, Nov 18 2026: "can this take up more available space on the mobile?";
-     the picture and a 92px strip sat in the middle with 50px of cream either side). Bigger pictures of the room too */
+     the picture and a 92px strip sat in the middle with 50px of cream either side). Bigger pictures of the room too.
+     (Live and in the replay the picture has its rail there instead, the rail's The room opening the same viewer: Peter,
+     Nov 20 2026, "Yes, one layout", LiveStage. The strip is beside "That's the reveal!") */
   @media (max-width: 559px) {
-    .hero[data-party][data-design][data-orientation='portrait'] [data-stage][data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) {
+    .hero[data-party][data-design][data-orientation='portrait'] [data-stage][data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]):is([data-ended], :not([data-mode='replay'])) {
       width: 100%;
       grid-template-columns: 0px minmax(0, var(--pic)) var(--beside-gap) minmax(var(--beside), 1fr) 0px;
     }

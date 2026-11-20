@@ -129,8 +129,8 @@ const ICON = {
     <div class="bar__replay" data-s="replaybar" hidden>
       <!-- One icon that turns from play into pause and back (play-morph.ts), never one blinking out for the other -->
       <button class="bar__play" type="button" data-s="play" aria-label="Play">
-        <svg class="bar__morph" viewBox="0 0 24 24" aria-hidden="true"><path data-s="morph" d={morphPath(0)} /></svg>
-        <!-- (its word, in the Theater's rail only: "Play", "Pause" while it plays) -->
+        <span class="bar__play-ico"><svg class="bar__morph" viewBox="0 0 24 24" aria-hidden="true"><path data-s="morph" d={morphPath(0)} /></svg></span>
+        <!-- (its word, in the rail only: "Play", "Pause" while it plays) -->
         <span class="bar__lbl bar__lbl--play" aria-hidden="true">Play</span><span class="bar__lbl bar__lbl--pause" aria-hidden="true">Pause</span>
       </button>
       <!-- The progress line. A finger or the mouse works it anywhere along it (live-stage.ts): the picture follows the
@@ -151,6 +151,9 @@ const ICON = {
       <span class="bar__time" data-s="time"><span data-s="time-now">0:00</span><span class="bar__total" data-s="time-total"></span></span>
       <button class="bar__btn bar__cc" type="button" data-s="cc-toggle" aria-label="Captions" aria-pressed="false" title="Captions (C)" hidden><span class="bar__cc-ico">CC</span><span class="bar__lbl" aria-hidden="true">Captions</span></button>
       <button class="bar__btn bar__full" type="button" data-full aria-label="Full screen" title="Full screen (F)"><span class="bar__full-ico"><span class="full-in"><Fragment set:html={ICON.full} /></span><span class="full-out"><Fragment set:html={ICON.fullExit} /></span></span><span class="bar__lbl" aria-hidden="true">Full screen</span></button>
+      <!-- The replay's way into the room, in its rail on a phone held upright, where the live rail has its own (the room's
+           first picture for its face; live-design.ts opens the viewer from either) -->
+      <button class="bar__btn bar__design" type="button" data-s="design-r" aria-label="See the room and the plan" title="The room and the plan" hidden><span class="bar__ico"><img data-s="design-face-r" alt="" decoding="async" /></span><span class="bar__lbl" aria-hidden="true">The room</span></button>
     </div>
   </div>
 
@@ -402,9 +405,9 @@ const ICON = {
   /* (the icons' own boxes, and the words that go under them in the rail: none in the bar) */
   .bar__ico { display: grid; place-items: center; }
   /* Full screen's icon: out to the corners, then, while full screen, back in (live-stage.ts names it to match) */
-  /* (the round part and the word of captions and full screen: the Theater's rail draws them, LivePage; anywhere else
-     the button is the round part, as ever) */
-  .bar__cc-ico, .bar__full-ico { display: contents; }
+  /* (the round part and the word of play, captions and full screen: the rail draws them, below; anywhere else the
+     button is the round part, as ever) */
+  .bar__play-ico, .bar__cc-ico, .bar__full-ico { display: contents; }
   .full-in, .full-out { display: grid; place-items: center; }
   .full-out, .stage[data-fullscreen] .full-in { display: none; }
   .stage[data-fullscreen] .full-out { display: grid; }
@@ -498,6 +501,99 @@ const ICON = {
     /* (the round part shrinks for a tap, above, not the whole button; and its entrance never runs again for one) */
     .stage[data-rail] .bar__heart:active, .stage[data-rail] .bar__heart.is-pop, .stage[data-rail] .bar__heart.is-beat { transform: none; }
   }
+
+  /* ── One layout, live and in the replay: on a computer's Theater (Peter, Nov 19 2026: yes to "one layout for live and
+     the replay") and on a phone or tablet held upright (Nov 20 2026: "Yes, one layout"). The picture, the rail of its
+     controls beside it (live's, above; the replay's play, captions and full screen in the same place, and on a phone
+     its way into the room), and under the picture a row for the replay's timeline, kept empty while live. The picture
+     is the same size in both, so nothing moves when the reveal ends and its replay starts. (A computer narrower than
+     the Theater and a phone held sideways keep the replay's bar, their own layouts; full screen is full screen.) On a
+     phone, "That's the reveal!" keeps its own layout (the design beside the note, the note centred: Peter's iPhone,
+     Nov 18 2026); the Theater keeps the rail's place for it (LivePage) ── */
+  /* (the Theater's width and PHONE_UPRIGHT, word for word as in LivePage and src/utils/live-media.ts) */
+  @media (min-width: 1200px), (max-width: 559px), (max-width: 960px) and (max-aspect-ratio: 1749/1000), (max-width: 960px) and (min-height: 541px) {
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) { --line: 48px; --rail: 56px; --rail-gap: 12px; }
+    .stage[data-party][data-orientation='portrait'][data-rail]:not([data-fullscreen]) {
+      --below: calc(var(--line) + var(--under, 0px));
+      grid-template-rows: auto var(--line) auto;
+      grid-template-areas: '. screen . bar .' '. . . . .' 'under under under under under';
+    }
+    .stage[data-party][data-orientation='portrait'][data-mode='replay']:not([data-rail]):not([data-ended]):not([data-fullscreen]) {
+      --below: calc(var(--line) + var(--under, 0px));
+      grid-template-columns: minmax(0, 1fr) minmax(0, var(--pic)) var(--rail-gap) var(--rail) minmax(0, 1fr);
+      grid-template-rows: auto auto var(--line) auto;
+      grid-template-areas: '. screen . bar .' '. cc . . .' '. . . . .' 'under under under under under';
+      width: min(var(--stage-max, 100%), calc(var(--pic) + var(--rail-gap) + var(--rail)));
+    }
+    /* (captions on: their line under the picture, which gives it the room, as anywhere else) */
+    .stage[data-party][data-orientation='portrait'][data-mode='replay'][data-cc]:not([data-rail]):not([data-ended]):not([data-fullscreen]) {
+      --below: calc(var(--line) + 3.4em + var(--gap) + var(--under, 0px));
+    }
+    /* (the design's strip gives its place to the rail: the rail's The room opens the same viewer) */
+    .stage[data-party][data-orientation='portrait'][data-mode='replay']:not([data-rail]):not([data-ended]):not([data-fullscreen]) .stage__beside { display: none; }
+    /* The replay's rail, slot for slot the live one's: play where Tap for sound is (an ink circle), captions where From
+       the start is, full screen where full screen is, each a 46px circle with its word under it. Captions keep their
+       slot until the replay has them, never pushing full screen along. (The bar's own container is set aside: the
+       timeline under the picture is placed by the stage, and nothing may make the bar its box instead) */
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .stage__bar:not([hidden]) {
+      grid-area: bar; position: static; align-self: stretch; height: auto; min-height: 0; margin: 0; padding: 0; border: 0; border-radius: 0; background: none; display: block; container: none;
+      /* (as tall as the picture, whatever it holds: its buttons never make the row taller than the picture) */
+      contain: size;
+    }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:not([hidden]) {
+      display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; height: 100%; position: static;
+    }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button {
+      display: grid; grid-template-rows: 46px auto; justify-items: center; align-content: start; row-gap: 6px; flex-shrink: 0; width: 100%; height: auto; margin: 0; padding: 0;
+      border: 0; border-radius: 0; background: none; box-shadow: none; color: var(--c-dark); font: inherit; transform: none;
+    }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button[hidden] { display: none; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__cc[hidden] { display: grid; visibility: hidden; }
+    /* (the round parts: play's ink with its icon on it, the others white with a hairline, as the live rail's) */
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) {
+      grid-row: 1; display: grid; place-items: center; width: 46px; height: 46px; box-sizing: border-box; border-radius: 50%; border: 1px solid var(--c-border); background: #fff; color: var(--c-dark);
+      font-size: 12px; font-weight: 800; letter-spacing: 0.04em; transition: border-color 150ms ease, background 150ms ease, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__play-ico { border: 0; background: var(--c-dark); color: #fff; box-shadow: 0 6px 16px rgba(30, 31, 37, 0.16); }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__morph { width: 17px; height: 17px; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button :global(svg) { width: 19px; height: 19px; }
+    /* (a press: the round part gives under it and springs back, the word staying put) */
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button[data-press] > :first-child { transform: scale(0.88); transition: transform 90ms ease-out; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__cc[aria-pressed='true'] .bar__cc-ico { background: var(--c-dark); border-color: var(--c-dark); color: #fff; }
+    /* (the room: its first picture in the circle, ringed in ink, as in the live rail) */
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__design .bar__ico { padding: 0; overflow: hidden; border: 2px solid var(--c-dark); box-shadow: 0 0 0 2px #fff, 0 4px 12px rgba(30, 31, 37, 0.14); }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__design img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 50%; }
+    @media (hover: hover) {
+      .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:hover :is(.bar__cc-ico, .bar__full-ico) { border-color: var(--c-dark); }
+      .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__design:hover .bar__ico { transform: scale(1.06); }
+    }
+    /* (the site's two-tone focus ring, on the round part only, as the live rail's) */
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:focus-visible { outline: none; box-shadow: none; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > button:focus-visible > :first-child { outline: 2px solid var(--c-dark); outline-offset: 2px; box-shadow: 0 0 0 5px var(--c-yellow); }
+    /* (the words, as the live rail's; play's says Pause while it plays) */
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__lbl {
+      display: block; grid-row: 2; max-width: 100%; font-size: 10.5px; font-weight: 700; line-height: 1.2; text-align: center; color: var(--c-text-muted);
+    }
+    .stage[data-party][data-orientation='portrait'][data-playing]:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__lbl--play,
+    .stage[data-party][data-orientation='portrait']:not([data-playing]):not([data-rail]):not([data-fullscreen]) .bar__replay .bar__lbl--pause { display: none; }
+    /* ...and its timeline under the picture, in the row kept for it: the line, the reveal's star, the time played under
+       its start and the length under its end, from the picture's left edge to the rail (the picture's own width,
+       however the page holds it) */
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(.seek, .bar__time) {
+      position: absolute; left: 0; right: calc(var(--rail) + var(--rail-gap)); width: auto; bottom: calc(var(--under, 0px) + 4px);
+    }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > .bar__time { height: 14px; }
+  }
+  /* A short rail (a small phone, or captions on): step by step until it fits the picture's height, as the live rail
+     does (live-stage.ts measures it, data-rail-fit): the words go and the circles sit closer, then the circles are smaller,
+     then The room steps out (the design is further down the page) */
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit]:not([hidden]) { gap: 10px; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit] .bar__lbl { display: none; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:is([data-rail-fit='tight'], [data-rail-fit='tiny']):not([hidden]) { gap: 7px; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:is([data-rail-fit='tight'], [data-rail-fit='tiny']) > button { grid-template-rows: 40px; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay:is([data-rail-fit='tight'], [data-rail-fit='tiny']) :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { width: 40px; height: 40px; }
+  .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay[data-rail-fit='tiny'] > .bar__design { display: none; }
+
   /* One heart floating up the column: it rises from the button, sways a little and fades near the top
      (--up: the column's height, --s1..3 and --r1..2: its own sway, set by live-stage.ts) */
   .bar__rise :global(.float) {
