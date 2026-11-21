@@ -1,76 +1,77 @@
-# Facebook App Review package: Live Video API
+# Facebook App Review package
 
-Goal: let the site create and end the Facebook live post itself, so the crew's only action is tapping Start in Larix. Until this is approved, the persistent stream key plus a pre-scheduled post does the same job with one extra step at the office.
+The Facebook app the site uses is "Sunshine on a Ranney Day" in developers.facebook.com, app id 3077726055757497 (named "Live URL" until Nov 21 2026, when Peter had it renamed before the App Review; the rename left the token and its permissions as they were). It belongs to the business portfolio "Sunshine on a Ranney Day / Sunny and Ranney" (193121635659663), whose Business Verification shows Verified.
 
-## What to request
+## Why it's needed (Nov 21 2026)
 
-In the Facebook app used for the page token: "Sunshine on a Ranney Day" in developers.facebook.com, app id 3077726055757497 (named "Live URL" until Nov 21 2026, when Peter had it renamed before the App Review; the rename left the token and its permissions as they were):
+The app is in Development mode. Meta shows what a Development-mode app creates only to people with a role on the app, so the Facebook lives the site posted for Dylan (Nov 18) and Max (Nov 20) were hidden from the public: logged out, both say "This content isn't available" while an ordinary Page video loads, someone without a role on the app saw a blank screen, and Facebook counted 4 and 3 views on a Page with 107K followers. Peter, as an admin, sees them under Past live videos.
 
-- Feature: **Live Video API**
-- Permissions: `publish_video`, `pages_manage_posts`, `pages_read_engagement`, `pages_show_list` (the last two are already in use)
+Switching the app to Live mode would make them public, but none of its permissions has Advanced Access (App Review → submissions listed all 13 as "Not submitted" on Nov 21), and Meta warns that going Live too early can make an app unusable even for people with a role on it. In July, in Live mode, Facebook refused `POST /{page-id}/live_videos` with error #10. So the order is: App Review for Advanced Access, then Live mode.
 
-Prerequisites Facebook checks: the page is more than 60 days old and has at least 100 followers (both true), the app has a privacy policy URL (`https://sunshineonaranneyday.com/privacy-policy/`), a Data Deletion Instructions URL (`https://sunshineonaranneyday.com/privacy-policy/#data-deletion`, section 09 of the policy), an app icon and category, and Business Verification is complete for the business that owns the app. Business Verification is the slow part; start it first if it isn't done.
+Peter's decisions (Nov 21): submit the App Review (he presses Submit himself); keep the site's automatic Facebook post until it's approved; if it isn't approved a few days before the first December reveal, switch to the persistent-key backup below, after he sees the steps.
 
-Admin → Broadcast → Settings → Facebook → **Test connection** shows the app id, the permissions the current token already has, the ones still missing, and a direct link to the app's App Review page.
+## What is requested
 
-## Where to submit
+Requested for Advanced Access, each with the description below and the screen recording. Times point into the recording.
 
-developers.facebook.com → the app → **App Review** → **Permissions and Features** → find "Live Video API" and each permission → **Request** → fill in the form → **Submit for review**.
+- **Live Video API** (feature):
+  > Sunshine on a Ranney Day is a 501(c)(3) nonprofit that builds free dream bedrooms and accessible bathrooms for children with special needs, and shows each child seeing their finished room live on our own Facebook Page. We use the Live Video API only to broadcast these room reveals on our own Page: when our crew's camera phone starts streaming to our server, the server creates the live video on our Page (POST /{page-id}/live_videos, status LIVE_NOW, with the child's name as the title and their story as the description), sends our stream to the returned RTMPS URL, checks the stream's health while live, and ends the live video when the phone stops (end_live_video) so the replay stays on our Page. Staff don't have to set up the post by hand during a fast, emotional event. Screen recording: steps 2 to 4 (0:29 to 1:07).
+- **publish_video**:
+  > Our server publishes the live video of each room reveal to our own Facebook Page through the Live Video API when our crew's camera phone starts streaming, and ends it when the phone stops so the replay stays on the Page. Only our own Page and our own videos. Screen recording: steps 2 and 3 (0:29 to 0:53).
+- **pages_manage_posts**:
+  > For each room reveal our server creates the live video post on our own Page (POST /{page-id}/live_videos with the child's name as the title and their story as the description) and ends it when the broadcast is over (end_live_video). We never post to or edit anyone else's Page. Screen recording: steps 2 to 4 (0:29 to 1:07).
+- **pages_manage_engagement**:
+  > Right after our server starts a live reveal on our own Page, it posts the Page's own first comment on that live video: "Watch on our website too, and leave a message for the family:" with the link to the child's page on our website (POST /{video-id}/comments). It is one comment per live video, from our Page, on our Page's own post. We never comment on other people's content or reply to people automatically. Screen recording: steps 4 and 5 (0:53 to 1:15).
+- **pages_read_user_content**:
+  > Facebook requires pages_read_user_content for our Page to post its own first comment on its own live video (see pages_manage_engagement). We also read the comment count of our own live video for our staff-only History page. We don't read, store or show the content of other people's comments. Screen recording: steps 4 (0:53) and 6 (1:15).
+- **read_insights**:
+  > After a reveal our server reads the lifetime totals of that one live video on our own Page (GET /{video-id}/video_insights: total views and average watch time) and shows them in our staff-only admin beside our website's own numbers, so staff can see how each reveal did and plan the next one. Only our own Page's videos, only totals, never data about individual people; seen only by our staff. Screen recording: step 6 (1:15).
+- **pages_read_engagement**:
+  > Our server reads our own Page's name and link, its recent videos (to find the live video, its permalink and whether it is live) and the video's reaction and comment counts. We use them in our staff-only admin and to link visitors from our website to the Facebook post. Only our own Page. Screen recording: steps 1, 3 and 6.
+- **pages_show_list**:
+  > A Page admin connected our Page to the app once with Facebook Login for Business. pages_show_list lets the app find our Page among the Pages that admin manages (GET /me/accounts) to get the Page token our server uses. We use it only for our own Page. Screen recording: step 1 (0:14).
+- **business_management**:
+  > Our Facebook Page and Instagram account are managed in our verified business portfolio (Sunshine on a Ranney Day), and our admin's access to them comes through that portfolio. The app uses it only to act on those two assets of ours; it doesn't read or change any other business assets. Screen recording: step 1 (0:14).
+- **instagram_basic**:
+  > Our Instagram professional account (@sunshineonaranneyday) is linked to our Page. The app reads only its id and username (GET /{page-id}?fields=instagram_business_account{id,username}) to post the reveal Reel to it and link to it from our admin. Only our own account. Screen recording: step 7 (1:28).
+- **instagram_content_publish**:
+  > When the replay of a reveal is ready, our server cuts out the moment the child sees their room and publishes it as a Reel on our own Instagram account (POST /{ig-user-id}/media with media_type REELS, then /media_publish). Only our own account and our own videos. Screen recording: step 8 (1:36).
+- **public_profile** (granted to every app):
+  > Granted with Facebook Login for Business when our Page admin connected our Page. We don't use or store any profile data.
 
-## Use-case description (paste as written, adjust names)
+Taken out of the submission: Business Asset User Profile Access (the site doesn't use it).
 
-> Sunshine on a Ranney Day is a 501(c)(3) nonprofit that builds free dream bedrooms, accessible bathrooms and therapy rooms for children with special needs in Georgia. Once a month we reveal a finished room to the child live on our Facebook page.
->
-> Our website (sunshineonaranneyday.com) receives the crew's video through Cloudflare Stream and simulcasts it to our own Facebook Page (Sunshine on a Ranney Day). We use the Live Video API only for our own Page, on our own website, operated by our staff:
->
-> 1. When our camera phone starts streaming, our server creates a live video on our Page (POST /{page-id}/live_videos with status LIVE_NOW and the reveal's title) and sends the RTMPS video to the ingest URL returned.
-> 2. When the phone stops, our server ends the live video (end_live_video=true) so the replay is saved on the Page.
-> 3. We read the live video's permalink so our website can link visitors to the Facebook post to comment and share.
->
-> No user data is collected. The API is used with a Page access token for a Page we administer. Staff trigger everything from our password-protected admin at sunshineonaranneyday.com/admin (behind Cloudflare Access).
+## Screen recording
 
-## Screencast (Facebook requires one)
+`soard-app-review-screencast.mp4`, 2:07, 1920×1080, kept at `~/Downloads/soard-app-review-screencast.mp4` (not in the repo). Real screens from Max's reveal (Nov 20), each with a caption naming what it shows and the permission; the admin's sidebar (staff name and email) is cropped out, and the phone setup codes (stream keys) are never shown.
 
-Switch the app to **Development mode** first (toggle at the top of the app dashboard). In Development mode an app can use features that are still pending review for people who have a role on the app, which Peter does, so the site's API call to create the live post should succeed for real during the recording. Switch back to Live mode afterwards. If Facebook still refuses the call in Development mode, record the persistent-key flow and say in the narration that the automatic post creation is the step being requested.
+0:00 who we are · 0:14 step 1, the Page connected (Reveals → Settings → Facebook) · 0:29 step 2, reveal day: the server creates and ends the live video (Reveals → Now) · 0:44 step 3, the lives on our Page · 0:53 step 4, the post and the Page's first comment · 1:07 step 5, where the link goes (the child's live page) · 1:15 step 6, Facebook numbers in History · 1:28 step 7, our Instagram account (Reveals → Settings → Instagram) · 1:36 step 8, the Reel · 1:47 only our own Page and account.
 
-Record a 2–3 minute screen recording that shows, in order:
+To remake it, take the same screens in a signed-in Chrome, then render each with its caption at 1920×1080 in headless Chrome and join them with ffmpeg (concat, libx264, yuv420p).
 
-1. Logging into the admin at sunshineonaranneyday.com/admin (blur the login).
-2. Broadcast → Settings → Facebook set to "Automatic (Live Video API)".
-3. Broadcast → Now: a scheduled reveal (name and time visible).
-4. A phone (or OBS on the laptop, pointed at the rehearsal input for the recording) tapping Start in Larix.
-5. The admin flipping to LIVE, and the Facebook Page showing the new live video with the reveal's title.
-6. Stopping the stream and the Facebook post ending and becoming a saved video.
+## Reviewer instructions (paste)
 
-Narrate what each step does. Facebook reviewers look for: the app is used by the business for its own Page, the permission is actually exercised, and there is a way for a human to see the result.
-
-## Test credentials field
-
-Facebook asks for test login details. The admin is behind Cloudflare Access, so write:
-
-> The admin is protected by Cloudflare Access (SSO for our staff). We cannot issue a reviewer login. The screencast shows the full flow end to end; the Page and the live videos it creates are public at facebook.com/SunshineOnaRanneyDay.
-
-If the reviewer insists, create a temporary Access policy for the reviewer's email for the duration of the review, then remove it.
+> This app is used only by the staff of Sunshine on a Ranney Day, a 501(c)(3) nonprofit, for our own Facebook Page (facebook.com/SunshineOnaRanneyDay) and our own Instagram professional account (@sunshineonaranneyday). There is no public login and no other users: our server holds a Page access token that our Page admin granted with Facebook Login for Business, and our staff run each reveal from our admin at sunshineonaranneyday.com/admin, which is behind Cloudflare Access single sign-on for our staff, so we can't issue a reviewer login. The screen recording shows every requested permission in use on our real reveal of November 20, 2026. Our privacy policy is at sunshineonaranneyday.com/privacy-policy/ (data deletion: section 09).
 
 ## After approval
 
-Admin → Broadcast → Settings → Facebook → choose "Automatic (Live Video API)" → Save settings. The next time the phone connects, the site creates the Facebook post. Nothing else changes. If a call is refused (Facebook error #10 or #200) the site records it, shows a note under the Facebook settings, and keeps using the persistent key.
+1. developers.facebook.com → the app → Publish → switch to Live.
+2. Logged out (or as someone without a role on the app), open Max's video (facebook.com/SunshineOnaRanneyDay/videos/1696905131784130/). It should play.
+3. Admin → Reveals → Settings → Facebook: the connection test should still say every permission automatic mode needs is granted; run the go/no-go (facebookToken and facebookComment ok).
+
+## Backup if it isn't approved in time: the persistent key
+
+A persistent stream key is already saved (Reveals → Settings → Facebook → Persistent stream key, Active). Posts made by a person in Live Producer are public whatever the app's mode. Before the first December reveal, if the review is still pending, and only after Peter has seen these steps: choose "Persistent stream key" under "How the live post gets made" and save; on reveal day, when the phone starts, someone at the office opens Live Producer on the SOARD Page, sees the preview, adds the title and clicks Go live (no scheduled or upcoming post), then pastes the link comment as the Page. In this mode the site doesn't comment and the crew text for a failed comment doesn't fire.
 
 ## If it is rejected
 
-Rejections usually cite an unclear screencast or missing Business Verification. Fix the cited item and resubmit; there is no cooldown. The alternative that needs no review is a multistreaming service (Restream, StreamYard) whose Facebook connector already holds approval, at a monthly fee.
+Rejections usually cite an unclear screen recording or a permission not shown in use. Each permission is judged on its own, so fix the cited item and resubmit that one; there is no cooldown. The alternative that needs no review is a multistreaming service (Restream, StreamYard) whose own Facebook app already holds approval, at a monthly fee.
 
 ## Instagram Reels
 
 The site posts every reveal to Instagram as a Reel on its own (functions/api/_broadcast-reel.js). That uses the same Facebook app and the same page token, with two more permissions.
 
-**Add to the same submission:** `instagram_basic` and `instagram_content_publish`. Use-case text to add:
-
-> After each live reveal, our server posts a clip of the recording (up to 15 minutes, cut around the reveal moment) as a Reel on our own Instagram professional account, which is linked to our Facebook Page. It uses the Content Publishing API (POST /{ig-user-id}/media with media_type REELS, then media_publish). It reads only our own account's id and username. No user data is collected.
-
-Add one extra shot to the screencast: Admin → Broadcast → Now after a reveal, showing the Reel card reach "Posted", then the Reel on instagram.com/sunshineonaranneyday.
-
-**Before approval**, Facebook usually lets people with a role on the app use these permissions on their own accounts, so it can work right away once the token carries them.
+Requested in the same submission: `instagram_basic` and `instagram_content_publish` (see What is requested). Instagram posts the app made in Development mode were public all along (the Reel shows logged out); only the Facebook lives were hidden.
 
 **Regenerate the page token** (Peter; secrets live only in Cloudflare). Last done Nov 21 2026, with all 10 permissions below.
 
