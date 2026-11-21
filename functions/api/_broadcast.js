@@ -1540,9 +1540,20 @@ export async function sendKitLive(env, config, state, work, { by = 'live-broadca
 async function tickReel(env, config, state, work, opts) {
   if (!state.reel || !stream.streamConfigured(env)) return state;
   const before = state.reel.stage;
+  const fbBefore = state.reel.facebook?.stage || null;
   const r = await reels.advanceReel(env, config, state, opts);
   work.push(...r.events);
   const reel = r.state.reel;
+  const f = reel?.facebook;
+  if (f && f.stage !== fbBefore) {
+    if (f.stage === 'done') {
+      await recordEvent(env.DB, state.broadcastId, 'fb_reel_published', { permalink: f.permalink, start: reel.start, end: reel.end, comment: !!f.commentId });
+      await logAudit(env.DB, { userEmail: 'live-broadcast', action: 'published', entityType: 'facebook-reel', entitySlug: f.videoId, entityName: `Facebook Reel: ${state.title || state.broadcastId}`, changes: [{ field: 'window', from: null, to: `${reel.start}-${reel.end}s` }], gitStatus: 'ok' });
+      await notify.alertAdmins(env, config, { level: 'info', kind: 'news', icon: '🎬', title: `Facebook Reel posted: ${state.title || 'reveal'}`, detail: `The same cut as the Instagram Reel, on the Page.${f.commentError ? ` The website link comment didn't post (${f.commentError}).` : f.commentId ? ' The website link is its first comment.' : ''}`, url: f.permalink || undefined });
+    } else if (f.stage === 'failed' || f.stage === 'blocked') {
+      await notify.alertAdmins(env, config, { level: 'warn', title: `Facebook Reel ${f.stage === 'blocked' ? 'needs setup' : 'failed'}: ${state.title || 'reveal'}`, detail: f.error || 'unknown error', url: `${SITE_ORIGIN}/admin/` });
+    }
+  }
   if (reel && reel.stage !== before) {
     if (reel.stage === 'done') {
       await recordEvent(env.DB, state.broadcastId, 'reel_published', { permalink: reel.permalink, method: reel.method, start: reel.start, end: reel.end });
@@ -2890,6 +2901,15 @@ async function runAdminAction(env, action, body, userEmail) {
       await logAudit(DB, { userEmail, action: 'updated', entityType: 'instagram-reel', entitySlug: state.broadcastId,
         entityName: cut ? `Reel cut ${clock(cut.start)} to ${clock(cut.end)}` : m !== null ? `Reel re-cut at minute ${m}` : 'Reel retried',
         changes: caption ? [{ field: 'caption', from: null, to: caption.slice(0, 200) }] : undefined, gitStatus: 'ok' });
+      break;
+    }
+    case 'reelFacebook': {
+      // The Reel's cut on the Facebook Page too (again after a failure, or with the setting off)
+      if (!state.reel?.mp4Url) return fail('The Reel has no video yet: post it on Instagram first');
+      if (state.reel.facebook?.stage === 'done') return fail('This Reel is already on Facebook');
+      state = { ...state, reel: { ...state.reel, facebook: null, facebookAsked: true, checkedAt: null, updatedAt: nowIso() }, updatedBy: userEmail };
+      await writeState(DB, state); await upsertBroadcastRow(DB, state);
+      await logAudit(DB, { userEmail, action: 'updated', entityType: 'facebook-reel', entitySlug: state.broadcastId, entityName: 'Facebook Reel asked for', gitStatus: 'ok' });
       break;
     }
     case 'reelSkip': {

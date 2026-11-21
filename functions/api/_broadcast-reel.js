@@ -66,6 +66,7 @@ export function defaultReelConfig() {
     maxSeconds: REEL_MAX_SECONDS,
     caption: "{kid}'s room reveal, the moment it all came together. Watch the full reveal on our website, link in bio. #SunshineOnARanneyDay #DreamsBuiltHere",
     shareToFeed: true,
+    facebook: true,            // also post the same cut on the Facebook Page as a Reel (Peter, Nov 21 2026)
   };
 }
 
@@ -357,15 +358,17 @@ const fallbackNote = (duration, cfg) => (duration <= cfg.maxSeconds ? 'used the 
  */
 export async function advanceReel(env, config, state, { force = false } = {}) {
   const r = state.reel;
-  if (!r || ['done', 'failed', 'skipped', 'blocked'].includes(r.stage)) return { state, events: [] };
-  if (!force && r.checkedAt && Date.now() - Date.parse(r.checkedAt) < STEP_INTERVAL_MS) return { state, events: [] };
+  if (!r) return { state, events: [] };
   const cfg = { ...defaultReelConfig(), ...(config.reels || {}) };
-  const reel = { ...r, checkedAt: nowIso(), attempts: (r.attempts || 0) + 1 };
+  const igOpen = !REEL_DONE.includes(r.stage);
+  if (!igOpen && !facebookOpen(env, cfg, r)) return { state, events: [] };
+  if (!force && r.checkedAt && Date.now() - Date.parse(r.checkedAt) < STEP_INTERVAL_MS) return { state, events: [] };
+  const reel = { ...r, checkedAt: nowIso(), attempts: (r.attempts || 0) + (igOpen ? 1 : 0) };
   const events = [];
   const set = (patch) => Object.assign(reel, patch, { updatedAt: nowIso() });
   const fail = (error, stage = 'failed') => { set({ stage, error }); events.push(`reel:${stage}`); };
 
-  try {
+  if (igOpen) try {
     if (Date.now() - Date.parse(reel.startedAt) > PIPELINE_TIMEOUT_MS) { fail('Timed out after 4 hours'); return { state: { ...state, reel }, events }; }
 
     switch (reel.stage) {
@@ -498,5 +501,117 @@ export async function advanceReel(env, config, state, { force = false } = {}) {
   } catch (e) {
     set({ error: e.message || String(e) });
   }
+  // The same cut on the Facebook Page, once its MP4 is known (in step with Instagram, or after it)
+  if (facebookOpen(env, cfg, reel)) await advanceFacebookReel(env, cfg, state, reel, events);
   return { state: { ...state, reel }, events };
+}
+
+// ─── Facebook Reel: the same cut on the Page ───────────────────────
+//
+// Facebook's Reels Publishing API (developers.facebook.com/docs/video-api/guides/reels-publishing):
+//   POST /{page}/video_reels upload_phase=start → video_id
+//   POST rupload.facebook.com/video-upload/{v}/{video_id}, headers Authorization: OAuth <page token>, file_url: <mp4>
+//   POST /{page}/video_reels upload_phase=finish, video_state=PUBLISHED, description
+//   GET /{video_id}?fields=status,permalink_url until publishing_phase says published
+// Needs pages_manage_posts, pages_read_engagement, pages_show_list (the token has them). 3 to 90 s, 9:16.
+// The website link goes in the Page's first comment, never the post (Peter, Nov 20 2026).
+
+const REEL_DONE = ['done', 'failed', 'skipped', 'blocked'];
+const FB_RUPLOAD = 'https://rupload.facebook.com/video-upload/v25.0';
+
+/** Is a Facebook Reel wanted and not finished? (an admin "Post on Facebook" wins over the setting) */
+function facebookOpen(env, cfg, reel) {
+  if (!reel?.mp4Url || reel.stage === 'skipped' || !env.FB_PAGE_ID || !env.FB_PAGE_TOKEN) return false;
+  if (cfg.facebook === false && !reel.facebookAsked) return false;
+  return !REEL_DONE.includes(reel.facebook?.stage);
+}
+
+/** The Instagram caption for Facebook: a "link in bio" sentence means nothing there (the link is in the first comment) */
+export function facebookDescription(text) {
+  return String(text || '')
+    .split('\n')
+    .map(line => line.split(/(?<=[.!?])\s+/).filter(x => !/link in (our |the )?bio/i.test(x)).join(' '))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+    .slice(0, 2200);
+}
+
+async function fbUploadFromUrl(env, videoId, fileUrl) {
+  const res = await fetch(`${FB_RUPLOAD}/${encodeURIComponent(videoId)}`, {
+    method: 'POST',
+    headers: { Authorization: `OAuth ${env.FB_PAGE_TOKEN}`, file_url: fileUrl },
+    signal: AbortSignal.timeout(30000),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error || data.success === false) return { ok: false, error: data.error?.message || data.debug_info?.message || `Facebook upload returned ${res.status}`, code: data.error?.code || null };
+  return { ok: true };
+}
+
+async function advanceFacebookReel(env, cfg, state, reel, events) {
+  const f = { stage: 'start', startedAt: nowIso(), attempts: 0, ...(reel.facebook || {}) };
+  f.attempts += 1;
+  f.checkedAt = nowIso();
+  const setF = (patch) => Object.assign(f, patch, { updatedAt: nowIso() });
+  const failF = (error, stage = 'failed') => { setF({ stage, error }); events.push(`fb-reel:${stage}`); };
+  try {
+    if (Date.now() - Date.parse(f.startedAt) > PIPELINE_TIMEOUT_MS) failF('Timed out after 4 hours');
+    else switch (f.stage) {
+      case 'start': {
+        const s = await graph(env, 'POST', `${env.FB_PAGE_ID}/video_reels`, { upload_phase: 'start' });
+        if (!s.ok || !s.data?.video_id) {
+          if (isPermissionError(s)) { failF(`Facebook refused: ${s.error}. The page token needs pages_manage_posts.`, 'blocked'); break; }
+          setF({ error: s.error || 'Facebook gave no video id' }); if (f.attempts > 6) failF(f.error); break;
+        }
+        setF({ stage: 'upload', videoId: String(s.data.video_id), error: null });
+        events.push('fb-reel:start');
+        break;
+      }
+      case 'upload': {
+        const u = await fbUploadFromUrl(env, f.videoId, reel.mp4Url);
+        if (!u.ok) { setF({ error: u.error }); if (f.attempts > 8) failF(u.error); break; }
+        setF({ stage: 'publish', error: null });
+        events.push('fb-reel:uploaded');
+        break;
+      }
+      case 'publish': {
+        const description = facebookDescription(reel.caption || renderCaption(cfg.caption, state));
+        const p = await graph(env, 'POST', `${env.FB_PAGE_ID}/video_reels`, { video_id: f.videoId, upload_phase: 'finish', video_state: 'PUBLISHED', description });
+        if (!p.ok) {
+          if (isPermissionError(p)) { failF(`Facebook refused: ${p.error}`, 'blocked'); break; }
+          setF({ error: p.error }); if (f.attempts > 12) failF(p.error); break;
+        }
+        setF({ stage: 'processing', error: null });
+        events.push('fb-reel:finish');
+        break;
+      }
+      case 'processing': {
+        const s = await graph(env, 'GET', f.videoId, { fields: 'status,permalink_url' });
+        if (!s.ok) { setF({ error: s.error }); break; }
+        const st = s.data.status || {};
+        const vs = st.video_status;
+        const failed = ['error', 'upload_failed', 'expired'].includes(vs) || st.processing_phase?.status === 'error' || st.publishing_phase?.status === 'error' || st.publishing_phase?.publish_status === 'error';
+        if (failed) { failF(`Facebook could not process the video: ${st.processing_phase?.error?.message || st.uploading_phase?.error?.message || vs || 'unknown'}`); break; }
+        const published = st.publishing_phase?.publish_status === 'published' || (vs === 'ready' && ['complete', 'completed'].includes(st.publishing_phase?.status));
+        if (!published) break;
+        const link = s.data.permalink_url || '';
+        const permalink = link ? (link.startsWith('http') ? link : `https://www.facebook.com${link}`) : `https://www.facebook.com/reel/${f.videoId}`;
+        setF({ stage: 'done', permalink, publishedAt: nowIso(), error: null });
+        events.push('fb-reel:published');
+        // The website link as the Page's first comment; the Reel stands either way
+        if (state.kidSlug && !f.commentId) {
+          const message = `Watch ${state.kidName || 'the'}${state.kidName ? "'s" : ''} whole live reveal on our website: https://sunshineonaranneyday.com/live/${state.kidSlug}/?src=facebook`;
+          const c = await graph(env, 'POST', `${f.videoId}/comments`, { message });
+          setF(c.ok ? { commentId: c.data?.id || null, commentError: null } : { commentError: c.error || 'unknown' });
+          events.push(c.ok ? 'fb-reel:comment' : 'fb-reel:comment-failed');
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  } catch (e) {
+    setF({ error: e.message || String(e) });
+  }
+  reel.facebook = f;
 }

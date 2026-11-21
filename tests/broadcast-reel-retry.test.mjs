@@ -82,3 +82,21 @@ test('bad cuts are refused in plain words and leave the state alone', async () =
   }
   assert.equal((await b.readState(env.DB)).reel, null);
 });
+
+test('Post on Facebook: asks for the Reel on the Page, refuses with no video or when it is already there', async () => {
+  await reset();
+  let r = await b.adminAction(env, 'reelFacebook', {}, 'peter@test');
+  assert.equal(r.success, false);
+  assert.match(r.error, /no video yet/);
+  const st = await b.readState(env.DB);
+  await b.writeState(env.DB, { ...st, reel: { stage: 'done', mp4Url: 'https://x/clip.mp4', start: 444, end: 463, facebook: { stage: 'failed', error: 'boom' } } });
+  r = await b.adminAction(env, 'reelFacebook', {}, 'peter@test');
+  assert.equal(r.success, true, r.error);
+  const after = (await b.readState(env.DB)).reel;
+  assert.equal(after.facebook, null);
+  assert.equal(after.facebookAsked, true);
+  assert.equal(after.stage, 'done', 'the Instagram Reel stays as it was');
+  await b.writeState(env.DB, { ...(await b.readState(env.DB)), reel: { ...after, facebook: { stage: 'done', permalink: 'https://www.facebook.com/reel/1/' } } });
+  r = await b.adminAction(env, 'reelFacebook', {}, 'peter@test');
+  assert.match(r.error, /already on Facebook/);
+});

@@ -360,3 +360,106 @@ test('a long cut of a live recording fails in plain words instead of retrying a 
     assert.match(state.reel.error, /60 seconds or less from a live recording/);
   } finally { globalThis.fetch = realFetch; }
 });
+
+// ─── Facebook Reel (Peter, Nov 21 2026: "now do a facebook reel of max too") ───
+
+const MAX_CAPTION = "Max rolled into his new bathroom for the first time on Friday, and that smile says it all.\n\nThank you to Max's friends and family who crowdfunded this makeover.\n\nWatch the full live reveal at the link in our bio.\n\n#SunshineOnARanneyDay #DreamsBuiltHere";
+const MAX_CLIP = 'https://customer-cuav5h47lgfe96ql.cloudflarestream.com/36aff9b744e9b92770833f27e0eeede7/clip.mp4?time=444s&duration=19s&filename=max-reveal-reel.mp4';
+// Max's Instagram Reel as production held it after posting (Nov 21 2026, 10:22 AM)
+const maxPostedReel = (extra = {}) => ({ ...reels.startReel({}, '36aff9b744e9b92770833f27e0eeede7', null, { start: 444, end: 463, coverSeconds: 454, caption: MAX_CAPTION }), stage: 'done', start: 444, end: 463, live: true, mp4Url: MAX_CLIP, mediaId: 'ig-media', permalink: 'https://www.instagram.com/reel/DgAinPOk68c/', ...extra });
+
+function mockFacebook({ startError = null, polls = 2 } = {}) {
+  const seen = { calls: [], upload: null, finish: null, comment: null };
+  let statusPolls = 0;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = (init.method || 'GET').toUpperCase();
+    seen.calls.push(`${method} ${url.split('?')[0]}`);
+    const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { 'content-type': 'application/json' } });
+    const G = 'https://graph.facebook.com/v25.0';
+    if (url === `${G}/page1/video_reels` && method === 'POST') {
+      const b = Object.fromEntries(new URLSearchParams(init.body));
+      if (b.upload_phase === 'start') return startError ? json({ error: startError }, 400) : json({ video_id: '9001', upload_url: 'https://rupload.facebook.com/video-upload/9001' });
+      if (b.upload_phase === 'finish') { seen.finish = b; return json({ success: true }); }
+    }
+    if (url === 'https://rupload.facebook.com/video-upload/v25.0/9001' && method === 'POST') { seen.upload = { auth: init.headers.Authorization, fileUrl: init.headers.file_url }; return json({ success: true }); }
+    if (url.startsWith(`${G}/9001?`) && method === 'GET') {
+      statusPolls++;
+      return json(statusPolls < polls
+        ? { id: '9001', status: { video_status: 'processing', processing_phase: { status: 'in_progress' }, publishing_phase: { status: 'not_started' } } }
+        : { id: '9001', permalink_url: '/reel/9001/', status: { video_status: 'ready', processing_phase: { status: 'complete' }, publishing_phase: { status: 'complete', publish_status: 'published' } } });
+    }
+    if (url === `${G}/9001/comments` && method === 'POST') { seen.comment = Object.fromEntries(new URLSearchParams(init.body)); return json({ id: '9001_77' }); }
+    return new Response('not mocked ' + url, { status: 599 });
+  };
+  return { seen, restore: () => { globalThis.fetch = realFetch; } };
+}
+const FB_ENV = { CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 't', FB_PAGE_ID: 'page1', FB_PAGE_TOKEN: 'pt' };
+async function runFb(config, state, max = 12) {
+  const stages = [];
+  for (let i = 0; i < max && !['done', 'failed', 'blocked'].includes(state.reel.facebook?.stage); i++) {
+    state = (await reels.advanceReel(FB_ENV, config, state, { force: true })).state;
+    stages.push(state.reel.facebook?.stage);
+  }
+  return { state, stages };
+}
+
+test('facebookDescription drops the "link in bio" sentence and keeps the rest', () => {
+  assert.equal(reels.facebookDescription(MAX_CAPTION), "Max rolled into his new bathroom for the first time on Friday, and that smile says it all.\n\nThank you to Max's friends and family who crowdfunded this makeover.\n\n#SunshineOnARanneyDay #DreamsBuiltHere");
+  assert.equal(reels.facebookDescription(reels.renderCaption(null, { kidName: 'Max' })), "Max's room reveal, the moment it all came together. #SunshineOnARanneyDay #DreamsBuiltHere");
+});
+
+test("Max's posted Instagram Reel goes to the Facebook Page too: start, upload from the clip, publish, then the link as the first comment", async () => {
+  const m = mockFacebook();
+  try {
+    const { state, stages } = await runFb({ reels: reels.defaultReelConfig() }, { kidSlug: 'max', kidName: 'Max', reel: maxPostedReel() });
+    const f = state.reel.facebook;
+    assert.equal(f.stage, 'done', `${stages.join(' → ')} | ${f.error}`);
+    assert.deepEqual(stages, ['upload', 'publish', 'processing', 'processing', 'done']);
+    assert.deepEqual(m.seen.upload, { auth: 'OAuth pt', fileUrl: MAX_CLIP });
+    assert.equal(m.seen.finish.video_id, '9001');
+    assert.equal(m.seen.finish.video_state, 'PUBLISHED');
+    assert.ok(!/link in our bio/.test(m.seen.finish.description) && /^Max rolled into his new bathroom/.test(m.seen.finish.description));
+    assert.equal(f.permalink, 'https://www.facebook.com/reel/9001/');
+    assert.equal(m.seen.comment.message, "Watch Max's whole live reveal on our website: https://sunshineonaranneyday.com/live/max/?src=facebook");
+    assert.equal(f.commentId, '9001_77');
+    assert.equal(state.reel.stage, 'done', 'the Instagram Reel is untouched');
+    assert.equal(state.reel.attempts, 0, "Instagram's steps don't count Facebook's");
+    // finished: nothing more happens
+    const again = await reels.advanceReel(FB_ENV, { reels: reels.defaultReelConfig() }, state, { force: true });
+    assert.equal(again.state, state);
+  } finally { m.restore(); }
+});
+
+test('Facebook Reels switched off: nothing goes to Facebook unless the admin asks for this one', async () => {
+  const m = mockFacebook();
+  try {
+    const off = { reels: { ...reels.defaultReelConfig(), facebook: false } };
+    const r1 = await reels.advanceReel(FB_ENV, off, { kidSlug: 'max', kidName: 'Max', reel: maxPostedReel() }, { force: true });
+    assert.equal(r1.state.reel.facebook, undefined);
+    assert.equal(m.seen.calls.length, 0);
+    const { state } = await runFb(off, { kidSlug: 'max', kidName: 'Max', reel: maxPostedReel({ facebookAsked: true }) });
+    assert.equal(state.reel.facebook.stage, 'done');
+  } finally { m.restore(); }
+});
+
+test('a Facebook permission refusal stops at "needs setup" with the reason', async () => {
+  const m = mockFacebook({ startError: { message: '(#200) The user has not authorized the application to perform this action', code: 200 } });
+  try {
+    const { state } = await runFb({}, { kidSlug: 'max', kidName: 'Max', reel: maxPostedReel() });
+    assert.equal(state.reel.facebook.stage, 'blocked');
+    assert.match(state.reel.facebook.error, /pages_manage_posts/);
+  } finally { m.restore(); }
+});
+
+test('no Facebook Reel for a skipped Reel, one with no video yet, or without the Page token', async () => {
+  const m = mockFacebook();
+  try {
+    for (const [env, reel] of [[FB_ENV, maxPostedReel({ stage: 'skipped' })], [FB_ENV, maxPostedReel({ mp4Url: null, stage: 'failed' })], [{ CF_ACCOUNT_ID: 'a', CF_STREAM_TOKEN: 't' }, maxPostedReel()]]) {
+      const r = await reels.advanceReel(env, {}, { reel }, { force: true });
+      assert.equal(r.state.reel.facebook, undefined);
+    }
+    assert.equal(m.seen.calls.length, 0);
+  } finally { m.restore(); }
+});
