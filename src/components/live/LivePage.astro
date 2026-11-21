@@ -1782,12 +1782,15 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     // Keeps the countdown fresh
     const countdown = setInterval(() => { if (last?.upcoming) render(last, { reminders: client.reminders }); }, 15_000);
 
-    // ── The frame's height holds still while someone types on the page ──
-    // The frame is sized to the screen's height (100svh). Some browsers (Android in-app ones, Facebook's among them)
-    // shrink the page for the on-screen keyboard, and the video then shrank to nothing under the message being typed and
-    // the page jumped. While a text field on the page has focus, the height the frame goes by (--live-vh) is held at
-    // what it was; it lets go once typing ends and the keyboard has gone, or when the screen's width changes (the phone
-    // turned)
+    // ── The frame's height holds still on a touch screen: through a scroll, and while someone types ──
+    // The frame is sized to the screen's height (100svh). Some browsers (in-app ones, Facebook's and Instagram's among
+    // them) change the page's height as their bars hide and show on a scroll, and the video, and the room's pictures
+    // beside it, grew and shrank with every scroll (Peter, Nov 20 2026: "on mobile when you scroll down the photo rail
+    // enlarges"); some shrink the page for the on-screen keyboard too, and the video then shrank to nothing under the
+    // message being typed and the page jumped. So on a touch screen the height the frame goes by (--live-vh) is the
+    // first full height seen at that width, for good: a new width (the phone turned) or a change bigger than any bars
+    // make (a split screen) sizes it again. While a text field has focus it holds at what it was, and lets go back to
+    // that once typing ends and the keyboard has gone. On a laptop the window's own height always counts
     const vhProbe = document.createElement('div');
     vhProbe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:100svh;visibility:hidden;pointer-events:none';
     document.body.append(vhProbe);
@@ -1796,18 +1799,31 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     const touch = matchMedia('(pointer: coarse)');
     const typingNow = () => touch.matches && typingIn(document.activeElement);
     let heldW = 0;
-    // The full height for each width seen while nobody was typing: a turn mid-typing (keyboard still up) holds again
-    // at the height that width really has, once it's known
+    // The full height for each width seen while nobody was typing (on a touch screen the first one, unless the height
+    // changes by more than a browser's bars ever take, a quarter): a turn mid-typing (keyboard still up) holds again at
+    // the height that width really has, once it's known
+    const BARS_AT_MOST = 0.25;
     const fullH = new Map<number, number>();
-    const noteFull = () => { if (!typingNow()) fullH.set(innerWidth, vhProbe.getBoundingClientRect().height); };
+    const noteFull = () => {
+      if (typingNow()) return;
+      const now = vhProbe.getBoundingClientRect().height;
+      const was = fullH.get(innerWidth);
+      if (!was || !touch.matches || Math.abs(now - was) > was * BARS_AT_MOST) fullH.set(innerWidth, now);
+    };
+    // At rest: on a touch screen the full height for this width, on a laptop the window's own
+    const rest = () => {
+      const h = touch.matches ? fullH.get(innerWidth) : 0;
+      if (h) root.style.setProperty('--live-vh', `${h}px`); else root.style.removeProperty('--live-vh');
+    };
     noteFull();
+    rest();
     let heldH = 0;
     let goTimer = 0;
     const holdAt = (h: number) => { heldW = innerWidth; heldH = h; root.style.setProperty('--live-vh', `${h}px`); };
     const holdHeight = () => holdAt(fullH.get(innerWidth) ?? vhProbe.getBoundingClientRect().height);
     const letGo = () => {
       clearTimeout(goTimer);
-      heldW = 0; heldH = 0; root.style.removeProperty('--live-vh');
+      heldW = 0; heldH = 0; rest();
     };
     // Typing ends a moment before the keyboard goes. Letting go then shrank the frame to the page the keyboard left, for
     // that moment, and the page moved hundreds of pixels from the message just typed. So while the page is still short
@@ -1834,6 +1850,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         // (the keyboard on its way down: what the page is now isn't its full height yet)
         if (heldW) { doneTyping(); if (heldW) return; }
         noteFull();
+        rest();
         return;
       }
       if (innerWidth !== heldW) { const h = fullH.get(innerWidth); if (h) holdAt(h); else letGo(); }
@@ -1865,6 +1882,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       document.removeEventListener('focusout', onFocusOut);
       removeEventListener('resize', onWidth);
       letGo();
+      root.style.removeProperty('--live-vh');
       vhProbe.remove();
       give?.destroy();
       stageSize?.disconnect();
