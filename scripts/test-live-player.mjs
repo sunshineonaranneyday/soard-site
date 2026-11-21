@@ -237,7 +237,9 @@ const VIEWPORTS = [
   ['phone-toolbars', { width: 390, height: 664, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }],
 ];
 
-const browser = await puppeteer.launch({ headless: 'new', args: ['--autoplay-policy=no-user-gesture-required'] });
+// (no sound out of the computer: a test machine whose speakers are taken, or asleep, stalled every check that plays with
+// sound at 0.1 s; the page still plays unmuted, just to a silent output)
+const browser = await puppeteer.launch({ headless: 'new', args: ['--autoplay-policy=no-user-gesture-required', '--disable-audio-output'] });
 const errors = [];
 try {
   const page = await browser.newPage();
