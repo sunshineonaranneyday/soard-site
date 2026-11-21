@@ -72,11 +72,12 @@ Add one extra shot to the screencast: Admin → Broadcast → Now after a reveal
 
 **Before approval**, Facebook usually lets people with a role on the app use these permissions on their own accounts, so it can work right away once the token carries them.
 
-**Regenerate the page token with the Instagram permissions** (Peter, once; secrets live only in Cloudflare):
+**Regenerate the page token** (Peter; secrets live only in Cloudflare). Last done Nov 21 2026, with all 10 permissions below.
 
 1. Link Instagram to the Page if it isn't: Instagram app → Settings → Account type and tools → switch to a professional account → Business, then Facebook Page settings → Linked accounts → Instagram → connect.
-2. developers.facebook.com/tools/explorer → pick the SOARD app → User or Page: **Get User Access Token** → tick `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `publish_video`, `instagram_basic`, `instagram_content_publish`, `business_management` → Generate → approve in the popup.
-3. Access Token Tool (developers.facebook.com/tools/accesstoken) → **Extend Access Token** on that user token → copy the long-lived user token.
-4. In Graph Explorer, paste the long-lived token and run `GET /me/accounts`. Copy the `access_token` of the Sunshine on a Ranney Day page. Page tokens made from a long-lived user token do not expire.
-5. Cloudflare dashboard → Workers & Pages → soard-site → Settings → Variables → edit `FB_PAGE_TOKEN` → paste → Save → redeploy (any push, or Retry deployment).
-6. Admin → Broadcast → Settings → Instagram → **Test connection**. It should say "Linked Instagram: @sunshineonaranneyday. Ready to post." Facebook's Test connection should list the new scopes.
+2. A permission the app doesn't have yet can't go on a token ("(#200) The permission(s) … are not available"). Add it first: developers.facebook.com → the "Live URL" app → Use cases → Manage everything on your Page → Customize → **Add to App Review** on the permission. That only adds it to the app ("Ready for testing"); nothing is submitted. `pages_manage_engagement`, `pages_read_user_content` and `read_insights` were added this way on Nov 21 2026.
+3. developers.facebook.com/tools/explorer → pick the SOARD app → User or Page: **Get User Access Token** → tick `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `publish_video`, `instagram_basic`, `instagram_content_publish`, `business_management`, `pages_manage_engagement` and `pages_read_user_content` (the Page's website-link comment on its live post), `read_insights` (Facebook viewer numbers after a reveal) → Generate → approve in the popup.
+4. Access Token Tool (developers.facebook.com/tools/accesstoken) → **Extend Access Token** on that user token → copy the long-lived user token. (Or exchange it without the token in an address bar: POST `oauth/access_token` with `grant_type=fb_exchange_token`, the app id, the app secret from App settings → Basic, and the user token.)
+5. In Graph Explorer, paste the long-lived token and run `GET /me/accounts`. Copy the `access_token` of the Sunshine on a Ranney Day page. Page tokens made from a long-lived user token do not expire.
+6. Cloudflare dashboard → Workers & Pages → soard-site → Settings → Variables → edit `FB_PAGE_TOKEN` → paste → Save → redeploy (Publish to site in the admin, any push, or Retry deployment).
+7. Admin → Broadcast → Settings → Instagram → **Test connection**. It should say "Linked Instagram: @sunshineonaranneyday. Ready to post." Facebook's Test connection should list the new scopes, and the go/no-go before a reveal checks the comment permissions.

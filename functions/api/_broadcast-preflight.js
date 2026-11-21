@@ -94,6 +94,14 @@ export async function run(env, config, state, health, { hub = null } = {}) {
   else if (!tok.ok) add('facebookToken', 'fail', 'The Facebook token stopped working', tok.error, 'Regenerate the Page token (docs/facebook-app-review.md) and update FB_PAGE_TOKEN.');
   else {
     add('facebookToken', 'ok', `Connected to the Facebook Page${tok.name ? ` "${tok.name}"` : ''}`);
+    // API mode: right after the live post, the Page comments the website link on it. A token without the comment
+    // permissions is only found out at go-live (Max, Nov 20 2026), so say so here, while there's time to fix it.
+    if (fbMode === 'api') {
+      const info = await fb.fbTokenInfo(env).catch(() => null);
+      const missing = info?.ok && Array.isArray(info.missingForComment) ? info.missingForComment : null;
+      if (missing?.length) add('facebookComment', 'warn', 'Facebook won\'t take the website link comment', `The Facebook token is missing ${missing.join(' and ')}. The live post still goes up, and staff get the words to paste as the comment.`, 'Regenerate the Page token with those permissions (docs/facebook-app-review.md) and update FB_PAGE_TOKEN.');
+      else if (missing) add('facebookComment', 'ok', 'The Page can comment the website link on the live post');
+    }
     if (fbMode === 'persistent') {
       const s = await fb.fbScheduledLive(env);
       if (s.found) add('facebookPost', 'ok', 'A Facebook live post is scheduled', s.title || null);
