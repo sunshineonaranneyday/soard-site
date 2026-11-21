@@ -76,8 +76,9 @@ interface Options {
   /** The page lays itself out around the stage's shape */
   onShape?: (orientation: 'portrait' | 'landscape', party: boolean) => void;
   /**
-   * On air, and how many are watching (null below VIEWERS_MIN): what the bar says, for the page to say instead when
-   * the controls are in the rail (it has no room for them). null for onAir: not live
+   * On air, and how many are watching (null below VIEWERS_MIN): what the bar says, for the page to say beside the kid's
+   * name on a phone held sideways, where the controls are in the rail (it has no room for them; on a computer the stage
+   * says them under the picture itself). null for onAir: not live
    */
   onAir?: (onAir: boolean | null, watching: number | null) => void;
   /** playingLive or ended changed: the page draws itself again */
@@ -688,6 +689,11 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // The number and its word apart, so the word can step aside first on a narrow bar
     const cn = $('count-num'); const cw = $('count-word');
     if (count) { if (cn) cn.textContent = viewers.toLocaleString(); if (cw) cw.textContent = 'watching'; }
+    // On a computer, with the controls in the rail: the same "Live" and number, under the picture (shown there only, by
+    // LiveStage's styles)
+    setHidden($('liveline'), !onAir);
+    setHidden($('liveline-count'), !count);
+    const ln = $('liveline-num'); if (count && ln) ln.textContent = viewers.toLocaleString();
     // Muted: one clear "Tap for sound". After that: sound, a heart, full screen. In the rail, and in full screen (where
     // there's no other way back out on a computer or an Android phone but Esc or Back), all three from the start
     const soundCta = live && isVideo && showing && muted;

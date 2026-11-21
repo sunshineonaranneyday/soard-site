@@ -93,7 +93,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       <div class="hero-head">
         <!-- The label, and across from it in the Theater the site's reveal news (elsewhere this row isn't a box of its own) -->
         <div class="hero-eyerow">
-          <p class="hero-eyebrow"><span class="hero-eyebrow__dot" aria-hidden="true"></span><span data-live="eyebrow">Live reveal</span><span class="hero-eyebrow__n" data-live="watching" hidden></span></p>
+          <p class="hero-eyebrow"><span class="hero-eyebrow__dot" aria-hidden="true"></span><span data-live="eyebrow">Live reveal</span></p>
           <!-- The site's reveal news (another kid's reveal day, live now, its replay: LiveIndicator fills it), where the
                Theater gives it a place: across from the label, one quiet line, never floating over the reveal, its rail
                and timeline, or the sponsors (Peter, Nov 20 2026: "keep it off the sponsors") -->
@@ -288,10 +288,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
   @keyframes live-ping { 0% { transform: scale(0.6); opacity: 0.9; } 70%, 100% { transform: scale(1.5); opacity: 0; } }
-  /* How many are watching, after "Live now", when the video's controls are in its rail (which has no room for it) */
-  .hero-eyebrow__n { display: none; color: var(--c-text-muted); letter-spacing: 0.08em; }
-  .hero-eyebrow__n::before { content: '·'; margin-right: 10px; }
-  :global(.hero:has([data-stage][data-rail])) .hero-eyebrow__n:not([hidden]) { display: inline; }
+  /* (how many are watching: on a computer under the video, LiveStage's .stage__live; never in this line) */
   /* The kid's name, and beside it on a phone during a live reveal, "Live" and the number watching */
   .hero-titlerow { display: contents; }
   .hero-onair { display: none; }
@@ -1030,12 +1027,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       reshape: (end) => { if (rendered) morph(end); else end(); },
       // The hero lays itself out around the video's real shape
       onShape: (orientation, party) => { hero.dataset.orientation = orientation; setAttr(hero, 'data-party', party); },
-      // With the video's controls in its rail, "Live" and the number watching are the page's to say: after "Live now"
-      // on a computer, beside the kid's name on a phone (LiveStage)
+      // With the video's controls in its rail on a phone held sideways, "Live" and the number watching are the page's to
+      // say, beside the kid's name (a computer has them under the video, LiveStage)
       onAir: (on, n) => {
         const many = n != null ? n.toLocaleString() : '';
-        const w = q<HTMLElement>('watching');
-        if (w) { w.textContent = many ? `${many} watching` : ''; w.hidden = !(on && many); }
         // ("Live" by the kid's name says the reveal is on, from the server's first paint: the video's own state, such as
         // connecting, shows on the video. null: no live watch party)
         const pill = q<HTMLElement>('onair');
