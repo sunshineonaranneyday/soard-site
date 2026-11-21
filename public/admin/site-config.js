@@ -1350,18 +1350,19 @@ function FinancialsPage({ c }) {
       <h4 class="sc-h4">Money in, and what’s left</h4>
       <div class="sc-pair">
         <${NumberInput} label="Total revenue" money value=${snap.totalRevenue} onChange=${setSnap('totalRevenue')} />
-        <${NumberInput} label="Store revenue (net)" money value=${snap.storeRevenue} onChange=${setSnap('storeRevenue')} />
+        <${NumberInput} label="Store revenue (net)" money value=${snap.storeRevenue} onChange=${setSnap('storeRevenue')} hint="The 990’s line 10c: sales after the cost of goods. Shown only when Store sales is empty." />
+        <${NumberInput} label="Store sales" money value=${snap.storeSales} onChange=${setSnap('storeSales')} hint="The store’s sales before the cost of goods (the audit’s gross sales). The Financials page shows this." />
         <${NumberInput} label="Net assets, end of year" money value=${snap.netAssets} onChange=${setSnap('netAssets')} />
         <${NumberInput} label="Contributions and grants" money value=${snap.contributions} onChange=${setSnap('contributions')} hint="Kept for your records; not shown on the site." />
       </div>
       <h4 class="sc-h4">People</h4>
       <div class="sc-pair">
-        <${NumberInput} label="Employees" value=${snap.employees} onChange=${setSnap('employees')} />
-        <${NumberInput} label="Volunteers" value=${snap.volunteers} onChange=${setSnap('volunteers')} hint="Shown with a +." />
+        <${NumberInput} label="Employees" value=${snap.employees} onChange=${setSnap('employees')} hint="The 990’s Part I line 5: everyone employed during the year." />
+        <${NumberInput} label="Volunteers" value=${snap.volunteers} onChange=${setSnap('volunteers')} hint="The 990’s Part I line 6." />
       </div>
       <div class="sc-pv-line">
         <span><span class="sc-pv-tag">Homepage</span> <strong>${snap.programPct || 0}% Program Services</strong></span>
-        <span><span class="sc-pv-tag">Financials page</span> FY ${snap.year} · ${S.moneyShort(snap.totalRevenue)} revenue · ${S.moneyShort(snap.programExpenses)} to programs · ${S.moneyShort(snap.storeRevenue)} from the store · ${S.moneyShort(snap.netAssets)} net assets · ${snap.employees || 0} staff · ${snap.volunteers || 0}+ volunteers</span>
+        <span><span class="sc-pv-tag">Financials page</span> FY ${snap.year} · ${S.moneyShort(snap.totalRevenue)} revenue · ${S.moneyShort(snap.programExpenses)} to programs · ${snap.storeSales ? `${S.moneyShort(snap.storeSales)} store sales` : `${S.moneyShort(snap.storeRevenue)} from the store`} · ${S.moneyShort(snap.netAssets)} net assets · ${snap.employees || 0} staff · ${snap.volunteers || 0}+ volunteers</span>
       </div>
     <//>
     <${FinancialDocs} c=${c} />

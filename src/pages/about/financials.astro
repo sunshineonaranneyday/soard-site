@@ -58,7 +58,8 @@ const snapshot = snapshotData;
 const fmtShort = (n: number) =>
   n >= 1_000_000 ? `$${(n / 1_000_000).toFixed(1)}M` : `$${Math.round(n / 1000)}K`;
 
-// 100 pennies of a donated dollar, in fill order: programs, management, fundraising
+// 100 pennies of a dollar SOARD spent, in fill order: programs, management, fundraising (the 990's Part IX columns;
+// programs include the Sunny & Ranney store, which the audit counts there)
 const pennies = Array.from({ length: 100 }, (_, i) =>
   i < snapshot.programPct ? 'program' : i < snapshot.programPct + snapshot.managementPct ? 'mgmt' : 'fund');
 
@@ -154,7 +155,7 @@ const hero = {
         </div>
         <div class="hero-stat">
           <span class="hero-stat-num">{snapshot.programPct}<span>&cent;</span></span>
-          <span class="hero-stat-label">of every donated dollar<br/>goes to programs</span>
+          <span class="hero-stat-label">of every dollar spent<br/>went to programs in {snapshot.year}</span>
         </div>
       </div>
     </div>
@@ -192,15 +193,15 @@ const hero = {
           data-reveal
           class="waffle"
           role="img"
-          aria-label={`A donated dollar as 100 pennies: ${snapshot.programPct} to programs, ${snapshot.managementPct} to management, ${snapshot.fundraisingPct} to fundraising.`}
+          aria-label={`A dollar SOARD spent in ${snapshot.year} as 100 pennies: ${snapshot.programPct} to programs, ${snapshot.managementPct} to management, ${snapshot.fundraisingPct} to fundraising.`}
         >
           {pennies.map(p => <span class={`waffle__cell waffle__cell--${p}`}></span>)}
         </div>
         <div class="promise__copy" data-reveal data-delay="1">
           <span class="promise__cents" aria-hidden="true">{snapshot.programPct}<span class="promise__cents-symbol">&cent;</span></span>
           <p class="promise__lede">
-            of every donated dollar goes directly to building rooms and serving children
-            with critical illnesses and disabilities.
+            of every dollar SOARD spent in {snapshot.year} went to its programs: building rooms for children with
+            critical illnesses and disabilities, and the Sunny &amp; Ranney store that covers most of our overhead.
           </p>
           <div class="promise__legend" aria-hidden="true">
             <span class="promise__key"><span class="promise__dot promise__dot--program"></span>Programs {snapshot.programPct}&cent;</span>
@@ -255,7 +256,7 @@ const hero = {
               <span class="model-step__num" aria-hidden="true">1</span>
               <div>
                 <span class="model-step__title">The store covers our overhead</span>
-                <p>Sales from <a href="https://sunnyandranney.com" target="_blank" rel="noopener noreferrer">Sunny &amp; Ranney</a>, the Roswell furnishings store our founders opened in 2020, pay the rent, utilities, and most salaries.</p>
+                <p>Sales from <a href="https://sunnyandranney.com" target="_blank" rel="noopener noreferrer">Sunny &amp; Ranney</a>, the Roswell furnishings store our founders opened in 2020, cover most of our overhead.</p>
               </div>
             </li>
             <li class="model-step">
@@ -275,16 +276,17 @@ const hero = {
           </ol>
           <div class="engine-stats">
             <div class="engine-stat">
-              <span class="engine-stat__num">{fmtShort(snapshot.storeRevenue)}</span>
-              <span class="engine-stat__label">Store revenue, FY {snapshot.year}</span>
+              {/* The store's sales (Site Config → Financials); without them, the 990's store revenue after the cost of goods, said so */}
+              <span class="engine-stat__num">{fmtShort((snapshot as any).storeSales || snapshot.storeRevenue)}</span>
+              <span class="engine-stat__label">{(snapshot as any).storeSales ? 'Store sales' : 'Store revenue after the cost of goods'}, FY {snapshot.year}</span>
             </div>
             <div class="engine-stat">
               <span class="engine-stat__num">{snapshot.employees}</span>
-              <span class="engine-stat__label">Employees</span>
+              <span class="engine-stat__label">Employees in {snapshot.year}</span>
             </div>
             <div class="engine-stat">
-              <span class="engine-stat__num">{snapshot.volunteers}+</span>
-              <span class="engine-stat__label">Volunteers</span>
+              <span class="engine-stat__num">{snapshot.volunteers.toLocaleString('en-US')}</span>
+              <span class="engine-stat__label">Volunteers in {snapshot.year}</span>
             </div>
           </div>
           <a href="/sunny-and-ranney/" class="model-store-link">

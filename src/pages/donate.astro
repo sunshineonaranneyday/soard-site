@@ -91,7 +91,7 @@ const hero = {
 <BaseLayout
   og={{ layout: 'split', eyebrow: hero.eyebrow, title: heroHtml(hero.title), lead: heroHtml(hero.lead), photo: { id: donateHeroPhoto, alt: `${donateHeroKidName} smiling in their new dream bedroom` } }}
   title="Donate: Give a Child Their Dream Room"
-  description="Your gift transforms a child's world. We build free dream bedrooms, accessible bathrooms, and therapy rooms for kids with special needs in Atlanta. 100% goes to the mission."
+  description="Your gift transforms a child's world. We build free dream bedrooms, accessible bathrooms, and therapy rooms for kids with special needs in Atlanta. Zeffy charges no fees, so all of your gift reaches SOARD."
   jsonLd={donateJsonLd}
   breadcrumbs={breadcrumbs}
 >
@@ -170,13 +170,6 @@ const hero = {
         <p>SOARD transformed {donateStoryKidName}'s home{storyRoomTypes.length > 0 ? ` with a ${storyRoomTypes.join(' and ').toLowerCase()}` : ''}, giving them back independence and a space that's truly <em>theirs</em>.</p>
         <p><strong>This is what your donation builds.</strong> Rooms that bring independence, dignity, and joy to kids who deserve it most.</p>
         <a href={`/kids/${donateStoryKidSlug}`} class="btn btn-dark">{`Read ${donateStoryKidName}'s Full Story →`}</a>
-        <blockquote class="why-testimonial">
-          <p>"Seeing the look on a child's face when they walk into their new room — there's nothing like it. We've been donating to SOARD for three years and every time, we know our money went exactly where it should."</p>
-          <cite>
-            <strong>Sarah & Michael T.</strong>
-            <span>Monthly donors since 2023</span>
-          </cite>
-        </blockquote>
       </div>
     </div>
   </section>
@@ -204,26 +197,26 @@ const hero = {
             <span class="tier-feature-amount">$500</span>
             <span class="tier-feature-what">Furniture & Flooring</span>
           </div>
-          <p class="tier-feature-desc">Adaptive furniture or new accessible flooring: the structural pieces that change a child's daily life.</p>
+          <p class="tier-feature-desc">Goes toward adaptive furniture and accessible flooring, the pieces that change a child's day.</p>
           <a {...once(500)} target="_blank" rel="noopener noreferrer" class="btn btn-primary">Give $500 →</a>
         </div>
         <div class="tier-row">
           <div class="tier-item" data-reveal>
             <span class="tier-item-amount">$60</span>
             <strong class="tier-item-what">Paint & Supplies</strong>
-            <p>Transforms a child's walls into their dream canvas. Paint, primer, and all materials included.</p>
+            <p>Helps pay for the paint, primer and supplies that finish a child's walls.</p>
             <a {...once(60)} target="_blank" rel="noopener noreferrer" class="tier-item-cta">Give $60 →</a>
           </div>
           <div class="tier-item" data-reveal data-delay="1">
             <span class="tier-item-amount">$125</span>
             <strong class="tier-item-what">Bedding & Decor</strong>
-            <p>New bedding, curtains, rugs, and wall art. The details that make a room feel like <em>home</em>.</p>
+            <p>Helps with bedding, curtains and wall art: the details that make a room feel like <em>home</em>.</p>
             <a {...once(125)} target="_blank" rel="noopener noreferrer" class="tier-item-cta">Give $125 →</a>
           </div>
           <div class="tier-item" data-reveal data-delay="2">
             <span class="tier-item-amount">$1,000</span>
-            <strong class="tier-item-what">Full Room Sponsor</strong>
-            <p>Funds a complete room transformation, from design to demolition to the big reveal moment.</p>
+            <strong class="tier-item-what">Dream Bedroom Furnishings</strong>
+            <p>Helps furnish a child's dream bedroom: bedding, a rug and decor.</p>
             <a {...once(1000)} target="_blank" rel="noopener noreferrer" class="tier-item-cta">Give $1,000 →</a>
           </div>
           <div class="tier-item tier-item--custom" data-reveal data-delay="3">
@@ -243,26 +236,26 @@ const hero = {
             <span class="tier-feature-amount">$50<span class="tier-freq">/mo</span></span>
             <span class="tier-feature-what">Room Champion</span>
           </div>
-          <p class="tier-feature-desc">$600/year funds adaptive furniture and flooring that transforms a child's daily life.</p>
+          <p class="tier-feature-desc">$600 a year goes toward adaptive furniture and accessible flooring.</p>
           <a {...monthly(50)} target="_blank" rel="noopener noreferrer" class="btn btn-primary">Give $50/mo →</a>
         </div>
         <div class="tier-row">
           <div class="tier-item">
             <span class="tier-item-amount">$10<span class="tier-freq">/mo</span></span>
             <strong class="tier-item-what">Sunshine Starter</strong>
-            <p>Less than 35¢ a day provides essential supplies for room makeovers all year long.</p>
+            <p>Less than 35¢ a day goes toward supplies for the rooms we build all year.</p>
             <a {...monthly(10)} target="_blank" rel="noopener noreferrer" class="tier-item-cta">Give $10/mo →</a>
           </div>
           <div class="tier-item">
             <span class="tier-item-amount">$25<span class="tier-freq">/mo</span></span>
             <strong class="tier-item-what">Dream Builder</strong>
-            <p>$300/year is enough to furnish a child's entire dream bedroom with new bedding, decor, and rugs.</p>
+            <p>$300 a year helps furnish a child's dream bedroom: bedding, decor and a rug.</p>
             <a {...monthly(25)} target="_blank" rel="noopener noreferrer" class="tier-item-cta">Give $25/mo →</a>
           </div>
           <div class="tier-item">
             <span class="tier-item-amount">$100<span class="tier-freq">/mo</span></span>
             <strong class="tier-item-what">Legacy Builder</strong>
-            <p>At $1,200/year, you're directly sponsoring a complete room transformation for a child in need.</p>
+            <p>$1,200 a year funds a real share of a room: a dream bedroom costs $10,000 to $15,000 to build.</p>
             <a {...monthly(100)} target="_blank" rel="noopener noreferrer" class="tier-item-cta">Give $100/mo →</a>
           </div>
           <div class="tier-item tier-item--custom">
@@ -688,47 +681,6 @@ const hero = {
   .why-text p:last-of-type { margin-bottom: 32px; }
 
   /* Pull-quote testimonial — editorial accent */
-  .why-testimonial {
-    margin-top: 48px;
-    padding: 32px 0 0 28px;
-    border-top: 1px solid var(--c-border);
-    border-left: 3px solid var(--c-yellow);
-    position: relative;
-  }
-  .why-testimonial::before {
-    content: '\201C';
-    position: absolute;
-    top: 12px;
-    left: 28px;
-    font-family: var(--font-display);
-    font-size: 56px;
-    line-height: 1;
-    color: var(--c-yellow);
-    opacity: 0.3;
-  }
-  .why-testimonial p {
-    font-family: var(--font-display);
-    font-size: clamp(16px, 2vw, 18px);
-    line-height: 1.7;
-    font-style: italic;
-    color: var(--c-dark);
-    margin-bottom: 16px;
-    padding-left: 0;
-  }
-  .why-testimonial cite {
-    font-style: normal;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  .why-testimonial cite strong {
-    font-size: 14px;
-    color: var(--c-dark);
-  }
-  .why-testimonial cite span {
-    font-size: 13px;
-    color: var(--c-text-muted);
-  }
 
   /* ══════════════════════════════════════════
      3. IMPACT TIERS
