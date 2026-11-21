@@ -109,10 +109,12 @@ const END_LINE_MAX = 0.92;
 const END_LINE_TAU_S = 75;
 /**
  * Live, the reveal over: how long a live video holding its last frame (Reconnecting) still counts as playing out its
- * ending (isPlayingLive). Stream closes a stopped recording 17 s after the stop with recording.timeoutSeconds 0, and
- * 2 min 2 s after it with 120 (measured Nov 20 2026); viewers reach the held end about 16 s after the stop
+ * ending (isPlayingLive). With recording.timeoutSeconds 0 ("SOARD reveals" since Nov 21 2026) Stream closes a stopped
+ * recording 15 to 16 s after the stop, before viewers 20 s behind reach its end, so a hold means a late close: this
+ * covers one up to about 70 s after the stop. Some closes stick for minutes (3 of 9 private test stops on Nov 21 2026:
+ * 4, 12 and 13 minutes), and those end with the note after this wait, not minutes of Reconnecting
  */
-const END_WAIT_MS = 150_000;
+const END_WAIT_MS = 45_000;
 const REPLAY_META_FOR_MS = 45 * 60 * 1000;
 const CC_KEY = 'soard-live-cc';
 
@@ -326,7 +328,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // keeps the recording open a while (the live input's recording.timeoutSeconds) and its playlist lacks the last few
   // seconds until it closes; the player holds and plays them once they come. Max's reveal, Nov 20 2026: the page took
   // the hold for the end and showed "That's the reveal!" about 100 s before his last words came, so no one watching
-  // live saw them. A hold that outlasts END_WAIT_MS, the viewer's own signal gone, ends with the note as before)
+  // live saw them. A hold that outlasts END_WAIT_MS, a close stuck for minutes or the viewer's own signal gone, ends
+  // with the note as before)
   const holdingForEnd = () => pstatus === 'reconnecting' && !!player?.waitingForMore && reconnectingSince > 0 && Date.now() - reconnectingSince < END_WAIT_MS;
   const isPlayingLive = () => kind === 'live' && !!player && !endShown && !player.feedEnded && !player.closed && (pstatus === 'playing' || pstatus === 'buffering' || holdingForEnd());
   // The page's next view ends the reveal for the video on: it was this broadcast's live video, and the broadcast has
