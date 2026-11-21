@@ -4,7 +4,7 @@ Goal: let the site create and end the Facebook live post itself, so the crew's o
 
 ## What to request
 
-In the Facebook app used for the page token (the "Live URL" app in developers.facebook.com):
+In the Facebook app used for the page token: "Sunshine on a Ranney Day" in developers.facebook.com, app id 3077726055757497 (named "Live URL" until Nov 21 2026, when Peter had it renamed before the App Review; the rename left the token and its permissions as they were):
 
 - Feature: **Live Video API**
 - Permissions: `publish_video`, `pages_manage_posts`, `pages_read_engagement`, `pages_show_list` (the last two are already in use)
@@ -75,8 +75,8 @@ Add one extra shot to the screencast: Admin → Broadcast → Now after a reveal
 **Regenerate the page token** (Peter; secrets live only in Cloudflare). Last done Nov 21 2026, with all 10 permissions below.
 
 1. Link Instagram to the Page if it isn't: Instagram app → Settings → Account type and tools → switch to a professional account → Business, then Facebook Page settings → Linked accounts → Instagram → connect.
-2. A permission the app doesn't have yet can't go on a token ("(#200) The permission(s) … are not available"). Add it first: developers.facebook.com → the "Live URL" app → Use cases → Manage everything on your Page → Customize → **Add to App Review** on the permission. That only adds it to the app ("Ready for testing"); nothing is submitted. `pages_manage_engagement`, `pages_read_user_content` and `read_insights` were added this way on Nov 21 2026.
-3. developers.facebook.com/tools/explorer → pick the SOARD app → User or Page: **Get User Access Token** → tick `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `publish_video`, `instagram_basic`, `instagram_content_publish`, `business_management`, `pages_manage_engagement` and `pages_read_user_content` (the Page's website-link comment on its live post), `read_insights` (Facebook viewer numbers after a reveal) → Generate → approve in the popup.
+2. A permission the app doesn't have yet can't go on a token ("(#200) The permission(s) … are not available"). Add it first: developers.facebook.com → the "Sunshine on a Ranney Day" app (3077726055757497) → Use cases → Manage everything on your Page → Customize → **Add to App Review** on the permission. That only adds it to the app ("Ready for testing"); nothing is submitted. `pages_manage_engagement`, `pages_read_user_content` and `read_insights` were added this way on Nov 21 2026.
+3. developers.facebook.com/tools/explorer → Meta App: "Sunshine on a Ranney Day" → User or Page: **Get User Access Token** → tick `pages_show_list`, `pages_read_engagement`, `pages_manage_posts`, `publish_video`, `instagram_basic`, `instagram_content_publish`, `business_management`, `pages_manage_engagement` and `pages_read_user_content` (the Page's website-link comment on its live post), `read_insights` (Facebook viewer numbers after a reveal) → Generate → approve in the popup.
 4. Access Token Tool (developers.facebook.com/tools/accesstoken) → **Extend Access Token** on that user token → copy the long-lived user token. (Or exchange it without the token in an address bar: POST `oauth/access_token` with `grant_type=fb_exchange_token`, the app id, the app secret from App settings → Basic, and the user token.)
 5. In Graph Explorer, paste the long-lived token and run `GET /me/accounts`. Copy the `access_token` of the Sunshine on a Ranney Day page. Page tokens made from a long-lived user token do not expire.
 6. Cloudflare dashboard → Workers & Pages → soard-site → Settings → Variables → edit `FB_PAGE_TOKEN` → paste → Save → redeploy (Publish to site in the admin, any push, or Retry deployment).
