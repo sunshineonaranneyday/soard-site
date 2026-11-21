@@ -1222,10 +1222,20 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       const bar = document.querySelector<HTMLElement>('.auction-bar');
       const off = bar && bar.offsetHeight && getComputedStyle(bar).display !== 'none' ? bar.offsetHeight : 0;
       picture.style.setProperty('--dock-bottom', `${off}px`);
-      const label = $('dock-label'); if (label) label.textContent = view.mode === 'replay' ? 'Replay' : 'Live';
+      paintDockLabel();
     }
     picture.classList.toggle('is-docked', on);
     setHidden($('dockbar'), !on);
+  }
+  // The docked picture's label says what plays in it, Live or Replay. Before a reveal (the kid's photo in the corner
+  // while the plan is open big) nothing is live yet, so it has none: it said LIVE (be, Nov 21 2026). Painted again on
+  // every change while docked, so a reveal going live in the corner says so
+  function paintDockLabel() {
+    const label = $('dock-label');
+    if (!label) return;
+    const word = view.mode === 'live' ? 'Live' : view.mode === 'replay' ? 'Replay' : '';
+    if (word) label.textContent = word;
+    setHidden(label.parentElement, !word);
   }
   function setPinned(on: boolean) {
     picture?.classList.toggle('is-pinned', on);
@@ -1238,6 +1248,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       : pstatus === 'playing' || pstatus === 'buffering' || (!!scrub?.on && scrub.wasPlaying) || playAfterSeek);
     const pin = pinned && party;
     setDock(pin || (party && going && !inView && !dockOff && !typing && !document.fullscreenElement));
+    if (docked) paintDockLabel();
     setPinned(pin && docked);
   }
   // While someone types on a phone the small player steps aside: its keyboard leaves no room on the screen for both,
