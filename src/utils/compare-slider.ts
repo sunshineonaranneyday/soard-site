@@ -66,7 +66,7 @@ export function attachCompare(container: HTMLElement, opts: CompareOptions = {})
   let pos = 50;
   let vel = 0;
   let raf = 0;
-  let drag: { id: number; x0: number; y0: number; t0: number; moved: boolean; scrolled?: boolean; lastX: number; lastT: number; vels: number[] } | null = null;
+  let drag: { id: number; touch: boolean; x0: number; y0: number; t0: number; moved: boolean; scrolled?: boolean; lastX: number; lastT: number; vels: number[] } | null = null;
   let lastTap = 0;
   let introPlayed = !opts.intro || reduced();
   const stop = () => { if (raf) cancelAnimationFrame(raf); raf = 0; };
@@ -111,7 +111,7 @@ export function attachCompare(container: HTMLElement, opts: CompareOptions = {})
     vel = 0;
     // (someone has found the line: its sweep, still to come while its pictures load, never takes it from where they leave it)
     if (!introPlayed) { introPlayed = true; io?.disconnect(); }
-    drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, lastX: e.clientX, lastT: performance.now(), vels: [] };
+    drag = { id: e.pointerId, touch: e.pointerType !== 'mouse', x0: e.clientX, y0: e.clientY, t0: performance.now(), moved: false, lastX: e.clientX, lastT: performance.now(), vels: [] };
     try { container.setPointerCapture(e.pointerId); } catch { /* a pointer already gone */ }
     container.classList.add('is-dragging');
     // (a mouse press would otherwise start a text or image drag; on a range laid over the picture, the kid page's, the
@@ -158,7 +158,15 @@ export function attachCompare(container: HTMLElement, opts: CompareOptions = {})
     }
   };
   // The keyboard: the range's own arrows (one step), with Shift ten
-  const onInput = () => { if (range) { stop(); update(parseFloat(range.value), false); } };
+  // (a finger pressed on a range laid over the picture, the kid page's, jumps the range to it at once, on Android: the line
+  // leapt there even when the finger went on to scroll the page, Nov 21 2026. Until the finger has moved sideways, the
+  // range goes back to where the line is; the sideways drag then moves it as always, and a mouse's click still jumps it)
+  const onInput = () => {
+    if (!range) return;
+    if (drag?.touch && !drag.moved) { range.value = String(Math.round(pos * 10) / 10); return; }
+    stop();
+    update(parseFloat(range.value), false);
+  };
   const onKey = (e: KeyboardEvent) => {
     if (!e.shiftKey || (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight')) return;
     e.preventDefault();
