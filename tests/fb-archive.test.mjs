@@ -267,3 +267,66 @@ test('self-correction: an old automatic mistake (replay on Helen) moves to Remi 
   const man = (await a.readArchiveState(env.DB)).archived['2000000000000001'];
   assert.equal(man.via, 'manual');
 });
+
+test('a reveal the site broadcast and recorded: its Facebook side is never copied, alerted about or offered for saving', async () => {
+  // What production held on Nov 21 2026: Max's and Dylan's reveals went out
+  // through the site (own recording on the kid page) and on Facebook at once.
+  const old = '2026-01-10T21:00:00.000Z'; // far from any video below, so no planned-reveal window matches
+  const row = (id, kidSlug, kidName, rec, fbLive, fbVideo) => env.DB.prepare(
+    `INSERT INTO broadcasts (id, kid_slug, kid_name, title, scheduled_at, live_at, ended_at, phase, live_video_uid, replay_uid, fb_live_video_id, fb_permalink, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'replay', ?, ?, ?, ?, 'stream', ?, ?)`)
+    .bind(id, kidSlug, kidName, `${kidName}'s room reveal`, old, old, old, rec, rec, fbLive, fbVideo ? `https://www.facebook.com/1476302394541775/videos/${fbVideo}` : null, old, old).run();
+  await row('bc-max', 'max', 'Max', 'siterecmax', '1598828265622520', '1696905131784130');
+  await row('bc-dylan', 'dylan-2026', 'Dylan', 'siterecdylan', '1596562582515755', '1173734941838613');
+  await row('bc-manual', 'amari', 'Amari', 'siterecamari', null, '4000000000000001');
+  await row('bc-norec', 'adrian-now', 'Adrian', null, null, '5000000000000001'); // the site's recording failed
+
+  const site = await a.siteBroadcastVideos(env.DB);
+  assert.equal(site['1696905131784130']?.kidName, 'Max', 'found by the Facebook link');
+  assert.equal(site['1598828265622520']?.kidName, 'Max', 'and by the live video id');
+  assert.equal(site['5000000000000001'], undefined, 'no recording of its own → not counted');
+
+  const st0 = await a.readArchiveState(env.DB);
+  st0.checkedAt = new Date(Date.now() - 7 * H).toISOString(); // make the next sweep due
+  // Dylan's leftover copy from before the fix (exactly as production held it)
+  st0.archived['1173734941838613'] = { uid: 'olddylancopy', name: "Dylan's room reveal (2026-11-18)", at: new Date().toISOString(), lead: "Dylan's room reveal", attachSkipped: true, matchedName: 'Dylan', alertedAt: new Date().toISOString() };
+  // A copy a person handled by hand stays as they left it
+  st0.archived['4000000000000001'] = { uid: 'mancopy', name: 'x', at: new Date().toISOString(), attachedTo: null, via: 'manual', attachSkipped: true };
+  await env.DB.prepare('INSERT OR REPLACE INTO site_config (key, data, updated_at) VALUES (?, ?, ?)').bind('fb-archive', JSON.stringify(st0), new Date().toISOString()).run();
+
+  const created = new Date(Date.now() - 5 * H).toISOString();
+  sim.fbVideos = [
+    { id: '1696905131784130', live_status: 'VOD', created_time: created, title: "Max's room reveal", description: "Max's room reveal" },
+    { id: '5000000000000001', live_status: 'VOD', created_time: created, title: "Adrian's room reveal", description: "Adrian's room reveal" },
+  ];
+  calls.length = 0;
+  const s = await a.sweepArchives(env);
+  assert.equal(s.error, null);
+  assert.equal(s.archived, 1, 'only the reveal the site did not record');
+  assert.equal(callsTo('/stream/copy').length, 1);
+  assert.equal(callsTo('hooks.slack.test').length, 0, 'no "not on a kid page" alert');
+
+  const st = await a.readArchiveState(env.DB);
+  assert.equal(st.archived['1696905131784130'], undefined, "Max's Facebook side is not saved");
+  assert.equal(st.archived['1173734941838613'], undefined, "Dylan's leftover copy is forgotten");
+  assert.equal(st.archived['4000000000000001']?.via, 'manual', 'a hand placement stays');
+  assert.equal(st.archived['5000000000000001']?.attachedTo, 'adrian-now', 'no own recording → Facebook copy saved and placed as before');
+
+  // The admin's Facebook list says so and offers nothing to do
+  const rows = await a.annotateArchived(env.DB, [{ id: '1696905131784130' }, { id: '5000000000000001' }]);
+  assert.deepEqual(rows[0].siteBroadcast, { kidSlug: 'max', kidName: 'Max' });
+  assert.equal(rows[0].streamUid, null);
+  assert.equal(rows[0].needsKid, false);
+  assert.equal(rows[1].siteBroadcast, null);
+
+  // Later sweeps keep leaving it alone
+  const st1 = await a.readArchiveState(env.DB);
+  st1.checkedAt = new Date(Date.now() - 7 * H).toISOString();
+  await env.DB.prepare('INSERT OR REPLACE INTO site_config (key, data, updated_at) VALUES (?, ?, ?)').bind('fb-archive', JSON.stringify(st1), new Date().toISOString()).run();
+  calls.length = 0;
+  const s2 = await a.sweepArchives(env);
+  assert.equal(s2.archived, 0);
+  assert.equal(callsTo('/stream/copy').length, 0);
+  assert.equal(callsTo('hooks.slack.test').length, 0);
+  await env.DB.prepare(`DELETE FROM broadcasts WHERE id IN ('bc-max','bc-dylan','bc-manual','bc-norec')`).run();
+});

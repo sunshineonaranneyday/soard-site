@@ -25,6 +25,14 @@
  * the Remi & Nico replay on 2021's Helen before. Two answers in one rule
  * means ambiguous: the replay is still saved and the admins get one alert.
  *
+ * Reveals broadcast through the site are skipped. They also go out on
+ * Facebook, but the site keeps its own recording (the original, a little
+ * longer) and puts it on the kid's page itself, so copying Facebook's
+ * version only made a duplicate and a false "not on a kid page" alert
+ * (Dylan Nov 19, Max Nov 21 2026). The broadcast record holds the Facebook
+ * link, which is how the sweep tells them apart. A site broadcast with no
+ * recording of its own still gets its Facebook copy saved.
+ *
  * Self-correction: automatic placements made by an older version of these
  * rules are re-checked once; if today's rules pick a different kid, the
  * link is moved and the site redeploys. Manual placements are never touched.
@@ -254,6 +262,57 @@ export async function findKidByBroadcast(DB, createdTime) {
   return { slug: slugs[0], name: hits[0].kid_name || null };
 }
 
+/** The video id in a Facebook link like https://www.facebook.com/<page>/videos/<id>. */
+function fbVideoIdFromPermalink(url) {
+  const m = String(url || '').match(/\/videos\/(\d+)/);
+  return m ? m[1] : null;
+}
+
+/**
+ * Facebook videos that are the Facebook side of a reveal the site broadcast
+ * itself and recorded: { [fbVideoId]: { kidSlug, kidName } }. The sweep
+ * leaves these alone (see the header). Only broadcasts with their own
+ * recording count, so if the site's recording failed the Facebook copy is
+ * still saved.
+ */
+export async function siteBroadcastVideos(DB) {
+  const out = {};
+  let rows = [];
+  try {
+    const res = await DB.prepare(
+      `SELECT kid_slug, kid_name, fb_live_video_id, fb_permalink FROM broadcasts
+       WHERE source = 'stream' AND COALESCE(replay_uid, live_video_uid, '') != ''
+         AND (fb_permalink IS NOT NULL OR fb_live_video_id IS NOT NULL)
+       ORDER BY created_at DESC LIMIT 100`
+    ).all();
+    rows = (res && res.results) || [];
+  } catch {
+    return out; // broadcasts table not created yet
+  }
+  for (const r of rows) {
+    const info = { kidSlug: r.kid_slug || null, kidName: r.kid_name || null };
+    for (const id of [fbVideoIdFromPermalink(r.fb_permalink), r.fb_live_video_id]) {
+      if (id && !out[String(id)]) out[String(id)] = info;
+    }
+  }
+  return out;
+}
+
+/**
+ * Forget saved Facebook copies of the site's own broadcasts that never went
+ * on a page (made before the sweep knew to skip them). A placement a person
+ * made stays. Mutates state; returns true if anything was dropped.
+ */
+function dropSiteCopies(state, siteVideos) {
+  let changed = false;
+  for (const [id, entry] of Object.entries(state.archived)) {
+    if (!siteVideos[id] || entry.attachedTo || entry.via === 'manual') continue;
+    delete state.archived[id];
+    changed = true;
+  }
+  return changed;
+}
+
 /**
  * Decide which kid page a Facebook replay belongs to (rules in the header).
  * `uid` lets a kid whose link already points at this very video count as
@@ -395,6 +454,7 @@ export async function assignArchivedVideo(env, { videoId, kidSlug, by = 'admin' 
 export async function annotateArchived(DB, videos) {
   let archived = {};
   try { archived = (await readArchiveState(DB)).archived; } catch { /* annotation only */ }
+  const site = await siteBroadcastVideos(DB);
   const slugs = [...new Set(Object.values(archived).map((e) => e.attachedTo).filter(Boolean))];
   const names = {};
   for (const slug of slugs) {
@@ -405,9 +465,11 @@ export async function annotateArchived(DB, videos) {
   }
   return (videos || []).map((v) => {
     const e = v.id ? archived[v.id] : null;
-    if (!e) return { ...v, streamUid: null, attachedTo: null, attachedName: null, needsKid: false };
+    const siteBroadcast = (v.id && site[v.id]) || null;   // the site recorded this reveal itself
+    if (!e) return { ...v, streamUid: null, attachedTo: null, attachedName: null, needsKid: false, siteBroadcast };
     return {
       ...v,
+      siteBroadcast,
       streamUid: e.uid || null,
       watch: e.uid ? watchUrl(e.uid) : null,
       attachedTo: e.attachedTo || null,
@@ -561,9 +623,11 @@ export async function sweepArchives(env) {
 
     const state = await readArchiveState(DB);
     const stats = { kidWrites: 0 }; // kid-record changes → pages are stale → auto-deploy
+    const siteVideos = await siteBroadcastVideos(DB);
 
     // Retro-attach + embed→link migration run on every attempt (cheap, no Facebook quota)
     let dirty = false;
+    if (dropSiteCopies(state, siteVideos)) dirty = true;
     if (await migrateEmbedsToLinks(env, state, stats)) { dirty = true; summary.migrated++; }
     if (await reverifyAuto(env, state, stats)) { dirty = true; summary.corrected++; }
     if (await retroAttach(env, state, stats)) { dirty = true; summary.attached++; }
@@ -593,7 +657,7 @@ export async function sweepArchives(env) {
 
     const candidates = (data.data || [])
       .filter(v => v.live_status === 'VOD'
-        && v.id && !state.archived[v.id]
+        && v.id && !state.archived[v.id] && !siteVideos[v.id]
         && v.created_time && Date.now() - Date.parse(v.created_time) > MIN_AGE_MS)
       .slice(0, MAX_PER_SWEEP);
 

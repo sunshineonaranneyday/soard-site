@@ -6272,7 +6272,7 @@
         return html`<div class="bc-fbrow">
           <div style="flex:1;min-width:220px">
             <span class=${`badge ${v.status === 'LIVE' ? 'badge-yellow' : 'badge-gray'}`}>${v.status}</span> <strong style="font-size: var(--fs-sm)">${v.title || '(untitled)'}</strong>
-            <div class="text-sm text-muted">${bcFmt(v.createdAt)}${v.streamUid ? html` · saved to Stream · ${v.attachedName ? html`on <strong>${v.attachedName}</strong>'s page` : html`<strong class="ink-warn">not on a kid page yet</strong>`}` : null}</div>
+            <div class="text-sm text-muted">${bcFmt(v.createdAt)}${v.streamUid ? html` · saved to Stream · ${v.attachedName ? html`on <strong>${v.attachedName}</strong>'s page` : html`<strong class="ink-warn">not on a kid page yet</strong>`}` : v.siteBroadcast ? ' · broadcast through the site, which kept its own recording' : null}</div>
           </div>
           <div class="bc-btns">
             <a class="btn btn-ghost btn-sm" href=${safeHref(v.url)} target="_blank" rel="noopener">Facebook ↗</a>
@@ -6284,7 +6284,7 @@
               </select>
               <button class="btn btn-ghost btn-sm" disabled=${!!rowBusy || !pick || pick === v.attachedTo} onClick=${() => handleAttachFb(v, pick)}>${v.attachedTo ? 'Move to this page' : 'Put on this page'}</button>
               ${v.attachedTo ? html`<button class="btn btn-ghost btn-sm" disabled=${!!rowBusy} onClick=${() => handleAttachFb(v, null)}>Take off page</button>` : null}`
-            : (v.status === 'VOD' ? html`<button class="btn btn-ghost btn-sm" disabled=${!!rowBusy} onClick=${() => handleArchiveFb(v)}>Save to Stream</button>` : null)}
+            : (v.status === 'VOD' && !v.siteBroadcast ? html`<button class="btn btn-ghost btn-sm" disabled=${!!rowBusy} onClick=${() => handleArchiveFb(v)}>Save to Stream</button>` : null)}
           </div>
         </div>`;
       };
