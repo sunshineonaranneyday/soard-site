@@ -9,9 +9,13 @@
  * Signed: the webhook destination has a secret, which Cloudflare sends in the
  * cf-webhook-auth header, and the same value is set here as
  * STREAM_WEBHOOK_SECRET. A wrong or missing header is refused (401). A signed
- * call for our live input forces an immediate tick (at most one every 5 s),
- * and an error on either of our inputs alerts staff (once per input per 15
- * minutes).
+ * call for our live input forces an immediate tick (at most one every 5 s).
+ * An error on the live input is only noted (health.encoderError): the feed
+ * watch texts it only if the video hasn't recovered 30 s later, and else
+ * leaves a quiet Slack note (ENCODER in _broadcast-monitor.js; Peter, Nov 21
+ * 2026: "only real problems"). An account error (storage full, no Stream
+ * plan) and any error on the rehearsal input alert at once, once per input
+ * per 15 minutes.
  *
  * Unsigned (STREAM_WEBHOOK_SECRET not set yet): anyone could have sent it,
  * so it only starts an ordinary, throttled tick. No alerts, nothing forced.
@@ -28,21 +32,13 @@
  * webhook. Or use the Alerting API (see docs/live-broadcast.md).
  */
 
-import { runTick, readConfig, readState, publishToHub, noteWebhook, ensureSchema, SITE_ORIGIN } from './_broadcast.js';
+import { runTick, readConfig, readState, publishToHub, noteWebhook, noteEncoderError, ensureSchema, SITE_ORIGIN } from './_broadcast.js';
 import * as notify from './_broadcast-notify.js';
+import { ENCODER, ENCODER_ERRORS, ACCOUNT_ERRORS, encoderWords, ADMIN_URL } from './_broadcast-monitor.js';
 import { safeEqual } from './_secure.js';
 import { limit } from './_rate-limit.js';
 
 const EVENTS = new Set(['live_input.connected', 'live_input.disconnected', 'live_input.errored']);
-// Stream's documented error codes, each with our own words (docs: stream/stream-live/webhooks)
-const ERRORS = {
-  ERR_GOP_OUT_OF_RANGE: ['The keyframe interval is out of range.', 'In Larix, set the keyframe interval to 2 seconds.'],
-  ERR_UNSUPPORTED_VIDEO_CODEC: ['Stream can\'t use the video codec the phone sent.', 'In Larix, set the video codec to H.264.'],
-  ERR_UNSUPPORTED_AUDIO_CODEC: ['Stream can\'t use the audio codec the phone sent.', 'In Larix, set the audio codec to AAC.'],
-  ERR_STORAGE_QUOTA_EXHAUSTED: ['Cloudflare Stream storage is full.', 'Delete old recordings in Cloudflare Stream, or add storage.'],
-  ERR_MISSING_SUBSCRIPTION: ['The Cloudflare Stream subscription isn\'t active.', 'Check the Stream plan in the Cloudflare dashboard.'],
-  ERR_UNHEALTHY: ['Stream couldn\'t process the broadcast.', 'Check the Larix profile, then stop and start the stream.'],
-};
 const CODECS = new Set(['h264', 'avc', 'hevc', 'h265', 'av1', 'vp8', 'vp9', 'aac', 'opus', 'mp3', 'ac3', 'eac3']);
 const ERROR_ALERT_EVERY_SEC = 15 * 60;
 const FORCED_TICK_EVERY_SEC = 5;
@@ -96,8 +92,18 @@ export async function onRequestPost(context) {
     }
 
     if (event === 'live_input.errored' && which) {
-      // Once per input per 15 minutes, however often Stream repeats it
-      if ((await limit(env.DB, `stream-webhook:errored:${which}`, 1, ERROR_ALERT_EVERY_SEC)).ok) {
+      const facts = errorFacts(data.live_input_errored);
+      if (which === 'live' && !ACCOUNT_ERRORS.has(facts.code)) {
+        // The phone's error on the live input: only noted. The feed watch texts it only if the video
+        // hasn't recovered (ENCODER in _broadcast-monitor.js)
+        await noteEncoderError(env.DB, { ...facts, windowMs: ENCODER.windowMs });
+        // No watch runs with no reveal on air (nothing scheduled, or a quiet test): a quiet Slack note instead
+        const state = await readState(env.DB);
+        if ((state.quiet || state.phase === 'idle') && (await limit(env.DB, 'stream-webhook:errored:note', 1, ERROR_ALERT_EVERY_SEC)).ok) {
+          context.waitUntil(offAirNote(env, facts.code).catch((err) => console.error('[stream-webhook]', err.message)));
+        }
+      } else if ((await limit(env.DB, `stream-webhook:errored:${which}`, 1, ERROR_ALERT_EVERY_SEC)).ok) {
+        // Once per input per 15 minutes, however often Stream repeats it
         context.waitUntil(notify.alertAdmins(env, config, errorAlert(which, data.live_input_errored)));
       }
     }
@@ -120,13 +126,25 @@ export async function onRequestPost(context) {
   }
 }
 
+/** An error's code and codecs, each only from a fixed list (null / 'unknown' otherwise) */
+export function errorFacts(errored) {
+  const raw = errored && typeof errored === 'object' ? errored : {};
+  const code = typeof raw.error?.code === 'string' && Object.hasOwn(ENCODER_ERRORS, raw.error.code) ? raw.error.code : null;
+  const codec = (v) => (typeof v === 'string' && CODECS.has(v.trim().toLowerCase()) ? v.trim().toLowerCase() : 'unknown');
+  return { code, videoCodec: codec(raw.video_codec), audioCodec: codec(raw.audio_codec) };
+}
+
+/** The live input's error with no reveal on air: Slack only, no @here, no email, no text */
+function offAirNote(env, code) {
+  const [what, fix] = encoderWords(code);
+  const title = `Stream flagged the phone's video: ${what.replace(/\.$/, '')}`;
+  return notify.slackPost(env, notify.adminCard({ level: 'info', icon: '📝', title, detail: 'No reveal was on air (a test?), so nobody was texted. If it comes back, fix the phone before the next reveal.', fix, url: ADMIN_URL }));
+}
+
 /** The staff alert for an input error, from our own words only */
 export function errorAlert(which, errored) {
-  const raw = errored && typeof errored === 'object' ? errored : {};
-  const code = typeof raw.error?.code === 'string' && Object.hasOwn(ERRORS, raw.error.code) ? raw.error.code : null;
-  const [what, fix] = code ? ERRORS[code] : ['Stream reported a problem with the incoming broadcast.', null];
-  const codec = (v) => (typeof v === 'string' && CODECS.has(v.trim().toLowerCase()) ? v.trim().toLowerCase() : 'unknown');
-  const theFix = fix || 'Check the phone\'s Larix profile: H.264 video, AAC audio, a keyframe every 2 seconds.';
+  const { code, videoCodec, audioCodec } = errorFacts(errored);
+  const [what, theFix] = encoderWords(code);
   return {
     level: 'error',
     urgent: which === 'live',
@@ -134,7 +152,7 @@ export function errorAlert(which, errored) {
     text: which === 'live' ? notify.alertText({ title: `Stream error: ${what.replace(/\.$/, '')}`, fix: theFix, url: `${notify.SITE_ORIGIN}/admin/#broadcast/control-room`, tone: 'alert' }) : false,
     title: `Stream input error${which === 'live' ? '' : ' (rehearsal)'}: ${code || 'unknown'}`,
     detail: what,
-    facts: [['Video codec', codec(raw.video_codec)], ['Audio codec', codec(raw.audio_codec)]],
+    facts: [['Video codec', videoCodec], ['Audio codec', audioCodec]],
     fix: theFix,
     url: `${SITE_ORIGIN}/admin/`,
   };

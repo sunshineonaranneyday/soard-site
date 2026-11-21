@@ -443,16 +443,38 @@ export async function countBannerClick(DB, broadcastId) {
     .bind(STATE_KEY, broadcastId).run();
 }
 
+// Health entries that belong to /api/stream-webhook, each written by one statement of its own (noteWebhook,
+// noteEncoderError)
+const WEBHOOK_OWNED = ['$.webhook', '$.encoderError'];
+
 /**
- * Save the health record. Its `webhook` entry belongs to /api/stream-webhook
- * (noteWebhook), so the stored one is kept whatever this copy says: a tick
- * that read health before a webhook arrived can't wipe it.
+ * Save the health record. Its `webhook` and `encoderError` entries belong to
+ * /api/stream-webhook, so the stored ones are kept whatever this copy says: a
+ * tick that read health before a webhook arrived can't wipe them.
  */
 export async function writeHealth(DB, h) {
+  const keep = WEBHOOK_OWNED.reduce((sql, path) => `CASE WHEN json_type(${stored('site_config.data', path)}) = 'object'
+      THEN json_set(${sql}, '${path}', json(json_extract(site_config.data, '${path}'))) ELSE ${sql} END`, '?2');
   await DB.prepare(`INSERT INTO site_config (key, data, updated_at) VALUES (?1, ?2, ?3)
-    ON CONFLICT(key) DO UPDATE SET data = CASE WHEN json_type(${stored('site_config.data', '$.webhook')}) = 'object'
-      THEN json_set(?2, '$.webhook', json(json_extract(site_config.data, '$.webhook'))) ELSE ?2 END, updated_at = ?3`)
+    ON CONFLICT(key) DO UPDATE SET data = ${keep}, updated_at = ?3`)
     .bind(HEALTH_KEY, JSON.stringify(h), nowIso()).run();
+}
+
+/**
+ * Note a Stream encoder error on the live input (live_input.errored) in
+ * health.encoderError, in one statement like noteWebhook. Nobody hears of it
+ * here: the feed watch decides (_broadcast-monitor.js encoderWatch). Errors
+ * less than `windowMs` apart are one run (firstAt kept, count up); a longer
+ * quiet starts a new run. `code` and the codecs come from fixed lists only.
+ */
+export async function noteEncoderError(DB, { code = null, videoCodec = 'unknown', audioCodec = 'unknown', windowMs = 10 * 60e3 } = {}) {
+  const prev = (field) => stored('site_config.data', `$.encoderError.${field}`);
+  const sameRun = `(${prev('lastAt')} >= ?3)`;
+  const entry = (first, count) => `json_object('firstAt', ${first}, 'lastAt', ?2, 'count', ${count}, 'code', ?4, 'videoCodec', ?5, 'audioCodec', ?6)`;
+  await DB.prepare(`INSERT INTO site_config (key, data, updated_at) VALUES (?1, json_object('encoderError', ${entry('?2', '1')}), ?2)
+    ON CONFLICT(key) DO UPDATE SET data = json_set(CASE WHEN json_valid(site_config.data) THEN site_config.data ELSE '{}' END, '$.encoderError',
+      ${entry(`CASE WHEN ${sameRun} THEN ${prev('firstAt')} ELSE ?2 END`, `CASE WHEN ${sameRun} THEN COALESCE(${prev('count')}, 0) + 1 ELSE 1 END`)}), updated_at = ?2`)
+    .bind(HEALTH_KEY, nowIso(), new Date(Date.now() - windowMs).toISOString(), code, videoCodec, audioCodec).run();
 }
 
 /**

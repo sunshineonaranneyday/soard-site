@@ -68,6 +68,44 @@ export const PAUSE = {
   keep: 20,          // moving readings kept for that level
 };
 
+/**
+ * Stream's encoder errors on the live input (live_input.errored). Peter, Nov 21 2026, offered texts only when the
+ * error repeats or the video really stalls: "Yes, only real problems". On Max's reveal (Nov 20) one
+ * ERR_GOP_OUT_OF_RANGE came two minutes in, after about 30 s of pieces arriving unevenly; the picture then ran fine
+ * to the end, yet it had texted, emailed and @here'd everyone. Now /api/stream-webhook only notes it
+ * (health.encoderError, noteEncoderError in _broadcast.js) and encoderWatch decides, `settleMs` after the error:
+ *  - the video stale (its newest piece older than `staleSec`, or the player can't load the feed): a real problem,
+ *    the issue 'encoder' with the error's own fix, texted like any reveal error
+ *  - the video fine: a quiet Slack note (no @here, no email, no text), "recovered by itself". Stream saying it again
+ *    within a run (errors less than `windowMs` apart) also gets one email once the reveal ends, to fix the phone
+ *    before the next reveal: re-scanning its setup code mid-reveal means stopping the stream in front of the family
+ *  - the phone away (a drop, or the reveal ending): dropped, as the drop has its own alert
+ * Errors that can't clear by themselves (ACCOUNT_ERRORS) still alert at once from the webhook.
+ * staleSec: Max's newest piece aged up to 6.5 s with nothing wrong for viewers (Nov 20, the playlist polled every 2 s).
+ */
+export const ENCODER = { settleMs: 30e3, staleSec: 8, windowMs: 10 * 60e3 };
+
+/** Stream's documented error codes (docs: stream/stream-live/webhooks), each with our own words: [what, fix] */
+export const ENCODER_ERRORS = {
+  ERR_GOP_OUT_OF_RANGE: ['The keyframe interval is out of range.', 'In Larix, set the keyframe interval to 2 seconds.'],
+  ERR_UNSUPPORTED_VIDEO_CODEC: ['Stream can\'t use the video codec the phone sent.', 'In Larix, set the video codec to H.264.'],
+  ERR_UNSUPPORTED_AUDIO_CODEC: ['Stream can\'t use the audio codec the phone sent.', 'In Larix, set the audio codec to AAC.'],
+  ERR_STORAGE_QUOTA_EXHAUSTED: ['Cloudflare Stream storage is full.', 'Delete old recordings in Cloudflare Stream, or add storage.'],
+  ERR_MISSING_SUBSCRIPTION: ['The Cloudflare Stream subscription isn\'t active.', 'Check the Stream plan in the Cloudflare dashboard.'],
+  ERR_UNHEALTHY: ['Stream couldn\'t process the broadcast.', 'Check the Larix profile, then stop and start the stream.'],
+};
+/** The account's errors, not the phone's: nothing on the phone fixes them, and they don't clear by themselves */
+export const ACCOUNT_ERRORS = new Set(['ERR_STORAGE_QUOTA_EXHAUSTED', 'ERR_MISSING_SUBSCRIPTION']);
+
+/** [what, fix] for a code from the list, or our general words for any other */
+export function encoderWords(code) {
+  return typeof code === 'string' && Object.hasOwn(ENCODER_ERRORS, code) ? ENCODER_ERRORS[code]
+    : ['Stream reported a problem with the incoming broadcast.', 'Check the phone\'s Larix profile: H.264 video, AAC audio, a keyframe every 2 seconds.'];
+}
+
+/** "The keyframe interval is out of range." → "the keyframe interval is out of range" */
+const inSentence = (what) => what.replace(/\.$/, '').replace(/^The /, 'the ');
+
 const median = (xs) => {
   if (!xs?.length) return null;
   const s = [...xs].sort((a, b) => a - b);
@@ -321,6 +359,7 @@ export const RESOLVED = {
   feed: 'Viewers can load the reveal again',
   weakSignal: 'The phone\'s signal is steady again',
   disconnected: 'The phone is back',
+  encoder: 'Reveal video is moving again',
   facebook: 'Facebook is live now',
   youtube: 'YouTube is live now',
 };
@@ -405,6 +444,63 @@ function makeCtx(env, config, state, m, work, record) {
 }
 
 /**
+ * Stream's encoder errors for this reveal (see ENCODER): picks up what the webhook noted in health.encoderError
+ * and, `settleMs` after the first one not yet decided, raises the issue 'encoder' if the video is stale or posts
+ * a quiet note if it isn't. m.encoder keeps the tally for finish(). `away`: the phone is away, no `probe` read.
+ */
+export async function encoderWatch(env, config, state, health, m, c, { away = false, probe = null, paused = false } = {}) {
+  const r = (m.encoder ||= { run: null, seen: 0, runCount: 0, pendingSince: null, flags: 0, firstAt: null, code: null, texted: false, emailAfter: false });
+  const e = health.encoderError;
+  const lastAt = Date.parse(e?.lastAt || '');
+  // This reveal's only: the phone connects a little before the site goes live
+  if (Number.isFinite(lastAt) && lastAt >= Date.parse(state.liveAt || m.startedAt) - 2 * 60e3) {
+    if (e.firstAt !== r.run) Object.assign(r, { run: e.firstAt, seen: 0 });
+    const count = Math.max(1, Math.floor(Number(e.count)) || 1);
+    if (count > r.seen) {
+      r.pendingSince ||= r.seen ? e.lastAt : e.firstAt;
+      r.flags += count - r.seen;
+      Object.assign(r, { seen: count, runCount: count, code: typeof e.code === 'string' ? e.code : r.code });
+      r.firstAt ||= e.firstAt;
+    }
+  }
+  const log = (title, slack = null) => { m.log.push({ at: c.at, kind: 'encoder', title, ...(slack ? { slack } : {}) }); if (m.log.length > 40) m.log.splice(0, m.log.length - 40); };
+  if (away) {
+    if (r.pendingSince) { r.pendingSince = null; log('Stream flagged the phone\'s video, then the phone went away (its own alert covers that)'); }
+    return;
+  }
+
+  const [what, fix] = encoderWords(r.code);
+  const edge = probe?.video?.edgeAgeSec;
+  // Stale: the player can't load it, its newest piece is too old, or no new piece came since the last look
+  const stale = !probe?.ok || (edge != null && edge > ENCODER.staleSec) || !!m.frozenSince;
+  const raise = () => c.raise('encoder', {
+    level: 'error',
+    title: `Stream error: ${what.replace(/\.$/, '')}`,
+    detail: `Stream flagged the phone's video at ${fmtClock(r.firstAt, config.timezone)} and it hasn't recovered: ${!probe?.ok ? `the player can't load it (${probe?.error || 'no answer'})` : edge != null && edge > ENCODER.staleSec ? `its newest piece is ${Math.round(edge)} seconds old` : 'no new video since'}.`,
+    fix,
+  });
+  // Raised already and nothing new: it follows the video, reminded while stale, closed once the video moves again
+  if (!r.pendingSince) {
+    if (m.issues.encoder) { if (stale && !paused) await raise(); else await c.clear('encoder'); }
+    return;
+  }
+  if (c.now - Date.parse(r.pendingSince) < ENCODER.settleMs) return;
+  r.pendingSince = null;
+  if (stale && !paused) { await raise(); r.texted = true; return; }
+  if (m.issues.encoder) { await c.clear('encoder'); return; }
+  // Recovered by itself: a quiet note only (no @here, no email, no text)
+  const again = r.runCount >= 2;
+  if (again) r.emailAfter = true;
+  const title = again ? `Stream flagged the phone's video again (${inSentence(what)})` : `Stream flagged the phone's video (${inSentence(what)})`;
+  const detail = again
+    ? `${r.runCount} times since ${fmtClock(r.run, config.timezone)}. The picture is fine, so nobody was texted. One email goes out after the reveal to fix the phone before the next one.`
+    : `At ${fmtClock(r.firstAt, config.timezone)}. The video recovered by itself, so nobody was texted.`;
+  const slack = slackStatus(await notify.slackPost(env, notify.adminCard({ level: 'info', icon: '📝', title, detail, url: ADMIN_URL, context: c.context })).catch((err) => ({ ok: false, error: err.message })));
+  log(again ? 'Stream flagged the phone\'s video again; the picture is fine' : 'Stream flagged the phone\'s video; it recovered by itself', slack);
+  c.work.push('encoder-note');
+}
+
+/**
  * One watch step. Mutates health.monitor; never throws on bad network.
  * Call while the phase is live or ending and the source is Stream.
  * `record(DB, broadcastId, type, meta)` writes an analytics event.
@@ -435,6 +531,7 @@ export async function watch(env, config, state, health, work, record = async () 
     m.fbViewers = null; m.ytViewers = null;
     // A pause ends when the phone stops
     if (m.pausedSince) { m.pausedMs = (m.pausedMs || 0) + Math.max(0, c.now - Date.parse(m.pausedSince)); m.pausedSince = null; }
+    await encoderWatch(env, config, state, health, m, c, { away: true });
     await c.raise('disconnected', { level: 'error', after: RULES.disconnectedAfter, title: 'The phone lost its connection', detail: `The site keeps the reveal live for 2 minutes. After that it shows the reveal ended, and a phone back within 15 more minutes still picks the same reveal up again.${overQuestion ? ' Staff got a text asking if the reveal is over (Y ends it, N keeps it on air).' : ''}`, fix: 'Check that Larix is still streaming. If it stopped, tap Start: the reveal picks up where it left off.', text: !overQuestion });
     return;
   }
@@ -531,6 +628,8 @@ export async function watch(env, config, state, health, work, record = async () 
       await c.raise('weakSignal', { level: 'warn', after: RULES.weakAfter, title: 'The phone\'s signal is weak', detail: why, fix: 'Switch Larix to the Weak signal profile (Settings → Phones), move toward a window, or join the house Wi-Fi.' });
     } else if (status === 'strong') await c.clear('weakSignal');
   }
+  // Stream's encoder errors: texted only if the video hasn't recovered (ENCODER)
+  await encoderWatch(env, config, state, health, m, c, { probe, paused: !!m.pausedSince });
 
   // Destinations: confirmed live times go in the report; problems after their grace go to Slack
   const d = destinations({ config, state, phoneLive: true, liveForMs: c.liveForMs, probe, viewers, outputs: outputsRes?.ok ? outputsRes.result || [] : null, facebook, youtube });
@@ -630,6 +729,21 @@ export async function finish(env, config, state, health, record = async () => {}
   if (m.peakViewers != null) parts.push(`Peak ${m.peakViewers} watching on the site.`);
   if (m.reconnects.length) parts.push(`${m.reconnects.length} reconnect${m.reconnects.length > 1 ? 's' : ''}.`);
   if (m.pauses) parts.push(`Paused on the thank-you card for ${fmtDur(m.pausedMs || 0)}${m.pauses > 1 ? ` (${m.pauses} times)` : ''}.`);
+  // Stream's encoder errors (ENCODER): on the record, and if they kept coming with the picture fine, one email to
+  // fix the phone before the next reveal (a real problem was texted already)
+  const enc = m.encoder;
+  if (enc?.flags) {
+    const [what, fix] = encoderWords(enc.code);
+    parts.push(`Stream flagged the phone's video ${enc.flags === 1 ? 'once' : `${enc.flags} times`} (${inSentence(what)}), first at ${fmtClock(enc.firstAt, tz)}${enc.texted ? '' : '; the picture recovered by itself'}.`);
+    if (enc.emailAfter && !enc.texted) {
+      await notify.alertAdmins(env, config, {
+        level: 'warn',
+        title: 'Before the next reveal: check the reveal phone\'s Larix settings',
+        detail: `During ${state.title || 'the reveal'}, Stream flagged the phone's video ${enc.flags} times (${inSentence(what)}). The picture held up, so nobody was texted.`,
+        fix, url: ADMIN_URL, text: false,
+      }).catch(() => {});
+    }
+  }
   return { report, summary: parts.join(' ') };
 }
 

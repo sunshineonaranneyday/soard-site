@@ -23,7 +23,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { analyzeSegment, analyzeSegments, configFromInit } from '../functions/api/_aac-level.js';
 import { parseMaster, parseMedia, probeFeed, audioVerdict, deadSide } from '../functions/api/_stream-probe.js';
-import { destinations, watch, finish, noteRehearsal, RULES, PAUSE, pictureStill, isPaused, report as monitorReport } from '../functions/api/_broadcast-monitor.js';
+import { destinations, watch, finish, noteRehearsal, RULES, PAUSE, ENCODER, pictureStill, isPaused, report as monitorReport } from '../functions/api/_broadcast-monitor.js';
 import * as preflight from '../functions/api/_broadcast-preflight.js';
 
 const fx = (name) => new Uint8Array(readFileSync(new URL(`./fixtures/aac/${name}`, import.meta.url)));
@@ -117,7 +117,8 @@ const masterNoAudio = `#EXTM3U
 #EXT-X-STREAM-INF:RESOLUTION=1920x1080,CODECS="avc1.4d4028",BANDWIDTH=3000000,FRAME-RATE=30
 v1080.m3u8
 `;
-const livePlaylist = (seq, seg = 'a') => `#EXTM3U
+// `edgeAt` (ms): the newest piece's own date-time, so the probe can tell how old it is (edgeAgeSec)
+const livePlaylist = (seq, seg = 'a', edgeAt = null) => `#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-TARGETDURATION:4
 #EXT-X-MEDIA-SEQUENCE:${seq}
@@ -125,7 +126,7 @@ const livePlaylist = (seq, seg = 'a') => `#EXTM3U
 #EXT-X-PROGRAM-DATE-TIME:2026-10-14T18:00:00.000Z
 #EXTINF:4.000,
 ${seg}1.m4s
-#EXTINF:4.000,
+${edgeAt != null ? `#EXT-X-PROGRAM-DATE-TIME:${new Date(edgeAt).toISOString()}\n` : ''}#EXTINF:4.000,
 ${seg}2.m4s
 `;
 
@@ -178,7 +179,7 @@ before(() => {
     if (kind === 'lifecycle') return json({ isInput: true, live: true, videoUID: 'v' });
     if (file === 'video.m3u8') return new Response(f.master);
     if (file === 'audio.m3u8') return new Response(livePlaylist(f.seq, 'a'));
-    if (file === 'v1080.m3u8') return new Response(livePlaylist(f.seq, 'v'));
+    if (file === 'v1080.m3u8') return new Response(livePlaylist(f.seq, 'v', f.edge ? f.edge() : null));
     if (file === 'init.mp4') return new Response(INIT);
     if (/^a\d\.m4s$/.test(file)) return new Response(fx(f.audioSeg));
     // Video pieces' sizes, for the pause rule (only when a test sets them: a feed without them reads as before)
@@ -725,5 +726,153 @@ test('control room: the report says when Larix is paused', async () => {
     assert.ok(r.pausedSince);
     s.feed.videoBytes = MOVING;
     assert.equal((await monitorReport(s.env, s.config, s.state, s.health)).paused, false, 'a muted Larix is not a pause');
+  } finally { s.restore(); }
+});
+
+// ─── Stream's encoder errors (ENCODER) ──────────────────────────────
+
+/** What /api/stream-webhook notes in health.encoderError (noteEncoderError), at `atMs` */
+const encoderError = (s, atMs, { count = 1, firstAtMs = atMs, code = 'ERR_GOP_OUT_OF_RANGE' } = {}) => {
+  s.health.encoderError = { firstAt: new Date(firstAtMs).toISOString(), lastAt: new Date(atMs).toISOString(), count, code, videoCodec: 'h264', audioCodec: 'aac' };
+};
+/** The newest piece's end `ageSec` old at every look (the fake's pieces are 4 s long) */
+const edgeAge = (s, ageSec) => { s.feed.edge = () => s.at() - ageSec * 1000 - 4000; };
+const notes = () => slack.filter((p) => /^📝 Stream flagged/.test(p.text)); // the quiet notes
+const streamTexts = () => sms.filter((x) => /Stream (error|flagged)/.test(x.body));
+const ended = async (s) => {
+  s.state.phase = 'replay'; s.state.endedAt = new Date(s.at() + 5e3).toISOString();
+  return finish(s.env, s.config, s.state, s.health, async (_db, id, type, meta) => s.events.push({ type, meta }));
+};
+
+test('watch: a Stream error with the video fine is one quiet Slack note, never a text or an email (Max, Nov 20)', async () => {
+  const s = scenario('w-enc-ok');
+  staffTexts(s);
+  edgeAge(s, 4.8); // Max's worst stretch was 4.8 s, and 6.5 s happened with nothing wrong
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 8; i++) await s.step(15e3);   // two minutes in
+    encoderError(s, s.at());
+    await s.step(15e3);
+    assert.equal(notes().length, 0, `nothing decided before ${ENCODER.settleMs / 1000} s`);
+    await s.step(16e3);
+    assert.equal(notes().length, 1, slack.map((p) => p.text).join(' | '));
+    assert.match(notes()[0].text, /Stream flagged the phone's video \(the keyframe interval is out of range\)/);
+    assert.match(JSON.stringify(notes()[0]), /recovered by itself, so nobody was texted/);
+    assert.doesNotMatch(JSON.stringify(notes()[0]), /<!here>|<!channel>/, 'no @here');
+    assert.equal(streamTexts().length, 0, 'nobody texted');
+    assert.equal(s.health.monitor.issues.encoder, undefined);
+    assert.match(s.health.monitor.log.filter((l) => l.kind === 'encoder').at(-1).title, /recovered by itself/);
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    assert.equal(notes().length, 1, 'once');
+
+    const { summary } = await ended(s);
+    assert.match(summary, /Stream flagged the phone's video once \(the keyframe interval is out of range\), first at \d{1,2}:\d\d\s[AP]M; the picture recovered by itself\./);
+    assert.ok(!slack.some((p) => /Before the next reveal/.test(p.text)), 'once is no follow-up');
+  } finally { s.restore(); }
+});
+
+test('watch: a Stream error with the video stuck is a real problem: texted with its fix, then "moving again"', async () => {
+  const s = scenario('w-enc-stale');
+  staffTexts(s);
+  edgeAge(s, 2);
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    encoderError(s, s.at());
+    edgeAge(s, 12);                                    // the newest piece goes stale and stays
+    await s.step(15e3, { advance: false });
+    assert.equal(streamTexts().length, 0, 'not yet');
+    await s.step(16e3, { advance: false });
+    const sent = streamTexts();
+    assert.deepEqual(sent.map((x) => x.to), ['+14045550123', '+16785550199']);
+    assert.match(sent[0].body, /^🚨 SOARD ALERT: Stream error: The keyframe interval is out of range\nFix: In Larix, set the keyframe interval to 2 seconds\./);
+    assert.ok(s.health.monitor.issues.encoder, 'an open issue');
+    assert.match(slack.find((p) => /Stream error/.test(p.text)).text, /Stream error/);
+    assert.equal(notes().length, 0, 'no quiet note for a real problem');
+
+    edgeAge(s, 2);                                     // the video moves again
+    await s.step(15e3);
+    assert.equal(s.health.monitor.issues.encoder, undefined);
+    assert.ok(sms.some((x) => /^✅ SOARD FIXED: Reveal video is moving again/.test(x.body)), sms.map((x) => x.body.split('\n')[0]).join(' | '));
+    const { summary } = await ended(s);
+    assert.match(summary, /Stream flagged the phone's video once \(the keyframe interval is out of range\), first at [^;]+\./);
+    assert.doesNotMatch(summary, /recovered by itself/);
+  } finally { s.restore(); }
+});
+
+test('watch: a Stream error that can\'t load the feed at all (a codec Stream refuses) texts its own fix', async () => {
+  const s = scenario('w-enc-codec');
+  staffTexts(s);
+  edgeAge(s, 2);
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    encoderError(s, s.at(), { code: 'ERR_UNSUPPORTED_VIDEO_CODEC' });
+    s.feed.master = '';                                // the player can't load it
+    await s.step(15e3); await s.step(16e3);
+    assert.match(streamTexts()[0]?.body || '', /Stream error: Stream can't use the video codec the phone sent\nFix: In Larix, set the video codec to H\.264\./);
+  } finally { s.restore(); }
+});
+
+test('watch: Stream saying it again with the picture fine stays off the phones; one email after the reveal', async () => {
+  const s = scenario('w-enc-again');
+  staffTexts(s);
+  edgeAge(s, 3);
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    const first = s.at();
+    encoderError(s, first);
+    await s.step(15e3); await s.step(16e3);
+    assert.equal(notes().length, 1);
+    for (let i = 0; i < 12; i++) await s.step(15e3);  // three minutes later Stream says it again: the same run
+    encoderError(s, s.at(), { count: 2, firstAtMs: first });
+    await s.step(15e3); await s.step(16e3);
+    assert.equal(notes().length, 2);
+    assert.match(notes()[1].text, /flagged the phone's video again/);
+    assert.match(JSON.stringify(notes()[1]), /2 times since .*The picture is fine, so nobody was texted\. One email goes out after the reveal/);
+    assert.equal(streamTexts().length, 0, 'nobody texted mid-reveal');
+    assert.ok(!slack.some((p) => /Before the next reveal/.test(p.text)), 'not while live');
+
+    const { summary } = await ended(s);
+    assert.match(summary, /Stream flagged the phone's video 2 times/);
+    const after = slack.filter((p) => /Before the next reveal/.test(p.text));
+    assert.equal(after.length, 1, 'one follow-up once it ends');
+    assert.match(JSON.stringify(after[0]), /In Larix, set the keyframe interval to 2 seconds/);
+    assert.equal(streamTexts().length, 0, 'and that one is no text either');
+  } finally { s.restore(); }
+});
+
+test('watch: a Stream error just before the phone goes away is left to the drop\'s own alert; an old one is ignored', async () => {
+  const s = scenario('w-enc-away');
+  staffTexts(s);
+  edgeAge(s, 2);
+  slack.length = 0;
+  try {
+    await s.step(1000);
+    for (let i = 0; i < 4; i++) await s.step(15e3);
+    encoderError(s, s.at());
+    s.state.gapSince = new Date(s.at() + 5e3).toISOString();   // Pause, then Stop
+    await s.step(15e3); await s.step(16e3);
+    assert.match(s.health.monitor.log.filter((l) => l.kind === 'encoder').at(-1).title, /the phone went away/);
+    delete s.state.gapSince;
+    await s.step(15e3); await s.step(16e3);
+    assert.equal(notes().length, 0);
+    assert.equal(streamTexts().length, 0);
+    assert.equal(s.health.monitor.issues.encoder, undefined);
+
+    // A run from before this reveal went live (yesterday's test, say) is not this reveal's
+    const old = scenario('w-enc-old');
+    try {
+      encoderError(old, old.at() - 30 * 60e3);
+      await old.step(1000);
+      for (let i = 0; i < 4; i++) await old.step(15e3);
+      assert.equal(notes().length, 0);
+      assert.equal(old.health.monitor.encoder.flags, 0);
+    } finally { old.restore(); }
   } finally { s.restore(); }
 });

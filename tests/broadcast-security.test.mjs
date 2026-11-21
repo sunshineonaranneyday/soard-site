@@ -157,45 +157,84 @@ test('webhook with STREAM_WEBHOOK_SECRET set: a missing or wrong cf-webhook-auth
   assert.equal((await b.readHealth(DB)).webhook?.count || 0, before, 'not even counted');
 });
 
-test('signed error webhook: one alert in our own words, deduped per input for 15 minutes', async () => {
+test('signed error webhook: the phone\'s error on the live input is only noted for the feed watch (Peter, Nov 21 2026: "only real problems")', async () => {
   calls = [];
+  env.SLACK_WEBHOOK_URL = 'https://hooks.slack.test/x';
   const res = await endpoints.webhook.onRequestPost(ctx(hook(errored('in1'), signed)));
   await flush();
+  // Nothing on air (idle here), so no watch will see it: one quiet Slack note says so
+  const slackPosts = () => calls.filter((c) => c.url.startsWith('https://hooks.slack.test/'));
+  assert.equal(slackPosts().length, 1);
+  assert.match(slackPosts()[0].body, /No reveal was on air \(a test\?\), so nobody was texted/);
+  assert.doesNotMatch(slackPosts()[0].body, /<!here>|evil\.example\.com/);
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { ok: true }, 'the reply says nothing about which inputs we know');
+  assert.equal(alerts().length, 0, 'no email (nor @here, nor text): the watch decides once it sees the video');
+  const first = (await b.readHealth(DB)).encoderError;
+  assert.deepEqual({ ...first, firstAt: null, lastAt: null }, { firstAt: null, lastAt: null, count: 1, code: 'ERR_GOP_OUT_OF_RANGE', videoCodec: 'h264', audioCodec: 'unknown' }, 'code and codecs from fixed lists only');
+  assert.doesNotMatch(JSON.stringify(first), /evil\.example\.com|suspended|Log in/, 'nothing from the payload is kept');
+
+  // Stream repeats it: one run while they come under 10 minutes apart, and a tick's older copy of health can't wipe it
+  const tickCopy = await b.readHealth(DB);
+  travel(4 * M);
+  await endpoints.webhook.onRequestPost(ctx(hook(errored('in1'), signed)));
+  await flush();
+  await b.writeHealth(DB, { ...tickCopy, encoderError: { firstAt: 'stale', count: 0 } });
+  const again = (await b.readHealth(DB)).encoderError;
+  assert.equal(again.count, 2);
+  assert.equal(again.firstAt, first.firstAt, 'the same run');
+  assert.ok(again.lastAt > first.lastAt);
+  travel(11 * M);
+  await endpoints.webhook.onRequestPost(ctx(hook(errored('in1', { error: { code: 'ERR_SOMETHING_NEW', message: PHISH } }), signed)));
+  await flush();
+  const next = (await b.readHealth(DB)).encoderError;
+  assert.equal(next.count, 1, 'a new run after 10 quiet minutes');
+  assert.ok(next.firstAt > again.lastAt);
+  assert.equal(next.code, null, 'an unknown code is not repeated');
+  assert.equal(alerts().length, 0, 'still nothing sent');
+  assert.equal(slackPosts().length, 2, 'the quiet note at most once per 15 minutes');
+  delete env.SLACK_WEBHOOK_URL;
+});
+
+test('signed error webhook: account errors and the rehearsal input alert at once in our own words, deduped per input for 15 minutes', async () => {
+  travel(20 * M);
+  calls = [];
+  const storage = errored('in1', { error: { code: 'ERR_STORAGE_QUOTA_EXHAUSTED', message: PHISH } });
+  await endpoints.webhook.onRequestPost(ctx(hook(storage, signed)));
+  await flush();
   const [mail, ...more] = alerts(/Stream input error/);
-  assert.ok(mail, 'staff alerted');
+  assert.ok(mail, 'staff alerted: nothing on the phone fixes a full Stream account');
   assert.equal(more.length, 0);
-  assert.equal(mail.subject, '[SOARD Live] Stream input error: ERR_GOP_OUT_OF_RANGE');
+  assert.equal(mail.subject, '[SOARD Live] Stream input error: ERR_STORAGE_QUOTA_EXHAUSTED');
   for (const part of [mail.subject, mail.html, mail.text]) {
     assert.doesNotMatch(part, /evil\.example\.com|suspended|Log in/, 'nothing from the payload reaches staff');
   }
-  assert.match(mail.text, /keyframe interval/i, 'our own explanation');
+  assert.match(mail.text, /storage is full/i, 'our own explanation');
 
-  // Stream repeats the error: no new alert inside 15 minutes, for the same input
+  // Stream repeats it: no new alert inside 15 minutes, for the same input
   calls = [];
-  await endpoints.webhook.onRequestPost(ctx(hook(errored('in1'), signed)));
+  await endpoints.webhook.onRequestPost(ctx(hook(storage, signed)));
   travel(10 * M);
-  await endpoints.webhook.onRequestPost(ctx(hook(errored('in1'), signed)));
+  await endpoints.webhook.onRequestPost(ctx(hook(storage, signed)));
   await flush();
   assert.equal(alerts(/Stream input error/).length, 0, 'deduped');
 
-  // The rehearsal input has its own window; an input that isn't ours never alerts
+  // The rehearsal input has its own window, and any error there alerts; an input that isn't ours never alerts
   await endpoints.webhook.onRequestPost(ctx(hook(errored('rh1', { video_codec: '<script>', audio_codec: 'opus' }), signed)));
   await endpoints.webhook.onRequestPost(ctx(hook(errored('someone-elses-input'), signed)));
   await flush();
   const reh = alerts(/Stream input error/);
   assert.equal(reh.length, 1);
-  assert.match(reh[0].subject, /\(rehearsal\)/);
+  assert.match(reh[0].subject, /\(rehearsal\): ERR_GOP_OUT_OF_RANGE/);
   assert.doesNotMatch(reh[0].html, /script/);
 
-  travel(6 * M); // 16 minutes since the first live alert
+  travel(16 * M); // past the rehearsal input's 15 minutes
   calls = [];
-  await endpoints.webhook.onRequestPost(ctx(hook(errored('in1', { error: { code: 'ERR_SOMETHING_NEW', message: PHISH } }), signed)));
+  await endpoints.webhook.onRequestPost(ctx(hook(errored('rh1', { error: { code: 'ERR_SOMETHING_NEW', message: PHISH } }), signed)));
   await flush();
-  const again = alerts(/Stream input error/);
-  assert.equal(again.length, 1, 'alerts again after 15 minutes');
-  assert.equal(again[0].subject, '[SOARD Live] Stream input error: unknown', 'an unknown code is not repeated');
+  const later = alerts(/Stream input error/);
+  assert.equal(later.length, 1, 'alerts again after 15 minutes');
+  assert.equal(later[0].subject, '[SOARD Live] Stream input error (rehearsal): unknown', 'an unknown code is not repeated');
 });
 
 test('errorAlert: codes and codecs only from fixed lists', () => {
