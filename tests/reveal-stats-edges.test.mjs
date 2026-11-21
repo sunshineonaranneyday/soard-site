@@ -32,7 +32,9 @@ globalThis.fetch = async (input) => {
 
 let DB, env, b, rs, liveWatch, event;
 const ctx = (request) => ({ env, request, data: {}, waitUntil: () => {} });
-const post = (url, body, ua = IPHONE) => new Request(url, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': ua }, body: JSON.stringify(body) });
+// A person's page, unless the test says otherwise (h: the page has seen a person there; a test sets h itself to leave it out)
+const person = (body) => (body && typeof body === 'object' && !Array.isArray(body) && !('h' in body) ? { ...body, h: 1 } : body);
+const post = (url, body, ua = IPHONE) => new Request(url, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': ua }, body: JSON.stringify(person(body)) });
 const beacon = (body, ua) => event.onRequestPost(ctx(post(`${SITE}/api/broadcast-event`, body, ua)));
 const watch = (body, ua) => liveWatch.onRequestPost(ctx(post(`${SITE}/api/live-watch`, body, ua)));
 const viewer = (id, vid) => DB.prepare('SELECT * FROM broadcast_viewers WHERE broadcast_id = ? AND vid = ?').bind(id, vid).first();

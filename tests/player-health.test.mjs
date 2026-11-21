@@ -19,9 +19,10 @@ const SITE = 'https://sunshineonaranneyday.com';
 let DB, env, b, rs, liveWatch, admin, live;
 const ctx = (request) => ({ env, request, data: {}, waitUntil: () => {} });
 const post = (body, ua = IPHONE, host = SITE) => liveWatch.onRequestPost(ctx(new Request(`${host}/api/live-watch`, {
-  method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': ua }, body: JSON.stringify(body),
+  method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': ua }, body: JSON.stringify(body && !('h' in body) ? { ...body, h: 1 } : body),
 })));
 const rowsOf = (vid) => DB.prepare('SELECT * FROM broadcast_player WHERE broadcast_id = ? AND vid = ? ORDER BY mount').bind(live, vid).all().then((r) => r.results);
+const SCANNER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
 const P = (o = {}) => ({ m: 'mount0001', e: 'mms', d: 'iphone', f: 5200, s: 20.1, h: 0, hm: 0, r: 0, x: 0, b: 0, er: 0, ...o });
 
 before(async () => {
@@ -136,6 +137,15 @@ test('History: a reveal\'s live video, over the public\'s browsers', async () =>
   await send('viewerCCC1', { e: 'native', d: 'iphone', f: 18000, s: 24, b: 1, x: 1 }, 20);
   await send('viewerDDD1', { e: 'mms', d: 'iphone', f: undefined, s: undefined, w: 8000 }); // ready to play 8 s, never a picture
   await send('viewerEEE1', { e: 'hls', d: 'android', f: undefined, s: undefined, w: 2000 }); // left 2 s after it was ready
+  // (DDD1 and EEE1 never watched a second and their page's view never came here: their reports, from a page that has
+  // seen a person, make them this reveal's visits)
+  assert.equal((await DB.prepare('SELECT human FROM broadcast_viewers WHERE broadcast_id = ? AND vid = ?').bind(live, 'viewerDDD1').first())?.human, 1);
+  // Email security software opening the link: its page's view, no sign of a person, a player that fails with an error
+  await post({ broadcastId: live, vid: 'viewerSCN1', kind: 'live', sec: 0, h: 0, player: P({ e: 'hls', d: 'computer', f: undefined, s: undefined, w: 12000, er: 1 }) }, SCANNER_UA);
+  await DB.prepare(`INSERT INTO broadcast_viewers (broadcast_id, vid, src, human) VALUES (?, 'viewerSCN1', 'email', 0)`).bind(live).run();
+  // and one with no visit at all and no sign of a person: not a person History knows
+  await post({ broadcastId: live, vid: 'viewerNOV1', kind: 'live', sec: 0, h: 0, player: P({ e: 'hls', d: 'computer', f: undefined, s: undefined, w: 9000, er: 2 }) }, SCANNER_UA);
+  assert.equal(await DB.prepare('SELECT 1 FROM broadcast_viewers WHERE broadcast_id = ? AND vid = ?').bind(live, 'viewerNOV1').first(), null, 'no visit made for it');
   await send('viewerSTF1', { e: 'hls', d: 'computer', h: 9, hm: 99000 }); // staff, marked on a start
   await DB.prepare("UPDATE broadcast_player SET who = 'staff' WHERE vid = 'viewerSTF1'").run();
   // staff marked only on its viewer row (the admin opened in that browser): the whole browser is left out
@@ -146,7 +156,8 @@ test('History: a reveal\'s live video, over the public\'s browsers', async () =>
     .bind(live, new Date(Date.now() - 5 * 60e3).toISOString(), new Date().toISOString()).run();
   const rows = (await DB.prepare('SELECT * FROM broadcasts WHERE id = ?').bind(live).all()).results.map((r) => ({ ...r, data: {} }));
   const v = (await rs.historyStats(DB, rows)).byId[live].video;
-  // AAA1 (two starts: first picture 3.0 s, a freeze of 6 s, 2 moves stopped), BBB1, CCC1, DDD1, EEE1; staff and tests out
+  // AAA1 (two starts: first picture 3.0 s, a freeze of 6 s, 2 moves stopped), BBB1, CCC1, DDD1, EEE1; staff, tests,
+  // the security software (SCN1) and a browser with no visit (NOV1) out
   assert.equal(v.viewers, 5);
   assert.equal(v.pictured, 3);
   assert.equal(v.never, 1, 'DDD1 had it ready 8 s and never got a picture; EEE1 left 2 s after it was ready');

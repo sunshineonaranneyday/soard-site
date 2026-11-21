@@ -42,7 +42,11 @@ function summary(series) {
   const totals = series.map((p) => n(p[1]) + n(p[2]) + n(p[3]));
   const peak = (i) => { const v = series.map((p) => p[i]).filter(Number.isFinite); return v.length ? Math.max(...v) : null; };
   const at = totals.indexOf(Math.max(...totals));
-  return { peakAll: Math.max(...totals), peakAllAt: series[at][0], peakSplit: series[at].slice(1), avgAll: totals.reduce((a, b) => a + b, 0) / totals.length, peakSite: peak(1), peakFb: peak(2), peakYt: peak(3), hasFb: series.some((p) => Number.isFinite(p[2])), hasYt: series.some((p) => Number.isFinite(p[3])) };
+  // (as the server's summarizeSeries: a place that only ever said 0 isn't measured)
+  const hasFb = series.some((p) => Number(p[2]) > 0), hasYt = series.some((p) => Number(p[3]) > 0);
+  const split = series[at].slice(1).map((v, i) => ((i === 1 && !hasFb) || (i === 2 && !hasYt) ? null : v));
+  return { peakAll: Math.max(...totals), peakAllAt: series[at][0], peakSplit: split, avgAll: totals.reduce((a, b) => a + b, 0) / totals.length, peakSite: peak(1), peakFb: hasFb ? peak(2) : null, peakYt: hasYt ? peak(3) : null, hasFb, hasYt,
+    fbSaid0: !hasFb && series.some((p) => p[2] === 0), fbMissed: !hasFb && series.some((p) => p[2] == null) };
 }
 const stats = (o) => ({ counted: true, partial: false, staff: 0, tests: 0, sources: {}, series: [], atOnce: null, hearts: null, heartsTotal: 0, facebook: null, youtube: null, video: null, test: false, revealAt: null, atReveal: null, avgReplaySec: null, ...o, ...(o.series ? { atOnce: summary(o.series) } : {}) });
 
@@ -65,8 +69,11 @@ const HISTORY = [
   { id: 'live-6', kid_slug: 'nicolas-and-maddox-2026', kid_name: 'Nicolas and Maddox', title: "Nicolas and Maddox's room reveal", scheduled_at: ago(27), live_at: ago(27), ended_at: ago(27, 0.7), phase: 'idle', replay_uid: 'r6', fb_permalink: null, source: 'stream', data: {}, messageCount: 23, events: { click_donate: 12 },
     stats: stats({ people: 412, before: 201, live: 268, avgLiveSec: 742, atReveal: null, revealAt: null, replay: 96, avgReplaySec: 300, heartsTotal: 512, hearts: { heart: 500, sun: 12 },
       sources: { facebook: 160, email: 140, direct: 60, qr: 22, site: 14, search: 8, push: 5, calendar: 3 }, series: line(42, 1500, { site: 210 }) }) },
-  { id: 'live-5', kid_slug: 'maximiliana-josephine-2026', kid_name: 'Maximiliana-Josephine Featherstonehaugh-Wellingtonshire', title: 'x', scheduled_at: ago(40), live_at: ago(40), ended_at: ago(40, 0.3), phase: 'idle', replay_uid: 'r5', source: 'stream', data: {}, messageCount: 4, events: {},
-    stats: stats({ people: 58, before: 9, live: 41, avgLiveSec: 260, atReveal: 30, revealAt: 600, replay: 12, heartsTotal: 40, sources: { direct: 40, email: 18 }, series: line(18, 600, { site: 30 }) }) },
+  // Like Max's (Nov 20 2026): live on Facebook, which gave nothing (no permission for views, nor reactions and comments)
+  // and said 0 live viewers at every check, and email security software opening the "We're live" email's link
+  { id: 'live-5', kid_slug: 'maximiliana-josephine-2026', kid_name: 'Maximiliana-Josephine Featherstonehaugh-Wellingtonshire', title: 'x', scheduled_at: ago(40), live_at: ago(40), ended_at: ago(40, 0.3), phase: 'idle', replay_uid: 'r5', fb_live_video_id: 'lv5', fb_permalink: 'https://www.facebook.com/x/videos/5', source: 'stream', data: {}, messageCount: 4, events: {},
+    stats: stats({ people: 58, before: 9, live: 41, avgLiveSec: 260, atReveal: 30, revealAt: 600, replay: 12, heartsTotal: 40, sources: { direct: 40, email: 18 }, series: line(18, 600, { site: 30, fb: 0 }), unseen: 78,
+      facebook: { liveVideoId: 'lv5', permalink: 'https://www.facebook.com/x/videos/5', error: '(#200) read_insights permission missing', errorKind: 'denied', missing: 'read_insights', checkedAt: ago(0, -1) } }) },
   { id: 'live-4', kid_slug: 'hudson-2025', kid_name: 'Hudson', title: "Hudson's room reveal", scheduled_at: ago(200), live_at: ago(200), ended_at: ago(200, 0.5), phase: 'idle', replay_uid: 'r4', source: 'stream', data: {}, messageCount: 9, events: { view_live_page: 210, click_donate: 2 },
     stats: stats({ counted: false, people: 0 }) },
   { id: 'live-3', kid_slug: 'isla', kid_name: 'Isla', title: "TEST · Isla's room reveal", scheduled_at: ago(22), phase: 'cancelled', source: null, data: { test: true }, messageCount: 0, events: {}, stats: stats({ test: true, people: 3 }) },
@@ -211,6 +218,14 @@ try {
   ok(/reveal moment wasn.t found in the recording/.test(nmTiles), 'an old reveal whose moment wasn\'t found says so (only the current replay can be set)');
   ok(await page.$$eval('.rs-open .rs-chart polyline', (els) => els.length >= 1) && !(await page.$('.rs-open .rs-legend')), 'one line, no legend box');
   ok(/Reveals aren.t sent to YouTube/.test(await page.$eval('.rs-open .rs-plats', (el) => el.innerText)), 'no YouTube set up: said plainly, with where to set it');
+  ok(await clickText('.rs-namebtn', /^Maximiliana/), 'open Maximiliana-Josephine (Facebook gave nothing; security software opened the email)');
+  await settle(200);
+  const mx = await page.$eval('.rs-open', (el) => el.innerText.replace(/\s+/g, ' '));
+  ok(/Facebook didn.t share any numbers for this reveal/.test(mx), 'Facebook that gave nothing says so');
+  ok(!/Reactions and comments still come through/.test(mx), 'and never that reactions and comments came');
+  ok(/Facebook said 0 at every check, so it isn.t in this\./.test(mx), `Most at once says Facebook only said 0 (${(mx.match(/Site \d+[^.]*\.[^.]*\./) || [''])[0]})`);
+  ok(/Not counted: 78 visits with no sign of a person \(security software opening an email.s links, mostly\)\./.test(mx), 'the visits with no sign of a person are said to be left out');
+  await page.screenshot({ path: `${OUT}detail-nothing-from-facebook-1280.png`, fullPage: false });
   await page.click('.rs-rest summary').catch(() => {});
   ok(await clickText('.rs-restbtn', /Hudson/), 'open Hudson (before counting) in the fold');
   await settle(300);

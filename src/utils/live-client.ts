@@ -11,7 +11,7 @@
  * then gets 'viewers', 'react' and 'msg' / 'msg-hide' events through on().
  */
 
-import { noteArrival, sender } from './live-stats';
+import { noteArrival, sender, onHuman } from './live-stats';
 
 export interface LivePlayer {
   kind: 'live' | 'replay'; uid: string; customerCode: string;
@@ -222,6 +222,12 @@ function createClient() {
     ws.onerror = () => { try { ws?.close(); } catch { /* already closed */ } };
   }
 
+  // Reveal stats counts a visit once its page has seen a person there (live-stats.ts humanSign): the visits this page
+  // has already reported (the broadcast each was for, '' for the current one, and the child's page it was on) hear it
+  // the moment it happens. Visits reported after it carry it themselves
+  const visited = new Map<string, string>();
+  onHuman(() => { for (const [id, kid] of visited) post('human', kid ? { kid } : undefined, id || null); });
+
   // How this tab arrived, for Reveal stats' "where viewers came from" (once per session)
   if (!rehearsal) noteArrival();
   else {
@@ -236,6 +242,18 @@ function createClient() {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') { fetchState(); if (!wsOk && !reconnectTimer) connect(); }
   });
+
+  function post(type: string, meta?: Record<string, string>, broadcastId?: string | null) {
+    if (rehearsal || staffEnd) return;
+    try {
+      // (a child's own past reveal on their page counts as that reveal's, not the current one's: broadcastId)
+      const body = JSON.stringify({ type, broadcastId: broadcastId || state?.id || undefined, meta, ...sender() });
+      const blob = new Blob([body], { type: 'application/json' });
+      if (!(navigator.sendBeacon && navigator.sendBeacon('/api/broadcast-event', blob))) {
+        fetch('/api/broadcast-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
+      }
+    } catch { /* analytics only */ }
+  }
 
   return {
     subscribe(l: Listener) {
@@ -261,15 +279,8 @@ function createClient() {
     get timezone() { return timezone; },
     refresh: fetchState,
     beacon(type: string, meta?: Record<string, string>, broadcastId?: string | null) {
-      if (rehearsal || staffEnd) return;
-      try {
-        // (a child's own past reveal on their page counts as that reveal's, not the current one's: broadcastId)
-        const body = JSON.stringify({ type, broadcastId: broadcastId || state?.id || undefined, meta, ...sender() });
-        const blob = new Blob([body], { type: 'application/json' });
-        if (!(navigator.sendBeacon && navigator.sendBeacon('/api/broadcast-event', blob))) {
-          fetch('/api/broadcast-event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});
-        }
-      } catch { /* analytics only */ }
+      if (type === 'view_live_page' && !rehearsal && !staffEnd && !sender().h) visited.set(broadcastId || state?.id || '', meta?.kid || '');
+      post(type, meta, broadcastId);
     },
     /** Reveal stats: this browser watched `sec` more seconds of the reveal (live) or its replay */
     watched(kind: 'live' | 'replay', sec: number, broadcastId: string | null, player: Record<string, unknown> | null = null) {

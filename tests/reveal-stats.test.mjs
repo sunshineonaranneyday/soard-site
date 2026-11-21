@@ -42,7 +42,9 @@ globalThis.fetch = async (input, init = {}) => {
 
 let DB, env, b, rs, liveWatch, event, admin;
 const ctx = (request) => ({ env, request, data: {}, waitUntil: () => {} });
-const post = (url, body, ua = IPHONE) => new Request(url, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': ua }, body: JSON.stringify(body) });
+// A person's page, unless the test says otherwise (h: the page has seen a person there; a test sets h itself to leave it out)
+const person = (body) => (body && typeof body === 'object' && !Array.isArray(body) && !('h' in body) ? { ...body, h: 1 } : body);
+const post = (url, body, ua = IPHONE) => new Request(url, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': ua }, body: JSON.stringify(person(body)) });
 const beacon = (body, ua) => event.onRequestPost(ctx(post(`${SITE}/api/broadcast-event`, body, ua)));
 const watch = (body, ua, host = SITE) => liveWatch.onRequestPost(ctx(post(`${host}/api/live-watch`, body, ua)));
 const viewer = (id, vid) => DB.prepare('SELECT * FROM broadcast_viewers WHERE broadcast_id = ? AND vid = ?').bind(id, vid).first();
@@ -213,7 +215,7 @@ test('History: people, before / live / replay, average watch, there for the reve
   const liveAt = s.liveAt;
   await DB.prepare(`INSERT INTO broadcasts (id, kid_slug, kid_name, title, live_at, ended_at, phase, replay_uid, source, data, created_at)
     VALUES (?, 'remi', 'Remi', 'Remi''s room reveal', ?, ?, 'replay', 'rec1', 'stream', ?, ?)`)
-    .bind(s.broadcastId, liveAt, s.endedAt, JSON.stringify({ revealAtSeconds: 70 }), new Date(Date.now() - 2 * D).toISOString()).run();
+    .bind(s.broadcastId, liveAt, s.endedAt, JSON.stringify({ revealAtSeconds: 50 }), new Date(Date.now() - 2 * D).toISOString()).run();
   const rows = (await DB.prepare('SELECT * FROM broadcasts').all()).results.map((r) => ({ ...r, data: JSON.parse(r.data || '{}') }));
   const { byId } = await rs.historyStats(DB, rows);
   const st = byId['live-100'];
@@ -224,8 +226,8 @@ test('History: people, before / live / replay, average watch, there for the reve
   assert.equal(st.replay, 1);
   assert.equal(st.staff, 1);
   assert.equal(st.tests, 1);
-  assert.equal(st.revealAt, 70);
-  assert.equal(st.atReveal, 3, 'the reveal was 1:10 in: A, the newcomer and B were watching in that minute; D only saw the replay');
+  assert.equal(st.revealAt, 50);
+  assert.equal(st.atReveal, 3, 'the reveal was 0:50 in, seen 20 s later (the player\'s delay): A, the newcomer and B were watching then (1:05 to 1:15); D only saw the replay');
   assert.deepEqual(st.sources, { email: 2, facebook: 1, direct: 2 });
   assert.equal(st.atOnce.peakAll, 55);
   assert.equal(st.atOnce.peakSite, 3);

@@ -12,16 +12,30 @@
  *             browsers and any host but the real site are tests. Both are
  *             kept apart (who = 'staff' | 'test') and never counted; bots are
  *             dropped. A reveal from a JobTread TEST job isn't compared.
+ *  A person   a visit counts once it shows a person is there (human = 1):
+ *             a tap, scroll, key or mouse movement on the page, or 10 s of
+ *             the video's own picture moving (live-stats.ts humanSign). Email
+ *             security software opens every link in an email in a real
+ *             browser and never does either (Nov 2026: 78 of 80 visits in the
+ *             minute after Max's "We're live" email). Such a visit is kept
+ *             with human = 0 and counted apart; its seconds are kept too, so a
+ *             sign that comes later counts the whole visit. Rows from before
+ *             Nov 21 2026 are 1, but for the scanner bursts after Dylan's and
+ *             Max's emails, marked 0 by hand.
  *  Watching   the live page reports seconds actually played with the tab
  *             showing (/api/live-watch): every 20 s live, every 60 s on the
  *             replay. A report can't claim more than the time since that
  *             browser's last one (plus 5 s when they're at least 5 s apart),
  *             and a browser's total never passes the time since its first
  *             report plus 15 s, however many reports it sends. Each
- *             live report marks the minutes of the reveal it covered, so
- *             "there for the reveal" is the people watching in the reveal's
- *             minute (the replay's moment, lined up with the live minutes
- *             even when a reconnect started a new recording).
+ *             live report marks the 10-second steps of the reveal it covered
+ *             (live_ten; live_min keeps the minutes), so "there for the
+ *             reveal" is the people watching in the step they saw the child
+ *             see the room: the replay's moment, lined up with going live even
+ *             when a reconnect started a new recording, plus that viewer's own
+ *             delay (Behind the phone; else the reveal's typical one, else the
+ *             player's 20 s). Rows from before the steps have the minute and
+ *             their first and last report instead (wasThere).
  *  At once    every 30 s while live, how many were watching on the site (a
  *             live report in the last 50 s), on Facebook (live_views) and on
  *             YouTube (concurrentViewers) goes in broadcast_stats.series, with
@@ -59,6 +73,7 @@ const SCHEMA = [
     live_sec INTEGER NOT NULL DEFAULT 0, live_first_at INTEGER, live_seen_at INTEGER,
     replay_sec INTEGER NOT NULL DEFAULT 0, replay_first_at INTEGER, replay_seen_at INTEGER,
     live_min TEXT NOT NULL DEFAULT ',',
+    human INTEGER NOT NULL DEFAULT 1, live_ten TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (broadcast_id, vid)
   )`,
   `CREATE INDEX IF NOT EXISTS idx_bviewers_seen ON broadcast_viewers(broadcast_id, live_seen_at)`,
@@ -81,9 +96,19 @@ const SCHEMA = [
   )`,
 ];
 
+// Columns added since the table was made (a database from before has the rest): a person seen (rows from before count,
+// so 1), and the 10-second steps of the reveal a browser watched live (one character a step, '1' watched)
+const ADDED = [
+  'ALTER TABLE broadcast_viewers ADD COLUMN human INTEGER NOT NULL DEFAULT 1',
+  "ALTER TABLE broadcast_viewers ADD COLUMN live_ten TEXT NOT NULL DEFAULT ''",
+];
+
 export async function ensureStatsSchema(DB) {
   if (_ready) return;
   await DB.batch(SCHEMA.map((sql) => DB.prepare(sql)));
+  // (a column already there is fine; anything else is thrown, so the next request tries again rather than this isolate
+  // going on without the column)
+  for (const sql of ADDED) { try { await DB.prepare(sql).run(); } catch (e) { if (!/duplicate column/i.test(String(e?.message || e))) throw e; } }
   // When counting people began: reveals before it only have page loads
   await DB.prepare('INSERT OR IGNORE INTO site_config (key, data, updated_at) VALUES (?, ?, ?)')
     .bind(SINCE_KEY, JSON.stringify({ at: new Date(Date.now()).toISOString() }), new Date(Date.now()).toISOString()).run();
@@ -159,9 +184,10 @@ export function classifySource({ src = '', ref = '', ua = '' } = {}) {
 }
 
 /**
- * What a beacon says about who sent it → { vid, who, src } or { drop: true }.
+ * What a beacon says about who sent it → { vid, who, src, human } or { drop: true }.
  *   who: null (the public), 'staff' (this browser has opened the admin), or
  *   'test' (an automated browser, or not on the real site)
+ *   human: the page has seen a person there (h: 1; live-stats.ts humanSign)
  */
 export function visitor(request, body = {}) {
   const ua = request.headers.get('user-agent') || '';
@@ -174,6 +200,7 @@ export function visitor(request, body = {}) {
     vid: cleanVid(body.vid),
     who,
     src: classifySource({ src: body.src, ref: body.ref, ua }),
+    human: body.h === 1 || body.h === true,
   };
 }
 
@@ -181,16 +208,20 @@ export function visitor(request, body = {}) {
 
 const iso = (ms) => new Date(ms).toISOString();
 
-/** Someone opened the live page for this reveal (any phase). */
-export async function recordVisit(DB, { broadcastId, vid, who = null, src = 'direct', beforeLive = false, now = Date.now() }) {
+/**
+ * Someone opened the live page for this reveal (any phase), or a page already open saw a person there (`human`). A
+ * person once seen stays seen.
+ */
+export async function recordVisit(DB, { broadcastId, vid, who = null, src = 'direct', beforeLive = false, human = false, now = Date.now() }) {
   if (!broadcastId || !vid) return;
-  await DB.prepare(`INSERT INTO broadcast_viewers (broadcast_id, vid, who, src, first_at, last_at, before_live)
-      VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6)
+  await DB.prepare(`INSERT INTO broadcast_viewers (broadcast_id, vid, who, src, first_at, last_at, before_live, human)
+      VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, ?7)
     ON CONFLICT(broadcast_id, vid) DO UPDATE SET last_at = excluded.last_at,
       who = COALESCE(broadcast_viewers.who, excluded.who),
       before_live = MAX(broadcast_viewers.before_live, excluded.before_live),
+      human = MAX(broadcast_viewers.human, excluded.human),
       src = CASE WHEN broadcast_viewers.src IS NULL OR broadcast_viewers.src = 'direct' THEN excluded.src ELSE broadcast_viewers.src END`)
-    .bind(broadcastId, vid, who, src, iso(now), beforeLive ? 1 : 0).run();
+    .bind(broadcastId, vid, who, src, iso(now), beforeLive ? 1 : 0, human ? 1 : 0).run();
 }
 
 // ─── What each viewer's live video did ─────────────────────────────
@@ -267,9 +298,10 @@ export const NEVER_AFTER_MS = 5000;
 
 /**
  * Each public browser's live video on these reveals, summed over its starts of the player in the database (at most
- * PLAYER_MOUNTS_MAX each), every total capped at what one reveal could reach. A browser marked staff or test anywhere
- * (its viewer row, or any start) is left out entirely, as the rest of History does. The start delay and the engine
- * come from its earliest picture and its latest start.
+ * PLAYER_MOUNTS_MAX each), every total capped at what one reveal could reach. Only a browser History counts as a
+ * person: a viewer row of the public's with a person seen (email security software starts the player too, and fails
+ * with an error); one marked staff or test anywhere (its viewer row, or any start) is left out entirely. The start
+ * delay and the engine come from its earliest picture and its latest start.
  */
 export async function playerRows(DB, ids) {
   if (!ids.length) return [];
@@ -288,7 +320,7 @@ export async function playerRows(DB, ids) {
       MIN(SUM(p.errors), 1000) AS errors
     FROM broadcast_player p
     WHERE p.broadcast_id IN (${marks})
-      AND NOT EXISTS (SELECT 1 FROM broadcast_viewers v WHERE v.broadcast_id = p.broadcast_id AND v.vid = p.vid AND v.who IS NOT NULL)
+      AND EXISTS (SELECT 1 FROM broadcast_viewers v WHERE v.broadcast_id = p.broadcast_id AND v.vid = p.vid AND v.who IS NULL AND v.human = 1)
     GROUP BY p.broadcast_id, p.vid
     HAVING MAX(p.who) IS NULL`).bind(...ids).all();
   return res?.results || [];
@@ -333,16 +365,22 @@ export function summarizePlayers(rows) {
   };
 }
 
+/** A browser's 10-second steps of a reveal are kept up to this many (16 hours) */
+export const STEP_SEC = 10;
+const STEPS_MAX = 5760;
+
 /**
  * The live page played `sec` seconds since its last report. A live report
- * marks the minutes of the reveal it covered (from `liveAt`, the go-live
- * time). Two limits, so a script gets no more than a person watching the
- * whole time would: a report is worth at most the time since this browser's
- * last one (+5 s for network jitter, only when they're at least 5 s apart,
- * so a burst earns nothing), and the total never passes the time since its first
- * report + 15 s (so silence can't be banked and claimed later in a rush).
+ * marks the minutes and the 10-second steps of the reveal it covered (from
+ * `liveAt`, the go-live time). Two limits, so a script gets no more than a
+ * person watching the whole time would: a report is worth at most the time
+ * since this browser's last one (+5 s for network jitter, only when they're
+ * at least 5 s apart, so a burst earns nothing), and the total never passes
+ * the time since its first report + 15 s (so silence can't be banked and
+ * claimed later in a rush). `human`: the page has seen a person (a person
+ * once seen stays seen).
  */
-export async function recordWatch(DB, { broadcastId, vid, kind, sec, liveAt = null, who = null, src = 'direct', now = Date.now() }) {
+export async function recordWatch(DB, { broadcastId, vid, kind, sec, liveAt = null, who = null, src = 'direct', human = false, now = Date.now() }) {
   if (!broadcastId || !vid || !['live', 'replay'].includes(kind)) return;
   const s = Math.max(0, Math.min(Math.round(Number(sec) || 0), kind === 'live' ? 90 : 180));
   if (!s) return;
@@ -350,9 +388,15 @@ export async function recordWatch(DB, { broadcastId, vid, kind, sec, liveAt = nu
   // The minutes this report covered (whole numbers worked out here, so they go in the SQL as text)
   const minutes = [];
   const t0 = Date.parse(liveAt || '');
+  // And its 10-second steps, first to last: live_ten keeps one character a step ('1' watched), so the report's run of
+  // steps is written over that stretch (the string padded with '0's to reach it)
+  let steps = null;
   if (kind === 'live' && Number.isFinite(t0) && now >= t0) {
     const last = Math.floor((now - t0) / 60000);
     for (let m = Math.max(0, Math.floor((now - s * 1000 - t0) / 60000)); m <= last && m < 1000; m++) minutes.push(m);
+    const from = Math.max(0, Math.floor((now - s * 1000 - t0) / (STEP_SEC * 1000)));
+    const to = Math.min(STEPS_MAX - 1, Math.floor((now - t0) / (STEP_SEC * 1000)));
+    if (to >= from) steps = { from, zeros: '0'.repeat(from), ones: '1'.repeat(to - from + 1), after: to + 2 };
   }
   let marks = 'broadcast_viewers.live_min';
   for (const m of minutes) marks = `CASE WHEN instr(${marks}, ',${m},') > 0 THEN ${marks} ELSE ${marks} || '${m},' END`;
@@ -362,16 +406,23 @@ export async function recordWatch(DB, { broadcastId, vid, kind, sec, liveAt = nu
   const add = `CAST(MAX(0, MIN(?7,
       ${since} + CASE WHEN ${since} >= 5 THEN 5 ELSE 0 END,
       (?5 - COALESCE(broadcast_viewers.${col}_first_at, ?5)) / 1000.0 + ${FIRST_BEAT_CAP_SEC} - broadcast_viewers.${col}_sec)) AS INTEGER)`;
-  await DB.prepare(`INSERT INTO broadcast_viewers (broadcast_id, vid, who, src, first_at, last_at, ${col}_sec, ${col}_first_at, ${col}_seen_at, live_min)
-      VALUES (?1, ?2, ?3, ?4, ?6, ?6, CAST(MIN(?7, ${FIRST_BEAT_CAP_SEC}) AS INTEGER), CAST(?5 AS INTEGER), CAST(?5 AS INTEGER), ${fresh})
+  // (?9 the '0's up to the first step, ?10 a '1' for each step, ?11 where the string goes on after the last, ?12 the first)
+  const ten = steps
+    ? 'substr(broadcast_viewers.live_ten || ?9, 1, CAST(?12 AS INTEGER)) || ?10 || substr(broadcast_viewers.live_ten, CAST(?11 AS INTEGER))'
+    : 'broadcast_viewers.live_ten';
+  await DB.prepare(`INSERT INTO broadcast_viewers (broadcast_id, vid, who, src, first_at, last_at, ${col}_sec, ${col}_first_at, ${col}_seen_at, live_min, human, live_ten)
+      VALUES (?1, ?2, ?3, ?4, ?6, ?6, CAST(MIN(?7, ${FIRST_BEAT_CAP_SEC}) AS INTEGER), CAST(?5 AS INTEGER), CAST(?5 AS INTEGER), ${fresh}, ?8, ${steps ? '?9 || ?10' : "''"})
     ON CONFLICT(broadcast_id, vid) DO UPDATE SET last_at = excluded.last_at,
       who = COALESCE(broadcast_viewers.who, excluded.who),
+      human = MAX(broadcast_viewers.human, excluded.human),
       src = CASE WHEN broadcast_viewers.src IS NULL OR broadcast_viewers.src = 'direct' THEN excluded.src ELSE broadcast_viewers.src END,
       ${col}_sec = broadcast_viewers.${col}_sec + ${add},
       ${col}_first_at = COALESCE(broadcast_viewers.${col}_first_at, CAST(?5 AS INTEGER)),
       ${col}_seen_at = MAX(COALESCE(broadcast_viewers.${col}_seen_at, 0), CAST(?5 AS INTEGER)),
-      live_min = ${marks}`)
-    .bind(broadcastId, vid, who, src, now, iso(now), s).run();
+      live_min = ${marks},
+      live_ten = ${ten}`)
+    .bind(broadcastId, vid, who, src, now, iso(now), s, human ? 1 : 0,
+      ...(steps ? [steps.zeros, steps.ones, steps.after, steps.from] : [])).run();
 }
 
 /**
@@ -393,9 +444,9 @@ export function watchKind(claimed, { current = null, endedAt = null, now = Date.
 
 // ─── While live: how many at once ───────────────────────────────────
 
-/** People with a live report in the last 50 s (staff and tests left out) */
+/** People with a live report in the last 50 s (staff, tests and visits with no person seen left out) */
 export async function watchingNow(DB, broadcastId, now = Date.now()) {
-  const row = await DB.prepare('SELECT COUNT(*) AS n FROM broadcast_viewers WHERE broadcast_id = ? AND who IS NULL AND live_seen_at >= ?')
+  const row = await DB.prepare('SELECT COUNT(*) AS n FROM broadcast_viewers WHERE broadcast_id = ? AND who IS NULL AND human = 1 AND live_seen_at >= ?')
     .bind(broadcastId, now - WATCHING_NOW_MS).first();
   return Number(row?.n) || 0;
 }
@@ -651,6 +702,30 @@ export function recordingOffset(row) {
   return Number.isFinite(off) && off > -600 && off < 8 * 3600 ? Math.round(off) : 0;
 }
 
+/** The player's usual delay behind the phone (src/utils/live-player.ts LIVE_DELAY_S), when a viewer's own isn't known */
+export const DEFAULT_BEHIND_SEC = 20;
+/** A viewer's own delay is used when it's one a live viewer could have (one who chose to watch from the start isn't) */
+const usableBehind = (v) => v != null && Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 90;
+
+/**
+ * Was this live viewer watching when they saw the child first see the room? momentSec: the reveal, in seconds after
+ * going live (the phone's time); behindSec: how far behind the phone this viewer's picture was, so they saw it at
+ * momentSec + behindSec. Their 10-second steps say it (live_ten); a row from before the steps says it with that
+ * minute (live_min) and its first and last report (the first report covers the 10 s or so before it, so 15 s are
+ * allowed before it).
+ */
+export function wasThere(row, { momentSec, behindSec, liveAtMs }) {
+  const at = Number(momentSec) + Number(behindSec);
+  if (!Number.isFinite(at) || at < 0) return false;
+  const ten = String(row?.live_ten || '');
+  if (ten.includes('1')) return ten.charAt(Math.floor(at / STEP_SEC)) === '1';
+  if (!String(row?.live_min || '').includes(`,${Math.floor(at / 60)},`)) return false;
+  const t = Number(liveAtMs) + at * 1000;
+  const first = Number(row?.live_first_at), seen = Number(row?.live_seen_at);
+  return Number.isFinite(t) && Number.isFinite(first) && Number.isFinite(seen) && row.live_first_at != null && row.live_seen_at != null
+    && t >= first - FIRST_BEAT_CAP_SEC * 1000 && t <= seen;
+}
+
 /** A reveal that is a rehearsal (a JobTread TEST job), not one to compare */
 export const isTestReveal = (row) => !!row?.data?.test || /^\s*TEST\b/i.test(row?.title || '');
 
@@ -676,6 +751,8 @@ export function summarizeSeries(series) {
   // A place counts as measured once it had someone: only zeros (set up, not live yet; or a count it never gave while
   // live) isn't a "most at once 0", and its gaps don't make other moments partial
   const hasFb = pts.some((p) => Number(p[2]) > 0), hasYt = pts.some((p) => Number(p[3]) > 0);
+  // Facebook not counted: did it answer 0, and was it ever not read (History words the two apart)
+  const fbSaid0 = !hasFb && pts.some((p) => p[2] === 0), fbMissed = !hasFb && pts.some((p) => p[2] == null);
   for (const p of pts) { if (!hasFb) p[2] = null; if (!hasYt) p[3] = null; }
   // A missed reading isn't nobody: a place's last reading stands for up to 2 minutes; past that it isn't known
   const filled = fillGaps(pts);
@@ -696,7 +773,7 @@ export function summarizeSeries(series) {
     avgAll: Math.round((filled.reduce((a, q) => a + tot(q), 0) / filled.length) * 10) / 10,
     avgPartial: whole.length < filled.length,
     peakSite: peakOf(1)?.[1] ?? null, peakFb: peakOf(2)?.[2] ?? null, peakYt: peakOf(3)?.[3] ?? null,
-    hasFb, hasYt,
+    hasFb, hasYt, fbSaid0, fbMissed,
   };
 }
 
@@ -758,18 +835,21 @@ export async function historyStats(DB, rows) {
   if (!ids.length) return { since, byId: {} };
   const marks = ids.map((_, i) => `?${i + 1}`).join(',');
   const [people, sources, stats, metas, players] = await Promise.all([
+    // (a person: the public's, with a person seen; a visit with none, kept apart as `unseen`, is mostly email security
+    // software opening the email's links)
     DB.prepare(`SELECT broadcast_id,
-        SUM(CASE WHEN who IS NULL THEN 1 ELSE 0 END) AS people,
-        SUM(CASE WHEN who IS NULL AND before_live = 1 THEN 1 ELSE 0 END) AS before_n,
-        SUM(CASE WHEN who IS NULL AND live_sec > 0 THEN 1 ELSE 0 END) AS live_n,
-        SUM(CASE WHEN who IS NULL THEN live_sec ELSE 0 END) AS live_sec,
-        SUM(CASE WHEN who IS NULL AND replay_sec > 0 THEN 1 ELSE 0 END) AS replay_n,
-        SUM(CASE WHEN who IS NULL THEN replay_sec ELSE 0 END) AS replay_sec,
+        SUM(CASE WHEN who IS NULL AND human = 1 THEN 1 ELSE 0 END) AS people,
+        SUM(CASE WHEN who IS NULL AND human = 1 AND before_live = 1 THEN 1 ELSE 0 END) AS before_n,
+        SUM(CASE WHEN who IS NULL AND human = 1 AND live_sec > 0 THEN 1 ELSE 0 END) AS live_n,
+        SUM(CASE WHEN who IS NULL AND human = 1 THEN live_sec ELSE 0 END) AS live_sec,
+        SUM(CASE WHEN who IS NULL AND human = 1 AND replay_sec > 0 THEN 1 ELSE 0 END) AS replay_n,
+        SUM(CASE WHEN who IS NULL AND human = 1 THEN replay_sec ELSE 0 END) AS replay_sec,
         SUM(CASE WHEN who = 'staff' THEN 1 ELSE 0 END) AS staff_n,
-        SUM(CASE WHEN who = 'test' THEN 1 ELSE 0 END) AS test_n
+        SUM(CASE WHEN who = 'test' THEN 1 ELSE 0 END) AS test_n,
+        SUM(CASE WHEN who IS NULL AND human = 0 THEN 1 ELSE 0 END) AS unseen_n
       FROM broadcast_viewers WHERE broadcast_id IN (${marks}) GROUP BY broadcast_id`).bind(...ids).all(),
     DB.prepare(`SELECT broadcast_id, COALESCE(src, 'direct') AS src, COUNT(*) AS n FROM broadcast_viewers
-      WHERE who IS NULL AND broadcast_id IN (${marks}) GROUP BY broadcast_id, COALESCE(src, 'direct')`).bind(...ids).all(),
+      WHERE who IS NULL AND human = 1 AND broadcast_id IN (${marks}) GROUP BY broadcast_id, COALESCE(src, 'direct')`).bind(...ids).all(),
     DB.prepare(`SELECT * FROM broadcast_stats WHERE broadcast_id IN (${marks})`).bind(...ids).all(),
     (() => {
       const uids = [...new Set(rows.map((r) => r.replay_uid).filter(Boolean))];
@@ -788,7 +868,8 @@ export async function historyStats(DB, rows) {
   const sourcesBy = {};
   for (const r of sources?.results || []) (sourcesBy[r.broadcast_id] ||= {})[r.src] = Number(r.n) || 0;
 
-  // There for the reveal: people watching live in the reveal's minute (one query for every reveal)
+  // There for the reveal: the people watching live when they saw the child see the room, the reveal's moment plus each
+  // one's own delay (one query for every reveal; wasThere)
   const revealAtBy = {};
   for (const row of rows) {
     const inRecording = row.live_at ? revealSeconds(row, metaBy[row.replay_uid]) : null;
@@ -797,13 +878,21 @@ export async function historyStats(DB, rows) {
   const asked = rows.filter((row) => revealAtBy[row.id] != null && Number(peopleBy[row.id]?.live_n));
   const atRevealBy = Object.fromEntries(asked.map((row) => [row.id, 0]));
   if (asked.length) {
-    // The minutes are whole numbers this code worked out, so they go in the SQL; the ids are bound
-    const pairs = asked.map((row, i) => `(?${i + 1}, ${Math.floor(revealAtBy[row.id] / 60)})`).join(', ');
-    const hits = await DB.prepare(`WITH r(id, m) AS (VALUES ${pairs})
-      SELECT r.id AS id, COUNT(v.vid) AS n FROM r JOIN broadcast_viewers v ON v.broadcast_id = r.id AND v.who IS NULL
-        AND instr(v.live_min, ',' || r.m || ',') > 0
-      GROUP BY r.id`).bind(...asked.map((row) => row.id)).all();
-    for (const h of hits.results || []) atRevealBy[h.id] = Number(h.n) || 0;
+    const live = await DB.prepare(`SELECT broadcast_id, vid, live_min, live_ten, live_first_at, live_seen_at FROM broadcast_viewers
+      WHERE broadcast_id IN (${asked.map((_, i) => `?${i + 1}`).join(',')}) AND who IS NULL AND human = 1 AND live_sec > 0`)
+      .bind(...asked.map((row) => row.id)).all();
+    // Each viewer's delay behind the phone at their first picture (the live video's numbers, since Nov 19 2026); one
+    // without it has the reveal's typical one, else the player's own
+    const behindBy = {};
+    for (const p of players || []) if (usableBehind(p.start_behind)) (behindBy[p.broadcast_id] ||= {})[p.vid] = Number(p.start_behind);
+    const rowBy = Object.fromEntries(asked.map((row) => [row.id, row]));
+    const typical = Object.fromEntries(asked.map((row) => [row.id, median(Object.values(behindBy[row.id] || {})) ?? DEFAULT_BEHIND_SEC]));
+    for (const v of live?.results || []) {
+      const row = rowBy[v.broadcast_id];
+      if (!row) continue;
+      const behindSec = behindBy[row.id]?.[v.vid] ?? typical[row.id];
+      if (wasThere(v, { momentSec: revealAtBy[row.id], behindSec, liveAtMs: Date.parse(row.live_at) })) atRevealBy[row.id]++;
+    }
   }
 
   const byId = {};
@@ -829,6 +918,8 @@ export async function historyStats(DB, rows) {
       avgReplaySec: Number(p.replay_n) ? Math.round((Number(p.replay_sec) || 0) / Number(p.replay_n)) : null,
       staff: Number(p.staff_n) || 0,
       tests: Number(p.test_n) || 0,
+      // Visits with no sign of a person (security software opening an email's links, mostly): never counted
+      unseen: Number(p.unseen_n) || 0,
       revealAt,
       atReveal,
       sources: sourcesBy[row.id] || {},
@@ -856,7 +947,7 @@ export async function revealStatsFacts(DB) {
   await ensureStatsSchema(DB);
   const since = iso(Date.now() - REFRESH_DAYS * 86400e3);
   const [seen, stats, lastFb] = await Promise.all([
-    DB.prepare('SELECT MAX(last_at) AS at FROM broadcast_viewers WHERE who IS NULL').first(),
+    DB.prepare('SELECT MAX(last_at) AS at FROM broadcast_viewers WHERE who IS NULL AND human = 1').first(),
     DB.prepare(`SELECT MAX(sampled_at) AS sampled,
         MAX(json_extract(facebook, '$.readAt')) AS fb_at, MAX(json_extract(youtube, '$.readAt')) AS yt_at
       FROM broadcast_stats`).first(),

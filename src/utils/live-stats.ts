@@ -10,13 +10,22 @@
  *               and the referring site's host, kept for the tab's session so
  *               the page someone landed on decides, not the last click. A new
  *               arrival from another site (a full page load) takes over.
+ *  humanSign()  whether this page has seen a person there: a tap, scroll, key
+ *               or mouse movement, or 10 s of its own picture moving (the watch
+ *               meter says so). Email security software opens every link in an
+ *               email in a real browser, so a visit counts in History only
+ *               once this is so; every beacon carries it (h: 1), and the live
+ *               client tells the server the moment it first happens.
  *  shareable()  a link without ?src= or utm_*, for the page's Share button, so
  *               a friend's visit isn't credited to the sharer's email or QR.
  *               (The address bar keeps them: changing it confuses Astro's
  *               router, which then reloads the page on an in-page # link.)
  *  watchMeter() counts seconds the video actually plays with the tab showing
  *               and reports them: after the first 10 s, then every 20 s live
- *               (60 s on the replay), and what's left when it stops.
+ *               (60 s on the replay), and what's left when it stops. Live, it
+ *               sends the player's numbers too, and keeps them as they were the
+ *               last moment the picture moved once the phone has stopped (a
+ *               page left open on the end isn't a viewer frozen).
  */
 
 const VID_KEY = 'soard-viewer';
@@ -108,11 +117,77 @@ export function shareable(href: string): string {
   } catch { return href; }
 }
 
+// ─── A person there ─────────────────────────────────────────────────
+// Email security software (Microsoft's, Proofpoint's, a school's) opens every link in an email in a real browser the
+// moment it arrives, runs the page's scripts and leaves; on Max's reveal (Nov 20 2026) 78 of the 80 visits in the
+// minute after the "We're live" email were that. None touched the page or played anything. So a visit counts once
+// the page sees a person: a tap, a scroll (wheel), a key, the mouse moving, a click into Stream's own player (the
+// page sees only its focus go there), or the watch meter's 10 s of the page's own picture moving.
+
+/** Seconds of the page's own picture moving (not Stream's iframe, which shows itself) that count as a person watching */
+export const HUMAN_PLAY_SEC = 10;
+/** The mouse moved this far in all (CSS px): someone moving it, not one step a script made */
+const HUMAN_MOUSE_PX = 40;
+
+let humanSeen = false;
+const humanWaiting = new Set<() => void>();
+
+/** Whether this page has seen a person there */
+export function humanSign(): boolean { return humanSeen; }
+
+/** Call `fn` once a person is seen (at once, when one has been) */
+export function onHuman(fn: () => void): void {
+  if (humanSeen) { try { fn(); } catch { /* listener bug */ } return; }
+  humanWaiting.add(fn);
+}
+
+/** A person is there (the first time: everyone waiting hears it) */
+export function markHuman(): void {
+  if (humanSeen) return;
+  humanSeen = true;
+  stopListening();
+  for (const fn of humanWaiting) { try { fn(); } catch { /* listener bug */ } }
+  humanWaiting.clear();
+}
+
+let mouseMoved = 0;
+const onInput = (e: Event) => { if (e.isTrusted) markHuman(); };
+const onMouse = (e: Event) => {
+  const m = e as PointerEvent;
+  if (!m.isTrusted || m.pointerType !== 'mouse') return;
+  mouseMoved += Math.abs(m.movementX || 0) + Math.abs(m.movementY || 0);
+  if (mouseMoved >= HUMAN_MOUSE_PX) markHuman();
+};
+// A click into Stream's own player (a cross-origin iframe): the page sees only the window lose focus to it (some
+// browsers move the focus only after the blur, so it's looked at again a moment later)
+const focusInFrame = () => { try { if (document.activeElement?.tagName === 'IFRAME') markHuman(); } catch { /* no document */ } };
+const onBlur = () => { focusInFrame(); setTimeout(focusInFrame, 0); };
+const INPUTS = ['pointerdown', 'touchstart', 'keydown', 'wheel'] as const;
+let listening = false;
+function stopListening() {
+  if (!listening) return;
+  listening = false;
+  try {
+    for (const t of INPUTS) window.removeEventListener(t, onInput, true);
+    window.removeEventListener('pointermove', onMouse, true);
+    window.removeEventListener('blur', onBlur);
+  } catch { /* no window */ }
+}
+(function listen() {
+  try {
+    if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return;
+    for (const t of INPUTS) window.addEventListener(t, onInput, { capture: true, passive: true });
+    window.addEventListener('pointermove', onMouse, { capture: true, passive: true });
+    window.addEventListener('blur', onBlur);
+    listening = true;
+  } catch { /* no window */ }
+})();
+
 /** What every beacon carries about its sender */
-export function sender(): { vid: string; who?: string; src?: string; ref?: string } {
+export function sender(): { vid: string; who?: string; src?: string; ref?: string; h?: 1 } {
   const a = arrival();
   const w = who();
-  return { vid: viewerId(), ...(w ? { who: w } : {}), ...(a.src ? { src: a.src } : {}), ...(a.ref ? { ref: a.ref } : {}) };
+  return { vid: viewerId(), ...(w ? { who: w } : {}), ...(a.src ? { src: a.src } : {}), ...(a.ref ? { ref: a.ref } : {}), ...(humanSeen ? { h: 1 as const } : {}) };
 }
 
 export const FIRST_REPORT_SEC = 10;
@@ -155,6 +230,14 @@ export interface WatchMeterOptions {
   report: (kind: 'live' | 'replay', sec: number, final: boolean, player: Record<string, unknown> | null) => void;
   /** Live: the player's numbers so far, sent with every report (live-player.ts health) */
   player?: () => PlayerNumbers | null;
+  /**
+   * Live: the phone has stopped for this broadcast (it's ending, over, or the site has moved on). From then the
+   * player's numbers are sent as they were the last moment the picture moved: the picture running out at the end, a
+   * page left open on Reconnecting for hours, and the start-over when Stream closes the recording aren't a viewer's
+   * video freezing. Viewers are about 20 s behind, so the end's last seconds still count while they play; a picture
+   * already frozen when the phone stopped keeps what it had then. The phone coming back on lets them count again.
+   */
+  phoneStopped?: () => boolean;
   /** For tests: the clock and the timer */
   now?: () => number;
   every?: number;
@@ -179,7 +262,22 @@ export function watchMeter(opts: WatchMeterOptions): { stop: () => void; flush: 
   const started = now();
   let lastPlayer = '';
   let lastSentAt = started;
-  const snapshot = (): Record<string, unknown> | null => { try { return playerReport(opts.player?.() ?? null, mount); } catch { return null; } };
+  const current = (): Record<string, unknown> | null => { try { return playerReport(opts.player?.() ?? null, mount); } catch { return null; } };
+  // Once the phone has stopped (phoneStopped): the numbers kept, those of the last tick the picture moved, and the
+  // ones sent (frozen) when it no longer does. sawLive: this meter ran while the phone was on (a page opened after the
+  // phone stopped has nothing from before to keep); liveSnap: the numbers at its last tick then
+  let stopSeen = false;
+  let sawLive = false;
+  let liveSnap: Record<string, unknown> | null = null;
+  let movingSnap: Record<string, unknown> | null = null;
+  let frozen: Record<string, unknown> | null = null;
+  // A page opened after the phone stopped: Reconnecting, start-overs and errors stay as they were when it opened (with no
+  // phone seen, they're the phone being gone) while its first picture, delay and wait still come in
+  let pinned: Record<string, unknown> | null = null;
+  const pin = (n: Record<string, unknown> | null) => (n && pinned ? { ...n, h: pinned.h, hm: pinned.hm, x: pinned.x, er: pinned.er } : n);
+  const snapshot = (): Record<string, unknown> | null => frozen ?? pin(current());
+  // The page's own picture moving, in seconds (a person watching, once HUMAN_PLAY_SEC)
+  let ownPlayed = 0;
   const send = (sec: number, final: boolean) => {
     lastSentAt = now();
     const pl = snapshot();
@@ -216,7 +314,28 @@ export function watchMeter(opts: WatchMeterOptions): { stop: () => void; flush: 
     last = t;
     const played = playing(); // every tick, so the picture's clock is always tracked (a long gap included)
     if (dt > 0 && dt <= 5 && played > 0) acc += Math.min(dt, played); // the picture's own time, never more than passed
+    // (the page's own picture, not Stream's iframe, which counts as showing whether anyone is there or not)
+    if (dt > 0 && dt <= 5 && played > 0 && played !== Infinity) { ownPlayed += Math.min(dt, played); if (ownPlayed >= HUMAN_PLAY_SEC) markHuman(); }
     still = played > 0 ? 0 : still + Math.max(0, dt);
+    if (opts.phoneStopped) {
+      let stopped = false;
+      try { stopped = opts.phoneStopped(); } catch { /* as if not */ }
+      // (a tick after a long gap, a device asleep, says nothing about the picture moving: what it shows may be the
+      // player's own doing on waking)
+      const fresh = dt > 0 && dt <= 5;
+      const moved = fresh && played > 0;
+      if (!stopped) { sawLive = true; stopSeen = false; frozen = null; movingSnap = null; pinned = null; if (fresh || !liveSnap) liveSnap = current(); }
+      else if (!frozen) {
+        if (!sawLive && !stopSeen) pinned = current();
+        // Still playing (the delay's last seconds): kept each tick while it moves, and sent as they were once it doesn't.
+        // Frozen already when the phone stopped: what it had then (before a long gap, as it was before it). Opened after
+        // the phone stopped: as they are until its picture has moved and stopped
+        if (moved) movingSnap = pin(current());
+        else if (movingSnap) frozen = movingSnap;
+        else if (!stopSeen && sawLive) frozen = fresh ? current() : (liveSnap ?? current());
+        stopSeen = true;
+      }
+    }
     // A report marks the minutes just before it arrives: when the picture stops (paused, frozen) for 3 s, the
     // seconds watched go now, so "there for the reveal" counts the minutes they were really watched in
     const stalled = still >= 3 && acc >= 1;

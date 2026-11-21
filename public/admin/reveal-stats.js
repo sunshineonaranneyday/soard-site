@@ -144,6 +144,7 @@ const WHY_NOT = {
   cancelled: ['cancelled', 'cancelled', 'Cancelled'],
 };
 const orList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`);
+const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 
 // ─── Columns ────────────────────────────────────────────────────────
 
@@ -151,9 +152,9 @@ const counted = (s) => !!s?.counted;
 /** Numbers that need the reveal to have gone live (a dash before then) */
 const wentLive = (s, r) => counted(s) && !!r?.live_at;
 export const COLUMNS = [
-  { key: 'atOnce', label: 'Most at once', means: 'The most people watching at the same moment: the site, Facebook and YouTube together.',
+  { key: 'atOnce', label: 'Most at once', means: 'The most people watching at the same moment: the site, with Facebook and YouTube added in when they gave a count.',
     get: (s, r) => (wentLive(s, r) ? num(s.atOnce?.peakAll) : null), fmt: fmtN },
-  { key: 'people', label: 'People', means: 'Different people who opened the live page for this reveal: before it, during it or after.',
+  { key: 'people', label: 'People', means: 'Different people who opened the live page for this reveal: before it, during it or after. A visit counts once the page sees a person: a tap, scroll, key or the mouse, or the video playing. Security software opening an email\'s links isn\'t counted.',
     get: (s) => (counted(s) ? num(s.people) : null), fmt: fmtN },
   { key: 'live', label: 'Watched live', means: 'People who watched the reveal live on the site.',
     get: (s, r) => (wentLive(s, r) ? num(s.live) : null), fmt: fmtN },
@@ -163,8 +164,10 @@ export const COLUMNS = [
     get: (s, r) => (wentLive(s, r) && num(s.atReveal) != null && num(s.live) ? Math.min(1, num(s.atReveal) / num(s.live)) : null), fmt: fmtPct },
   { key: 'replay', label: 'Replay', means: 'People who played the replay on the live page (it stays there for a few days after, as Settings says).',
     get: (s, r) => (counted(s) && ended(r) && r.replay_uid ? num(s.replay) : null), fmt: fmtN },
-  { key: 'facebook', label: 'Facebook', optional: true, means: 'People who watched for 3 seconds or more on Facebook, live or later (Facebook\'s own count).',
-    get: (s) => num(s?.facebook?.unique), fmt: fmtN },
+  // (views: since Nov 2026 Facebook gives a reveal's views and average watch, not how many people; the reveal's detail
+  // shows people too whenever Facebook gives it)
+  { key: 'facebook', label: 'Facebook', optional: true, means: 'Views on Facebook, live or later (Facebook\'s own count).',
+    get: (s) => num(s?.facebook?.views), fmt: fmtN },
   { key: 'youtube', label: 'YouTube', optional: true, means: 'Views on YouTube, live or later (YouTube\'s own count).',
     get: (s) => num(s?.youtube?.views), fmt: fmtN },
   { key: 'hearts', label: 'Hearts', means: 'Hearts tapped on the live page during the reveal (a dash when none were recorded).',
@@ -440,6 +443,10 @@ function Platforms({ r, s, youtubeKey, youtubeOn, facebookOn }) {
   const readAt = (x) => x.readAt || (!x.error ? x.checkedAt : null);
   const viewsAt = f.viewsReadAt || (!f.error && !f.missing ? readAt(f) : null);
   const hasViews = f.unique != null || f.views != null;
+  const hasTalk = f.reactions != null || f.comments != null;
+  // What came of them, in words: "reactions and comments", "comments" (asked for apart, one can come without the other)
+  const talk = [f.reactions != null ? 'reactions' : null, f.comments != null ? 'comments' : null].filter(Boolean).join(' and ');
+  const Talk = talk ? talk[0].toUpperCase() + talk.slice(1) : '';
   const when = ago(f.checkedAt) ? ` (${ago(f.checkedAt)})` : '';
   // errorKind: 'partial' (reactions, no views), 'denied' (the permission), 'gone' (no such video), 'failed' (anything else)
   const failed = f.error && !['partial', 'denied'].includes(f.errorKind);
@@ -448,9 +455,11 @@ function Platforms({ r, s, youtubeKey, youtubeOn, facebookOn }) {
   const fbNote = !facebookOn ? `Facebook isn't connected to the site, so it can't read Facebook's numbers.${fbNums.length && readAt(f) ? ` The numbers shown are from ${ago(readAt(f))}.` : ''}`
     : gone ? `Facebook says this reveal's video isn't there any more (deleted, or not on the Page), so its numbers can't be read.${shownFrom}`
     : failed ? `Facebook couldn't be read when last asked${when}: ${plainError(f.error)}${shownFrom}`
+    : f.missing && !hasTalk && !hasViews
+    ? `Facebook didn't share ${fbNums.length ? 'its totals' : 'any numbers'} for this reveal${fbNums.length ? ', only its count while live' : ''}. The site's Facebook connection needs the "read insights" permission for the view totals, and permission to read the Page's reactions and comments for those.`
     : f.missing
-    ? `Facebook only shares its view totals once the site's Facebook connection has the "read insights" permission. Reactions and comments still come through.${hasViews && viewsAt ? ` The views shown are from ${ago(viewsAt)}.` : ''}`
-    : f.error ? `Facebook sent reactions and comments${when} but not its view totals: ${plainError(f.error)}${hasViews && viewsAt ? ` The views shown are from ${ago(viewsAt)}.` : ''}`
+    ? `Facebook only shares its view totals once the site's Facebook connection has the "read insights" permission.${hasTalk ? ` ${Talk} still come through.` : ''}${hasViews && viewsAt ? ` The views shown are from ${ago(viewsAt)}.` : ''}`
+    : f.error ? `Facebook sent ${talk || 'its other numbers'}${when} but not its view totals: ${plainError(f.error)}${hasViews && viewsAt ? ` The views shown are from ${ago(viewsAt)}.` : ''}`
     : fbNums.length && !hasViews && f.reactions == null && !old ? (isUpcoming(r) || isLiveNow(r) || ended(r) ? 'Facebook\'s totals come in after the reveal.' : null)
     : fbNums.length ? null
     : isUpcoming(r) ? 'Facebook\'s numbers come in once the reveal is live.'
@@ -541,9 +550,15 @@ export function VideoHealth({ r, v }) {
   </div>`;
 }
 
-/** "Site 120 · Facebook 160 · YouTube 18, 20:30 after going live": where the most-at-once crowd was */
-export function peakNote(a) {
-  if (!(Number(a.peakAll) > 0)) return 'Nobody was watching at once.';
+/**
+ * "Site 120 · Facebook 160 · YouTube 18, 20:30 after going live": where the most-at-once crowd was. onFacebook: the
+ * reveal was live on Facebook, so a Facebook that only ever said 0 is said (it isn't in the number)
+ */
+export function peakNote(a, { onFacebook = false } = {}) {
+  const fbZero = !onFacebook || a.hasFb ? ''
+    : a.fbSaid0 ? ` Facebook said 0 ${a.fbMissed ? 'whenever it answered' : 'at every check'}, so it isn't in this.`
+    : ' Facebook\'s live count couldn\'t be read, so it isn\'t in this.';
+  if (!(Number(a.peakAll) > 0)) return `Nobody was watching at once.${fbZero}`;
   const split = a.peakSplit || [a.peakSite, a.peakFb, a.peakYt];
   const places = [['Site', split[0], true], ['Facebook', split[1], a.hasFb], ['YouTube', split[2], a.hasYt]].filter(([, , on]) => on);
   const carried = a.peakCarried || [];
@@ -551,7 +566,7 @@ export function peakNote(a) {
   const unread = places.filter(([, v]) => v == null).map(([name]) => name);
   const tail = unread.length ? ` ${unread.join(' and ')} ${unread.length > 1 ? 'weren\'t' : 'wasn\'t'} read then, so it may have been more.` : '';
   const approx = carried.some(Boolean) ? ' (≈ a reading from up to 2 minutes before)' : '';
-  return `${read.join(' · ')}${a.peakAllAt != null ? `, ${clockOf(a.peakAllAt)} after going live` : ''}${approx}.${tail}`;
+  return `${read.join(' · ')}${a.peakAllAt != null ? `, ${clockOf(a.peakAllAt)} after going live` : ''}${approx}.${tail}${fbZero}`;
 }
 
 /** "120 came before, 171 watched live, 64 the replay": the groups overlap, and it says so when they do */
@@ -566,7 +581,8 @@ export function RevealDetail({ r, since, error, currentId, youtubeKey, youtubeOn
   const a = s?.atOnce;
   const events = r.events || {};
   const clicks = CLICKS.filter(([k]) => events[k] > 0).map(([k, label]) => `${label} ${fmtN(events[k])}`);
-  const leftOut = s ? [s.staff ? plural(s.staff, 'staff visit') : null, s.tests ? plural(s.tests, 'test visit') : null].filter(Boolean) : [];
+  const leftOut = s ? [s.staff ? plural(s.staff, 'staff visit') : null, s.tests ? plural(s.tests, 'test visit') : null,
+    s.unseen ? `${plural(s.unseen, 'visit')} with no sign of a person (security software opening an email's links, mostly)` : null].filter(Boolean) : [];
   const live = !!r.live_at;
   const there = s && live && num(s.atReveal) != null && num(s.live) ? Math.min(1, num(s.atReveal) / num(s.live)) : null;
   const thereNote = there != null ? `${fmtN(s.atReveal)} of ${fmtN(s.live)} watching live`
@@ -588,7 +604,7 @@ export function RevealDetail({ r, since, error, currentId, youtubeKey, youtubeOn
     ${s?.counted && neverLive(r) ? html`<p class="rs-note">This reveal didn't go live, so there's nothing to compare.${num(s.people) ? ` ${plural(num(s.people), 'person', 'people')} opened its page before then.` : ''}</p>` : null}
     ${s?.counted && !neverLive(r) ? html`
       <div class="stats rs-tiles">
-        <${Tile} label="Most at once" value=${fmtN(live ? a?.peakAll : null)} note=${a && live ? peakNote(a) : !live ? 'Counted while it\'s live.' : isLiveNow(r) ? 'Counted every 30 seconds while it\'s live.' : 'Not measured.'} />
+        <${Tile} label="Most at once" value=${fmtN(live ? a?.peakAll : null)} note=${a && live ? peakNote(a, { onFacebook: !!(r.fb_live_video_id || r.fb_permalink || s.facebook?.liveVideoId || s.facebook?.permalink) }) : !live ? 'Counted while it\'s live.' : isLiveNow(r) ? 'Counted every 30 seconds while it\'s live.' : 'Not measured.'} />
         <${Tile} label="Average at once" value=${fmtN(live && a?.avgAll != null ? Math.round(a.avgAll) : null)} note=${a && live ? (a.avgPartial ? `Across the whole reveal, every place together. ${[a.hasFb ? 'Facebook' : null, a.hasYt ? 'YouTube' : null].filter(Boolean).join(' or ') || 'A place'} wasn't read at some moments, so it may have been more.` : 'Across the whole reveal, every place together.') : !live ? 'Counted while it\'s live.' : null} />
         <${Tile} label="People" value=${fmtN(s.people)} note=${peopleNote(r, s)} />
         <${Tile} label="Avg. watch, live" value=${fmtDur(live ? s.avgLiveSec : null)} note=${!live ? 'Counted while it\'s live.' : s.avgReplaySec != null ? `Replay ${fmtDur(s.avgReplaySec)}` : null} />
@@ -602,7 +618,7 @@ export function RevealDetail({ r, since, error, currentId, youtubeKey, youtubeOn
         <section class="rs-sec"><h4>On Facebook and YouTube</h4><${Platforms} r=${r} s=${s} youtubeKey=${youtubeKey} youtubeOn=${youtubeOn} facebookOn=${facebookOn} /></section>
       </div>` : null}
     ${s?.counted && clicks.length ? html`<p class="rs-muted rs-clicks">Clicks: ${clicks.join(' · ')}</p>` : null}
-    ${leftOut.length ? html`<p class="rs-muted">Not counted: ${leftOut.join(' and ')}.</p>` : null}
+    ${leftOut.length ? html`<p class="rs-muted">Not counted: ${andList(leftOut)}.</p>` : null}
     ${renderExtra ? html`<div class="rs-extra">${renderExtra(r)}</div>` : null}
   </div>`;
 }
@@ -739,7 +755,7 @@ export function RevealStats({ rows: given = [], since = null, error = null, curr
   };
   const head = [
     error ? null : nCompared ? `${plural(nCompared, 'finished reveal')} compared.${nCompared >= 2 ? ' Sort by any number. Bold marks the one finished reveal that did best at it.' : ' The best and the averages show from the second one on.'}` : 'Each reveal is compared here once it\'s over.',
-    'Staff and tests are never counted.',
+    'Staff, tests and visits with no sign of a person (security software opening an email\'s links) are never counted.',
   ].filter(Boolean).join(' ');
   const sizeClass = cols.length >= 10 ? ' rs-card--c10' : cols.length === 9 ? ' rs-card--c9' : '';
   // Why the rest aren't compared, the reasons in this order, only those that apply

@@ -287,6 +287,9 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
           report: (k, sec, _final, numbers) => client.watched(k, sec, bid, numbers),
           // (live: what the video has done, sent with the seconds; Broadcast → History shows it)
           player: () => (watchKind === 'live' ? player?.health ?? null : null),
+          // (the phone stopped for this broadcast: ending, over, or the site moved on; from then the numbers are kept as
+          // they were the last moment the picture moved, so the end and a page left open on it aren't a freeze)
+          phoneStopped: () => { const s = client.state; return watchKind === 'live' && !!bid && !!s && (s.id !== bid || s.phase !== 'live'); },
         });
       } else {
         playerEl.hidden = true;

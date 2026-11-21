@@ -1,7 +1,9 @@
 /**
  * POST /api/live-watch — "this browser watched N more seconds" (public)
  * =====================================================================
- * { broadcastId, vid, kind: 'live'|'replay', sec, who?, src?, ref?, player? } → 204.
+ * { broadcastId, vid, kind: 'live'|'replay', sec, who?, src?, ref?, h?, player? } → 204.
+ * h: 1 once the page has seen a person there (a tap, scroll, key, the mouse, or
+ * 10 s of its own picture moving); a browser counts in History only then.
  * The live page sends it while the reveal or its replay actually plays with
  * the tab showing: every 20 s live, every 60 s on the replay, and once more
  * when it stops. Reveal stats (_reveal-stats.js) adds the seconds to that
@@ -23,7 +25,7 @@
  */
 
 import { readState, ensureSchema } from './_broadcast.js';
-import { ensureStatsSchema, visitor, recordWatch, watchKind, cleanPlayer, recordPlayer } from './_reveal-stats.js';
+import { ensureStatsSchema, visitor, recordVisit, recordWatch, watchKind, cleanPlayer, recordPlayer } from './_reveal-stats.js';
 
 const BROADCAST_ID = /^live-\d{1,16}$/;
 const STATE_CACHE_MS = 3000;
@@ -70,13 +72,17 @@ export async function onRequestPost(context) {
     const now = Date.now();
     if (sec > 0) {
       const kind = watchKind(claimed, { current, endedAt: row?.ended_at || null, now });
-      if (kind) await recordWatch(env.DB, { broadcastId, vid: who.vid, kind, sec, liveAt: current?.liveAt || row?.live_at || null, who: who.who, src: who.src, now });
+      if (kind) await recordWatch(env.DB, { broadcastId, vid: who.vid, kind, sec, liveAt: current?.liveAt || row?.live_at || null, who: who.who, src: who.src, human: who.human, now });
     }
     // The live video's numbers: for the reveal on now, or one that ended within PLAYER_LATE_MS (a page left open after
     // it), never at the seconds' cost (a failure here leaves them recorded)
     // (an ended reveal can stay the site's current one for days: its end counts the same)
     const endedAt = Date.parse(current?.endedAt || row?.ended_at || '');
     if (player && (Number.isFinite(endedAt) ? now - endedAt < PLAYER_LATE_MS : !!current)) {
+      // (a person whose video never got a picture sends no seconds; their page's view may have gone to another reveal,
+      // the page having been open since, or been lost: the person sign makes it this reveal's visit, so History counts
+      // them among those who never got a picture)
+      if (who.human && !(sec > 0)) await recordVisit(env.DB, { broadcastId, vid: who.vid, who: who.who, src: who.src, human: true, now }).catch(() => {});
       await recordPlayer(env.DB, { broadcastId, vid: who.vid, who: who.who, player, now }).catch(() => {});
     }
   } catch { /* counting only */ }

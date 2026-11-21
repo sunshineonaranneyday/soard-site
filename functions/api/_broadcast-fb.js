@@ -303,10 +303,14 @@ export async function fbVideoTotals(env, { liveVideoId = null, permalink = null,
     id = lv.data.video?.id || null;
   }
   if (!id) return { ok: false, error: 'Facebook has no video for this reveal', gone: true };
-  const [ins, eng] = await Promise.all([
+  // (reactions and comments each asked on its own: Facebook refusing one field fails the whole request, and on Nov 21
+  // 2026 Max's and Dylan's reads kept no comments though Facebook gave the count when asked for comments alone)
+  const [ins, reac, com] = await Promise.all([
     graph(env, 'GET', `${id}/video_insights`, { metric: INSIGHT_METRICS.join(','), period: 'lifetime' }),
-    graph(env, 'GET', id, { fields: 'reactions.summary(total_count).limit(0),comments.summary(total_count).limit(0)' }),
+    graph(env, 'GET', id, { fields: 'reactions.summary(total_count).limit(0)' }),
+    graph(env, 'GET', id, { fields: 'comments.summary(total_count).limit(0)' }),
   ]);
+  const eng = { ok: reac.ok || com.ok };
   const totals = { videoId: id };
   if (ins.ok) {
     const val = (name) => { const m = (ins.data.data || []).find((x) => x.name === name); const v = m?.values?.[0]?.value; return v != null && Number.isFinite(Number(v)) ? Number(v) : null; };
@@ -316,18 +320,16 @@ export async function fbVideoTotals(env, { liveVideoId = null, permalink = null,
     totals.avgSec = avg != null ? Math.round(avg / 1000) : null;
     totals.liveUnique = val('total_video_views_live');
   }
-  if (eng.ok) {
-    // Only counts Facebook actually gave (a missing summary isn't a zero)
-    const n = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
-    totals.reactions = n(eng.data.reactions?.summary?.total_count);
-    totals.comments = n(eng.data.comments?.summary?.total_count);
-  }
+  // Only counts Facebook actually gave (a missing summary isn't a zero)
+  const n = (v) => (v != null && Number.isFinite(Number(v)) ? Number(v) : null);
+  if (reac.ok) totals.reactions = n(reac.data.reactions?.summary?.total_count);
+  if (com.ok) totals.comments = n(com.data.comments?.summary?.total_count);
   // The token can't read insights: (#10)/(#200)/(#283), or a message naming the permission. Not (#100) "does not exist,
   // cannot be loaded due to missing permissions": that's a deleted or wrong video, and a new token wouldn't help
   const blocked = !ins.ok && ins.code !== 100 && !/does not exist/i.test(ins.error || '')
     && ([10, 200, 283].includes(ins.code) || /read_insights|pages_manage_engagement|pages_read_engagement|\(#(10|200|283)\)/i.test(ins.error || ''));
   // gone: Facebook says the video isn't there (deleted, or not the Page's), so asking again won't help
-  if (!ins.ok && !eng.ok) return { ok: false, error: ins.error, missing: blocked ? 'read_insights' : null, gone: notThere(ins) && notThere(eng) };
+  if (!ins.ok && !eng.ok) return { ok: false, error: ins.error, missing: blocked ? 'read_insights' : null, gone: notThere(ins) && notThere(reac) && notThere(com) };
   return { ok: true, totals, partial: ins.ok ? null : ins.error, missing: blocked ? 'read_insights' : null };
 }
 

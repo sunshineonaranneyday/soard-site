@@ -12,10 +12,13 @@
  * most), number or true/false.
  *
  * Every beacon also says which browser sent it (vid), where it came from
- * (src, ref) and whether it's staff or a test (who). A view of the live page
- * records that browser for the reveal (Reveal stats: _reveal-stats.js). Bots
- * are dropped; staff and tests are recorded as such and never counted, and
- * their clicks aren't logged at all.
+ * (src, ref), whether it's staff or a test (who), and whether the page has seen
+ * a person there (h). A view of the live page records that browser for the
+ * reveal (Reveal stats: _reveal-stats.js), counted only once a person is seen:
+ * h on the view itself, or a later 'human' (its page's first tap, scroll, key
+ * or mouse movement, or 10 s of its picture moving). Bots are dropped; staff
+ * and tests are recorded as such and never counted, and their clicks aren't
+ * logged at all.
  */
 
 import { ensureSchema, recordEvent, readState, countBannerClick } from './_broadcast.js';
@@ -25,6 +28,7 @@ const TYPES = new Set([
   'banner_click', 'view_live_page', 'click_watch', 'click_facebook', 'click_youtube',
   'click_donate', 'click_replay', 'click_instagram', 'click_calendar', 'reminder_form_view', 'share',
   'qr_scan', // the reusable family QR code (/live/?src=qr)
+  'human', // a live page already counted saw a person there (Reveal stats: never logged as an event)
 ]);
 
 const BROADCAST_ID = /^live-\d{1,16}$/;
@@ -71,11 +75,11 @@ export async function onRequestPost(context) {
     // A person for this reveal: only a view of its own page (another child's /live/<kid>/ shows that child, not this reveal)
     const pageKid = typeof body.meta?.kid === 'string' ? body.meta.kid : '';
     const ownPage = broadcastId !== state.broadcastId || !pageKid || pageKid === state.kidSlug;
-    if (type === 'view_live_page' && broadcastId && who.vid && ownPage) {
+    if ((type === 'view_live_page' || type === 'human') && broadcastId && who.vid && ownPage) {
       await ensureStatsSchema(env.DB);
-      await recordVisit(env.DB, { broadcastId, vid: who.vid, who: who.who, src: who.src, beforeLive: broadcastId === state.broadcastId && ['scheduled', 'armed'].includes(state.phase) });
+      await recordVisit(env.DB, { broadcastId, vid: who.vid, who: who.who, src: who.src, human: type === 'human' || who.human, beforeLive: broadcastId === state.broadcastId && ['scheduled', 'armed'].includes(state.phase) });
     }
-    if (who.who) return new Response(null, { status: 204 }); // staff and tests: kept apart above, never in the counts
+    if (who.who || type === 'human') return new Response(null, { status: 204 }); // staff and tests: kept apart above, never in the counts
     await recordEvent(env.DB, broadcastId, type, cleanMeta(body.meta));
     if (type === 'banner_click' && broadcastId && broadcastId === state.broadcastId) await countBannerClick(env.DB, broadcastId);
   } catch { /* analytics only */ }

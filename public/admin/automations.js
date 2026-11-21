@@ -1040,7 +1040,7 @@ const MAP = { t: 'SOARD', children: [
           touches: ['Zeffy'], where: 'src/components/live/LiveGive.astro' },
         { t: 'Counting viewers', s: 'live', k: 'visitor',
           when: 'Someone opens the live page, or watches the reveal or its replay.',
-          does: 'Counts each browser once per reveal (a random id, nothing personal), where it came from, and the seconds it really watched. Staff and tests are kept apart. The numbers are in Broadcast → History.',
+          does: 'Counts each browser once per reveal (a random id, nothing personal), where it came from, and the seconds it really watched. A visit counts once the page sees a person there (a tap, scroll, key, the mouse, or the video playing), so security software opening an email\'s links isn\'t counted. Staff and tests are kept apart. The numbers are in Broadcast → History.',
           touches: ['D1'], where: 'src/utils/live-stats.ts · functions/api/live-watch.js · _reveal-stats.js',
           live: (f) => (!f.revealStats || f.revealStats.error ? null : f.revealStats.lastSeenAt ? ON('Last counted someone on the live page:', f.revealStats.lastSeenAt) : { why: 'Starts with the next visit to the live page.' }) },
       ]},

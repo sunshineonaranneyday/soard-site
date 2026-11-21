@@ -137,12 +137,19 @@ try {
   ok(!!view && /^[a-f0-9]{32}$/.test(view.body.vid || ''), `the page view carries a browser id (${view?.body?.vid})`);
   ok(view?.body?.src === 'email', `and where it came from (src=${view?.body?.src})`);
   ok(!view?.body?.who, 'the public: no staff or test mark');
+  // A person: nothing has touched the page yet, so the view doesn't say one is there (email security software opening
+  // the link looks just like this, and never gets further)
+  ok(view && !view.body.h, `nobody has touched the page yet: the view carries no person sign (h=${view?.body?.h})`);
   const vid = view?.body?.vid;
   await sleep(12500);
   const w1 = posts.filter((p) => p.path === '/api/live-watch');
   ok(w1.length === 1 && w1[0].body.kind === 'live' && w1[0].body.broadcastId === 'live-9' && w1[0].body.vid === vid, `one live report after 10 s of playing (${JSON.stringify(w1.map((p) => p.body))})`);
   ok(w1[0]?.body?.sec >= 9 && w1[0]?.body?.sec <= 11, `for about 10 s (${w1[0]?.body?.sec})`);
   ok(w1[0]?.body?.src === 'email', 'reports carry where the visit came from too');
+  ok(w1[0]?.body?.h === 1, `10 s of the page's own picture moving is a person watching: the report says so (h=${w1[0]?.body?.h})`);
+  const told = posts.filter((p) => p.path === '/api/broadcast-event' && p.body?.type === 'human');
+  ok(told.length === 1 && told[0].body.vid === vid && told[0].body.h === 1 && told[0].body.broadcastId === 'live-9',
+    `the page view already sent hears it too: one 'human' beacon for this reveal (${JSON.stringify(told.map((p) => p.body))})`);
   await sleep(20500);
   const w2 = posts.filter((p) => p.path === '/api/live-watch');
   ok(w2.length === 2 && w2[1].body.sec >= 19 && w2[1].body.sec <= 21, `then one every 20 s (${w2.map((p) => p.body.sec).join(', ')})`);
@@ -235,6 +242,12 @@ try {
   await Promise.all([other.waitForNavigation({ waitUntil: 'domcontentloaded' }), other.evaluate((u) => { const a = document.createElement('a'); a.href = u; document.body.append(a); a.click(); }, `${BASE}/live/`)]);
   const fromSite = await waitFor((p) => p.body?.type === 'view_live_page');
   ok(fromSite?.body?.ref === '127.0.0.1' && !fromSite?.body?.src, `the referring site is sent when there's no ?src= (ref=${fromSite?.body?.ref})`);
+  // The link was a script's click (no person); a real tap on the page is one, at once, before any watching is reported
+  ok(!fromSite?.body?.h, 'a script\'s click isn\'t a person');
+  await other.mouse.click(40, 300);
+  const tapped = await waitFor((p) => p.path === '/api/broadcast-event' && p.body?.type === 'human');
+  ok(!!tapped && tapped.body.vid === fromSite?.body?.vid && tapped.body.h === 1 && !posts.some((p) => p.path === '/api/live-watch' && posts.indexOf(p) < posts.indexOf(tapped)),
+    `a tap on the page is a person: its 'human' beacon goes at once (${JSON.stringify(tapped?.body)})`);
   await other.close();
 } finally {
   await browser.close();
