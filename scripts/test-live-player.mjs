@@ -689,6 +689,23 @@ try {
     ok(atNote != null && atNote >= recEnd - 1, `its last seconds play once Stream closes it, then "That's the reveal!" (played to ${furthest.toFixed(1)} of ${recEnd} s)`);
     ok(!flash, `after the last frame the note comes straight away, no Reconnecting first (${flash})`);
 
+    // A close that sticks (Cloudflare kept 3 of 9 stopped test recordings open for minutes, Nov 21 2026): the page holds
+    // for END_WAIT_MS (45 s) of Reconnecting, then "That's the reveal!" as before, never minutes of it
+    if (recordings.get(feed.rec).closed) phoneOn();
+    state = { ...STATES.live, kidName: 'Axel' }; await open(page); await waitFor(page, ['playing'], 45000); await sleep(2000);
+    phoneStops();
+    await sleep(1500);
+    state = { ...STATES.replay, kidName: 'Axel', player: null }; await refresh();
+    let heldAt = null, endAt = null;
+    for (let i = 0; i < 480 && endAt == null; i++) {
+      const s = await page.evaluate(() => ({ pstatus: document.querySelector('[data-stage]').dataset.pstatus, shown: !document.querySelector('[data-s="end"]').hidden }));
+      if (s.pstatus === 'reconnecting' && heldAt == null) heldAt = Date.now();
+      if (s.shown) endAt = Date.now(); else await sleep(250);
+    }
+    closeRecording();
+    const waited = heldAt && endAt ? (endAt - heldAt) / 1000 : null;
+    ok(waited != null && waited >= 42 && waited <= 52, `a close that sticks: about 45 s of Reconnecting, then "That's the reveal!" (${waited?.toFixed(1)} s)`);
+
     // A camera check before the start: live, then back to the countdown, never "That's the reveal!"
     state = { ...STATES.live, kidName: 'Axel' }; await refresh(); await sleep(1000);
     state = { ...base, phase: 'armed', upcoming: true, scheduledAt: new Date(Date.now() + 30 * 60e3).toISOString(), player: null }; await refresh();
