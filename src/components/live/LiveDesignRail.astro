@@ -64,17 +64,18 @@
      nothing here). A tablet held upright is a big phone, the same layout at its size (Peter, Nov 20 2026, of an iPad
      held upright during Max's reveal: "it shoudl show like a large mobile right!?!?!"; it had the picture and a 90px
      strip in the middle with 150px of cream either side). (PHONE_UPRIGHT, word for word as in src/utils/live-media.ts) */
-  @media (max-width: 559px), (max-width: 960px) and (max-aspect-ratio: 1749/1000), (max-width: 960px) and (min-height: 541px) {
+  @media (max-width: 559px), (max-width: 960px) and (max-aspect-ratio: 1749/1000), (max-width: 960px) and (min-height: 541px), (min-width: 961px) and (max-width: 1100px) and (min-height: 1200px) {
     .hero[data-party][data-design][data-orientation='portrait'] [data-stage][data-party][data-orientation='portrait']:not([data-fullscreen]) {
       width: 100%;
       grid-template-columns: 0px minmax(0, var(--pic)) var(--beside-gap) minmax(var(--beside), 1fr) 0px;
     }
   }
-  /* (a tablet's strip is 330 to 410px wide: its pictures two across, so each is about two-thirds of the video's width
-     as on a phone, and the reveal stays the biggest thing on the screen; one picture across was wider than the video) */
-  @media (min-width: 560px) and (max-width: 960px) and (max-aspect-ratio: 1749/1000), (min-width: 560px) and (max-width: 960px) and (min-height: 541px) {
+  /* (a tablet's strip is 330 to 460px wide: its pictures two across, so each is about two-thirds of the video's width
+     as on a phone, and the reveal stays the biggest thing on the screen; one picture across was wider than the video,
+     and as many 140px pictures as fit put a 13-inch iPad's three across, small, with the column half empty under them) */
+  @media (min-width: 560px) and (max-width: 960px) and (max-aspect-ratio: 1749/1000), (min-width: 560px) and (max-width: 960px) and (min-height: 541px), (min-width: 961px) and (max-width: 1100px) and (min-height: 1200px) {
     .hero[data-party][data-design][data-orientation='portrait'] [data-stage][data-party][data-orientation='portrait']:not([data-fullscreen]) .hds-list {
-      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
   .hero[data-party][data-design][data-orientation='landscape'] .hds { height: var(--hds-h); margin-top: var(--hds-gap); }
@@ -161,7 +162,7 @@
   .hds-cmp--live .pcmp__enlarge { right: 5px; bottom: 5px; width: 28px; height: 28px; }
   .hds-cmp--live .pcmp__enlarge svg { width: 14px; height: 14px; }
 
-  @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
+  @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px), (min-width: 961px) and (max-width: 1100px) and (min-height: 1200px) {
     .hero { --hds-w: clamp(76px, 23vw, 92px); --hds-h: 88px; --hds-gap: 10px; }
     .hds-in { gap: 8px; }
     .hds-name { font-size: 13px; }
@@ -186,7 +187,7 @@
     width: 96px; padding-top: 2px; display: flex; flex-direction: column; flex-wrap: wrap; align-content: flex-start; row-gap: 2px; overflow: hidden;
   }
   [data-stage][data-orientation='landscape']:not([data-fit='col']) .hds-head > * { width: 100%; }
-  @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
+  @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px), (min-width: 961px) and (max-width: 1100px) and (min-height: 1200px) {
     [data-stage][data-orientation='landscape']:not([data-fit='col']) .hds-head { width: 72px; }
   }
   @media (prefers-reduced-motion: reduce) {

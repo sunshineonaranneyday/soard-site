@@ -65,14 +65,14 @@ const ZEFFY_EMBED = formLinks(requireSiteForm(siteSettings, 'liveUrl'))!.embed;
 
   /* Desktop: down the left side, over the messages; the video on the right keeps playing */
   /* (PHONE, DESK and SIDE: word for word as in src/utils/live-media.ts) */
-  @media (min-width: 961px) and (pointer: fine), (min-width: 961px) and (pointer: none), (min-width: 961px) and (min-height: 541px), (min-width: 961px) and (max-aspect-ratio: 1749/1000), (min-width: 1024px) {
+  @media (min-width: 1101px), (min-width: 961px) and (max-height: 1199px) and (pointer: fine), (min-width: 961px) and (max-height: 1199px) and (pointer: none), (min-width: 961px) and (max-height: 1199px) and (min-height: 541px), (min-width: 961px) and (max-height: 1199px) and (max-aspect-ratio: 1749/1000), (min-width: 1024px) and (max-height: 1199px) {
     /* (--give-max: the room left of the video, live-give.ts) */
     .give { top: calc(var(--header-height) + 12px); bottom: 12px; left: 12px; width: min(460px, 40vw, var(--give-max, 460px)); }
     .give__panel { border-radius: 20px; }
     @keyframes giveIn { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
   }
   /* Phones: a sheet from the bottom, under the small player pinned at the top */
-  @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px) {
+  @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px), (min-width: 961px) and (max-width: 1100px) and (min-height: 1200px) {
     .give { left: 0; right: 0; bottom: 0; top: calc(var(--header-height) + 196px); }
     .give__panel { border-radius: 20px 20px 0 0; }
     @keyframes giveIn { from { transform: translateY(40px); opacity: 0; } to { transform: none; opacity: 1; } }
