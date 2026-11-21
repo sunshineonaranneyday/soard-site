@@ -10,6 +10,17 @@ Switching the app to Live mode would make them public, but none of its permissio
 
 Peter's decisions (Nov 21): submit the App Review (he presses Submit himself); keep the site's automatic Facebook post until it's approved; if it isn't approved a few days before the first December reveal, switch to the persistent-key backup below, after he sees the steps.
 
+## The submission (prepared Nov 21 2026, not yet submitted)
+
+developers.facebook.com → the app → Review → App Review: submission 3077732302423539, filled in and saved as a draft. Only Peter presses **Submit for review**.
+
+- Verification, App settings and Data handling: complete.
+- Allowed usage: every item has its description, the screen recording and the agreement. Waiting on Meta, not on us: the "API test calls" counter for read_insights, pages_read_user_content and pages_manage_engagement (the site made those calls on Nov 21 with the new token; Meta says up to 24 hours to show, and a test is valid for 30 days), and the processing of the uploaded recording on business_management and the Live Video API.
+- Reviewer instructions: the text below; "Is Facebook Login integrated on this platform?" answered No (the website has no Facebook Login; the Page admin granted access once with Facebook Login for Business). Facebook required a platform first, so App settings → Basic now has a Website platform with Site URL https://sunshineonaranneyday.com/.
+- Data handling, as Peter answered on Nov 21: data processors Yes, Cloudflare, Inc. (IT solutions and services, including cloud storage and processing; United States of America); responsible entity Sunshine on a Ranney Day Incorporated, United States of America; national-security requests in the past 12 months: No; policies for public-authority requests: None of the above.
+
+When every Allowed usage item shows a green tick, Submit for review unlocks.
+
 ## What is requested
 
 Requested for Advanced Access, each with the description below and the screen recording. Times point into the recording.
