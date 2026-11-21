@@ -35,7 +35,11 @@
  * 500), and the plain live playlist keeps only about 18 s, so the delay needs DVR. When the phone's connection drops,
  * Stream closes the recording within seconds, even with recording.timeoutSeconds at 120 (its DVR playlist gains an
  * end; the input's playlist answers 204), and the phone back starts a new recording about 13 s later; a clean stop
- * with a quick reconnect can stay one recording (Stream bridges the gap with the last frame).
+ * with a quick reconnect can stay one recording (Stream bridges the gap with the last frame). After a clean stop
+ * Stream keeps the recording open for recording.timeoutSeconds, and meanwhile its DVR playlist stays two pieces (about
+ * 4 s) short of the end: they come, with the end, when it closes, 17 s after the stop at 0 (the "SOARD reveals" input
+ * since Nov 21 2026) and 2 min 2 s after it at 120 (measured Nov 20 2026). The player holds there and plays them then;
+ * the page waits for them (live-stage.ts isPlayingLive).
  * A feed that isn't there yet (204/404) is looked at again every few seconds for as long as the page keeps the
  * player mounted. If neither playback path exists, the Stream iframe takes over.
  */
@@ -70,6 +74,11 @@ export interface PlayerHandle {
   readonly feedEnded: boolean;
   /** Live: the feed is a recording Stream has already closed that this viewer never watched (nothing to play live) */
   readonly closed: boolean;
+  /**
+   * Live: holding the last frame for more of the feed, or starting over to fetch it (Reconnecting); false once it plays
+   * again or the last frame of a closed recording has played (then it only looks for a newer recording)
+   */
+  readonly waitingForMore: boolean;
   setMuted(muted: boolean): void;
   play(): void;
   /** A play asked for, called off by the video being reset as its source came, waiting to go once it can play */
@@ -121,6 +130,8 @@ interface Options {
   onLive?: (s: LiveSeek) => void;
   /** Live: once, when feedEnded becomes true */
   onFeedEnd?: () => void;
+  /** Live: waitingForMore changed */
+  onWaitingForMore?: (waiting: boolean) => void;
 }
 
 /** Live: how far behind the phone viewers watch (Peter, Nov 18 2026: "about 20 seconds") */
@@ -298,6 +309,8 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   let lookFails = 0; // looks at the feed in a row that Stream didn't answer as it should (lookAtFeed)
   let rebuilding: '' | 'slower' | 'faster' = ''; // live: playing a touch slower to rebuild the cushion, or faster to catch up (rebuild)
   let holding = false; // live: holding the last frame until the feed has the usual delay's worth again
+  let forMore = false; // live: held for more of the feed, through any start-over to fetch it (waitingForMore)
+  const setForMore = (on: boolean) => { if (forMore !== on) { forMore = on; opts.onWaitingForMore?.(on); } };
   let holdTimer: ReturnType<typeof setInterval> | undefined;
   let holdLooks = 0;
   let heldSince = 0;
@@ -829,6 +842,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     failures = 0;
     lastMove = Date.now();
     closed = false;
+    if (!holding || !video.paused) setForMore(false); // (not for an old 'playing' arriving while the hold is on)
     set('playing');
     // Playing again by any road (a tap for sound included): no longer holding (an old 'playing' from before the hold aside)
     if (holding && !video.paused) unhold();
@@ -871,6 +885,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   }
   video.addEventListener('ended', () => {
     if (!live) { set('ended'); return; }
+    setForMore(false);
     // Live: the recording closed and its last frame has been shown. Look for a newer one (the phone back); if
     // there's none, the feed has ended for this viewer (lookAtFeed says so, and start() tells the page)
     if (seen) seen = { ...seen, pos: Math.max(seen.pos, video.currentTime) };
@@ -943,7 +958,13 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   }
   function hold() {
     if (holding || dead) return;
+    // (the last second of a recording Stream has closed: its end, nothing more to hold for; as 'ended', just after
+    // whatever called this, hls.js among them)
+    const d = hls?.latestLevelDetails;
+    const end = newestSecond();
+    if (d && !d.live && (end == null || end - video.currentTime < 1)) { setTimeout(() => { if (!dead && !pending && !holding) endHere(); }, 0); return; }
     holding = true;
+    setForMore(true);
     holdLooks = 0;
     health.holds++;
     heldSince = Date.now();
@@ -966,6 +987,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
   /** The recording's last frame has been shown: as 'ended' (look for a newer recording, else the feed has ended) */
   function endHere() {
     unhold();
+    setForMore(false);
     if (seen) seen = { ...seen, pos: Math.max(seen.pos, video.currentTime) };
     restart(0, false);
   }
@@ -979,6 +1001,10 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     if (!fresh && returnTo == null && edge != null && edge - video.currentTime >= LIVE_DELAY_S - 2) { unhold(); tryPlay(); return; }
     const details = hls?.latestLevelDetails;
     if (details && !details.live && (edge == null || edge - video.currentTime < 1)) { endHere(); return; }
+    // (closed with more past the held frame: the last seconds, which Stream's playlist leaves out until it closes the
+    // recording (Max's reveal, Nov 20 2026), played out now, with no cushion to wait for; this used to wait for the
+    // next look at the feed and start over)
+    if (details && !details.live && !fresh && returnTo == null) { unhold(); tryPlay(); return; }
     // Every few seconds, read the feed too: a newer recording (the phone back after Stream closed the last one),
     // the end, or a player that has stopped reading its playlist while the feed went on
     if (++holdLooks % 4 || looking) return;
@@ -1040,6 +1066,7 @@ export function mountPlayer(container: HTMLElement, opts: Options): PlayerHandle
     get behind() { return behind; },
     get feedEnded() { return feedEnded; },
     get closed() { return closed; },
+    get waitingForMore() { return forMore && !feedEnded && !dead; },
     setMuted(muted: boolean) {
       video.muted = muted;
       if (!muted && video.volume === 0) video.volume = 1;
