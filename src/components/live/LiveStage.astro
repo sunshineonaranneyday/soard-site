@@ -733,14 +733,17 @@ const ICON = {
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):not([hidden]) :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { grid-row: auto; width: 34px; height: 34px; border: 0 !important; background: transparent; box-shadow: none !important; transform: none; }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):not([hidden]) :global(svg) { width: 18px; height: 18px; }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):not([hidden]) .bar__morph { width: 15px; height: 15px; }
-    /* the ends of the pill: whichever comes first (Play, Tap for sound or Sound, or before the reveal Share) and Shop */
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):is(.bar__play, .bar__sound, [data-s='mute']):not([hidden]),
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen])[data-mode='upcoming'] .bar__end > :is(button, a):not(.bar__heart).bar__act--share:not([hidden]) { height: 52px; padding-top: 5px !important; border-top: 1px solid var(--c-border); border-radius: 26px 26px 0 0; }
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart).bar__act--shop:not([hidden]) { height: 52px; padding-bottom: 5px !important; border-bottom: 1px solid var(--c-border); border-radius: 0 0 26px 26px; }
     /* the hairline between the two groups, and no gap of its own any more */
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart).bar__act--share { margin-top: 0 !important; background-image: linear-gradient(var(--c-border), var(--c-border)); background-size: 22px 1px; background-position: center top; background-repeat: no-repeat; }
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen])[data-mode='upcoming'] .bar__end > :is(button, a):not(.bar__heart).bar__act--share { background-image: none; }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--share::before { display: none !important; }
+    /* the ends of the pill: whichever button shows first and whichever shows last, as each moment leaves them. Play, Tap
+       for sound or Sound on top most of the time, but Full screen while the camera connects, and Share before the reveal
+       and under "That's the reveal!" (Peter, Nov 21 2026, of the rail with the replay on its way: "the slim play rail is
+       cut off": it had no top of its own then, only the hairline that sits over Share). Shop at the foot, or whichever is
+       last without it; one alone is round at both ends. The first never has the hairline: nothing is above it */
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :nth-child(1 of :is(button, a):not(.bar__heart):not([hidden])) { height: 52px; padding-top: 5px !important; border-top: 1px solid var(--c-border); border-top-left-radius: 26px; border-top-right-radius: 26px; background-image: none; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :nth-last-child(1 of :is(button, a):not(.bar__heart):not([hidden])) { height: 52px; padding-bottom: 5px !important; border-bottom: 1px solid var(--c-border); border-bottom-left-radius: 26px; border-bottom-right-radius: 26px; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :nth-child(1 of :is(button, a):not(.bar__heart):not([hidden])):nth-last-child(1 of :is(button, a):not(.bar__heart):not([hidden])) { height: 58px; }
     /* (captions take their place in the pill once the replay has them, rather than leaving a hole in it) */
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) .bar__replay > .bar__cc[hidden] { display: none !important; }
     /* the chips: Play and Tap for sound ink, Captions on ink, Fund soft yellow, the shop's logo a small round mark */
