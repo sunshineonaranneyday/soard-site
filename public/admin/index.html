@@ -9376,10 +9376,13 @@
         for (let y = first; y <= Math.max(thisYear, +years[years.length - 1]); y++) all.push(String(y));
         return { years: all, series: { kids: all.map((y) => kidsBy[y] || 0), rooms: all.map((y) => roomsBy[y] || 0) }, profiles, first };
       }, [published]);
-      const kidsServed = published.reduce((s, k) => s + childrenOf(k), 0);
-      const rooms = published.reduce((s, k) => s + roomsOf(k), 0);
-      const lastYearCount = published.filter((k) => +k.year === thisYear - 1).reduce((s, k) => s + childrenOf(k), 0);
-      const thisYearCount = published.filter((k) => +k.year === thisYear).reduce((s, k) => s + childrenOf(k), 0);
+      // Served and built: finished makeovers, as the website counts them (the chart shows the ones in build and
+      // awaiting funding stacked on top, apart)
+      const finished = published.filter((k) => dashStage(k) === 'completed');
+      const kidsServed = finished.reduce((s, k) => s + childrenOf(k), 0);
+      const rooms = finished.reduce((s, k) => s + roomsOf(k), 0);
+      const lastYearCount = finished.filter((k) => +k.year === thisYear - 1).reduce((s, k) => s + childrenOf(k), 0);
+      const thisYearCount = finished.filter((k) => +k.year === thisYear).reduce((s, k) => s + childrenOf(k), 0);
       const sparkTop = yearData ? Math.max(...yearData.series.kids, 1) : 1;
 
       // ── Header status line
@@ -22428,7 +22431,6 @@ ${sections || '<p>No one yet.</p>'}
 
       // ── Totals ──
       const listed = projects.filter(CS.isListed);
-      const reached = listed.reduce((n, p) => n + CS.reachedCount(p), 0);
       const warnCount = rows.filter(warn).length;
       const draftCount = projects.length - listed.length;
       const progressCount = projects.filter((p) => p.status === 'in-progress').length;
@@ -22526,7 +22528,7 @@ ${sections || '<p>No one yet.</p>'}
         <div class="page-header kd-head">
           <div>
             <h2>Community Projects</h2>
-            <p class="page-sub">${kdPlural(projects.length, 'project')} · ${reached.toLocaleString()} children reached, as the Community page counts them. Listed in its order. Changes go live when you publish.</p>
+            <p class="page-sub">${kdPlural(projects.length, 'project')}, the number the Community page shows. Listed in its order. Changes go live when you publish.</p>
           </div>
           <div class="kd-head__actions">
             <a class="btn btn-ghost btn-sm" href="/community/" target="_blank" rel="noopener">Community page ${kdIcon.external}</a>
@@ -23100,7 +23102,6 @@ ${sections || '<p>No one yet.</p>'}
       const placeNote = !listed ? 'Hidden from the site. Switch on and save when the project is ready.'
         : place >= 0 ? `${kdOrdinal(place + 1)} of ${onPage.length} on the Community page. Reorder from the list.`
         : 'Joins the Community page once saved. Reorder from the list.';
-      const othersReached = CS.listOrder(projects).filter((p) => p.slug !== slug).reduce((n, p) => n + CS.reachedCount(p), 0);
       const logoFix = (url) => { const p = kdLogoPartner(url, partners); return p && p.logo !== url ? p : null; };
       const fixableLogos = (data.partnerLogos || []).filter((l) => broken.has(l.url) && logoFix(l.url));
       const fixLogos = (list) => set((d) => ({ partnerLogos: d.partnerLogos.map((l) => { const p = list.some((x) => x._key === l._key) ? logoFix(l.url) : null; return p ? { ...l, url: p.logo, name: String(l.name || '').trim() || p.name } : l; }) }));
@@ -23327,7 +23328,7 @@ ${sections || '<p>No one yet.</p>'}
 
           <fieldset class="cm-stats">
             <legend class="form-label">Impact numbers <span class="form-optional">up to ${CS.STATS_MAX}</span></legend>
-            <p class="form-hint cm-stats__intro">The first is the card’s number; the page’s top shows them all. Mark the one that counts people reached: it’s added to the Community page’s “children reached” total.</p>
+            <p class="form-hint cm-stats__intro">The first is the card’s number; the page’s top shows them all. Mark the one that counts people reached.</p>
             <ol class="cm-stats__list">
               ${data.stats.map((st, i) => {
                 const counted = reachedNow && reachedNow.index === i;
@@ -23358,8 +23359,8 @@ ${sections || '<p>No one yet.</p>'}
             </div>
             <p class=${`form-hint${reachedNow && reachedNow.value && !CS.countsPeople(reachedNow.label) ? ' kd-warn-text' : ''}`} role="status">
               ${reachedNow
-                ? html`${reachedNow.value && !CS.countsPeople(reachedNow.label) ? html`${kdIcon.alert} “${cmStatLine(reachedNow)}” doesn’t read as people, but it’s added to “children reached”. Mark the number that counts people, or none. ` : null}Adds ${CS.reachedCount(record).toLocaleString()} to “children reached through partnerships”: ${(othersReached + (listed ? CS.reachedCount(record) : 0)).toLocaleString()} in all${listed ? '' : ' once the project is shown'}.`
-                : `Adds nothing to “children reached” (${othersReached.toLocaleString()} from the other projects).`}
+                ? html`${reachedNow.value && !CS.countsPeople(reachedNow.label) ? html`${kdIcon.alert} “${cmStatLine(reachedNow)}” doesn’t read as people. Mark the number that counts people, or none. ` : null}“${cmStatLine(reachedNow)}” is the number marked as counting people. The Community page shows how many projects there are and each one’s own numbers; it doesn’t add them up.`
+                : 'None of these is marked as counting people.'}
             </p>
           </fieldset>
 

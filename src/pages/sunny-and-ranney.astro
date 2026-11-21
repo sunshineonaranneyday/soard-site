@@ -36,6 +36,10 @@ const hero = {
   title: "Sunny & Ranney",
   lead: ["A nonprofit home furnishings store where ", { strong: "100% of profits" }, " build dream rooms for children with special needs."] as HeroPart[],
 };
+
+import { storeRating } from '../utils/store-rating';
+// The store's Google rating, as its own site has it today (read at build; the line is left out if it can't be read)
+const googleRating = await storeRating();
 ---
 
 <BaseLayout title="Sunny & Ranney" description={desc} og={{ layout: 'split', eyebrow: hero.eyebrow, title: heroHtml([hero.title]), lead: heroHtml(hero.lead), photo: { id: store, alt: 'The Sunny & Ranney store in Roswell' } }} breadcrumbs={[{name:'Home',url:'https://sunshineonaranneyday.com/'},{name:'Sunny & Ranney',url:'https://sunshineonaranneyday.com/sunny-and-ranney/'}]}>
@@ -53,10 +57,12 @@ const hero = {
           <a href="https://sunnyandranney.com" target="_blank" rel="noopener noreferrer" class="sr-cta sr-cta--gold">Shop Online</a>
           <a href="#visit" class="sr-cta sr-cta--glass">Visit Us</a>
         </div>
-        <div class="sr-hero-trust">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="#FFD400"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
-          <span>5.0 on Google · 117 reviews</span>
-        </div>
+        {googleRating && (
+          <div class="sr-hero-trust">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="#FFD400"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+            <span>{googleRating.rating.toFixed(1)} on Google · {googleRating.count.toLocaleString('en-US')} reviews</span>
+          </div>
+        )}
       </div>
       <div class="sr-hero-media">
         <img

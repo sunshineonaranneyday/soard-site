@@ -79,11 +79,13 @@ const celebrities = [
 const totalPress = press.length;
 const tvCount = press.filter(p => p.data.category === 'national-tv' || p.data.category === 'local-tv').length;
 const uniqueOutlets = outletCount(press.map(p => p.data), outletBySlug);
+// National TV: the networks that covered SOARD, counted from the stories (it was typed as 2 until Nov 21 2026)
+const nationalTv = outletCount(press.filter(p => p.data.category === 'national-tv').map(p => p.data), outletBySlug);
 
 const jsonLd = {
   '@context': 'https://schema.org', '@type': 'CollectionPage',
   name: 'Publicity & Media Coverage',
-  description: `Featured on the Today Show, WSB-TV, 11Alive, Fox 5, AJC, K-LOVE, and ${totalPress}+ media outlets.`,
+  description: `Featured on the Today Show, WSB-TV, 11Alive, Fox 5, AJC, K-LOVE, and ${uniqueOutlets}+ media outlets.`,
   url: 'https://sunshineonaranneyday.com/publicity',
   mainEntity: { '@type': 'ItemList', numberOfItems: totalPress,
     itemListElement: featured.slice(0, 8).map((item, i) => ({
@@ -99,7 +101,7 @@ const breadcrumbs = [{ name: 'Home', url: '/' }, { name: 'Publicity', url: '/pub
 
 <PageLayout
   title="In the News: Today Show, Atlanta Braves & More"
-  description={`Featured on the Today Show, WSB-TV, 11Alive, Fox 5, AJC, K-LOVE, and ${totalPress}+ outlets. See our media coverage and press highlights.`}
+  description={`Featured on the Today Show, WSB-TV, 11Alive, Fox 5, AJC, K-LOVE, and ${uniqueOutlets}+ outlets. See our media coverage and press highlights.`}
   heroLabel="Press & Media"
   heroTitle={'Sunshine in the <em class="highlight">Spotlight</em>'}
   heroSubtitle="See how national media, local news, athletes, celebrities, and community partners are helping share SOARD's mission and the stories of our incredible Sunshine Kids."
@@ -127,7 +129,7 @@ const breadcrumbs = [{ name: 'Home', url: '/' }, { name: 'Publicity', url: '/pub
         </div>
         <span class="stats__div" aria-hidden="true"></span>
         <div class="stats__item">
-          <span class="stats__num">2</span>
+          <span class="stats__num">{nationalTv}</span>
           <span class="stats__label">National TV</span>
         </div>
         <span data-whole-end hidden></span>

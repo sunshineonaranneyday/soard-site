@@ -3,21 +3,42 @@
  * Every number derived from actual data — no manual overrides.
  */
 import { getPublishedKids, getPublishedCommunity } from './collections';
-import { reachedCount } from './community';
 
 export interface SiteStats {
-  /** Total individual children served (accounts for sibling profiles via childCount) */
+  /** Children served: those on finished makeovers (siblings on one profile count individually, childCount) */
   totalKids: number;
-  /** Total rooms built (sum of roomCount across all kid profiles) */
+  /** Rooms built: the rooms of finished makeovers (roomCount) */
   totalRooms: number;
-  /** Count of rooms by type (e.g. "Dream Bedroom" → 128) */
+  /** Makeovers still in the works (in build or awaiting funding): their children and rooms, never in the totals above */
+  inWorksKids: number;
+  inWorksRooms: number;
+  inWorksMakeovers: number;
+  /** Finished rooms of each kind (a profile's own count of each kind; one for a kind it lists without a count) */
   roomsByType: Record<string, number>;
   /** Community projects count */
   communityProjects: number;
-  /** Total lives impacted across all community projects (sum of impact fields) */
-  livesImpacted: number;
   /** Years of impact since 2012 */
   years: number;
+}
+
+/**
+ * Finished: a makeover whose room is done (status "completed"). Until Nov 21 2026 every published profile counted,
+ * so "children served" and "rooms built" included kids still in build or awaiting funding (218 and 310 then, for
+ * 213 and 303 finished). src/pages, functions/api/_board.js, _newsletter-drafts.js and the admin's Dashboard count
+ * the same way.
+ */
+export const isFinished = (d: { status?: string | null }) => (d?.status || 'completed') === 'completed';
+
+/** A profile's rooms of each kind it lists: its own count of bedrooms, bathrooms and therapy rooms, at least one each */
+export function roomsOfEachKind(d: { roomTypes?: string[] | null; bedroomCount?: number | null; bathroomCount?: number | null; therapyRoomCount?: number | null }): Record<string, number> {
+  const own: Record<string, number | null | undefined> = { 'Dream Bedroom': d.bedroomCount, 'Accessible Bathroom': d.bathroomCount, 'Therapy Room': d.therapyRoomCount };
+  const out: Record<string, number> = {};
+  for (const t of d.roomTypes || []) {
+    // (the schema fills a missing count with 0, so a kind listed counts as at least one room)
+    const n = Object.hasOwn(own, t) && Number(own[t]) > 0 ? Number(own[t]) : 1;
+    if (n > 0) out[t] = (out[t] || 0) + n;
+  }
+  return out;
 }
 
 let _cached: SiteStats | null = null;
@@ -28,23 +49,23 @@ export async function getSiteStats(): Promise<SiteStats> {
   const kids = await getPublishedKids();
   const community = await getPublishedCommunity();
 
-  const totalKids = kids.reduce((sum, k) => sum + (k.data.childCount || 1), 0);
-  const totalRooms = kids.reduce((sum, k) => sum + (k.data.roomCount || 1), 0);
+  const finished = kids.filter((k) => isFinished(k.data));
+  const inWorks = kids.filter((k) => !isFinished(k.data));
+  const kidsOf = (list: typeof kids) => list.reduce((sum, k) => sum + (k.data.childCount || 1), 0);
+  const roomsOf = (list: typeof kids) => list.reduce((sum, k) => sum + (k.data.roomCount || 1), 0);
   const roomsByType: Record<string, number> = {};
-  for (const k of kids) {
-    for (const rt of k.data.roomTypes || []) {
-      roomsByType[rt] = (roomsByType[rt] || 0) + 1;
-    }
+  for (const k of finished) {
+    for (const [t, n] of Object.entries(roomsOfEachKind(k.data))) roomsByType[t] = (roomsByType[t] || 0) + n;
   }
-  // Each project adds the stat marked in the admin as people reached (else its first)
-  const livesImpacted = community.reduce((sum, c) => sum + reachedCount(c.data), 0);
 
   _cached = {
-    totalKids,
-    totalRooms,
+    totalKids: kidsOf(finished),
+    totalRooms: roomsOf(finished),
+    inWorksKids: kidsOf(inWorks),
+    inWorksRooms: roomsOf(inWorks),
+    inWorksMakeovers: inWorks.length,
     roomsByType,
     communityProjects: community.length,
-    livesImpacted,
     years: new Date().getFullYear() - 2012,
   };
 

@@ -56,7 +56,7 @@ const projectPhoto = org
     .sort((a: any, b: any) => (a.order || 0) - (b.order || 0)).map(mainPhotoOf).find(Boolean)
   : null;
 const heroPhotoId = projectPhoto || ap.story || 'kids/eli/photo-01';
-const statNum = org ? `${stats.livesImpacted.toLocaleString('en-US')}+` : `${stats.totalKids}+`;
+const statNum = org ? `${stats.communityProjects}` : `${stats.totalKids}+`;
 
 const site = Astro.site?.origin || 'https://sunshineonaranneyday.com';
 const path = org ? '/apply/community-project/' : '/apply/form/';

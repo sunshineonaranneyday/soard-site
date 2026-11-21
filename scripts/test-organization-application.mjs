@@ -116,7 +116,7 @@ try {
   await page.goto(`${SITE}/apply/community-project/`, { waitUntil: 'networkidle0' });
   ok(/Tell us about your organization/.test(await page.$eval('.hero-headline', (e) => e.textContent)), 'the hero speaks to an organization');
   ok(/For Schools, Clinics & Nonprofits/.test(await page.$eval('.hero-eyebrow', (e) => e.textContent)), 'and names who it is for');
-  ok(/children reached/.test(await page.$eval('.hero-stat-label', (e) => e.textContent)), 'the stat is children reached through partnerships');
+  ok(/community projects/.test(await page.$eval('.hero-stat-label', (e) => e.textContent)), 'the stat is the community projects (not a sum of their numbers)');
   ok(!(await visible('[data-lang-switch], .af-lang:not(.af-notify-lang)')), 'English only: no language switch');
   ok(!(await page.$('[data-notify]')), 'no family "notify me" form on the page');
   ok(await page.$eval('[data-application]', (e) => e.dataset.kind) === 'organization', 'the form knows it is an organization’s');

@@ -6,6 +6,7 @@
  * SEO: JSON-LD NonprofitOrganization + WebSite, semantic HTML5
  */
 import BaseLayout from '../layouts/BaseLayout.astro';
+import { upNextDate } from '../../public/admin/site-config-shared.js';
 import MediaLogos from '../components/ui/MediaLogos.astro';
 import PartnerShowcase from '../components/ui/PartnerShowcase.astro';
 import { getCollection } from 'astro:content';
@@ -150,13 +151,17 @@ if (upNextMode === 'manual' && un.headline) {
     const reveal = upcomingReveals.find(r => r.slug === k.slug);
     const rooms = (k.roomTypes || []).map(r => r.toLowerCase());
     const what = rooms.length > 1 ? `${rooms.slice(0, -1).join(', ')} and ${rooms[rooms.length - 1]}` : (rooms[0] || 'dream room');
+    // A date line staff typed belongs to the build it was typed for (dateKid, else the build they picked): once that
+    // build is finished and the strip moves on, it no longer shows (Nov 21 2026: "Reveal November 18 at 4:00", typed
+    // for Dylan, showed under Colin after Dylan's reveal)
+    const typedDate = upNextDate(un, k.slug);
     upNext = {
       label: 'Now Building',
       headline: `${k.name}'s ${what}`,
       body: k.shortDescription || k.heroSummary || '',
-      date: un.dateText || (reveal ? revealDateLine(reveal) : 'Reveal coming soon'),
-      // The date line follows JobTread live unless staff typed their own
-      revealKid: un.dateText ? undefined : k.slug,
+      date: typedDate || (reveal ? revealDateLine(reveal) : 'Reveal coming soon'),
+      // The date line follows JobTread live unless staff typed their own for this build
+      revealKid: typedDate ? undefined : k.slug,
       photoId: extractCfId(k.heroImage || '') || `kids/${k.slug}/hero`,
       ctaLabel: `Meet ${k.name}`,
       ctaLink: `/kids/${k.slug}/`,

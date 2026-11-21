@@ -1307,15 +1307,19 @@ export async function projectsNow(env, { fetchImpl = fetch, now = Date.now(), fr
   }
 }
 
-/** Kids served and rooms built, the way the site counts them (src/utils/stats.ts) */
+/**
+ * Kids served and rooms built, the way the site counts them (src/utils/stats.ts): finished makeovers only (one in
+ * build or awaiting funding isn't served or built yet). The community projects' own figures aren't added up: they're
+ * yearly rates, families and clients, not one count of children (Nov 21 2026)
+ */
 async function impact(DB) {
   const read = async (table) => { try { return ((await DB.prepare(`SELECT slug, data FROM ${table}`).all()).results || []).map((r) => ({ slug: r.slug, ...parse(r.data) })).filter((d) => d.publishStatus !== 'draft'); } catch { return []; } };
-  const [kids, community] = await Promise.all([read('kids'), read('community')]);
+  const [all, community] = await Promise.all([read('kids'), read('community')]);
+  const kids = all.filter((k) => (k.status || 'completed') === 'completed');
   return {
     kids: kids.reduce((s, k) => s + (Number(k.childCount) || 1), 0),
     rooms: kids.reduce((s, k) => s + (Number(k.roomCount) || 1), 0),
     communityProjects: community.length,
-    reached: community.reduce((s, c) => s + reachedCount(c), 0),
     years: Number(todayEastern().slice(0, 4)) - 2012,
     // Each year's kids served, rooms built and makeovers (a published profile is one), counted as the admin's
     // Dashboard does; every year from the first through this one, so a quiet year shows as one

@@ -289,3 +289,16 @@ export function pageOf(doc, path) {
   const record = String(doc).includes('/') || String(doc).startsWith('@');
   return PAGES.find((pg) => ((record ? pg.records?.[recordOf(doc)] : pg.fields?.[doc]) || []).some((f) => f === '' || p === f || p.startsWith(`${f}.`) || f.startsWith(`${p}.`))) || null;
 }
+
+/**
+ * The homepage's Now Building strip: the date line staff typed, if it's for the build shown (`slug`), else ''. A typed
+ * line belongs to the build it was typed for (dateKid, saved with it; else the build staff picked): once that build
+ * is finished and the strip moves on, the line follows JobTread again. Nov 21 2026: "Reveal November 18 at 4:00",
+ * typed for Dylan, showed under Colin after Dylan's reveal. src/pages/index.astro and Site Config use this.
+ */
+export function upNextDate(up, slug) {
+  const text = String(up?.dateText || '').trim();
+  if (!text) return '';
+  const typedFor = up?.dateKid || up?.kidSlug || null;
+  return !typedFor || typedFor === slug ? text : '';
+}

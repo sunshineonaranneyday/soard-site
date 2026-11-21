@@ -305,9 +305,11 @@ export async function monthlyFacts(env, month, { now = Date.now(), fetchImpl = f
       const link = p.linkGone ? p.archiveUrl : p.url;
       return { outlet: p.outlet || '', title: p.title, url: /^https?:\/\//.test(String(link || '')) ? link : '', date: p.date };
     });
+  // Kids served and rooms built as the site counts them (src/utils/stats.ts): finished makeovers only
+  const finished = published.filter((k) => (k.status || 'completed') === 'completed');
   const totals = {
-    kids: published.reduce((n, k) => n + (Number(k.childCount) || 1), 0),
-    rooms: published.reduce((n, k) => n + (Number(k.roomCount) || 1), 0),
+    kids: finished.reduce((n, k) => n + (Number(k.childCount) || 1), 0),
+    rooms: finished.reduce((n, k) => n + (Number(k.roomCount) || 1), 0),
   };
   return { month, today, revealed, building, upcoming, events: eventsAhead, recaps, press: pressIn, totals };
 }

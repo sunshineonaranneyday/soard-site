@@ -188,7 +188,11 @@ if (kid.quote && kid.quote !== kid.bio && kid.quote !== introPara) {
   pullQuote = kid.quote;
 }
 
-const galleryPhotos = photos.slice(0, 30);
+// Every photo (until Nov 21 2026 the gallery stopped at 30 while saying "Show all 30 photos": Tyrece & Maddie have 44,
+// Jackson 73); the ones past the first eight load only when the gallery is opened
+const galleryPhotos = photos;
+// A donation link asks for help only while the room isn't finished (Max's page asked for donations after his reveal)
+const fundraisingUrl = kid.status !== 'completed' && kid.fundraisingUrl ? kid.fundraisingUrl : null;
 
 // ── Accent photo for hero (must be explicitly set by admin) ────────────────
 const accentPhoto = kid.accentImage || null;
@@ -463,10 +467,10 @@ const planOrientation = (() => {
             {kid.year && <span class="hero__meta-item">{kid.year}</span>}
           </div>
 
-          {(kid.fundraisingUrl || kid.revealVideoUrl) && (
+          {(fundraisingUrl || kid.revealVideoUrl) && (
             <div class="hero__actions">
-              {kid.fundraisingUrl && (
-                <a href={kid.fundraisingUrl} target="_blank" rel="noopener noreferrer" class="hero__cta">
+              {fundraisingUrl && (
+                <a href={fundraisingUrl} target="_blank" rel="noopener noreferrer" class="hero__cta">
                   Support {kid.name}
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                 </a>
@@ -1012,11 +1016,11 @@ const planOrientation = (() => {
     <section class="page-cta">
       <div class="container container--narrow">
         <div class="page-cta__inner">
-          {kid.fundraisingUrl ? (
+          {fundraisingUrl ? (
             <>
               <h2 class="page-cta__title">Support {kid.name}'s Room</h2>
               <p class="page-cta__text">100% of your donation goes directly to transforming {kid.name}'s space.</p>
-              <a href={kid.fundraisingUrl} target="_blank" rel="noopener noreferrer" class="page-cta__btn">
+              <a href={fundraisingUrl} target="_blank" rel="noopener noreferrer" class="page-cta__btn">
                 Donate Now
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
               </a>

@@ -189,7 +189,17 @@ export function recapSponsorsSource(ev, events, pageDoc) {
   if (hasOwnSponsors(ev)) return 'event';
   return recapSponsors(ev, events, pageDoc).length ? 'page' : null;
 }
-export const sponsorCount = (tiers) => new Set(cleanSponsors(tiers).flatMap((t) => t.names.map((n) => (n.name || n.logo).toLowerCase()))).size;
+/**
+ * How many sponsors, each once however its name is written: "Paul & Adro Nielsen" and "Adro & Paul Nielsen", "Pella"
+ * and "Pella, Inc." are one (until Nov 21 2026 a plain lowercase match counted the first pair as two). A logo with
+ * no name counts by its file.
+ */
+export const sponsorKey = (n) => {
+  const name = String(n?.name || '').toLowerCase().replace(/&/g, ' and ').replace(/\b(inc|llc|co|corp|the)\b\.?/g, ' ');
+  const words = name.split(/[^a-z0-9]+/).filter((w) => w && w !== 'and').sort();
+  return words.length ? `n:${words.join(' ')}` : `l:${String(n?.logo || '')}`;
+};
+export const sponsorCount = (tiers) => new Set(cleanSponsors(tiers).flatMap((t) => t.names.map(sponsorKey))).size;
 
 const LEVEL_WORDS = /\b(title|presenting|diamond|platinum|gold|silver|bronze|copper|premier|champion|patron|benefactor|founding|host|hole)\b/i;
 /**

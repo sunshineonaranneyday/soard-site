@@ -17,7 +17,7 @@ export const GET: APIRoute = async () => {
 
   const roomTypeLines = Object.entries(s.roomsByType)
     .sort(([, a], [, b]) => b - a)
-    .map(([type, count]) => `${count}+ ${type.toLowerCase()}s`);
+    .map(([type, count]) => `${count} ${type.toLowerCase()}${count === 1 ? '' : 's'}`);
 
   // Build sorted kids list
   const kidsList = kids
@@ -42,7 +42,7 @@ export const GET: APIRoute = async () => {
   // Build partners list
   const partnerList = [...partners]
     .sort((a, b) => a.data.name.localeCompare(b.data.name))
-    .map((p) => `- ${p.data.name} (${p.data.category.join(', ')})`);
+    .map((p) => `- ${p.data.name}${p.data.category.length ? ` (${p.data.category.join(', ')})` : ''}`);
 
   // Build community projects list
   const communityList = community
@@ -69,7 +69,7 @@ We are a nonprofit that partners with professional designers, contractors, and s
 - GuideStar: https://www.guidestar.org/profile/shared/2954b510-8c76-42e4-b589-7e826ca2cc47
 
 ## Mission & Impact
-Sunshine on a Ranney Day (SOARD) creates life-changing home makeovers for children with special needs and life-altering illnesses. Since 2012, we have served over ${s.totalKids} children, completed over ${s.totalRooms} rooms (${roomTypeLines.join(', ')}), and impacted over ${s.livesImpacted.toLocaleString()} children through community projects. Every room is designed and built by volunteer professionals — designers, contractors, and suppliers — who donate their time, materials, and expertise. Families pay nothing.
+Sunshine on a Ranney Day (SOARD) creates life-changing home makeovers for children with special needs and life-altering illnesses. Since 2012, we have served over ${s.totalKids} children, completed over ${s.totalRooms} rooms (${roomTypeLines.join(', ')}), and built ${s.communityProjects} community projects with schools and nonprofits serving children. Every room is designed and built by volunteer professionals — designers, contractors, and suppliers — who donate their time, materials, and expertise. Families pay nothing.
 
 ## Programs
 
@@ -117,7 +117,7 @@ ${kidsList.join('\n')}
 - [About — Our Story](https://sunshineonaranneyday.com/about/): Founding story and mission
 - [About — Leadership](https://sunshineonaranneyday.com/about/leadership/): Board and team bios
 - [About — Financials](https://sunshineonaranneyday.com/about/financials/): 990 filings and reports
-- [Meet the Kids](https://sunshineonaranneyday.com/kids/): All ${s.totalKids}+ kid profiles
+- [Meet the Kids](https://sunshineonaranneyday.com/kids/): All ${kids.length} kid profiles
 - [Community Projects](https://sunshineonaranneyday.com/community/): School/facility projects
 - [Partners](https://sunshineonaranneyday.com/partners/): Supporting organizations
 - [Donate](https://sunshineonaranneyday.com/donate/): Tax-deductible giving

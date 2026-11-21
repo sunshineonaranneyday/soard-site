@@ -11,7 +11,7 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
 import { getPublishedKids } from '../../utils/collections';
-import { getSiteStats } from '../../utils/stats';
+import { getSiteStats, isFinished } from '../../utils/stats';
 import siteSettings from '../../content/site/settings.json';
 
 const allKids = await getPublishedKids();
@@ -37,7 +37,8 @@ const roomTypes = [...new Set(kids.flatMap(k => k.data.roomTypes || []))].sort()
 
 const ROOM_ORDER: Record<string, number> = { 'Accessible Bathroom': 0, 'Dream Bedroom': 1, 'Therapy Room': 2 };
 const sortRoomTypes = (types: string[]) => [...types].sort((a, b) => (ROOM_ORDER[a] ?? 99) - (ROOM_ORDER[b] ?? 99));
-const totalKids = kids.reduce((sum, k) => sum + (k.data.childCount || 1), 0);
+// Children served: finished makeovers only (stats.ts isFinished); the ones in the works are counted apart below
+const totalKids = kids.filter((k) => isFinished(k.data)).reduce((sum, k) => sum + (k.data.childCount || 1), 0);
 
 // ── CF Image helpers ──────────────────────
 import { cfUrl, cfRaw, cfSrcset as _cfSrcset, cfDensitySrcset, cfId, CF_BASE, focusOf } from '../../utils/cf-image';
@@ -70,7 +71,7 @@ const itemListSchema = {
   "about": { "@id": `${SITE}/#organization` },
   "mainEntity": {
     "@type": "ItemList",
-    "numberOfItems": totalKids,
+    "numberOfItems": kids.length,
     "itemListElement": kids.slice(0, 50).map((kid, i) => ({
       "@type": "ListItem",
       "position": i + 1,

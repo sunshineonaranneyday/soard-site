@@ -63,8 +63,10 @@ const communityPartners = allCommunityPartners
     return { ...p, description: sameAsName ? '' : desc, monogram: monogramOf(p.name), href: project ? `/community/${project.slug}/` : site, external: !project && !!site };
   });
 
-const { livesImpacted } = await getSiteStats();
-const totalImpact = livesImpacted.toLocaleString() + '+';
+// The hero's number is how many community projects there are. Each project's own figure stays on its card: they're
+// yearly rates, families, clients and one-time counts, so adding them up as "children reached" (20,053+ until Nov 21
+// 2026) said something none of them says
+const { communityProjects } = await getSiteStats();
 
 /* ── Hero photos (editable via admin → Kids on Site → Community) ── */
 const heroPhotoId = siteSettings.communityPhotos?.hero || 'kids/camp-twin-lakes/hero';
@@ -142,8 +144,8 @@ const hero = {
       </div>
     </div>
     <div class="hero-stat">
-      <span class="hero-stat-num">{totalImpact}</span>
-      <span class="hero-stat-label">children reached<br/>through partnerships</span>
+      <span class="hero-stat-num">{communityProjects}</span>
+      <span class="hero-stat-label">community projects<br/>with partner organizations</span>
     </div>
     <span data-whole-end hidden></span>
   </section>

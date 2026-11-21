@@ -274,7 +274,8 @@ try {
     const { page, api, errors } = await open(browser, { width: 1440, height: 1000, mobile: false });
     await goCommunity(page, false);
     const sub = await page.$eval('.kd-head .page-sub', (e) => e.textContent);
-    ok(sub.startsWith(`${projects.length} projects · ${reached0.toLocaleString()} children reached`), `the header counts projects and children reached, as the page does (${sub.slice(0, 48)})`);
+    // (the Community page shows how many projects, not a sum of their numbers: Nov 21 2026)
+    ok(sub.startsWith(`${projects.length} projects, the number the Community page shows`) && !/children reached/.test(sub), `the header counts projects, as the page does (${sub.slice(0, 60)})`);
     ok(JSON.stringify(await rowSlugs(page)) === JSON.stringify(order0), 'rows follow the Community page’s order');
     const attention = await page.$eval('.kd-filter:nth-child(2) span', (e) => Number(e.textContent));
     ok(attention === expectWarn, `Needs attention counts what community-shared.js flags (${attention} = ${expectWarn})`);
@@ -372,10 +373,10 @@ try {
     await page.click('.cm-stat__value', { clickCount: 3 });
     await page.keyboard.type('250');
     await sleep(200);
-    ok(await page.$('.kd-bar__state.is-dirty') && /Adds 250 to/.test(await page.$eval('.cm-stats .form-hint[role="status"]', (e) => e.textContent)), 'editing the number marks the project unsaved and updates what it adds');
+    ok(await page.$('.kd-bar__state.is-dirty') && /“250 [^”]*” is the number marked as counting people/.test(await page.$eval('.cm-stats .form-hint[role="status"]', (e) => e.textContent)), 'editing the number marks the project unsaved and says which number counts people');
     await page.click('.cm-stat__none input');
     await sleep(150);
-    ok(/Adds nothing/.test(await page.$eval('.cm-stats .form-hint[role="status"]', (e) => e.textContent)), '“None of these” counts nothing');
+    ok(/None of these is marked as counting people/.test(await page.$eval('.cm-stats .form-hint[role="status"]', (e) => e.textContent)), '“None of these” marks none');
     await page.click('.cm-stat .cm-stat__count input');
     await clickText(page, '.cm-stats__foot .btn', 'Add a number');
     await sleep(150);

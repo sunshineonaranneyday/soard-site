@@ -276,7 +276,9 @@ export const UI_ORG = {
   heroFaq: 'See our community projects',
   heroEyebrow: 'For Schools, Clinics & Nonprofits · {year}', heroTitleHtml: 'Tell us about your <em>organization</em>.',
   heroLeadHtml: 'Apply for a community project for the children you serve. The application takes about 15 minutes and <strong>saves as you go</strong>, so you can stop and come back anytime.',
-  heroStatHtml: 'children reached<br/>through partnerships', heroPhotoAlt: 'A space at a partner organization that SOARD transformed',
+  // (the number is the community projects: until Nov 21 2026 it added up each project's figure, yearly rates, families
+  // and clients among them, as "children reached")
+  heroStatHtml: 'community projects<br/>with partner organizations', heroPhotoAlt: 'A space at a partner organization that SOARD transformed',
   heroNotify: 'Get in touch with us',
   heroAnother: 'Start another application',
   hubLeadSent: "It arrived on {date}, and we'll be in touch by email. Applying for another project too? Start a new application.",

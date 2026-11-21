@@ -923,6 +923,10 @@ function HomePage({ c }) {
   const nowBuilding = (up.kidSlug && building.find(k => k.slug === up.kidSlug)) || nextUp || building[0];
   const nowReveal = nowBuilding && (upcoming || []).find(r => r.slug === nowBuilding.slug);
   const autoDate = upcoming === null ? '' : revealDateLine(nowReveal);
+  // A typed date line belongs to the build it was typed for (dateKid, else the build picked): the site drops it once
+  // the strip shows another build (src/pages/index.astro), and so does this card
+  const typedDate = nowBuilding ? S.upNextDate(up, nowBuilding.slug) : '';
+  const setDateLine = (v) => { setUp('dateText')(v); setUp('dateKid')(v && nowBuilding ? nowBuilding.slug : ''); };
   const strip = Array.isArray(st.kidShowcase) ? st.kidShowcase : [];
   const [adding, setAdding] = useState(false);
   const snap = c.doc('financial-snapshot');
@@ -961,11 +965,11 @@ function HomePage({ c }) {
       <${Segmented} label="What the strip shows" value=${mode} onChange=${setUp('mode')} options=${[['auto', 'The build in progress'], ['manual', 'Something I write'], ['off', 'Nothing (hidden)']]} />
       ${mode === 'auto' && html`
         <p class="sc-note">${nowBuilding
-          ? html`Showing <strong>${nowBuilding.name}’s ${roomsText(nowBuilding)}</strong>, “Now Building”${(up.dateText || autoDate) ? html`, “${up.dateText || autoDate}”` : ''}, with a Meet ${nowBuilding.name} button.`
+          ? html`Showing <strong>${nowBuilding.name}’s ${roomsText(nowBuilding)}</strong>, “Now Building”${(typedDate || autoDate) ? html`, “${typedDate || autoDate}”` : ''}, with a Meet ${nowBuilding.name} button.`
           : 'No build is in progress, so it shows the next event, or hides when there isn’t one.'}</p>
         <div class="sc-pair">
           <${KidPicker} label="Which build" value=${up.kidSlug || ''} kids=${c.kids} filter=${(k) => k.status === 'in-progress'} blankLabel="The next reveal in JobTread" onChange=${setUp('kidSlug')} hint="Only kids being built now are listed." />
-          <${TextField} label="Date line" value=${up.dateText} onChange=${setUp('dateText')} placeholder=${autoDate || 'Reveal coming soon'} max=${40} optional hint="Fills in from JobTread: “Reveal mid November” while the date is tentative, the day once it’s confirmed. Type here only to say something else." />
+          <${TextField} label="Date line" value=${typedDate} onChange=${setDateLine} placeholder=${autoDate || 'Reveal coming soon'} max=${40} optional hint="Fills in from JobTread: “Reveal mid November” while the date is tentative, the day once it’s confirmed. Type here only to say something else." />
         </div>`}
       ${mode === 'manual' && html`
         <div class="sc-split">

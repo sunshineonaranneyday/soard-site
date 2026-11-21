@@ -125,10 +125,12 @@ const partners = defineCollection({
     logo: z.string().optional(),
     website: link().optional(),
     level: z.enum(['signature', 'champion', 'builder', 'friend']).default('friend'),
+    // A partner with no category has none (until Nov 21 2026 it counted as Build: 135 of the Partners page's "Build 185"
+    // had none, against 50 tagged build)
     category: z.preprocess(
-      (v) => Array.isArray(v) ? v : [v ?? 'build'],
+      (v) => Array.isArray(v) ? v : (v ? [v] : []),
       z.array(z.enum(['build', 'design', 'funding', 'community'])),
-    ).default(['build']),
+    ).default([]),
     featured: z.boolean().default(false),
     order: z.number().default(0),
     tagline: z.string().optional(),

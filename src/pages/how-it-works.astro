@@ -28,7 +28,7 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import { getCollection } from 'astro:content';
 import { getPublishedKids } from '../utils/collections';
-import { getSiteStats } from '../utils/stats';
+import { getSiteStats, isFinished } from '../utils/stats';
 import { CF_BASE as CF, cfId, cfRaw, cfSrcset, cfLqip } from '../utils/cf-image';
 import { getVideoSchema } from '../utils/schema';
 import siteSettings from '../content/site/settings.json';
@@ -160,11 +160,13 @@ const stats = await getSiteStats();
 const partnerCount = partnerCollection.length;
 const programPct = financialSnapshot.programPct;
 
-/* Rooms per year: the same roomCount sum stats.ts uses, split by project year,
-   so the columns add up to the rooms-built total. */
+/* Rooms per year: the same roomCount sum stats.ts uses, split by project year, so the columns add up to the
+   rooms-built total: finished makeovers only (a room still in build isn't built; until Nov 21 2026 the 2026 column
+   said 20 for 13 finished). */
 const thisYear = new Date().getFullYear();
 const roomsByYear = new Map<number, number>();
 for (const kd of allKids) {
+  if (!isFinished(kd.data)) continue;
   const y = Number(kd.data.year);
   if (y) roomsByYear.set(y, (roomsByYear.get(y) || 0) + (kd.data.roomCount || 1));
 }
@@ -573,7 +575,7 @@ const hero = {
             </table>
           </figure>
           <div class="scale__stat" data-reveal data-delay="1"><span class="scale__num">{stats.totalRooms}+</span><span class="scale__label">rooms built since 2012</span></div>
-          <div class="scale__stat" data-reveal data-delay="2"><span class="scale__num">{partnerCount}+</span><span class="scale__label">partners who have joined a build</span></div>
+          <div class="scale__stat" data-reveal data-delay="2"><span class="scale__num">{partnerCount}+</span><span class="scale__label">partners since 2012</span></div>
           <div class="scale__stat scale__stat--accent" data-reveal data-delay="3"><span class="scale__num">{programPct}<span class="scale__cent">&cent;</span></span><span class="scale__label">of every dollar goes to programs</span></div>
         </div>
         <p class="scale__foot" data-reveal>The numbers above come from our project records and audited financials. <a href="/about/financials/">See where the money goes</a>.</p>

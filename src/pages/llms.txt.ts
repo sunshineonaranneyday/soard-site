@@ -10,7 +10,7 @@ export const GET: APIRoute = async () => {
 
   const roomTypeLines = Object.entries(s.roomsByType)
     .sort(([, a], [, b]) => b - a)
-    .map(([type, count]) => `- ${count}+ ${type.toLowerCase()}s built`);
+    .map(([type, count]) => `- ${count} ${type.toLowerCase()}${count === 1 ? '' : 's'} built`);
 
   const body = `# Sunshine on a Ranney Day
 
@@ -19,10 +19,10 @@ export const GET: APIRoute = async () => {
 We are a nonprofit that partners with professional designers, contractors, and suppliers to transform the homes of children facing serious medical challenges. Our work gives families functional, beautiful spaces that support their child's independence, therapy, and joy.
 
 ## Key Facts
-- ${s.totalKids}+ children served since 2012
-- ${s.totalRooms}+ rooms completed (bedrooms, bathrooms, therapy rooms, wheelchair ramps and chair lifts)
+- ${s.totalKids} children served since 2012 (finished makeovers; ${s.inWorksMakeovers} more in the works)
+- ${s.totalRooms} rooms completed: bedrooms, bathrooms and therapy rooms
 ${roomTypeLines.join('\n')}
-- ${s.livesImpacted.toLocaleString()}+ children impacted through community projects
+- ${s.communityProjects} community projects with schools and nonprofits serving children
 - Each room is funded by sponsors and donors and built with professional design, construction, and supplier partners
 
 ## Programs
