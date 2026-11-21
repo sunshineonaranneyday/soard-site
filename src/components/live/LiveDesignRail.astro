@@ -55,17 +55,26 @@
      last row, under the controls */
   .hero[data-party][data-design][data-orientation='portrait'] { --beside: var(--hds-w); --beside-gap: var(--hds-gap); }
   .hero[data-party][data-design] .hds { width: 100%; height: 100%; }
-  /* A phone held upright (every phone, no tablet): the picture is sized by the screen's height, so its width leaves room
-     at the sides; the strip takes all of it, the picture at the left edge and the strip out to the right, with the bar
-     the whole width under them (Peter, Nov 18 2026: "can this take up more available space on the mobile?";
-     the picture and a 92px strip sat in the middle with 50px of cream either side). Bigger pictures of the room too.
-     All through the reveal, live, at the end and in the replay (Peter, Nov 20 2026: "Keep pictures beside video"; the
-     rail beside a live picture is a computer's and a sideways phone's, LiveStage, so the server's first-paint mark of it
-     changes nothing here) */
-  @media (max-width: 559px) {
+  /* A phone or a tablet held upright: the picture is sized by the screen's height, so its width leaves room at the
+     sides; the strip takes all of it, the picture at the left edge and the strip out to the right, with the bar the
+     whole width under them (Peter, Nov 18 2026: "can this take up more available space on the mobile?"; the picture
+     and a 92px strip sat in the middle with 50px of cream either side). Bigger pictures of the room too. All through
+     the reveal, live, at the end and in the replay (Peter, Nov 20 2026: "Keep pictures beside video"; the rail beside
+     a live picture is a computer's and a sideways phone's, LiveStage, so the server's first-paint mark of it changes
+     nothing here). A tablet held upright is a big phone, the same layout at its size (Peter, Nov 20 2026, of an iPad
+     held upright during Max's reveal: "it shoudl show like a large mobile right!?!?!"; it had the picture and a 90px
+     strip in the middle with 150px of cream either side). (PHONE_UPRIGHT, word for word as in src/utils/live-media.ts) */
+  @media (max-width: 559px), (max-width: 960px) and (max-aspect-ratio: 1749/1000), (max-width: 960px) and (min-height: 541px) {
     .hero[data-party][data-design][data-orientation='portrait'] [data-stage][data-party][data-orientation='portrait']:not([data-fullscreen]) {
       width: 100%;
       grid-template-columns: 0px minmax(0, var(--pic)) var(--beside-gap) minmax(var(--beside), 1fr) 0px;
+    }
+  }
+  /* (a tablet's strip is 330 to 410px wide: its pictures two across, so each is about two-thirds of the video's width
+     as on a phone, and the reveal stays the biggest thing on the screen; one picture across was wider than the video) */
+  @media (min-width: 560px) and (max-width: 960px) and (max-aspect-ratio: 1749/1000), (min-width: 560px) and (max-width: 960px) and (min-height: 541px) {
+    .hero[data-party][data-design][data-orientation='portrait'] [data-stage][data-party][data-orientation='portrait']:not([data-fullscreen]) .hds-list {
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     }
   }
   .hero[data-party][data-design][data-orientation='landscape'] .hds { height: var(--hds-h); margin-top: var(--hds-gap); }
