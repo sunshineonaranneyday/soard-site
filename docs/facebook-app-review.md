@@ -15,7 +15,7 @@ Peter's decisions (Nov 21): submit the App Review (he presses Submit himself); k
 developers.facebook.com → the app → Review → App Review: submission 3077732302423539, filled in and saved as a draft. Only Peter presses **Submit for review**.
 
 - Verification, App settings and Data handling: complete.
-- Allowed usage: every item has its description, the screen recording and the agreement. Waiting on Meta, not on us: the "API test calls" counter for read_insights, pages_read_user_content and pages_manage_engagement (the site made those calls on Nov 21 with the new token; Meta says up to 24 hours to show, and a test is valid for 30 days), and the processing of the uploaded recording on business_management and the Live Video API.
+- Allowed usage: every item has its description, the screen recording and the agreement. Waiting on Meta, not on us: the "API test calls" counter for read_insights, pages_read_user_content and pages_manage_engagement (the site made those calls on Nov 21 with the new token; Meta says up to 24 hours to show, and a test is valid for 30 days). The other nine items are complete.
 - Reviewer instructions: the text below; "Is Facebook Login integrated on this platform?" answered No (the website has no Facebook Login; the Page admin granted access once with Facebook Login for Business). Facebook required a platform first, so App settings → Basic now has a Website platform with Site URL https://sunshineonaranneyday.com/.
 - Data handling, as Peter answered on Nov 21: data processors Yes, Cloudflare, Inc. (IT solutions and services, including cloud storage and processing; United States of America); responsible entity Sunshine on a Ranney Day Incorporated, United States of America; national-security requests in the past 12 months: No; policies for public-authority requests: None of the above.
 
@@ -30,7 +30,7 @@ Requested for Advanced Access, each with the description below and the screen re
 - **publish_video**:
   > Our server publishes the live video of each room reveal to our own Facebook Page through the Live Video API when our crew's camera phone starts streaming, and ends it when the phone stops so the replay stays on the Page. Only our own Page and our own videos. Screen recording: steps 2 and 3 (0:29 to 0:53).
 - **pages_manage_posts**:
-  > For each room reveal our server creates the live video post on our own Page (POST /{page-id}/live_videos with the child's name as the title and their story as the description) and ends it when the broadcast is over (end_live_video). We never post to or edit anyone else's Page. Screen recording: steps 2 to 4 (0:29 to 1:07).
+  > For each room reveal our server creates the live video post on our own Page (POST /{page-id}/live_videos with the child's name as the title and their story as the description) and ends it when the broadcast is over (end_live_video). After the reveal it also posts the reveal moment as a Reel on our own Page (POST /{page-id}/video_reels). We never post to or edit anyone else's Page. Screen recording: steps 2 to 4 (0:29 to 1:07).
 - **pages_manage_engagement**:
   > Right after our server starts a live reveal on our own Page, it posts the Page's own first comment on that live video: "Watch on our website too, and leave a message for the family:" with the link to the child's page on our website (POST /{video-id}/comments). It is one comment per live video, from our Page, on our Page's own post. We never comment on other people's content or reply to people automatically. Screen recording: steps 4 and 5 (0:53 to 1:15).
 - **pages_read_user_content**:
@@ -82,7 +82,7 @@ Rejections usually cite an unclear screen recording or a permission not shown in
 
 The site posts every reveal to Instagram as a Reel on its own (functions/api/_broadcast-reel.js). That uses the same Facebook app and the same page token, with two more permissions.
 
-Requested in the same submission: `instagram_basic` and `instagram_content_publish` (see What is requested). Instagram posts the app made in Development mode were public all along (the Reel shows logged out); only the Facebook lives were hidden.
+Requested in the same submission: `instagram_basic` and `instagram_content_publish` (see What is requested). Instagram posts the app made in Development mode were public all along (the Reel shows logged out); only the Facebook lives were hidden. The Facebook Reel the site now also posts on the Page (Nov 21) goes through this app too, so it is hidden from the public the same way until the app is Live.
 
 **Regenerate the page token** (Peter; secrets live only in Cloudflare). Last done Nov 21 2026, with all 10 permissions below.
 
