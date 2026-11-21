@@ -4,14 +4,27 @@
  * ===============================================================================================
  * Peter, Nov 18 2026: "i want the sponsor shown by their tier, priority of screen should be the reveal, plans/before
  * and sponsors". On a computer with an upright live video (the Theater, LivePage) the right column is the build's
- * sponsors by tier: the room's sponsor biggest, then Signature, Champion, Builder partners and Friends, every partner
- * below the room's sponsor the same size, all as big as the column has room for. The messages shrink to one line under
- * the video (LiveMessages); a tap there brings their card back to this column. Everywhere else (a phone, before the reveal, a replay) the build's partners
- * scroll under the video as before (LivePartners) and this isn't shown.
+ * sponsors by tier. The messages shrink to one line under the video (LiveMessages); a tap there brings their card back
+ * to this column. Everywhere else (a phone, a tablet's narrower window) the build's partners scroll under the video
+ * (LivePartners) and this isn't shown.
+ *
+ * Nov 20 2026 (Peter, of Max's twenty logos: "they are still too small to actually see, i need your best here, fresh
+ * eyes, amazing uiux, motion, no patches"): all twenty at once in a column 258px wide were 25 to 30px tall, however
+ * they were sized. Now the room's sponsors stay at the top, always on screen, and the partners below them show a page
+ * at a time, each logo at least twice as tall, the pages turning by themselves (src/utils/live-sponsors-show.ts, which
+ * also has the rules for the sizes and the pages):
+ *
+ *   BUILT WITH HELP FROM
+ *   Room sponsors
+ *   [          Detwiler Family Foundation          ]
+ *   [               J.M. Wilkerson                 ]
+ *   Signature partners                   ━━ ── ── ──     (a bar for each page; the shown page's fills as it holds)
+ *   [   CR   ] [  MSI   ]
+ *   [        Randall Brothers         ]                  (a wide wordmark a whole row, a square mark half of one)
  *
  * The markup comes from src/utils/live-sponsors-html.ts, which the server also uses on /live/ for whichever reveal is
- * current, so the styles here are global. LivePage's script sizes each logo once it loads (--r) and drops any that
- * fail, and shows the column only with the child it belongs to.
+ * current, so the styles here are global. The gaps below are the ones live-sponsors-show.ts counts with (GAP): change
+ * them together.
  */
 interface Props { kid: string; inner: string }
 const { kid, inner } = Astro.props;
@@ -22,62 +35,108 @@ const { kid, inner } = Astro.props;
   .lsp { display: none; }
   /* (the Theater's width, LivePage: a computer's layout, DESK in src/utils/live-media.ts) */
   @media (min-width: 1200px) {
-    /* The Theater's right column (LivePage), the whole height of the reveal beside it, on the panel itself. In order
-       (Peter, Nov 19 2026: "the sponsors look scattered"): each tier's name on one left edge, its logos in cells of one
-       size two across under it, the tiers one after another, the room's sponsor's cell the biggest, all of it as big as
-       the column's height allows (--lsp-s, LivePage's script) */
+    /* The Theater's right column (LivePage), the whole height of the reveal beside it, on the panel itself: the heading,
+       the room's sponsors, then the partners' pages in the rest (gap = GAP.stack) */
     .hero[data-party][data-orientation='portrait']:not([data-msgs-open]) .lsp:not([hidden]) {
-      grid-area: side; grid-row: 1 / -1; display: flex; flex-direction: column; gap: 8px; min-height: 0; align-self: stretch; contain: size; margin-top: -4px;
-      overflow-y: auto; overscroll-behavior: contain; padding: 0; box-sizing: border-box; text-align: left; scrollbar-width: thin;
-      container: lsp / inline-size;
+      grid-area: side; grid-row: 1 / -1; display: flex; flex-direction: column; gap: 14px; min-height: 0; align-self: stretch; contain: size; margin-top: -4px;
+      overflow: hidden; padding: 0; box-sizing: border-box; text-align: left;
     }
     /* (each logo in a cell of a soft tint, so the rows read as rows; no border, no shadow. A logo's own white goes into the
        tint, never a white box on it; and a cell keeps a margin round its logo however big it grows) */
-    .hero[data-party][data-orientation='portrait'] .lsp-card { background: #F8F7F2; --pad: max(4px, calc(var(--h) * var(--lsp-s, 1) * 0.09)); }
+    .hero[data-party][data-orientation='portrait'] .lsp-card { background: #F8F7F2; }
     .hero[data-party][data-orientation='portrait'] .lsp-card img { mix-blend-mode: multiply; }
     /* (an empty cell is no cell: its tint comes with its logo, never a grey box waiting for one) */
     .hero[data-party][data-orientation='portrait'] .lsp-card { transition: background-color 320ms ease-out; }
     .hero[data-party][data-orientation='portrait'] .lsp-card:has(img:not([style*='--r'])) { background-color: transparent; }
-    /* Each logo fades in as it arrives (its shape known, --r: live-page script), never popping in; one that is slow to
-       weigh shows by 2.5 s all the same, and anyone who asked for less motion sees each as it comes */
+    /* Each logo fades in as it arrives (its shape known, --r), never popping in; one that is slow to weigh shows by 2.5 s
+       all the same */
     .hero[data-party][data-orientation='portrait'] .lsp-card img { transition: opacity 320ms ease-out; }
     .hero[data-party][data-orientation='portrait'] .lsp-card img:not([style*='--r']) { opacity: 0; animation: lspLate 0s linear 2.5s forwards; }
+    /* Until the script has sized the cells (it waits for the logos' shapes, 1.5 s at most) the column is its heading
+       only: nothing is drawn at one size and jumps to another. Without the script, the tiers show by 3 s as a list
+       that scrolls */
+    .hero[data-party][data-orientation='portrait'] .lsp:not([data-laid]) > :is(.lsp-tier, .lsp-show) { opacity: 0; animation: lspLate 0s linear 3s forwards; }
     @keyframes lspLate { to { opacity: 1; } }
   }
-  .lsp-head { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-text-muted); }
-  /* (the tiers' names and the gaps kept tight, Nov 20 2026: every pixel of the column's height they don't take is the
-     logos', and with a build's twenty sponsors they took a fifth of it) */
-  .lsp-tier { display: grid; gap: 4px; }
-  .lsp-label { margin: 0; font-size: 12px; font-weight: 700; line-height: 1.2; color: var(--c-text); }
-  .lsp-grid { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
-  /* Logos big enough to read (Peter, Nov 18 2026: "on the theater the vendor logos are small, can yo make them larger,
-     more ledgable?"; Nov 19: "signature and down, the logos should be the same size"): every partner's cell the same,
-     two across, each logo filling its cell, every cell as tall as the column has room for. --h is the cell's height and
-     --lsp-s the column's scale, which LivePage's script sets so the whole column just fills the video's height (no
-     scrolling unless a build has more sponsors than fit even at its smallest) */
+  .lsp-head { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: 0.14em; line-height: 16px; text-transform: uppercase; color: var(--c-text-muted); }
+  /* A tier: its name, then its logos (gap = GAP.label) */
+  .lsp-tier { display: grid; gap: 6px; min-width: 0; }
+  .lsp-label { margin: 0; font-size: 12px; font-weight: 700; line-height: 15px; color: var(--c-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  /* Cells in rows (gap = GAP.cell); the room's sponsors one to a row */
+  .lsp-grid { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; grid-template-columns: minmax(0, 1fr); }
+  /* Every cell's height comes from the column's (live-sponsors-show.ts cellSizes): --lsp-hr for the room's sponsors, as
+     big as any partner's and bigger when there are one or two of them, --lsp-h for every partner (Peter, Nov 19 2026:
+     "signature and down, the logos should be the same size"). A cell keeps 9% of its height above and below its logo */
   .lsp-card {
-    --h: 64px; --pad: 5px;
-    --logo-h: calc(var(--h) * var(--lsp-s, 1) - 2 * var(--pad));
-    display: flex; align-items: center; justify-content: center; min-width: 0; height: calc(var(--h) * var(--lsp-s, 1)); padding: var(--pad); box-sizing: border-box;
-    border-radius: 12px; background: none; border: 0;
+    --h: var(--lsp-h, 64px);
+    --pad: max(5px, calc(var(--h) * 0.09));
+    --logo-h: calc(var(--h) - 2 * var(--pad));
+    display: flex; align-items: center; justify-content: center; min-width: 0; height: var(--h); padding: var(--pad); box-sizing: border-box;
+    border-radius: 14px; background: none; border: 0;
   }
+  .lsp-tier--room .lsp-card { --h: var(--lsp-hr, 88px); }
+  /* (only a sliver at a cell's sides: a wordmark wider than its cell's shape is held by the cell's width, not its height,
+     and there every pixel of width is its size; live-sponsors-show.ts counts this 4px) */
+  .lsp-card { padding-inline: 4px; }
   .lsp-card img { display: block; max-width: 100%; max-height: var(--logo-h); width: auto; height: auto; object-fit: contain; }
-  /* Each logo as big as its cell allows, its own shape kept (Peter, Nov 20 2026, of Max's twenty in the column: "the vendor
-     logos are still really small! cant read some of them, need this best in class!"). They used to be evened out by shape
-     (a wordmark's height times 1.15 ÷ its width-to-height^0.4), which held a wide wordmark to two thirds of its cell's
-     height: Randall Brothers 74×20 in a 126×40 cell, now 110×30. Only the very widest still give a touch, so a long
-     wordmark never outweighs a square mark beside it. --r is width ÷ height, set once it loads */
+  /* Each logo as big as its cell allows, its own shape kept (Peter, Nov 20 2026: "the vendor logos are still really
+     small! cant read some of them"); only the very widest give a touch, so a long wordmark never outweighs a square mark
+     beside it. --r is width ÷ height, set once it loads */
   .lsp-card img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.06 / pow(var(--r), 0.12))); }
-  /* The room's sponsor a bigger cell of its own, the column's width; every partner below it two across, the same size
-     (no yellow: the Theater's one yellow is Fund the next room, Peter, Nov 19 2026) */
-  .lsp-tier--room .lsp-grid { grid-template-columns: minmax(0, 1fr); }
-  /* (its cell 88px at full size, the partners' 64: still the biggest, its wordmark as wide as the column, and room for
-     the partners below it) */
-  .lsp-tier--room .lsp-card { --h: 88px; --pad: 7px; }
-  .lsp-tier:not(.lsp-tier--room) .lsp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  /* (a column wide enough for three of them at that size: three across) */
-  @container lsp (min-width: 390px) {
-    .lsp-tier:not(.lsp-tier--room) .lsp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  /* ── The partners' pages ── */
+  /* Two cells to a row; a wide wordmark (data-wide: too wide to be read at half a row's width) takes the whole row, and
+     square marks fill in round it (dense), so a page holds as many as it can at one size; an odd square mark out has
+     its row to itself (data-solo) */
+  .lsp-show { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; }
+  .lsp-show .lsp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: row dense; }
+  .lsp-show .lsp-card:is([data-wide], [data-solo]) { grid-column: 1 / -1; }
+  /* (before the script has made the pages, and if it never does: the tiers one after another in a list that scrolls) */
+  .lsp-show:not([data-built]) { display: flex; flex-direction: column; gap: 14px; overflow-y: auto; scrollbar-width: thin; }
+  /* Every page in the same place, the showcase's whole height; only the one on (and the one leaving) shows. The others
+     stay in the page for a screen reader, which reads every partner in order (gap between tiers = GAP.section) */
+  .lsp-page { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .lsp-page:not([data-on]):not([data-out]) { opacity: 0; pointer-events: none; }
+  .lsp-page[data-out] { pointer-events: none; }
+  /* (anyone who asked for less motion: one still page, every partner at the same size, scrolled by hand) */
+  .lsp-show[data-still] { overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+  .lsp-show[data-still] .lsp-page { position: static; }
+
+  /* The turn: the shown page's names and logos lift away quickly, top first, and the next page's rise in one after
+     another down the page, each only once the one that was in its place has gone (never two logos on one spot). A
+     tier's name that is the same on both pages (data-keep) stays still through the turn. The first time the column
+     comes in, the room's sponsors rise first and the first page follows on. A new layout of the same page (the window
+     resized) stands still (data-calm) */
+  @keyframes lspRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  @keyframes lspLeave { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-10px); } }
+  .lsp[data-lsp-in] .lsp-tier--room :is(.lsp-label, .lsp-card) { animation: lspRise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--i, 0) * 55ms) both; }
+  .lsp-page[data-on]:not([data-calm]) :is(.lsp-label, .lsp-card) { animation: lspRise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(300ms + var(--i, 0) * 50ms) both; }
+  .lsp-page[data-out] :is(.lsp-label, .lsp-card) { animation: lspLeave 200ms cubic-bezier(0.4, 0, 1, 1) calc(var(--i, 0) * 18ms) both; }
+  .lsp-page[data-on] .lsp-label[data-keep] { animation: none; }
+  .lsp-page[data-out] .lsp-label[data-keep] { animation: none; opacity: 0; }
+
+  /* A bar for each page, on the line of the page's first tier name, at its right: the shown page's fills while it holds
+     (HOLD_MS, live-sponsors-show.ts) and the next page comes when it's full. A pointer resting on the partners, or the
+     keyboard on a bar, holds it; a click or tap on a bar goes to that page */
+  .lsp-dots { position: absolute; top: 0; right: 0; z-index: 1; display: flex; align-items: center; gap: 5px; height: 15px; max-width: 50%; }
+  .lsp-dots[hidden] { display: none; }
+  .lsp-dot {
+    position: relative; flex: 0 1 20px; min-width: 8px; height: 25px; margin: -5px 0; padding: 0; border: 0; background: none;
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
   }
-  @media (prefers-reduced-motion: reduce) { .lsp { animation: none !important; } .lsp-card img { transition: none !important; } }
+  .lsp-dot::before, .lsp-dot > i { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 3px; }
+  .lsp-dot::before { background: #DFDACD; transition: background-color 150ms ease; }
+  .lsp-dot > i { background: var(--c-dark); transform: scaleX(0); transform-origin: left center; }
+  .lsp-dot[aria-current] > i { animation: lspFill 6000ms linear forwards; }
+  .lsp-show:is(:hover, :focus-within) .lsp-dot[aria-current] > i { animation-play-state: paused; }
+  @keyframes lspFill { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+  @media (hover: hover) { .lsp-dot:hover::before { background: #C4BEAD; } }
+  .lsp-dot:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 1px; border-radius: 4px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .lsp, .lsp-card img, .lsp-dot::before { animation: none !important; transition: none !important; }
+    .lsp :is(.lsp-label, .lsp-card) { animation: none !important; }
+    .hero[data-party][data-orientation='portrait'] .lsp:not([data-laid]) > :is(.lsp-tier, .lsp-show) { opacity: 1; animation: none; }
+    .hero[data-party][data-orientation='portrait'] .lsp-card img:not([style*='--r']) { opacity: 1; animation: none; }
+  }
 </style>

@@ -66,13 +66,16 @@ export function sponsorTiers(partnerLogos: unknown, roomSponsors: unknown, partn
   return ORDER.map((tier) => ({ tier, list: groups.get(tier)! })).filter((g) => g.list.length);
 }
 
-/** A logo as asked of Cloudflare: its white edges trimmed, at most 256 px tall (128 at 2×: the room sponsor's card at
- *  its biggest, LiveSponsors) */
+/** A logo as asked of Cloudflare: its white edges trimmed, at most 256 px tall (128 at 2×: the room sponsor's cell at
+ *  its biggest, 132px less its margin, LiveSponsors) */
 const LOGO_ASK = 'trim=border,h=256,fit=scale-down,q=85';
 
-/** The column's inside: its heading, then each tier's logos. '' when there's nobody */
+/** The column's inside: its heading, the room's sponsors, then the partners' tiers in the showcase that turns their
+ *  pages (LiveSponsors; src/utils/live-sponsors-show.ts lays them out on the page). '' when there's nobody */
 export function sponsorsInner(tiers: SponsorTier[]): string {
   if (!tiers.length) return '';
   const card = (s: SponsorLogo) => `<li class="lsp-card"><img src="${esc(cfRaw(s.url, LOGO_ASK))}" alt="${esc(s.name)}" title="${esc(s.name)}" loading="eager" decoding="async" data-lsp-logo /></li>`;
-  return `<p class="lsp-head">Built with help from</p>${tiers.map((g) => `<section class="lsp-tier lsp-tier--${g.tier}" data-n="${g.list.length}"><p class="lsp-label">${esc(tierTitle(g.tier, g.list.length))}</p><ul class="lsp-grid">${g.list.map(card).join('')}</ul></section>`).join('')}`;
+  const tier = (g: SponsorTier) => `<section class="lsp-tier lsp-tier--${g.tier}" data-tier="${g.tier}" data-n="${g.list.length}"><p class="lsp-label">${esc(tierTitle(g.tier, g.list.length))}</p><ul class="lsp-grid">${g.list.map(card).join('')}</ul></section>`;
+  const room = tiers.filter((g) => g.tier === 'room'), partners = tiers.filter((g) => g.tier !== 'room');
+  return `<p class="lsp-head">Built with help from</p>${room.map(tier).join('')}${partners.length ? `<div class="lsp-show" data-lsp-show>${partners.map(tier).join('')}</div>` : ''}`;
 }

@@ -854,6 +854,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   import { createMessages } from '../../utils/live-messages';
   import { createGive } from '../../utils/live-give';
   import { createLiveDesign } from '../../utils/live-design';
+  import { sponsorShow } from '../../utils/live-sponsors-show';
   import { openShareSheet } from '../../utils/share-sheet';
   import { cfRaw } from '../../utils/cf-image';
   import { readUpcoming, loadSignup, inviteData, inviteLinks, scheduleOnPage, type UpcomingReveal } from '../../utils/reveals-client';
@@ -929,42 +930,13 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     }
 
     // ── The build's sponsors by tier, the Theater's right column (LiveSponsors.astro) ──
-    // Each logo the same area within its tier once it has loaded (--r); one that won't load leaves, and its tier with it
-    // when it was the last
+    // The room's sponsors always on screen, the partners in pages that turn by themselves, every cell sized from the
+    // column's height (src/utils/live-sponsors-show.ts): laid out again whenever the column's size changes (shown, the
+    // window resized; its contents never change its size: size containment) and when a logo won't load, which leaves,
+    // and its tier with it when it was the last
     const sponsorsEl = hero.querySelector<HTMLElement>('[data-live-sponsors]');
-    sponsorsEl?.querySelectorAll<HTMLImageElement>('img[data-lsp-logo]').forEach((img) => {
-      const weigh = () => { if (img.naturalWidth && img.naturalHeight) img.style.setProperty('--r', (img.naturalWidth / img.naturalHeight).toFixed(3)); };
-      const drop = () => {
-        const tier = img.closest('.lsp-tier');
-        img.closest('.lsp-card')?.remove();
-        if (tier && !tier.querySelector('.lsp-card')) tier.remove();
-        drawBand(shownKidNow);
-        fitSponsors();
-      };
-      img.addEventListener('load', weigh);
-      img.addEventListener('error', drop);
-      if (img.complete) { if (img.naturalWidth) weigh(); else if (img.getAttribute('src')) img.decode().then(weigh, () => { if (!img.naturalWidth) drop(); }); }
-    });
-    // Every card as tall as the column has room for (--lsp-s, LiveSponsors): the cards' heights are the only part that
-    // scales, so the column's contents grow in a straight line with it; measured at two scales, the one that just fills
-    // the column follows. Between 0.55 and 1.35 of the cards' set heights: a build with more sponsors than fit even at
-    // the smallest scrolls, one with a few doesn't blow them up. Again whenever the column's size changes (shown, the
-    // window resized; its contents never change its size: size containment) and when a logo leaves
-    function fitSponsors() {
-      const el = sponsorsEl;
-      if (!el || !el.clientHeight || !el.firstElementChild) return;
-      const cs = getComputedStyle(el);
-      const room = el.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom) - 1;
-      const used = (s: number) => {
-        el.style.setProperty('--lsp-s', String(s));
-        return el.lastElementChild!.getBoundingClientRect().bottom - el.firstElementChild!.getBoundingClientRect().top;
-      };
-      const at1 = used(1), per = used(2) - at1;
-      const s = per > 0 ? Math.min(1.35, Math.max(0.55, 1 + (room - at1) / per)) : 1;
-      el.style.setProperty('--lsp-s', s.toFixed(3));
-    }
-    if (sponsorsEl && 'ResizeObserver' in window) new ResizeObserver(fitSponsors).observe(sponsorsEl);
-    document.fonts?.ready.then(fitSponsors);
+    const sponsorsShow = sponsorsEl ? sponsorShow(sponsorsEl, { onDrop: () => drawBand(shownKidNow) }) : null;
+    document.fonts?.ready.then(() => sponsorsShow?.relayout());
 
     // ── The messages in the Theater: the newest two under the room until someone opens them ──
     // (LiveMessages: a message, "See all" or "Write to the family"; a tap on any brings the card to the right column in the

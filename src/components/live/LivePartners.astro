@@ -53,6 +53,17 @@ const { kid, inner } = Astro.props;
   /* Every logo the same area, whatever its shape (as the starting-soon screen sized them): at one height for all, a
      5-wide-to-1-tall logo was seven times the size of a 0.6-to-1 one. --r (width ÷ height) is set once it loads */
   .lpb-chip img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.118 / sqrt(var(--r)))); }
+  /* A tablet, or a computer outside the Theater (Peter, Nov 20 2026: "how can we better display and showcase these logos
+     on larger ipad and desktop? they are still too small to actually see"): the same band at the same height, so the
+     video's size doesn't change (LiveStage's --under), its strip all of it but a sliver, and every logo as big as the
+     strip allows, its own shape kept, as the Theater's column has them (LiveSponsors). Evened out by area, a long
+     wordmark was 11px tall here. Phones keep theirs (below) */
+  @media (min-width: 769px) {
+    .lpb-window { height: calc(var(--lpb-h) - 6px); }
+    .lpb-chip { --logo-h: calc(var(--lpb-h) - 22px); padding: 8px 18px; }
+    .lpb-chip img { max-width: 230px; }
+    .lpb-chip img[style*='--r'] { height: min(var(--logo-h), calc(var(--logo-h) * 1.06 / pow(var(--r), 0.12))); }
+  }
   @media (max-width: 768px) {
     .hero { --lpb-h: 52px; }
     .lpb { gap: 10px; }
