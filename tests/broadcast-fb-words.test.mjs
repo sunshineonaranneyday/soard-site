@@ -21,6 +21,8 @@ const sim = { live: false, videoUID: null, inputState: null, inputSince: null, v
 const fbc = { mode: 'ok', failFirst: 0 };
 const outputs = new Map([['fbout', { uid: 'fbout', url: 'rtmps://live-api-s.facebook.com:443/rtmp/', enabled: true }]]);
 const calls = [];
+const texts = []; // what Twilio was asked to send: { to, body }
+const STAFF_PHONE = '+14045550123';
 let fbSeq = 0;
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (input, init = {}) => {
@@ -53,6 +55,7 @@ globalThis.fetch = async (input, init = {}) => {
     }
     return json({ data: [] });
   }
+  if (url.startsWith('https://api.twilio.com/')) { texts.push({ to: init.body.get('To'), body: init.body.get('Body') }); return json({ sid: `SM${texts.length}` }, 201); }
   if (url.startsWith('https://api.resend.com/')) return json({ data: [] });
   if (url.startsWith('https://api.kit.com/v4/')) return json({ broadcasts: [], subscribers: [], tags: [], pagination: {} }, method === 'POST' ? 201 : 200);
   if (url.startsWith('https://hook.test/')) return new Response('ok', { status: 200 });
@@ -77,7 +80,7 @@ before(async () => {
   await kid('remi', 'Remi', { heroImage: 'kids/remi/hero', heroSummary: REMI_STORY, shortDescription: 'Not this one: the lead uses heroSummary first.' });
   await kid('ava', 'Ava', { shortDescription: 'Ava needs a sensory room to rest and play.' });
   await kid('noor', 'Noor', {});
-  env = { DB, LIVE_HUB, CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 'tok', RESEND_API_KEY: 're_test', KIT_API_KEY: 'kit_test', CF_PAGES_DEPLOY_HOOK: 'https://hook.test/deploy', SLACK_WEBHOOK_URL: 'https://hook.test/slack', FB_PAGE_ID: '123', FB_PAGE_TOKEN: 'fbtok', ALERT_EMAILS: 'staff@test' };
+  env = { DB, LIVE_HUB, CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 'tok', RESEND_API_KEY: 're_test', KIT_API_KEY: 'kit_test', CF_PAGES_DEPLOY_HOOK: 'https://hook.test/deploy', SLACK_WEBHOOK_URL: 'https://hook.test/slack', FB_PAGE_ID: '123', FB_PAGE_TOKEN: 'fbtok', ALERT_EMAILS: 'staff@test', TWILIO_ACCOUNT_SID: 'AC1', TWILIO_AUTH_TOKEN: 'twtok', TWILIO_FROM: '+14045550100' };
   b = await import('../functions/api/_broadcast.js');
   await b.ensureSchema(DB);
   const cfg = await b.readConfig(DB);
@@ -90,6 +93,14 @@ before(async () => {
 });
 after(() => { Date.now = realNow; globalThis.fetch = realFetch; });
 
+// A staff number on the alert list for the length of fn (texts go only to those); none otherwise
+const withStaffPhone = async (fn) => {
+  const set = async (phones) => { const c = await b.readConfig(env.DB); c.alerts = { ...(c.alerts || {}), phones }; await b.writeConfig(env.DB, c); };
+  await set([STAFF_PHONE]);
+  try { return await fn(); } finally { await set([]); }
+};
+// The comment-failure texts: the alert, then the words alone
+const fbCommentTexts = (from) => texts.slice(from).filter((t) => /Facebook link comment didn't post|^Watch on our website too/.test(t.body));
 const remiLink = () => `${b.liveUrlFor({ kidSlug: 'remi' })}?src=facebook`;
 const REMI_COMMENT = () => `Watch on our website too, and leave a message for the family: ${remiLink()}`;
 const fresh = async () => {
@@ -169,7 +180,18 @@ test('a scheduled reveal: nothing on Facebook before the phone goes live, then o
 test('Facebook refuses the comment (no permission): the post stands, no retries, staff are told once with the words to paste', async () => {
   await fresh();
   fbc.mode = 'permission';
-  const { from } = await goLiveRemi('vid2', 6);
+  const t0 = texts.length;
+  const { from } = await withStaffPhone(() => goLiveRemi('vid2', 6));
+  // Texted too (Peter, Nov 21 2026, "1b"): the alert, then the comment alone so a long-press copies exactly it
+  const sms = fbCommentTexts(t0);
+  assert.equal(sms.length, 2, 'two texts, once, however many ticks follow');
+  assert.ok(sms.every((t) => t.to === STAFF_PHONE), 'to the staff number on the alert list');
+  assert.match(sms[0].body, /^🚨 SOARD ALERT: Facebook link comment didn't post\n/);
+  assert.match(sms[0].body, /Copy the next text\. Comment it on the live video as the SOARD Page, not your own profile\./);
+  assert.match(sms[0].body, /\nhttps:\/\/www\.facebook\.com\/\S+$/, 'ends with the link to the post (or the Page)');
+  assert.ok(sms[0].body.length <= 306, 'two segments at most');
+  assert.equal(sms[1].body, REMI_COMMENT(), 'the second text is the comment alone, exactly the words Facebook refused');
+  assert.ok(texts.indexOf(sms[0]) < texts.indexOf(sms[1]), 'the alert first, the words second');
   assert.equal(fbPosts(from).length, 1, 'the post is made');
   assert.equal(fbComments(from).length, 1, 'tried once: a missing permission is not retried');
   assert.equal(fbEnds(from).length, 0, 'the post is never taken down');
@@ -185,19 +207,25 @@ test('Facebook refuses the comment (no permission): the post stands, no retries,
 test('a passing Facebook error: tried again on the next tick, one comment in the end, nobody alerted', async () => {
   await fresh();
   fbc.failFirst = 1;
-  const { from } = await goLiveRemi('vid3', 6);
+  const t0 = texts.length;
+  const { from } = await withStaffPhone(() => goLiveRemi('vid3', 6));
   const comments = fbComments(from);
   assert.equal(comments.length, 2, 'one failed try, then the one that worked');
   assert.equal(fbc.failFirst, 0);
   assert.equal(slack(from, /website link comment/).length, 0, 'no alert');
+  assert.equal(fbCommentTexts(t0).length, 0, 'and no texts');
 });
 
 test('Facebook keeps failing: three tries, then staff are told once; the post stands', async () => {
   await fresh();
   fbc.failFirst = 99;
-  const { from } = await goLiveRemi('vid4', 8);
+  const t0 = texts.length;
+  const { from } = await withStaffPhone(() => goLiveRemi('vid4', 8));
   assert.equal(fbComments(from).length, 3, 'three tries at most');
   assert.equal(slack(from, /website link comment/).length, 1, 'one alert');
+  const sms = fbCommentTexts(t0);
+  assert.equal(sms.length, 2, 'texted once: the alert and the words');
+  assert.equal(sms[1].body, REMI_COMMENT());
   assert.equal(fbEnds(from).length, 0, 'the post stands');
   fbc.failFirst = 0;
 });

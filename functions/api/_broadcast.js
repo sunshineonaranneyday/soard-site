@@ -1788,7 +1788,9 @@ export async function fbLiveWords(DB, state, config) {
  * The website link as the Page's first comment on its live post, once per post. Tried on the tick that made the
  * post and the ticks after (Facebook may not take a comment the second the post exists), FB_COMMENT_TRIES times
  * at most, each try its own claim so racing ticks never comment twice. If Facebook won't take it (a missing
- * permission at once, anything else after the last try), staff are told once, with the words to paste by hand.
+ * permission at once, anything else after the last try), staff are told once, with the words to paste by hand:
+ * Slack and email as before, and a text to the staff numbers followed by a text of the comment alone, ready to copy
+ * (Peter, Nov 21 2026: "1b", text the crew the paste-ready comment, not just email).
  * The post stands either way. goLiveEffects runs it while the go-live is recent, as it does the post.
  */
 const FB_COMMENT_TRIES = 3;
@@ -1814,11 +1816,16 @@ async function fbFirstComment(env, config, state, work) {
   await settleClaim(env.DB, bid, `fb-comment:${id}:${n}`, { error: r.error || 'unknown', code: r.code || null });
   work.push('fb-comment-failed');
   if ((r.permission || n >= FB_COMMENT_TRIES) && await claimOnce(env.DB, bid, `fb-comment-alert:${id}`)) {
+    // The post's own link once Facebook has given it, else the Page, where the live video is at the top
+    const [alertLine, paste] = notify.fbCommentTexts({ comment: words.comment, postUrl: state.fb?.permalink || config.facebook?.pageUrl || null });
     await notify.alertAdmins(env, config, {
       level: 'warn', title: 'Facebook: the website link comment didn\'t post',
       detail: `The live post is up; only the Page's first comment failed (${r.error || 'unknown error'}${r.permission ? ': the Facebook token needs the pages_manage_engagement permission' : ''}). Post this as a comment from the Page on the live video:\n\n${words.comment}`,
       url: `${SITE_ORIGIN}/admin/#broadcast/control-room`,
+      text: alertLine,
     }).catch(() => {});
+    // After the alert, so it lands second: the words alone
+    await notify.textStaff(env, config, { title: 'Facebook comment to paste', body: paste }).catch(() => {});
   }
   return state;
 }

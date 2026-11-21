@@ -768,7 +768,8 @@ export function confirmEmail({ confirmUrl, kidName, hours = [24, 1], dated = fal
 // The public is never texted. Texts go only to the staff numbers in
 // Reveals → Settings → Alerts, and only for the reveal alerts that ask for
 // one (alertAdmins' `text`): problems while live and when they clear, the
-// go / no-go check before a reveal, "Live now" and "All green". Each text
+// go / no-go check before a reveal, "Live now" and "All green", and the
+// Facebook link comment that didn't post (fbCommentTexts). Each text
 // opens with a picture and what it is ("🚨 SOARD ALERT:", "✅ SOARD FIXED:",
 // "🟢 SOARD:") so a lock screen says it at a glance, and Twilio reports
 // whether it arrived. The hello text stays plain: it's the consent message.
@@ -822,6 +823,17 @@ export function alertText({ title, detail, fix, url, tone = 'info', icon = undef
   const room = TEXT_MAX - head.length - link.length - 1;
   const body = more && room > 24 ? `\n${more.length > room ? `${more.slice(0, room - 3).trimEnd()}...` : more}` : '';
   return `${head}${body}${link}`;
+}
+
+/**
+ * The Page's website-link comment on its live post didn't post (fbFirstComment in _broadcast.js): two texts. The
+ * first says so and links the post; the second is the comment alone, because Messages copies a whole text, never
+ * part of one, so a long-press → Copy gives exactly the words to paste into Facebook. → [alert, comment]
+ */
+export function fbCommentTexts({ comment, postUrl = null }) {
+  const url = postUrl ? (String(postUrl).startsWith('http') ? String(postUrl) : `https://www.facebook.com${postUrl}`) : null;
+  const first = alertText({ title: 'Facebook link comment didn\'t post', detail: 'Copy the next text. Comment it on the live video as the SOARD Page, not your own profile.', url, tone: 'alert' });
+  return [first, smsSafe(comment)];
 }
 
 /** "Live now": only what's known the second the phone connects; the feed monitor's "All green" follows */
