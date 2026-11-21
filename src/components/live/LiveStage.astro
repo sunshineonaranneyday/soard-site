@@ -1126,6 +1126,10 @@ const ICON = {
   .stage__undock[hidden] { display: none; }
   .stage__undock :global(svg) { width: 16px; height: 16px; }
   .stage__undock:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
+  /* The stage itself is never tabbed to (tabindex -1): the page hands it focus so its keys work after "Watch the
+     replay" or when the room's pictures close, and iPhone Safari then drew the site's yellow ring round the whole video
+     and its pictures after a tap (Nov 21 2026 phone review). Its buttons, the line and the pictures keep their own rings */
+  .stage[data-stage]:focus, .stage[data-stage]:focus-visible { outline: none; box-shadow: none; }
 
   @media (max-width: 960px), (pointer: coarse) and (min-aspect-ratio: 7/4) and (max-height: 540px) and (max-width: 1023px), (min-width: 961px) and (max-width: 1100px) and (min-height: 1200px) {
     /* (a little smaller on a phone, and no more than about a quarter of a short one's height: it floats over the page) */
