@@ -22,6 +22,7 @@
  */
 
 const FB_GRAPH = 'https://graph.facebook.com/v25.0';
+export const FB_COMMENT_SCOPES = ['pages_manage_engagement', 'pages_read_user_content'];
 
 export function fbConfigured(env) {
   return !!(env.FB_PAGE_ID && env.FB_PAGE_TOKEN);
@@ -74,6 +75,8 @@ export async function fbTokenInfo(env) {
       expiresAt: d.expires_at ? new Date(d.expires_at * 1000).toISOString() : null,
       scopes,
       missingForApiMode: needed.filter(s => !scopes.includes(s)),
+      // The Page's first comment on its live post (the website link): Facebook asks for both (Max, Nov 20 2026)
+      missingForComment: FB_COMMENT_SCOPES.filter(s => !scopes.includes(s)),
       appReviewUrl: d.app_id ? `https://developers.facebook.com/apps/${d.app_id}/app-review/permissions/` : null,
       appSettingsUrl: d.app_id ? `https://developers.facebook.com/apps/${d.app_id}/settings/basic/` : null,
     };
