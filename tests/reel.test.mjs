@@ -223,10 +223,17 @@ test('parseClock and fitCut', () => {
   assert.match(reels.fitCut({ start: 720, end: 740 }, 716.82).error, /past the end/);
   assert.match(reels.fitCut({ start: 100, end: 101 }, 716.82).error, /3 seconds/);
   assert.equal(reels.fitCut({ start: 444, end: 463, coverSeconds: 500 }, 716.82).coverSeconds, null);
+  assert.match(reels.fitCut({ start: 100, end: 200 }, 716.82).error, /60 seconds/, 'a live recording: at most 60 s');
+  assert.deepEqual(reels.fitCut({ start: 100, end: 200 }, 716.82, { live: false }), { start: 100, end: 200, coverSeconds: null });
+});
+
+test('instantClipUrl: whole seconds and a tidy file name', () => {
+  assert.equal(reels.instantClipUrl(undefined, 'abc', 443.6, 19.2, "Max reveal reel"), 'https://customer-cuav5h47lgfe96ql.cloudflarestream.com/abc/clip.mp4?time=443s&duration=20s&filename=max-reveal-reel.mp4');
+  assert.match(reels.instantClipUrl('zzz', 'abc', 0, 30, "Zoë & Ana's"), /^https:\/\/customer-zzz\.cloudflarestream\.com\/abc\/clip\.mp4\?time=0s&duration=30s&filename=zo-ana-s\.mp4$/);
 });
 
 /** A Stream + Instagram stand-in for one recording; returns what the pipeline asked for */
-function mockPipeline({ uid, duration, captions = null }) {
+function mockPipeline({ uid, duration, captions = null, live = true }) {
   const seen = { clip: null, container: null, calls: [] };
   let downloadsRequested = false;
   const realFetch = globalThis.fetch;
@@ -236,7 +243,7 @@ function mockPipeline({ uid, duration, captions = null }) {
     seen.calls.push(`${method} ${url.split('?')[0]}`);
     const json = (o) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
     const cf = 'https://api.cloudflare.com/client/v4/accounts/acct';
-    if (url === `${cf}/stream/${uid}` && method === 'GET') return json({ success: true, result: { uid, duration, status: { state: 'ready' } } });
+    if (url === `${cf}/stream/${uid}` && method === 'GET') return json({ success: true, result: { uid, duration, status: { state: 'ready' }, ...(live ? { liveInput: 'in1' } : {}) } });
     if (url === `${cf}/stream/${uid}/captions`) return json({ success: true, result: captions ? [{ language: 'en', status: 'ready' }] : [] });
     if (url === `${cf}/stream/${uid}/captions/en/vtt`) return new Response(captions, { status: 200 });
     if (url === `${cf}/stream/clip` && method === 'POST') { seen.clip = JSON.parse(init.body); return json({ success: true, result: { uid: 'cut1' } }); }
@@ -268,7 +275,10 @@ test('short length (the default): Max\'s 12-minute recording becomes a 20-second
   try {
     const { state, stages } = await run({ reels: reels.defaultReelConfig() }, { kidName: 'Max', reel: reels.startReel({}, 'max1', null) });
     assert.equal(state.reel.stage, 'done', `${stages.join(' → ')} | ${state.reel.error}`);
-    assert.deepEqual([m.seen.clip.startTimeSeconds, m.seen.clip.endTimeSeconds], [443, 463]);
+    // A live recording: Stream's instant clip goes straight to Instagram, no /stream/clip (which refuses live recordings)
+    assert.equal(m.seen.clip, null);
+    assert.equal(m.seen.container.video_url, 'https://customer-cuav5h47lgfe96ql.cloudflarestream.com/max1/clip.mp4?time=443s&duration=20s&filename=max-reveal-reel.mp4');
+    assert.deepEqual([state.reel.start, state.reel.end], [443, 463]);
     assert.equal(m.seen.container.thumb_offset, '10000');
     assert.match(m.seen.container.caption, /^Max's room reveal/);
     assert.equal(state.reel.permalink, 'https://www.instagram.com/reel/MAX/');
@@ -283,7 +293,8 @@ test('a start and end chosen in the admin skip the captions and post that cut, w
     assert.equal(state.reel.stage, 'done', `${stages.join(' → ')} | ${state.reel.error}`);
     assert.equal(state.reel.method, 'chosen');
     assert.ok(!m.seen.calls.some(c => c.includes('/captions')), 'no caption reading');
-    assert.deepEqual([m.seen.clip.startTimeSeconds, m.seen.clip.endTimeSeconds], [444, 463]);
+    assert.equal(m.seen.clip, null);
+    assert.match(m.seen.container.video_url, /\/max2\/clip\.mp4\?time=444s&duration=19s&/);
     assert.equal(m.seen.container.thumb_offset, '10000');
     assert.equal(m.seen.container.caption, 'Max rolled into his new bathroom.');
     assert.equal(m.seen.container.media_type, 'REELS');
@@ -305,7 +316,7 @@ test('short length with the admin\'s minute: the reveal language near it sets th
   try {
     const { state } = await run({}, { kidName: 'Max', reel: reels.startReel({}, 'max4', 7 * 60) });
     assert.equal(state.reel.method, 'override');
-    assert.deepEqual([m.seen.clip.startTimeSeconds, m.seen.clip.endTimeSeconds], [443, 463]);
+    assert.match(m.seen.container.video_url, /\/max4\/clip\.mp4\?time=443s&duration=20s&/);
   } finally { m.restore(); }
 });
 
@@ -322,4 +333,30 @@ test('short length, no reveal language: a recording under 15 min posts whole and
     assert.equal(state.reel.stage, 'done');
     assert.equal(m.seen.clip, null, 'no clip for the whole recording');
   } finally { m.restore(); }
+});
+
+test('an uploaded (not live) recording is cut with /stream/clip, as before', async () => {
+  const m = mockPipeline({ uid: 'up1', duration: 716.82, captions: vtt(MAX), live: false });
+  try {
+    const { state, stages } = await run({}, { kidName: 'Max', reel: reels.startReel({}, 'up1', null) });
+    assert.equal(state.reel.stage, 'done', `${stages.join(' → ')} | ${state.reel.error}`);
+    assert.deepEqual([m.seen.clip.startTimeSeconds, m.seen.clip.endTimeSeconds], [443, 463]);
+    assert.equal(m.seen.container.video_url, 'https://x/cut1.mp4');
+  } finally { m.restore(); }
+});
+
+test('a long cut of a live recording fails in plain words instead of retrying a request Stream always refuses', async () => {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input.url;
+    if (url.endsWith('/stream/long1')) return new Response(JSON.stringify({ success: true, result: { duration: 1800, liveInput: 'in1', status: { state: 'ready' } } }), { status: 200 });
+    if (url.endsWith('/stream/clip')) return new Response(JSON.stringify({ success: false, errors: [{ code: 10005, message: 'Bad Request: The request was invalid. Additional details might be available in messages.' }], messages: [{ code: 10005, message: 'to clip recordings of live streams, please refer to our live instant clipping documentation' }] }), { status: 400 });
+    return new Response('{}', { status: 599 });
+  };
+  try {
+    let state = { reel: reels.startReel({}, 'long1', 20 * 60) };
+    for (let i = 0; i < 4 && !['failed', 'done'].includes(state.reel.stage); i++) state = (await reels.advanceReel(ENV, { reels: { length: 'whole' } }, state, { force: true })).state;
+    assert.equal(state.reel.stage, 'failed');
+    assert.match(state.reel.error, /60 seconds or less from a live recording/);
+  } finally { globalThis.fetch = realFetch; }
 });

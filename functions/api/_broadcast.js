@@ -2871,7 +2871,7 @@ async function runAdminAction(env, action, body, userEmail) {
         const cover = body.cover === undefined || body.cover === null || body.cover === '' ? null : reels.parseClock(body.cover);
         if (start === null || end === null) return fail('Give the start and the end as minutes:seconds, like 7:24');
         if (end - start < 3) return fail('The end must be at least 3 seconds after the start');
-        if (end - start > reels.REEL_MAX_SECONDS) return fail('A Reel from the site can be at most 14:55 long');
+        if (end - start > reels.INSTANT_CLIP_MAX_SECONDS) return fail('A cut can be at most 60 seconds: that is the most Stream cuts from a live recording');
         if (cover !== null && (cover < start || cover >= end)) return fail('The cover time must be between the start and the end');
         cut = { start, end, coverSeconds: cover };
       }

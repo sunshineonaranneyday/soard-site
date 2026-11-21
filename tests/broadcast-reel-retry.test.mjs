@@ -71,7 +71,8 @@ test('bad cuts are refused in plain words and leave the state alone', async () =
     [{ start: '7:24', end: 'later' }, /start and the end/],
     [{ start: '7:43', end: '7:24' }, /at least 3 seconds after/],
     [{ start: '7:24', end: '7:25' }, /at least 3 seconds after/],
-    [{ start: '0:00', end: '15:10' }, /at most 14:55/],
+    [{ start: '0:00', end: '15:10' }, /at most 60 seconds/],
+    [{ start: '7:00', end: '8:30' }, /at most 60 seconds/],
     [{ start: '7:24', end: '7:43', cover: '8:00' }, /cover time/],
     [{ start: '7:24', end: '7:43', caption: 42 }, /caption/],
   ]) {

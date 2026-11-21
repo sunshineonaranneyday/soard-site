@@ -5978,7 +5978,7 @@
       const setC = (k) => (e) => setCut((c) => ({ ...c, [k]: e.target.value }));
       const secs = (v) => { const m = String(v || '').trim().match(/^(\d+):(\d{1,2})$/); return m && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : null; };
       const cs = secs(cut.start), ce = secs(cut.end), cc = cut.cover.trim() ? secs(cut.cover) : null;
-      const cutReady = cs != null && ce != null && ce - cs >= 3 && ce - cs <= 895 && (!cut.cover.trim() || (cc != null && cc >= cs && cc < ce));
+      const cutReady = cs != null && ce != null && ce - cs >= 3 && ce - cs <= 60 && (!cut.cover.trim() || (cc != null && cc >= cs && cc < ce));
       const postCut = () => setConfirm({
         title: r.stage === 'done' ? 'Post another Reel?' : 'Post this Reel?',
         message: `Posts ${cut.start} to ${cut.end} of the recording (${ce - cs} seconds) to Instagram as a Reel${cut.caption.trim() ? ', with your caption' : ', with the caption in Settings'}.${r.stage === 'done' ? ' The Reel already on Instagram stays up; delete it in Instagram if you only want the new one.' : ''}`,
@@ -5994,7 +5994,7 @@
         </div>
         <div class="text-sm" style="line-height:1.7">
           ${r.start != null ? html`<div>Cut <strong>${t(r.start)} to ${t(r.end)}</strong> of ${t(r.duration)}${r.method ? html`, picked by <strong>${BC_REEL_METHODS[r.method] || r.method}</strong>` : null}${r.momentSeconds != null ? `, reveal at ${t(r.momentSeconds)}` : ''}${r.confidence != null && r.method !== 'fits' ? ` (confidence ${Math.round(r.confidence * 100)}%)` : ''}.</div>` : null}
-          ${r.clipUid ? html`<div><a href=${`https://watch.cloudflarestream.com/${r.clipUid}`} target="_blank" rel="noopener">Preview the cut ↗</a></div>` : null}
+          ${r.clipUid ? html`<div><a href=${`https://watch.cloudflarestream.com/${r.clipUid}`} target="_blank" rel="noopener">Preview the cut ↗</a></div>` : r.mp4Url && /\/clip\.mp4\?/.test(r.mp4Url) ? html`<div><a href=${safeHref(r.mp4Url)} target="_blank" rel="noopener">Preview the cut ↗</a></div>` : null}
           ${r.error ? html`<div class="text-muted">${r.error}</div>` : null}
         </div>
         <div class="bc-inline" style="margin-top:.75rem">
@@ -6009,7 +6009,7 @@
             <div class="form-group"><label class="form-label" for="bc-reel-cover">Cover picture at (optional)</label><input class="form-input" id="bc-reel-cover" inputmode="numeric" placeholder="7:34" value=${cut.cover} onInput=${setC('cover')} /></div>
             <div class="form-group span-2"><label class="form-label" for="bc-reel-cut-caption">Caption for this Reel (optional)</label><textarea class="form-textarea" id="bc-reel-cut-caption" rows="4" maxlength="2200" placeholder="Leave empty to use the caption in Settings" value=${cut.caption} onInput=${setC('caption')}></textarea></div>
           </div>
-          <span class="form-hint">Times in the recording, minutes:seconds.${cs != null && ce != null && ce > cs ? ` That's ${ce - cs} seconds.` : ''}${cs != null && ce != null && !cutReady ? ' The end must be 3 seconds to 14:55 after the start, and the cover between them.' : ''}</span>
+          <span class="form-hint">Times in the recording, minutes:seconds.${cs != null && ce != null && ce > cs ? ` That's ${ce - cs} seconds.` : ''}${cs != null && ce != null && !cutReady ? ' The end must be 3 to 60 seconds after the start, and the cover between them.' : ''}</span>
           <div class="bc-inline" style="margin-top:.5rem"><button class="btn btn-primary btn-sm" disabled=${!!busy || !cutReady} onClick=${postCut}>Post this cut to Instagram</button></div>
         </details>
       </div>`;

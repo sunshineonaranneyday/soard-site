@@ -47,6 +47,16 @@ export const SHORT_MIN_SECONDS = 20;
 export const SHORT_MAX_SECONDS = 45;
 const SHORT_DEFAULT_SECONDS = 30;   // a moment with no reactions found after it
 const REEL_MIN_SECONDS = 3;         // Instagram refuses shorter Reels
+// Stream won't cut a live recording with POST /stream/clip (400, code 10005: "to clip recordings of live
+// streams, please refer to our live instant clipping documentation"), and every reveal replay is one. Its
+// instant clip is an MP4 made on request, up to 60 s: /<video>/clip.mp4?time=444s&duration=19s
+export const INSTANT_CLIP_MAX_SECONDS = 60;
+
+/** Stream's instant-clip MP4 of a live recording (public, made on request; Instagram fetches it) */
+export function instantClipUrl(customerCode, uid, start, seconds, name = 'reveal-reel') {
+  const file = `${String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'reveal-reel'}.mp4`;
+  return `${stream.playbackHost(customerCode)}/${encodeURIComponent(uid)}/clip.mp4?time=${Math.floor(start)}s&duration=${Math.ceil(seconds)}s&filename=${file}`;
+}
 
 export function defaultReelConfig() {
   return {
@@ -241,12 +251,13 @@ export function parseClock(v) {
  * A start and end chosen in the admin, checked against the recording's length.
  * → { start, end, coverSeconds } in whole seconds, or { error }.
  */
-export function fitCut(cut, duration) {
+export function fitCut(cut, duration, { live = true } = {}) {
   const start = Math.max(0, Math.floor(Number(cut?.start)));
   const end = Math.min(Math.floor(duration), Math.ceil(Number(cut?.end)));
   if (!Number.isFinite(start) || !Number.isFinite(end)) return { error: 'The start and end must be times in the recording' };
   if (start >= Math.floor(duration)) return { error: `The start is past the end of the recording (${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')})` };
   if (end - start < REEL_MIN_SECONDS) return { error: 'Instagram needs at least 3 seconds' };
+  if (live && end - start > INSTANT_CLIP_MAX_SECONDS) return { error: 'Stream can cut at most 60 seconds from a live recording' };
   if (end - start > REEL_MAX_SECONDS) return { error: 'Instagram takes at most 14:55 from the site' };
   const cover = Number(cut?.coverSeconds);
   const coverSeconds = Number.isFinite(cover) && cover >= start && cover < end ? Math.round(cover) : null;
@@ -363,9 +374,9 @@ export async function advanceReel(env, config, state, { force = false } = {}) {
         if (!v.ok) { set({ error: stream.errorMessage(v) }); break; }
         const duration = Number(v.result?.duration) || 0;
         if (v.result?.status?.state !== 'ready' || !duration) break;
-        set({ duration });
+        set({ duration, live: !!v.result?.liveInput });
         if (reel.cut) {
-          const w = fitCut(reel.cut, duration);
+          const w = fitCut(reel.cut, duration, { live: !!v.result?.liveInput });
           if (w.error) { fail(w.error); break; }
           set({ stage: 'window', start: w.start, end: w.end, coverSeconds: w.coverSeconds, method: 'chosen', confidence: null, clipUid: null });
           events.push(`reel:chosen@${w.start}-${w.end}`);
@@ -423,8 +434,19 @@ export async function advanceReel(env, config, state, { force = false } = {}) {
         // A short cut or a chosen one arrives with its start and end; the long Reel works them out here
         const w = reel.start != null && reel.end != null ? { start: reel.start, end: reel.end } : clipWindow(reel.duration, reel.momentSeconds, cfg);
         if (w.start <= 0 && w.end >= Math.floor(reel.duration)) { set({ stage: 'download', start: 0, end: reel.duration, clipUid: null, error: reel.method === 'fallback' ? reel.error : null }); events.push('reel:whole'); break; }
+        const live = reel.live !== false; // a reveal replay is a live recording; older records didn't say
+        if (live && w.end - w.start <= INSTANT_CLIP_MAX_SECONDS) {
+          // Nothing to wait for: Instagram fetches the instant clip straight from Stream
+          const url = instantClipUrl(config.customerCode, reel.sourceUid, w.start, w.end - w.start, `${state.kidName || 'live'} reveal reel`);
+          set({ stage: 'instagram', start: w.start, end: w.end, clipUid: null, mp4Url: url, error: null });
+          events.push('reel:instant-clip');
+          break;
+        }
         const c = await stream.createClip(env, { uid: reel.sourceUid, startTimeSeconds: w.start, endTimeSeconds: w.end, name: `${state.kidName ? `${state.kidName}'s` : 'Live'} reveal (Instagram cut)` });
-        if (!c.ok || !c.result?.uid) { set({ error: stream.errorMessage(c, 'Clip failed') }); if (reel.attempts > 6) fail(reel.error); break; }
+        if (!c.ok || !c.result?.uid) {
+          if (live && c.status === 400) { fail(`Stream can only cut 60 seconds or less from a live recording, and this cut is ${Math.round((w.end - w.start) / 60)} minutes. Choose a cut of 60 seconds or less, or set Length to the reveal moment.`); break; }
+          set({ error: stream.errorMessage(c, 'Clip failed') }); if (reel.attempts > 6) fail(reel.error); break;
+        }
         set({ stage: 'clipping', start: w.start, end: w.end, clipUid: c.result.uid, error: null });
         events.push('reel:clip');
         break;
