@@ -347,6 +347,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .hero-party { margin-bottom: 20px; }
   .hero-party[hidden] { display: none; }
 
+  /* During the watch party (before the reveal, live, at the end and in the replay; the server marks it from the first
+     paint) the frame holds the reveal, and it's there from the first frame, as YouTube and Apple TV show a player, not
+     rising 12px and growing into place as every visit opened (Nov 21 2026 phone review). The words keep their entrance */
+  .hero[data-party] .hero-frame { animation: none; }
   /* backwards, not both: a transform left on after the entrance would trap the docked mini player */
   .hero-frame {
     position: relative; animation: heroPhotoIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards; scroll-margin-top: 100px;
