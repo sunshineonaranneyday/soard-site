@@ -5816,6 +5816,7 @@
       reelsEnabled: c.reels?.enabled !== false,
       reelsCaption: c.reels?.caption || '',
       reelsLead: c.reels?.leadSeconds ?? 240,
+      reelsLength: c.reels?.length === 'whole' ? 'whole' : 'short',
       reelsFeed: c.reels?.shareToFeed !== false,
       remEnabled: c.reminders?.enabled !== false,
       remPush: c.reminders?.push !== false,
@@ -5833,7 +5834,7 @@
       youtube: { channelUrl: f.youtubeUrl },
       instagram: { profileUrl: f.instagramUrl },
       orientation: f.orientation,
-      reels: { enabled: f.reelsEnabled, caption: f.reelsCaption, leadSeconds: Number(f.reelsLead), shareToFeed: f.reelsFeed },
+      reels: { enabled: f.reelsEnabled, length: f.reelsLength, caption: f.reelsCaption, leadSeconds: Number(f.reelsLead), shareToFeed: f.reelsFeed },
       reminders: { enabled: f.remEnabled, push: f.remPush, hoursBefore: [f.rem24 ? 24 : null, f.rem1 ? 1 : null].filter(Boolean) },
       replayHours: Number(f.replayHours), timezone: f.timezone,
       alerts: { emails: f.alertEmails.split(',').map((x) => x.trim()).filter(Boolean), phones: f.alertPhones.split(',').map((x) => x.trim()).filter(Boolean) },
@@ -5968,10 +5969,22 @@
       </div>`;
     }
 
-    const BC_REEL_STAGES = { pending: 'Waiting for the recording', captions: 'Reading captions to find the reveal', window: 'Cutting the clip', clipping: 'Stream is making the clip', download: 'Preparing the MP4', instagram: 'Sending to Instagram', processing: 'Instagram is processing', done: 'Posted', failed: 'Failed', blocked: 'Needs setup', skipped: 'Skipped' };
-    const BC_REEL_METHODS = { fits: 'the whole recording (under 15 min)', override: 'your minute', captions: 'captions', 'captions+ai': 'captions, confirmed by AI', ai: 'AI', fallback: 'the ending (no reveal found)' };
-    function BcReel({ reel: r, busy, act, setConfirm }) {
+    const BC_REEL_STAGES = { none: 'Not posted', pending: 'Waiting for the recording', captions: 'Reading captions to find the reveal', window: 'Cutting the clip', clipping: 'Stream is making the clip', download: 'Preparing the MP4', instagram: 'Sending to Instagram', processing: 'Instagram is processing', done: 'Posted', failed: 'Failed', blocked: 'Needs setup', skipped: 'Skipped' };
+    const BC_REEL_METHODS = { chosen: 'your start and end', fits: 'the whole recording (under 15 min)', override: 'your minute', captions: 'captions', 'captions+ai': 'captions, confirmed by AI', ai: 'AI', fallback: 'no reveal found, so the whole recording or its ending' };
+    function BcReel({ reel, whole, busy, act, setConfirm }) {
+      const r = reel || { stage: 'none' };
       const [minute, setMinute] = useState('');
+      const [cut, setCut] = useState({ start: '', end: '', cover: '', caption: '' });
+      const setC = (k) => (e) => setCut((c) => ({ ...c, [k]: e.target.value }));
+      const secs = (v) => { const m = String(v || '').trim().match(/^(\d+):(\d{1,2})$/); return m && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : null; };
+      const cs = secs(cut.start), ce = secs(cut.end), cc = cut.cover.trim() ? secs(cut.cover) : null;
+      const cutReady = cs != null && ce != null && ce - cs >= 3 && ce - cs <= 895 && (!cut.cover.trim() || (cc != null && cc >= cs && cc < ce));
+      const postCut = () => setConfirm({
+        title: r.stage === 'done' ? 'Post another Reel?' : 'Post this Reel?',
+        message: `Posts ${cut.start} to ${cut.end} of the recording (${ce - cs} seconds) to Instagram as a Reel${cut.caption.trim() ? ', with your caption' : ', with the caption in Settings'}.${r.stage === 'done' ? ' The Reel already on Instagram stays up; delete it in Instagram if you only want the new one.' : ''}`,
+        confirmLabel: 'Post to Instagram',
+        fn: () => act('reelRetry', { start: cut.start, end: cut.end, cover: cut.cover.trim() || null, caption: cut.caption.trim() || null }, 'Reel'),
+      });
       const t = (x) => (x == null ? '' : bcClock(x * 1000));
       const stuck = ['failed', 'blocked'].includes(r.stage);
       return html`<div class="card">
@@ -5986,9 +5999,19 @@
         </div>
         <div class="bc-inline" style="margin-top:.75rem">
           <input class="form-input" type="number" min="0" step="0.5" placeholder="Reveal at minute" aria-label="Reveal at minute" value=${minute} onInput=${(e) => setMinute(e.target.value)} style="max-width:170px" />
-          <button class="btn btn-ghost btn-sm" disabled=${!!busy} onClick=${() => setConfirm({ title: r.stage === 'done' ? 'Post another Reel?' : 'Re-cut the Reel?', message: r.stage === 'done' ? 'The Reel already on Instagram stays up. This posts a second one; delete the first in Instagram if you only want the new cut.' : 'Starts the Reel again from the recording.', confirmLabel: r.stage === 'done' ? 'Post another' : 'Re-cut', fn: () => act('reelRetry', { revealAtMinute: minute }, 'Reel') })}>${minute ? 'Re-cut at that minute' : 'Retry'}</button>
-          ${!['done', 'skipped', 'failed'].includes(r.stage) ? html`<button class="btn btn-ghost btn-sm" disabled=${!!busy} onClick=${() => act('reelSkip', {}, 'Skip')}>Don't post this one</button>` : null}
+          <button class="btn btn-ghost btn-sm" disabled=${!!busy} onClick=${() => setConfirm({ title: r.stage === 'done' ? 'Post another Reel?' : r.stage === 'none' ? 'Post a Reel?' : 'Re-cut the Reel?', message: `${r.stage === 'none' ? 'Finds the reveal in the recording' : 'Starts the Reel again from the recording'}${minute ? ` near minute ${minute}` : ''} and posts ${whole ? 'up to 15 minutes around it' : 'the 20 to 45 seconds around it'} to Instagram.${r.stage === 'done' ? ' The Reel already on Instagram stays up; delete it in Instagram if you only want the new one.' : ''}`, confirmLabel: r.stage === 'done' ? 'Post another' : r.stage === 'none' ? 'Post to Instagram' : 'Re-cut', fn: () => act('reelRetry', { revealAtMinute: minute }, 'Reel') })}>${minute ? (r.stage === 'none' ? 'Post, reveal near that minute' : 'Re-cut at that minute') : r.stage === 'none' ? 'Find the reveal and post' : 'Retry'}</button>
+          ${!['done', 'skipped', 'failed', 'none'].includes(r.stage) ? html`<button class="btn btn-ghost btn-sm" disabled=${!!busy} onClick=${() => act('reelSkip', {}, 'Skip')}>Don't post this one</button>` : null}
         </div>
+        <details class="bc-more" style="margin-top:.75rem" open=${r.stage === 'none'}><summary>Choose the cut yourself</summary>
+          <div class="form-grid" style="margin-top:.5rem">
+            <div class="form-group"><label class="form-label" for="bc-reel-start">From</label><input class="form-input" id="bc-reel-start" inputmode="numeric" placeholder="7:24" value=${cut.start} onInput=${setC('start')} /></div>
+            <div class="form-group"><label class="form-label" for="bc-reel-end">To</label><input class="form-input" id="bc-reel-end" inputmode="numeric" placeholder="7:43" value=${cut.end} onInput=${setC('end')} /></div>
+            <div class="form-group"><label class="form-label" for="bc-reel-cover">Cover picture at (optional)</label><input class="form-input" id="bc-reel-cover" inputmode="numeric" placeholder="7:34" value=${cut.cover} onInput=${setC('cover')} /></div>
+            <div class="form-group span-2"><label class="form-label" for="bc-reel-cut-caption">Caption for this Reel (optional)</label><textarea class="form-textarea" id="bc-reel-cut-caption" rows="4" maxlength="2200" placeholder="Leave empty to use the caption in Settings" value=${cut.caption} onInput=${setC('caption')}></textarea></div>
+          </div>
+          <span class="form-hint">Times in the recording, minutes:seconds.${cs != null && ce != null && ce > cs ? ` That's ${ce - cs} seconds.` : ''}${cs != null && ce != null && !cutReady ? ' The end must be 3 seconds to 14:55 after the start, and the cover between them.' : ''}</span>
+          <div class="bc-inline" style="margin-top:.5rem"><button class="btn btn-primary btn-sm" disabled=${!!busy || !cutReady} onClick=${postCut}>Post this cut to Instagram</button></div>
+        </details>
       </div>`;
     }
 
@@ -6200,7 +6223,7 @@
       if (live) return html`${status}${liveRoom}${messages}<${BcSends} sends=${data.sends} />`;
       return html`${status}
         <${BcReplay} recordings=${data.recordings} busy=${busy} act=${act} />
-        ${st.reel ? html`<${BcReel} reel=${st.reel} busy=${busy} act=${act} setConfirm=${setConfirm} />` : null}
+        ${st.reel || st.replayUid ? html`<${BcReel} key=${st.broadcastId} reel=${st.reel} whole=${c?.reels?.length === 'whole'} busy=${busy} act=${act} setConfirm=${setConfirm} />` : null}
         ${messages}
         <${BcSends} sends=${data.sends} />
         ${tracker}`;
@@ -6511,12 +6534,13 @@
           </div>` : null}
           <div class="bc-block">
             <h4>A Reel of every reveal</h4>
-            <p class="text-sm text-muted">When the replay is ready, the site finds the reveal moment in the captions (with AI as a second opinion), cuts up to 15 minutes around it, and posts it as a Reel. Shorter recordings post whole.</p>
+            <p class="text-sm text-muted">When the replay is ready, the site finds the reveal moment in the captions (with AI as a second opinion), cuts the Reel around it and posts it. Instagram shows Reels of 3 minutes or less to people who don't follow us yet.</p>
             <label class="checkbox-label"><input type="checkbox" checked=${f.reelsEnabled} onChange=${(e) => { set('reelsEnabled')(e); if (e.target.checked && !igCheck?.success) checkInstagram(); }} /> Post a Reel after every reveal</label>
             <label class="checkbox-label"><input type="checkbox" checked=${f.reelsFeed} onChange=${set('reelsFeed')} /> Also show it on the main grid, not only the Reels tab</label>
             <div class="form-grid">
               <div class="form-group span-2"><label class="form-label" for="bc-reel-caption">Caption</label><textarea class="form-textarea" id="bc-reel-caption" rows="3" maxlength="2200" value=${f.reelsCaption} onInput=${set('reelsCaption')}></textarea><span class="form-hint"><code>{kid}</code> becomes the kid's name. Links in captions aren't clickable, so point to the link in bio.</span></div>
-              <div class="form-group"><label class="form-label" for="bc-reel-lead">Lead-up before the reveal moment</label><select class="form-select" id="bc-reel-lead" value=${f.reelsLead} onChange=${(e) => setTo('reelsLead', Number(e.target.value))}>${[60, 120, 180, 240, 300, 420, 600].map((n) => html`<option value=${n}>${n / 60} minute${n > 60 ? 's' : ''}</option>`)}</select><span class="form-hint">The rest of the 15 minutes is the reactions and the room tour.</span></div>
+              <div class="form-group"><label class="form-label" for="bc-reel-length">Length</label><select class="form-select" id="bc-reel-length" value=${f.reelsLength} onChange=${(e) => setTo('reelsLength', e.target.value)}><option value="short">The reveal moment, 20 to 45 seconds</option><option value="whole">The whole reveal, up to 15 minutes</option></select><span class="form-hint">${f.reelsLength === 'whole' ? 'Recordings under 15 minutes post whole.' : 'From "are you ready" through the first reactions.'}</span></div>
+              ${f.reelsLength === 'whole' ? html`<div class="form-group"><label class="form-label" for="bc-reel-lead">Lead-up before the reveal moment</label><select class="form-select" id="bc-reel-lead" value=${f.reelsLead} onChange=${(e) => setTo('reelsLead', Number(e.target.value))}>${[60, 120, 180, 240, 300, 420, 600].map((n) => html`<option value=${n}>${n / 60} minute${n > 60 ? 's' : ''}</option>`)}</select><span class="form-hint">Only for recordings over 15 minutes. The rest is the reactions and the room tour.</span></div>` : null}
               <div class="form-group"><label class="form-label" for="bc-ig-url">Profile URL (linked from the live page)</label><input class="form-input" id="bc-ig-url" value=${f.instagramUrl} placeholder="https://www.instagram.com/…" onInput=${set('instagramUrl')} /></div>
             </div>
           </div>

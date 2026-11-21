@@ -67,7 +67,7 @@ test('renderCaption fills the kid and falls back without one', () => {
   assert.match(reels.renderCaption(null, { kidName: null }), /^Room reveal day/);
 });
 
-test('pipeline: 25-min recording → captions → cut → MP4 → Instagram Reel', async () => {
+test('whole length: 25-min recording → captions → cut → MP4 → Instagram Reel', async () => {
   const calls = [];
   let downloadsRequested = false, downloadPolls = 0, containerPolls = 0;
   const realFetch = globalThis.fetch;
@@ -99,7 +99,7 @@ test('pipeline: 25-min recording → captions → cut → MP4 → Instagram Reel
     return new Response('not mocked ' + url, { status: 599 });
   };
   const env = { CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 't', FB_PAGE_ID: 'page1', FB_PAGE_TOKEN: 'pt', AI: { run: async () => ({ response: '{"revealSeconds": 752, "confidence": 0.8}' }) } };
-  const config = { reels: reels.defaultReelConfig() };
+  const config = { reels: { ...reels.defaultReelConfig(), length: 'whole' } };
   let state = { kidName: 'Remi', title: "Remi's room reveal", reel: reels.startReel({}, 'src1', null) };
   const stages = [];
   try {
@@ -117,7 +117,7 @@ test('pipeline: 25-min recording → captions → cut → MP4 → Instagram Reel
   assert.ok(stages.includes('clipping') && stages.includes('processing'));
 });
 
-test('pipeline: short recording posts whole, no clip', async () => {
+test('whole length: a recording under 15 min posts whole, no clip', async () => {
   const realFetch = globalThis.fetch;
   const seen = [];
   globalThis.fetch = async (input, init = {}) => {
@@ -130,10 +130,11 @@ test('pipeline: short recording posts whole, no clip', async () => {
   };
   try {
     let state = { kidName: 'Ana', reel: reels.startReel({}, 's2', null) };
-    state = (await reels.advanceReel({ CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 't' }, {}, state, { force: true })).state;
+    const whole = { reels: { length: 'whole' } };
+    state = (await reels.advanceReel({ CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 't' }, whole, state, { force: true })).state;
     assert.equal(state.reel.stage, 'download');
     assert.equal(state.reel.method, 'fits');
-    state = (await reels.advanceReel({ CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 't' }, {}, state, { force: true })).state;
+    state = (await reels.advanceReel({ CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 't' }, whole, state, { force: true })).state;
     assert.equal(state.reel.stage, 'instagram');
     assert.ok(!seen.some(u => u.includes('/stream/clip')));
   } finally { globalThis.fetch = realFetch; }
@@ -150,7 +151,7 @@ test('pipeline: missing Instagram permission → blocked with a clear message', 
   } finally { globalThis.fetch = realFetch; }
 });
 
-test('override minute skips caption detection', async () => {
+test('whole length: override minute skips caption detection', async () => {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (input) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
@@ -159,9 +160,166 @@ test('override minute skips caption detection', async () => {
   };
   try {
     let state = { reel: reels.startReel({}, 's4', 20 * 60) };
-    state = (await reels.advanceReel({ CF_ACCOUNT_ID: 'a', CF_STREAM_TOKEN: 't' }, {}, state, { force: true })).state;
+    state = (await reels.advanceReel({ CF_ACCOUNT_ID: 'a', CF_STREAM_TOKEN: 't' }, { reels: { length: 'whole' } }, state, { force: true })).state;
     assert.equal(state.reel.stage, 'window');
     assert.equal(state.reel.method, 'override');
     assert.equal(state.reel.momentSeconds, 1200);
   } finally { globalThis.fetch = realFetch; }
+});
+
+// ─── Short Reels (Peter, Nov 21 2026: "Short cut, 20 to 45 s") ─────────
+
+// Max's reveal, Nov 20 2026: Stream's own captions around the door opening (times in seconds)
+const MAX = [
+  [418, 'is laughing in the hallway. Sounds'], [419, 'like they\'re still getting set up. We\'re'], [425, 'ready when'], [426, 'They are, Christian.'],
+  [419 + 16, 'Are you ready to see your new bathroom?'], [441, 'Are you sure? Okay.'], [445, 'Alright Max, are you ready to see it?'],
+  [448, 'Here we go!'], [450, 'Oh my god!'], [453, 'Wow!'], [455, 'Wow!'], [457, "Oh, it's beautiful!"], [459, 'Oh, look at that!'],
+  [462, "all right I'm gonna hand this to Christian so that I can show you guys"], [466, 'around a second got it okay so'],
+  [471, 'the shower obviously is way bigger than it'], [473, 'was before because we were able to take from that closet so now you guys have'],
+  [482, "oh man we'll just tuck that away for a second"], [488, 'this is a live reveal everybody'],
+].sort((a, b) => a[0] - b[0]);
+const maxCues = () => reels.parseVtt(vtt(MAX));
+
+test('short cut on Max\'s reveal: "Alright Max, are you ready" through "look at that", stopping before the hand-off', () => {
+  const cues = maxCues();
+  const kw = reels.detectByKeywords(cues);
+  assert.equal(kw.seconds, 435, 'the moment lands on "are you ready to see your new bathroom?"');
+  const w = reels.shortWindow(cues, kw.seconds, 716.82);
+  // 7:23 to 7:43: the 7:24 to 7:43 cut Peter approved, reaching back one second to the 20 s he chose as the shortest; cover 7:33
+  assert.deepEqual(w, { start: 443, end: 463, coverSeconds: 453 });
+});
+
+test('short cut on a countdown reveal keeps the countdown and the reactions, 20 to 45 s', () => {
+  const cues = reels.parseVtt(REVEAL);
+  const w = reels.shortWindow(cues, reels.detectByKeywords(cues).seconds, 1500);
+  assert.equal(w.start, 741);          // "three two one" at 742
+  assert.ok(w.end >= 774 && w.end <= 776, `end ${w.end}`); // "do you like it" at 770
+  assert.ok(w.end - w.start >= reels.SHORT_MIN_SECONDS && w.end - w.start <= reels.SHORT_MAX_SECONDS);
+  assert.equal(w.coverSeconds, 757);   // 3 s into "oh my gosh"
+});
+
+test('short cut: limits, no reactions, recording edges', () => {
+  // only a lead-in line: 2 s before it, 30 s long
+  assert.deepEqual(reels.shortWindow(reels.parseVtt(vtt([[100, 'are you ready']])), 100, 900), { start: 98, end: 128, coverSeconds: 103 });
+  // a long run of reactions is held to 45 s
+  const many = reels.parseVtt(vtt(Array.from({ length: 30 }, (_, i) => [200 + i * 4, i ? 'wow' : 'open your eyes'])));
+  const w = reels.shortWindow(many, 200, 900);
+  assert.equal(w.end - w.start, 45);
+  // a moment near the end of the recording keeps 20 s inside it
+  const tail = reels.shortWindow(reels.parseVtt(vtt([[595, 'oh my gosh']])), 595, 600);
+  assert.equal(tail.end, 600);
+  assert.ok(tail.end - tail.start >= 20);
+  assert.equal(reels.shortWindow([], null, 600), null);
+});
+
+test('parseClock and fitCut', () => {
+  assert.equal(reels.parseClock('7:24'), 444);
+  assert.equal(reels.parseClock('1:02:05'), 3725);
+  assert.equal(reels.parseClock(444), 444);
+  assert.equal(reels.parseClock('444'), 444);
+  for (const bad of ['7:60', 'seven', '', null, undefined, -3, '7:']) assert.equal(reels.parseClock(bad), null, String(bad));
+  assert.deepEqual(reels.fitCut({ start: 444, end: 463, coverSeconds: 454 }, 716.82), { start: 444, end: 463, coverSeconds: 454 });
+  assert.deepEqual(reels.fitCut({ start: 700, end: 760 }, 716.82), { start: 700, end: 716, coverSeconds: null });
+  assert.match(reels.fitCut({ start: 720, end: 740 }, 716.82).error, /past the end/);
+  assert.match(reels.fitCut({ start: 100, end: 101 }, 716.82).error, /3 seconds/);
+  assert.equal(reels.fitCut({ start: 444, end: 463, coverSeconds: 500 }, 716.82).coverSeconds, null);
+});
+
+/** A Stream + Instagram stand-in for one recording; returns what the pipeline asked for */
+function mockPipeline({ uid, duration, captions = null }) {
+  const seen = { clip: null, container: null, calls: [] };
+  let downloadsRequested = false;
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init = {}) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const method = (init.method || 'GET').toUpperCase();
+    seen.calls.push(`${method} ${url.split('?')[0]}`);
+    const json = (o) => new Response(JSON.stringify(o), { status: 200, headers: { 'content-type': 'application/json' } });
+    const cf = 'https://api.cloudflare.com/client/v4/accounts/acct';
+    if (url === `${cf}/stream/${uid}` && method === 'GET') return json({ success: true, result: { uid, duration, status: { state: 'ready' } } });
+    if (url === `${cf}/stream/${uid}/captions`) return json({ success: true, result: captions ? [{ language: 'en', status: 'ready' }] : [] });
+    if (url === `${cf}/stream/${uid}/captions/en/vtt`) return new Response(captions, { status: 200 });
+    if (url === `${cf}/stream/clip` && method === 'POST') { seen.clip = JSON.parse(init.body); return json({ success: true, result: { uid: 'cut1' } }); }
+    if (url === `${cf}/stream/cut1` && method === 'GET') return json({ success: true, result: { uid: 'cut1', status: { state: 'ready' } } });
+    const dl = url.match(/\/stream\/([\w-]+)\/downloads$/);
+    if (dl && method === 'GET') return json({ success: true, result: downloadsRequested ? { default: { status: 'ready', url: `https://x/${dl[1]}.mp4` } } : {} });
+    if (dl && method === 'POST') { downloadsRequested = true; return json({ success: true, result: { default: { status: 'inprogress' } } }); }
+    if (url.startsWith('https://graph.facebook.com/v25.0/page1?')) return json({ instagram_business_account: { id: 'ig1', username: 'sunshineonaranneyday' } });
+    if (url === 'https://graph.facebook.com/v25.0/ig1/media' && method === 'POST') { seen.container = Object.fromEntries(new URLSearchParams(init.body)); return json({ id: 'cont1' }); }
+    if (url.startsWith('https://graph.facebook.com/v25.0/cont1?')) return json({ status_code: 'FINISHED' });
+    if (url === 'https://graph.facebook.com/v25.0/ig1/media_publish' && method === 'POST') return json({ id: 'media1' });
+    if (url.startsWith('https://graph.facebook.com/v25.0/media1?')) return json({ permalink: 'https://www.instagram.com/reel/MAX/' });
+    return new Response('not mocked ' + url, { status: 599 });
+  };
+  return { seen, restore: () => { globalThis.fetch = realFetch; } };
+}
+const ENV = { CF_ACCOUNT_ID: 'acct', CF_STREAM_TOKEN: 't', FB_PAGE_ID: 'page1', FB_PAGE_TOKEN: 'pt' };
+async function run(config, state) {
+  const stages = [];
+  for (let i = 0; i < 20 && !['done', 'failed', 'blocked'].includes(state.reel.stage); i++) {
+    state = (await reels.advanceReel(ENV, config, state, { force: true })).state;
+    stages.push(state.reel.stage);
+  }
+  return { state, stages };
+}
+
+test('short length (the default): Max\'s 12-minute recording becomes a 20-second Reel with the cover on his face', async () => {
+  const m = mockPipeline({ uid: 'max1', duration: 716.82, captions: vtt(MAX) });
+  try {
+    const { state, stages } = await run({ reels: reels.defaultReelConfig() }, { kidName: 'Max', reel: reels.startReel({}, 'max1', null) });
+    assert.equal(state.reel.stage, 'done', `${stages.join(' → ')} | ${state.reel.error}`);
+    assert.deepEqual([m.seen.clip.startTimeSeconds, m.seen.clip.endTimeSeconds], [443, 463]);
+    assert.equal(m.seen.container.thumb_offset, '10000');
+    assert.match(m.seen.container.caption, /^Max's room reveal/);
+    assert.equal(state.reel.permalink, 'https://www.instagram.com/reel/MAX/');
+  } finally { m.restore(); }
+});
+
+test('a start and end chosen in the admin skip the captions and post that cut, with its own cover and caption', async () => {
+  const m = mockPipeline({ uid: 'max2', duration: 716.82 });
+  try {
+    const reel = reels.startReel({}, 'max2', null, { start: reels.parseClock('7:24'), end: reels.parseClock('7:43'), coverSeconds: reels.parseClock('7:34'), caption: '  Max rolled into his new bathroom.  ' });
+    const { state, stages } = await run({ reels: reels.defaultReelConfig() }, { kidName: 'Max', reel });
+    assert.equal(state.reel.stage, 'done', `${stages.join(' → ')} | ${state.reel.error}`);
+    assert.equal(state.reel.method, 'chosen');
+    assert.ok(!m.seen.calls.some(c => c.includes('/captions')), 'no caption reading');
+    assert.deepEqual([m.seen.clip.startTimeSeconds, m.seen.clip.endTimeSeconds], [444, 463]);
+    assert.equal(m.seen.container.thumb_offset, '10000');
+    assert.equal(m.seen.container.caption, 'Max rolled into his new bathroom.');
+    assert.equal(m.seen.container.media_type, 'REELS');
+  } finally { m.restore(); }
+});
+
+test('a chosen cut outside the recording fails with a plain reason and posts nothing', async () => {
+  const m = mockPipeline({ uid: 'max3', duration: 716.82 });
+  try {
+    const { state } = await run({}, { reel: reels.startReel({}, 'max3', null, { start: 800, end: 830 }) });
+    assert.equal(state.reel.stage, 'failed');
+    assert.match(state.reel.error, /past the end/);
+    assert.equal(m.seen.container, null);
+  } finally { m.restore(); }
+});
+
+test('short length with the admin\'s minute: the reveal language near it sets the cut', async () => {
+  const m = mockPipeline({ uid: 'max4', duration: 716.82, captions: vtt(MAX) });
+  try {
+    const { state } = await run({}, { kidName: 'Max', reel: reels.startReel({}, 'max4', 7 * 60) });
+    assert.equal(state.reel.method, 'override');
+    assert.deepEqual([m.seen.clip.startTimeSeconds, m.seen.clip.endTimeSeconds], [443, 463]);
+  } finally { m.restore(); }
+});
+
+test('short length, no reveal language: a recording under 15 min posts whole and says why', async () => {
+  const m = mockPipeline({ uid: 'quiet', duration: 600, captions: vtt([[10, 'hello'], [60, 'thanks for coming']]) });
+  try {
+    let state = { reel: reels.startReel({}, 'quiet', null) };
+    for (let i = 0; i < 5 && state.reel.stage !== 'download'; i++) state = (await reels.advanceReel(ENV, {}, state, { force: true })).state;
+    assert.equal(state.reel.stage, 'download');
+    assert.equal(state.reel.method, 'fallback');
+    assert.match(state.reel.error || '', /No reveal language found; used the whole recording/);
+    assert.deepEqual([state.reel.start, state.reel.end], [0, 600]);
+    ({ state } = await run({}, state));
+    assert.equal(state.reel.stage, 'done');
+    assert.equal(m.seen.clip, null, 'no clip for the whole recording');
+  } finally { m.restore(); }
 });

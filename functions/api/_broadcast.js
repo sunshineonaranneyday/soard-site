@@ -1547,7 +1547,7 @@ async function tickReel(env, config, state, work, opts) {
     if (reel.stage === 'done') {
       await recordEvent(env.DB, state.broadcastId, 'reel_published', { permalink: reel.permalink, method: reel.method, start: reel.start, end: reel.end });
       await logAudit(env.DB, { userEmail: 'live-broadcast', action: 'published', entityType: 'instagram-reel', entitySlug: reel.mediaId, entityName: `Instagram Reel: ${state.title || state.broadcastId}`, changes: [{ field: 'window', from: null, to: `${reel.start}-${reel.end}s (${reel.method})` }], gitStatus: 'ok' });
-      await notify.alertAdmins(env, config, { level: 'info', kind: 'news', icon: '📱', title: `Instagram Reel posted: ${state.title || 'reveal'}`, detail: `Cut ${Math.floor(reel.start / 60)}:${String(Math.floor(reel.start % 60)).padStart(2, '0')} to ${Math.floor(reel.end / 60)}:${String(Math.floor(reel.end % 60)).padStart(2, '0')} of the recording (picked by ${reel.method}).`, url: reel.permalink || undefined });
+      await notify.alertAdmins(env, config, { level: 'info', kind: 'news', icon: '📱', title: `Instagram Reel posted: ${state.title || 'reveal'}`, detail: `Cut ${Math.floor(reel.start / 60)}:${String(Math.floor(reel.start % 60)).padStart(2, '0')} to ${Math.floor(reel.end / 60)}:${String(Math.floor(reel.end % 60)).padStart(2, '0')} of the recording (${reel.method === 'chosen' ? 'the start and end chosen in the admin' : `picked by ${reel.method}`}).`, url: reel.permalink || undefined });
     } else if (reel.stage === 'failed' || reel.stage === 'blocked') {
       await notify.alertAdmins(env, config, { level: 'warn', title: `Instagram Reel ${reel.stage === 'blocked' ? 'needs setup' : 'failed'}: ${state.title || 'reveal'}`, detail: reel.error || 'unknown error', url: `${SITE_ORIGIN}/admin/` });
     }
@@ -2863,9 +2863,26 @@ async function runAdminAction(env, action, body, userEmail) {
       const m = body.revealAtMinute === undefined || body.revealAtMinute === '' || body.revealAtMinute === null ? null : Number(body.revealAtMinute);
       if (m !== null && !(m >= 0 && m < 600)) return fail('revealAtMinute must be a number of minutes');
       const seconds = m === null ? state.revealAtSeconds : Math.round(m * 60);
-      state = { ...state, revealAtSeconds: seconds ?? null, reel: reels.startReel(state, uid, seconds ?? null), updatedBy: userEmail };
+      // A start and end chosen in the admin ("7:24" or seconds), with an optional cover time and caption for this Reel
+      const hasCut = ['start', 'end'].some(k => body[k] !== undefined && body[k] !== null && body[k] !== '');
+      let cut = null;
+      if (hasCut) {
+        const start = reels.parseClock(body.start), end = reels.parseClock(body.end);
+        const cover = body.cover === undefined || body.cover === null || body.cover === '' ? null : reels.parseClock(body.cover);
+        if (start === null || end === null) return fail('Give the start and the end as minutes:seconds, like 7:24');
+        if (end - start < 3) return fail('The end must be at least 3 seconds after the start');
+        if (end - start > reels.REEL_MAX_SECONDS) return fail('A Reel from the site can be at most 14:55 long');
+        if (cover !== null && (cover < start || cover >= end)) return fail('The cover time must be between the start and the end');
+        cut = { start, end, coverSeconds: cover };
+      }
+      if (body.caption !== undefined && body.caption !== null && typeof body.caption !== 'string') return fail('caption must be text');
+      const caption = typeof body.caption === 'string' && body.caption.trim() ? body.caption.trim().slice(0, 2200) : null;
+      state = { ...state, revealAtSeconds: seconds ?? null, reel: reels.startReel(state, uid, seconds ?? null, cut || caption ? { ...(cut || {}), caption } : null), updatedBy: userEmail };
       await writeState(DB, state); await upsertBroadcastRow(DB, state);
-      await logAudit(DB, { userEmail, action: 'updated', entityType: 'instagram-reel', entitySlug: state.broadcastId, entityName: m !== null ? `Reel re-cut at minute ${m}` : 'Reel retried', gitStatus: 'ok' });
+      const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+      await logAudit(DB, { userEmail, action: 'updated', entityType: 'instagram-reel', entitySlug: state.broadcastId,
+        entityName: cut ? `Reel cut ${clock(cut.start)} to ${clock(cut.end)}` : m !== null ? `Reel re-cut at minute ${m}` : 'Reel retried',
+        changes: caption ? [{ field: 'caption', from: null, to: caption.slice(0, 200) }] : undefined, gitStatus: 'ok' });
       break;
     }
     case 'reelSkip': {

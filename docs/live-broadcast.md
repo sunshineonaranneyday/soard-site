@@ -332,13 +332,16 @@ Every reveal side by side, to see which did best: most watching at once (site, F
 
 ## Instagram Reels (automatic)
 
-Instagram has no API for going live, so every replay becomes a Reel instead (functions/api/_broadcast-reel.js), with no human step:
+Instagram has no API for going live, so every replay becomes a Reel instead (functions/api/_broadcast-reel.js), with no human step. Settings → Instagram → Length picks how long:
 
-1. Replay ready → `state.reel` starts (`pending`). Recordings of 14:55 or less post whole (`fits`).
-2. Longer ones: wait for Stream's English captions (requested when the replay is ready), score cues for reveal language ("open your eyes", countdowns, "your new room", reactions), take the densest 45 s window, and ask Workers AI (`env.AI`) for a second opinion. Agreement within 2 min → keyword time. Weak keywords → AI. Nothing found or no captions after 25 min → the last 14:55 (`fallback`). A per-reveal "reveal happens at minute" in the admin overrides everything.
-3. Window = moment minus `leadSeconds` (default 4 min), up to 14:55, clamped to the recording. Stream `POST /stream/clip` makes a new video; the source is untouched.
-4. Stream MP4 download → Instagram `POST /{ig-user-id}/media` (REELS, caption template, cover at the reveal) → poll `status_code` → `media_publish` → permalink.
-5. The Now tab shows each stage, the chosen window and method, a preview link, and Retry / re-cut at a minute / Don't post. Outcomes alert; History links the Reel.
+- **The reveal moment, 20 to 45 seconds** (default since Nov 21 2026, Peter: "Short cut, 20 to 45 s"). Instagram shows Reels of 3 minutes or less to people who don't follow the account; a whole 12-minute reveal reaches mostly existing followers.
+- **The whole reveal, up to 15 minutes**: recordings under 14:55 post whole; longer ones are cut around the moment with the lead-up setting.
+
+1. Replay ready → `state.reel` starts (`pending`).
+2. Find the reveal moment: wait for Stream's English captions (requested when the replay is ready), score cues for reveal language ("open your eyes", countdowns, "your new room", reactions), take the densest 45 s window, and ask Workers AI (`env.AI`) for a second opinion. Agreement within 2 min → keyword time. Weak keywords → AI. A per-reveal "reveal happens at minute" narrows the search to that minute. Nothing found or no captions after 25 min → `fallback`: the whole recording if it's under 14:55, else its last 14:55.
+3. Short window (`shortWindow`): from the run of lead-in lines just before the first reaction ("Alright Max, are you ready to see it?" "Here we go!") through the reactions that follow within 8 s of each other, stopping as the next unrelated line begins; at least 20 s (reaching back into the lead-up first), at most 45 s. The cover is 3 s into the first reaction. Max's reveal (Nov 20 2026) gives 7:23 to 7:43. Whole window: moment minus `leadSeconds` (default 4 min), up to 14:55, clamped to the recording. Stream `POST /stream/clip` makes a new video; the source is untouched.
+4. Stream MP4 download → Instagram `POST /{ig-user-id}/media` (REELS, caption, cover) → poll `status_code` → `media_publish` → permalink.
+5. Reveals → Now shows the Reel card on any replay, before a Reel exists too: each stage, the chosen window and method, a preview link, Retry / re-cut near a minute / Don't post, and **Choose the cut yourself**: From and To (minutes:seconds of the recording), an optional cover time and an optional caption for this Reel (`reelRetry` with `start`, `end`, `cover`, `caption`). A chosen cut skips the captions. Outcomes alert; History links the Reel.
 
 Needs the page token to carry `instagram_basic` and `instagram_content_publish` and a professional Instagram account linked to the Page. See docs/facebook-app-review.md → Instagram Reels. Without them the Reel stops at `blocked` with the reason and an alert; nothing else is affected.
 

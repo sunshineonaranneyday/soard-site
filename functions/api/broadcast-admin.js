@@ -334,6 +334,7 @@ export async function onRequestPost(context) {
           c.reels = { ...reels.defaultReelConfig(), ...(c.reels || {}) };
           if (typeof p.reels.enabled === 'boolean') c.reels.enabled = p.reels.enabled;
           if (typeof p.reels.shareToFeed === 'boolean') c.reels.shareToFeed = p.reels.shareToFeed;
+          if (p.reels.length === 'short' || p.reels.length === 'whole') c.reels.length = p.reels.length;
           if (typeof p.reels.caption === 'string' && p.reels.caption.trim()) c.reels.caption = p.reels.caption.trim().slice(0, 2200);
           if (p.reels.leadSeconds !== undefined) c.reels.leadSeconds = Math.min(600, Math.max(0, Math.round(Number(p.reels.leadSeconds) || 0)));
         }

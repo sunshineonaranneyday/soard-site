@@ -4,17 +4,25 @@
  * Instagram has no API for going live, but it does let a Page's linked
  * professional account publish Reels. So after each reveal:
  *
- *   replay ready ──▶ fits in a Reel? ──yes──────────────────────────┐
+ *   replay ready ──▶ a start and end chosen in the admin? ──yes─────┐
  *                        │ no                                         │
  *                        ▼                                            │
  *        find the reveal moment (captions → keyword scoring,          │
- *        Workers AI as a second opinion, admin override wins)         │
+ *        Workers AI as a second opinion, admin minute narrows it)     │
  *                        ▼                                            │
- *        Stream clips [moment − lead, … up to 15 min] into a new      │
- *        video (the full recording is untouched)                      │
+ *        length 'short' (default, Peter Nov 21 2026): the lead-in     │
+ *        ("are you ready… here we go") through the first reactions,   │
+ *        20 to 45 s. Length 'whole': the recording if it fits, else   │
+ *        [moment − lead, … up to 15 min]                              │
+ *                        ▼                                            │
+ *        Stream clips that window into a new video (the full          │
+ *        recording is untouched)                                      │
  *                        ▼                                            ▼
  *        Stream makes an MP4 ──▶ Instagram container (REELS, caption) ──▶
  *        poll until FINISHED ──▶ media_publish ──▶ permalink in the admin
+ *
+ * Why short: Instagram shows Reels of 3 minutes or less to people who don't
+ * follow the account; longer ones reach mostly existing followers.
  *
  * The pipeline lives on state.reel and advances one step per tick (the hub
  * ticks every minute during replay), so nothing here runs long. Every step
@@ -35,10 +43,16 @@ const CAPTION_WAIT_MS = 25 * 60 * 1000;     // Stream's AI captions usually land
 const PIPELINE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 const AI_MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
 
+export const SHORT_MIN_SECONDS = 20;
+export const SHORT_MAX_SECONDS = 45;
+const SHORT_DEFAULT_SECONDS = 30;   // a moment with no reactions found after it
+const REEL_MIN_SECONDS = 3;         // Instagram refuses shorter Reels
+
 export function defaultReelConfig() {
   return {
     enabled: true,
-    leadSeconds: 240,          // keep this much lead-up before the reveal moment
+    length: 'short',           // 'short': the reveal moment, 20-45 s · 'whole': up to 15 min (leadSeconds applies)
+    leadSeconds: 240,          // 'whole' only: keep this much lead-up before the reveal moment
     maxSeconds: REEL_MAX_SECONDS,
     caption: "{kid}'s room reveal, the moment it all came together. Watch the full reveal on our website, link in bio. #SunshineOnARanneyDay #DreamsBuiltHere",
     shareToFeed: true,
@@ -158,6 +172,87 @@ export function clipWindow(duration, momentSec, { leadSeconds = 240, maxSeconds 
   return { start: Math.floor(start), end: Math.floor(end) };
 }
 
+// What's said just before the child sees the room, and the reactions after. Phrases like
+// "your new room" are left out of both: they come before the door opens ("are you ready to
+// see your new bathroom?") as often as after
+const LEAD_IN = /open (your|ur) eyes|open them|take (it|them) off|take off the blindfold|you can look|go ahead and look|are you ready|ready to see|here we go|big reveal|\b(three|3)[,.\s]+(two|2)[,.\s]+(one|1)\b/i;
+const REACTION = /oh my (god|gosh)|oh wow|i can'?t believe|no way|it'?s (so )?(beautiful|amazing|perfect|gorgeous)|do you like it|do you love it|\bwow\b|\byay\b|\bwoo+\b|look at (this|that|it)|\[(applause|cheering|laughter|crying)\]/i;
+
+/**
+ * The short Reel around a reveal moment: from the run of lead-in lines just before the first
+ * reaction ("Alright Max, are you ready to see it?" "Here we go!") through the reactions that
+ * follow one another, 20 to 45 seconds. Returns { start, end, coverSeconds } in whole seconds,
+ * or null without a moment. The cover is a few seconds into the first reaction (the child's face).
+ */
+export function shortWindow(cues, momentSec, duration, { minSeconds = SHORT_MIN_SECONDS, maxSeconds = SHORT_MAX_SECONDS } = {}) {
+  if (momentSec == null || !Number.isFinite(momentSec)) return null;
+  const near = (cues || []).filter(c => c.start >= momentSec - 60 && c.start <= momentSec + 90).sort((a, b) => a.start - b.start);
+  const reaction = near.find(c => c.start >= momentSec - 5 && REACTION.test(c.text));
+  let start, end, coverSeconds;
+  if (reaction) {
+    // Step back over lead-in lines that follow on from one another, at most 15 s before the reaction
+    const i = near.indexOf(reaction);
+    let first = null;
+    for (let j = i - 1; j >= 0; j--) {
+      const c = near[j], next = first || reaction;
+      if (!LEAD_IN.test(c.text) || REACTION.test(c.text) || next.start - c.start > 8 || reaction.start - c.start > 15) break;
+      first = c;
+    }
+    start = (first ? first.start : reaction.start - 6) - 1;
+    // Forward over reactions and other reveal language, while each follows within 8 s
+    let last = reaction;
+    for (const c of near.slice(i + 1)) {
+      if (c.start - last.end > 8) break;
+      if (REACTION.test(c.text) || scoreCues([c])[0].score > 0) last = c;
+    }
+    // ...and stop as the next line that isn't one begins ("all right, I'm going to hand this to…")
+    const next = near.find(c => c.start > last.start);
+    end = Math.min(last.end + 1.5, next ? next.start + 1 : Infinity);
+    coverSeconds = reaction.start + 3;
+  } else {
+    start = momentSec - 2;
+    end = start + SHORT_DEFAULT_SECONDS;
+    coverSeconds = momentSec + 3;
+  }
+  start = Math.max(0, Math.floor(start));
+  end = Math.ceil(end);
+  // Too short: reach back into the lead-up (the closed door) before running into whatever is said next
+  if (end - start < minSeconds) start = Math.max(0, end - minSeconds);
+  if (end - start < minSeconds) end = start + minSeconds;
+  if (end - start > maxSeconds) end = start + maxSeconds;
+  const lastSecond = Math.floor(duration || end);
+  if (end > lastSecond) { end = lastSecond; start = Math.max(0, Math.min(start, end - minSeconds)); }
+  coverSeconds = Math.min(Math.max(coverSeconds, start), end - 1);
+  return { start, end, coverSeconds: Math.round(coverSeconds) };
+}
+
+/** "7:24", "1:02:05", 444 or "444" → seconds; anything else → null */
+export function parseClock(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (typeof v === 'number') return Number.isFinite(v) && v >= 0 ? v : null;
+  const s = String(v).trim();
+  if (/^\d+(\.\d+)?$/.test(s)) return Number(s);
+  const m = s.match(/^(?:(\d+):)?(\d{1,3}):(\d{1,2}(?:\.\d+)?)$/);
+  if (!m || Number(m[3]) >= 60) return null;
+  return (Number(m[1] || 0) * 3600) + Number(m[2]) * 60 + Number(m[3]);
+}
+
+/**
+ * A start and end chosen in the admin, checked against the recording's length.
+ * → { start, end, coverSeconds } in whole seconds, or { error }.
+ */
+export function fitCut(cut, duration) {
+  const start = Math.max(0, Math.floor(Number(cut?.start)));
+  const end = Math.min(Math.floor(duration), Math.ceil(Number(cut?.end)));
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return { error: 'The start and end must be times in the recording' };
+  if (start >= Math.floor(duration)) return { error: `The start is past the end of the recording (${Math.floor(duration / 60)}:${String(Math.floor(duration % 60)).padStart(2, '0')})` };
+  if (end - start < REEL_MIN_SECONDS) return { error: 'Instagram needs at least 3 seconds' };
+  if (end - start > REEL_MAX_SECONDS) return { error: 'Instagram takes at most 14:55 from the site' };
+  const cover = Number(cut?.coverSeconds);
+  const coverSeconds = Number.isFinite(cover) && cover >= start && cover < end ? Math.round(cover) : null;
+  return { start, end, coverSeconds };
+}
+
 export function renderCaption(template, state) {
   const kid = state.kidName || 'Today';
   const t = String(template || defaultReelConfig().caption);
@@ -224,15 +319,26 @@ export function reelEnabled(config) {
   return config?.reels?.enabled !== false;
 }
 
-/** Create the pipeline record when the replay becomes ready. */
-export function startReel(state, sourceUid, overrideSeconds) {
+/**
+ * Create the pipeline record when the replay becomes ready, or on Retry. `cut` is a start and
+ * end chosen in the admin ({ start, end, coverSeconds?, caption? }, seconds of the recording);
+ * it skips finding the moment. Its caption, when given, replaces the Settings caption for this Reel.
+ */
+export function startReel(state, sourceUid, overrideSeconds, cut = null) {
+  const chosen = cut && Number.isFinite(Number(cut.start)) && Number.isFinite(Number(cut.end))
+    ? { start: Number(cut.start), end: Number(cut.end), coverSeconds: Number.isFinite(Number(cut.coverSeconds)) && cut.coverSeconds !== null ? Number(cut.coverSeconds) : null }
+    : null;
+  const caption = typeof cut?.caption === 'string' && cut.caption.trim() ? cut.caption.trim().slice(0, 2200) : null;
   return {
     stage: 'pending', sourceUid, startedAt: nowIso(), updatedAt: nowIso(), checkedAt: null,
     duration: null, method: null, momentSeconds: null, confidence: null, overrideSeconds: overrideSeconds ?? null,
+    cut: chosen, caption, coverSeconds: null,
     start: null, end: null, clipUid: null, mp4Url: null, igUserId: null, containerId: null, mediaId: null, permalink: null,
     error: null, attempts: 0,
   };
 }
+
+const fallbackNote = (duration, cfg) => (duration <= cfg.maxSeconds ? 'used the whole recording' : 'used the ending');
 
 /**
  * Advance state.reel one step. Returns { state, events } where events is a
@@ -258,8 +364,18 @@ export async function advanceReel(env, config, state, { force = false } = {}) {
         const duration = Number(v.result?.duration) || 0;
         if (v.result?.status?.state !== 'ready' || !duration) break;
         set({ duration });
-        if (duration <= cfg.maxSeconds) { set({ stage: 'download', start: 0, end: duration, method: 'fits', clipUid: null }); events.push('reel:fits'); break; }
-        if (reel.overrideSeconds != null) { set({ stage: 'window', momentSeconds: reel.overrideSeconds, method: 'override', confidence: 1 }); break; }
+        if (reel.cut) {
+          const w = fitCut(reel.cut, duration);
+          if (w.error) { fail(w.error); break; }
+          set({ stage: 'window', start: w.start, end: w.end, coverSeconds: w.coverSeconds, method: 'chosen', confidence: null, clipUid: null });
+          events.push(`reel:chosen@${w.start}-${w.end}`);
+          break;
+        }
+        if (cfg.length === 'whole') {
+          if (duration <= cfg.maxSeconds) { set({ stage: 'download', start: 0, end: duration, method: 'fits', clipUid: null }); events.push('reel:fits'); break; }
+          if (reel.overrideSeconds != null) { set({ stage: 'window', momentSeconds: reel.overrideSeconds, method: 'override', confidence: 1 }); break; }
+        }
+        // Short Reels always read the captions, even with a minute from the admin: it narrows the search
         set({ stage: 'captions' });
         break;
       }
@@ -270,24 +386,43 @@ export async function advanceReel(env, config, state, { force = false } = {}) {
         const en = tracks.find(t => (t.language || '').startsWith('en'));
         if (!en) {
           if (waited > 5 * 60 * 1000 && !reel.captionRequested) { await stream.requestCaptions(env, reel.sourceUid); set({ captionRequested: true }); }
-          if (waited > CAPTION_WAIT_MS) { set({ stage: 'window', method: 'fallback', momentSeconds: null, error: 'No captions arrived; used the ending' }); events.push('reel:fallback'); }
+          if (waited > CAPTION_WAIT_MS) {
+            // A minute from the admin still makes a short Reel without captions
+            if (reel.overrideSeconds != null && cfg.length !== 'whole') { const sw = shortWindow([], reel.overrideSeconds, reel.duration); set({ stage: 'window', momentSeconds: reel.overrideSeconds, method: 'override', confidence: 1, start: sw.start, end: sw.end, coverSeconds: sw.coverSeconds, error: 'No captions arrived; cut at your minute' }); break; }
+            set({ stage: 'window', method: 'fallback', momentSeconds: null, error: `No captions arrived; ${fallbackNote(reel.duration, cfg)}` }); events.push('reel:fallback');
+          }
           break;
         }
         if (en.status && en.status !== 'ready') {
-          if (en.status === 'error' || waited > CAPTION_WAIT_MS) { set({ stage: 'window', method: 'fallback', momentSeconds: null, error: 'Captions failed; used the ending' }); events.push('reel:fallback'); }
+          if (en.status === 'error' || waited > CAPTION_WAIT_MS) { set({ stage: 'window', method: 'fallback', momentSeconds: null, error: `Captions failed; ${fallbackNote(reel.duration, cfg)}` }); events.push('reel:fallback'); }
           break;
         }
         const vtt = await stream.getCaptionsVtt(env, reel.sourceUid, en.language || 'en');
         const cues = parseVtt(vtt);
-        const kw = detectByKeywords(cues);
-        const ai = await detectByAi(env, cues, reel.duration);
-        const pick = chooseMoment(kw, ai);
-        if (pick) { set({ stage: 'window', momentSeconds: pick.seconds, method: pick.method, confidence: Math.round(pick.confidence * 100) / 100, kw: kw ? kw.seconds : null, ai: ai ? ai.seconds : null }); events.push(`reel:moment@${pick.seconds}`); }
-        else { set({ stage: 'window', method: 'fallback', momentSeconds: null, error: 'No reveal language found; used the ending' }); events.push('reel:fallback'); }
+        let kw = null, ai = null, pick = null;
+        if (reel.overrideSeconds != null) {
+          // The admin's minute: the reveal language near it pins the second, else the minute itself
+          const o = reel.overrideSeconds;
+          const near = detectByKeywords(cues.filter(c => c.start >= o - 30 && c.start <= o + 120));
+          pick = { seconds: near ? near.seconds : o, method: 'override', confidence: 1 };
+        } else {
+          kw = detectByKeywords(cues);
+          ai = await detectByAi(env, cues, reel.duration);
+          pick = chooseMoment(kw, ai);
+        }
+        if (pick) {
+          const sw = cfg.length === 'whole' ? null : shortWindow(cues, pick.seconds, reel.duration);
+          set({ stage: 'window', momentSeconds: pick.seconds, method: pick.method, confidence: Math.round(pick.confidence * 100) / 100, kw: kw ? kw.seconds : null, ai: ai ? ai.seconds : null,
+            ...(sw ? { start: sw.start, end: sw.end, coverSeconds: sw.coverSeconds } : {}) });
+          events.push(`reel:moment@${pick.seconds}`);
+        }
+        else { set({ stage: 'window', method: 'fallback', momentSeconds: null, error: `No reveal language found; ${fallbackNote(reel.duration, cfg)}` }); events.push('reel:fallback'); }
         break;
       }
       case 'window': {
-        const w = clipWindow(reel.duration, reel.momentSeconds, cfg);
+        // A short cut or a chosen one arrives with its start and end; the long Reel works them out here
+        const w = reel.start != null && reel.end != null ? { start: reel.start, end: reel.end } : clipWindow(reel.duration, reel.momentSeconds, cfg);
+        if (w.start <= 0 && w.end >= Math.floor(reel.duration)) { set({ stage: 'download', start: 0, end: reel.duration, clipUid: null, error: reel.method === 'fallback' ? reel.error : null }); events.push('reel:whole'); break; }
         const c = await stream.createClip(env, { uid: reel.sourceUid, startTimeSeconds: w.start, endTimeSeconds: w.end, name: `${state.kidName ? `${state.kidName}'s` : 'Live'} reveal (Instagram cut)` });
         if (!c.ok || !c.result?.uid) { set({ error: stream.errorMessage(c, 'Clip failed') }); if (reel.attempts > 6) fail(reel.error); break; }
         set({ stage: 'clipping', start: w.start, end: w.end, clipUid: c.result.uid, error: null });
@@ -314,8 +449,9 @@ export async function advanceReel(env, config, state, { force = false } = {}) {
       case 'instagram': {
         const ig = await instagramAccount(env);
         if (!ig.ok) { isPermissionError(ig) || /No professional Instagram/.test(ig.error) ? fail(ig.error, 'blocked') : set({ error: ig.error }); break; }
-        const thumb = reel.momentSeconds != null && reel.start != null ? (reel.momentSeconds - reel.start + 3) * 1000 : undefined;
-        const c = await createReelContainer(env, ig.id, { videoUrl: reel.mp4Url, caption: renderCaption(cfg.caption, state), thumbOffsetMs: thumb, shareToFeed: cfg.shareToFeed });
+        const thumb = reel.coverSeconds != null && reel.start != null ? (reel.coverSeconds - reel.start) * 1000
+          : reel.momentSeconds != null && reel.start != null ? (reel.momentSeconds - reel.start + 3) * 1000 : undefined;
+        const c = await createReelContainer(env, ig.id, { videoUrl: reel.mp4Url, caption: reel.caption || renderCaption(cfg.caption, state), thumbOffsetMs: thumb, shareToFeed: cfg.shareToFeed });
         if (!c.ok) { isPermissionError(c) ? fail(`Instagram refused: ${c.error}. The page token needs instagram_basic and instagram_content_publish.`, 'blocked') : set({ error: c.error }); if (reel.attempts > 12 && reel.stage !== 'blocked') fail(c.error); break; }
         set({ stage: 'processing', igUserId: ig.id, igUsername: ig.username, containerId: c.data.id, error: null });
         events.push('reel:container');
