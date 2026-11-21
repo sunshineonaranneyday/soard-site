@@ -107,6 +107,12 @@ const REPLAY_META_MS = 2 * 60 * 1000;
  */
 const END_LINE_MAX = 0.92;
 const END_LINE_TAU_S = 75;
+/**
+ * Live, the reveal over: how long a live video holding its last frame (Reconnecting) still counts as playing out its
+ * ending (isPlayingLive). Stream closes a stopped recording 17 s after the stop with recording.timeoutSeconds 0, and
+ * 2 min 2 s after it with 120 (measured Nov 20 2026); viewers reach the held end about 16 s after the stop
+ */
+const END_WAIT_MS = 150_000;
 const REPLAY_META_FOR_MS = 45 * 60 * 1000;
 const CC_KEY = 'soard-live-cc';
 
@@ -190,6 +196,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // The broadcast the video on belongs to: only its own moving on is the reveal's end (a staff test after the reveal,
   // ending back on the reveal's replay, isn't)
   let mountedFor = '';
+  // Live: since when the video has been Reconnecting (0: it isn't); the page hears again once a hold has run past
+  // END_WAIT_MS (isPlayingLive)
+  let reconnectingSince = 0;
+  let endWaitTimer: ReturnType<typeof setTimeout> | undefined;
   let connectingTimer: ReturnType<typeof setTimeout> | undefined;
   let soundBeacon = false;
   let replayBeacon = false;
@@ -259,6 +269,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
         player = mountPlayer(playerEl, {
           player: next.player, onStatus, onSize, onMuted,
           onLive: (st) => { liveSeek = st; paint(); },
+          // (Reconnecting at the end, holding for its last seconds or not: isPlayingLive)
+          onWaitingForMore: () => tellPage(),
           // (the feed over: the end only once the broadcast itself has moved on to its replay, or to nothing. While it's
           // still live or ending, a phone that dropped may yet come back: the player says Reconnecting meanwhile)
           onFeedEnd: () => {
@@ -310,7 +322,13 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   // frames (waiting or reconnecting with the broadcast moved on means nothing is left for it to play)
   // (playing or buffering only: paused by the phone, never started (Low Power Mode), connecting or Stream's own player
   // aren't playing anything to the end, so the page doesn't stay Live for them)
-  const isPlayingLive = () => kind === 'live' && !!player && !endShown && !player.feedEnded && !player.closed && (pstatus === 'playing' || pstatus === 'buffering');
+  // (and holding its last frame, Reconnecting, after it has played, for up to END_WAIT_MS: when the phone stops, Stream
+  // keeps the recording open a while (the live input's recording.timeoutSeconds) and its playlist lacks the last few
+  // seconds until it closes; the player holds and plays them once they come. Max's reveal, Nov 20 2026: the page took
+  // the hold for the end and showed "That's the reveal!" about 100 s before his last words came, so no one watching
+  // live saw them. A hold that outlasts END_WAIT_MS, the viewer's own signal gone, ends with the note as before)
+  const holdingForEnd = () => pstatus === 'reconnecting' && !!player?.waitingForMore && reconnectingSince > 0 && Date.now() - reconnectingSince < END_WAIT_MS;
+  const isPlayingLive = () => kind === 'live' && !!player && !endShown && !player.feedEnded && !player.closed && (pstatus === 'playing' || pstatus === 'buffering' || holdingForEnd());
   // The page's next view ends the reveal for the video on: it was this broadcast's live video, and the broadcast has
   // moved on to its replay or to nothing (the page asks before drawing itself, so its layout and the give form hold)
   const endsNow = (next: { mode: StageMode }) => kind === 'live' && !!player && !endShown && (next.mode === 'replay' || next.mode === 'idle') && mountedFor === (client.state?.id || '');
@@ -366,6 +384,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     revealAt = null; hasCaptions = false; cues = null;
     clearTimeout(metaTimer);
     clearTimeout(connectingTimer);
+    clearTimeout(endWaitTimer);
+    reconnectingSince = 0;
     slowConnect = false;
     delete root.dataset.pstatus;
     delete root.dataset.pkind;
@@ -381,6 +401,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   function onStatus(st: PlayerStatus) {
     pstatus = st;
     root.dataset.pstatus = st;
+    if (st !== 'reconnecting') { reconnectingSince = 0; clearTimeout(endWaitTimer); }
+    else if (!reconnectingSince) { reconnectingSince = Date.now(); clearTimeout(endWaitTimer); endWaitTimer = setTimeout(tellPage, END_WAIT_MS + 50); }
     repaintPlay?.();
     clearTimeout(connectingTimer);
     slowConnect = false;

@@ -83,7 +83,10 @@ function newRecording() {
 newRecording();
 setInterval(() => { if (feed.phone === 'on' && feed.rec && !recordings.get(feed.rec).closed) recordings.get(feed.rec).count++; }, 2000).unref();
 const phoneOff = () => { feed.phone = 'off'; };
-const phoneOn = () => { if (recordings.get(feed.rec).closed) newRecording(); feed.phone = 'on'; };
+const phoneOn = () => { if (recordings.get(feed.rec).closed) newRecording(); recordings.get(feed.rec).tail = 0; feed.phone = 'on'; };
+// The phone's Stop button: Stream keeps the recording open a while (recording.timeoutSeconds), and the last two pieces
+// the phone sent show in its playlists only once it closes (closeRecording), as measured on private inputs, Nov 20 2026
+const phoneStops = () => { feed.phone = 'off'; const r = recordings.get(feed.rec); r.count += 2; r.tail = 2; };
 const closeRecording = () => { recordings.get(feed.rec).closed = true; feed.phone = 'off'; };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 /** The room's design, for the strip beside the video (a kid's page) */
@@ -97,7 +100,7 @@ const DESIGN = {
  */
 function livePlaylist(track = '', recId = feed.rec, { dvr = false } = {}) {
   const r = recordings.get(recId);
-  const top = r.count - 1;
+  const top = r.count - 1 - (r.closed ? 0 : r.tail || 0);
   const first = dvr ? 0 : Math.max(0, top - feed.window);
   let s = `#EXTM3U\n#EXT-X-VERSION:${track ? 7 : 3}\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:${first}\n#EXT-X-DISCONTINUITY-SEQUENCE:${Math.floor(first / SEGMENTS)}\n`;
   if (dvr && r.closed) s += '#EXT-X-PLAYLIST-TYPE:VOD\n';
@@ -652,6 +655,37 @@ try {
     await waitFor(page, ['playing'], 45000); await sleep(1500);
     e = await end();
     ok(!e.shown && e.pkind === 'live', `the phone back on: the note goes, live again (${e.pkind})`);
+
+    // Max's ending (Nov 20 2026): Stop on the phone, then the Y text ends the broadcast. Stream keeps a stopped recording
+    // open a while, its playlist two pieces short of the end until it closes, so the live video, 20 s behind, holds at
+    // that short end (Reconnecting). The page waits: the last seconds play once they come, and only then "That's the
+    // reveal!" (it showed the note at the hold, about 100 s before his last words came, and nobody watching live saw them)
+    if (recordings.get(feed.rec).closed) phoneOn();
+    state = { ...STATES.live, kidName: 'Axel' }; await open(page); await waitFor(page, ['playing'], 45000); await sleep(2000);
+    phoneStops();
+    const stopped = recordings.get(feed.rec);
+    const recEnd = stopped.count * 2;
+    await sleep(1500);
+    state = { ...STATES.replay, kidName: 'Axel', player: null }; await refresh();
+    const CLOSE_AFTER_MS = 40000;
+    const stoppedAt = Date.now();
+    const closer = setTimeout(closeRecording, CLOSE_AFTER_MS);
+    let held = false, heldLive = true, noteOpen = false, furthest = 0, atNote = null, flash = false;
+    for (let i = 0; i < 360 && atNote == null; i++) {
+      const s = await page.evaluate(() => ({ t: document.querySelector('.stage__player video')?.currentTime ?? 0, pstatus: document.querySelector('[data-stage]').dataset.pstatus, shown: !document.querySelector('[data-s="end"]').hidden, phase: document.querySelector('#live-hero').dataset.phase }));
+      const isOpen = Date.now() - stoppedAt < CLOSE_AFTER_MS;
+      furthest = Math.max(furthest, s.t);
+      if (isOpen && s.pstatus === 'reconnecting') { held = true; if (s.phase !== 'live') heldLive = false; }
+      // (the last frame played: nothing more to wait for, so never a Reconnecting before the note)
+      if (!isOpen && !s.shown && furthest >= recEnd - 0.3 && s.pstatus === 'reconnecting') flash = true;
+      if (s.shown) { if (isOpen) noteOpen = true; atNote = furthest; }
+      else await sleep(250);
+    }
+    clearTimeout(closer);
+    if (!stopped.closed) closeRecording();
+    ok(held && heldLive && !noteOpen, `while Stream keeps the stopped recording open the live video holds at its short end, the page still live, no "That's the reveal!" (held ${held}, live ${heldLive}, note ${noteOpen})`);
+    ok(atNote != null && atNote >= recEnd - 1, `its last seconds play once Stream closes it, then "That's the reveal!" (played to ${furthest.toFixed(1)} of ${recEnd} s)`);
+    ok(!flash, `after the last frame the note comes straight away, no Reconnecting first (${flash})`);
 
     // A camera check before the start: live, then back to the countdown, never "That's the reveal!"
     state = { ...STATES.live, kidName: 'Axel' }; await refresh(); await sleep(1000);
