@@ -71,6 +71,9 @@ const TICK_MIN_INTERVAL_MS = 2500;
 const LIFECYCLE_MIN_INTERVAL_MS = 4000;
 const FB_PERMALINK_INTERVAL_MS = 60 * 1000;
 const REPLAY_CHECK_INTERVAL_MS = 30 * 1000;
+// A test's end, as the reveal's end will look, for signed-in staff (testEndView): "That's the reveal!", then the test's
+// own recording as the replay, for this long. The public page goes straight back to the countdown
+const TEST_END_SHOW_MS = 10 * 60 * 1000;
 const DAILY_HEALTH_MS = 24 * 60 * 60 * 1000;
 const REVEAL_MORNING_HEALTH_MS = 6 * 60 * 60 * 1000;
 const DEPLOY_COOLDOWN_MS = 10 * 60 * 1000;
@@ -223,6 +226,7 @@ export function defaultState() {
     endedBy: null,         // who ended it (an admin's email, "text from …1234"); null when it ended on its own
     closedAt: null,        // when that window closed and the reveal was over for good (the final effects run from then)
     replayPieces: null,    // { count, minutes } when the reveal was recorded in more than one piece
+    testEnd: null,         // a test that just ended, shown on the website as the reveal's end would be (tEndQuiet)
     preShowFb: null,       // the Facebook live post a framing check opened, to release and close (preShowEffects)
     preShowNote: null,     // a framing check just ended: staff are told once (preShowEffects)
     fbReopen: false,       // picked up again (tRejoin): open a new Facebook post (preShowEffects)
@@ -503,6 +507,22 @@ export function publicState(state, config, { includeTest = false } = {}) {
     ...(state.test ? { test: true } : {}),
     updatedAt: state.updatedAt,
   };
+}
+
+/**
+ * A test that just ended, as the reveal's end will look (tEndQuiet): ended, "That's the reveal!", its own recording
+ * as the replay once Stream has it. Staff only (/api/broadcast-test-end, signed-in staff): the public page goes
+ * straight back to the planned reveal's countdown (Peter, Nov 18 2026: he wants to see the real end after his test,
+ * and the public must never read that Dylan's reveal "just ended" hours before it). Null when there's none.
+ */
+export function testEndView(state, config, now = Date.now()) {
+  if (!testEndShowing(state, now)) return null;
+  const te = state.testEnd;
+  const code = config?.customerCode || stream.DEFAULT_CUSTOMER_CODE;
+  const shown = { ...state, phase: 'replay', broadcastId: te.broadcastId, kidSlug: te.kidSlug ?? state.kidSlug, kidName: te.kidName ?? state.kidName,
+    title: te.title ?? state.title, liveAt: te.liveAt, endedAt: te.at, replayUntil: te.until, replayUid: null, source: 'stream', testEnd: null };
+  const p = publicState(shown, config, { includeTest: true });
+  return { ...p, player: te.replayUid ? { kind: 'replay', uid: te.replayUid, customerCode: code } : null, testEnded: true };
 }
 
 /** The shape the original LiveIndicator + admin Go Live read. */
@@ -798,7 +818,7 @@ export function tSchedule(state, { kidSlug, kidName, jobId, test, scheduledAt, t
 }
 
 export function tStartLive(state, { videoUid, source = 'stream', by }, config) {
-  let s = { ...state };
+  let s = { ...state, testEnd: null };
   // A real stream never inherits a rehearsal: it starts its own, public broadcast
   const reusable = !state.test && (['scheduled', 'armed', 'ending'].includes(state.phase) || (state.phase === 'live'));
   if (!reusable) {
@@ -919,7 +939,8 @@ export function tStartQuiet(state, { videoUid, by } = {}, config) {
     reel: null, fb: blank.fb, fbEarlier: [], kit: blank.kit, kidCheckAt: null, kidAlertAt: null, manual: null, clicks: 0, note: null,
     endedVideoUid: before.endedVideoUid || null, endedVideoAt: before.endedVideoAt || null, gapSince: null, holdUntil: null, endedBy: null,
     quiet: { at },
-    resume: before.phase === 'idle' || !before.phase ? null : before,
+    resume: before.phase === 'idle' || !before.phase ? null : { ...before, testEnd: null },
+    testEnd: null,
     updatedBy: by || null,
   };
 }
@@ -968,9 +989,43 @@ function preShow(state) {
 }
 
 /** The test is over: whatever it interrupted comes back as it was (nothing → idle) */
-export function tEndQuiet(state, by) {
+export function tEndQuiet(state, by, now = Date.now()) {
   const back = state.resume ? { ...state.resume } : { ...defaultState(), note: 'test-ended' };
-  return { ...back, ...endedFields(state), updatedBy: by || back.updatedBy || null };
+  const out = { ...back, ...endedFields(state), updatedBy: by || back.updatedBy || null, testEnd: null };
+  // Signed-in staff see the test's end as the reveal's will (testEndView, staff only): "That's the reveal!", then its
+  // own recording as the replay once Stream has it (findTestReplay), for TEST_END_SHOW_MS, never into the half hour
+  // before a planned reveal. The public goes straight back to the countdown; nothing is sent, posted or attached
+  const recordings = withRecording(state.recordings, state.liveVideoUid);
+  if (state.source === 'stream' && state.liveAt && recordings.length) {
+    const at = Date.parse(back.scheduledAt || '');
+    const until = Math.min(now + TEST_END_SHOW_MS, Number.isFinite(at) ? at - ARM_WINDOW_MS : Infinity);
+    if (until - now >= 60e3) {
+      out.testEnd = {
+        at: new Date(now).toISOString(), until: new Date(until).toISOString(), broadcastId: state.broadcastId,
+        kidSlug: state.kidSlug || null, kidName: state.kidName || null, title: state.title || null, liveAt: state.liveAt,
+        recordings, replayUid: null, checkedAt: null,
+      };
+    }
+  }
+  return out;
+}
+
+/** Is a test's end being shown to staff (tEndQuiet, testEndView)? Only while the state is back to waiting */
+export function testEndShowing(state, now = Date.now()) {
+  const te = state?.testEnd;
+  return !!te && ['idle', 'scheduled', 'armed'].includes(state.phase || 'idle') && now < Date.parse(te.until);
+}
+
+/** A test's end: its recording as the replay, once Stream has it ready (the longest ready piece) */
+async function findTestReplay(env, state, work) {
+  const te = state.testEnd;
+  if (!testEndShowing(state) || te.replayUid || !stream.streamConfigured(env)) return state;
+  if (te.checkedAt && Date.now() - Date.parse(te.checkedAt) < REPLAY_CHECK_INTERVAL_MS) return state;
+  const vids = await Promise.all((te.recordings || []).map((uid) => stream.getVideo(env, uid).catch(() => null)));
+  const ready = vids.filter((v) => v?.ok && v.result?.status?.state === 'ready').map((v) => v.result);
+  const pick = ready.reduce((a, b) => (!a || (Number(b.duration) || 0) > (Number(a.duration) || 0) ? b : a), null);
+  if (pick?.uid) work.push('test-replay-ready');
+  return { ...state, testEnd: { ...te, checkedAt: nowIso(), replayUid: pick?.uid || null } };
 }
 
 /**
@@ -2169,6 +2224,10 @@ async function tick(env, { source, force, by, keepLease = async () => true, answ
     // No phone came back: the reveal is over for good, and its final effects run (endedEffects, the replay's)
     state = { ...state, rejoinUntil: null, closedAt: nowIso() }; work.push('closed');
   }
+  if (state.testEnd && !testEndShowing(state, now)) {
+    // A test's end has been shown to staff long enough (or a broadcast has started)
+    state = { ...state, testEnd: null }; work.push('test-end-over');
+  }
   if (state.phase === 'replay' && state.replayUntil && now >= Date.parse(state.replayUntil)) {
     state = tClear(state, 'replay-expired'); work.push('replay-expired');
   }
@@ -2238,6 +2297,8 @@ async function tick(env, { source, force, by, keepLease = async () => true, answ
     async () => { state = await kitAutoLive(env, config, state, work); },
     async () => { for (const kind of await dueReminderKinds(DB, state, config, { kit: kitConfigured(env) })) await sendReminders(env, config, state, kind, work); },
     async () => { state = await checkReplayReady(env, config, state, health, work); },
+    // A test's end for staff: its recording as the replay once Stream has it
+    async () => { state = await findTestReplay(env, state, work).catch((e) => { work.push(`test-replay-error: ${e.message}`); return state; }); },
     async () => { state = await tickReel(env, config, state, work); },
     async () => { await runHealth(env, config, state, health, work); },
   ];
