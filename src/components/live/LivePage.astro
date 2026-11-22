@@ -772,8 +772,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     }
     /* As tall as the screen leaves: under the header, the hero's 12px and the kid's name (its 28px line and 10px), and
        14px clear of the box docked at the screen's foot when there is one (--live-dock, LiveMessages), less what goes
-       between them (--fh-cut). What comes next starts under that box, never peeking over it (.hero-party below) */
-    .hero[data-party] .hero-frame { order: 2; max-width: none; --fh: calc(var(--live-vh, 100svh) - var(--header-height) - 12px - 38px - 14px - var(--fh-cut, 0px) - var(--live-dock, 0px)); }
+       between them (--fh-cut) and the site's reveal news over the name while it shows (--news-h, below). What comes next
+       starts under that box, never peeking over it (.hero-party below) */
+    .hero[data-party] .hero-frame { order: 2; max-width: none; --fh: calc(var(--live-vh, 100svh) - var(--header-height) - 12px - 38px - 14px - var(--fh-cut, 0px) - var(--live-dock, 0px) - var(--news-h, 0px)); }
     .hero[data-party] .hero-status { order: 3; margin: 20px auto 0; }
     .hero[data-party] .hero-party { order: 4; margin: 24px 0 0; }
     .hero[data-party] .hero-ctas { order: 5; margin-top: 24px; }
@@ -786,6 +787,28 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   @media (max-width: 559px), (max-width: 960px) and (max-aspect-ratio: 1749/1000), (max-width: 960px) and (min-height: 541px), (min-width: 961px) and (max-width: 1100px) and (min-height: 1200px) {
     /* (the name at the left, live and in the replay alike: centred in one and not the other, it moved at the end) */
     .hero[data-party] .hero-titlerow { justify-content: space-between; text-align: left; }
+    /* The site's reveal news (another kid's reveal day, live now, its replay; LiveIndicator fills it): one quiet line over
+       the name, in the page, as in the Theater, not a dark card floating over the messages and Share and Fund the next
+       room (Peter, Nov 21 2026, picked "A quiet line above the name"). The video gives up its 28px and 8px only while it
+       shows (--news-h, the frame's height above) */
+    .hero[data-party] .hero-head { --banner-home: 1; }
+    .hero[data-party]:has(.hero-news:not([hidden])) { --news-h: 36px; }
+    .hero[data-party] .hero-news:not([hidden]) {
+      order: 0; justify-self: start; position: relative; display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; box-sizing: border-box; height: 28px; min-height: 0;
+      margin: 0 0 8px; padding: 0 12px 0 11px; border-radius: 100px; background: #fff; border: 1px solid var(--c-border);
+      color: var(--c-text); text-decoration: none; font-size: 12.5px; font-weight: 600; line-height: 1; white-space: nowrap; text-align: left;
+    }
+    /* (a 28px line to the eye, a 44px target to a thumb, the site's touch size: its reach goes 8px over and under it, into
+       the room above it and the 8px to the name) */
+    .hero[data-party] .hero-news::before { content: ''; position: absolute; inset: -8px -4px; }
+    .hero[data-party] .hero-news__dot { position: relative; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c-yellow); }
+    .hero[data-party] .hero-news[data-state='live'] .hero-news__dot::after {
+      content: ''; position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--c-yellow); opacity: 0; animation: live-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+    }
+    .hero[data-party] .hero-news__label { flex: none; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+    .hero[data-party] .hero-news__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--c-text-muted); }
+    .hero[data-party] .hero-news__go { flex: none; }
+    .hero[data-party] .hero-news:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
     /* The newest message's line and the 12px over it: the video leaves room for them on the screen (LiveMessages), on a
        phone at least 740px tall; a shorter one keeps the video's size and has the line further down. From the held
        screen height, --live-vh, so a keyboard coming up never resizes the video: 64px or nothing. Live and in the
