@@ -237,6 +237,19 @@ const ICON = {
   .stage[data-party][data-cc] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + var(--under, 0px)); }
   .stage[data-party][data-jump] { --below: calc(var(--bar) + var(--gap) + 46px + var(--gap) + var(--under, 0px)); }
   .stage[data-party][data-cc][data-jump] { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + 46px + var(--gap) + var(--under, 0px)); }
+  /* A phone held upright (every phone, no tablet: PHONE_UPRIGHT's narrowest part, live-media.ts), an upright picture
+     with its bar under it (a replay, or "That's the reveal!"): the picture, its captions, bar and Jump fill the screen
+     above the box docked at its foot, and the partners' band is next, just under that box (Peter, Nov 18 2026: "can this
+     take up more available space on the mobile?"; with the band also on the first screen the picture was 185px wide on
+     his iPhone, 50px of cream either side). The band starts clear of the box (14px, LivePage's gap above it), never
+     peeking over it */
+  @media (max-width: 559px) {
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) { --below: calc(var(--bar) + var(--gap)); }
+    .stage[data-party][data-orientation='portrait'][data-cc]:not([data-rail]):not([data-fullscreen]) { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap)); }
+    .stage[data-party][data-orientation='portrait'][data-jump]:not([data-rail]):not([data-fullscreen]) { --below: calc(var(--bar) + var(--gap) + 46px + var(--gap)); }
+    .stage[data-party][data-orientation='portrait'][data-cc][data-jump]:not([data-rail]):not([data-fullscreen]) { --below: calc(var(--bar) + var(--gap) + 3.4em + var(--gap) + 46px + var(--gap)); }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .stage__under { margin-top: calc(var(--gap) + 14px); }
+  }
   .stage[data-party] .stage__screen { aspect-ratio: var(--ar); }
   .stage[data-party] .stage__picture { position: absolute; inset: 0; aspect-ratio: auto; border-radius: 20px; }
   /* While the video connects or reconnects, the kid's photo, soft and dim, sits behind the note; the video fades in
@@ -678,6 +691,13 @@ const ICON = {
       grid-template-areas: 'screen . beside . cc' 'screen . beside . bar' 'screen . beside . jump' 'screen . beside . .';
     }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) .stage__beside { height: var(--fh); }
+    /* "That's the reveal!" has no controls, so nothing for their column: the stage is the note and the design beside it,
+       and the page puts the kid's name and the messages beside them, as while it was live (LivePage). The controls'
+       empty column left half the screen bare */
+    .stage[data-party][data-ended][data-orientation='portrait']:not([data-fullscreen]):not([data-rail]) {
+      width: calc(var(--pic) + var(--beside-gap, 0px) + var(--beside, 0px));
+      grid-template-columns: var(--pic) var(--beside-gap, 0px) var(--beside, 0px) 0px 0px;
+    }
     /* The first control beside the picture starts level with its top */
     .stage[data-party][data-orientation]:not([data-fullscreen]) .stage__cc:not([hidden]), .stage[data-party][data-orientation]:not([data-fullscreen]) .stage__cc[hidden] + .stage__bar,
     .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc:not([hidden]), .stage[data-party][data-fit='side'][data-fullscreen] .stage__cc[hidden] + .stage__bar { margin-top: 0; }

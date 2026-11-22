@@ -75,6 +75,12 @@ interface Options {
   onAir?: (onAir: boolean | null, watching: number | null) => void;
   /** playingLive or ended changed: the page draws itself again */
   onEnd?: () => void;
+  /**
+   * The live video has played its last frame: "That's the reveal!" changes the page's shape (an upright phone's rail
+   * gives way to the design beside the note), so the page makes the change (end) and glides into it. Without it the
+   * note just comes up
+   */
+  reshape?: (end: () => void) => void;
 }
 
 /** Below this the count reads as lonely rather than lively, so it stays hidden. */
@@ -240,7 +246,12 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
           onLive: (st) => { liveSeek = st; paint(); },
           // (the feed over: the end only once the broadcast itself has moved on to its replay, or to nothing. While it's
           // still live or ending, a phone that dropped may yet come back: the player says Reconnecting meanwhile)
-          onFeedEnd: () => { if (kind === 'live' && (view.phase === 'replay' || view.phase === 'idle')) showEnd(null); else tellPage(); },
+          onFeedEnd: () => {
+            if (!(kind === 'live' && (view.phase === 'replay' || view.phase === 'idle'))) { tellPage(); return; }
+            // (whatever the page draws meanwhile brings the note up all the same: its next view is the replay or nothing)
+            const end = () => { if (kind === 'live' && player?.feedEnded) showEnd(null); };
+            if (opts.reshape) opts.reshape(end); else end();
+          },
         });
         // Live starts muted, a replay doesn't; after that, volume events keep this current
         muted = player.video?.muted ?? true;
@@ -578,7 +589,10 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     // heart and full screen even before the sound is on
     // (a phone held sideways too, Nov 18 2026: the picture as tall as the screen, its controls in the rail beside it, the
     // messages beside that, where a long bar of controls used to leave most of the screen empty)
-    const rail = party && live && shape() === 'portrait' && document.fullscreenElement !== root;
+    // (not under "That's the reveal!": the live video kept under the note has nothing left in the rail, and its empty
+    // column left the note off centre (Peter's iPhone, Nov 18 2026). The page is then laid out as for everyone arriving
+    // after the end: the design beside the note, the kid's name centred)
+    const rail = party && live && !endShown && shape() === 'portrait' && document.fullscreenElement !== root;
     flag('data-rail', rail);
 
     // Photo badge, before the watch party only
@@ -595,8 +609,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     setHidden($('tap'), !(isVideo && !endShown && (pstatus === 'blocked' || (kind === 'live' && pstatus === 'paused'))));
 
     // Bar
-    // (none under "That's the reveal!" when there's no video at all: someone arriving after the end has nothing to control)
-    setHidden($('bar'), !party || (endShown && !player));
+    // (none under "That's the reveal!": nothing in it is shown then, the live video kept under the note included)
+    setHidden($('bar'), !party || endShown);
     const replayControls = kind === 'replay' && isVideo;
     setHidden($('livebar'), replayControls);
     setHidden($('replaybar'), !replayControls);
