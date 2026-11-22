@@ -13783,7 +13783,12 @@
       const streamUid = KS.streamUid(data.streamVideoId);
       const streamState = useStreamState(streamUid);
       const ytId = KS.youTubeId(data.videoUrl);
-      const plays = streamUid && (streamState === 'playable' || (streamState === 'unknown' && !ytId)) ? 'stream' : ytId ? 'youtube' : null;
+      // Until there's a finished video, the Reveal chapter plays the live reveal's recording unless Stream has dropped it
+      // (resolveKidReveal in src/utils/reveals.ts)
+      const liveUid = KS.streamUid(data.revealVideoUrl);
+      const liveState = useStreamState(liveUid);
+      const finished = streamUid && (streamState === 'playable' || (streamState === 'unknown' && !ytId)) ? 'stream' : ytId ? 'youtube' : null;
+      const plays = finished || (liveUid && (liveState === 'playable' || liveState === 'unknown') ? 'live' : null);
       const reveal = slug ? kdRevealOf(reveals, slug) : null;
       const jobId = slug ? jobs[slug] : null;
       // A room that's been revealed has all its design on the kid page; before that, from the confirmed reveal, its before photos and existing and proposed plans (./reveal-design.js pagePlans)
@@ -15046,14 +15051,16 @@
 
         ${sec('video', 'Video', 'The reveal video plays in the Reveal chapter.', null, html`
           <div class=${`kd-plays kd-plays--${plays || 'none'}`}>
-            ${plays === 'stream' ? html`<img src=${`https://videodelivery.net/${streamUid}/thumbnails/thumbnail.jpg?width=320&height=180&fit=crop`} alt="" />`
+            ${plays === 'stream' || plays === 'live' ? html`<img src=${`https://videodelivery.net/${plays === 'live' ? liveUid : streamUid}/thumbnails/thumbnail.jpg?width=320&height=180&fit=crop`} alt="" />`
               : plays === 'youtube' ? html`<img src=${`https://i.ytimg.com/vi/${ytId}/mqdefault.jpg`} alt="" />`
               : html`<span class="kd-plays__none">${kdIcon.play}</span>`}
             <div>
-              <strong>${streamUid && streamState === 'checking' ? 'Checking the uploaded video…' : plays === 'stream' ? 'The page plays the uploaded video' : plays === 'youtube' ? 'The page plays the YouTube video' : 'No video on the page'}</strong>
+              <strong>${streamUid && streamState === 'checking' ? 'Checking the uploaded video…' : plays === 'stream' ? 'The page plays the uploaded video' : plays === 'youtube' ? 'The page plays the YouTube video'
+                : !finished && liveUid && liveState === 'checking' ? 'Checking the live reveal’s recording…' : plays === 'live' ? 'The page plays the live reveal’s recording' : 'No video on the page'}</strong>
               <p>${streamUid && streamState === 'gone'
-                ? `The uploaded video can’t play (it’s still processing, or it was removed from Stream)${ytId ? ', so the page uses the YouTube video.' : '.'}`
+                ? `The uploaded video can’t play (it’s still processing, or it was removed from Stream)${ytId ? ', so the page uses the YouTube video.' : plays === 'live' ? ', so the page plays the live reveal’s recording until it can.' : '.'}`
                 : streamUid && streamState === 'unknown' ? 'Couldn’t reach Stream to check it; the site checks again when it publishes.'
+                : plays === 'live' ? `${liveState === 'unknown' ? 'Couldn’t reach Stream to check it; the site checks again when it publishes. ' : ''}Upload the finished video or link it from YouTube, and it takes the recording’s place.`
                 : plays ? 'Uploaded videos play without ads, so they win when both are set.' : 'Upload the reveal or link it from YouTube.'}</p>
             </div>
           </div>
@@ -15084,7 +15091,7 @@
                 onInput=${(e) => set({ revealVideoUrl: e.target.value })} />
               <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setStreamPick('reveal')}>Choose from Stream</button>
             </div>
-            <div class="form-hint">Adds “Watch the reveal” at the top of the page. Filled in by itself after a live reveal; to move a replay to the right kid, use Broadcast → History.</div>
+            <div class="form-hint">Adds “Watch the reveal” at the top of the page, and plays in the Reveal chapter until there’s a finished video. Filled in by itself after a live reveal; to move a replay to the right kid, use Broadcast → History.</div>
           </div>
         `)}
 

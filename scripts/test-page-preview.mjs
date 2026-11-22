@@ -25,7 +25,7 @@ import puppeteer from 'puppeteer';
 import { spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkStreamUid } from '../functions/api/stream-check.js';
+import { streamCheck } from '../functions/api/stream-check.js';
 import { FIXTURES } from '../src/pages/admin/_preview-fixtures.js';
 import { normalizePerson, hasProfile } from '../public/admin/team-shared.js';
 
@@ -152,7 +152,7 @@ const browser = await puppeteer.launch();
 let failed = 0;
 const page = await browser.newPage();
 try {
-  await page.exposeFunction('nodeStreamCheck', (uid) => checkStreamUid(uid));
+  await page.exposeFunction('nodeStreamCheck', (uid) => streamCheck(uid));
   const workbench = async () => {
     // Any same-origin page will do as a workbench
     await page.goto(`${SITE}/admin/kid-manifests.json`);
@@ -162,8 +162,8 @@ try {
       window.fetch = async (input, init) => {
         const m = String(input?.url || input).match(/\/api\/stream-check\?uid=([^&]+)/);
         if (!m) return real(input, init);
-        const state = await window.nodeStreamCheck(decodeURIComponent(m[1]));
-        return new Response(JSON.stringify({ success: true, state }), { headers: { 'Content-Type': 'application/json' } });
+        const { state, aspect } = await window.nodeStreamCheck(decodeURIComponent(m[1]));
+        return new Response(JSON.stringify({ success: true, state, aspect }), { headers: { 'Content-Type': 'application/json' } });
       };
     });
   };

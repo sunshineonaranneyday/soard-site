@@ -33,36 +33,47 @@ const STREAM_UID_RE = /^[a-f0-9]{32}$/i;
 
 const streamChecks = new Map();
 /**
- * Same check the build makes: does Stream serve this video's manifest?
+ * Same check the build makes: does Stream serve this video's manifest, and
+ * what shape is it? { state, aspect } (aspect: width / height, or null).
  * Asked through /api/stream-check because Stream's CORS blocks the browser.
  * A failed check is retried next time instead of being remembered.
  */
 function checkStream(uid) {
   if (!streamChecks.has(uid)) {
     const check = (async () => {
-      if (!STREAM_UID_RE.test(uid)) return 'gone';
+      if (!STREAM_UID_RE.test(uid)) return { state: 'gone', aspect: null };
       try {
         const res = await fetch(`/api/stream-check?uid=${encodeURIComponent(uid)}`, { signal: AbortSignal.timeout(10000) });
         const data = await res.json();
-        return ['playable', 'gone'].includes(data.state) ? data.state : 'unknown';
+        const state = ['playable', 'gone'].includes(data.state) ? data.state : 'unknown';
+        return { state, aspect: state === 'playable' && data.aspect > 0 ? data.aspect : null };
       } catch {
-        return 'unknown';
+        return { state: 'unknown', aspect: null };
       }
     })();
     streamChecks.set(uid, check);
-    check.then((s) => { if (s === 'unknown') streamChecks.delete(uid); });
+    check.then((c) => { if (c.state === 'unknown') streamChecks.delete(uid); });
   }
   return streamChecks.get(uid);
 }
 
-/** The video the built page will play: { type, id, note } or null (community-preview.js uses it too) */
+/** Pull the Stream uid out of a revealVideoUrl (streamUidFromUrl in reveals.ts) */
+function streamUidFromUrl(url) {
+  const m = String(url || '').match(/(?:^|\/)([a-f0-9]{32})(?:\/|$|\?|#)/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
+/** A live reveal's recording the build couldn't measure is upright (LIVE_REVEAL_ASPECT in reveals.ts) */
+const LIVE_REVEAL_ASPECT = 9 / 16;
+
+/** The video the built page will play: { type, id, aspect, note } or null (community-preview.js uses it too) */
 export async function resolveVideo(kid) {
   const streamId = kid.streamVideoId?.trim().toLowerCase() || null;
   const ytId = youTubeId(kid.videoUrl);
   if (streamId) {
-    const state = await checkStream(streamId);
+    const { state, aspect } = await checkStream(streamId);
     if (state === 'playable' || (state === 'unknown' && !ytId)) {
-      return { type: 'stream', id: streamId, note: state === 'unknown' ? 'Couldn’t reach Stream to check the video, so this shows it the way the site will if Stream is reachable when it publishes.' : null };
+      return { type: 'stream', id: streamId, aspect: aspect ?? 16 / 9, note: state === 'unknown' ? 'Couldn’t reach Stream to check the video, so this shows it the way the site will if Stream is reachable when it publishes.' : null };
     }
     const why = 'Stream can’t play the uploaded video yet (it may still be processing)';
     if (ytId) return { type: 'youtube', id: ytId, note: `${why}, so the page shows the YouTube video instead.` };
@@ -71,6 +82,26 @@ export async function resolveVideo(kid) {
   if (ytId) return { type: 'youtube', id: ytId, note: null };
   if (kid.videoUrl) return { type: null, note: 'The video link isn’t a YouTube link the page can play, so there’s no video section.' };
   return null;
+}
+
+/**
+ * The kid page's Reveal section (resolveKidReveal in reveals.ts): the
+ * finished video when there is one, and until then the live reveal's
+ * recording unless Stream has dropped it.
+ */
+export async function resolveKidVideo(kid) {
+  const video = await resolveVideo(kid);
+  if (video?.type) return video;
+  const uid = streamUidFromUrl(kid.revealVideoUrl);
+  if (!uid) return video;
+  const { state, aspect } = await checkStream(uid);
+  if (state === 'gone') return video;
+  const why = video?.note ? video.note.replace(/, so .*$/, '') : null;
+  return {
+    type: 'stream', id: uid, aspect: aspect ?? LIVE_REVEAL_ASPECT,
+    note: why ? `${why}, so the Reveal section plays the live reveal’s recording.`
+      : state === 'unknown' ? 'Couldn’t reach Stream to check the live reveal’s recording, so this shows it the way the site will if Stream is reachable when it publishes.' : null,
+  };
 }
 
 // ── Kit: templates + build manifests (fetched once per session) ───────
@@ -107,7 +138,7 @@ export async function buildModel(kid, kit, { measure: measureNew = true, video: 
     if (d) dims[id] = d;
   }));
   // (forcedVideo: the template pages' fixed player, for the accuracy test)
-  const video = forcedVideo ? { ...forcedVideo, note: null } : await resolveVideo(kid);
+  const video = forcedVideo ? { ...forcedVideo, note: null } : await resolveKidVideo(kid);
   const blobs = await checkBlobs([kid.heroImage, kid.accentImage, ...(kid.photos || []).map((p) => p.url), ...(kid.plans || []).map((p) => p.url),
     ...(kid.beforeAfterPhotos || []).flatMap((p) => [p.before, p.after]), ...(kid.beforePhotos || []).map((p) => p.url), ...(kid.partnerLogos || []).map((p) => p.url)]);
   const notes = [video?.note, ...blobs.notes].filter(Boolean);
@@ -399,11 +430,26 @@ export function patchKidPage(doc, win, model) {
   let reveal = null;
   if (model.video?.type === 'stream') {
     reveal = take('full', 'section.reveal');
+    // An upright video plays in a frame of its own shape, as the page has it (uprightVideo)
+    const aspect = model.video.aspect ?? 16 / 9;
+    const upright = aspect < 1;
+    const thumbH = 2 * Math.round(720 / aspect / 2); // even: Stream refuses an odd thumbnail size
+    if (upright) {
+      const frame = reveal.querySelector('.reveal__frame');
+      frame.classList.add('reveal__frame--upright');
+      frame.setAttribute('style', `--video-ar: ${aspect}`);
+    }
     const f = reveal.querySelector('#stream-facade');
     f.dataset.id = model.video.id;
     f.setAttribute('aria-label', `Play ${name}'s video`);
     const img = f.querySelector('img');
-    img.src = `https://videodelivery.net/${model.video.id}/thumbnails/thumbnail.jpg?time=2s&width=1920&height=1080&fit=crop`;
+    img.src = upright
+      ? `https://videodelivery.net/${model.video.id}/thumbnails/thumbnail.jpg?time=2s&width=720&height=${thumbH}&fit=crop`
+      : `https://videodelivery.net/${model.video.id}/thumbnails/thumbnail.jpg?time=2s&width=1920&height=1080&fit=crop`;
+    if (upright) {
+      img.setAttribute('width', '720');
+      img.setAttribute('height', String(thumbH));
+    }
     img.alt = `Video thumbnail for ${name}'s story`;
   } else if (model.video?.type === 'youtube') {
     reveal = take('alt', 'section.reveal');

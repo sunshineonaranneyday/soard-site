@@ -213,6 +213,29 @@ export async function resolveKidVideo(kid: KidVideoFields): Promise<KidVideo | n
   return source ? { type: source.type, id: source.id } : null;
 }
 
+/** A live reveal is filmed on a phone held upright: the shape its recording is given when the build couldn't read it */
+export const LIVE_REVEAL_ASPECT = 9 / 16;
+
+/**
+ * The video a kid page's Reveal section plays: the finished video when there
+ * is one (resolveSource), and until then the live reveal's recording
+ * (revealVideoUrl, put on the kid when the reveal's replay is ready), unless
+ * Stream has dropped it. A recording the build couldn't check is kept, as on
+ * /reveals/. Peter, Nov 19 2026: Dylan's reveal belonged on his page as soon
+ * as its recording was there. public/admin/kid-preview.js resolveKidVideo
+ * is the same rule for the admin's Preview.
+ */
+export async function resolveKidReveal(kid: KidVideoFields & Pick<KidData, 'revealVideoUrl'>): Promise<RevealSource | null> {
+  const source = await resolveSource(kid);
+  if (source) return source;
+  const liveUid = streamUidFromUrl(kid.revealVideoUrl);
+  if (!liveUid) return null;
+  await warmStreamChecks();
+  const check = await checkStream(liveUid);
+  if (check.state === 'gone') return null;
+  return { type: 'stream', id: liveUid, aspect: check.aspect ?? LIVE_REVEAL_ASPECT };
+}
+
 export function embedUrl(source: KidVideo): string {
   return source.type === 'youtube'
     ? `https://www.youtube-nocookie.com/embed/${source.id}?autoplay=1&rel=0&playsinline=1`

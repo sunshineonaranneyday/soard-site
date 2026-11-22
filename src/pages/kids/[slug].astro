@@ -23,7 +23,7 @@ import Button from '../../components/ui/Button.astro';
 import { getPublishedKids } from '../../utils/collections';
 import { getKidProfileSchema } from '../../utils/schema';
 import { getSiteStats } from '../../utils/stats';
-import { resolveKidVideo } from '../../utils/reveals';
+import { resolveKidReveal } from '../../utils/reveals';
 import RevealInvite from '../../components/live/RevealInvite.astro';
 import { upcomingAtBuild, pastAtBuild } from '../../utils/reveals-copy';
 import { getCollection } from 'astro:content';
@@ -126,13 +126,21 @@ function dims(src: string): [number, number] {
 
 // ── Reveal video ──────────────────────────
 // Most old Stream uploads were purged, so a Stream id only wins when the
-// build saw it play; otherwise YouTube, otherwise no video block at all.
+// build saw it play; otherwise YouTube; until there's a finished video, the
+// live reveal's recording; otherwise no video block at all (resolveKidReveal).
 // The admin preview's template pages (src/pages/admin/kid-template/) pass
 // forceVideo so they render a known player without a Stream lookup.
-const kidVideo = Astro.props.forceVideo !== undefined ? Astro.props.forceVideo : await resolveKidVideo(kid);
+const kidVideo = Astro.props.forceVideo !== undefined ? Astro.props.forceVideo : await resolveKidReveal(kid);
 const ytId = kidVideo?.type === 'youtube' ? kidVideo.id : null;
 const streamId = kidVideo?.type === 'stream' ? kidVideo.id : null;
 const hasVideo = streamId || ytId;
+// An upright video (every live reveal is filmed on a phone held upright) plays in a frame of its own shape; a wide one
+// keeps the 16:9 frame
+const videoAspect: number = (kidVideo as { aspect?: number } | null)?.aspect ?? 16 / 9;
+const uprightVideo = !!streamId && videoAspect < 1;
+// (Stream's thumbnails take even sizes only: an odd height is refused with a 400)
+const THUMB_W = 720;
+const thumbH = 2 * Math.round(THUMB_W / videoAspect / 2);
 
 // ── SEO ───────────────────────────────────
 const SITE = 'https://sunshineonaranneyday.com';
@@ -740,17 +748,19 @@ const planOrientation = (() => {
           <h2 class="reveal__title">The Reveal</h2>
 
           <figure class="reveal__figure">
-            <div class="reveal__frame">
+            <div class={uprightVideo ? 'reveal__frame reveal__frame--upright' : 'reveal__frame'} style={uprightVideo ? `--video-ar: ${videoAspect}` : undefined}>
               {streamId ? (
                 <div class="stream-facade" id="stream-facade" data-id={streamId} role="button" tabindex="0" aria-label={`Play ${kid.name}'s video`}>
                   <img
-                    src={`https://videodelivery.net/${streamId}/thumbnails/thumbnail.jpg?time=2s&width=1920&height=1080&fit=crop`}
+                    src={uprightVideo
+                      ? `https://videodelivery.net/${streamId}/thumbnails/thumbnail.jpg?time=2s&width=${THUMB_W}&height=${thumbH}&fit=crop`
+                      : `https://videodelivery.net/${streamId}/thumbnails/thumbnail.jpg?time=2s&width=1920&height=1080&fit=crop`}
                     alt={`Video thumbnail for ${kid.name}'s story`}
                     class="reveal__thumb"
                     loading="lazy"
                     decoding="async"
-                    width="1920"
-                    height="1080"
+                    width={uprightVideo ? THUMB_W : 1920}
+                    height={uprightVideo ? thumbH : 1080}
                   />
                   <div class="reveal__play" aria-hidden="true">
                     <span class="reveal__play-ring"></span>
@@ -1452,10 +1462,13 @@ const planOrientation = (() => {
     if (streamFacade) {
       const activateStream = () => {
         const id = streamFacade.dataset.id;
+        // The player takes the facade's shape: 16:9, or an upright video's own
+        const shape = getComputedStyle(streamFacade).aspectRatio;
         // Show loading state
         revealFrame?.classList.add('reveal__frame--loading');
         const wrapper = document.createElement('div');
         wrapper.style.cssText = 'position:relative;aspect-ratio:16/9;overflow:hidden';
+        if (shape && shape !== 'auto') wrapper.style.aspectRatio = shape;
         const iframe = document.createElement('iframe');
         iframe.src = `https://iframe.videodelivery.net/${id}?autoplay=true&preload=true`;
         iframe.allow = 'accelerometer; gyroscope; autoplay; encrypted-media; picture-in-picture';
@@ -3758,6 +3771,26 @@ const planOrientation = (() => {
     aspect-ratio: 16 / 9;
     cursor: pointer;
     background: #000;
+  }
+
+  /* An upright video (a live reveal, filmed on a phone): a frame of its own shape, centred, as tall as the screen
+     leaves below the site's header and the section menu (both stay on screen, the menu about 64px), so the whole
+     picture shows at once; 760px at most, and never under 320px (a phone held sideways scrolls to it) */
+  .reveal__frame--upright {
+    --video-h: max(320px, min(760px, calc(100vh - var(--header-height, 84px) - 112px)));
+    width: min(100%, calc(var(--video-h) * var(--video-ar)));
+    margin-inline: auto;
+  }
+
+  @supports (height: 100svh) {
+    /* The screen with the browser's own bars showing (a phone's address bar) */
+    .reveal__frame--upright {
+      --video-h: max(320px, min(760px, calc(100svh - var(--header-height, 84px) - 112px)));
+    }
+  }
+
+  .reveal__frame--upright .stream-facade {
+    aspect-ratio: var(--video-ar);
   }
 
   .reveal__thumb {
