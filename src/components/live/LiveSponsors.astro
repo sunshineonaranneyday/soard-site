@@ -46,11 +46,11 @@ const { kid, inner } = Astro.props;
     .hero[data-party][data-orientation='portrait'] .lsp-card { background: #F8F7F2; }
     .hero[data-party][data-orientation='portrait'] .lsp-card img { mix-blend-mode: multiply; }
     /* (an empty cell is no cell: its tint comes with its logo, never a grey box waiting for one) */
-    .hero[data-party][data-orientation='portrait'] .lsp-card { transition: background-color 320ms ease-out; }
+    .hero[data-party][data-orientation='portrait'] .lsp-card { transition: background-color var(--m-medium) var(--m-fade); }
     .hero[data-party][data-orientation='portrait'] .lsp-card:has(img:not([style*='--r'])) { background-color: transparent; }
     /* Each logo fades in as it arrives (its shape known, --r), never popping in; one that is slow to weigh shows by 2.5 s
        all the same */
-    .hero[data-party][data-orientation='portrait'] .lsp-card img { transition: opacity 320ms ease-out; }
+    .hero[data-party][data-orientation='portrait'] .lsp-card img { transition: opacity var(--m-medium) var(--m-fade); }
     .hero[data-party][data-orientation='portrait'] .lsp-card img:not([style*='--r']) { opacity: 0; animation: lspLate 0s linear 2.5s forwards; }
     /* Until the script has sized the cells (it waits for the logos' shapes, 1.5 s at most) the column is its heading
        only: nothing is drawn at one size and jumps to another. Without the script, the tiers show by 3 s as a list
@@ -109,9 +109,9 @@ const { kid, inner } = Astro.props;
      resized) stands still (data-calm) */
   @keyframes lspRise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
   @keyframes lspLeave { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(-10px); } }
-  .lsp[data-lsp-in] .lsp-tier--room :is(.lsp-label, .lsp-card) { animation: lspRise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(var(--i, 0) * 55ms) both; }
-  .lsp-page[data-on]:not([data-calm]) :is(.lsp-label, .lsp-card) { animation: lspRise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) calc(300ms + var(--i, 0) * 50ms) both; }
-  .lsp-page[data-out] :is(.lsp-label, .lsp-card) { animation: lspLeave 200ms cubic-bezier(0.4, 0, 1, 1) calc(var(--i, 0) * 18ms) both; }
+  .lsp[data-lsp-in] .lsp-tier--room :is(.lsp-label, .lsp-card) { animation: lspRise var(--m-long) var(--m-move) calc(var(--i, 0) * 55ms) both; }
+  .lsp-page[data-on]:not([data-calm]) :is(.lsp-label, .lsp-card) { animation: lspRise var(--m-long) var(--m-move) calc(300ms + var(--i, 0) * 50ms) both; }
+  .lsp-page[data-out] :is(.lsp-label, .lsp-card) { animation: lspLeave var(--m-quick) var(--m-move) calc(var(--i, 0) * 18ms) both; }
   .lsp-page[data-on] .lsp-label[data-keep] { animation: none; }
   .lsp-page[data-out] .lsp-label[data-keep] { animation: none; opacity: 0; }
 
@@ -125,7 +125,7 @@ const { kid, inner } = Astro.props;
     cursor: pointer; -webkit-tap-highlight-color: transparent;
   }
   .lsp-dot::before, .lsp-dot > i { content: ''; position: absolute; left: 0; right: 0; top: 50%; height: 3px; margin-top: -1.5px; border-radius: 3px; }
-  .lsp-dot::before { background: #DFDACD; transition: background-color 150ms ease; }
+  .lsp-dot::before { background: #DFDACD; transition: background-color var(--m-quick) var(--m-fade); }
   .lsp-dot > i { background: var(--c-dark); transform: scaleX(0); transform-origin: left center; }
   .lsp-dot[aria-current] > i { animation: lspFill 6000ms linear forwards; }
   .lsp-show:is(:hover, :focus-within) .lsp-dot[aria-current] > i { animation-play-state: paused; }

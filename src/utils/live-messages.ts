@@ -15,6 +15,7 @@
 import { trapValue } from '../../functions/api/_bot-trap.js';
 import { rehearsal, type LiveClient, type LiveMessage } from './live-client';
 import { messageInitial, messageTone, latestLine, LATEST_HEART } from './live-message-look';
+import { MOTION } from './motion';
 
 export interface MessagesView {
   /** A broadcast is on (scheduled, live or replay) and it is this page's kid */
@@ -147,7 +148,7 @@ export function createMessages(opts: Options) {
     holdReading(() => list.append(li), stick);
     for (const [el, top] of was) {
       const dy = top - el.getBoundingClientRect().top;
-      if (dy && el.getClientRects().length) el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 360, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+      if (dy && el.getClientRects().length) el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: MOTION.medium, easing: MOTION.move });
     }
     while (list.children.length > MAX) list.firstElementChild?.remove();
     setHidden($('empty'), true);

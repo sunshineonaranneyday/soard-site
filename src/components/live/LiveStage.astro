@@ -212,7 +212,7 @@ const ICON = {
   .stage__under { position: relative; z-index: 1; min-width: 0; }
   .stage:not([data-partners]) .stage__under { display: none; }
   .stage:not([data-party]) .stage__under { margin-top: 36px; }
-  .stage__player { position: absolute; inset: 0; transition: opacity 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
+  .stage__player { position: absolute; inset: 0; transition: opacity var(--m-medium) var(--m-fade); }
   .stage__player[hidden] { display: none; }
   /* :global: the video and iframes are created at runtime, so they have no Astro scope attribute */
   .stage__player :global(iframe) { width: 100%; height: 100%; border: 0; display: block; }
@@ -321,12 +321,12 @@ const ICON = {
   /* (once faded, not drawn at all: a blur under a playing video costs a phone for nothing) */
   .stage[data-party] .stage__photo {
     opacity: 0; visibility: hidden; filter: blur(16px) brightness(0.5); transform: scale(1.12);
-    transition: opacity 0.45s ease, visibility 0s linear 0.45s;
+    transition: opacity var(--m-medium) var(--m-fade), visibility 0s linear 0.45s;
   }
   .stage[data-party]:not([data-pstatus]) .stage__photo,
   .stage[data-party][data-pstatus='connecting'] .stage__photo,
   .stage[data-party][data-pstatus='waiting'] .stage__photo,
-  .stage[data-party][data-pstatus='reconnecting'] .stage__photo { opacity: 1; visibility: visible; transition: opacity 0.45s ease, visibility 0s; }
+  .stage[data-party][data-pstatus='reconnecting'] .stage__photo { opacity: 1; visibility: visible; transition: opacity var(--m-medium) var(--m-fade), visibility 0s; }
   /* Before the reveal, in the Theater (StageView.waiting): the photo itself, sharp, where the video will be (going live,
      the page's morph crossfades it into the soft stand-in behind "The camera is getting ready") */
   .stage[data-party][data-mode='upcoming'] .stage__photo { filter: none; transform: none; }
@@ -339,28 +339,28 @@ const ICON = {
     padding: 24px; color: #fff; pointer-events: none;
   }
   .stage__note[hidden] { display: none; }
-  .stage__note:not([hidden]) { animation: noteIn 0.35s ease-out both; }
+  .stage__note:not([hidden]) { animation: noteIn var(--m-medium) var(--m-move) both; }
   @keyframes noteIn { from { opacity: 0; } }
   .stage__note-title { font-family: var(--font-display); font-size: clamp(1.2rem, 7cqi, 1.6rem); line-height: 1.2; margin: 0 0 8px; }
   .stage__note-text { font-size: 14px; line-height: 1.55; margin: 0 auto; max-width: 30ch; color: rgba(255, 255, 255, 0.86); }
   .stage__note-text:empty { display: none; }
 
   /* The reveal over: the soft photo behind, the words on it, a button for the replay once there is one */
-  .stage[data-ended] .stage__photo { opacity: 1; visibility: visible; transition: opacity 0.45s ease, visibility 0s; }
+  .stage[data-ended] .stage__photo { opacity: 1; visibility: visible; transition: opacity var(--m-medium) var(--m-fade), visibility 0s; }
   .stage[data-ended] .stage__player { opacity: 0; pointer-events: none; }
   .stage__end {
     position: absolute; inset: 0; z-index: 3; display: grid; place-content: center; justify-items: center; gap: 0; text-align: center;
     padding: clamp(12px, 6cqi, 24px); color: #fff;
   }
   .stage__end[hidden] { display: none; }
-  .stage__end:not([hidden]) { animation: noteIn 0.5s ease-out both; }
+  .stage__end:not([hidden]) { animation: noteIn var(--m-long) var(--m-move) both; }
   .stage__end-title { font-family: var(--font-display); font-size: clamp(1.4rem, 9cqi, 2rem); line-height: 1.15; margin: 0 0 10px; }
   .stage__end-text { font-size: 15px; line-height: 1.5; margin: 0 auto; max-width: 26ch; color: rgba(255, 255, 255, 0.9); text-wrap: balance; }
   .stage__end-btn {
     /* (one line in the narrowest frame: an iPhone's, beside the design strip, is about 215px wide) */
     display: inline-flex; align-items: center; gap: 8px; margin: 20px 0 0; padding: 0 clamp(14px, 6cqi, 20px); height: 46px; border: 0; border-radius: 100px;
     background: #fff; color: var(--c-dark); font: inherit; font-size: clamp(13px, 5.8cqi, 15px); font-weight: 800; white-space: nowrap; cursor: pointer;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25); animation: noteIn 0.4s ease-out both;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.25); animation: noteIn var(--m-medium) var(--m-move) both;
   }
   .stage__end-btn[hidden] { display: none; }
   .stage__end-btn :global(svg) { width: 16px; height: 16px; fill: currentColor; }
@@ -407,7 +407,7 @@ const ICON = {
      next room). Gone the moment it plays; never during the live reveal */
   .stage[data-start] .stage__tap { background: none; }
   .stage[data-start] .stage__tap-word { display: none; }
-  .stage[data-start] .stage__tap-icon { width: 84px; height: 84px; background: var(--c-dark); color: #fff; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 0 0 4px rgba(255, 255, 255, 0.92); transition: transform 160ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .stage[data-start] .stage__tap-icon { width: 84px; height: 84px; background: var(--c-dark); color: #fff; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28), 0 0 0 4px rgba(255, 255, 255, 0.92); transition: transform var(--m-quick) var(--m-pop); }
   .stage[data-start] .stage__tap-icon :global(svg) { width: 34px; height: 34px; margin-left: 5px; }
   @media (hover: hover) { .stage[data-start] .stage__tap:hover .stage__tap-icon { transform: scale(1.06); } }
   .stage[data-start] .stage__tap:active .stage__tap-icon { transform: scale(0.94); }
@@ -475,7 +475,7 @@ const ICON = {
   @keyframes soundNudge { 0%, 80%, 100% { transform: none; } 88% { transform: scale(1.06); } }
   .bar__btn {
     width: 40px; height: 40px; flex-shrink: 0; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
-    background: transparent; color: var(--c-dark); transition: background 150ms ease, transform 150ms ease;
+    background: transparent; color: var(--c-dark); transition: background var(--m-quick) var(--m-fade), transform var(--m-quick) var(--m-move);
   }
   .bar__btn[hidden] { display: none; }
   .bar__btn:hover { background: var(--c-cream); }
@@ -487,7 +487,7 @@ const ICON = {
   .bar__heart :global(svg) { fill: var(--c-dark); }
   .bar__heart:active, .bar__heart.is-pop { transform: scale(0.84); }
   /* Others watching sent love: the heart beats (no numbers, nothing over the picture) */
-  .bar__heart.is-beat { animation: heartBeat 0.6s ease-out; }
+  .bar__heart.is-beat { animation: heartBeat var(--m-long) var(--m-move); }
   @keyframes heartBeat { 0% { transform: none; } 25% { transform: scale(1.22); } 50% { transform: scale(0.96); } 75% { transform: scale(1.1); } 100% { transform: none; } }
   .bar__cc { font-size: 12px; font-weight: 800; letter-spacing: 0.04em; border: 1.5px solid var(--c-border); width: 40px; height: 32px; border-radius: 8px; }
   /* (the icons' own boxes, and the words that go under them in the rail: none in the bar) */
@@ -535,12 +535,12 @@ const ICON = {
     .stage[data-rail] .bar__end > [hidden] { display: none; }
     /* One that comes (the picture starting, the sound going on, the heart once it's on air) grows in, a touch springy,
        while the others glide to their new places (live-stage.ts railChange) */
-    .stage[data-rail] .bar__end > :is(button, a) { animation: railIn 420ms cubic-bezier(0.34, 1.56, 0.64, 1) backwards; }
+    .stage[data-rail] .bar__end > :is(button, a) { animation: railIn var(--m-medium) var(--m-pop) backwards; }
     @keyframes railIn { from { opacity: 0; transform: scale(0.6); } }
     .stage[data-rail] .bar__btn:hover { background: none; }
     .stage[data-rail] .bar__ico {
       width: 46px; height: 46px; border-radius: 50%; background: #fff; border: 1px solid var(--c-border); color: var(--c-dark);
-      transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+      transition: transform var(--m-quick) var(--m-move), background var(--m-quick) var(--m-fade), border-color var(--m-quick) var(--m-fade);
     }
     .stage[data-rail] .bar__btn:hover .bar__ico { border-color: var(--c-dark); }
     .stage[data-rail] .bar__btn :global(svg), .stage[data-rail] .bar__sound :global(svg) { width: 19px; height: 19px; }
@@ -588,7 +588,7 @@ const ICON = {
     /* A tap: down under the finger, then a springy bounce back as the hearts go up; with reduced motion, it goes dark
        for a moment instead (live-stage.ts is-sent), and "Love sent" is said */
     .stage[data-rail] .bar__heart:active .bar__ico { transform: scale(0.88); }
-    .stage[data-rail] .bar__heart.is-pop .bar__ico { animation: heartPress 0.38s cubic-bezier(0.34, 1.56, 0.64, 1); }
+    .stage[data-rail] .bar__heart.is-pop .bar__ico { animation: heartPress var(--m-medium) var(--m-pop); }
     @keyframes heartPress { 0% { transform: scale(0.88); } 45% { transform: scale(1.12); } 100% { transform: none; } }
     .stage[data-rail] .bar__heart.is-sent .bar__ico { background: var(--c-dark-deep); }
     .stage[data-rail] .bar__heart.is-sent :global(svg) { fill: var(--c-yellow); }
@@ -677,13 +677,13 @@ const ICON = {
     /* (the round parts: play's ink with its icon on it, the others white with a hairline, as the live rail's) */
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) {
       grid-row: 1; display: grid; place-items: center; width: 46px; height: 46px; box-sizing: border-box; border-radius: 50%; border: 1px solid var(--c-border); background: #fff; color: var(--c-dark);
-      font-size: 12px; font-weight: 800; letter-spacing: 0.04em; transition: border-color 150ms ease, background 150ms ease, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
+      font-size: 12px; font-weight: 800; letter-spacing: 0.04em; transition: border-color var(--m-quick) var(--m-fade), background var(--m-quick) var(--m-fade), transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
     }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__play-ico { border: 0; background: var(--c-dark); color: #fff; box-shadow: 0 6px 16px rgba(30, 31, 37, 0.16); }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__morph { width: 17px; height: 17px; }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act) :global(svg) { width: 19px; height: 19px; }
     /* (a press: the round part gives under it and springs back, the word staying put) */
-    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act)[data-press] > :first-child { transform: scale(0.88); transition: transform 90ms ease-out; }
+    .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act)[data-press] > :first-child { transform: scale(0.88); transition: transform var(--m-quick) var(--m-move); }
     .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay .bar__cc[aria-pressed='true'] .bar__cc-ico { background: var(--c-dark); border-color: var(--c-dark); color: #fff; }
     @media (hover: hover) {
       .stage[data-party][data-orientation='portrait']:not([data-rail]):not([data-fullscreen]) .bar__replay > :is(button, a.bar__act):hover :is(.bar__cc-ico, .bar__full-ico) { border-color: var(--c-dark); }
@@ -743,7 +743,7 @@ const ICON = {
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop .bar__ico, .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico { padding: 3px; border: 1px solid var(--c-border); background: #fff; }
     .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) .bar__act--shop .bar__ico img, .stage[data-party][data-orientation='portrait'][data-rail][data-mode='upcoming']:not([data-fullscreen]) .bar__act--shop .bar__ico img { transform: none; }
     /* hover: the ring goes ink and the circle lifts a touch; a press presses it in */
-    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a) :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1), border-color 150ms ease, background 150ms ease, box-shadow 150ms ease; }
+    .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a) :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1), border-color var(--m-quick) var(--m-fade), background var(--m-quick) var(--m-fade), box-shadow var(--m-quick) var(--m-fade); }
     @media (hover: hover) {
       .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):hover :is(.bar__play-ico, .bar__cc-ico, .bar__full-ico, .bar__ico) { transform: translateY(-2px); box-shadow: 0 6px 14px rgba(30, 31, 37, 0.12); }
       .stage[data-party][data-orientation='portrait']:not([data-fullscreen]) :is(.bar__end, .bar__replay) > :is(button, a):not(.bar__heart):not(.bar__act--fund):hover :is(.bar__cc-ico, .bar__full-ico, .bar__ico) { border-color: var(--c-dark); }
@@ -843,10 +843,10 @@ const ICON = {
   .bar__play {
     width: 40px; height: 40px; flex-shrink: 0; padding: 0; border: 0; border-radius: 50%; display: grid; place-items: center; cursor: pointer;
     background: var(--c-dark); color: #fff; margin-left: -10px; -webkit-tap-highlight-color: transparent;
-    transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1), background-color 150ms ease;
+    transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1), background-color var(--m-quick) var(--m-fade);
   }
-  .bar__play[data-press], .bar__replay .bar__btn[data-press] { transform: scale(0.88); transition: transform 90ms ease-out, background-color 150ms ease; }
-  .bar__replay .bar__btn { -webkit-tap-highlight-color: transparent; transition: background-color 150ms ease, transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1); }
+  .bar__play[data-press], .bar__replay .bar__btn[data-press] { transform: scale(0.88); transition: transform var(--m-quick) var(--m-move), background-color var(--m-quick) var(--m-fade); }
+  .bar__replay .bar__btn { -webkit-tap-highlight-color: transparent; transition: background-color var(--m-quick) var(--m-fade), transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1); }
   @media (hover: hover) { .bar__play:hover { background-color: var(--c-dark-deep); } }
   .bar__morph { width: 16px; height: 16px; display: block; overflow: visible; }
   .bar__morph path { fill: currentColor; stroke: currentColor; stroke-width: 4; stroke-linejoin: round; }
@@ -863,7 +863,7 @@ const ICON = {
   .bar__total { order: 2; }
   .bar__total:empty { display: none; }
   /* While a finger is on the line, the time it's at reads darker (it's the time the picture shows) */
-  .bar__time > span { transition: color 150ms ease; }
+  .bar__time > span { transition: color var(--m-quick) var(--m-fade); }
   .bar__replay[data-scrub] .bar__time > [data-s='time-now'] { color: var(--c-dark); }
 
   /* The line sits in the top of its cell (--seek-pad leaves the bottom for the time); the whole cell is the line's: a
@@ -887,7 +887,7 @@ const ICON = {
     border-radius: 99px; overflow: hidden; pointer-events: none; background: var(--c-border);
     /* (along the line itself, the handle's centre is 8px in from its ends) */
     --star: calc(8px + (100% - 16px) * var(--at, 0.5));
-    transition: height 160ms cubic-bezier(0.2, 0.8, 0.2, 1), top 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    transition: height var(--m-quick) var(--m-move), top var(--m-quick) var(--m-move);
   }
   /* (each part's right end is where the handle's centre is at its point: 8px in, plus the rest of the line times how far) */
   .seek__loaded, .seek__played { position: absolute; inset: 0; border-radius: inherit; will-change: transform; }
@@ -913,7 +913,7 @@ const ICON = {
   .seek__knob {
     position: absolute; left: -8px; top: -8px; width: 16px; height: 16px; box-sizing: border-box; border-radius: 50%;
     background: var(--c-dark); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
-    transition: transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+    transition: transform var(--m-short) var(--m-pop);
   }
   .bar__replay[data-scrub] .seek__knob { transform: scale(1.5); }
   @media (hover: hover) { .bar__replay:not([data-scrub]) .seek:hover .seek__knob { transform: scale(1.25); } }
@@ -1061,7 +1061,7 @@ const ICON = {
     z-index: 950; /* over content, under the sticky header (1000) and its mobile menu (1100) */
     border-radius: 16px; cursor: pointer;
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
-    animation: dockIn 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+    animation: dockIn var(--m-short) var(--m-move);
   }
   @keyframes dockIn { from { opacity: 0; transform: translateY(16px) scale(0.96); } to { opacity: 1; transform: none; } }
   /* Its corner (live-stage.ts data-corner: tr, tl, br, bl). On a phone it starts top right, under the site's header and

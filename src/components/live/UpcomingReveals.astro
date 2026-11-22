@@ -194,7 +194,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     display: inline-flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; padding: 12px 20px;
     border-radius: 100px; border: 0; background: var(--c-yellow); color: var(--c-dark-deep);
     font: inherit; font-size: 15px; font-weight: 700; cursor: pointer;
-    transition: background 0.2s ease, transform 0.3s var(--ease), box-shadow 0.3s var(--ease);
+    transition: background var(--m-quick) var(--m-fade), transform var(--m-short) var(--m-move), box-shadow var(--m-short) var(--m-fade);
   }
   .upn-cal__btn:hover { background: var(--c-yellow-hover); transform: translateY(-1px); box-shadow: 0 10px 26px rgba(255, 218, 36, 0.18); }
   .upn-cal__btn:active { transform: scale(0.98); transition-duration: 80ms; }
@@ -213,7 +213,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     flex: 999 1 240px; min-width: 0; min-height: 50px; padding: 0 20px; border-radius: 100px;
     border: 1.5px solid rgba(254, 252, 245, 0.34); background: rgba(255, 255, 255, 0.06); color: var(--upn-ink);
     font: inherit; font-size: 16px;
-    transition: border-color 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+    transition: border-color var(--m-quick) var(--m-fade), box-shadow var(--m-quick) var(--m-fade), opacity var(--m-quick) var(--m-fade);
   }
   .upn-mail__input::placeholder { color: rgba(254, 252, 245, 0.62); }
   .upn-mail__input:hover { border-color: rgba(254, 252, 245, 0.5); }
@@ -246,7 +246,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     text-decoration: underline; text-decoration-color: var(--c-yellow); text-underline-offset: 3px; overflow-wrap: anywhere;
   }
   .upn-mail :global(.remind-fix:focus-visible) { outline: 2px solid var(--c-yellow); outline-offset: 0; border-radius: 2px; box-shadow: none; }
-  .upn-mail__check :global(iframe) { display: block; width: 100%; height: 0; border: 0; overflow: hidden; transition: height 0.2s ease; }
+  .upn-mail__check :global(iframe) { display: block; width: 100%; height: 0; border: 0; overflow: hidden; transition: height var(--m-quick) var(--m-move); }
   .upn-mail__check:global(.is-shown) :global(iframe) { height: 72px; margin-top: 12px; }
 
   /* ── Timeline ── */
@@ -273,7 +273,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
   :global(.upn-row) {
     display: grid; grid-template-columns: var(--upn-when) var(--upn-node) minmax(0, 1fr); align-items: center;
     opacity: 0; transform: translateY(18px);
-    transition: opacity 0.7s var(--ease), transform 0.7s var(--ease);
+    transition: opacity var(--m-long) var(--m-fade), transform var(--m-long) var(--m-move);
     transition-delay: calc(0.25s + var(--i, 0) * 0.09s);
   }
   .upn.is-in :global(.upn-row) { opacity: 1; transform: none; }
@@ -298,7 +298,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
   :global(.upn-month span) { position: relative; width: 22px; height: 4px; border-radius: 4px; background: var(--upn-faint); overflow: hidden; }
   :global(.upn-month span.is-on)::after {
     content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--c-yellow);
-    transform-origin: left; transform: scaleX(0); transition: transform 0.8s var(--ease);
+    transform-origin: left; transform: scaleX(0); transition: transform var(--m-long) var(--m-move);
     transition-delay: calc(0.65s + var(--i, 0) * 0.09s);
   }
   .upn.is-in :global(.upn-month span.is-on)::after { transform: scaleX(1); }
@@ -317,7 +317,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     position: relative; display: flex; align-items: center; gap: 18px; min-width: 0;
     padding: 14px 20px 14px 14px; border-radius: 20px;
     background: var(--upn-card); border: 1px solid rgba(255, 255, 255, 0.07);
-    transition: background 0.3s ease, border-color 0.3s ease, transform 0.4s var(--ease), box-shadow 0.4s var(--ease);
+    transition: background var(--m-short) var(--m-fade), border-color var(--m-short) var(--m-fade), transform var(--m-medium) var(--m-move), box-shadow var(--m-medium) var(--m-fade);
   }
   :global(.upn-card:hover) { background: var(--upn-card-hover); border-color: rgba(255, 255, 255, 0.12); transform: translateY(-2px); box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28); }
   :global(.upn-row[data-state='confirmed'] .upn-card) { border-color: rgba(255, 218, 36, 0.35); }
@@ -325,7 +325,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     flex-shrink: 0; width: 96px; height: 96px; border-radius: 14px; overflow: hidden; display: block;
     background: rgba(255, 255, 255, 0.06);
   }
-  :global(.upn-card__photo img) { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform 0.7s var(--ease); }
+  :global(.upn-card__photo img) { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform var(--m-long) var(--m-move); }
   :global(.upn-card:hover .upn-card__photo img) { transform: scale(1.06); }
   :global(.upn-card__photo--blank) {
     display: grid; place-items: center; color: var(--c-yellow);
@@ -354,7 +354,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     font-size: 14px; font-weight: 700; color: var(--upn-ink); text-decoration: none;
     border-bottom: 2px solid var(--c-yellow); padding: 6px 0 2px;
   }
-  :global(.upn-act svg) { transition: transform 0.25s ease; }
+  :global(.upn-act svg) { transition: transform var(--m-short) var(--m-move); }
   :global(.upn-act:hover svg) { transform: translateX(3px); }
   :global(.upn-act:hover) { color: var(--c-yellow); }
   :global(.upn-act:focus-visible) { outline: 2px solid var(--c-yellow); outline-offset: 3px; border-radius: 2px; box-shadow: none; }
@@ -363,7 +363,7 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     position: relative; z-index: 1; display: inline-flex; align-items: center; gap: 7px; min-height: 40px; padding: 0 14px; white-space: nowrap;
     border-radius: 100px; border: 1.5px solid rgba(254, 252, 245, 0.35); background: transparent; color: var(--upn-ink);
     font: inherit; font-size: 13.5px; font-weight: 700; cursor: pointer;
-    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.3s var(--ease);
+    transition: background var(--m-quick) var(--m-fade), border-color var(--m-quick) var(--m-fade), color var(--m-quick) var(--m-fade), transform var(--m-short) var(--m-move);
   }
   :global(.upn-add svg) { flex-shrink: 0; }
   :global(.upn-add:hover) { background: var(--c-yellow); border-color: var(--c-yellow); color: var(--c-dark-deep); transform: translateY(-1px); }
@@ -373,12 +373,12 @@ const atBuild = upcomingAtBuild().filter((r) => r.slug !== exclude);
     display: flex; align-items: center; justify-content: center; gap: 8px; width: calc(100% - var(--upn-when) - var(--upn-node));
     min-height: 50px; margin: 18px 0 0 calc(var(--upn-when) + var(--upn-node)); padding: 12px 20px; border-radius: 100px;
     border: 1.5px solid rgba(254, 252, 245, 0.34); background: transparent; color: var(--upn-ink);
-    font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; transition: border-color 0.2s ease, background-color 0.2s ease;
+    font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; transition: border-color var(--m-quick) var(--m-fade), background-color var(--m-quick) var(--m-fade);
   }
   .upn__more[hidden], .upn[data-all] .upn__more { display: none; }
   /* It comes in with the rows above it */
   .upn:not(.is-in) .upn__more { opacity: 0; }
-  @media (prefers-reduced-motion: no-preference) { .upn__more { transition: opacity 0.7s var(--ease) 0.5s, border-color 0.2s ease, background-color 0.2s ease; } }
+  @media (prefers-reduced-motion: no-preference) { .upn__more { transition: opacity var(--m-long) var(--m-fade) 0.5s, border-color var(--m-quick) var(--m-fade), background-color var(--m-quick) var(--m-fade); } }
   /* No script, no button to press: every reveal is simply there */
   @media (scripting: none) { .upn .upn__more { display: none; } .upn:not([data-all]) :global(.upn-row[data-more]) { display: grid; } }
   /* The rest rise in as the first ones did */

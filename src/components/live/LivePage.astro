@@ -295,7 +295,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
 
   .hero-text h1 {
     font-size: clamp(2.5rem, 6vw, 4.5rem); letter-spacing: -0.035em; line-height: 1.04; color: var(--c-text);
-    margin-bottom: 24px; animation: heroSlide 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+    margin-bottom: 24px; animation: heroSlide var(--m-long) var(--m-move) both;
   }
   .hero-text h1 :global(em) {
     font-style: italic; background-image: linear-gradient(transparent 52%, var(--c-yellow-soft) 52%);
@@ -303,11 +303,11 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   }
   .hero-lead {
     font-size: clamp(16px, 1.6vw, 18px); color: var(--c-text-muted); line-height: 1.7; margin-bottom: 20px; max-width: 480px;
-    opacity: 0; animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
+    opacity: 0; animation: heroUp var(--m-long) var(--m-move) 0.15s both;
   }
   .hero-status {
     font-family: var(--font-display); font-size: clamp(1.1rem, 1.8vw, 1.35rem); color: var(--c-text); margin: 0 0 32px; min-height: 1.6em;
-    opacity: 0; animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
+    opacity: 0; animation: heroUp var(--m-long) var(--m-move) 0.2s both;
   }
   .hero-status:empty { margin-bottom: 20px; }
   .hero-status[hidden] { display: none; }
@@ -316,7 +316,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
     display: inline-flex; align-items: center; gap: 16px; max-width: 100%; margin: 4px 0 30px; padding: 10px 30px 10px 10px;
     border-radius: 999px; background: var(--c-dark-deep); color: var(--c-cream); text-align: left;
     box-shadow: 0 16px 36px rgba(30, 31, 37, 0.16);
-    opacity: 0; animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s both;
+    opacity: 0; animation: heroUp var(--m-long) var(--m-move) 0.2s both;
   }
   .hero-watch[hidden] { display: none; }
   .hero-watch__play { flex: none; position: relative; width: 58px; height: 58px; border-radius: 50%; background: var(--c-yellow); color: var(--c-dark); display: grid; place-items: center; }
@@ -337,7 +337,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .hero-next a { color: var(--c-dark); font-weight: 600; text-decoration: underline; text-decoration-color: var(--c-yellow); text-decoration-thickness: 2px; text-underline-offset: 3px; white-space: nowrap; }
   .hero-ctas {
     display: flex; gap: 14px; flex-wrap: wrap;
-    opacity: 0; animation: heroUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.25s both;
+    opacity: 0; animation: heroUp var(--m-long) var(--m-move) 0.25s both;
   }
   .hero-ctas [hidden], .hero-ctas [data-capped] { display: none !important; }
   .hero-share { display: inline-flex; align-items: center; gap: 8px; }
@@ -353,7 +353,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   .hero[data-party] .hero-frame { animation: none; }
   /* backwards, not both: a transform left on after the entrance would trap the docked mini player */
   .hero-frame {
-    position: relative; animation: heroPhotoIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) backwards; scroll-margin-top: 100px;
+    position: relative; animation: heroPhotoIn var(--m-medium) var(--m-move) backwards; scroll-margin-top: 100px;
     /* The height the stage (video + bar) may take */
     /* (--live-vh: the screen's height, held steady while someone types on the page; see holdHeight in the script) */
     --fh: clamp(420px, calc(var(--live-vh, 100svh) - var(--header-height) - var(--apply-bar-h, 0px) - 44px - var(--fh-cut, 0px)), 900px);
@@ -403,10 +403,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
      arrives; the page behind them is the same cream either way, so nothing blinks) */
   :global(html[data-live-morph]::view-transition-old(live-eyebrow)), :global(html[data-live-morph]::view-transition-old(live-title)),
   :global(html[data-live-morph]::view-transition-old(live-lead)), :global(html[data-live-morph]::view-transition-old(live-ctas)),
-  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-old(live-watch)), :global(html[data-live-morph]::view-transition-old(live-partners)) { animation: 0.12s cubic-bezier(0.4, 0, 1, 1) both vt-fade-out; mix-blend-mode: normal; }
+  :global(html[data-live-morph]::view-transition-old(live-status)), :global(html[data-live-morph]::view-transition-old(live-watch)), :global(html[data-live-morph]::view-transition-old(live-partners)) { animation: var(--m-quick) var(--m-fade) both vt-fade-out; mix-blend-mode: normal; }
   :global(html[data-live-morph]::view-transition-new(live-eyebrow)), :global(html[data-live-morph]::view-transition-new(live-title)),
   :global(html[data-live-morph]::view-transition-new(live-lead)), :global(html[data-live-morph]::view-transition-new(live-ctas)),
-  :global(html[data-live-morph]::view-transition-new(live-status)), :global(html[data-live-morph]::view-transition-new(live-partners)) { animation: 0.24s cubic-bezier(0, 0, 0.2, 1) 0.1s both vt-fade-in; mix-blend-mode: normal; }
+  :global(html[data-live-morph]::view-transition-new(live-status)), :global(html[data-live-morph]::view-transition-new(live-partners)) { animation: var(--m-short) var(--m-fade) 0.1s both vt-fade-in; mix-blend-mode: normal; }
   /* The kid's name is the same name before and after: just the one, the new, from where it was to where it goes,
      its size easing with it (no fade, so never two of it) */
   :global(html[data-live-morph]::view-transition-old(live-title)) { animation: none; opacity: 0; }
@@ -415,9 +415,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
   :global(html[data-live-morph]::view-transition-old(live-frame)),
   :global(html[data-live-morph]::view-transition-new(live-frame)) { height: 100%; object-fit: cover; }
   :global(html[data-live-morph]::view-transition-old(live-frame)),
-  :global(html[data-live-morph]::view-transition-old(root)) { animation: 0.28s cubic-bezier(0.4, 0, 0.2, 1) both vt-fade-out; }
+  :global(html[data-live-morph]::view-transition-old(root)) { animation: var(--m-short) var(--m-fade) both vt-fade-out; }
   :global(html[data-live-morph]::view-transition-new(live-frame)),
-  :global(html[data-live-morph]::view-transition-new(root)) { animation: 0.28s cubic-bezier(0.4, 0, 0.2, 1) both vt-fade-in; }
+  :global(html[data-live-morph]::view-transition-new(root)) { animation: var(--m-short) var(--m-fade) both vt-fade-in; }
   /* The yellow card behind the video would show between it and the strip */
   .hero[data-party][data-design] .hero-frame :global(.stage__accent) { display: none; }
 
@@ -583,7 +583,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         display: inline-flex; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; box-sizing: border-box; height: 28px;
         margin: 0; padding: 0 12px 0 11px; border-radius: 100px; background: #fff; border: 1px solid var(--c-border);
         color: var(--c-text); text-decoration: none; font-size: 12.5px; font-weight: 600; line-height: 1; white-space: nowrap;
-        transition: border-color 150ms ease;
+        transition: border-color var(--m-quick) var(--m-fade);
       }
       .hero[data-party][data-orientation='portrait'] .hero-news__dot { position: relative; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--c-yellow); }
       .hero[data-party][data-orientation='portrait'] .hero-news[data-state='live'] .hero-news__dot::after {
@@ -591,7 +591,7 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       }
       .hero[data-party][data-orientation='portrait'] .hero-news__label { flex: none; font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
       .hero[data-party][data-orientation='portrait'] .hero-news__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--c-text-muted); }
-      .hero[data-party][data-orientation='portrait'] .hero-news__go { flex: none; transition: transform 150ms ease; }
+      .hero[data-party][data-orientation='portrait'] .hero-news__go { flex: none; transition: transform var(--m-quick) var(--m-move); }
       .hero[data-party][data-orientation='portrait'] .hero-news:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
       @media (hover: hover) {
         .hero[data-party][data-orientation='portrait'] .hero-news:hover { border-color: var(--c-dark); }
@@ -704,10 +704,10 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
          come a moment after the page, fade in when they do rather than appearing at once. Anyone who asked for less motion
          sees it all at once ── */
       .hero[data-party][data-orientation='portrait'] :is(.hero-head, .hero-ctas, .hero-frame, .hero-party, :global(.lsp)) { animation: none; opacity: 1; }
-      .hero[data-party][data-orientation='portrait'] :global(.lrm:not([hidden])) { animation: thFade 260ms ease-out both; }
+      .hero[data-party][data-orientation='portrait'] :global(.lrm:not([hidden])) { animation: thFade var(--m-short) var(--m-fade) both; }
       /* (the name rises with its column, not on its own as well) */
       .hero[data-party][data-orientation='portrait'] .hero-text h1 { animation: none; opacity: 1; }
-      .hero[data-enter][data-party][data-orientation='portrait'] :is(.hero-head, .hero-ctas, .hero-frame, .hero-party, :global(.lrm), :global(.lsp)) { animation: thRise 560ms cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+      .hero[data-enter][data-party][data-orientation='portrait'] :is(.hero-head, .hero-ctas, .hero-frame, .hero-party, :global(.lrm), :global(.lsp)) { animation: thRise var(--m-long) var(--m-move) both; }
       .hero[data-enter][data-party][data-orientation='portrait'] :is(.hero-head, :global(.lsp)) { animation-delay: 60ms; }
       .hero[data-enter][data-party][data-orientation='portrait'] .hero-ctas { animation-delay: 120ms; }
       .hero[data-enter][data-party][data-orientation='portrait'] :global(.lrm) { animation-delay: 180ms; }

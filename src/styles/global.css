@@ -14,6 +14,19 @@
 [data-whole]:not(:has(> [data-whole-end])) > :not([data-whole-keep]) { visibility: hidden; }
 
 :root {
+  /* Motion: four speeds and two curves, one feel across the live page (Nov 21 2026 phone review: over 30 different
+     speeds and curves on one page). Quick: a press, a hover, a colour; short: a small move or fade; medium: a panel,
+     the room's pictures opening, the corner video; long: what enters the page. Move: what travels or grows; fade:
+     colour and opacity. (src/utils/motion.ts has the same for the scripts) */
+  --m-quick: 150ms;
+  --m-short: 250ms;
+  --m-medium: 350ms;
+  --m-long: 500ms;
+  --m-move: cubic-bezier(0.16, 1, 0.3, 1);
+  --m-fade: cubic-bezier(0.4, 0, 0.2, 1);
+  /* (and a press's small spring: a button, the heart, the corner video let go) */
+  --m-pop: cubic-bezier(0.34, 1.56, 0.64, 1);
+
   /* Brand Colors — per official brand guidelines */
   --c-yellow: #FFDA24;
   --c-yellow-soft: rgba(255, 218, 36, 0.3);

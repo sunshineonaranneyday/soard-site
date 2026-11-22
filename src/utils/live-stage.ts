@@ -15,6 +15,7 @@ import { mountPlayer, type LiveSeek, type PlayerHandle, type PlayerStatus } from
 import { watchMeter } from './live-stats';
 import { PHONE, PHONE_UPRIGHT, SIDE, typingIn } from './live-media';
 import { morphEase, morphPath } from './play-morph';
+import { MOTION } from './motion';
 
 export type StageMode = 'loading' | 'idle' | 'upcoming' | 'live' | 'replay';
 export interface StageView {
@@ -637,7 +638,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       // (gliding, it's drawn over where the one that came now is: it takes no taps until it's there, so a quick tap on
       // Tap for sound as it appears is never a tap on Full screen passing over it)
       el.style.pointerEvents = 'none';
-      const glide = el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: 420, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' });
+      const glide = el.animate([{ transform: `translateY(${dy}px)` }, { transform: 'none' }], { duration: MOTION.medium, easing: MOTION.move });
       const done = () => { el.style.pointerEvents = ''; };
       glide.onfinish = done; glide.oncancel = done;
     });
@@ -1264,7 +1265,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
         picture.animate([
           { transformOrigin: 'top left', transform: `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})` },
           { transformOrigin: 'top left', transform: 'none' },
-        ], { duration: on ? 320 : 280, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
+        ], { duration: on ? MOTION.medium : MOTION.short, easing: MOTION.move });
       }
     }
   }
@@ -1453,7 +1454,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     applyCorner();
     // From where it was let go, a little spring into its corner
     const to = picture.getBoundingClientRect();
-    if (!reduced) picture.animate([{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)` }, { transform: 'none' }], { duration: 380, easing: 'cubic-bezier(0.34, 1.4, 0.64, 1)' });
+    if (!reduced) picture.animate([{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)` }, { transform: 'none' }], { duration: MOTION.medium, easing: MOTION.pop });
   };
   picture?.addEventListener('pointerup', endDrag);
   picture?.addEventListener('pointercancel', endDrag);

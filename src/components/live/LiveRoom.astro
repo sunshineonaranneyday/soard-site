@@ -64,7 +64,7 @@
   .lrm { display: none; }
   /* (the Theater layout's width, LivePage: always a computer's layout, DESK in src/utils/live-media.ts) */
   @media (min-width: 1200px) {
-    .hero[data-party][data-orientation='portrait'] .lrm:not([hidden]) { display: block; margin: 0 0 24px; animation: lrmIn 0.45s ease-out both; }
+    .hero[data-party][data-orientation='portrait'] .lrm:not([hidden]) { display: block; margin: 0 0 24px; animation: lrmIn var(--m-medium) var(--m-move) both; }
     @keyframes lrmIn { from { opacity: 0; } }
   }
   /* The switch: the room, the plan, the look (whichever have pictures). A sliding toggle (Peter, Nov 19 2026: "the room
@@ -83,12 +83,12 @@
   .lrm-tabs::before {
     content: ''; position: absolute; top: 4px; bottom: 4px; left: 4px; width: calc((100% - 8px) / var(--n)); border-radius: 100px;
     background: var(--c-dark); box-shadow: 0 2px 8px rgba(30, 31, 37, 0.18);
-    transform: translateX(calc(var(--i) * 100%)); transition: transform 280ms cubic-bezier(0.2, 0.8, 0.2, 1);
+    transform: translateX(calc(var(--i) * 100%)); transition: transform var(--m-short) var(--m-move);
   }
   .lrm-tabs[hidden], .lrm-thumbs[hidden] { display: none; }
   .lrm-tab {
     position: relative; z-index: 1; height: 36px; padding: 0 18px; border: 0; border-radius: 100px; background: transparent; color: var(--c-text-muted);
-    font: inherit; font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: color 200ms ease;
+    font: inherit; font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; transition: color var(--m-quick) var(--m-fade);
   }
   .lrm-tab:hover { color: var(--c-text); }
   .lrm-tab[aria-selected='true'] { color: #fff; }
@@ -103,7 +103,7 @@
   /* (the compare in its place: gone, not just covered) */
   .lrm-big[hidden] { display: none; }
   .lrm-pic { position: absolute; inset: 0; display: block; }
-  .lrm-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 360ms ease; }
+  .lrm-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--m-medium) var(--m-fade); }
   .lrm-pic img.is-in { opacity: 1; }
   /* (the one it replaces goes at once, so a badge never sits on the wrong picture; its small picture stands in) */
   .lrm-pic img.is-out { opacity: 0; transition-duration: 120ms; }
@@ -131,7 +131,7 @@
   .lrm-nav {
     position: absolute; top: 50%; z-index: 2; width: 42px; height: 42px; margin-top: -21px; padding: 0; border: 0; border-radius: 50%;
     display: grid; place-items: center; background: rgba(255, 255, 255, 0.95); color: var(--c-dark); cursor: pointer;
-    box-shadow: 0 0 0 1px rgba(30, 31, 37, 0.06), 0 6px 18px rgba(30, 31, 37, 0.18); transition: transform 160ms ease, background-color 160ms ease;
+    box-shadow: 0 0 0 1px rgba(30, 31, 37, 0.06), 0 6px 18px rgba(30, 31, 37, 0.18); transition: transform var(--m-quick) var(--m-move), background-color var(--m-quick) var(--m-fade);
   }
   .lrm-nav[hidden] { display: none; }
   .lrm-nav svg { width: 20px; height: 20px; }
@@ -144,7 +144,7 @@
      Peter, Nov 20 2026: "the left and right arrows should be hidden until users is in the photo right?". A touch screen
      can't point first, so there they stay) */
   @media (hover: hover) {
-    .lrm-nav { opacity: 0; transition: opacity 180ms ease, transform 160ms ease, background-color 160ms ease; }
+    .lrm-nav { opacity: 0; transition: opacity var(--m-quick) var(--m-fade), transform var(--m-quick) var(--m-move), background-color var(--m-quick) var(--m-fade); }
     .lrm-row:has(> .lrm-big:hover, > .lrm-nav:hover) .lrm-nav,
     .lrm-big:focus-visible ~ .lrm-nav,
     .lrm-nav:focus-visible { opacity: 1; }
@@ -166,7 +166,7 @@
   .lrm-thumbs li { flex: 0 1 64px; min-height: 44px; display: flex; }
   .lrm-thumb {
     position: relative; display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 10px; overflow: hidden; cursor: pointer;
-    background: #fff; box-shadow: 0 0 0 1px var(--c-border); transition: box-shadow 160ms ease, transform 160ms ease;
+    background: #fff; box-shadow: 0 0 0 1px var(--c-border); transition: box-shadow var(--m-quick) var(--m-fade), transform var(--m-quick) var(--m-move);
   }
   /* (all at full strength: a dimmed one reads as switched off; the one showing big has the ring) */
   .lrm-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }

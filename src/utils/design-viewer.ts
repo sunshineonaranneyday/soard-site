@@ -30,6 +30,7 @@ import { attachCompare, type CompareHandle } from './compare-slider';
 import { compareFor } from './plan-compare';
 import { compareHtml, type PartKey } from './live-design-html';
 import { compareRatio, focusOf, knownRatio, type DesignSlide, type PlanPair } from './reveal-design-client';
+import { MOTION } from './motion';
 
 export type GalleryItem =
   | { kind: 'slide'; s: DesignSlide; part: PartKey }
@@ -79,7 +80,7 @@ interface Pane {
 }
 
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
-const EASE = 'cubic-bezier(0.2, 0.8, 0.2, 1)';
+const EASE = MOTION.move;
 /** The gap between two pictures while one slides in */
 const GAP = 24;
 
@@ -167,7 +168,7 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     p.y = h <= ph ? (ph - h) / 2 : Math.min(0, Math.max(ph - h, p.y));
   }
   function paint(p: Pane, animate: boolean) {
-    p.zoom.style.transition = animate && !reduced() ? `transform 0.32s ${EASE}` : 'none';
+    p.zoom.style.transition = animate && !reduced() ? `transform ${MOTION.medium}ms ${EASE}` : 'none';
     p.zoom.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px) scale(${p.k.toFixed(4)})`;
     if (p.cmp) placeLine(p, animate);
     if (panes[at] === p) hooks.onZoom(p.k > 1.01, p.item.kind === 'slide' && !!focusOf(p.item.s));
@@ -275,7 +276,7 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     // Only the one showing can be reached (Tab, a screen reader): focus in one beside it would scroll the strip
     panes.forEach((p, i) => { p.el.inert = i !== at; });
     trackX = -at * (pw + GAP) + extra;
-    track.style.transition = animate && !reduced() ? `transform 0.36s ${EASE}` : 'none';
+    track.style.transition = animate && !reduced() ? `transform ${MOTION.medium}ms ${EASE}` : 'none';
     track.style.transform = `translate3d(${trackX.toFixed(1)}px, 0, 0)`;
   }
   function go(i: number, animate = true) {
@@ -461,7 +462,7 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     }
     if (mode === 'dismiss') {
       if (dy > 110 || vy > 0.6) { hooks.onDismiss(); return; }
-      p.fly.style.transition = reduced() ? 'none' : `transform 0.3s ${EASE}`;
+      p.fly.style.transition = reduced() ? 'none' : `transform ${MOTION.short}ms ${EASE}`;
       p.fly.style.transform = '';
       hooks.onDismissProgress(0);
       return;
@@ -514,19 +515,19 @@ export function createGallery(stage: HTMLElement, hooks: GalleryHooks) {
     if (!to.width) return;
     const s = from.width / to.width;
     const dx = from.left + from.width / 2 - (to.left + to.width / 2), dy = from.top + from.height / 2 - (to.top + to.height / 2);
-    p.fly.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${s})` }, { transform: 'none' }], { duration: 320, easing: EASE });
+    p.fly.animate([{ transform: `translate(${dx}px, ${dy}px) scale(${s})` }, { transform: 'none' }], { duration: MOTION.medium, easing: EASE });
   }
   function flyTo(to: DOMRect | null): Promise<void> {
     const p = panes[at];
     if (!p || reduced()) return Promise.resolve();
     const from = shownRect(p);
     if (!to || !to.width || !from.width || to.bottom < 0 || to.top > innerHeight) {
-      return p.fly.animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(0.96)' }], { duration: 160, easing: 'ease-out', fill: 'forwards' }).finished.then(() => {}, () => {});
+      return p.fly.animate([{ opacity: 1 }, { opacity: 0, transform: 'scale(0.96)' }], { duration: MOTION.quick, easing: MOTION.fade, fill: 'forwards' }).finished.then(() => {}, () => {});
     }
     const s = to.width / from.width;
     const dx = to.left + to.width / 2 - (from.left + from.width / 2), dy = to.top + to.height / 2 - (from.top + from.height / 2);
     const now = getComputedStyle(p.fly).transform;
-    return p.fly.animate([{ transform: now === 'none' ? 'none' : now }, { transform: `translate(${dx}px, ${dy}px) scale(${s})` }], { duration: 240, easing: EASE, fill: 'forwards' }).finished.then(() => {}, () => {});
+    return p.fly.animate([{ transform: now === 'none' ? 'none' : now }, { transform: `translate(${dx}px, ${dy}px) scale(${s})` }], { duration: MOTION.short, easing: EASE, fill: 'forwards' }).finished.then(() => {}, () => {});
   }
 
   return {

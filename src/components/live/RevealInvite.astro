@@ -49,9 +49,9 @@
     box-shadow: 0 30px 80px rgba(0, 0, 0, 0.28), 0 8px 24px rgba(0, 0, 0, 0.12);
     overflow: auto; overscroll-behavior: contain;
   }
-  .rinv[open] { animation: rinv-in 0.42s var(--ease) both; }
+  .rinv[open] { animation: rinv-in var(--m-medium) var(--m-move) both; }
   .rinv::backdrop { background: rgba(30, 31, 37, 0.55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
-  .rinv[open]::backdrop { animation: rinv-fade 0.3s ease both; }
+  .rinv[open]::backdrop { animation: rinv-fade var(--m-short) var(--m-fade) both; }
   @keyframes rinv-in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
   @keyframes rinv-fade { from { opacity: 0; } to { opacity: 1; } }
   html:has(.rinv[open]) { overflow: hidden; }
@@ -60,7 +60,7 @@
   .rinv__close-form { position: absolute; top: 14px; right: 14px; margin: 0; }
   .rinv__close {
     width: 44px; height: 44px; border-radius: 50%; border: 0; background: var(--c-warm-gray, #F5F4F0); color: var(--c-dark, #373A36);
-    display: grid; place-items: center; cursor: pointer; transition: background 0.2s ease, transform 0.3s var(--ease);
+    display: grid; place-items: center; cursor: pointer; transition: background var(--m-quick) var(--m-fade), transform var(--m-short) var(--m-move);
   }
   .rinv__close:hover { background: var(--c-border, #E5E4E0); transform: rotate(90deg); }
   .rinv__close:focus-visible { outline: 2px solid var(--c-dark, #373A36); outline-offset: 2px; }
@@ -77,8 +77,8 @@
     display: flex; align-items: center; justify-content: center; min-height: 52px; padding: 12px 18px;
     border-radius: 100px; border: 1.5px solid var(--c-border, #E5E4E0); background: var(--c-white, #fff);
     font: inherit; font-size: 15.5px; font-weight: 700; color: var(--c-dark, #373A36); text-decoration: none; cursor: pointer;
-    opacity: 0; animation: rinv-opt 0.45s var(--ease) both;
-    transition: border-color 0.2s ease, background 0.2s ease, transform 0.3s var(--ease);
+    opacity: 0; animation: rinv-opt var(--m-medium) var(--m-move) both;
+    transition: border-color var(--m-quick) var(--m-fade), background var(--m-quick) var(--m-fade), transform var(--m-short) var(--m-move);
   }
   .rinv__opt:nth-child(1) { animation-delay: 0.08s; }
   .rinv__opt:nth-child(2) { animation-delay: 0.13s; }
@@ -99,7 +99,7 @@
   /* Phone: a sheet that rises from the bottom */
   @media (max-width: 640px) {
     .rinv { width: 100%; max-height: 92dvh; margin: auto 0 0; border-radius: 24px 24px 0 0; }
-    .rinv[open] { animation: rinv-up 0.48s var(--ease) both; }
+    .rinv[open] { animation: rinv-up var(--m-long) var(--m-move) both; }
     @keyframes rinv-up { from { transform: translateY(100%); } to { transform: none; } }
     .rinv__inner { padding: 26px 20px calc(20px + env(safe-area-inset-bottom)); }
     .rinv__inner::before { content: ''; display: block; width: 40px; height: 5px; border-radius: 5px; background: var(--c-border, #E5E4E0); margin: -12px auto 18px; }
