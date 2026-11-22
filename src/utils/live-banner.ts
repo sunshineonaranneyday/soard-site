@@ -24,7 +24,8 @@ type Status = Pick<LiveState, 'id' | 'live' | 'upcoming' | 'replay' | 'kidSlug' 
 const midnight = (t: number | string) => { const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
 /** Calendar days away, in the viewer's own time zone */
 const daysAway = (iso: string, now: number) => Math.round((midnight(iso) - midnight(now)) / DAY);
-const clock = (iso: string) => new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }).format(new Date(iso));
+/** (in the viewer's own time zone; the server, drawing the page, passes the visitor's) */
+const clock = (iso: string, timeZone?: string) => new Intl.DateTimeFormat(LOCALE, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short', ...(timeZone ? { timeZone } : {}) }).format(new Date(iso));
 /** Same rule as reveals-client: "Max’s", "James’" */
 const possessive = (name: string) => (/s$/i.test(name) ? `${name}’` : `${name}’s`);
 
@@ -126,7 +127,7 @@ export function bannerWords(s: Status, stage: BannerStage, next: NextReveal[], {
  * Theater's head: LivePage, Peter, Nov 20 2026: "keep it off the sponsors"): its label, then whose and when, never
  * the card's whole sentence, so it fits across from the page's own label
  */
-export function bannerShort(s: Status, stage: BannerStage, { now = Date.now() } = {}): { label: string; text: string; aria: string } {
+export function bannerShort(s: Status, stage: BannerStage, { now = Date.now(), timeZone }: { now?: number; timeZone?: string } = {}): { label: string; text: string; aria: string } {
   const whose = s.kidName ? `${possessive(s.kidName)} reveal` : 'The reveal';
   const label = stage === 'live' ? 'Live now' : stage === 'ended' ? 'Just ended' : stage === 'replay' ? 'Replay ready' : stage === 'today' ? 'Reveal day' : 'Coming up';
   let text = whose;
@@ -137,7 +138,7 @@ export function bannerShort(s: Status, stage: BannerStage, { now = Date.now() } 
     const at = Date.parse(s.scheduledAt);
     // (past its start and still waiting on the stream: as the card says it)
     if (at <= now) text = runningLate(s.scheduledAt, now) ? `${whose} is running a little late` : `${whose} is starting soon`;
-    else text = `${whose} ${stage === 'today' ? '' : `${onDay(s.scheduledAt, now)} `}at ${clock(s.scheduledAt)}`;
+    else text = `${whose} ${stage === 'today' ? '' : `${onDay(s.scheduledAt, now)} `}at ${clock(s.scheduledAt, timeZone)}`;
   }
   return { label, text, aria: `${label}. ${text}.` };
 }

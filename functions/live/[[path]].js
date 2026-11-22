@@ -46,6 +46,7 @@ import { designSignature, validSlide } from '../../src/utils/reveal-design-clien
 import { designPartsHtml, designName, designLead } from '../../src/utils/live-design-html.ts';
 import { bandPartners, partnersBandInner } from '../../src/utils/live-partners-html.ts';
 import { sponsorTiers, sponsorsInner } from '../../src/utils/live-sponsors-html.ts';
+import { bannerStage, bannerShort, pageShowsIt } from '../../src/utils/live-banner.ts';
 import { barFor, addBar, PAGE_REUSE } from '../_apply-bar.js';
 import { cardFor } from '../_og-cards.js';
 import { edgeSchedule, scheduleAttr } from '../_kid-reveal.js';
@@ -191,6 +192,25 @@ function heroMessages(rw, msgs) {
       .on('[data-msgs="latest-text"]', { element(e) { e.setInnerContent(line.text); } });
   }
   return rw;
+}
+
+/**
+ * The site's reveal news on another kid's page (their reveal day, live now, its replay), drawn in the page's own line
+ * from the first paint, as LiveIndicator would write it (live-banner.ts): on a phone the line sits over the name and the
+ * video makes room for it, so it can't arrive late and push the video down (Nov 21 2026, 36px at 0.8 s). Not on the
+ * page that already shows the reveal; the script keeps it current after that
+ */
+function addNews(res, pub, path, zone) {
+  if (!pub?.kidSlug || pageShowsIt(path, pub.kidSlug)) return res;
+  const stage = bannerStage(pub);
+  if (!stage) return res;
+  const short = bannerShort(pub, stage, { timeZone: zone });
+  const href = pub.url || pub.liveUrl || '/live/';
+  return new HTMLRewriter()
+    .on('#live-hero [data-banner-home]', { element(e) { e.removeAttribute('hidden'); e.setAttribute('href', href); e.setAttribute('data-state', stage); e.setAttribute('aria-label', short.aria); } })
+    .on('#live-hero [data-banner-home-label]', { element(e) { e.setInnerContent(short.label); } })
+    .on('#live-hero [data-banner-home-text]', { element(e) { e.setInnerContent(short.text); } })
+    .transform(res);
 }
 
 function rewrite(res, { kid, party, messages, design, partnerList }) {
@@ -612,6 +632,8 @@ export async function onRequest(context) {
       }
     }
   } catch { broadcast = null; }
+  // (the site's current broadcast, before a child's page swaps in their own past reveal: what the reveal news is about)
+  const currentPub = broadcast?.pub || null;
   // A child's own page once their broadcast isn't the current one (its replay window over, or the next child's reveal
   // on): their own last reveal, in the Theater, for good (_past-reveal.js). The current broadcast stays in rawState
   if (broadcast && pageKid && !rehearsal && !ownCurrent(broadcast.pub, pageKid)) {
@@ -698,6 +720,7 @@ export async function onRequest(context) {
     let page = first ? await addFirstView(res, first, messages, ctaFacts) : res;
     page = kid || party ? rewrite(page, { kid, party, messages: heroMsgs, design: party ? design : null, partnerList }) : page;
     page = addDesign(page, design);
+    if (pageKid && !rehearsal) page = addNews(page, currentPub, url.pathname, visitorZone(request));
     if (rows && isIndex) page = addHeroRows(page, { list: rows, zone: visitorZone(request), between: !!broadcast && !kid && !ACTIVE.has(broadcast.state?.phase) });
     if (line) page = addAfterLine(page, line);
     if (schedule) page = addSchedule(page, schedule, { zone: visitorZone(request), current: showingKid(broadcast?.pub, pageKid) });

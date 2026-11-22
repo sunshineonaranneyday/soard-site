@@ -352,7 +352,8 @@
       moveFocusOut(el);
       el.classList.remove('is-visible');
       el.hidden = true;
-      hideHome();
+      // (not before the news is known: the page drew its line from the first paint, functions/live/[[path]].js)
+      if (status) hideHome();
       return;
     }
     // The page has its own place for it: one short line there, and nothing floating over the page
