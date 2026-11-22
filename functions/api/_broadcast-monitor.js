@@ -318,7 +318,8 @@ function makeCtx(env, config, state, m, work, record) {
   const texted = (key) => { (m.texted ||= {})[key] = at; };
   const textedLately = (key) => !!m.texted?.[key] && now - Date.parse(m.texted[key]) < RULES.textQuiet;
 
-  const raise = async (key, { level = 'warn', title, detail, fix, links = [], after = 0 }) => {
+  // `text: false`: Slack and email only, never the phones (nor its reminders, nor, following open.texted, its fix)
+  const raise = async (key, { level = 'warn', title, detail, fix, links = [], after = 0, text = true }) => {
     m.pending[key] ||= at;
     if (now - Date.parse(m.pending[key]) < after) return;
     const open = m.issues[key];
@@ -326,7 +327,7 @@ function makeCtx(env, config, state, m, work, record) {
       Object.assign(open, { level, title, detail, fix });
       const last = Date.parse(open.remindedAt || open.postedAt || open.since);
       if (now - last < (open.remindedAt ? RULES.remindEvery : RULES.remindFirst)) return;
-      const textIt = !open.texted; // it came back too soon to text, and it's sticking: one text now
+      const textIt = text && !open.texted; // it came back too soon to text, and it's sticking: one text now
       const r = await notify.alertAdmins(env, config, { level, title: `Still: ${title}`, detail: `${detail} Going on ${fmtDur(now - Date.parse(open.since))}.`, fix, url: ADMIN_URL, links, context, issue: issueKey(key), text: textIt });
       if (textIt) { open.texted = true; texted(key); }
       open.remindedAt = at;
@@ -337,7 +338,7 @@ function makeCtx(env, config, state, m, work, record) {
       return;
     }
     // Something failing during the reveal itself buzzes whoever is watching the alerts channel
-    const textIt = !textedLately(key);
+    const textIt = text && !textedLately(key);
     const r = await notify.alertAdmins(env, config, { level, title, detail, fix, url: ADMIN_URL, links, context, issue: issueKey(key), urgent: level === 'error', text: textIt });
     if (textIt) texted(key);
     m.issues[key] = { key, level, title, detail, fix, since: m.pending[key], postedAt: at, slack: slackStatus(r.slack), texted: textIt };
@@ -374,7 +375,11 @@ function makeCtx(env, config, state, m, work, record) {
  * Call while the phase is live or ending and the source is Stream.
  * `record(DB, broadcastId, type, meta)` writes an analytics event.
  */
-export async function watch(env, config, state, health, work, record = async () => {}) {
+/**
+ * `overQuestion`: staff are being asked "Is the reveal over?" about this drop (askIfOver in _broadcast.js), so
+ * "The phone lost its connection" goes to Slack and email only, not the phones: one text per drop, not two.
+ */
+export async function watch(env, config, state, health, work, record = async () => {}, { overQuestion = false } = {}) {
   let m = health.monitor;
   if (!m || m.broadcastId !== state.broadcastId) m = freshMonitor(state);
   health.monitor = m;
@@ -394,7 +399,7 @@ export async function watch(env, config, state, health, work, record = async () 
   if (state.phase === 'ending' || state.gapSince) {
     // Facebook and YouTube aren't read while the phone is away: not known (a short gap carries the last reading)
     m.fbViewers = null; m.ytViewers = null;
-    await c.raise('disconnected', { level: 'error', after: RULES.disconnectedAfter, title: 'The phone lost its connection', detail: 'The site keeps the reveal live for 2 minutes. After that it shows the reveal ended, and a phone back within 15 more minutes still picks the same reveal up again.', fix: 'Check that Larix is still streaming. If it stopped, tap Start: the reveal picks up where it left off.' });
+    await c.raise('disconnected', { level: 'error', after: RULES.disconnectedAfter, title: 'The phone lost its connection', detail: `The site keeps the reveal live for 2 minutes. After that it shows the reveal ended, and a phone back within 15 more minutes still picks the same reveal up again.${overQuestion ? ' Staff got a text asking if the reveal is over (Y ends it, N keeps it on air).' : ''}`, fix: 'Check that Larix is still streaming. If it stopped, tap Start: the reveal picks up where it left off.', text: !overQuestion });
     return;
   }
   await c.clear('disconnected');
