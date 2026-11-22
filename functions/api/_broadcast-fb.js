@@ -202,6 +202,28 @@ export async function commentOnFbLive(env, liveVideoId, message) {
   }
 }
 
+/**
+ * Admin check: can the site start a Facebook live right now? Creates an UNPUBLISHED live video (nothing shows on the
+ * Page and nobody is notified) through the same /live_videos call the go-live uses, then deletes it at once. Added Nov
+ * 22 2026, when the app went Live before Meta's App Review answer (in Live mode in July, /live_videos was refused, #10).
+ * → { ok, created, id, deleted, deleteError, error, code, needsReview }
+ */
+export async function testFbLiveCreate(env) {
+  if (!fbConfigured(env)) return { ok: false, created: false, error: 'not configured' };
+  try {
+    const r = await graph(env, 'POST', `${env.FB_PAGE_ID}/live_videos`, { status: 'UNPUBLISHED', title: 'SOARD site check (deleted at once)' });
+    if (!r.ok) {
+      const needsReview = r.code === 10 || r.code === 200 || /reviewed|approved|permission/i.test(r.error || '');
+      return { ok: false, created: false, error: r.error, code: r.code, needsReview };
+    }
+    const id = r.data.id;
+    const d = await graph(env, 'DELETE', id);
+    return { ok: true, created: true, id, deleted: d.ok, deleteError: d.ok ? null : d.error };
+  } catch (e) {
+    return { ok: false, created: false, error: e.message };
+  }
+}
+
 export async function endFbLiveVideo(env, liveVideoId) {
   if (!fbConfigured(env) || !liveVideoId) return { ok: false, error: 'not configured' };
   try {

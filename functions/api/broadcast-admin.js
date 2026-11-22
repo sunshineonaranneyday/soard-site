@@ -12,7 +12,7 @@
  *   setOutput { target: facebook|youtube, url, streamKey } | toggleOutput { target, enabled } | removeOutput { target }
  *   setConfig { ...partial }
  *   generateVapid { force? }
- *   testStream | testFacebook | testHub | testAlert | runTick | lifecycle
+ *   testStream | testFacebook | testFacebookLive | testHub | testAlert | runTick | lifecycle
  *   slackStatus | slackChannels | setSlackChannel { id, role }   the Slack app's connection and its two channels
  *     (role 'news': good news everyone sees; 'attention': alerts that need a hand, id '' to share the news one)
  *   monitor { feed: live|rehearsal }   Control room: picture, audio level, every destination's verdict, open issues
@@ -406,6 +406,11 @@ export async function onRequestPost(context) {
         const t = await fb.checkFbToken(env);
         const [recent, info] = await Promise.all([t.ok ? fb.fbRecentBroadcasts(env, 5) : null, fb.fbTokenInfo(env)]);
         return Response.json({ success: t.ok, token: t, recent, info });
+      }
+      case 'testFacebookLive': {
+        // Creates a hidden test live video on the Page and deletes it at once (see testFbLiveCreate)
+        const r = await fb.testFbLiveCreate(env);
+        return Response.json({ success: r.ok && r.deleted !== false, ...r });
       }
       case 'testInstagram': {
         const ig = await reels.instagramAccount(env);
