@@ -61,7 +61,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // ── The fake broadcast ────────────────────────────────────────────
 // window: how many pieces older than the newest the playlist keeps (Stream keeps far more; 3 keeps the tests quick).
 // held: the pieces' answers wait here instead of going out (a picture that hasn't come in yet).
-const feed = { shape: 'portrait', down: false, split: false, t0: Date.now(), revealAt: 6, design: { open: false }, window: 3, held: null };
+// frozen / shrink / closed: the feed stopping (livePlaylist). pieces: every piece the page asks for, when collecting.
+const feed = { shape: 'portrait', down: false, split: false, t0: Date.now(), revealAt: 6, design: { open: false }, window: 3, held: null, frozen: null, shrink: false, closed: false, pieces: null };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
 /** The room's design, for the strip beside the video (a kid's page) */
 const DESIGN = {
@@ -73,14 +74,21 @@ const DESIGN = {
  * track of the split fixture: fMP4 pieces after their own init segment, as Stream sends them.
  */
 function livePlaylist(track = '') {
-  const newest = Math.floor((Date.now() - feed.t0) / 2000) + 3;
-  const first = Math.max(0, newest - feed.window);
+  // A feed that has stopped (frozen: the newest piece then) stays where it was; shrunk, its end reads a piece earlier
+  // than the player already got to, as Stream's did when the phone stopped on Nov 18 2026 (so hls.js "catches up"
+  // backwards); closed, it's the recording Stream makes of it: every piece from the first, and an end
+  const top = feed.frozen != null ? feed.frozen - (feed.shrink ? 1 : 0) : Math.floor((Date.now() - feed.t0) / 2000) + 3;
+  const first = feed.closed ? 0 : Math.max(0, top - feed.window);
   let s = `#EXTM3U\n#EXT-X-VERSION:${track ? 7 : 3}\n#EXT-X-TARGETDURATION:2\n#EXT-X-MEDIA-SEQUENCE:${first}\n#EXT-X-DISCONTINUITY-SEQUENCE:${Math.floor(first / SEGMENTS)}\n`;
+  if (feed.closed) s += '#EXT-X-PLAYLIST-TYPE:VOD\n';
   if (track) s += `#EXT-X-MAP:URI="${track}-init.mp4"\n`;
-  for (let i = first; i <= newest; i++) {
+  for (let i = first; i <= top; i++) {
     if (i > first && i % SEGMENTS === 0) s += '#EXT-X-DISCONTINUITY\n';
-    s += `#EXTINF:2.000000,\n${track ? `${track}${i % SEGMENTS}.m4s` : `seg${i % SEGMENTS}.ts`}?n=${i}\n`;
+    // Dated like Stream's pieces: the moment each was filmed
+    s += `#EXT-X-PROGRAM-DATE-TIME:${new Date(feed.t0 + i * 2000).toISOString()}\n`;
+    s += `#EXTINF:2.000000,\n${track ? `${track}${i % SEGMENTS}.m4s` : `seg${i % SEGMENTS}.ts`}?n=${i}${feed.closed ? '&closed=1' : ''}\n`;
   }
+  if (feed.closed) s += '#EXT-X-ENDLIST\n';
   return s;
 }
 /** Stream's own shape: a master playlist whose sound is a separate audio rendition (EXT-X-MEDIA TYPE=AUDIO) */
@@ -125,6 +133,7 @@ async function mock(page) {
         return req.respond({ status: 200, contentType: 'video/mp4', headers: cors, body: readFileSync(`${FIX}split/${name}`) });
       }
       if (url.pathname.endsWith('.m3u8')) return req.respond({ status: 200, contentType: 'application/vnd.apple.mpegurl', headers: cors, body: livePlaylist() });
+      if (feed.pieces && url.searchParams.has('n')) feed.pieces.push({ n: Number(url.searchParams.get('n')), closed: url.searchParams.has('closed') });
       const piece = () => req.respond({ status: 200, contentType: 'video/mp2t', headers: cors, body: readFileSync(`${FIX}${feed.shape}/${url.pathname.split('/').pop()}`) }).catch(() => {});
       if (feed.held) return feed.held.push(piece);
       return piece();
@@ -333,6 +342,60 @@ try {
   await waitFor(page, ['playing'], 30000);
   g = await probe(page);
   ok(g.pstatus === 'playing' && g.status === 'Live', 'picks back up by itself');
+
+  console.log('\n▶ the feed stops, then Stream closes it into a recording, then the phone is back: nothing plays twice');
+  // Nov 18 2026 test broadcast: the phone's feed stopped; the page played its last few seconds over and over (hls.js
+  // moving back to "catch up" with a playlist that no longer reached the picture, and every start-over beginning
+  // several seconds back), then, once Stream had closed the feed into a recording, the whole broadcast from 0:00
+  {
+    feed.window = 6;
+    await open(page);
+    await waitFor(page, ['playing']); await sleep(5000);
+    // Every frame the page shows, by the player it came from (a start-over empties the video) and its place in it
+    await page.evaluate(() => {
+      const v = document.querySelector('.stage__player video');
+      const w = window;
+      w.__frames = []; w.__gen = 0;
+      v.addEventListener('emptied', () => { w.__gen++; });
+      const each = (_now, md) => { w.__frames.push([w.__gen, md.mediaTime]); v.requestVideoFrameCallback(each); };
+      v.requestVideoFrameCallback(each);
+    });
+    await sleep(1500);
+    feed.pieces = [];
+    feed.frozen = Math.floor((Date.now() - feed.t0) / 2000) + 3;
+    feed.shrink = true;
+    const fromFrame = await page.evaluate(() => window.__frames.length);
+    // Past the player's own 12 s frozen-picture check, so a start-over has its chance to replay
+    await sleep(18000);
+    let g = await probe(page);
+    ok(g.pstatus === 'reconnecting' && g.note === 'Reconnecting', `stopped feed: Reconnecting (${g.pstatus})`);
+    const replayed = await page.evaluate((from) => {
+      // A frame earlier than one this same player already showed: seen again
+      const best = new Map();
+      let again = 0;
+      window.__frames.forEach(([gen, t], i) => {
+        const top = best.get(gen) ?? -1;
+        if (i >= from && t < top - 0.5) again++;
+        if (t > top) best.set(gen, t);
+      });
+      return again;
+    }, fromFrame);
+    const older = feed.pieces.filter((p) => p.n < feed.frozen - 1).map((p) => p.n);
+    ok(replayed <= 1 && older.length === 0, `stopped feed: nothing shown twice (${replayed} frames seen again; pieces from before the stop asked for again: ${older.join(', ') || 'none'})`);
+    feed.closed = true;
+    await sleep(10000);
+    g = await probe(page);
+    const fromStart = feed.pieces.filter((p) => p.closed).map((p) => p.n);
+    ok(g.pstatus === 'reconnecting' && fromStart.length === 0, `closed into a recording: still Reconnecting, nothing played from the start (${g.pstatus}; recording pieces asked for: ${fromStart.slice(0, 6).join(', ') || 'none'})`);
+    const stoppedAt = feed.frozen;
+    feed.closed = false; feed.frozen = null; feed.shrink = false; feed.pieces = [];
+    await waitFor(page, ['playing'], 30000); await sleep(1500);
+    g = await probe(page);
+    const asked = feed.pieces.map((p) => p.n);
+    ok(g.pstatus === 'playing' && g.status === 'Live' && asked.length > 0 && Math.min(...asked) >= stoppedAt, `phone back: plays on at the live moment, nothing from before the stop (${g.pstatus}; pieces ${Math.min(...asked)} on, stopped at ${stoppedAt})`);
+    feed.pieces = null;
+    feed.window = 3;
+  }
 
   console.log('\n▶ back from a pause (the lock screen, a call, another app)');
   // A playlist long enough that a 10 s pause stays inside it: hls.js eases back from about one piece late and jumps
