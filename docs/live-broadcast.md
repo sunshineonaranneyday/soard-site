@@ -153,6 +153,73 @@ which changes the moment the phone connects or disconnects. `sensePhone()` in `_
 
 Tests: `tests/broadcast-lag.test.mjs`, `tests/broadcast-rejoin.test.mjs`.
 
+## Is the reveal over? (the Y/N text)
+
+The site can't tell a dropped signal from the crew stopping the phone because the reveal is done, so it asks
+(Peter, Nov 18 2026). Once the phone has been away 10 seconds during a stream on air (the same wait as the feed
+monitor's "The phone lost its connection", so a Larix reconnect within a few seconds texts nobody), every number on
+the alert list (Reveals → Settings → Alerts) gets, once for each stop:
+
+> SOARD: The stream from Dylan's reveal stopped at 4:21 PM. Is the reveal over? Reply Y if it's over, or N if the
+> signal dropped (viewers see Reconnecting). Or tap: https://sunshineonaranneyday.com/over/…
+
+A text can't have buttons (Peter: "can the text have response buttons?"), so each number's text ends with its own
+link to a page with two big buttons, "Yes, it's over" and "No, the signal dropped" (`functions/over/[token].js`,
+answered at `/api/over-answer`, both in `functions/api/_over-page.js`). Opening the link changes nothing (phones
+and chat apps open links by themselves to preview them); only a tap does, and it goes through exactly the same path
+as a Y or N text, so the same rules apply, and the page says what happened ("Done: ended. Viewers see the last
+moments, then Thank you for watching."). The link names the reveal, the stop it asks about and the number it went
+to, works for 30 minutes, and is signed with a key derived from `TWILIO_AUTH_TOKEN` (`_over-link.js`), so a changed,
+expired or earlier-stop link, a number taken off the alert list, or a post from another site changes nothing and
+the page says why. The page is noindex, no-store, sends no referrer, and runs no scripts.
+
+It never asks for one of Twilio's opt-out words (STOP, END, CANCEL, QUIT, UNSUBSCRIBE, STOPALL), and neither do the
+replies: a staffer who answers "End" is unsubscribed from every alert text by Twilio.
+
+It names the kid when the site knows them ("The reveal's stream" when not). A test on the main feed asks too, and
+its text starts "Test: ", so it can be tried with a real phone. Nothing is asked for the emergency banner, a framing
+check before the start time, or the staff rehearsal feed. A phone that comes back and stops again is asked again.
+One text per drop: while the question is in play, the feed monitor's "The phone lost its connection" (and its "The
+phone is back") still go to Slack and email, saying staff were asked, but not to the phones.
+
+Only clear answers count, so ending a live reveal is always deliberate (after trimming, ignoring capitals and a
+final full stop or the like):
+
+- **Y**, yes, yep, yeah, yup, "yes it's over", "it's over", "over", "done", 👍: if the phone is still away, the site ends it at once, just as it
+  would have after its 2-minute wait: viewers see the last moments, then Thank you for watching, and the replay.
+  It stays open 15 minutes, so if that was a mistake, the phone streaming again picks the same reveal back up. A
+  test puts back what it interrupted. If the phone is sending again, nothing ends and the reply says so.
+- **N**, no, nope, "not over", "not yet", "dropped", "signal dropped", "keep going": the reveal stays on air and viewers see Reconnecting for up to 15
+  minutes from the answer (`state.holdUntil`); the 2-minute rule (15 s for a test) waits. The phone coming back
+  ends the hold. If no phone comes back by then, it ends the usual way. A Y later still ends it at once.
+- Anything else, "almost over" or a phone's 'Liked "…"' reaction included, gets a one-line "Reply Y if the reveal
+  is over, or N if the signal dropped" (a few times at most). A reply when nothing is waiting on its phone says so;
+  one after the end says when and how it ended.
+- An answer counts only for the stop it was asked about. If the phone came back and stopped again and the new stop
+  hasn't been asked yet, nothing changes and the reply says a new question follows in a few seconds.
+- Twilio waits 15 seconds for the reply, so it always goes within about 10. If the site is slow, it says "Got it" and
+  finishes the answer afterwards, then texts that number how it came out ("Sorry, that didn't go through. Reply Y or N
+  again." if it couldn't). A database error still gets a proper reply, never an error page. Twilio's own words (STOP, START, HELP, END and the like) are left to Twilio. Only the alert numbers are
+  heard; anyone else gets no reply.
+- Each question and answer is in the broadcast's events (`over_asked`, `over_answer`), an answer that changed
+  something is in the audit log, and staff get a note in Slack and email (never a text), such as "Reveal ended by a
+  text from …1234". A test tells nobody.
+
+How it works: `askIfOver` in `_broadcast.js` sends the question (claimed once per stretch on air). Replies come to
+`/api/twilio-inbound` (`functions/api/twilio-inbound.js`), signed by Twilio exactly like `/api/twilio-status`. The
+answer goes to `answerByText`, which runs a tick that first looks at the phone, then applies the answer (`tAnswer`)
+and saves it the way it saves any phase change, before anything else happens. Everything an automatic end sets off
+(Facebook's post closed, the History row, the "Ended" note after the 15 minutes) then follows from that same tick.
+
+Setup, once: Twilio's Messaging Service must send incoming texts to `https://sunshineonaranneyday.com/api/twilio-inbound`.
+POST `{ "action": "textRepliesStatus" }` to `/api/broadcast` (staff sign-in) shows where replies go now;
+`{ "action": "connectTextReplies" }` sets it (InboundRequestUrl, InboundMethod POST, UseInboundWebhookOnNumber
+false, so the service's own address is used for every number in it). Both need `TWILIO_AUTH_TOKEN` and
+`TWILIO_MESSAGING_SERVICE_SID`. The site never changes it by itself, and the question is only texted while the last
+check found replies reaching the site (`site_config` "text-replies"), so it never asks for a reply nobody receives.
+
+Tests: `tests/broadcast-over-text.test.mjs`.
+
 ## Rehearsing the live page (staff only)
 
 Reveals → Mic check → "See the live page as viewers will": pick whose reveal and when it starts, Start rehearsal,

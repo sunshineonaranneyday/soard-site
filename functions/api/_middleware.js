@@ -158,6 +158,15 @@ PUBLIC_GET_ROUTES.push('/api/companycam-file');
 // when the token isn't set; it only records delivered or why not
 PUBLIC_ROUTES.push('/api/twilio-status');
 
+// Staff replies to "Is the reveal over?" (Twilio's incoming-message webhook):
+// signed with TWILIO_AUTH_TOKEN and checked inside the handler, which refuses
+// everything when the token isn't set and hears only the staff alert numbers
+PUBLIC_ROUTES.push('/api/twilio-inbound');
+// The buttons on /over/<token> (the "Or tap:" link in that text): the link's
+// signed token is checked inside (_over-page.js, _over-link.js), a post from
+// another site is refused there, and it is rate limited below
+PUBLIC_ROUTES.push('/api/over-answer');
+
 // Resend's delivery reports for the site's emails: Svix-signed with the webhook
 // secret and checked inside the handler, which refuses everything until there
 // is one; it only records delivered, bounced and the like (see _email-log.js)
@@ -217,7 +226,7 @@ PUBLIC_GET_ROUTES.push('/api/jobtread-callback');
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 5;
 // Abuse-prone POST routes (newsletter signup, live-banner click beacon).
-const RATE_LIMITED_POST_ROUTES = new Set(['/api/book-stats', '/api/newsletter', '/api/live-click', '/api/reminders', '/api/broadcast-event', '/api/live-watch', '/api/profile-request', '/api/advisory-apply', '/api/advisory-action', '/api/vendor-docs', '/api/trade-partner', '/api/board-rsvp']);
+const RATE_LIMITED_POST_ROUTES = new Set(['/api/book-stats', '/api/newsletter', '/api/live-click', '/api/reminders', '/api/broadcast-event', '/api/live-watch', '/api/profile-request', '/api/advisory-apply', '/api/advisory-action', '/api/vendor-docs', '/api/trade-partner', '/api/board-rsvp', '/api/over-answer']);
 // Public GET routes that fan out to paid upstreams / build large responses.
 const RATE_LIMITED_GET_ROUTES = new Set(['/api/download-branding-photos', '/api/books-callback', '/api/jobtread-callback']);
 // The application form autosaves every step and uploads photos one by one, so
@@ -225,7 +234,7 @@ const RATE_LIMITED_GET_ROUTES = new Set(['/api/download-branding-photos', '/api/
 // Per minute per address. A watch party or a gala table shares one Wi-Fi, so the
 // beacons and the signup forms get room for a crowd; the handlers add their own
 // per-person limits behind these.
-const ROUTE_LIMITS = { '/api/book-stats': 300, '/api/broadcast-event': 120, '/api/live-watch': 600, '/api/live-click': 120, '/api/newsletter': 20, '/api/reminders': 20, '/api/profile-request': 10, '/api/vendor-docs': 10, '/api/trade-partner': 20, '/api/board-rsvp': 10 };
+const ROUTE_LIMITS = { '/api/book-stats': 300, '/api/broadcast-event': 120, '/api/live-watch': 600, '/api/live-click': 120, '/api/newsletter': 20, '/api/reminders': 20, '/api/profile-request': 10, '/api/vendor-docs': 10, '/api/trade-partner': 20, '/api/board-rsvp': 10, '/api/over-answer': 20 };
 const APPLY_ROUTE = '/api/apply';
 const APPLY_RATE_LIMIT_MAX = 60;
 const _rateLimitMap = new Map(); // "<route>:<ip>" → { count, resetAt }

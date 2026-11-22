@@ -36,7 +36,9 @@
  * captions + kid-page attach + rebuild, Kit drafts + the automatic Kit
  * "we're live" send, Slack/email alerts, the live feed watch (silent or
  * missing audio, frozen video, Facebook/YouTube not live: _broadcast-monitor.js),
- * analytics rows, audit log.
+ * analytics rows, audit log, and "Is the reveal over?" texted to the staff
+ * numbers when the phone stops (askIfOver; their Y or N comes back through
+ * functions/api/twilio-inbound.js to answerByText).
  */
 
 import { logAudit } from './_audit.js';
@@ -52,6 +54,7 @@ import * as preflight from './_broadcast-preflight.js';
 import * as revealStats from './_reveal-stats.js';
 import { testGuests } from './_reveal-invites.js';
 import { cfImg, HERO_TRANSFORM } from './_reveal-invite-email.js';
+import { overLinkFor } from './_over-link.js';
 
 export const STATE_KEY = 'broadcast';
 export const CONFIG_KEY = 'broadcast-config';
@@ -214,8 +217,10 @@ export function defaultState() {
     endedVideoUid: null,   // the last recording that ended: a lifecycle still reporting it live starts nothing (sensePhone)
     endedVideoAt: null,    // when it ended: a phone connected after that is a new one
     gapSince: null,        // on air, the phone has been disconnected since (a drop shorter than INPUT_DROP_*_MS)
+    holdUntil: null,       // the crew texted N ("the signal dropped"): on air, Reconnecting, until the phone is back or this passes
     recordings: [],        // every Stream recording of this broadcast, in order (the replay is the longest)
     rejoinUntil: null,     // a reveal ended by its phone stopping: a phone back before this picks it up again (REJOIN_MS)
+    endedBy: null,         // who ended it (an admin's email, "text from …1234"); null when it ended on its own
     closedAt: null,        // when that window closed and the reveal was over for good (the final effects run from then)
     replayPieces: null,    // { count, minutes } when the reveal was recorded in more than one piece
     preShowFb: null,       // the Facebook live post a framing check opened, to release and close (preShowEffects)
@@ -842,9 +847,9 @@ export function rejoinOpen(state, now = Date.now()) {
  */
 export function tRejoin(state, { videoUid } = {}) {
   return {
-    ...state, phase: 'live', segmentAt: nowIso(), disconnectedAt: null, endedAt: null,
+    ...state, phase: 'live', segmentAt: nowIso(), disconnectedAt: null, endedAt: null, endedBy: null,
     replayUntil: null, replayUid: null, replayReadyAt: null, replayStartedAt: null,
-    rejoinUntil: null, closedAt: null, replayOut: false, gapSince: null,
+    rejoinUntil: null, closedAt: null, replayOut: false, gapSince: null, holdUntil: null,
     // Its Facebook post was closed when the site ended it: a new one opens for the rest (preShowEffects, once).
     // The closed one stays the reveal's: History adds its numbers to the new one's (refreshPlatforms)
     fbEarlier: withFbPost(state.fbEarlier, state.fb),
@@ -854,16 +859,31 @@ export function tRejoin(state, { videoUid } = {}) {
 }
 
 export function tDisconnected(state) {
-  return { ...state, phase: 'ending', disconnectedAt: nowIso() };
+  return { ...state, phase: 'ending', disconnectedAt: nowIso(), holdUntil: null };
 }
 
 export function tReconnected(state) {
-  return { ...state, phase: 'live', disconnectedAt: null, segmentAt: nowIso() };
+  return { ...state, phase: 'live', disconnectedAt: null, segmentAt: nowIso(), holdUntil: null };
+}
+
+/** Is the crew's "N, the signal dropped" (tHold) still keeping the reveal on air? */
+export function holding(state, now = Date.now()) {
+  return !!state?.holdUntil && now < Date.parse(state.holdUntil);
+}
+
+/**
+ * The crew texted N: the phone isn't done, the signal dropped. The broadcast stays on air until `until` (viewers see
+ * Reconnecting): the drop rule (INPUT_DROP_*_MS) waits, a phone back clears it, and past it the end comes as it always
+ * does. One already ending is put back on air, its stop kept as the gap's start.
+ */
+export function tHold(state, until) {
+  if (state.phase === 'ending') return { ...state, phase: 'live', holdUntil: until, gapSince: state.disconnectedAt || nowIso(), disconnectedAt: null };
+  return { ...state, holdUntil: until };
 }
 
 export function tEnd(state, config, { by, rejoin = false } = {}) {
   const hours = Number(config?.replayHours) || DEFAULT_REPLAY_HOURS;
-  const s = { ...state, phase: 'replay', endedAt: state.endedAt || nowIso(), disconnectedAt: null, gapSince: null, ...endedFields(state), updatedBy: by || null };
+  const s = { ...state, phase: 'replay', endedAt: state.endedAt || nowIso(), disconnectedAt: null, gapSince: null, holdUntil: null, endedBy: by || null, ...endedFields(state), updatedBy: by || null };
   // Ended by its phone stopping: open to a phone coming back. Ended any other way (End now, 8 hours): over now
   // Stopped before its start time: open at least until 15 minutes after the start, so the real start is the same reveal
   const at = Date.parse(state.scheduledAt || '');
@@ -897,7 +917,7 @@ export function tStartQuiet(state, { videoUid, by } = {}, config) {
     liveAt: at, segmentAt: at, endedAt: null, disconnectedAt: null,
     liveVideoUid: videoUid || null, replayUid: null, replayReadyAt: null, replayUntil: null, replayStartedAt: null,
     reel: null, fb: blank.fb, fbEarlier: [], kit: blank.kit, kidCheckAt: null, kidAlertAt: null, manual: null, clicks: 0, note: null,
-    endedVideoUid: before.endedVideoUid || null, endedVideoAt: before.endedVideoAt || null, gapSince: null,
+    endedVideoUid: before.endedVideoUid || null, endedVideoAt: before.endedVideoAt || null, gapSince: null, holdUntil: null, endedBy: null,
     quiet: { at },
     resume: before.phase === 'idle' || !before.phase ? null : before,
     updatedBy: by || null,
@@ -918,7 +938,7 @@ export function tPreShowOver(state) {
   return {
     ...state, ...endedFields(state),
     phase: Date.now() >= at - ARM_WINDOW_MS ? 'armed' : 'scheduled',
-    liveAt: null, segmentAt: null, disconnectedAt: null, gapSince: null, liveVideoUid: null, recordings: [],
+    liveAt: null, segmentAt: null, disconnectedAt: null, gapSince: null, holdUntil: null, liveVideoUid: null, recordings: [],
     kit, kidCheckAt: null, kidAlertAt: null,
     // Its Facebook post is released at once (preShowEffects closes it): the reveal opens its own when it starts,
     // and History counts only the reveal's posts
@@ -951,6 +971,28 @@ function preShow(state) {
 export function tEndQuiet(state, by) {
   const back = state.resume ? { ...state.resume } : { ...defaultState(), note: 'test-ended' };
   return { ...back, ...endedFields(state), updatedBy: by || back.updatedBy || null };
+}
+
+/**
+ * A staff text answering "Is the reveal over?" (answerByText), on the state as the tick just sensed it.
+ * Only a stream on air whose phone is away (a gap, or ending), and only once that stop was asked about
+ * (`asked`: its over-ask claim exists; an answer to an earlier stop never ends a newer one), is changed:
+ *  'yes' ends it now, the way the automatic end would after its wait: a test puts back what it interrupted, a
+ *        framing check goes back to waiting, a reveal goes to its replay, open REJOIN_MS to its phone coming back
+ *  'no'  keeps it on air, Reconnecting, for REJOIN_MS from now (tHold)
+ * → { state, outcome, save } (save: changed, to be saved at once like a phase change)
+ */
+export function tAnswer(state, answer, config, { by = null, now = Date.now(), asked = false } = {}) {
+  if (state.phase === 'replay') return { state, outcome: 'already-ended' };
+  if (!['live', 'ending'].includes(state.phase) || state.source !== 'stream') return { state, outcome: 'nothing' };
+  if (state.phase === 'live' && !state.gapSince) return { state, outcome: 'phone-back' };
+  const s = { ...state, disconnectedAt: state.disconnectedAt || state.gapSince };
+  // Not asked about this stop (yet): a framing check never is; a new stop is, in a few seconds
+  if (!asked) return { state, outcome: preShow(s) ? 'nothing' : 'not-asked' };
+  if (answer === 'no') return { state: tHold(state, new Date(now + REJOIN_MS).toISOString()), outcome: state.quiet ? 'test-held' : 'held', save: true };
+  if (state.quiet) return { state: tEndQuiet(s, by), outcome: 'test-ended', save: true };
+  if (preShow(s)) return { state: tPreShowOver(s), outcome: 'pre-show', save: true };
+  return { state: tEnd(s, config, { by, rejoin: true }), outcome: 'ended', save: true };
 }
 
 // ─── Reminders ──────────────────────────────────────────────────────
@@ -1821,6 +1863,55 @@ async function endedEffects(env, config, state, health, work, by) {
 }
 
 /**
+ * "Is the reveal over?" The site can't tell a dropped signal from the crew stopping the phone because the reveal
+ * is done (Peter, Nov 18 2026), so once the phone has been away OVER_ASK_AFTER_MS, a tick texts every staff alert
+ * number, once per stretch on air (claimed on the stretch's start, so the gap turning into 'ending' asks nothing
+ * twice, and a phone back and gone again is asked again). Also in test mode ("Test: "), so it can be tried with a
+ * real phone. Never for the emergency banner, a framing check, or the rehearsal feed (which has its own record,
+ * never this tick). Their Y or N comes back through functions/api/twilio-inbound.js (answerByText).
+ */
+// A blip Larix rides out in a few seconds asks nobody: the same wait as the feed monitor's "The phone lost its connection"
+const OVER_ASK_AFTER_MS = monitor.RULES.disconnectedAfter;
+const stopOf = (state) => (state.phase === 'ending' ? state.disconnectedAt : state.phase === 'live' ? state.gapSince : null);
+/** The question's claim: one per stretch on air (the stop that ends it), so an answer can tell it is about this stop */
+const overAskKey = (state) => `over-ask:${state.segmentAt || state.liveAt || stopOf(state)}`;
+async function claimExists(DB, broadcastId, key) {
+  if (!broadcastId) return false;
+  const row = await DB.prepare('SELECT 1 AS x FROM broadcast_claims WHERE broadcast_id = ? AND key = ?').bind(broadcastId, key).first().catch(() => null);
+  return !!row;
+}
+
+/** Does this stop get "Is the reveal over?" Then the feed monitor doesn't also text "The phone lost its connection" */
+async function overQuestionFor(env, config, state) {
+  const stoppedAt = stopOf(state);
+  if (!stoppedAt || state.source !== 'stream' || !state.broadcastId || preShow({ ...state, disconnectedAt: stoppedAt })) return false;
+  // Only while a reply can reach the site (twilio-inbound.js; set from /api/broadcast connectTextReplies)
+  return notify.overQuestionOn(env, config);
+}
+
+async function askIfOver(env, config, state, work) {
+  const stoppedAt = stopOf(state);
+  // Already answered N (it is being held), or a stop long past (a deploy mid-hold): nothing to ask
+  if (!stoppedAt || !recent(stoppedAt) || holding(state)) return state;
+  if (Date.now() - Date.parse(stoppedAt) < OVER_ASK_AFTER_MS) return state;
+  if (!(await overQuestionFor(env, config, state))) return state;
+  if (!(await claimOnce(env.DB, state.broadcastId, overAskKey(state)))) return state;
+  // Each number its own text: its "Or tap:" link names it (functions/over/[token].js); no link, the plain question
+  const key = overAskKey(state);
+  const sends = await Promise.all(notify.alertPhones(config).map(async (to) => {
+    const link = await overLinkFor(env, { broadcastId: state.broadcastId, key, phone: to }).catch(() => null);
+    const body = notify.overQuestionText({ kidName: state.kidName, at: stoppedAt, tz: config.timezone, test: !!(state.quiet || state.test), link });
+    return notify.sendSms(env, { to: [to], body }).catch((e) => ({ sent: 0, failed: 1, errors: [e.message], optedOut: [], accepted: [] }));
+  }));
+  const r = { sent: 0, failed: 0, errors: [], optedOut: [], accepted: [] };
+  for (const x of sends) { r.sent += x.sent; r.failed += x.failed; r.errors.push(...x.errors); r.optedOut.push(...x.optedOut); r.accepted.push(...x.accepted); }
+  await notify.recordAlertTexts(env.DB, { title: 'Is the reveal over?', result: r }).catch(() => {});
+  await recordEvent(env.DB, state.broadcastId, 'over_asked', { stoppedAt, sent: r.sent, failed: r.failed });
+  work.push('asked-if-over');
+  return state;
+}
+
+/**
  * Test mode keeps Facebook and YouTube out of it by pausing every Stream output
  * on the main feed that is on, while the switch is on or a test is still
  * streaming, and putting back exactly those once neither is true. An output
@@ -1930,7 +2021,7 @@ export async function sensePhone(env, inputUid, lc, state, quiet, now = Date.now
  * caller that finds a tick already running gets the current state with
  * `busy: true`. Public routes never pass `force`.
  */
-export async function runTick(env, { source = 'tick', force = false, by = null, minIntervalMs = TICK_MIN_INTERVAL_MS } = {}) {
+export async function runTick(env, { source = 'tick', force = false, by = null, minIntervalMs = TICK_MIN_INTERVAL_MS, answer = null } = {}) {
   const { DB } = env;
   await ensureSchema(DB);
   const interval = Math.max(minIntervalMs, TICK_MIN_INTERVAL_MS);
@@ -1955,7 +2046,7 @@ export async function runTick(env, { source = 'tick', force = false, by = null, 
     return extendTickLease(DB, lease);
   };
   try {
-    const result = await tick(env, { source, force, by, keepLease });
+    const result = await tick(env, { source, force, by, keepLease, answer });
     _lastTickAt = Date.now();
     _lastTickResult = result;
     return result;
@@ -1967,7 +2058,7 @@ export async function runTick(env, { source = 'tick', force = false, by = null, 
 // The state as far as "did anything change" goes (rev and updatedAt are bookkeeping)
 const stateSig = (s) => JSON.stringify({ ...s, rev: undefined, updatedAt: undefined });
 
-async function tick(env, { source, force, by, keepLease = async () => true }) {
+async function tick(env, { source, force, by, keepLease = async () => true, answer = null }) {
   const { DB } = env;
   const now = Date.now();
   const [config, health] = await Promise.all([readConfig(DB), readHealth(DB)]);
@@ -2013,7 +2104,9 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
         // A gap (a short drop) breaks the unbroken stretch the Kit list email waits for; it starts again when the phone is back
         if (state.phase === 'live' && state.source === 'stream') {
           if (gap) { if (!state.gapSince) state = { ...state, gapSince: new Date(sensed.gapSince).toISOString() }; }
-          else if (state.gapSince) state = { ...state, gapSince: null, segmentAt: new Date(sensed.connectedSince && sensed.connectedSince > Date.parse(state.gapSince) ? sensed.connectedSince : now).toISOString() };
+          else if (state.gapSince) state = { ...state, gapSince: null, holdUntil: null, segmentAt: new Date(sensed.connectedSince && sensed.connectedSince > Date.parse(state.gapSince) ? sensed.connectedSince : now).toISOString() };
+          // The phone is back: a hold (the crew's N) is over
+          else if (state.holdUntil) state = { ...state, holdUntil: null };
         }
         // A reveal on air ends the switch: once it is over, a phone reconnecting is never taken for a test
         if (['live', 'ending'].includes(state.phase) && !state.quiet && quiet.until) {
@@ -2021,7 +2114,10 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
           await writeQuiet(DB, quiet);
         }
       } else if (sensed.phone === 'off' && state.source === 'stream') {
-        if (state.phase === 'live') {
+        if (state.phase === 'live' && holding(state, now)) {
+          // The crew texted N (the signal dropped): still on air, Reconnecting, until the phone is back or the hold runs out
+          if (!state.gapSince) state = { ...state, gapSince: new Date(sensed.stoppedAt || now).toISOString() };
+        } else if (state.phase === 'live') {
           state = { ...tDisconnected(state), gapSince: null }; work.push('disconnected');
           // Known from the input's status: the grace runs from the real stop, so the end isn't later for the wait
           if (sensed.stoppedAt && sensed.stoppedAt >= Date.parse(state.segmentAt || state.liveAt || 0)) state = { ...state, disconnectedAt: new Date(sensed.stoppedAt).toISOString() };
@@ -2034,6 +2130,23 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
       }
       // 'hold': Stream's API didn't answer while a broadcast is on air: nothing changes on a guess
     }
+  }
+
+  // 1b. A staff text answering "Is the reveal over?" (answerByText), on the state just sensed: a phone back since
+  //     the question is never ended by a late Y
+  //     (a link's answer, `about`, counts only for its own broadcast and stop)
+  let told = null;
+  if (answer) {
+    const key = stopOf(state) ? overAskKey(state) : null;
+    const about = answer.about || null;
+    if (about && about.broadcastId !== state.broadcastId) told = { state, outcome: 'old-link', broadcastId: state.broadcastId };
+    else {
+      const asked = key ? (!about || about.key === key) && await claimExists(DB, state.broadcastId, key) : false;
+      told = { ...tAnswer(state, answer.answer, config, { by: answer.by, now, asked }), broadcastId: state.broadcastId };
+      // A link about an earlier stop of this reveal: that one is over, the new one has (or gets) its own link
+      if (about && told.outcome === 'not-asked' && about.key !== key) told.outcome = 'old-link';
+    }
+    state = told.state;
   }
 
   // 2. Timers
@@ -2064,8 +2177,9 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
   //    the copy this tick read. A tick that lost the race stops here; the next
   //    one starts from whatever won. The side effects (step 4) are claimed, so
   //    each happens once, on this tick or, if this one is cut off, a later one.
-  // (A test starting, ending or turning into the reveal changes the broadcast too, sometimes not the phase)
-  if (state.phase !== prevPhase || (state.broadcastId ?? null) !== (read.broadcastId ?? null)) {
+  // (A test starting, ending or turning into the reveal changes the broadcast too, sometimes not the phase;
+  // a staff text's answer is saved here too, before the reply says it happened)
+  if (state.phase !== prevPhase || (state.broadcastId ?? null) !== (read.broadcastId ?? null) || told?.save) {
     state = { ...state, updatedAt: nowIso() };
     if (!(await writeStateIf(DB, state, rev))) {
       work.push('conflict');
@@ -2084,12 +2198,16 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
     }
     if (state.phase === 'ending') await recordEvent(DB, state.broadcastId, 'disconnected');
   }
+  // The answer is saved: the text's reply can go now, while the rest of the tick carries on
+  if (told) answer.decided?.({ outcome: told.outcome, state, config, broadcastId: told.broadcastId });
 
   // 4. What going live or ending sets off, until each part has happened (also on later ticks), then
   //    ongoing work. Each step first keeps the lease; if another tick has taken it, this one stops
   //    and saves what it has (over the copy it read, as always)
   const live = () => state.phase === 'live' || state.phase === 'ending';
   const steps = [
+    // The phone stopped: "Is the reveal over?" to the staff numbers, first, so it goes the moment it is seen
+    async () => { state = await askIfOver(env, config, state, work).catch((e) => { work.push(`ask-error: ${e.message}`); return state; }); },
     // Test mode: Facebook and YouTube paused while it is on or a test streams, put back after
     // (at once when a test has just started, ended or become the reveal)
     async () => { quiet = await syncQuietOutputs(env, config, quiet, state, work, { force: !!read.quiet !== !!state.quiet }).catch((e) => { work.push(`test-outputs-error: ${e.message}`); return quiet; }); },
@@ -2107,7 +2225,12 @@ async function tick(env, { source, force, by, keepLease = async () => true }) {
     async () => { state = await endedEffects(env, config, state, health, work, by); },
     async () => { if (live() && !state.quiet) state = await fbRefreshPermalink(env, state, work); },
     // Feed watch, go/no-go and mic checks only report; nothing they do may stop the state machine (a test pings nobody)
-    async () => { if (live() && state.source === 'stream' && !state.quiet) await monitor.watch(env, config, state, health, work, recordEvent).catch((e) => work.push(`monitor-error: ${e.message}`)); },
+    // While the phone is away and staff are asked "Is the reveal over?", the drop's own alert isn't texted too
+    async () => {
+      if (!live() || state.source !== 'stream' || state.quiet) return;
+      const overQuestion = stopOf(state) ? await overQuestionFor(env, config, state).catch(() => false) : false;
+      await monitor.watch(env, config, state, health, work, recordEvent, { overQuestion }).catch((e) => work.push(`monitor-error: ${e.message}`));
+    },
     // Every 30 s: how many watch at once on the site, Facebook and YouTube, and the hearts so far (History's reveal stats)
     async () => { if (live() && state.source === 'stream' && !state.quiet) await revealStats.sampleLive(env, state, health, { hubStatus: () => hubStatus(env) }).catch((e) => work.push(`stats-error: ${e.message}`)); },
     async () => { if (state.phase === 'scheduled' || state.phase === 'armed') await preflight.auto(env, config, state, health, work, { hubStatus }).catch((e) => work.push(`preflight-error: ${e.message}`)); },
@@ -2150,6 +2273,105 @@ async function closeNow(env, config, state, by) {
   // Its replay goes out too, if the recording is ready (the kid's page, the replay email): the state may move on next
   if (s.replayUid && s.replayOut === false) s = await replayOutward(env, config, s, health, []);
   return s;
+}
+
+// ─── "Is the reveal over?" answered by text ─────────────────────────
+
+/** What staff hear in Slack and email (never by text) when a text changed the broadcast; a test stays quiet */
+function answerNote(outcome, state, who, tz, via = 'text') {
+  const until = state.holdUntil ? notify.clockTime(state.holdUntil, tz) : null;
+  const how = via === 'link' ? `the link texted to ${who}` : `a text from ${who}`;
+  if (outcome === 'ended') return { icon: '🎬', title: `Reveal ended by ${how}`, detail: `${who} answered Y to "Is the reveal over?", so the site ended it at once. A phone streaming again in the next 15 minutes still picks the same reveal back up.` };
+  if (outcome === 'pre-show') return { icon: '🎬', title: `Framing check ended by ${how}`, detail: 'It stopped before the start time, so the countdown is back up for the reveal.' };
+  if (outcome === 'held') return { icon: '📶', title: `Reveal kept on air by ${how}`, detail: `${who} answered N: the signal dropped. Viewers see Reconnecting until the phone is back${until ? `, up to ${until}` : ''}. A Y ends it sooner.` };
+  return null;
+}
+
+// Twilio waits 15 s for the reply: it goes within TEXT_REPLY_WITHIN_MS whatever the site is doing (the rest
+// carries on after it), and no new try starts past TEXT_TRY_UNTIL_MS, so the work after the reply stays well
+// inside the 30 s a Worker keeps going for it
+const TEXT_REPLY_WITHIN_MS = 10 * 1000;
+const TEXT_TRIES = 3;
+const TEXT_TRY_UNTIL_MS = 20 * 1000;
+
+/**
+ * A staff text answering "Is the reveal over?" (functions/api/twilio-inbound.js; `answer` 'yes' or 'no', `who`
+ * "…1234"). A forced tick senses the phone, takes the answer (tAnswer) and saves it the way it saves a phase change:
+ * before any side effect, only over the copy it read. That tick then runs what an automatic end runs (Facebook's post
+ * closed, the row, a test's outputs back on, the "Ended" note once the 15 minutes are up), carried on in `waitUntil`
+ * while the reply goes. A tick that lost the race to save (or failed) tries again, up to TEXT_TRIES.
+ * → { outcome, state, config }: 'slow' when nothing was settled within `replyWithinMs` (then `onLate` hears how it
+ * came out, even 'busy', so a "Got it" never hides a lost answer), 'busy' when every try failed.
+ */
+export async function answerByText(env, { answer, who, via = 'text', about = null, waitUntil = () => {}, replyWithinMs = TEXT_REPLY_WITHIN_MS, onLate = null }) {
+  const { DB } = env;
+  const started = Date.now();
+  // A reply to the text, or a tap on its link (functions/over/[token].js: `about` is the broadcast and stop it names)
+  const by = `${via === 'link' ? 'link' : 'text'} from ${who}`;
+  const work = (async () => {
+    await ensureSchema(DB);
+    for (let i = 0; i < TEXT_TRIES; i++) {
+      if (i && Date.now() - started > TEXT_TRY_UNTIL_MS) break;
+      let decide;
+      const decided = new Promise((r) => { decide = r; });
+      const ticking = runTick(env, { source: 'text', force: true, by, answer: { answer, by, about, decided: decide } })
+        .then(async (r) => {
+          if (r?.changed) await publishToHub(env, await readState(DB), await readConfig(DB), 'tick:text');
+          return r;
+        })
+        .catch(() => null);
+      waitUntil(ticking);
+      // Settled once the answer is saved; a tick that ended without taking it lost the race (or failed): again
+      const taken = await Promise.race([decided, ticking.then(() => null)]);
+      if (taken) return taken;
+    }
+    return null;
+  })().catch(() => null);
+  // Whichever comes first, the answer or the reply's deadline, decides what the reply says (one flag, set once)
+  let late = false;
+  const first = new Promise((resolve) => {
+    const timer = setTimeout(() => { late = true; resolve('slow'); }, replyWithinMs);
+    work.then((t) => { if (!late) { clearTimeout(timer); resolve(t); } });
+  });
+  // Then: the log, the open pages, the staff note; and after a "Got it", how it really came out
+  waitUntil(work.then(async (t) => {
+    if (t) await answered(env, t, { answer, who, by, via }).catch(() => {});
+    if (late && onLate) await onLate(t ? { outcome: t.outcome, state: t.state, config: t.config } : { outcome: 'busy' });
+  }).catch(() => {}));
+  const t = await first;
+  if (t === 'slow') return { outcome: 'slow' };
+  _lastTickResult = null;
+  _lastBusyResult = null;
+  return t ? { outcome: t.outcome, state: t.state, config: t.config } : { outcome: 'busy' };
+}
+
+/** After an answer is saved: its event (with the broadcast that was asked: a test's own, not the reveal it hands back to), the hub, the audit log, the note */
+async function answered(env, { outcome, state, config, broadcastId: id }, { answer, who, by, via = 'text' }) {
+  const { DB } = env;
+  await recordEvent(DB, id, 'over_answer', { answer, outcome, from: who, ...(via === 'link' ? { via } : {}) });
+  if (['ended', 'test-ended', 'pre-show', 'held', 'test-held'].includes(outcome)) {
+    await publishToHub(env, state, config, 'tick:text');
+    await logAudit(DB, { userEmail: by, action: 'updated', entityType: 'live-status', entitySlug: id || 'broadcast', entityName: outcome.endsWith('held') ? 'Kept on air by a text (N)' : 'Ended by a text (Y)', gitStatus: 'ok' });
+  }
+  const note = answerNote(outcome, state, who, config.timezone, via);
+  if (note) await notify.alertAdmins(env, config, { level: 'info', kind: 'news', ...note, url: `${SITE_ORIGIN}/admin/#broadcast` });
+}
+
+/**
+ * What a tap-to-answer link (functions/over/[token].js) would do right now, read only: a GET never changes anything,
+ * since phones and chat apps open links by themselves to preview them. `about` is the link's broadcast and stop.
+ * → { outcome (as tAnswer would give a Y, or 'old-link'), state, config, question (the stop's line, when it can act) }
+ */
+export async function overLinkView(env, about) {
+  await ensureSchema(env.DB);
+  const [config, state] = await Promise.all([readConfig(env.DB), readState(env.DB)]);
+  if (about.broadcastId !== state.broadcastId) return { outcome: 'old-link', state, config, question: null };
+  const key = stopOf(state) ? overAskKey(state) : null;
+  const asked = key ? about.key === key && await claimExists(env.DB, state.broadcastId, key) : false;
+  let { outcome } = tAnswer(state, 'yes', config, { asked });
+  if (outcome === 'not-asked' && about.key !== key) outcome = 'old-link';
+  const open = ['ended', 'test-ended', 'pre-show'].includes(outcome);
+  return { outcome, state, config, question: open ? notify.overStopLine({ kidName: state.kidName, at: stopOf(state), tz: config.timezone }) : null, test: !!(state.quiet || state.test) };
 }
 
 // ─── Admin commands ─────────────────────────────────────────────────
