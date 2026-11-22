@@ -120,6 +120,12 @@ test('issues: what changes what visitors see is a warning; the rest is quiet', (
   const ids = (k) => KS.kidIssues(k).map((i) => `${i.tone}:${i.id}`);
   assert.deepEqual(ids(kid({ heroImage: '', bio: '' })), ['warn:no-hero', 'warn:no-story']);
   assert.deepEqual(ids(kid({ videoUrl: null })), ['quiet:no-video']);
+  // Only the live reveal's recording: the page's Reveal chapter plays it, so the tip never says there's no chapter
+  const noVideo = (k) => KS.kidIssues(k).find((i) => i.id === 'no-video');
+  assert.match(noVideo(kid({ videoUrl: null })).tip, /no Reveal chapter/);
+  const live = noVideo(kid({ videoUrl: null, revealVideoUrl: 'https://watch.cloudflarestream.com/99fc2ba0c84823eb6fb0f7cda795e837' }));
+  assert.equal(live.label, 'No finished reveal video');
+  assert.match(live.tip, /plays the live reveal’s recording/);
   assert.ok(ids(kid({ status: 'needs-funding', fundraisingUrl: null })).includes('warn:no-fund-link'));
   assert.ok(ids(kid({ status: 'in-progress', fundraisingUrl: null })).includes('quiet:no-fund-link'));
   // A link that isn't a Zeffy form: said here as Profile Health says it (it doesn't count it), never as "no link"

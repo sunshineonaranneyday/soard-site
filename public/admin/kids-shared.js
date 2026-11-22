@@ -265,7 +265,11 @@ export function kidIssues(kid) {
   if (kid.status === 'in-progress' && !(kid.sponsors || []).length) add('no-sponsor', 'quiet', 'No monetary sponsor', 'sponsor', 'Who paid for the room isn’t recorded');
   if (kid.status === 'in-progress' && !kid.fundraisingUrl) add('no-fund-link', 'quiet', 'No fundraising link', 'giving', 'Their page could ask visitors to help fund the room');
   if (kid.status === 'in-progress' && fundNotZeffy) add('fund-not-zeffy', 'quiet', 'Fundraising link isn’t a Zeffy form', 'giving', 'Pick the room’s form from SOARD’s Zeffy');
-  if (kid.status === 'completed' && !kid.streamVideoId && !kid.videoUrl) add('no-video', 'quiet', 'No reveal video', 'video', 'The page has no Reveal chapter');
+  // Until there's a finished video, the Reveal chapter plays the live reveal's recording (resolveKidReveal in src/utils/reveals.ts)
+  if (kid.status === 'completed' && !kid.streamVideoId && !kid.videoUrl) {
+    add('no-video', 'quiet', kid.revealVideoUrl ? 'No finished reveal video' : 'No reveal video', 'video',
+      kid.revealVideoUrl ? 'The Reveal chapter plays the live reveal’s recording until there is one' : 'The page has no Reveal chapter');
+  }
   const q = quoteState(kid);
   if (!q.shown && q.reason) add('quote-hidden', 'quiet', 'Quote isn’t shown', 'story', 'It repeats the story, so the page leaves it out');
   if ((kid.plans || []).some((p) => looksLikeFileName(p.label))) add('plan-captions', 'quiet', 'Plans need real captions', 'plans', 'Captions like “CompanyCam 2445” or “4” show when someone opens a plan');
