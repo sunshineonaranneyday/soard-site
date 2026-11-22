@@ -1387,6 +1387,21 @@ async function beforePhotosGroup(browser) {
     const s2 = api.st.saves.length > savesBefore ? api.st.saves.at(-1) : null;
     const facts = s2 ? s2.beforePhotos.map((p) => `${p.room || '-'}/${p.looked || '-'}/${p.offPage ? `off:${p.offWhy}` : 'on'}`).join(' ') : '(not saved)';
     ok(facts === 'Hall/site/on -/site/off:A person in it -/site/off:Boxes or deliveries -/site/on', `turned away only for the site’s answers: taken in and saved with the room typed: ${facts}`);
+    // The plans lined up by the site meanwhile (planCompare, the site's own field: functions/api/_reveal-design-auto.js
+    // lineUpKid): never someone else's save; Save takes it in and saves it with what was typed
+    const PC = { existing: 'https://imagedelivery.net/H/kids/d/plan-1-sheet.png/public', proposed: 'https://imagedelivery.net/H/kids/d/plan-2-sheet.png/public', none: true, at: '2026-11-19T22:00:00.000Z' };
+    api.st.kids[slug] = { ...api.st.kids[slug], planCompare: PC };
+    api.st.shaOf = { [slug]: 'sha-site-5' };
+    await page.evaluate(() => document.querySelectorAll('#kd-befores .kd-tile__open')[0].click());
+    await page.waitForSelector('#kd-before-room');
+    await page.type('#kd-before-room', ' up');
+    await clickText(page, '.kd-photo-dlg .kd-dialog__foot .btn', 'Done');
+    await sleep(200);
+    const savesNow = api.st.saves.length;
+    await page.click('.kd-bar__save .kd-save');
+    await sleep(1500);
+    const s3 = api.st.saves.length > savesNow ? api.st.saves.at(-1) : null;
+    ok(s3 && JSON.stringify(s3.planCompare) === JSON.stringify(PC) && s3.beforePhotos[0].room === 'Hall up', `the plans lined up meanwhile: taken in and saved with the room typed (${s3 ? `${s3.beforePhotos[0].room}, ${JSON.stringify(s3.planCompare)}` : 'not saved'})`);
     ok(real(errors).length === 0, `no console errors (${errors.join(' | ').slice(0, 200)})`);
     await page.close();
   }

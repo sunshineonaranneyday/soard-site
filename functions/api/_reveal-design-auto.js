@@ -40,6 +40,13 @@
  *     wherever its words are and the title block cut off
  *     (public/admin/reveal-design-draw.js, the code the button runs)
  *   - and the design board.
+ *   - The existing and the proposed plan lined up, once (Peter, Nov 19 2026: "Yes, before Max"): any kid whose two
+ *     sheets pair up as the live page pairs them (public/admin/plan-pair.js planPairOf), a past reveal's too
+ *     (their page shows it for good). In Cloudflare's browser, the same code a visitor's page would run
+ *     (public/admin/plan-compare-core.js): how far apart the drawings sit, both cut to the drawing, the pig taken
+ *     out; the two pictures kept in Cloudflare Images and the line-up on the profile (planCompare), so every page
+ *     shows the plan before and after at once, fetching two small pictures. Two sheets that don't line up are kept
+ *     as that ({ none: true }), and no page offers a compare for them. A new sheet in either place is lined up again.
  * It only ever adds. A before photo the profile has ever had (the ledger, the
  * profile, its History) never comes in again, and a drawing part comes in once
  * (the drawings and board), so what staff take out stays out; nothing in
@@ -70,10 +77,12 @@ import { alertAdmins, adminCard, slackPost, sendEmails, emailConfigured, SITE_OR
 import { emailShell, button, esc } from './_email-shell.js';
 import { recordVersion } from './_content-history.js';
 import { logAudit } from './_audit.js';
-import { uploadImage, publicUrl } from './_cf-images.js';
+import { uploadImage, publicUrl, CF_HASH } from './_cf-images.js';
 import { screenPhoto, screenUrl, QUESTIONS, AiDown, Refused, UNCHECKED } from './_photo-screen.js';
 import { aiCapped, AI_REST_MS, AI_WAIT_NOTE } from './_ai.js';
-import { PLAN_KINDS, planKind, suggestBefores, addressWords, addressChecked, looksLikeFileName, isRevealed, kindFromText, beforePhotosOf, freeBeforePlaces, pagePlans, pageBefores, onPage, keptOff, BEFORE_SHOWN } from '../../public/admin/reveal-design.js';
+import { planPairOf, compareBox, comparePixels } from '../../public/admin/plan-pair.js';
+import { REACH } from '../../public/admin/plan-compare-core.js';
+import { revealSlides, PLAN_KINDS, planKind, suggestBefores, addressWords, addressChecked, looksLikeFileName, isRevealed, kindFromText, beforePhotosOf, freeBeforePlaces, pagePlans, pageBefores, onPage, keptOff, BEFORE_SHOWN } from '../../public/admin/reveal-design.js';
 import { isDocumentName, captionOf, kindFromSheet } from '../../public/admin/reveal-design-draw.js';
 
 export const AUTO_KEY = 'reveal-design-auto';   // what it has done for each kid, and what Slack has been told
@@ -112,6 +121,8 @@ const LOOK_POST_MS = 2_000;                     // the looks stop this long befo
 const LOOK_REST_MS = 15 * 60_000;               // a photo whose look couldn't happen (a service down) rests this long
 const LOOK_OUTS = 8;                            // ...and this many of those in a row count as one failed look
 const BY = 'Automatic design import';
+const COMPARE_MIN_MS = 12_000;                  // the plans aren't lined up with less of the run left than this
+const COMPARE_RETRY_MS = 30 * 60_000;           // ...and a try that couldn't finish is tried again this soon (doubling, to 12 h)
 // Who's emailed to look over a reveal's before photos once they're in and checked (Peter, Nov 13 2026: "when the
 // befores are imported, can you send an email to linzi to go review them?")
 export const BEFORE_REVIEWERS = ['linzi@soardcharity.com'];
@@ -720,6 +731,106 @@ async function bringDrawings(env, ctx, job, src, kid, want, fetchImpl, now, dead
 }
 
 
+// ── The plans before and after, lined up ─────────────────────────────
+
+/**
+ * Kids whose existing and proposed plans pair up as the live page pairs them, not lined up yet (or lined up from other
+ * sheets), and not resting after a try that couldn't finish → [{ slug, name, pair }], in the order given
+ */
+export function comparesDue(kids, rest = {}, now = Date.now()) {
+  const out = [];
+  for (const kid of kids) {
+    if (!kid?.slug || kid.publishStatus === 'draft') continue;
+    // (lined up, or found not to: revealSlides puts it on the existing plan, and a pair that doesn't is no pair)
+    const pair = planPairOf(revealSlides(kid));
+    if (!pair || pair.existing.cmp) continue;
+    if (Number(rest[kid.slug]?.restUntil) > now) continue;
+    out.push({ slug: kid.slug, name: kid.name || kid.slug, pair });
+  }
+  return out;
+}
+
+/** In the browser: the two cuts fetched, lined up and the pig taken out by the site's own code, as PNGs (base64) */
+async function compareInBrowser(coreSrc, a, b, g) {
+  const core = await import(URL.createObjectURL(new Blob([coreSrc], { type: 'text/javascript' })));
+  const pixels = async (url, w, h) => {
+    const res = await fetch(url, { headers: { Accept: 'image/png' } });
+    if (!res.ok) throw new Error(`a plan’s picture answered ${res.status}`);
+    const bmp = await createImageBitmap(await res.blob());
+    if (bmp.width !== w || bmp.height !== h) throw new Error(`a plan’s picture came ${bmp.width}×${bmp.height}, not ${w}×${h}`);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const x = c.getContext('2d', { willReadFrequently: true });
+    x.drawImage(bmp, 0, 0);
+    bmp.close?.();
+    return x.getImageData(0, 0, w, h);
+  };
+  const [A, B] = await Promise.all([pixels(a, g.aw, g.ah), pixels(b, g.bw, g.bh)]);
+  const r = core.lineUp(A, B, g.ox, g.oy);
+  if (!r) return { none: true };
+  const png = (p) => {
+    const c = document.createElement('canvas');
+    c.width = p.width; c.height = p.height;
+    c.getContext('2d').putImageData(new ImageData(p.data, p.width, p.height), 0, 0);
+    return c.toDataURL('image/png').split(',')[1];
+  };
+  return { dx: r.dx, dy: r.dy, overlap: r.overlap, width: r.before.width, height: r.before.height, before: png(r.before), after: png(r.after) };
+}
+
+/**
+ * One kid's pair lined up and kept: cut from Cloudflare Images at full size as PNG (lossless, so the pig comes out
+ * exactly), lined up in the browser, the two pictures put in Cloudflare Images, the line-up saved on the profile
+ * (only while the profile still pairs these two sheets) → { lined: true } or { none: true } (saved), or null (the
+ * profile changed meanwhile). Throws Outage / TookTooLong when a service is down or slow
+ */
+async function lineUpKid(env, ctx, { slug, pair }, fetchImpl, now, deadline, clock) {
+  const P = comparePixels(pair);
+  // (as src/utils/plan-compare.ts cuts them: the proposed one REACH bigger each way, so any shift up to it is in hand)
+  const Wb = Number(pair.proposed.w) || Number(pair.existing.w), Hb = Number(pair.proposed.h) || Number(pair.existing.h);
+  const bl = Math.max(0, P.left - REACH), bt = Math.max(0, P.top - REACH);
+  const br = Math.min(Wb, P.left + P.width + REACH), bb = Math.min(Hb, P.top + P.height + REACH);
+  // (a plan's Cloudflare Images id: its address less the account and the variant)
+  const idOf = (url) => /^https:\/\/(?:imagedelivery\.net|[^/]+\/cdn-cgi\/imagedelivery)\/[^/]+\/(.+)\/[^/]+$/.exec(String(url || ''))?.[1] || '';
+  const cut = (url, l, t, w, h) => `https://imagedelivery.net/${CF_HASH}/${idOf(url)}/trim.left=${l},trim.top=${t},trim.width=${w},trim.height=${h},q=100`;
+  if (!idOf(pair.existing.url) || !idOf(pair.proposed.url)) throw new Error('a plan isn’t in Cloudflare Images');
+  // (nowhere to keep the pictures: said before the browser's time is spent on them)
+  if (!env.CF_ACCOUNT_ID || !env.CF_IMAGES_TOKEN) throw new Outage('Cloudflare Images isn’t set up (CF_ACCOUNT_ID, CF_IMAGES_TOKEN)');
+  // All of the browser's part (its start, the page, the line-up) by the run's deadline, the uploads' time left after it
+  const browserPart = async () => {
+    const browser = await browserOf(env, ctx);
+    if (!browser) throw new Outage('Cloudflare’s browser isn’t available');
+    const page = await browser.newPage();
+    try {
+      await page.setBypassCSP(true).catch(() => {});
+      await page.goto(`${ctx.origin || SITE_ORIGIN}${PDF_BASE}pdf.js`, { waitUntil: 'domcontentloaded', timeout: Math.max(1000, Math.min(15000, deadline - UPLOAD_MS - clock())) });
+      const coreSrc = await moduleSource(env, ctx, '/admin/plan-compare-core.js');
+      return await page.evaluate(compareInBrowser, coreSrc, cut(pair.existing.url, P.left, P.top, P.width, P.height), cut(pair.proposed.url, bl, bt, br - bl, bb - bt), { aw: P.width, ah: P.height, bw: br - bl, bh: bb - bt, ox: P.left - bl, oy: P.top - bt });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  };
+  const got = await withDeadline(browserPart(), deadline - UPLOAD_MS - clock(), 'lining the plans up');
+  const at = new Date(now).toISOString();
+  let record;
+  if (got?.none) record = { existing: pair.existing.url, proposed: pair.proposed.url, none: true, at };
+  else {
+    if (!got?.before || !got?.after) throw new Error('the browser gave no pictures');
+    const id = (which) => `kids/${slug}/plan-compare-${now}-${unguessable()}-${which}.png`;
+    const before = await uploadPicture(env, fromBase64(got.before), 'image/png', id('existing'), fetchImpl, { timeoutMs: Math.max(1000, deadline - clock()) });
+    const after = await uploadPicture(env, fromBase64(got.after), 'image/png', id('proposed'), fetchImpl, { timeoutMs: Math.max(1000, deadline - clock()) });
+    record = { existing: pair.existing.url, proposed: pair.proposed.url, box: compareBox(pair), width: got.width, height: got.height, dx: got.dx, dy: got.dy, overlap: Math.round(got.overlap * 1e4) / 1e4, before, after, at };
+  }
+  const r = await changeKid(env, slug, (k) => {
+    const p2 = planPairOf(revealSlides({ ...k, planCompare: null }));
+    if (!p2 || p2.existing.url !== record.existing || p2.proposed.url !== record.proposed) return null;
+    return {
+      data: { ...k, planCompare: record },
+      changes: [{ field: 'planCompare', from: null, to: record.none ? 'The existing and proposed plans don’t line up: no before and after' : 'The existing and proposed plans lined up for the before and after' }],
+    };
+  }, now);
+  return r?.data ? (record.none ? { none: true } : { lined: true }) : null;
+}
+
 // ── The record ──────────────────────────────────────────────────────
 
 /**
@@ -1164,6 +1275,55 @@ export async function runRevealDesigns(env, ctx = {}) {
     // Nothing anywhere waits on the site's look: its trouble, if it said any, is over
     noneWaiting = !!found && !found.waiting;
     if (noneWaiting) delete ledger.lookError;
+    // The plans before and after, lined up once (any kid's: a past reveal's page shows them for good). Nothing from
+    // JobTread: the run's time is its own, one kid a run, the next a minute on while any are still to do
+    // (Not when JobTread's confirm woke this run: that run is the confirm's. Nor while Cloudflare's browser or Images
+    // is down: the step rests as a whole, so the kids waiting don't take every run in turn failing)
+    if ((env.BROWSER || ctx.browser || ctx.launch) && !ctx.wake && !(Number(ledger.compareRest) > now)) {
+      const { results } = await env.DB.prepare(`SELECT slug, data FROM kids WHERE instr(data, '"focus"') > 0 ORDER BY updated_at DESC`).all().catch(() => ({ results: [] }));
+      const all = (results || []).map((r) => { try { return { ...JSON.parse(r.data), slug: r.slug }; } catch { return null; } }).filter(Boolean);
+      const due = comparesDue(all, ledger.compares || {}, now);
+      // (with too little of the run left, the next run does it: nothing is waiting on it but the page's own line-up)
+      if (due.length && deadline - clock() >= COMPARE_MIN_MS) {
+        ledger.compares ||= {};
+        const one = due[0];
+        const mine = (ledger.compares[one.slug] ||= {});
+        // (it rests, half an hour and twice that each time in a row, so it never takes every run)
+        const rest = (outs) => { mine.outs = outs; mine.restUntil = now + Math.min(COMPARE_RETRY_MS * 2 ** (outs - 1), 12 * 3600e3); };
+        // Saved first as if this try won't finish: a run Cloudflare stops partway (the browser hanging past the run's
+        // ~30 s) leaves this kid resting like any try that failed, never picked first every run after
+        const was = { outs: mine.outs, restUntil: mine.restUntil, why: mine.why };
+        rest((was.outs || 0) + 1);
+        await writeLedger(env.DB, ledger, now);
+        let got = null;
+        let why = '';
+        let down = false;
+        try {
+          got = await lineUpKid(env, ctx, one, fetchImpl, now, deadline, clock);
+        } catch (e) {
+          why = String(e?.message || e).slice(0, 200);
+          down = e instanceof Outage || e instanceof TookTooLong;
+          console.error('[design-auto] compare', one.slug, why);
+        }
+        if (got) { delete ledger.compares[one.slug]; delete ledger.compareRest; delete ledger.compareOuts; }
+        else if (why) {
+          mine.why = why;
+          // (a service down or too slow, not the kid's own trouble: the whole step rests, a half hour and twice that
+          // each time in a row, to 12 hours)
+          if (down) { ledger.compareOuts = (ledger.compareOuts || 0) + 1; ledger.compareRest = now + Math.min(COMPARE_RETRY_MS * 2 ** (ledger.compareOuts - 1), 12 * 3600e3); }
+        }
+        else {
+          // (the profile changed meanwhile: as it was, and tried again with what it has now)
+          for (const [k, v] of Object.entries(was)) { if (v === undefined) delete mine[k]; else mine[k] = v; }
+          if (!Object.keys(mine).length) delete ledger.compares[one.slug];
+        }
+        await writeLedger(env.DB, ledger, now);
+        // (The next run a minute on, always: this one's turn went to the line-up, so what else is owed, another kid's
+        // line-up, before photos, a redraw, doesn't wait the usual ten minutes for it)
+        if (started) await soonAgain(env.DB, started, now).catch(() => {});
+        return { did: { slug: one.slug, work: 'compare', ...(got || {}), ...(why ? { error: why } : {}) } };
+      }
+    }
     // JobTread's reveals: as read in the last few minutes (a run a minute on after the last spends its time on the
     // photos, not on reading every job again), or fresh, and always fresh when a confirm woke this run
     let list = ctx.reveals;

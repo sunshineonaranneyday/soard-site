@@ -30,6 +30,10 @@
  *      under it is grey again, a black line black). The viewer's whole sheets
  *      have it taken out the same way (sheetWithoutPig, below).
  *
+ * Done once, when a kid's drawings come in (functions/api/_reveal-design-auto.js, the same code in Cloudflare's
+ * browser; Peter, Nov 19 2026: "Yes, before Max"), and kept with its two pictures: a page then only fetches those
+ * (kept, below), and the compare is there at once. A pair not done yet is done on the page.
+ *
  * Steps 1 and 3 run in a background worker (plan-compare.worker.ts, the work
  * itself in plan-compare-core.ts): on the page they held it up for 0.4 s on a
  * computer and 1.5 to 2.7 s at a phone's speed, the reveal playing.
@@ -39,7 +43,7 @@
  * design section, the room beside the video, the viewer).
  */
 import { CF_HASH, cfId } from './cf-image';
-import { comparePixels, focusOf, type PlanPair } from './reveal-design-client';
+import { comparePixels, focusOf, storedCompareOf, type PlanPair } from './reveal-design-client';
 import { lineUp, REACH, type Pixels } from './plan-compare-core';
 
 export interface PlanCompare {
@@ -142,13 +146,37 @@ async function build(pair: PlanPair): Promise<PlanCompare | null> {
   return done(before, after, r);
 }
 
+/**
+ * The pair lined up when it came in (Peter, Nov 19 2026: "Yes, before Max"): its two pictures, the pig already taken
+ * out, kept in Cloudflare Images (functions/api/_reveal-design-auto.js), fetched whole as PNG (line drawings: 100 to
+ * 170 KB, every browser shows them; AVIF, which Cloudflare sends whenever it's asked for, isn't shown by older iPhones,
+ * and a picture the browser can't show would leave the compare empty): nothing to line up or clean on the page, so the
+ * compare is there as soon as they are. null: they can't be had (the page lines them up itself, as before)
+ */
+async function kept(pair: PlanPair): Promise<PlanCompare | null> {
+  const c = storedCompareOf(pair);
+  if (!c) return null;
+  const at = (url: string) => `${imagesBase()}/${cfId(url)}/w=${c.width},fit=scale-down,q=100`;
+  const blobOf = async (url: string) => {
+    if (!cfId(url)) throw new Error('not a Cloudflare picture');
+    const res = await fetch(at(url), { headers: { Accept: 'image/png' }, credentials: 'omit' });
+    if (!res.ok) throw new Error(`${res.status}`);
+    return URL.createObjectURL(await res.blob());
+  };
+  const [before, after] = await Promise.all([blobOf(c.before), blobOf(c.after)]);
+  return { before, after, width: c.width!, height: c.height!, dx: c.dx!, dy: c.dy!, overlap: c.overlap! };
+}
+
 const made = new Map<string, Promise<PlanCompare | null>>();
 /** The pair's compare, made once per page; null when it can't be (it doesn't line up, a picture can't be had) */
 export function compareFor(pair: PlanPair): Promise<PlanCompare | null> {
-  const key = `${pair.existing.url}|${pair.proposed.url}|${JSON.stringify(focusOf(pair.existing))}|${JSON.stringify(focusOf(pair.proposed))}`;
+  const key = `${pair.existing.url}|${pair.proposed.url}|${JSON.stringify(focusOf(pair.existing))}|${JSON.stringify(focusOf(pair.proposed))}|${storedCompareOf(pair)?.before || ''}`;
   let p = made.get(key);
   if (!p) {
-    p = build(pair).catch((e) => { console.info('plan compare unavailable:', e?.message || e); return null; });
+    p = kept(pair)
+      .catch((e) => { console.info('plan compare kept unavailable:', e?.message || e); return null; })
+      .then((k) => k || build(pair))
+      .catch((e) => { console.info('plan compare unavailable:', e?.message || e); return null; });
     made.set(key, p);
   }
   return p;

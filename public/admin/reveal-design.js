@@ -185,7 +185,29 @@ export function revealSlides(kid, { after = false } = {}) {
     };
   });
   // No design boards on the live page (Peter, Nov 12 2026): they wait for the kid page, after the reveal (pagePlans)
-  return [...befores, ...drawings('as-built'), ...drawings('proposed')];
+  const existing = drawings('as-built'), proposed = drawings('proposed');
+  // The plan before and after, lined up when they came in (functions/api/_reveal-design-auto.js): on the existing
+  // plan, for the pair the page compares (its first existing and first proposed plan), and only while they're still
+  // the two sheets it was made of
+  const cmp = storedCompare(kid?.planCompare, existing[0]?.url, proposed[0]?.url);
+  if (cmp) existing[0] = { ...existing[0], cmp };
+  return [...befores, ...existing, ...proposed];
+}
+
+/**
+ * The line-up kept on the profile (planCompare: { existing, proposed, box, width, height, dx, dy, overlap, before,
+ * after } or, for two sheets that don't line up, { existing, proposed, none: true }), for these two sheets, as the page
+ * reads it (src/utils/reveal-design-client.ts storedCompare): { proposed, ... }, or null (none kept, another pair's, or
+ * unreadable)
+ */
+export function storedCompare(c, existingUrl, proposedUrl) {
+  if (!c || typeof c !== 'object' || !existingUrl || !proposedUrl || c.existing !== existingUrl || c.proposed !== proposedUrl) return null;
+  if (c.none === true) return { proposed: proposedUrl, none: true };
+  const b = c.box;
+  const num = (n) => typeof n === 'number' && Number.isFinite(n);
+  if (!b || ![b.x, b.y, b.w, b.h].every(num) || b.w <= 0 || b.h <= 0 || b.x < 0 || b.y < 0 || b.x + b.w > 1.0001 || b.y + b.h > 1.0001) return null;
+  if (![c.width, c.height, c.dx, c.dy, c.overlap].every(num) || c.width < 16 || c.height < 16 || !usable(c.before) || !usable(c.after)) return null;
+  return { proposed: proposedUrl, box: { x: b.x, y: b.y, w: b.w, h: b.h }, width: Math.round(c.width), height: Math.round(c.height), dx: c.dx, dy: c.dy, overlap: c.overlap, before: c.before, after: c.after };
 }
 
 // ── The kid page ─────────────────────────────────────────────────────

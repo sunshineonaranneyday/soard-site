@@ -10,7 +10,9 @@
 import { test, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
-import { nextWork, partsOf, revealsAhead, standing, runRevealDesigns, currentReveals, dueLooks, AUTO_KEY, cutDown } from '../functions/api/_reveal-design-auto.js';
+import { nextWork, partsOf, revealsAhead, standing, runRevealDesigns, currentReveals, dueLooks, AUTO_KEY, cutDown, comparesDue } from '../functions/api/_reveal-design-auto.js';
+import { revealSlides } from '../public/admin/reveal-design.js';
+import { planPairOf } from '../public/admin/plan-pair.js';
 import { recordVersion } from '../functions/api/_content-history.js';
 
 const NOW = Date.parse('2026-11-10T15:00:00Z');
@@ -1470,4 +1472,150 @@ test('a redraw cut short tries again a minute on (JobTread’s reveals still fre
   l = await ledger();
   assert.deepEqual([l.kids.rory.resheet['as-built'], l.kids.rory.resheetCuts], ['done', undefined]);
   assert.match((await kid('rory')).plans[0].url, /-sheet\.png/);
+});
+
+// ── The plans before and after, lined up once (Peter, Nov 19 2026: "Yes, before Max") ──
+// The browser's part (fetching the two cuts, lining them up, taking the pig out) is stood in for here; the real one is
+// checked against Dylan's and Max's real plans by the session's own script, and it is the same code a visitor's page
+// runs (public/admin/plan-compare-core.js)
+const sheet = (slug, kind, n, focus = { x: 0.3, y: 0.2, w: 0.35, h: 0.5 }) => ({
+  url: `https://imagedelivery.net/HASH/kids/${slug}/plan-${n}-abc-${kind}-drawing-sheet.png/public`, label: kind, type: kind, w: 3200, h: 2071, addressCheck: 'wiped', source: `jt:F${n}#${n}`, focus,
+});
+const lined = [];
+const lineBrowser = (answer) => ({
+  newPage: async () => ({
+    setBypassCSP: async () => {}, goto: async () => {}, close: async () => {},
+    evaluate: async (_fn, _core, a, b, g) => { lined.push({ a, b, g }); if (answer instanceof Error) throw answer; return answer; },
+  }),
+  close: async () => {},
+});
+const LINED = { dx: -22, dy: 22, overlap: 0.776, width: 1172, height: 1054, before: btoa('before-png'), after: btoa('after-png') };
+const lineRun = (t, browser) => runRevealDesigns(env, { fetchImpl, now: t, clock: () => 0, reveals: [], sources: async (slug) => SOURCES[slug], browser, keepBrowser: true, readAsset: async () => '', force: true });
+
+test('which kids’ plans are lined up: a pair the live page compares, not lined up yet (or lined up from other sheets), not a draft, not resting', () => {
+  const pairOf = (slug, extra = {}) => ({ slug, name: slug, plans: [sheet(slug, 'as-built', 1), sheet(slug, 'proposed', 2)], ...extra });
+  const done = pairOf('done');
+  done.planCompare = { existing: done.plans[0].url, proposed: done.plans[1].url, box: { x: 0.2, y: 0.1, w: 0.5, h: 0.6 }, width: 1600, height: 1242, dx: 3, dy: -2, overlap: 0.8, before: 'https://imagedelivery.net/HASH/kids/done/a.png/public', after: 'https://imagedelivery.net/HASH/kids/done/b.png/public' };
+  const stale = pairOf('stale');
+  stale.planCompare = { ...done.planCompare, existing: stale.plans[0].url, proposed: 'https://imagedelivery.net/HASH/kids/stale/old-proposed-sheet.png/public' };
+  const none = pairOf('none');
+  none.planCompare = { existing: none.plans[0].url, proposed: none.plans[1].url, none: true };
+  const cut = { slug: 'cut', plans: [sheet('cut', 'as-built', 1), { ...sheet('cut', 'proposed', 2), url: 'https://imagedelivery.net/HASH/kids/cut/p-notitle.png/public', focus: undefined }] };
+  const unchecked = pairOf('unchecked');
+  unchecked.plans[1] = { ...unchecked.plans[1], addressCheck: undefined };
+  const due = comparesDue([pairOf('new'), done, stale, none, cut, unchecked, pairOf('draft', { publishStatus: 'draft' }), pairOf('resting')], { resting: { restUntil: NOW + MIN } }, NOW);
+  assert.deepEqual(due.map((d) => d.slug), ['new', 'stale'], 'a new pair and one whose proposed sheet changed; never one done, one that doesn’t line up, a cut-down sheet, an unchecked address, a draft or one resting');
+  assert.equal(comparesDue([pairOf('resting')], { resting: { restUntil: NOW - 1 } }, NOW).length, 1, 'its rest over');
+});
+
+test('a run lines a kid’s plans up once: the two pictures go to Cloudflare Images, the line-up onto the profile, and the page reads it from there', async () => {
+  await onlyDue();
+  const T = NOW + 900 * 3600e3;
+  await putKid('cam', { name: 'Cam', plans: [sheet('cam', 'as-built', 1), sheet('cam', 'proposed', 2)], beforePhotos: [] });
+  const uploads = calls.uploads.length;
+  lined.length = 0;
+  const r = await lineRun(T, lineBrowser(LINED));
+  assert.deepEqual(r.did, { slug: 'cam', work: 'compare', lined: true });
+  // Cut from the sheets at full size (PNG, for the pig), the proposed one 96 px bigger each way, with what lines them up
+  assert.equal(lined.length, 1);
+  assert.match(lined[0].a, /^https:\/\/imagedelivery\.net\/[^/]+\/kids\/cam\/plan-1-abc-as-built-drawing-sheet\.png\/trim\.left=\d+,trim\.top=\d+,trim\.width=\d+,trim\.height=\d+,q=100$/);
+  assert.match(lined[0].b, /kids\/cam\/plan-2-abc-proposed-drawing-sheet\.png\/trim\.left=\d+/);
+  assert.deepEqual([lined[0].g.bw - lined[0].g.aw, lined[0].g.ox, lined[0].g.oy], [192, 96, 96]);
+  const ids = calls.uploads.slice(uploads);
+  assert.equal(ids.length, 2);
+  assert.match(ids[0], /^kids\/cam\/plan-compare-\d+-[0-9a-f]{32}-existing\.png$/);
+  assert.match(ids[1], /^kids\/cam\/plan-compare-\d+-[0-9a-f]{32}-proposed\.png$/);
+  const k = await kid('cam');
+  assert.equal(k.planCompare.existing, k.plans[0].url);
+  assert.equal(k.planCompare.proposed, k.plans[1].url);
+  assert.deepEqual([k.planCompare.dx, k.planCompare.dy, k.planCompare.overlap, k.planCompare.width, k.planCompare.height], [-22, 22, 0.776, 1172, 1054]);
+  assert.equal(k.planCompare.before, `https://imagedelivery.net/HASH/${ids[0]}/public`);
+  // The live page's slides carry it on the existing plan, and the pair cuts where it was cut
+  const pair = planPairOf(revealSlides(k));
+  assert.equal(pair.existing.cmp.before, k.planCompare.before);
+  assert.deepEqual(pair.existing.cmp.box, k.planCompare.box);
+  assert.equal(Math.round(k.planCompare.box.w * 3200), lined[0].g.aw, 'the box kept is the one it was cut with');
+  // Once: the next run has nothing to line up
+  const again = await lineRun(T + 11 * MIN, lineBrowser(LINED));
+  assert.notEqual(again.did?.work, 'compare');
+  assert.equal(lined.length, 1);
+  // A new proposed sheet: lined up again
+  await putKid('cam', { ...k, plans: [k.plans[0], { ...sheet('cam', 'proposed', 3) }] });
+  const redo = await lineRun(T + 22 * MIN, lineBrowser(LINED));
+  assert.deepEqual([redo.did.slug, redo.did.work], ['cam', 'compare']);
+  assert.match((await kid('cam')).planCompare.proposed, /plan-3-/);
+});
+
+test('two sheets that don’t line up are kept as that, so no page offers a compare for them; a try that can’t finish rests, half an hour and then twice that', async () => {
+  await onlyDue();
+  const T = NOW + 950 * 3600e3;
+  await putKid('dee', { name: 'Dee', plans: [sheet('dee', 'as-built', 1), sheet('dee', 'proposed', 2)], beforePhotos: [] });
+  const r = await lineRun(T, lineBrowser({ none: true }));
+  assert.deepEqual(r.did, { slug: 'dee', work: 'compare', none: true });
+  const k = await kid('dee');
+  assert.equal(k.planCompare.none, true);
+  assert.equal(planPairOf(revealSlides(k)), null, 'no compare');
+  assert.equal(revealSlides(k).filter((s) => s.kind !== 'before').length, 2, 'the two sheets still show');
+
+  await putKid('eli', { name: 'Eli', plans: [sheet('eli', 'as-built', 1), sheet('eli', 'proposed', 2)], beforePhotos: [] });
+  lined.length = 0;
+  const bad = await lineRun(T + 11 * MIN, lineBrowser(new Error('a plan’s picture answered 503')));
+  assert.deepEqual([bad.did.slug, bad.did.work, bad.did.error], ['eli', 'compare', 'a plan’s picture answered 503']);
+  let l = await ledger();
+  assert.deepEqual([l.compares.eli.outs, l.compares.eli.restUntil], [1, T + 11 * MIN + 30 * MIN]);
+  assert.equal((await kid('eli')).planCompare, undefined, 'nothing saved');
+  // Resting: not tried
+  const resting = await lineRun(T + 20 * MIN, lineBrowser(LINED));
+  assert.notEqual(resting.did?.work, 'compare');
+  assert.equal(lined.length, 1);
+  // Its rest over and failing again: twice as long; then it gets in, and the rest is gone
+  await lineRun(T + 42 * MIN, lineBrowser(new Error('slow')));
+  l = await ledger();
+  assert.deepEqual([l.compares.eli.outs, l.compares.eli.restUntil], [2, T + 42 * MIN + 60 * MIN]);
+  const ok = await lineRun(T + 103 * MIN, lineBrowser(LINED));
+  assert.deepEqual(ok.did, { slug: 'eli', work: 'compare', lined: true });
+  assert.equal((await ledger()).compares.eli, undefined);
+});
+
+
+test('a line-up the run is stopped in the middle of (the browser hanging past Cloudflare’s time) leaves the kid resting, never picked first every run after', async () => {
+  await onlyDue();
+  const T = NOW + 1000 * 3600e3;
+  await putKid('fay', { name: 'Fay', plans: [sheet('fay', 'as-built', 1), sheet('fay', 'proposed', 2)], beforePhotos: [] });
+  let during = null;
+  const watching = { newPage: async () => ({ setBypassCSP: async () => {}, goto: async () => {}, close: async () => {}, evaluate: async () => { during = (await ledger()).compares?.fay; return LINED; } }), close: async () => {} };
+  const r = await lineRun(T, watching);
+  assert.deepEqual([during?.outs, during?.restUntil], [1, T + 30 * MIN], 'saved as resting before the browser was asked');
+  assert.deepEqual(r.did, { slug: 'fay', work: 'compare', lined: true });
+  assert.equal((await ledger()).compares.fay, undefined, 'done: the rest is gone');
+});
+
+test('the line-up never takes a confirm’s wake; a service down rests the whole step (not each kid in turn); and the next run comes a minute on', async () => {
+  await onlyDue();
+  const T = NOW + 1100 * 3600e3;
+  await putKid('gus', { name: 'Gus', plans: [sheet('gus', 'as-built', 1), sheet('gus', 'proposed', 2)], beforePhotos: [] });
+  await putKid('hal', { name: 'Hal', plans: [sheet('hal', 'as-built', 1), sheet('hal', 'proposed', 2)], beforePhotos: [] });
+  lined.length = 0;
+  // JobTread's confirm woke this run: it's the confirm's
+  const woke = await runRevealDesigns(env, { fetchImpl, now: T, clock: () => 0, reveals: [], sources: async (slug) => SOURCES[slug], browser: lineBrowser(LINED), keepBrowser: true, readAsset: async () => '', force: true, wake: true });
+  assert.notEqual(woke.did?.work, 'compare');
+  assert.equal(lined.length, 0);
+  // Cloudflare Images not set up (a service's trouble): the step rests as a whole, half an hour; no kid is tried meanwhile
+  const noImages = { ...env, CF_IMAGES_TOKEN: '' };
+  const r = await runRevealDesigns(noImages, { fetchImpl, now: T + MIN, clock: () => 0, reveals: [], sources: async (slug) => SOURCES[slug], browser: lineBrowser(LINED), keepBrowser: true, readAsset: async () => '', force: true });
+  assert.equal(r.did.work, 'compare');
+  assert.match(r.did.error, /Cloudflare Images isn’t set up/);
+  assert.equal(lined.length, 0, 'the browser’s time isn’t spent when there’s nowhere to keep the pictures');
+  let l = await ledger();
+  assert.deepEqual([l.compareOuts, l.compareRest], [1, T + MIN + 30 * MIN]);
+  const resting = await lineRun(T + 10 * MIN, lineBrowser(LINED));
+  assert.notEqual(resting.did?.work, 'compare', 'resting: neither kid is tried');
+  // Its rest over: in a claimed run (not forced), one kid lined up, and the next run a minute on for the other
+  await env.DB.prepare("DELETE FROM site_config WHERE key = 'reveal-design-auto-next'").run();
+  const t2 = T + 40 * MIN;
+  const ok = await runRevealDesigns(env, { fetchImpl, now: t2, clock: () => 0, reveals: [], sources: async (slug) => SOURCES[slug], browser: lineBrowser(LINED), keepBrowser: true, readAsset: async () => '' });
+  assert.equal(ok.did.work, 'compare');
+  assert.equal(Number((await claimRow()).data), t2 + MIN, 'again a minute on');
+  l = await ledger();
+  assert.deepEqual([l.compareOuts, l.compareRest], [undefined, undefined], 'the step’s rest ends once one goes through');
 });

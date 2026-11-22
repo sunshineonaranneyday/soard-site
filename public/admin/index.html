@@ -12425,16 +12425,20 @@
     const kdSaveRecord = (data) => KS.kidRecord({ ...data, ...KS.buildFields(KS.buildsOf(data), data) });
     // The site's check's own fields on a before photo (saveLooks in functions/api/_reveal-design-auto.js)
     const KD_LOOK_FIELDS = ['looked', 'offPage', 'offWhy'];
+    // The profile's fields only the site writes, never this editor: the plans lined up for the before and after
+    // (lineUpKid in functions/api/_reveal-design-auto.js), taken in from the saved version as the looks are
+    const KD_SITE_FIELDS = ['planCompare'];
     const kdStable = (v) => (Array.isArray(v) ? `[${v.map(kdStable).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${kdStable(v[k])}`).join(',')}}` : JSON.stringify(v));
     /**
-     * The server's version is ours (was) but for the site's check on before photos still waiting in ours: the only
-     * change the site makes (it never touches one anybody has looked at). Anything else is someone else's save
+     * The server's version is ours (was) but for the site's check on before photos still waiting in ours, and the
+     * site's own fields (KD_SITE_FIELDS): the only changes the site makes (it never touches a photo anybody has looked
+     * at). Anything else is someone else's save
      */
     function kdOnlySiteLooks(was, server) {
       const waiting = new Set((was.beforePhotos || []).filter((p) => p?.url && !p.looked).map((p) => p.url));
       // (Staff's say on one, in another editor, is someone else's save: never taken as the site's)
       if ((server.beforePhotos || []).some((p) => waiting.has(p?.url) && p.looked && p.looked !== 'site')) return false;
-      const strip = (r) => ({ ...r, beforePhotos: (r.beforePhotos || []).map((p) => (waiting.has(p?.url) ? Object.fromEntries(Object.entries(p).filter(([k]) => !KD_LOOK_FIELDS.includes(k))) : p)) });
+      const strip = (r) => ({ ...Object.fromEntries(Object.entries(r).filter(([k]) => !KD_SITE_FIELDS.includes(k))), beforePhotos: (r.beforePhotos || []).map((p) => (waiting.has(p?.url) ? Object.fromEntries(Object.entries(p).filter(([k]) => !KD_LOOK_FIELDS.includes(k))) : p)) });
       return kdStable(strip(was)) === kdStable(strip(server));
     }
     /**
@@ -13687,6 +13691,8 @@
         const known = new Set([...all(base), ...all(d)].flatMap((p) => [p?.url, p?.source].filter(Boolean)));
         const since = (now) => (base ? (now || []).filter((p) => p?.url && !known.has(p.url) && !(p.source && known.has(p.source))).map((p) => ({ ...p, _key: kdNewKey() })) : []);
         setData({ ...d,
+          // (the site's own fields as saved now, never the draft's older copy)
+          ...Object.fromEntries(KD_SITE_FIELDS.map((k) => [k, dataRef.current[k]])),
           beforePhotos: [...befores, ...since(dataRef.current.beforePhotos)],
           plans: [...(d.plans || []), ...since(dataRef.current.plans)],
           _ages: draft.ages ?? d._ages });
@@ -13714,10 +13720,12 @@
         const server = kdSaveRecord(kdForEditing(typeof r.content === 'string' ? JSON.parse(r.content) : r.content, ix, slug));
         const was = kdSaveRecord(kdForEditing(JSON.parse(baseRef.current || '{}'), ix, slug));
         if (!kdOnlySiteLooks(was, server)) return null;
-        const next = { ...dataRef.current, beforePhotos: kdTakeLooks(dataRef.current.beforePhotos, server.beforePhotos) };
+        // (the site's own fields as saved: an editor never has a say in them)
+        const site = Object.fromEntries(KD_SITE_FIELDS.map((k) => [k, server[k]]));
+        const next = { ...dataRef.current, ...site, beforePhotos: kdTakeLooks(dataRef.current.beforePhotos, server.beforePhotos) };
         dataRef.current = next;
         // (onto whatever is there by then, so a keystroke in the same moment stays)
-        setData((d) => ({ ...d, beforePhotos: kdTakeLooks(d.beforePhotos, server.beforePhotos) }));
+        setData((d) => ({ ...d, ...site, beforePhotos: kdTakeLooks(d.beforePhotos, server.beforePhotos) }));
         const b = JSON.stringify(server);
         baseRef.current = b;
         setBase(b);
