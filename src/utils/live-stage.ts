@@ -1237,8 +1237,14 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   let dockOff = false;
   let inView = true;
   let pinned = false;
+  const atTop = () => (picture?.dataset.corner || (phone.matches ? 'tr' : 'br')).startsWith('t');
   function setDock(on: boolean) {
     if (!picture || on === docked) return;
+    // In a top corner (a phone's) the video itself goes from its place on the page to the small player's and back, one
+    // move, as picture-in-picture does (Nov 21 2026 phone review: a small copy faded in at the corner from nowhere, and
+    // vanished on the way back); measured before and after, then played from where it was
+    const fly = !reduced && !pinned && !document.fullscreenElement && (on ? (picture.dataset.corner || (phone.matches ? 'tr' : 'br')) : picture.dataset.corner || '').startsWith('t');
+    const from = fly ? picture.getBoundingClientRect() : null;
     docked = on;
     if (on) {
       applyCorner();
@@ -1251,6 +1257,16 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     }
     picture.classList.toggle('is-docked', on);
     setHidden($('dockbar'), !on);
+    followStage();
+    if (from && from.width) {
+      const to = picture.getBoundingClientRect();
+      if (to.width) {
+        picture.animate([
+          { transformOrigin: 'top left', transform: `translate(${from.left - to.left}px, ${from.top - to.top}px) scale(${from.width / to.width}, ${from.height / to.height})` },
+          { transformOrigin: 'top left', transform: 'none' },
+        ], { duration: on ? 320 : 280, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)' });
+      }
+    }
   }
   // The docked picture's label says what plays in it, Live or Replay. Before a reveal (the kid's photo in the corner
   // while the plan is open big) nothing is live yet, so it has none: it said LIVE (be, Nov 21 2026). Painted again on
@@ -1273,6 +1289,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       : pstatus === 'playing' || pstatus === 'buffering' || (!!scrub?.on && scrub.wasPlaying) || playAfterSeek);
     const pin = pinned && party;
     setDock(pin || (party && going && !inView && !dockOff && !typing && !document.fullscreenElement));
+    followStage();
     if (docked) paintDockLabel();
     setPinned(pin && docked);
   }
@@ -1300,6 +1317,18 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     }, { threshold: [0, DOCK_AT, 1] });
     io.observe(screen);
   }
+  // In a top corner (a phone's) the small player keeps below what's left of the stage on the screen, the bar and the
+  // sponsor band, and rides up with them until it reaches its place under the header (Nov 21 2026 phone review: it
+  // sat on the sponsor band beside the bar): --dock-top, the stage's foot (LiveStage.astro). In sight all the way, on
+  // nothing of the stage's
+  let follow = 0;
+  function followStage() {
+    if (!picture) return;
+    if (!docked || pinned || !atTop()) { if (picture.style.getPropertyValue('--dock-top')) picture.style.removeProperty('--dock-top'); return; }
+    picture.style.setProperty('--dock-top', `${Math.max(0, Math.round(root.getBoundingClientRect().bottom))}px`);
+  }
+  const onFollowScroll = () => { if (follow) return; follow = requestAnimationFrame(() => { follow = 0; followStage(); }); };
+  addEventListener('scroll', onFollowScroll, { passive: true });
   // (data-fullscreen: what LiveStage's full-screen layout keys on, in place of :fullscreen, which older Safari can't read)
   const onFullscreen = () => {
     const full = document.fullscreenElement === root;
@@ -1464,6 +1493,8 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       mounted = '';
       if (watching) { watching = false; client.unwatch(); }
       io?.disconnect();
+      removeEventListener('scroll', onFollowScroll);
+      cancelAnimationFrame(follow);
       document.removeEventListener('fullscreenchange', onFullscreen);
       sideways.removeEventListener('change', onSideways);
       upright.removeEventListener('change', onSideways);

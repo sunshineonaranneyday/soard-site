@@ -1069,9 +1069,14 @@ const ICON = {
      on the buttons and the newest message just as they came into view. Dragged, it springs to the nearest corner and
      stays there while you're on the page. Pinned (the give form, the design viewer) it goes where those put it */
   .stage[data-party] .stage__picture.is-docked:not(.is-pinned) { touch-action: none; }
-  .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner^='t'] { top: calc(var(--header-height) + 48px); bottom: auto; }
+  /* (a top corner: under the header, or lower while the stage's bar and sponsor band are still on the screen, just under
+     them, with its label's 48px between: --dock-top, the stage's foot, live-stage.ts) */
+  .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner^='t'] { top: max(calc(var(--header-height) + 48px), calc(var(--dock-top, 0px) + 48px)); bottom: auto; }
   .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner$='l'] { left: max(16px, env(safe-area-inset-left, 0px)); right: auto; }
   .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner$='l'] .stage__dockbar { right: auto; left: 0; }
+  /* In a top corner (a phone's) the video itself flies from its place to the corner and back (live-stage.ts setDock),
+     so no fade of its own (Nov 21 2026 phone review: a small copy faded in from nowhere) */
+  .stage[data-party] .stage__picture.is-docked:not(.is-pinned)[data-corner^='t'] { animation: none; }
   .stage[data-party] .stage__picture.is-docked.is-dragging { animation: none; cursor: grabbing; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4); }
   /* Pinned above the give sheet on a phone: small, at the top, over everything the sheet covers */
   .stage[data-party] .stage__picture.is-docked.is-pinned {
