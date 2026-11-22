@@ -47,6 +47,8 @@
  *  - processDocs: the process Docs Site → Automations → Process follows (names, last read, any problem)
  *  - hosting:   where the site lives (_hosting.js): Cloudflare's production builds, main's newest commit on GitHub
  *               and what became of it, and each domain's registrar, paid-through date and nameservers (short shas and dates only)
+ *  - backup:    the nightly backup (its own Worker, soard-backup, through the BACKUP binding; _backup.js): its setup, each
+ *               night, the restore drill and anything wrong (dates, counts and sizes only; never a key)
  *
  * Not in _middleware's public list, so Access guards it. Never cached.
  * Each section fails on its own: one unreachable service never blanks the rest.
@@ -92,6 +94,7 @@ import { checksFacts } from './_check-gifts.js';
 import { wordsStatus } from './_board-file-words.js';
 import { permitFacts } from './_permit-office.js';
 import { hostingFacts } from './_hosting.js';
+import { backupFacts } from './_backup.js';
 
 const has = (v) => typeof v === 'string' ? v.trim().length > 0 : !!v;
 
@@ -581,6 +584,8 @@ export async function gatherFacts(env, { fetchImpl = fetch, now = Date.now() } =
     boardWords: await settle(() => wordsStatus(DB)),
     // Where the site lives: Cloudflare's builds, GitHub's main, the domains' registrations (_hosting.js)
     hosting: await hostingRead,
+    // The nightly backup: setup, each night, the restore drill (its own Worker, soard-backup; _backup.js)
+    backup: await settle(() => backupFacts(env)),
   };
 }
 

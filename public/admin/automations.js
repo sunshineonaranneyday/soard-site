@@ -29,10 +29,11 @@ import { h, htm, useState, useEffect } from './vendor.js';
 import { MindMap, prepareMap, fetchFacts, Ago, STATUS, MIN, HOUR, ms, ago, stamp, stale, plural } from './mindmap.js';
 import { ProcessView, hashOfTrack, currentTrack } from './process.js';
 import { reviewOf } from './process-shared.js';
+import { BackupPanel } from './backup-panel.js';
 
 const html = htm.bind(h);
 
-const WRITTEN_ON = 'November 12, 2026';
+const WRITTEN_ON = 'November 13, 2026';
 const FACTS_URL = '/api/automations-admin';
 
 // ─── Live check helpers ───────────────────
@@ -197,6 +198,126 @@ const domainLive = (f, name) => {
   if (left < 0) return ATTN(`Ran out ${dateOf(d.expires)}. Renew it now in Cloudflare → Domain Registration: about 30 days after it runs out, it stops working.`);
   if (left < 25) return ATTN(`Runs out ${dateOf(d.expires)}, and the renewal Cloudflare tries a month ahead hasn’t gone through. Check the card in Cloudflare → Billing, then renew it in Domain Registration.`);
   return ON(`Paid through ${dateOf(d.expires)}. Registered and DNS at Cloudflare.${d.stale ? ' (The registry didn’t answer just now; this is its last answer.)' : ''}`);
+};
+// Backup: its own Worker, soard-backup (workers/backup), seen through the site's BACKUP binding (functions/api/_backup.js)
+const size = (n) => (n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round((n || 0) / 1e3))} KB`);
+const errorsOf = (n, re) => (n.errors || []).filter((e) => re.test(e.step)).map((e) => e.error);
+// A backup run in one of these is still going
+const RUN_GOING = new Set(['queued', 'running', 'paused', 'waiting', 'waitingForPause']);
+// The site has no binding, or the Worker isn't on Cloudflare yet (never reached): Off. Reached before and not now: trouble.
+const backupAway = (b) => {
+  if (!b.connected) return OFF('Starts once the backup Worker is on Cloudflare and the site is published with its binding (see Setup and the key).');
+  if (!b.reachable) return b.chores?.reached ? ATTN(`The site can’t reach the backup: ${b.error}`) : OFF('Built, not on Cloudflare yet. Setup and the key, below, says what to do, a step at a time.');
+  return null;
+};
+const backupNotYet = (f) => {
+  const b = f.backup;
+  if (!b) return null;
+  if (b.error && b.connected === undefined) return ATTN(`The site couldn’t read the backup: ${b.error}`);
+  const away = backupAway(b);
+  if (away) return away;
+  if (!b.night) {
+    // The same rule as the alert: a first run that started a day and a half ago and hasn't finished is trouble
+    const first = b.firstStarted || b.started?.at;
+    if (first && stale(first, 36 * HOUR)) return ATTN(`The first backup run, started ${dateOf(first)}, hasn’t finished.`, first);
+    return OFF(b.setup?.ready ? 'Set up; the first run hasn’t finished yet.' : 'Starts once it’s set up (see Setup and the key).');
+  }
+  // A run before the setup was ready copied nothing: off while it's being set up, trouble once it had been
+  if (b.night.ready === false) return b.setUpAt ? ATTN(`The run of ${b.night.run} copied nothing: the setup isn’t ready (see Setup and the key).`, b.night.finished) : OFF('Starts once it’s set up (see Setup and the key).');
+  // A run days old says nothing about now, whatever it copied
+  if (stale(b.night.finished, 36 * HOUR)) return ATTN(`No backup run has finished since ${b.night.run}${RUN_GOING.has(b.started?.status) ? '; one is going now' : ''}.`, b.night.finished);
+  return null;
+};
+const backupSetupLive = (f) => {
+  const b = f.backup;
+  if (!b) return null;
+  if (b.error && b.connected === undefined) return ATTN(`The site couldn’t read the backup: ${b.error}`);
+  const away = backupAway(b);
+  if (away) return away;
+  if (!b.setup?.at) return OFF('On Cloudflare; its setup hasn’t been checked yet. Press Check the setup now, below.');
+  const s = b.setup;
+  const left = (s.problems || []).filter((p) => p.home !== 'key');
+  if (left.length) return ATTN(`${plural(left.length, 'thing')} left to set up: ${left.map((p) => p.why).join('; ')}.`, s.at);
+  const keyLeft = (s.problems || []).find((p) => p.home === 'key');
+  if (keyLeft) return ATTN(`Set up, but ${keyLeft.why}. Print it below (Setup and the key).`, s.at);
+  const lock = s.b2?.lock;
+  return ON(`Set up: Google Drive “${s.google?.drive}” (as a Contributor), Backblaze “${s.b2?.bucket}” (locked ${lock?.days} days, ${lock?.mode}), the read-only keys, and the recovery sheet printed. Key check code ${b.key?.fingerprint}.`, s.at);
+};
+const backupDbLive = (f) => {
+  const off = backupNotYet(f);
+  if (off) return off;
+  const n = f.backup.night;
+  const dbs = (n.databases || []).filter(Boolean);
+  const missing = f.backup.databases.filter((d) => !dbs.some((x) => x.name === d));
+  const what = dbs.map((d) => `${d.name} ${plural(d.tables, 'table')}, ${d.rows.toLocaleString('en-US')} rows, ${size(d.bytes)}${d.attempts > 1 ? ` (read again ${plural(d.attempts - 1, 'time')} for a quiet moment)` : ''}`).join('; ');
+  if (missing.length) return ATTN(`${missing.join(' and ')} wasn’t copied on ${n.run}: ${errorsOf(n, /^database/).join('; ') || 'see the run’s errors'}.${what ? ` Copied: ${what}.` : ''}`, n.finished);
+  return ON(`${n.run}: ${what}. Each read exactly, at one moment.`, n.finished);
+};
+const backupSettingsLive = (f) => {
+  const off = backupNotYet(f);
+  if (off) return off;
+  const n = f.backup.night;
+  const x = n.settings;
+  if (!x) return ATTN(`Not copied on ${n.run}: ${errorsOf(n, /settings/).join('; ') || 'see the run’s errors'}.`, n.finished);
+  const what = `${plural(x.zones, 'domain')} (${(x.records || 0).toLocaleString('en-US')} DNS records) and the rest`;
+  if (x.notRead?.length) return ATTN(`Copied ${what}, but the key couldn’t read ${plural(x.notRead.length, 'thing')}: ${x.notRead.slice(0, 3).join('; ')}${x.notRead.length > 3 ? '…' : ''}. Add those permissions to CF_BACKUP_TOKEN.`, n.finished);
+  return ON(`${n.run}: ${what}.`, n.finished);
+};
+const backupCodeLive = (f) => {
+  const off = backupNotYet(f);
+  if (off) return off;
+  const n = f.backup.night;
+  const code = (n.code || []).filter(Boolean);
+  const missing = f.backup.repos.filter((r) => !code.some((c) => c.repo === r));
+  const short = (r) => r.split('/').pop();
+  const what = code.map((c) => (c.unchanged ? `${short(c.repo)} unchanged` : `${short(c.repo)} ${c.full ? 'whole' : 'new commits'} (${size(c.bytes)})`)).join('; ');
+  if (missing.length) return ATTN(`${missing.map(short).join(' and ')} wasn’t copied on ${n.run}: ${errorsOf(n, /^code/).join('; ') || 'see the run’s errors'}.`, n.finished);
+  return ON(`${n.run}: ${what}.`, n.finished);
+};
+const backupFilesLive = (f) => {
+  const off = backupNotYet(f);
+  if (off) return off;
+  const n = f.backup.night;
+  const listed = Object.values(n.listed || {});
+  const found = listed.reduce((s, x) => s + (x.found || 0), 0);
+  const listErrors = Object.entries(n.listed || {}).filter(([, x]) => x.error).map(([k, x]) => `${k}: ${x.error}`);
+  if (listErrors.length) return ATTN(`Couldn’t list ${listErrors.join('; ')}.`, n.finished);
+  // A files step that never finished, or files never looked at: the run can't say they're all in
+  const stepErrors = errorsOf(n, /^(list files|files \d+)$/);
+  if (stepErrors.length) return ATTN(`The files weren’t all copied in the run of ${n.run}: ${stepErrors[0]}. The next run carries on.`, n.finished);
+  if (!n.listed || n.files?.left == null) return ATTN(`The photos, videos and files weren’t looked at in the run of ${n.run}; see its errors.`, n.finished);
+  // A video waiting for Stream's MP4 or a signing key is a note for a day and a half, then trouble
+  const waiting = (n.notes || []).filter((x) => /waiting for (Stream’s MP4|a Stream signing key)/.test(x));
+  const failed = (n.failures || []).filter((x) => !waiting.some((w) => w.includes(` ${x.key} `)));
+  // The site's part (its Stream key) failing for six hours is trouble of its own
+  const ch = f.backup.chores || {};
+  const siteStuck = ch.choreError && ch.choreErrorSince && stale(ch.choreErrorSince, 6 * HOUR);
+  if (siteStuck) return ATTN(`The site hasn’t been able to do its part with Stream since ${dateOf(ch.choreErrorSince)}: ${ch.choreError}.`, ch.at);
+  const later = waiting.length ? ` ${plural(waiting.length, 'video')} waiting for Stream (the site asks it for what’s missing).` : '';
+  if (failed.length) return ATTN(`${plural(failed.length, 'file')} couldn’t be copied on ${n.run}: ${failed.slice(0, 3).map((x) => `${x.name || x.key} (${x.error})`).join('; ')}. Each is tried again on the next run.${later}`, n.finished);
+  if (n.files?.left && RUN_GOING.has(f.backup.started?.status)) return ON(`Copying: ${n.files.left.toLocaleString('en-US')} still to go of ${found.toLocaleString('en-US')} after the run of ${n.run}, and a run is going now. The first runs copy everything, so they take hours; after that only what’s new.${later}`, n.finished);
+  if (n.files?.left) return ATTN(`${n.files.left.toLocaleString('en-US')} of ${found.toLocaleString('en-US')} were still to copy when the run of ${n.run} ended; the next run carries on.${later}`, n.finished);
+  return ON(`${n.run}: all ${found.toLocaleString('en-US')} in both homes${n.files?.copied ? `, ${n.files.copied.toLocaleString('en-US')} new this run` : ''}.${later}`, n.finished);
+};
+const backupDrillLive = (f) => {
+  const off = backupNotYet(f);
+  if (off) return off;
+  const d = f.backup.drill;
+  if (!d) return OFF('The first drill runs with the first run.');
+  if (d.ok === null) return OFF(`Nothing was in both homes to drill on ${d.run} yet; it runs again with the next run.`, d.at);
+  if (!d.ok) return ATTN(`The drill on ${d.run} found: ${(d.problems || []).slice(0, 3).join('; ')}. It runs again with every run until it passes.`, d.at);
+  const dbs = (d.databases || []).filter((x) => x.tables).map((x) => `${x.name} (${plural(x.tables, 'table')}, every one back exactly)`).join(' and ');
+  if (stale(d.at, 8 * DAY)) return ATTN(`The last drill was ${d.run}.`, d.at);
+  return ON(`${d.run}: ${dbs} restored from Google Drive into a spare database; Backblaze’s copies match; ${plural((d.files || []).length, 'file check')} and the code opened.`, d.at);
+};
+const backupHomesLive = (f) => {
+  const off = backupNotYet(f);
+  if (off) return off;
+  const n = f.backup.night;
+  const total = Object.values(f.backup.counts || {}).reduce((s, x) => ({ copies: s.copies + (x.copies || 0), bytes: s.bytes + (x.bytes || 0) }), { copies: 0, bytes: 0 });
+  if (!n.homes?.drive || !n.homes?.b2) return ATTN(`Only in ${n.homes?.drive ? 'Google Drive' : 'Backblaze'}: ${!n.homes?.drive ? 'Google Drive' : 'Backblaze'} isn’t set up or can’t be reached.`, n.finished);
+  if (n.waitingToShip) return ATTN(`${plural(n.waitingToShip, 'copy', 'copies')} still waiting to reach both homes.`, n.finished);
+  return ON(`${total.copies.toLocaleString('en-US')} copies (${size(total.bytes)}), each in both homes, every one checked against the home’s own checksum.`, n.finished);
 };
 const reminderBlock = (f, channel) => {
   const b = f.broadcast;
@@ -1061,6 +1182,43 @@ const MAP = { t: 'SOARD', children: [
           touches: ['GitHub', 'Cloudflare Pages'], where: 'github.com/sunshineonaranneyday/soard-site (branch main)',
           info: 'The repository is public: anyone can read the code, so keys and families’, donors’ and staff’s details never go in it. Keys live in Cloudflare and content lives in D1, so the code alone can’t bring back the site’s words or photos. It belongs to SOARD’s GitHub organization, Sunshine on a Ranney Day, beside the Sunny & Ranney store’s code; who can change it is under the organization’s People.',
           links: [{ label: 'Open on GitHub', href: GH }, { label: 'People', href: 'https://github.com/orgs/sunshineonaranneyday/people' }], live: (f) => codeLive(f) },
+      ]},
+      { t: 'Backup', children: [
+        { t: 'Setup and the key', s: 'live', k: 'admin', panel: BackupSetup, panelTitle: 'Set up',
+          does: 'Everything SOARD keeps on Cloudflare (both databases, Cloudflare’s settings, the website’s and the store’s code, every photo, video and file) is copied every night into two homes outside Cloudflare: a Google shared drive and a locked Backblaze bucket. The backup is its own Worker, soard-backup, apart from the website, with its own keys, none of which can change anything SOARD has.',
+          touches: ['Google Drive', 'Backblaze', 'Cloudflare', 'GitHub'], where: 'workers/backup · functions/api/_backup.js, backup-admin.js',
+          info: 'Every copy is encrypted for SOARD’s backup key (age, post-quantum), so a copy on its own tells nobody anything. The key is kept inside the backup for the weekly drill and on the printed recovery sheet; without one of them nothing can be opened. Google’s copy is added by an account that is only a Contributor (it can’t delete or move anything, though a drive member could add a new version of a file), and Backblaze’s bucket is locked for 90 days in Compliance mode: nobody, SOARD and Backblaze included, can change or delete a copy in that time. Keep both homes’ members few. Opening the recovery sheet tells the admins in Slack, with who opened it.',
+          links: [{ label: 'Shared drives', href: 'https://drive.google.com/drive/shared-drives' }, { label: 'Backblaze', href: 'https://secure.backblaze.com/b2_buckets.htm' }, { label: 'soard-backup', href: CF('/workers/services/view/soard-backup/production') }], live: (f) => backupSetupLive(f) },
+        { t: 'Databases, every night', s: 'live', k: 'schedule',
+          when: 'Every night from 2 AM Eastern; the website’s database is read in a quiet second, just after the site’s minute jobs.',
+          does: 'Reads every table of the website’s database (soard-db) and the store’s (sunnyandranney-db) exactly, every value as its bytes, all at one moment: D1’s bookmark is read before and after, and if anything was written in between, it reads again. Writes it as SQL D1 itself runs into an empty database, with a manifest of every table’s rows and fingerprint. Cloudflare’s own export was tested on Nov 13, 2026 and isn’t exact (it rounds large numbers and loses some text), so it isn’t used.',
+          touches: ['D1', 'Google Drive', 'Backblaze'], where: 'Database → name → year · workers/backup/src/db.js, sql.js',
+          info: 'To put one back: the READ ME FIRST at the top of the backup drive, or the restore tool (in workers/backup: npm ci, then node scripts/restore.mjs database <the downloaded folder> --key key.txt --check). For undoing a mistake while Cloudflare is fine, D1’s own Time Travel is quicker.',
+          live: (f) => backupDbLive(f) },
+        { t: 'Cloudflare settings, every night', s: 'live', k: 'schedule',
+          when: 'Every night after the databases.',
+          does: 'Copies what would have to be set up again by hand if SOARD’s Cloudflare account were ever lost, the website’s and the store’s: each domain’s DNS records as a zone file (staff email lives in them), redirects and other rules, email forwarding, the admin’s sign-in rules, the Pages and Workers setup, the R2 buckets and the databases. Never a key or password, only their names.',
+          touches: ['Cloudflare', 'Google Drive', 'Backblaze'], where: 'Cloudflare settings → year · workers/backup/src/settings.js',
+          live: (f) => backupSettingsLive(f) },
+        { t: 'Code, when it changes', s: 'live', k: 'schedule',
+          when: 'Every night after the settings, for each repository that changed.',
+          does: 'Copies soard-site, sunnyandranney-site and sunnyandranney-medusa with all their history, as git bundles (the file git itself restores with git clone): the whole of each on the month’s first night, then only the new commits.',
+          touches: ['GitHub', 'Google Drive', 'Backblaze'], where: 'Code → repository → year · workers/backup/src/github.js',
+          live: (f) => backupCodeLive(f) },
+        { t: 'Photos, videos and files', s: 'live', k: 'schedule',
+          when: 'Every night after the code: a look at what’s on Cloudflare, then whatever is new or changed.',
+          does: 'Copies every photo in Cloudflare Images (the original, under its id), every video in Stream (its MP4; when a video has none the site asks Stream to make one, and it stays: an MP4 is as public or private as its video) and every file in the files and vendor papers buckets, once each. In the homes a file is named by its id or a code, never by a name that could say whose it is; each run’s list, encrypted like the rest, maps every code to its name and says which copy is current. A changed file is copied again beside the old one, never over it.',
+          touches: ['Cloudflare Images', 'Cloudflare Stream', 'Cloudflare R2', 'Google Drive', 'Backblaze'], where: 'Files · workers/backup/src/sources.js',
+          live: (f) => backupFilesLive(f) },
+        { t: 'Google Drive and Backblaze', s: 'live', k: 'link',
+          does: 'The two homes. Each copy is made once, encrypted, and the same bytes go to both, each home on its own (one that’s down never holds up the other); each home’s own checksum of what it kept (Google’s MD5, Backblaze’s SHA-1) must match before the copy counts as safe. An upload cut off part way carries on where it stopped. Every run also looks at what Google Drive still holds: a copy someone deleted or put in the trash there is sent again from Backblaze’s locked copy, and that’s an alert.',
+          touches: ['Google Drive', 'Backblaze'], where: 'workers/backup/src/ship.js, drive.js, b2.js',
+          live: (f) => backupHomesLive(f) },
+        { t: 'Restore drill, every week', s: 'live', k: 'schedule',
+          when: 'Sunday nights after the backup, and with every run until a drill has passed.',
+          does: 'Proves the backup can be put back: reads that night’s database copies back from Google Drive, opens them with the key, restores them into a spare D1 database (soard-backup-drill, emptied again after) and compares every table with what was copied, byte for byte; checks Backblaze’s copies are the same bytes; opens a few photos, videos and files and the code. A failed drill is one Slack alert.',
+          touches: ['D1', 'Google Drive', 'Backblaze'], where: 'Restore drills → year · workers/backup/src/jobs.js',
+          live: (f) => backupDrillLive(f) },
       ]},
       { t: 'Domains', children: [
         { t: 'sunshineonaranneyday.com', s: 'live', k: 'link',
@@ -1988,6 +2146,7 @@ function Entry(sel, { pickService, Dot }) {
       ${sel.touches?.length > 0 && html`<div><dt>Touches</dt><dd class="am-tags">${sel.touches.map((t) => html`<button type="button" key=${t} title=${`Show everything that depends on ${t}`} onClick=${() => pickService(t)}>${t}</button>`)}</dd></div>`}
       ${sel.where && html`<div><dt>Where it lives</dt><dd class="am-mono">${sel.where}</dd></div>`}
       ${sel.links?.length > 0 && html`<div><dt>Open</dt><dd class="am-links" style="display: flex; flex-wrap: wrap; gap: 0.4rem;">${sel.links.map((l) => html`<a key=${l.href} class="btn btn-ghost btn-sm" href=${l.href} target="_blank" rel="noopener noreferrer">${l.label} ↗</a>`)}</dd></div>`}
+      ${sel.panel && html`<div><dt>${sel.panelTitle || 'Do'}</dt><dd><${sel.panel} /></dd></div>`}
       ${sel.info && html`<div><dt>Good to know</dt><dd>${sel.info}</dd></div>`}
     </dl>`;
 }
@@ -2002,6 +2161,13 @@ function getFacts(fresh = false) {
     p.catch(() => { if (factsRead?.p === p) factsRead = null; });
   }
   return factsRead.p;
+}
+
+// Backup → Setup and the key: the panel, with the facts this page read
+function BackupSetup() {
+  const [facts, setFacts] = useState(null);
+  useEffect(() => { getFacts().then(setFacts).catch(() => setFacts({ backup: { error: 'couldn’t read the facts' } })); }, []);
+  return facts ? html`<${BackupPanel} facts=${facts} />` : html`<span class="text-muted">Reading…</span>`;
 }
 
 const viewOfHash = () => (/^#automations\/process\b/.test(location.hash) ? 'process' : 'map');

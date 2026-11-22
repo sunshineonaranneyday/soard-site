@@ -1,0 +1,19 @@
+{
+  "name": "soard-backup",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.13" },
+  "description": "SOARD's nightly backup Worker (see src/index.js)",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "dependencies": {
+    "age-encryption": "0.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.10",
+    "miniflare": "4.20260426.0",
+    "wrangler": "4.155.0"
+  }
+}

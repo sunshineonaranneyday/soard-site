@@ -64,6 +64,7 @@ import { maybeGuardAudiences } from './_kit-audience-guard.js';
 import { maybeRunBackfill } from './_coi-backfill.js';
 import { maybeCheckOrgFacts } from './_org-facts.js';
 import { maybeRunAiWatch } from './_ai-watch.js';
+import { maybeBackupChores } from './_backup.js';
 
 // The hub gives up on this call after 15 s: answer within 10, and let a slower tick finish after the reply
 const HUB_ANSWER_MS = 10 * 1000;
@@ -146,6 +147,8 @@ export async function onRequestPost(context) {
     context.waitUntil(maybeSortPhotos(env, { deadline }));
     // Every 2 minutes: the next files on JobTread's old tags moved onto the new ones (see _tag-moves.js)
     context.waitUntil(maybeMoveTags(env, { deadline }));
+    // Every 15 minutes: the backup Worker's MP4s and Stream key, and its alert if it has stopped (see _backup.js)
+    context.waitUntil(maybeBackupChores(env, { deadline, alert: async (card) => alertAdmins(env, await readConfig(env.DB), card) }));
     // Every open job's CompanyCam photos against JobTread's copies, about hourly (see _companycam-jobs.js)
     context.waitUntil(maybeCheckJobs(env));
     // Once per alert redesign: the new Slack cards, posted in one thread (see _slack-preview.js)

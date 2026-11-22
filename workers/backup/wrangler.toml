@@ -1,0 +1,56 @@
+# soard-backup: SOARD's nightly backup (src/index.js says what it does). Deployed on its own, apart from the
+# website:   cd workers/backup && npm ci && npx wrangler deploy
+# Its keys are Worker secrets (never in this file): CF_BACKUP_TOKEN, GOOGLE_BACKUP_KEY, B2_KEY_ID,
+# B2_APPLICATION_KEY, GITHUB_BACKUP_TOKEN. The admin's Automations → Hosting → Backup walks through each one.
+name = "soard-backup"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+# No public address: the website reaches it through its BACKUP service binding only
+workers_dev = false
+preview_urls = false
+
+[limits]
+cpu_ms = 300_000
+# A run makes far more than the default 10,000 calls (a first run copies every photo, video and file): Cloudflare's
+# maximum, so a long run is never cut off part way
+subrequests = 10_000_000
+
+[triggers]
+crons = ["*/15 * * * *"]
+
+[vars]
+CF_ACCOUNT_ID = "116afe32d02c61855e5716424d3c2c22"
+DATABASES = '[{"name":"soard-db","id":"71ac037d-2682-4336-9cf7-234e97c5b462","label":"SOARD website"},{"name":"sunnyandranney-db","id":"a3fbfba9-569c-4dae-af1a-4a1f290963f7","label":"Sunny & Ranney store","quiet":false}]'
+REPOS = '["sunshineonaranneyday/soard-site","sunshineonaranneyday/sunnyandranney-site","sunshineonaranneyday/sunnyandranney-medusa"]'
+R2_BUCKETS = '["soard-files","soard-vendor-docs"]'
+# The second of each minute soard-db is quiet: the site's minute jobs write from about :03 to :27
+QUIET_SECOND = "28"
+
+[[workflows]]
+name = "soard-backup-night"
+binding = "NIGHT"
+class_name = "Night"
+limits = { steps = 25000 }
+
+[[durable_objects.bindings]]
+name = "STATE"
+class_name = "BackupState"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BackupState"]
+
+# The backup's own bucket: each copy waits here, encrypted, until it's in both homes
+[[r2_buckets]]
+binding = "STAGING"
+bucket_name = "soard-backup-staging"
+
+# The spare database the weekly restore drill restores into (and empties again)
+[[d1_databases]]
+binding = "DRILL"
+database_name = "soard-backup-drill"
+database_id = "46311ae2-716e-4121-b371-d27a88ec3ba7"
+
+[observability]
+enabled = true
