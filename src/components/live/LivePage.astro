@@ -616,27 +616,28 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
        name, with a long bar of controls and most of the screen empty): the site's header slimmer for the while, the
        picture as tall as the screen leaves with its controls in the rail beside it (LiveStage), and beside them the
        kid's name with "Live" and the messages, as tall as the picture. The design, Fund the next room and Share are
-       further down, as on a phone held upright ── */
-    :global(html:has(.hero[data-party] [data-stage][data-rail])) { --header-height: 52px; }
-    :global(html:has(.hero[data-party] [data-stage][data-rail]) .site-header .logo-img) { height: 60px; max-height: 60px; transform: translateY(calc((60px - var(--header-height)) / 6)); }
-    :global(.hero[data-party]:has([data-stage][data-rail])) { padding-top: 10px; padding-bottom: 24px; }
-    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-inner {
+       further down, as on a phone held upright. "That's the reveal!" keeps this layout, the design beside the note in
+       the rail's place (LiveStage), for those who watched and those arriving after the end alike ── */
+    :global(html:has(.hero[data-party] :is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) { --header-height: 52px; }
+    :global(html:has(.hero[data-party] :is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait'])) .site-header .logo-img) { height: 60px; max-height: 60px; transform: translateY(calc((60px - var(--header-height)) / 6)); }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) { padding-top: 10px; padding-bottom: 24px; }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) .hero-inner {
       --side-fh: calc(var(--live-vh, 100svh) - var(--header-height) - 10px - 10px);
       grid-template-columns: auto minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto;
       grid-template-areas: 'frame title' 'frame party' 'ctas ctas'; column-gap: 20px; align-items: start; text-align: left;
     }
-    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-frame { grid-area: frame; width: auto; margin: 0; --fh: var(--side-fh); }
-    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-titlerow { grid-area: title; justify-content: space-between; text-align: left; margin: 0 0 8px; }
-    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-onair:not([hidden]) {
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) .hero-frame { grid-area: frame; width: auto; margin: 0; --fh: var(--side-fh); }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) .hero-titlerow { grid-area: title; justify-content: space-between; text-align: left; margin: 0 0 8px; }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) .hero-onair:not([hidden]) {
       flex: none; display: inline-flex; align-items: center; gap: 7px; height: 26px; margin: 0; padding: 0 10px; border-radius: 100px;
       background: #fff; border: 1px solid var(--c-border); font-size: 11px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--c-text);
     }
     .hero-onair__dot { position: relative; width: 8px; height: 8px; border-radius: 50%; background: var(--c-yellow); }
     .hero-onair__n { color: var(--c-text-muted); letter-spacing: 0.04em; }
     .hero-onair__n:empty { display: none; }
-    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-party { grid-area: party; margin: 0; height: calc(var(--side-fh) - 36px); display: flex; flex-direction: column; min-height: 0; }
-    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-status { display: none; }
-    :global(.hero[data-party]:has([data-stage][data-rail])) .hero-ctas { grid-area: ctas; margin-top: 20px; justify-content: flex-start; }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) .hero-party { grid-area: party; margin: 0; height: calc(var(--side-fh) - 36px); display: flex; flex-direction: column; min-height: 0; }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) .hero-status { display: none; }
+    :global(.hero[data-party]:has(:is([data-stage][data-rail], [data-stage][data-ended][data-orientation='portrait']))) .hero-ctas { grid-area: ctas; margin-top: 20px; justify-content: flex-start; }
   }
   /* The Theater's story column (above): on a tall screen the whole story; on a short one, first the small pictures
      step aside, then the sentence */
@@ -831,6 +832,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
       // The live video still playing the broadcast's last seconds, or "That's the reveal!" up: the page draws itself again
       // (decide keeps it live meanwhile, and keeps the video's place for the note)
       onEnd: () => { if (rendered) render(last, lastMeta); },
+      // "That's the reveal!" coming up as the live video plays its last frame: the page changes shape with it (the rail
+      // gives way to the design beside the note, the name centred), so it glides there (morph)
+      reshape: (end) => { if (rendered) morph(end); else end(); },
       // The hero lays itself out around the video's real shape
       onShape: (orientation, party) => { hero.dataset.orientation = orientation; setAttr(hero, 'data-party', party); },
       // With the video's controls in its rail, "Live" and the number watching are the page's to say: after "Live now"
@@ -968,7 +972,9 @@ const SHARE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         if (was !== 'loading' && was !== 'live' && display === 'live') toTheReveal();
       };
       if (morphDraw) { morphDraw = draw; return; }
-      if (rendered && decide(state).party !== hero.hasAttribute('data-party')) morph(draw); else draw();
+      // (and when this drawing brings up "That's the reveal!", which changes the stage's shape: see reshape above)
+      const next = rendered ? decide(state) : null;
+      if (next && (next.party !== hero.hasAttribute('data-party') || (next.party && !stage.ended && stage.endsWith(next.view as 'idle' | 'upcoming' | 'live' | 'replay')))) morph(draw); else draw();
     }
 
     // ── The reveal starts with the page open: everyone is brought up to the video ──
