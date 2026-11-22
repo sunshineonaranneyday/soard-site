@@ -9,8 +9,8 @@ import { buildSync } from 'esbuild';
 
 const load = (entry) => import(`data:text/javascript,${encodeURIComponent(buildSync({ entryPoints: [entry], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent', packages: 'external' }).outputFiles[0].text)}`);
 const { formatWhen, relativeUntil, revealLabel, daysUntil, dayWords } = await load('src/utils/live-when.ts');
-const { plannedText, betweenText, ctasThatApply, ctaPicks, momentWords, afterReveal } = await load('src/utils/live-hero-text.ts');
-const { firstView, messagesInSection, messageHtml, pastFirst, onRequest, RETIRED_SLATE } = await load('functions/live/[[path]].js');
+const { plannedText, betweenText, ctasThatApply, ctaPicks, momentWords, afterReveal, watchWords } = await load('src/utils/live-hero-text.ts');
+const { firstView, addFirstView, messagesInSection, messageHtml, pastFirst, onRequest, RETIRED_SLATE } = await load('functions/live/[[path]].js');
 
 const NOW = Date.parse('2026-11-10T15:00:00Z'); // Tuesday 10 AM Eastern
 const DYLAN = '2026-11-18T21:00:00.000Z';       // Wednesday 4 PM Eastern
@@ -62,9 +62,13 @@ test('which view the server draws first: as the page script will', () => {
   assert.equal(firstView({ state, pub, pageKid: '', tz, now: NOW }).status, 'We go live Wednesday, November 18 at 4:00 PM EST, in 8 days.');
   // Max's page while Dylan's is scheduled: between reveals, naming Max's
   const rows = [{ slug: 'max', name: 'Max', confirmed: true, date: '2026-11-20', time: '16:00', startsAt: '2026-11-20T21:00:00.000Z' }];
-  assert.deepEqual(firstView({ state, pub, pageKid: 'max', rows, tz, now: NOW }), { view: 'idle', eyebrow: null, status: "Max's reveal is Friday, November 20 at 4:00 PM EST.", badge: '' });
-  // The photo's badge, as the stage paints it before the watch party (none between reveals)
-  assert.equal(firstView({ state, pub, pageKid: 'dylan-2026', tz, now: NOW }).badge, 'Live in 8 days');
+  assert.deepEqual(firstView({ state, pub, pageKid: 'max', rows, tz, now: NOW }), {
+    view: 'idle', eyebrow: null, status: "Max's reveal is Friday, November 20 at 4:00 PM EST.", badge: '',
+    watch: { when: 'Friday, November 20 at 4:00 PM EST', sub: '', today: false },
+  });
+  // Nothing on the photo before a reveal any more (no "Live in 8 days" badge): the watch card says when
+  assert.equal(firstView({ state, pub, pageKid: 'dylan-2026', tz, now: NOW }).badge, '');
+  assert.deepEqual(firstView({ state, pub, pageKid: 'dylan-2026', tz, now: NOW }).watch, { when: 'Wednesday, November 18 at 4:00 PM EST', sub: '', today: false });
   // The watch party has its own first paint; a live reveal without a video is the script's
   assert.equal(firstView({ state, pub, pageKid: 'dylan-2026', party: { mode: 'starting' }, tz, now: NOW }), null);
   assert.equal(firstView({ state: { ...state, phase: 'live' }, pub, pageKid: 'dylan-2026', tz, now: NOW }), null);
@@ -152,4 +156,70 @@ test('the retired starting-soon screen answers an empty, see-through page at its
     assert.doesNotMatch(html, /<script|<img|<video|<iframe/, path);
   }
   for (const path of ['/live/', '/live/dylan-2026/', '/live/slater/']) assert.equal(RETIRED_SLATE.test(path), false, path);
+});
+
+test('the watch card before a reveal: where and when to watch it (Peter, Nov 19 2026: "more obvious than just text")', () => {
+  const tz = 'America/New_York';
+  const day = Date.parse('2026-11-18T20:52:00Z'); // 3:52 PM Eastern on the day
+  // On the day: today, and how long to go
+  assert.deepEqual(watchWords({ view: 'upcoming', scheduledAt: DYLAN, pageKid: 'dylan-2026', tz, now: day }), { when: 'Today at 4:00 PM EST', sub: 'in 8 minutes', today: true });
+  // The day before: tomorrow, no countdown
+  assert.deepEqual(watchWords({ view: 'upcoming', scheduledAt: DYLAN, pageKid: '', tz, now: Date.parse('2026-11-17T15:00:00Z') }), { when: 'Tomorrow at 4:00 PM EST', sub: '', today: false });
+  // Its time come, the camera not on yet; then running late
+  assert.deepEqual(watchWords({ view: 'upcoming', scheduledAt: DYLAN, pageKid: '', tz, now: Date.parse(DYLAN) + 60e3 }), { when: 'Any moment now', sub: 'Stay right here', today: true });
+  assert.equal(watchWords({ view: 'upcoming', scheduledAt: DYLAN, pageKid: '', tz, now: Date.parse(DYLAN) + 31 * 60e3 }).when, 'Running a little late');
+  // No time set for the broadcast: the sentence, as before
+  assert.equal(watchWords({ view: 'upcoming', scheduledAt: null, pageKid: '', tz, now: NOW }), null);
+  // Between reveals: a child's own page, from the schedule (a set day and time, a time still to come, a third of a month)
+  const max = { slug: 'max', name: 'Max', confirmed: true, date: '2026-11-20', time: '16:00', startsAt: '2026-11-20T21:00:00.000Z' };
+  const noTime = { slug: 'ava', name: 'Ava', confirmed: true, date: '2026-11-24', time: null, startsAt: '2026-11-24T05:00:00.000Z' };
+  const colin = { slug: 'colin', name: 'Colin', confirmed: false, window: { label: 'early December' } };
+  const rows = [max, noTime, colin];
+  assert.deepEqual(watchWords({ view: 'idle', scheduledAt: null, pageKid: 'max', upcoming: rows, tz, now: Date.parse('2026-11-20T15:00:00Z') }), { when: 'Today at 4:00 PM EST', sub: 'in 6 hours', today: true });
+  assert.deepEqual(watchWords({ view: 'idle', scheduledAt: null, pageKid: 'ava', upcoming: rows, tz, now: NOW }), { when: 'Tuesday, November 24', sub: 'Time to come', today: false });
+  assert.deepEqual(watchWords({ view: 'idle', scheduledAt: null, pageKid: 'colin', upcoming: rows, tz, now: NOW }), { when: 'Early December', sub: 'Day and time to come', today: false });
+  // A child's reveal over and the broadcast moved on to the next one, the schedule still listing it for the rest of its day:
+  // no "Watch it live" for it (found in review: 9 PM after Dylan's reveal, with Max's scheduled)
+  const dylan = { slug: 'dylan-2026', name: 'Dylan', confirmed: true, date: '2026-11-18', time: '16:00', startsAt: DYLAN };
+  assert.equal(watchWords({ view: 'idle', scheduledAt: null, pageKid: 'dylan-2026', upcoming: [dylan, max], tz, now: Date.parse('2026-11-19T02:00:00Z') }), null);
+  assert.equal(watchWords({ view: 'idle', scheduledAt: null, pageKid: 'dylan-2026', upcoming: [dylan, max], tz, now: Date.parse(DYLAN) + 5 * 60e3 }), null);
+  assert.equal(watchWords({ view: 'idle', scheduledAt: null, pageKid: 'dylan-2026', upcoming: [dylan, max], tz, now: Date.parse(DYLAN) - 5 * 60e3 }).sub, 'in 5 minutes');
+  // /live/ between reveals (its frame lists what's coming up), a child not on the schedule, during and after a reveal: none
+  assert.equal(watchWords({ view: 'idle', scheduledAt: null, pageKid: '', upcoming: rows, tz, now: NOW }), null);
+  assert.equal(watchWords({ view: 'idle', scheduledAt: null, pageKid: 'dylan-2026', upcoming: rows, tz, now: NOW }), null);
+  for (const view of ['live', 'replay']) assert.equal(watchWords({ view, scheduledAt: DYLAN, pageKid: 'dylan-2026', upcoming: rows, tz, now: NOW }), null);
+});
+
+test('the server writes the watch card from the first paint, the sentence hidden, nothing on the photo', async () => {
+  // (Node has no HTMLRewriter: each handler is run on a stand-in element, as tests/live-remind.test.mjs does)
+  class El {
+    constructor(attrs = {}) { this.attrs = new Map(Object.entries(attrs)); this.text = null; }
+    getAttribute(n) { return this.attrs.has(n) ? this.attrs.get(n) : null; }
+    hasAttribute(n) { return this.attrs.has(n); }
+    setAttribute(n, v) { this.attrs.set(n, String(v)); }
+    removeAttribute(n) { this.attrs.delete(n); }
+    setInnerContent(c) { this.text = c; }
+  }
+  const run = async (first) => {
+    const handlers = [];
+    globalThis.HTMLRewriter = class { on(sel, h) { handlers.push([sel, h]); return this; } transform(res) { return res; } };
+    try { await addFirstView(new Response('<html></html>', { headers: { 'content-type': 'text/html' } }), first); } finally { delete globalThis.HTMLRewriter; }
+    return (sel, attrs) => { const e = new El(attrs); for (const [s, h] of handlers) if (s === sel) h.element(e); return e; };
+  };
+  const state = { phase: 'scheduled', kidSlug: 'dylan-2026', scheduledAt: DYLAN };
+  const el = await run(firstView({ state, pub: { kidSlug: 'dylan-2026' }, pageKid: 'dylan-2026', tz: 'America/New_York', now: Date.parse('2026-11-18T20:52:00Z') }));
+  const card = el('#live-hero [data-live="watch"]', { hidden: '' });
+  assert.equal(card.hasAttribute('hidden'), false, 'the card shown');
+  assert.equal(card.hasAttribute('data-today'), true, "with the day's ring");
+  assert.equal(el('#live-hero [data-live="watch-when"]').text, 'Today at 4:00 PM EST');
+  assert.equal(el('#live-hero [data-live="watch-sub"]').text, 'in 8 minutes');
+  const status = el('#live-hero [data-live="status"]');
+  assert.equal(status.hasAttribute('hidden'), true, 'the sentence hidden, as the script keeps it');
+  assert.equal(status.text, 'We go live today at 4:00 PM EST, in 8 minutes.');
+  assert.equal(el('#live-hero [data-s="badge"]').hasAttribute('hidden'), true, 'no badge');
+  // No time set for the broadcast: the sentence, and no card
+  const plain = await run(firstView({ state: { ...state, scheduledAt: null }, pub: { kidSlug: 'dylan-2026' }, pageKid: 'dylan-2026', tz: 'America/New_York', now: NOW }));
+  assert.equal(plain('#live-hero [data-live="watch"]', { hidden: '' }).hasAttribute('hidden'), true);
+  assert.equal(plain('#live-hero [data-live="status"]').hasAttribute('hidden'), false);
+  assert.equal(plain('#live-hero [data-live="status"]').text, 'A reveal is on the calendar.');
 });

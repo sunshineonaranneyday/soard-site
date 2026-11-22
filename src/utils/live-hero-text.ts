@@ -9,9 +9,9 @@
  * says the same thing from the first paint and nothing moves when the script
  * takes over. tz left out: the browser's own zone.
  */
-import { formatWhen, relativeUntil, revealLabel } from './live-when';
+import { formatWhen, relativeUntil, revealLabel, daysUntil } from './live-when';
 import { runningLate, replayOverdue, remindersUsable, remindPromise } from './live-banner';
-import { revealWhen, type UpcomingReveal } from './reveals-client';
+import { revealWhen, revealDay, type UpcomingReveal } from './reveals-client';
 import type { ReminderOptions } from './live-client';
 
 /** The hero's lead when no reveal is set (LivePage.astro); /live/'s share card says the same */
@@ -77,9 +77,51 @@ export function momentWords(f: MomentFacts): { eyebrow: string; status: string; 
       badge: f.hasPlayer || waiting ? 'Processing' : 'Ended',
     };
   }
-  const rel = relativeUntil(f.scheduledAt, now, f.tz);
-  const badge = rel ? `Live ${rel}` : 'Coming up';
-  return { ...plannedText(f.scheduledAt, f.tz, now), badge };
+  // (no badge on the photo before a reveal: the watch card says when, and the photo has its play button: watchWords)
+  return { ...plannedText(f.scheduledAt, f.tz, now), badge: '' };
+}
+
+// ── The watch card ──────────────────────────────────────────────────
+
+export interface WatchWords {
+  /** "Today at 4:00 PM EST", "Friday, November 20 at 4:00 PM EST", "Early December", "Any moment now" */
+  when: string;
+  /** "in 8 minutes" on the day itself, "Stay right here" once it's time ('' for none) */
+  sub: string;
+  /** The reveal is today (the card's play mark gets its ring) */
+  today: boolean;
+}
+
+const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/**
+ * Where and when to watch, before a reveal: "Watch it live, right here" over the day and time, with how long to go on
+ * the day itself (Peter, Nov 19 2026: "we need to make the play or watch reveal more obvious than just text", then "Push
+ * the card only": nothing on the photo). LivePage shows it in place of the status sentence; the server
+ * (functions/live/[[path]].js) writes the same into the page before it goes out. For a reveal coming up (upcoming), and
+ * on a child's own page between reveals once their reveal is on the schedule; null otherwise: the status sentence
+ * as before (/live/ between reveals, which lists what's coming up in the frame; during and after a reveal)
+ */
+export function watchWords(f: { view: string; scheduledAt: string | null; pageKid: string; upcoming?: UpcomingReveal[] | null; tz?: string; now?: number }): WatchWords | null {
+  const now = f.now ?? Date.now();
+  const dated = (iso: string): WatchWords => {
+    const today = daysUntil(iso, f.tz, now) === 0;
+    return { when: cap(formatWhen(iso, f.tz, now)), sub: today ? relativeUntil(iso, now, f.tz) : '', today };
+  };
+  if (f.view === 'upcoming') {
+    if (!f.scheduledAt) return null;
+    if (Date.parse(f.scheduledAt) > now) return dated(f.scheduledAt);
+    return { when: runningLate(f.scheduledAt, now) ? 'Running a little late' : 'Any moment now', sub: 'Stay right here', today: true };
+  }
+  if (f.view !== 'idle' || !f.pageKid) return null;
+  const mine = (f.upcoming || []).find((r) => r.slug === f.pageKid);
+  if (!mine) return null;
+  if (!mine.confirmed) return { when: cap(mine.window.label), sub: 'Day and time to come', today: false };
+  if (!mine.time) return { when: revealDay(mine, 'long', f.tz), sub: 'Time to come', today: false };
+  // Its time gone by and the broadcast not this child's (the schedule keeps a reveal through its day; the broadcast moves
+  // on to the next reveal within hours of the end): never "Watch it live" for a reveal that's over. The sentence says when
+  if (Date.parse(mine.startsAt) <= now) return null;
+  return dated(mine.startsAt);
 }
 
 /**
