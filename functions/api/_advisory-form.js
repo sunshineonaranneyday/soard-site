@@ -411,6 +411,32 @@ export function readName(full) {
   const letters = (p, { titles = false, singles = false } = {}) => joinPieces(p.split(' '), singles)
     .every((t) => afterName(t, { comma: true }) || capsLetters(t) || /\p{Ll}\p{Lu}\.?$/u.test(t) || (titles && isTitle(t) && !isRank(t)));
   const what = (p) => p.split(' ').some((t) => NOT_A_FIRST_NAME.test(bare(t)));
+  // Round 23 (finding 3): after a whole name and its comma, the other one of a couple named after an "&" or "and", with
+  // only the first one's letters, title or generation between ("Jordan Ames, MD & Amy Ames, PhD", "Jordan Ames, Jr. &
+  // Amy", "Jordan Ames, MD, PhD and Dr. Amy Ames", nothing at all: "Jordan Ames, & Amy Ames"), is read as theirs, as
+  // "Jordan Ames MD & Amy Ames PhD" reads them: whole as typed, else their first name with the first one's family name
+  // ("Jordan Ames, MD & Amy" is Amy Ames). Their own letters after it, or after another comma, are never part of it.
+  // Nobody with no first name to match them on ("& Mrs. Ames", "& family", "& Associates"), and never past words that
+  // aren't letters ("Jordan Ames, Atlanta & Amy Ames", "Jordan Ames, she/her & Amy"). → { whole, could } or null. Only
+  // the other one: the first one's reading, the name shown and the address stay round 22's (the whole name before the comma)
+  const partnerPast = (rest, family) => {
+    let at = -1;
+    let k = -1;
+    for (let i = 0; i < rest.length && at < 0; i++) { k = rest[i].split(' ').findIndex((x) => /^(&|and)$/i.test(x)); if (k >= 0) at = i; }
+    if (at < 0) return null;
+    const ws = rest[at].split(' ');
+    const before = [...rest.slice(0, at), ws.slice(0, k).join(' ')].filter(Boolean);
+    if (!before.every((p) => letters(p, { titles: true, singles: true }))) return null;
+    const them = ws.slice(k + 1).join(' ');
+    if (!them || what(them) || placeOrOrg(them)) return null;
+    const [named, theirTitles] = lead(them);
+    const [own, , could] = trail(named, { titles: theirTitles });
+    // (a title and one word is a family name, "& Mrs. Ames", "& Dr. Ames", as it is without the comma; a title alone,
+    // letters alone, "the", or a word for someone unnamed, "& wife", "& the Ames family", is nobody to match)
+    if (!own.length || (theirTitles.length && own.length === 1) || isTitle(own[0]) || /^(?:the|my|our)$/i.test(own[0]) || own.some((x) => NOT_NAMED.test(bare(x))) || letters(own.join(' '))) return null;
+    const out = own.length > 1 ? { whole: own, could: could || null } : family.length ? { whole: [own[0], ...family], could: null } : null;
+    return out && { ...out, before: before.join(' ') };
+  };
   // (one first name: after a family name in parts, more words are a company or a place as often as two first names:
   // "Van Jones, Dream Corps", "Del Taylor, Home Depot", never "Dream Corps Van Jones")
   const [head, t1, pair1] = lead(parts[0]);
@@ -425,8 +451,14 @@ export function readName(full) {
   const wholeName = !!pair1 || (family.length > 1 && !FAMILY_START.test(bare(family[0])));
   // What's after the comma, its titles set apart ("Quill, Pastor Jordan" is judged on "Jordan")
   const [tail, t2, pair2] = parts.length > 1 ? lead(parts[1], { tail: true, lone: oneFamily }) : [[], [], null];
-  const after = tail.join(' ');
-  const lettersAfter = !!after && letters(after, { titles: !oneFamily, singles: wholeName });
+  // Round 23: after a whole name, the other one of a couple past the first one's letters (partnerPast): what's after the
+  // comma is then those letters, never a first name ("Zed Ames, MD & Amy Ames" is Zed Ames, MD, as "Zed Ames, MD" is,
+  // never "MD Ames"); their family name, when they have none of their own, the first one's words after their given name or
+  // initials
+  const givenOf = (ws) => { let n = 0; while (n < ws.length - 1 && initials(ws[n])) n++; return Math.max(n, 1); };
+  const past = !pair1 && wholeName && parts.length > 1 ? partnerPast(parts.slice(1), family.slice(givenOf(family))) : null;
+  const after = past ? past.before : tail.join(' ');
+  const lettersAfter = !!past || (!!after && letters(after, { titles: !oneFamily, singles: wholeName }));
   // Round 22 (finding 5): a place or an organization right after the comma ("Grace Church", "Sandy Springs", "Mercy
   // Hospital", "Atlanta") is never a first name, whatever is before it ("Ames, Grace Church" is never Grace Church Ames).
   // (More after another comma is rule 8's, below: "Ames, Jordan, Atlanta" is Jordan Ames, kept in the order typed)
@@ -465,9 +497,10 @@ export function readName(full) {
     const withTitles = oneFamily && t2.length > 0 && (!after || lettersAfter);
     const familyOnly = parts.length > 1 && withTitles;
     // (a couple after the comma, "Garcia Lopez, Maria & Jose": the other one by their name with the family name too)
-    const partnerWhole = pair1?.whole || (either && pair2?.length && !pair2.familyOnly ? [...pair2, ...words] : null);
+    // (round 23: and after a whole name, the other one after its letters: partnerPast, above)
+    const partnerWhole = pair1?.whole || (either && pair2?.length && !pair2.familyOnly ? [...pair2, ...words] : null) || past?.whole || null;
     // (and their whole name with a last word kept that might be a family name in capitals, as `could` is the first one's)
-    const partnerCould = pair1?.whole ? pair1.could || null : null;
+    const partnerCould = pair1?.whole ? pair1.could || null : past?.could || null;
     if (either) {
       // Round 21 (finding 6): such a name is all of it, as typed, and it's matched as all of it ("De La Cruz, Jose" is
       // never asked about "De La Cruz, Maria"). The words before the comma alone (`apart`) are matched only against a name

@@ -494,21 +494,31 @@ export async function setHostedLink(DB, id, giveUrl, { by = '', now = Date.now()
 
 // ─── Terms ──────────────────────────────────────────────────────────
 
+/** A term as its row has it (advisory_terms), else the group's dates. { started, ends, renewedOn, left } */
+const termFrom = (r, settings) => ({ started: r?.started_on || settings.termStart, ends: r?.ends_on || settings.termEnd, renewedOn: r?.renewed_on || '', left: r?.left_on || '' });
 /** Each advisor's term: their row, else the group's dates. { started, ends, renewedOn, left } */
 export async function termOf(DB, slug, settings) {
   await ensureAdvisory(DB);
-  const r = await DB.prepare('SELECT * FROM advisory_terms WHERE slug = ?').bind(slug).first();
-  return { started: r?.started_on || settings.termStart, ends: r?.ends_on || settings.termEnd, renewedOn: r?.renewed_on || '', left: r?.left_on || '' };
+  return termFrom(await DB.prepare('SELECT * FROM advisory_terms WHERE slug = ?').bind(slug).first(), settings);
 }
 export async function allTerms(DB, settings) {
   await ensureAdvisory(DB);
   const rows = (await DB.prepare('SELECT * FROM advisory_terms').all()).results || [];
   const by = Object.fromEntries(rows.map((r) => [r.slug, r]));
-  return (slug) => {
-    const r = by[slug];
-    return { started: r?.started_on || settings.termStart, ends: r?.ends_on || settings.termEnd, renewedOn: r?.renewed_on || '', left: r?.left_on || '' };
-  };
+  return (slug) => termFrom(by[slug], settings);
 }
+/**
+ * A member's term written by a guarded statement (stillTheirs), and the row it wrote, from that statement itself
+ * (RETURNING): → writeAsMember's result, { meta, saved }, saved null when the guard let nothing through. What a term
+ * write answers with, and what the notice to whoever runs the group says, is this row, never one read again by the
+ * address afterwards: during a swap of two members' addresses that read is the other member's term, and after a rename
+ * nobody's, the group's dates (Advisory Board QA round 23)
+ */
+const TERM_SAVED = ' RETURNING started_on, ends_on, renewed_on, left_on';
+const termWritten = async (stmt) => {
+  const saved = await stmt.first();
+  return { meta: { changes: saved ? 1 : 0 }, saved };
+};
 /** How many days before a term ends the page offers Renew */
 export const RENEW_DAYS = 60;
 export const canRenew = (term, today) => {
@@ -518,11 +528,11 @@ export const canRenew = (term, today) => {
 };
 /**
  * Another year, at the address they have as it's written (./_member-write.js: their term read there, each try). → their
- * term, and `landedOn`: whose it is, as the write found them
+ * term as that write saved it (termWritten), and `landedOn`: whose it is, as the write found them
  */
 export async function renew(DB, who, settings, { now = Date.now() } = {}) {
   const today = todayEastern(now);
-  const { me } = await writeAsMember(DB, who, async (me) => {
+  const { me, result } = await writeAsMember(DB, who, async (me) => {
     // (their term read with their record, in one statement: renamed since, it's read again at their new address, never
     // taken for no term at all and refused)
     const row = await DB.prepare('SELECT tm.started_on AS started_on, tm.ends_on AS ends_on, tm.renewed_on AS renewed_on, tm.left_on AS left_on, (SELECT 1 FROM team t WHERE t.slug = ? AND t.data = ?) AS here FROM (SELECT 1) LEFT JOIN advisory_terms tm ON tm.slug = ?')
@@ -531,25 +541,26 @@ export async function renew(DB, who, settings, { now = Date.now() } = {}) {
     const term = { started: row.started_on || settings.termStart, ends: row.ends_on || settings.termEnd, renewedOn: row.renewed_on || '', left: row.left_on || '' };
     if (!canRenew(term, today)) throw err('Renewing opens closer to the end of your term', 409);
     const ends = plusYear(term.ends > today ? term.ends : today);
-    return DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on) SELECT t.slug, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, renewed_on = excluded.renewed_on, left_on = NULL`)
-      .bind(term.started, ends, today, me.slug, me.data).run();
+    return termWritten(DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on) SELECT t.slug, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, renewed_on = excluded.renewed_on, left_on = NULL${TERM_SAVED}`)
+      .bind(term.started, ends, today, me.slug, me.data));
   });
-  return { ...await termOf(DB, me.slug, settings), landedOn: landedOn(me) };
+  return { ...termFrom(result.saved, settings), landedOn: landedOn(me) };
 }
 /**
  * Staff set a member's term (Members). Written only while the address is an Advisory Board member's and no rename is
- * moving records off it (./_member-write.js): never a term left at an address nobody has
+ * moving records off it (./_member-write.js): never a term left at an address nobody has. → their term as that write
+ * saved it (termWritten)
  */
 export async function setTerm(DB, slug, { ends, left }, settings) {
   await ensureAdvisory(DB);
   if (ends !== undefined && !isDate(ends)) throw err('Pick a date');
   // (someone who left keeps their term row: a staff change to it still lands, at their address now)
-  const { me } = await writeAsMember(DB, slug, async (me) => {
+  const { result } = await writeAsMember(DB, slug, async (me) => {
     const term = await termOf(DB, me.slug, settings);
-    return DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) SELECT t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on`)
-      .bind(term.started, ends ?? term.ends, term.renewedOn || null, left === undefined ? term.left || null : left || null, me.slug, me.data).run();
+    return termWritten(DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) SELECT t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on${TERM_SAVED}`)
+      .bind(term.started, ends ?? term.ends, term.renewedOn || null, left === undefined ? term.left || null : left || null, me.slug, me.data));
   }, { fits: (p) => p.group === 'advisory', gone: GONE_STAFF, moving: MOVING_STAFF });
-  return termOf(DB, me.slug, settings);
+  return termFrom(result.saved, settings);
 }
 
 // ─── Papers and words ───────────────────────────────────────────────

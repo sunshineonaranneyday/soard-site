@@ -382,7 +382,8 @@ await clickText(page, '.ava-status button', /In conversation/);
 await page.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null);
 {
   const asked = await text(page, '.ava-dialog');
-  ok(/Mark Jordan Avery’s application In conversation\?/.test(asked) && /stays on the Advisory Board, with their sign-in, reveal invites and advisory@: Move to alumni on their People page is how someone leaves/.test(asked), `moving off Joined asks first, and says how someone leaves (${asked})`);
+  /* r23: emails are off in this run, so advisory@ is theirs once Advisory Board emails are on, never now (QA round 23, minor 4) */
+  ok(/Mark Jordan Avery’s application In conversation\?/.test(asked) && /stays on the Advisory Board, with their sign-in and reveal invites, and on advisory@soardcharity\.com once Advisory Board emails are on: Move to alumni on their People page is how someone leaves/.test(asked), `moving off Joined asks first, and says how someone leaves (${asked})`);
   await clickText(page, '.ava-dialog button', /^Keep it Joined$/); await sleep(300);
   ok((await getAdvisoryApplication(DB, jordan.id)).status === 'joined', 'Keep it Joined changes nothing');
   // Their sign-in email taken off People: the box never says they have a sign-in

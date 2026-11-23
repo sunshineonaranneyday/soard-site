@@ -33,6 +33,12 @@ const STATUS_HINT = {
   'not-now': 'Not moving forward for now',
 };
 const APPLY_PAGE = '/advisory-board/apply/';
+/**
+ * advisory@soardcharity.com as every box here says it: the group fills in by itself only with the Advisory Board's emails
+ * on (functions/api/_advisory-heartbeat.js; Members: "The group fills in by itself once emails are on"), so with them off
+ * it's theirs "once Advisory Board emails are on", never now (Advisory Board QA round 23)
+ */
+const groupAddress = (emailsOn) => `advisory@soardcharity.com${emailsOn ? '' : ' once Advisory Board emails are on'}`;
 
 async function call(path, body) {
   const r = await fetch(path, body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' });
@@ -425,9 +431,9 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
       ? 'As a different person, they’d need their own on their People page to sign in and get reveal invites.'
       : 'Add their own on their People page so they can sign in and get reveal invites: their sign-in email goes once it’s there.'}</p>` : null;
   // A test (its name starts with Test): adding it makes a real Advisory Board member, so it's said first
-  const testLine = app.isTest ? html`<p class="ava-note"><strong>This looks like a test application</strong> (its name starts with “Test”). Adding it makes a real Advisory Board member who gets reveal invites and advisory@ emails. If it was only a test, cancel and delete the application instead.</p>` : null;
+  const testLine = app.isTest ? html`<p class="ava-note"><strong>This looks like a test application</strong> (its name starts with “Test”). Adding it makes a real Advisory Board member who gets reveal invites and the emails to ${groupAddress(boardEmails)}. If it was only a test, cancel and delete the application instead.</p>` : null;
   const softLine = soft && shot ? html`<p class="ava-note">Their headshot is ${shot.width} × ${shot.height} pixels, so it may look a little soft on the site.</p>` : null;
-  const advisoryAt = `advisory@soardcharity.com${boardEmails ? '' : ' once Advisory Board emails are on'}`;
+  const advisoryAt = groupAddress(boardEmails);
   // Their sign-in email: now with the emails on, else once they're on; never again to someone who's had it
   const welcomes = (to, had = false) => (!to || had ? '' : boardEmails ? `emails ${to} how to sign in to the Advisory Board page` : `emails ${to} how to sign in once Advisory Board emails are turned on (they’re off now)`);
   const welcomeLine = (to, had) => { const w = welcomes(to, had); return w ? html`<li>${w},</li>` : null; };
@@ -944,7 +950,7 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       footer=${html`
         <button class="btn btn-ghost" data-autofocus onClick=${() => setLeaving(null)}>Keep it Joined</button>
         <button class="btn btn-primary" onClick=${async () => { const to = leaving; setLeaving(null); await setStatus(to, { sure: true }); }}>Mark it ${statuses.find((s) => s.id === leaving)?.label}</button>`}>
-      <p>This only changes the application. ${linked ? `${linked.name} stays on the Advisory Board${linked.hasEmail ? ', with their sign-in, reveal invites and advisory@' : ''}: Move to alumni on their People page is how someone leaves.${linked.emailWhy ? ` Their email on file ${linked.emailWhy === 'group' ? 'is a SOARD group inbox' : linked.emailWhy === 'staff' ? 'is a SOARD address, which signs in as staff' : 'can’t be used to sign in'}, so they can’t sign in to the Advisory Board page until their own is on their People page.`
+      <p>This only changes the application. ${linked ? `${linked.name} stays on the Advisory Board${linked.hasEmail ? (boardEmails ? `, with their sign-in, reveal invites and ${groupAddress(true)}` : `, with their sign-in and reveal invites, and on ${groupAddress(false)}`) : ''}: Move to alumni on their People page is how someone leaves.${linked.emailWhy ? ` Their email on file ${linked.emailWhy === 'group' ? 'is a SOARD group inbox' : linked.emailWhy === 'staff' ? 'is a SOARD address, which signs in as staff' : 'can’t be used to sign in'}, so they can’t sign in to the Advisory Board page until their own is on their People page.`
         : linked.hasEmail === false ? ' They have no sign-in email on their People page, so they can’t sign in or get reveal invites until one is added.' : ''}` : 'Whoever it’s linked to on People isn’t changed.'}</p>
     <//>`}
     ${confirm === 'remove' && app && html`<${Dialog} title=${`Delete ${app.name}’s application?`} size="sm" busy=${busy === 'remove'} onClose=${() => setConfirm(null)}
