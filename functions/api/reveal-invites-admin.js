@@ -27,10 +27,11 @@
 import {
   ensureSchema, readConfig, writeConfig, reconcileJob, reconcileAll, sendTestInvite,
   listUpcoming, maybeSweep, maybeCheckGuests, boardRoster, setBoardEmail, refreshForBoardChange, DEFAULT_TEMPLATE, TEMPLATE_LIMITS,
-  allowedOrganizers, draftInviteEmailNow,
+  allowedOrganizers, draftInviteEmailNow, EMAIL_SAVE_DOWN,
 } from './_reveal-invites.js';
 import { readNudgeConfig, writeNudgeConfig, runNudges, maybeNudge, summarize, SANDBOX_JOB_ID } from './_reveal-nudges.js';
 import { logAudit } from './_audit.js';
+import { sayable } from './_board.js';
 import { readState, readConfig as readBroadcastConfig, ensureSchema as ensureBroadcastSchema } from './_broadcast.js';
 import { readScheduleRecord } from './_broadcast-schedule.js';
 import { kitConfigured } from './_kit.js';
@@ -229,7 +230,8 @@ export async function onRequestGet(context) {
       },
     });
   } catch (err) {
-    return Response.json({ ok: false, error: err.message }, { status: err.unread ? 503 : 500 });
+    // (a 503 is ours and in words; anything else is said in ours too, never the database's own text: Board QA round 11)
+    return Response.json({ ok: false, error: err.unread ? err.message : sayable(err) }, { status: err.unread ? 503 : 500 });
   }
 }
 
@@ -281,16 +283,22 @@ export async function onRequestPost(context) {
       return Response.json({ ok: result.project === 'redesigned', ...result, ...(result.id ? { url: `https://app.kit.com/campaigns/${result.id}` } : {}) });
     }
 
-    // A board member's or advisor's private reveal email (People → Board, Advisory): open invites follow right away
+    // A board member's or Advisory Board member's private reveal email (People → Board, Advisory): open invites follow
+    // right away. Everything the answer says is read before the save, so once it's saved no read after it can make the
+    // answer "nothing was changed" (Board QA round 11: the new email saved, the old one locked out, and that said); and
+    // what a person is told is our words (setBoardEmail's: an address that can't be used, or nothing changed), never the
+    // database's
     if (body.boardEmail && typeof body.boardEmail === 'object') {
       const slug = String(body.boardEmail.slug || '').trim();
-      const onBoard = (await boardRoster(env.DB)).find((m) => m.slug === slug);
+      const board = await boardRoster(env.DB);
+      const onBoard = board.find((m) => m.slug === slug);
       const member = onBoard || (await boardRoster(env.DB, 'advisory')).find((m) => m.slug === slug);
       if (!member) return fail('Not on the board or the Advisory Board on the website');
-      try { await setBoardEmail(env.DB, slug, body.boardEmail.email); } catch (e) { return fail(e.message, e.unread ? 503 : 400); }
+      let saved;
+      try { saved = await setBoardEmail(env.DB, slug, body.boardEmail.email); } catch (e) { return fail(e.status ? e.message : sayable(e), e.status || 500); }
       await logAudit(env.DB, { userEmail: me, action: 'updated', entityType: 'team', entitySlug: slug, entityName: `Reveal invite email for ${member.name}`, gitStatus: 'ok' }).catch(() => {});
       context.waitUntil(refreshForBoardChange(env));
-      return Response.json({ ok: true, board: await boardRoster(env.DB) });
+      return Response.json({ ok: true, board: board.map((m) => (m.slug === slug ? { ...m, email: saved.email } : m)) });
     }
 
     const patch = {};
@@ -329,6 +337,9 @@ export async function onRequestPost(context) {
     const updated = patch.template && body.updateExisting === true && config.enabled ? await reconcileAll(env, { rewrite: true }) : null;
     return Response.json({ ok: true, config, ...(updated ? { updated } : {}) });
   } catch (err) {
-    return Response.json({ ok: false, error: err.message }, { status: err.unread ? 503 : 500 });
+    // (a 503 is ours and in words; anything else is said in ours too, never the database's own text: Board QA round 11)
+    // (a board email's change stops before anything of it is written, its own failures said inside: said so)
+    if (body?.boardEmail && !err.unread) { console.error('[reveal-invites-admin] board email', err?.message || err); return fail(EMAIL_SAVE_DOWN, 503); }
+    return Response.json({ ok: false, error: err.unread ? err.message : sayable(err) }, { status: err.unread ? 503 : 500 });
   }
 }

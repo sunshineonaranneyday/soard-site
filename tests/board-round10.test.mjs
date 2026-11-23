@@ -203,7 +203,7 @@ const HELPERS = ['peopleRows', 'privateEmails', 'peopleWithEmails', 'activeBoard
  */
 const OPT_OUTS = {
   'functions/api/_board.js': { activeBoard: 1 }, // a meeting's roll follows People only when it's read; a failure keeps every roll as stored
-  'functions/api/_process-docs.js': { boardAdmins: 1, peopleRows: 1 }, // whose Drive to ask as; the review notice (nothing sent or marked)
+  'functions/api/_process-docs.js': { peopleRows: 1 }, /* r11: whose Drive to ask as is a sure read now (a failure keeps every Doc as it was and is looked at again), so only the review notice's stays */ // the review notice (nothing sent or marked)
   'functions/api/messages-admin.js': { organizerFor: 1 }, // a sample email's "from" line in a preview
 };
 const jsFiles = (dir) => readdirSync(dir).flatMap((f) => { const p = join(dir, f); return statSync(p).isDirectory() ? jsFiles(p) : p.endsWith('.js') ? [p] : []; });

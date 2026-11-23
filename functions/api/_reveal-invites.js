@@ -361,48 +361,66 @@ export async function boardRoster(DB, group = 'board') {
   return out.sort((a, b) => a.order - b.order || String(a.name).localeCompare(String(b.name)));
 }
 
-/** Save (or clear, with an empty email) a board member's private reveal email */
+/** Said when the email change couldn't be written: nothing of it was (one batch), so there's nothing to undo */
+export const EMAIL_SAVE_DOWN = 'We couldn’t save that just now, so nothing was changed. Please try again in a moment.';
+/**
+ * Save (or clear, with an empty email) a board member's private reveal email. Every read it needs is made first; then
+ * the address, the clean-up of the same address left by someone no longer on People, and, for a board member whose
+ * address changed, the signing chain's 'email-changed' event (it has the old address told: ./_board-sign.js
+ * maybeRunSigning) go in one batch, all of it or none (Board QA round 11: the address saved and its event lost left the
+ * old address never told). Whatever stops it is said in our words with nothing changed, never the database's own text:
+ * status 400 for an address that can't be used, a 503 (`unread`, as ./_board-roles.js readDown) for a read or a write
+ * that didn't answer. → { email } as saved (null: cleared)
+ */
 export async function setBoardEmail(DB, slug, email) {
-  await ensureSchema(DB);
+  const said = (message, status = 400) => Object.assign(new Error(message), { status });
+  const down = (err, words = EMAIL_SAVE_DOWN) => { console.error('[reveal-invites] board email', err?.message || err); return readDown(words, err); };
+  try { await ensureSchema(DB); } catch (err) { throw down(err); }
   const e = normEmail(email);
-  if (e && !isEmail(e)) throw new Error('That email doesn’t look right.');
+  if (e && !isEmail(e)) throw said('That email doesn’t look right.');
   // (each board member signs in with their own: an address already someone else's would sign one in as the other).
   // Someone else's means someone on People: a row left by a person no longer there (deleted before their email was
   // cleared with them) is nobody's, and goes
   // A check that couldn't run stops the save (never a pass: two people would sign in as one)
+  let noTeam = false;
   if (e) {
     let other = null;
     try {
       other = await DB.prepare('SELECT r.slug, t.data FROM reveal_board_emails r JOIN team t ON t.slug = r.slug WHERE lower(r.email) = ? AND r.slug != ? LIMIT 1').bind(e, slug).first();
     } catch (err) {
-      if (!/no such table: team/i.test(err?.message || '')) throw new Error('The site couldn’t check that email just now. Please try again in a moment.');
+      if (!/no such table: team/i.test(err?.message || '')) throw down(err, 'The site couldn’t check that email just now. Please try again in a moment.');
+      noTeam = true;
     }
     if (other) {
       const name = (() => { try { return JSON.parse(other.data || '{}').name || ''; } catch { return ''; } })();
-      throw new Error(`That email is already ${name || other.slug}’s. Each person signs in to the board page with their own.`);
+      throw said(`That email is already ${name || other.slug}’s. Each person signs in to the board page with their own.`);
     }
-    await DB.prepare('DELETE FROM reveal_board_emails WHERE lower(email) = ? AND slug != ? AND slug NOT IN (SELECT slug FROM team)').bind(e, slug).run()
-      .catch((err) => { if (!/no such table: team/i.test(err?.message || '')) throw err; });
   }
   // The address it had and whose it is, read for certain before anything is written: either not answering saves nothing
   // (never a changed address with its old one never told, for want of a read: Board QA round 10)
   const sure = (err) => { if (/no such table/i.test(err?.message || '')) return null; console.error('[reveal-invites] board email', err?.message || err); throw readDown(PEOPLE_DOWN, err); };
   const was = await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(slug).first().catch(sure);
-  const person = (was?.email && normEmail(was.email) !== e) ? await DB.prepare('SELECT data FROM team WHERE slug = ?').bind(slug).first().catch(sure) : null;
-  const r = e
-    ? await DB.prepare('INSERT OR REPLACE INTO reveal_board_emails (slug, email, updated_at) VALUES (?, ?, ?)').bind(slug, e, new Date().toISOString()).run()
-    : await DB.prepare('DELETE FROM reveal_board_emails WHERE slug = ?').bind(slug).run();
-  // A changed or cleared address (the one a board member signs in, and signs, with): in the signing record, and the
-  // old address is told by the heartbeat, without the new one (./_board-sign.js maybeRunSigning)
-  const onBoard = (() => { try { return JSON.parse(person?.data || '{}').group === 'board'; } catch { return false; } })();
-  if (was?.email && normEmail(was.email) !== e && onBoard) {
-    try {
+  const changed = !!was?.email && normEmail(was.email) !== e;
+  const person = changed ? await DB.prepare('SELECT data FROM team WHERE slug = ?').bind(slug).first().catch(sure) : null;
+  const d = (() => { try { return JSON.parse(person?.data || '{}') || {}; } catch { return {}; } })();
+  // The writes, made again for each try (the chain's place can be taken meanwhile: ./_board-sign.js appendEvents)
+  const writes = () => [
+    ...(e && !noTeam ? [DB.prepare('DELETE FROM reveal_board_emails WHERE lower(email) = ? AND slug != ? AND slug NOT IN (SELECT slug FROM team)').bind(e, slug)] : []),
+    e ? DB.prepare('INSERT OR REPLACE INTO reveal_board_emails (slug, email, updated_at) VALUES (?, ?, ?)').bind(slug, e, new Date().toISOString())
+      : DB.prepare('DELETE FROM reveal_board_emails WHERE slug = ?').bind(slug),
+  ];
+  try {
+    // A changed or cleared address of a board member (the one they sign in, and sign, with): written with its event in
+    // the signing record, or not at all
+    if (changed && d.group === 'board') {
+      await (await import('./_board.js')).ensureSchema(DB);
       const { appendEvents } = await import('./_board-sign.js');
-      const name = (await DB.prepare('SELECT name FROM team WHERE slug = ?').bind(slug).first().catch(() => null))?.name || '';
-      await appendEvents(DB, async () => ({ events: [{ kind: 'email-changed', slug, detail: { from: normEmail(was.email), to: e, name } }] }));
-    } catch { /* the address is saved either way */ }
-  }
-  return r;
+      await appendEvents(DB, async () => ({ stmts: writes(), events: [{ kind: 'email-changed', slug, detail: { from: normEmail(was.email), to: e, name: personName(d) || '' } }] }));
+    } else {
+      await DB.batch(writes());
+    }
+  } catch (err) { throw down(err); }
+  return { email: e || null };
 }
 
 /**

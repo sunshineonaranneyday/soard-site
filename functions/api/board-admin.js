@@ -73,7 +73,7 @@ import { sendInvite, deleteWithInvite, noteInviteChange, projectOf, inviteCheck,
 import { meetingName } from '../../public/admin/board-shared.js';
 import { readMinutesInto, undoMinutes, minutesKindNo } from './_board-minutes.js';
 import { activityOverview, memberActivity, deviceOf, accessIat } from './_board-activity.js';
-import { evidenceOf, exportYear } from './_board-sign.js';
+import { evidenceOf, exportYear, recordDown } from './_board-sign.js';
 import { sendTrouble } from './_broadcast-notify.js';
 // Where an admin's change to a signature came from: its evidence, under the admin's own name
 const evidence = (context) => evidenceOf(context, { deviceOf, accessIat });
@@ -238,8 +238,9 @@ export async function onRequestGet(context) {
       packetTo: recipients.length,
     });
   } catch (err) {
-    // (a signing record for an auditor is never one missing people: refused in People's words, as any other press is)
-    return q.has('record') ? fromError(err) : pageError(err);
+    // (a signing record for an auditor is never one missing people: refused in People's words, as any other press is;
+    // anything else that stopped it is said as nothing downloaded, in words: Board QA round 11)
+    return q.has('record') ? fromError(err.status ? err : recordDown(err)) : pageError(err);
   }
 }
 

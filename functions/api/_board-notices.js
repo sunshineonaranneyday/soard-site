@@ -97,10 +97,26 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
   if (!n) return { none: true };
   const keep = (sent, why) => DB.prepare('UPDATE board_state SET data = ? WHERE key = ?')
     .bind(JSON.stringify({ ...n, sending: undefined, sent, tries: (Number(n.tries) || 0) + 1, triedAt: iso(now), error: String(why || '').slice(0, 300) }), key).run();
+  const release = () => DB.prepare("UPDATE board_state SET data = json_remove(data, '$.sending') WHERE key = ?").bind(key).run();
+  const close = (events = []) => (events.length
+    ? import('./_board-sign.js').then(({ appendEvents }) => appendEvents(DB, async () => ({ stmts: [DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key)], events })))
+    : DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run());
+  // Who it's for, as People has them at the moment it goes (Board QA round 11: one who'd left the board was sent it at
+  // the address the press kept). A read that fails here lets go of it as it was, for the look to say so: it's no try
+  let who;
+  try { who = await forNow(DB, n, reads.board); } catch (err) { await release().catch(() => {}); throw err; }
+  // (one whose rename couldn't finish waits for the person who settles it: nothing is sent or written)
+  if (who.wait) { await release(); return { busy: true }; }
   try {
     // (a signature's notice the chain already has went: off the list, never again)
-    if (n.kind === 'void' && await voidInChain(DB, n)) { await DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run(); return { none: true }; }
-    const mails = await mailsFor(env, n, reads);
+    if (n.kind === 'void' && await voidInChain(DB, n, who.slug)) { await close(); return { none: true }; }
+    // Someone who left the board is owed nothing: closed with a true record of why (in the signing record, for a
+    // signature's), in one step with taking it off the list
+    if (who.left) {
+      await close(n.kind === 'void' ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { for: n.at, skipped: 'not on the board' } }] : []);
+      return { none: true };
+    }
+    const mails = await mailsFor(env, n, reads, who.member);
     const had = new Set(n.sent || []);
     let failed = 0;
     let why = '';
@@ -111,11 +127,7 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
       else { failed += 1; why = r.errors?.[0] || 'the email didn’t go'; }
     }
     if (failed) { await keep([...had], why); return { failed }; }
-    if (n.kind === 'void' && mails.length) {
-      const { appendEvents } = await import('./_board-sign.js');
-      await appendEvents(DB, async () => ({ events: [{ kind: 'void-sent', docId: n.docId, slug: n.slug, year: n.year, by: n.by || 'SOARD board page', detail: { to: mails[0].to, for: n.at, ...(n.replacedByCopy ? { replacedByCopy: true } : {}) } }] }));
-    }
-    await DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run();
+    await close(n.kind === 'void' && mails.length ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { to: mails[0].to, for: n.at, ...(n.replacedByCopy ? { replacedByCopy: true } : {}) } }] : []);
     return mails.length ? { sent: true } : { none: true };
   } catch (err) {
     await keep(n.sent || [], err?.message).catch(() => {});
@@ -123,17 +135,53 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
   }
 }
 
-/** Whether the chain says this signature's notice went (a void-sent for the same paper, member, year and signature) */
-async function voidInChain(DB, n) {
-  const rows = (await DB.prepare("SELECT detail FROM board_sign_events WHERE kind = 'void-sent' AND doc_id = ? AND slug = ? AND year = ?").bind(n.docId, n.slug, n.year).all().catch(() => ({ results: [] }))).results || [];
+/**
+ * The address a member has now: `slug`, as it was at `since`, followed through People's renames made after (./_board.js
+ * addressesNow: the audit log, the signing chain's 'renamed' events and a rename still finishing). → { slug } or
+ * { wait: true } while a rename of theirs that couldn't finish waits for a person (./_rename-finish.js: until it's
+ * settled, who's at either address can't be told). A read that fails throws, never "the same address"
+ */
+export async function slugNow(DB, slug, since = '') {
+  const { addressesNow } = await import('./_board.js');
+  const { renamesLeft } = await import('./_rename-finish.js');
+  const now = (await addressesNow(DB, [slug], { since }))[slug] || slug;
+  if ((await renamesLeft(DB)).some((x) => x.stuck && [x.from, x.to].some((s) => s === slug || s === now))) return { wait: true };
+  return { slug: now };
+}
+
+/**
+ * Whom a notice is for at the moment it goes: { member } (on the board now, at the address they have now), { left, slug }
+ * (not on the board: nothing is owed them), { wait } (see slugNow), or {} for a notice that isn't any one member's
+ */
+async function forNow(DB, n, board) {
+  const slug = n.kind === 'void' ? n.slug : n.kind === 'correction-decided' ? n.toSlug : null;
+  if (!slug) return {};
+  const now = await slugNow(DB, slug, n.queuedAt || '');
+  if (now.wait) return now;
+  const member = board.find((p) => p.slug === now.slug);
+  return member ? { member, slug: now.slug } : { left: true, slug: now.slug };
+}
+
+/**
+ * Whether the chain says this signature's notice went or was closed (a void-sent for the same paper, member, year and
+ * signature, under the address they had or have now). A read that fails throws: never taken for "not yet"
+ */
+async function voidInChain(DB, n, slugNow = n.slug) {
+  const rows = (await DB.prepare("SELECT detail FROM board_sign_events WHERE kind = 'void-sent' AND doc_id = ? AND slug IN (?, ?) AND year = ?").bind(n.docId, n.slug, slugNow || n.slug, n.year).all().catch((e) => {
+    if (/no such table/i.test(e?.message || '')) return { results: [] };
+    throw e;
+  })).results || [];
   return rows.some((r) => parse(r.detail)?.for === n.at);
 }
 
-/** Each email a notice is, as it reads now: [{ to, subject, html, text, … }] ([] when nothing is owed any more) */
-async function mailsFor(env, n, { board, admins }) {
+/**
+ * Each email a notice is, as it reads now: [{ to, subject, html, text, … }] ([] when nothing is owed any more).
+ * `member`: whom it's for, on the board now (forNow); the address the press kept is only where it goes, never whether
+ */
+async function mailsFor(env, n, { board, admins }, member = null) {
   const { DB } = env;
   if (n.kind === 'void') {
-    const to = normEmail(n.to || board.find((p) => p.slug === n.slug)?.email);
+    const to = [n.to, member?.email].map(normEmail).find(isEmail) || '';
     const { listDocs } = await import('./_board.js');
     const doc = (await listDocs(DB)).find((d) => d.id === n.docId);
     if (!isEmail(to) || !doc) return [];
@@ -153,7 +201,7 @@ async function mailsFor(env, n, { board, admins }) {
     return to.map((address) => ({ to: address, from: fromBoard(), ...mail, replyTo: n.by?.email || admins, tags: [{ name: 'kind', value: 'board-correction' }], idempotencyKey: `correction:${n.cid}:${address}` }));
   }
   if (n.kind === 'correction-decided') {
-    const to = normEmail(n.toEmail || board.find((p) => p.slug === n.toSlug)?.email);
+    const to = [n.toEmail, member?.email].map(normEmail).find(isEmail) || '';
     if (!isEmail(to)) return [];
     return [{ to, from: fromBoard(), ...words.correctionDecidedEmail(m, { made: !!n.made, by: n.byName || '' }), replyTo: admins, tags: [{ name: 'kind', value: 'board-correction-decided' }], idempotencyKey: `correction-decided:${n.cid}` }];
   }

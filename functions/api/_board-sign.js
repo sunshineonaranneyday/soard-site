@@ -622,7 +622,7 @@ export async function maybeRunSigning(env, opts = {}) {
     // Every board member has signed a paper: the admins told, once
     await maybeTellAllSigned(env).catch((err) => console.error('[board-sign] all signed', err?.message || err));
     // An email changed on People: the old address told, once
-    const changed = ((await DB.prepare("SELECT seq, slug, detail FROM board_sign_events WHERE kind = 'email-changed' ORDER BY seq DESC LIMIT 20").all()).results || []);
+    const changed = ((await DB.prepare("SELECT seq, slug, at, detail FROM board_sign_events WHERE kind = 'email-changed' ORDER BY seq DESC LIMIT 20").all()).results || []);
     const told = new Set(((await DB.prepare("SELECT detail FROM board_sign_events WHERE kind = 'notice-sent'").all()).results || []).map((r) => { try { return JSON.parse(r.detail).for; } catch { return null; } }));
     const notices = changed.filter((c) => !told.has(c.seq));
     // …and the emails a press owes (a signature taken off, a correction suggested or decided: ./_board-notices.js)
@@ -647,13 +647,28 @@ export async function maybeRunSigning(env, opts = {}) {
       }
     }
     const board = new Set(reads.board.map((p) => p.slug));
+    // Whose each change is now: its member followed through every rename the chain records after it (by their place in
+    // the chain), then through any of People's own moves since that the chain doesn't have yet (a rename still
+    // finishing: ./_board-notices.js slugNow). So a member renamed before their old address is told is told as who they
+    // are now, "not on the board" is written only for someone who has truly left it, and the record names who they are
+    // now (Board QA round 11: renamed the moment their email changed, a sitting member was recorded "not on the board"
+    // and the old address never told). A read that fails sends nothing and writes nothing; the look says so
+    const whose = await currentSlugs(DB);
     for (const c of notices) {
       let d = {};
       try { d = JSON.parse(c.detail); } catch { continue; }
       if (!d.from) continue;
-      if (!board.has(c.slug)) { await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: c.slug, by: 'SOARD board page', detail: { for: c.seq, skipped: 'not on the board' } }] })); continue; }
+      let now;
+      try { now = await slugNow(DB, whose(c.slug, c.seq), c.at || ''); } catch (err) {
+        if (!err?.unread) throw err;
+        await unread();
+        return;
+      }
+      // (a rename of theirs that couldn't finish: a person settles it first, and this waits for that)
+      if (now.wait) continue;
+      if (!board.has(now.slug)) { await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: now.slug, by: 'SOARD board page', detail: { for: c.seq, skipped: 'not on the board' } }] })); continue; }
       const r = await sendEmailOne(env, { to: d.from, from: fromBoard(), replyTo: admins, tags: [{ name: 'kind', value: 'board-email-changed' }], idempotencyKey: `email-changed:${c.seq}`, ...emailChangedEmail(d) });
-      if (r.sent || r.already) await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: c.slug, by: 'SOARD board page', detail: { for: c.seq, to: d.from } }] }));
+      if (r.sent || r.already) await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: now.slug, by: 'SOARD board page', detail: { for: c.seq, to: d.from } }] }));
       return;
     }
   } catch (err) { console.error('[board-sign] heartbeat', err?.message || err); }
@@ -687,8 +702,8 @@ export function voidEmail({ doc, year, reason = '', replacedByCopy = false }) {
 // ─── Due dates, declining, asking again by itself, the whole board signed ──────────
 
 import { isEmail, emailConfigured } from './_broadcast-notify.js';
-import { activeBoard, readState, writeState, unreadStatus } from './_board-roles.js';
-import { dueNotices, noticeReads, sendDueNotices } from './_board-notices.js';
+import { activeBoard, readState, writeState, unreadStatus, readDown } from './_board-roles.js';
+import { dueNotices, noticeReads, sendDueNotices, slugNow } from './_board-notices.js';
 /** The signing look's own status: a read of People that didn't answer (./unreadStatus), cleared by the next that does */
 const LOOK = 'signing-look';
 import { todayEastern, welcomeHad } from '../../public/admin/board-shared.js';
@@ -989,30 +1004,47 @@ export const csvCell = (v) => {
 };
 const fileSafe = (s) => String(s || '').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120) || 'file';
 
+/** Said when a read the auditor's export needs didn't answer: nothing is downloaded, never a record missing anything */
+export const RECORD_DOWN = 'We couldn’t read the whole signing record just now, so nothing was downloaded. Please try again in a moment.';
+/** That, as the error a route says (503, in words) */
+export const recordDown = (cause = null) => readDown(RECORD_DOWN, cause);
+
 /**
  * Everything a paper's signing rests on for a year, for an auditor: each signature (this year's, and earlier ones
  * replaced or taken off), each member's signed copy and record, each copy signed on paper (and an iPhone photo's
  * original), the exact wordings signed, every event in the chain about it with the chain's check, a spreadsheet, a
  * summary, how signing works and what members agreed to. Members who've left the board are in it.
+ * Every read it makes is made before anything is sent, and one that fails is said in words (a 503: People's own words
+ * for a read of People, else RECORD_DOWN), never a ZIP missing anything (Board QA round 11: the earlier signatures'
+ * read failing left them out of a normal-looking ZIP). Each file's bytes are read as it goes in (one in memory at a
+ * time); each was looked up first, and one that can't be read then breaks the download off, never a ZIP that finishes
+ * without it
  */
 export async function exportYear(env, docId, year, { waitUntil = null } = {}) {
   const board = await import('./_board.js');
   const { DB } = env;
-  await board.ensureSchema(DB);
-  const docRow = await DB.prepare('SELECT data FROM board_docs WHERE id = ?').bind(docId).first();
+  const sure = async (read) => {
+    try { return await read(); } catch (err) {
+      if (err?.unread) throw err;
+      console.error('[board-sign] export', err?.message || err);
+      throw recordDown(err);
+    }
+  };
+  await sure(() => board.ensureSchema(DB));
+  const docRow = await sure(() => DB.prepare('SELECT data FROM board_docs WHERE id = ?').bind(docId).first());
   if (!docRow) return Response.json({ ok: false, error: 'That paper is gone' }, { status: 404 });
   const doc = { id: docId, ...JSON.parse(docRow.data) };
   const y = Number(year) || Number(todayEastern().slice(0, 4));
-  const [now, earlier, members, docs, events, versions, asks] = await Promise.all([
+  const [now, earlier, members, docs, events, versions, asks] = await sure(() => Promise.all([
     DB.prepare('SELECT * FROM board_signatures WHERE doc_id = ? AND year = ? ORDER BY name').bind(docId, y).all().then((r) => r.results || []),
-    DB.prepare('SELECT * FROM board_signatures_earlier WHERE doc_id = ? AND year = ? ORDER BY name, at').bind(docId, y).all().then((r) => r.results || []).catch(() => []),
+    DB.prepare('SELECT * FROM board_signatures_earlier WHERE doc_id = ? AND year = ? ORDER BY name, at').bind(docId, y).all().then((r) => r.results || []),
     activeBoard(DB), board.listDocs(DB, y),
     DB.prepare('SELECT * FROM board_sign_events WHERE year = ? AND (doc_id = ? OR doc_id IS NULL) ORDER BY seq').bind(y, docId).all().then((r) => r.results || []),
     DB.prepare('SELECT version, body, at, by, note, hash, file_id FROM board_doc_versions WHERE doc_id = ? ORDER BY version').bind(docId).all().then((r) => r.results || []),
     board.signAsks(DB, y),
-  ]);
+  ]));
   const listed = docs.find((d) => d.id === docId) || { declined: {} };
-  const chain = await checkChain(DB);
+  const chain = await sure(() => checkChain(DB));
   // Signatures that live on only in the chain: taken off, or replaced on the same wording (each event holds the row whole)
   const gone = events.filter((e) => ['taken-off', 'superseded'].includes(e.kind) && e.doc_id === docId).map((e) => {
     let d = {};
@@ -1056,40 +1088,52 @@ body{margin:0;font-family:'Outfit',Helvetica,Arial,sans-serif;font-size:10pt;col
     '',
     `What each member agreed to before signing electronically: “${CONSENT_TEXT}”`,
   ].join('\r\n');
+  // Every file it holds, in the order it's written: each looked up (its row, and that the bucket has it) before anything
+  // is sent. A file whose row or bytes truly aren't there is left out, as before; one that couldn't be read is a 503
+  const signedVersions = new Set([...now, ...earlier, ...gone].map((s) => Number(s.version) || 0));
+  const want = [];
+  // A paper read as its file: each file a signature rests on
+  for (const v of versions.filter((x) => signedVersions.has(Number(x.version)) && !x.body && x.file_id)) want.push(['wordings', v.file_id, `wording ${v.version}`]);
+  for (const s of [...now.map((x) => ({ ...x, current: true })), ...earlier, ...gone]) {
+    const who = `${s.name || s.slug}${s.current ? '' : ' (earlier)'}`;
+    want.push(['signed-copies', s.record_id, who], ['copies-on-paper', s.file_id, who]);
+  }
+  const [orphans, kept] = await sure(() => Promise.all([
+    DB.prepare("SELECT id, slug FROM board_files WHERE owner_type = 'record' AND owner_id = ? AND superseded_at IS NOT NULL AND name LIKE ?").bind(docId, `% ${y}.pdf`).all().then((r) => r.results || []),
+    // (every copy kept for them on this paper: replaced, and photos' originals)
+    DB.prepare("SELECT id, slug FROM board_files WHERE owner_type = 'signed' AND owner_id = ? AND substr(at, 1, 4) = ? AND (superseded_at IS NOT NULL OR id IN (SELECT original_id FROM board_files WHERE original_id IS NOT NULL))").bind(docId, String(y)).all().then((r) => r.results || []),
+  ]));
+  const names = Object.fromEntries([...gone, ...earlier, ...now].map((s) => [s.slug, s.name]));
+  for (const o of orphans) want.push(['signed-copies', o.id, `${names[o.slug] || o.slug} (earlier)`]);
+  for (const k of kept.filter((x) => names[x.slug])) want.push(['copies-on-paper', k.id, `${names[k.slug]} (kept)`]);
+  const files = board.boardFiles(env);
+  const planned = [];
+  const putIds = new Set();
+  for (const [folder, id, label] of want) {
+    // (each file once: a replaced copy is an earlier signature's and a kept one, the same bytes)
+    if (!id || putIds.has(id)) continue;
+    putIds.add(id);
+    const f = await sure(() => DB.prepare('SELECT r2_key, name, at FROM board_files WHERE id = ?').bind(id).first());
+    // (head: the bucket's look at a file without its bytes)
+    const there = f && files ? await sure(() => (typeof files.head === 'function' ? files.head(f.r2_key) : files.get(f.r2_key))) : null;
+    if (there) planned.push({ folder, label, f });
+  }
   const zip = zipWriter();
   const write = (async () => {
     try {
       await zip.add('README.txt', readme);
       await zip.add('signatures.csv', `﻿${csv}`);
       let printed = null;
+      // (the summary printed, or as the page it's printed from when the browser isn't there: the same words either way)
       if (env.BROWSER) { try { printed = await printPdf(env, summary); } catch { printed = null; } }
       await zip.add(printed ? 'summary.pdf' : 'summary.html', printed || summary);
-      const signedVersions = new Set([...now, ...earlier, ...gone].map((s) => Number(s.version) || 0));
       for (const v of versions.filter((x) => signedVersions.has(Number(x.version)) && x.body)) await zip.add(`wordings/wording ${v.version}.md`, v.body);
-      const files = board.boardFiles(env);
-      const putIds = new Set();
-      const put = async (folder, id, label) => {
-        // (each file once: a replaced copy is an earlier signature's and a kept one, the same bytes)
-        if (!id || putIds.has(id)) return;
-        putIds.add(id);
-        const f = await DB.prepare('SELECT r2_key, name, at FROM board_files WHERE id = ?').bind(id).first();
-        const obj = f && files ? await files.get(f.r2_key) : null;
-        if (obj) await zip.add(`${folder}/${fileSafe(label)} - ${fileSafe(f.name)}`, new Uint8Array(await new Response(obj.body).arrayBuffer()), new Date(f.at || Date.now()));
-      };
-      // A paper read as its file: each file a signature rests on
-      for (const v of versions.filter((x) => signedVersions.has(Number(x.version)) && !x.body && x.file_id)) await put('wordings', v.file_id, `wording ${v.version}`);
-      for (const s of [...now.map((x) => ({ ...x, current: true })), ...earlier, ...gone]) {
-        const who = `${s.name || s.slug}${s.current ? '' : ' (earlier)'}`;
-        await put('signed-copies', s.record_id, who);
-        await put('copies-on-paper', s.file_id, who);
+      for (const { folder, label, f } of planned) {
+        const obj = await files.get(f.r2_key);
+        // (gone since it was looked up a moment ago: the download stops here, never a ZIP finished without it)
+        if (!obj) throw new Error(`${f.name}: not in the bucket any more`);
+        await zip.add(`${folder}/${fileSafe(label)} - ${fileSafe(f.name)}`, new Uint8Array(await new Response(obj.body).arrayBuffer()), new Date(f.at || Date.now()));
       }
-      const orphans = (await DB.prepare("SELECT id, slug FROM board_files WHERE owner_type = 'record' AND owner_id = ? AND superseded_at IS NOT NULL AND name LIKE ?").bind(docId, `% ${y}.pdf`).all()).results || [];
-      const nameOf = Object.fromEntries([...gone, ...earlier, ...now].map((s) => [s.slug, s.name]));
-      for (const o of orphans) await put('signed-copies', o.id, `${nameOf[o.slug] || o.slug} (earlier)`);
-      // (every copy kept for them on this paper: replaced, and photos' originals)
-      const kept = (await DB.prepare("SELECT id, slug FROM board_files WHERE owner_type = 'signed' AND owner_id = ? AND substr(at, 1, 4) = ? AND (superseded_at IS NOT NULL OR id IN (SELECT original_id FROM board_files WHERE original_id IS NOT NULL))").bind(docId, String(y)).all()).results || [];
-      const names = Object.fromEntries([...gone, ...earlier, ...now].map((s) => [s.slug, s.name]));
-      for (const k of kept.filter((x) => names[x.slug])) await put('copies-on-paper', k.id, `${names[k.slug]} (kept)`);
       await zip.add('events.json', JSON.stringify({ paper: { id: docId, title }, year: y, chain, events: events.map((e) => ({ ...e, detail: (() => { try { return e.detail ? JSON.parse(e.detail) : null; } catch { return e.detail; } })() })) }, null, 2));
       await zip.close();
     } catch (err) { console.error('[board-sign] export', err?.message || err); zip.abort(err); }
