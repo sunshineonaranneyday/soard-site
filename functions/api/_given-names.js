@@ -35,7 +35,39 @@
 const CHINESE = `Mei Ming Jing Ying Jie Xin Hui Ling Hua Qing Xiaoming Xiaoyan Jian Jun Hao Bo Ping Lei Tao Fei Lan Na Yan Yun
 Zhen Zhiwei Xiaoling Lili Rui Wen Wenjun Yiming Zihan Yuxuan Haoran Zixuan Yutong Xinyi Jiayi Yixuan Siyu Ruoxi Shu Shan Qi
 Jia Kai Yong Bin Chao Feng Gang Jiang Kang Liang Ning Peng Qiang Wei Xiang Yi Yu Zhi Hong Meiling Meihua Xiaohong
-Xiaomei Xiaowei Jingyi Yiting Yuting Shuang Ying-Ying Chia-Hao Chih-Ming Hsin-Yi Yu-Ting Wei-Ming Pei-Shan Shu-Fen`;
+Xiaomei Xiaowei Jingyi Yiting Yuting Shuang Ying-Ying Chia-Hao Chih-Ming Hsin-Yi Yu-Ting Wei-Ming Pei-Shan Shu-Fen
+Jianguo Jianhua Jianjun Jianping Jianming Jianxin Jianwei Jianbo Jianfeng Jianlin Jianzhong Jianyu Zhiqiang Zhiming Zhihua
+Zhigang Zhiyong Zhijun Zhihao Zhiyuan Zhixin Zhiyu Zhihong Zhihui Zhiling Guoqiang Guohua Guoliang Guoping Guoqing Guodong
+Guozhong Guowei Guoxiang Weidong Weiguo Weimin Weiping Weixing Weijie Weihua Weilin Weijun Weiqiang Haitao Haibo Haiyang
+Haifeng Haiming Hailong Haijun Haiqing Haiyan Haiying Haoyu Haoming Haoyang Haoxuan Haoze Hongwei Hongbo Hongjun Honglin
+Hongtao Hongyu Hongliang Hongmei Hongxia Hongyan Hongying Junjie Junhao Junwei Junfeng Junming Junyi Junxi Mingyu Minghui
+Mingzhe Mingjie Mingxuan Mingyang Mingze Xiaojun Xiaolong Xiaodong Xiaogang Xiaobo Xiaoyu Xiaofeng Xiaopeng Xiaotian
+Xiaohu Xiaoli Xiaojuan Xiaoqing Xiaoxia Xiaofang Xiaohui Xiaoyun Xiaolin Xiaoqin Xiaodan Xiaojing Xiaoting Xiaowen Xiaoxue
+Yifan Yichen Yuhang Yuchen Yuze Yuxin Yuhao Yuming Yuqi Yuhan Yuyan Yuwen Yuling Yufei Yujie Yumei Yuying Yuhua Yulan
+Yuzhen Yuliang Zihao Ziyi Zirui Ziming Zixin Zitong Ziyan Ziqi Zhenyu Zhenhua Zhenguo Zhenhai Zhengyang Zexi Zeyu Zelin
+Ruiqi Ruichen Ruize Ruixue Wenbo Wenhao Wenjie Wenxuan Wenqiang Wenhua Wenli Wenming Wentao Wenzhe Wenjing Wenwen Wenting
+Wenya Wenqian Wenxin Xiangyu Xiangdong Xuanyu Yanbin Yanjun Yanlin Yanming Yanpeng Yanyan Yanling Yanhong Yanmei Yanping
+Yanqiu Yinan Yixin Yiqi Yiwen Yongjun Yongqiang Yonghui Yongming Yongsheng Yongping Yonghua Lijun Liming Liwei Lixin Lihong
+Libin Lifeng Lihua Lijuan Liping Lixia Liying Lifang Limei Liqin Liyan Shengli Shenglin Shiyu Shijie Shiqi Shiming
+Shuguang Songtao Tianyu Tianyi Tianhao Tianle Tianming Xinyu Xinhua Xingyu Xinyue Xinran Xinxin Xudong Xuefeng Xueming
+Xueli Xuemei Xueying Xueqin Yaoming Jiahao Jiaming Jiaqi Jiarui Jiawei Jiayu Jiajun Jialong Jiahui Jiaxin Jiaying Jingwei
+Jinghua Jingwen Jingyu Jingjing Jinhai Jinlong Jinming Jintao Jinhua Kaiyuan Kaiwen Qiming Qingyu Qinghua Qingsong
+Rongguo Ronghua Shaohua Shaojie Xiuying Xiulan Xiuzhen Xiumei Xiuhua Guiying Guilan Guifang Guizhen Dongmei Chunhua
+Chunmei Chunyan Chunxia Chunling Chunlan Meili Meilin Meiqi Meiying Yaqi Yating Yawen Yaxin Yafei Yali Yingying Yuexin
+Shanshan Shuhua Shuqin Shuzhen Shuting Shuyi Siqi Sitong Simin Ruolan Ruyi Qianqian Qiong Qiuju Qiuxia Mengyao Mengqi
+Mengting Mengmeng Lingling Lingyun Lanying Juanjuan Huimin Huifang Huiling Huiqin Huizhen Huiying Huijuan Fangfang
+Fengying Feifei Dandan Cuiping Cuihua Chenxi Bingbing Baoyu Aiping Aihua Aiying Zhenzhen Yuanyuan Yunfei Yunhua Yunfeng
+Yunlong Yunpeng Yuntao Tingting Zhaohui Zhonghua Zhongwei Xinyang Xuyang Zhuo Shuo Shuai
+Mei-ling Chun-hui Ya-ting Chia-hui Shu-hui Hui-ling Chien-hung Tsung-han Kuan-yu Yi-chen Po-han Wen-hsiung Chun-chieh
+Hsiao-mei Yu-chen Yu-hsuan Chih-hao Chia-ling Chia-wei Chih-wei Chun-ming Hsin-hui Hsiu-ying Hsiu-lan Hui-chen Hui-chun
+Hui-wen Kai-wen Li-hua Li-ling Mei-hua Mei-hui Pei-yu Pei-ling Shih-chieh Shu-chen Shu-ling Shu-ping Shu-yi Ting-ting
+Tzu-yu Tzu-hsuan Wan-ting Wei-chen Wei-lun Wen-chieh Wen-ling Ya-chi Ya-hui Ya-wen Yi-hsuan Yi-ling Yi-ting Yi-wen Yu-han
+Yu-hsin Yu-chieh Yu-ling Chien-ming Chih-hung Chin-lung Ching-wen Chun-kai Hsiang-yu Kuo-hua Kuo-liang Ming-hui Ming-che
+Po-yu Shao-wei Tsung-yu Wei-hsiang Wei-ting Yao-ting Yen-ting Yu-chun Yu-sheng Cheng-han Cheng-yu Chia-jung Hsin-yu
+Tzu-han Ka-ming Wing-yan Siu-ming Chi-wai Ka-yan Wai-man Kin-wah Man-kit Hoi-yan Chun-kit Siu-wai Ka-wai Ka-man Ka-ho
+Ka-yee Wai-yin Wai-ling Wai-kit Wing-kin Wing-sze Mei-yee Mei-kuen Suk-yee Suk-ching Siu-fong Kwok-wai Kwok-keung
+Chi-keung Chi-ming Chun-wai Hoi-ming Hon-ming Kin-man Man-yee Man-wai Pui-yee Pui-ling Sau-ling Sze-wing Tsz-yan
+Tsz-ching Tsz-hin Yuk-ling Yuk-lan Yee-man Hiu-yan Hiu-tung Ho-yin Lok-yi`;
 const JAPANESE = `Akira Aiko Akiko Ayaka Ayumi Chiaki Chiyo Daichi Daiki Emi Eri Fumiko Hana Hanako Haruka Haruki Haruto Hideki
 Hideo Hikari Hina Hiro Hiroko Hiroshi Hiroto Hitomi Ichiro Junko Kaito Kana Kaori Kazuki Kazuo Keiko Kenji Kenta Kenzo
 Kiyoshi Koji Kumiko Mai Makoto Mami Mari Mariko Masako Masao Masato Mayumi Megumi Michiko Midori Miho Miki Minoru Misaki
@@ -45,10 +77,12 @@ Yukiko Yumi Yuna Yusuke Yuto Kei Kenichi Shunsuke Seiji Tatsuya Hayato Asuka Aoi
 const KOREAN = `Min-jun Seo-yeon Ji-hoon Ji-woo Hyun-woo Jae-won Sung-min Ji-eun Soo-jin Eun-ji Min-ji Ha-eun Yeon-woo Jun-ho
 Dong-hyun Hye-jin Ji-young Joon-ho Min-seo Seo-jun Do-yoon Ye-jin Soo-ah Hyun-jin Jae-hyun Sang-woo Young-ho Mi-kyung
 Kyung-soo Joon Jae Seung Hyun Sang Min Eun Soo Jin Ji Hye Sun Yeon Jun Young-mi Myung Chul Jiho Jisoo Jiwoo Minji Seojin
-Yuna`;
+Yuna Sung-ho Young-soo Jung-hee Eun-young Min-soo Hye-won Dong-hoon Jae-hoon Ji-min Ji-yeon Hye-jung Mi-young Sun-hee
+Jung-ho Seung-hoon Seung-woo Sung-hoon Young-jae Eun-jung Hyun-jung Soo-min Ji-hyun Kyung-hee Jae-min Hae-won`;
 const VIETNAMESE = `An Anh Bao Binh Chau Chi Cuong Dung Duc Duy Giang Hai Hanh Hieu Hoa Hung Huong Huy Khanh Khoa Kim Lan Linh
 Loan Minh Ngoc Nhung Phuong Phuc Quang Quoc Quynh Tam Thanh Thao Thu Thuy Tien Trang Trung Tuan Tung Uyen Viet Vy Xuan
-Yen Bich Diep Hang Hien Hong Khoi Lien Long Mai My Nga Nhi Oanh Phong Sang Tai Thi Thien Tho Thuan Toan Trinh Truc Tu Vinh`;
+Yen Bich Diep Hang Hien Hong Khoi Lien Long Mai My Nga Nhi Oanh Phong Sang Tai Thi Thien Tho Thuan Toan Trinh Truc Tu Vinh
+Nam`;
 const FILIPINO = `Rizalino Jomar Arnel Rowena Marites Maricel Lorna Analyn Rhea Jhun Rodel Romeo Reynaldo Rommel Ernesto Danilo
 Edgardo Lourdes Imelda Corazon Teresita Rosalinda Marilou Josefina Erlinda Leonora Nenita Lolita Charmaine Mylene Jasmin
 Joanne Jocelyn Liezl Kristine Ma Rina Ruel Ariel Benjie Ronnie Jojo`;
@@ -60,7 +94,12 @@ const BURMESE = `Aung Htet Kyaw Myint Thandar Thura Zaw Phyo`;
 // (Cambodian: round 21 added the ones after Phalla, "Sam Rainsy" being Rainsy of the Sam family)
 const KHMER = `Sokha Sophea Dara Chantha Vanna Bopha Sovann Rithy Phalla Rainsy Sokhom Vibol Sophal Sopheap Kosal Visal Pisey
 Channary Chenda Sothea Rotha Kunthea Sokunthea Sreymom Vuthy Sambath Narith Vannak Piseth Rathana Bunthoeun Chanthou
-Leakhena Sreyleak Sophorn`;
+Leakhena Sreyleak Sophorn Sopheak Samnang Sreypov Bunna Sothy Vanny Chamroeun Sovanna Sreyneang Sreymao Socheata Sophy
+Sopheaktra Rotanak Sovannara Veasna Vutha Chanthy Kanha Bunthan Sokhorn Pheap Sreyroth Chanra Seyha Pisith Virak Sarath
+Sarun Sokun Vichea Ratha Rattana Sreynich Malis Kunthy Phearom Phearith Visoth Theary Mealea Sokchea Sovanny Sreynuon
+Kanika Vannary Raksmey Dalin Chanthol Chantrea Davuth Kimsour Leakena Monyrath Nimol Phally Samedy Seila Sereyvuth Serey
+Sokleng Somaly Sophanna Sophat Sopheara Sotheara Sovath Thearith Vicheka Vireak Borey Chakriya Channa Kolab Mony Nary
+Pheakdey Phirun Puthy Ratanak Sakada Sokhem Sokny Sopha Sothun Vichet Ponleu Bunly Sreyka Sreymey Kimly Kimleng`;
 const LAO = `Khamphet Somphone`;
 
 // American and English, women (named: round 21's women's list reads it whole)
@@ -453,15 +492,58 @@ Kato Abe Chong Chao Myung`;
 // given name after can be a family name too ("Ming Wei", "Joe Min"): nothing then says which comes first, so no name
 // either (round 21 greeted "Joe Min"; the lead's rule, round 22, doesn't). Two given names people go by together before a
 // family name are a pair, never a family name and a given name ("Thanh Huong Ames" is Thanh Huong: _advisory-form.js)
-const FAMILY_FIRST_BEFORE = [
-  // (Chinese, in pinyin and in Taiwan's Wade-Giles (Tien, Jen): family names there that are given names too)
-  [CHINESE, `Ying Jian Zhen Jing Qing Ming Bo Ping Kai Yong Shu Shan Rui Qiang Zhi Lou Jie Hai Kou Tien Jen`],
-  // (Japanese: Kai, Yūki, Aida, Miki and Sakura are family names there, and given names here)
-  [JAPANESE, `Kai Yuki Aida Miki Sakura`],
-  [KOREAN, `Joe Yong`],
-  // (Vietnamese: Thành, Vĩnh, Trang, Lục, Hoa, Quang)
-  [VIETNAMESE, `Thanh Vinh Trang Luc Hoa Quang`],
-  [KHMER, `Sam Em Nou`],
+//   Round 23 (finding 1: "Tung Chih-ming" and "Pao Yu-ting" were greeted "Tung" and "Pao", Wade-Giles and Cantonese for
+// Dong and Bao, given names here as Vietnamese and Hmong ones): no longer picked by hand. Each people's own family names,
+// as they're usually romanized, are written out below (FAMILY_NAMES_OF), and every one of them that's a given name
+// anywhere on the lists, and not a family name that always comes first (FAMILY_FIRST_NAMES), is that people's family name
+// before their own given names: the lists build it (build), so a name added to either list is counted without anyone
+// remembering to. A test checks it against family names written out apart from these
+const FAMILY_NAMES_OF = [
+  // (Chinese: pinyin; Taiwan's Wade-Giles; Cantonese, as Hong Kong and Macau write them; Hokkien and Teochew, as Singapore,
+  // Malaysia and the Philippines write them)
+  [CHINESE, `Wang Li Zhang Liu Chen Yang Huang Zhao Wu Zhou Xu Sun Ma Zhu Hu Guo He Gao Lin Luo Zheng Liang Xie Song Tang
+  Han Feng Deng Cao Peng Zeng Xiao Tian Dong Pan Yuan Cai Jiang Yu Du Ye Cheng Wei Su Lu Ding Ren Shen Yao Cui Zhong Tan Fan
+  Jin Shi Liao Jia Xia Fu Fang Bai Zou Meng Xiong Qin Qiu Hou Yin Xue Yan Duan Lei Long Tao Gu Mao Hao Gong Shao Wan Qian
+  Dai Mo Kong Xiang Chang Kang Chi Niu Ou Hong Ge Wen Geng Guan Lan Bao An Zuo Zhan Qi Ning Ji Mei Hui Ling Fei Hua Xin Ying
+  Jian Zhen Jing Qing Ming Bo Ping Kai Yong Shu Shan Rui Qiang Zhi Lou Jie Hai Kou Min Rong Mu Yue Zhuang Tong Ruan Lian Ai
+  Huo Pu Qu Bian Hang Shang Gan Dou Sheng Zhai Ni Cen Ke Yun Tu Jun Bi Ban Chai Che Diao Gui Jiao Ju Kan Kuang Lai Lang
+  Leng Lv Man Miao Nie Nong Pang Pei Qiao Sang Sha She Si Sui Tai Teng Tie Weng Xi Xiu Xuan You Zang Zhuo Zong
+  Chang Chen Hsu Tsai Cheng Hsieh Kuo Hung Tseng Chiu Chou Yeh Chuang Chiang Ho Kao Lo Chien Chung Tsao Tien Ting Ku Chu
+  Teng Jen Shih Chao Sung Kuan Yen Hsiao Pai Chin Kung Tsui Hsueh Lung Chia Tung Tuan Tso Tsou Pi Pao Hsiung Yung Hsing
+  Hsia Ching Chuan Kuang Chan Cheung Chow Fong Kwan Kwok Lam Lau Leung Mak Ng Siu Tam Tsang Tse Wong Yeung Yip Choi Fung
+  Kwong Law Lui Mok Poon Yau Yuen Yim Yiu Kam Shum Sham Szeto Au Chau Chong Chuk Fok Hau Hon Ip Kei Keung Lok Lum Mui Ngai
+  Pak Pun Shek Sin So Tin To Tsoi Wai Wing Yam Yee Yuk Kwai Tan Lim Ong Goh Chua Teo Koh Tay Yeo Seah Heng Quek Toh Ang Sim
+  Low Poh Soh Tee Yap Liew Foo Kwek Teh Loh Yeoh Khoo Cheah Beh Kok Lee Ooi Oei Sia Go Khaw Tio Wee`],
+  // (Japanese)
+  [JAPANESE, `Sato Suzuki Takahashi Tanaka Watanabe Ito Yamamoto Nakamura Kobayashi Kato Yoshida Yamada Sasaki Yamaguchi
+  Matsumoto Inoue Kimura Hayashi Shimizu Yamazaki Mori Abe Ikeda Hashimoto Yamashita Ishikawa Nakajima Maeda Fujita Ogawa
+  Goto Okada Hasegawa Murakami Kondo Ishii Saito Sakamoto Endo Aoki Fujii Nishimura Fukuda Ota Miura Fujiwara Okamoto
+  Matsuda Nakagawa Nakano Harada Ono Tamura Takeuchi Kaneko Wada Nakayama Ishida Ueda Morita Hara Shibata Sakai Kudo
+  Yokoyama Miyazaki Miyamoto Uchida Takagi Ando Taniguchi Ohno Maruyama Imai Takada Fujimoto Takeda Murata Ueno Sugiyama
+  Masuda Sugawara Hirano Kojima Otsuka Chiba Kubo Matsui Iwasaki Sakurai Kinoshita Noguchi Matsuo Nomura Kikuchi Sano
+  Onishi Sugimoto Arai Hamada Ichikawa Furukawa Mizuno Komatsu Shimada Koyama Takano Yamauchi Nishida Kawano Kawasaki Honda
+  Noda Oda Seki Tani Toda Yano Hoshino Kumagai Mochizuki Hino Kono Naka Shima Mita Ohta Nishi Arakawa Kawai Sone Taira
+  Shiba Sugi Hata Nara Mine Kaji Asano Imamura Oka Hori Kanda Kubota Hirata Kitamura Matsushita Okubo Morimoto Tsuchiya
+  Ogata Kawaguchi Kishi Doi Jo Mano Kai Yuki Aida Miki Sakura Ken Rin Hiro Ike Mai`],
+  // (Korean, in the spellings Korean Americans use)
+  [KOREAN, `Kim Lee Park Choi Jung Kang Cho Yoon Jang Lim Han Oh Seo Shin Kwon Hwang Ahn Song Jeon Hong Yoo Ko Moon Yang Son
+  Bae Baek Heo Nam Shim Noh Ha Kwak Sung Cha Joo Woo Koo Min Ryu Na Jin Ji Uhm Chae Won Chun Bang Gong Hyun Ham Byun Yeom
+  Yeo Choo Do Seok Sun Seol Ma Gil Pyo Yeon Wi Ki Ban Wang Geum Ok Yook In Maeng Je Mo Tak Kook Eo Eun Pyeon Yong Ye Kyung
+  Bong Sa Bu Sim Lyu Rhee Yi Rho Roh Suh Hahn Paik Pak Chung Chang Chong Cheong Kong Hur Yu Im Ryoo Moh Myung Joe Gi Jee
+  Jeong Jun Ku Gu Kye Shon Sohn Tae Chi Hyeon Seung Jo Seong Cheon Choe Paek Hyon Ann Kil Pi Bok Gan Gook Ryoo`],
+  // (Vietnamese: the usual hundred, Thành, Vĩnh, Trang, Lục, Hoa, Quang and Tiền among them)
+  [VIETNAMESE, `Nguyen Tran Le Pham Hoang Huynh Phan Vu Vo Dang Bui Do Ho Ngo Duong Ly Truong Dinh Mai Trinh Luong Cao Ta
+  Kieu Thai Quach Luu Doan Vuong Trieu La Tong Diep Banh Thach Phung Mac Bach Giang Kha Nghiem Lieu Tieu Ton Chau Tang Lam
+  Quan Dao Au Vi Ung Lac Kim Hua Lai Han Ninh Khuc Chu Mach Lu Hau Ong Dam Tat To Tham Than Nong Luc Thanh Vinh Hoa Quang
+  Trang Tien Hong Phi Nhan Giap Manh Cu Long Lang Mau Thieu Uong Khong Lo`],
+  // (Cambodian)
+  [KHMER, `Sam Chea Sok Keo Kim Chan Heng Meas Chhim Pen Hun Sar Tep Chhay Prak Ouk Mao Seng Yim Ly Hor Lim Tan Phan Long
+  Nhem Kong Kang Ung Pich Phal Em Nou Chhun Kheang Mam Nuon Sim Som Sun Uy Var Voeun Ros Mey Sin San Seang Touch Ek Kheng
+  Pok Nhim Thach Chhin Ngin Chum Om Hang Cheng Chhuon Chhem Huot Oum Prum Chhoeun Sou Duong Yin Mak Lay Hok Tith Sorn Meng
+  Thong Nget Phon Chen Vann Vong Chhorn Khim Sem`],
+  // (Hmong, as written in the US and in Hmong)
+  [HMONG, `Vang Xiong Thao Lee Yang Her Moua Lor Hang Khang Kue Pha Lo Thor Chue Chang Vue Cha Fang Hawj Muas Vaj Xyooj Yaj
+  Lis Tsab Thoj Kong Kha Koua`],
 ];
 
 // Given names of Hungary, where the family name comes first (round 21): a full name whose last word is one ("Simon
@@ -494,7 +576,36 @@ Szilárd Ágnes Beáta Dóra Klára Tünde Béla Krisztián Richárd
 Ábel Ábrahám Adrián Alfréd Ármin Artúr Aurél Benjámin Bernát Donát Dorián Fábián Flórián Gellért Hugó Iván Jácint Jónás
 Kristóf Lázár Lénárd Lukács Márió Márkus Medárd Milán Móric Nimród Olivér Róbert Sámuel Tóbiás Tódor Zénó
 Adél Alíz Amália Angéla Annamária Antónia Cecília Diána Emília Flóra Gertrúd Gréta Hédi Jázmin Júlia Kornélia Léna Liliána
-Lívia Lúcia Margó Márta Mónika Natália Noémi Nóra Renáta Rózsa Sára Stefánia Valéria Viktória Évi Móni Nóri`;
+Lívia Lúcia Margó Márta Mónika Natália Noémi Nóra Renáta Rózsa Sára Stefánia Valéria Viktória Évi Móni Nóri
+Brúnó Ráhel`;
+//   Round 23 (finding 5: 72 of the tester's 265 common Hungarian names weren't here, "Simon Csongor", "Ádám Zselyke" and
+// "Dávid Hedvig" greeted by the family name): Hungary's own names that were missing added to the two lists above, and
+// the common modern ones (Boldizsár, Bíborka, Lotti, Szófia). Hungarians give many names everyone gives, spelt the same
+// (Martin, Albert, Kevin, Erika, Rita, Laura, Anna): those are HUNGARIAN_SHARED's. On their own they say nothing ("Jordan
+// Martin", "Steve Martin" are greeted), but after one of Hungary's family names that's a given name too (HUNGARIAN_FAMILY:
+// Simon, Albert, Ádám, Dávid, Fábián...) they're as Hungarian as the rest: "Simon Rita", "Ádám Erika", "Albert Martin" are
+// written family name first (the lead's rule 1, Hungary being a people who write the family name first, and rule 5's
+// "all 72"). This replaces round 22's "Simon Rita says nothing"
+const HUNGARIAN_MORE = `Csongor Zente Bátor Bónis Hedvig Zselyke Szofi Lilien Zorka Janka Ivett Kati Kata Rozi Marcsi Szandra
+Boldizsár Bíborka Lotti Szófia Etele Örkény Ajtony Bodza Bogi`;
+// (written as everyone writes them, accents and all where others have them too: Zoé, Félix, Olívia, Míra. The plain
+// spellings of the accented names above, "Peter", "Robert", "Maria", still say nothing, as round 22 had it: "Simon
+// Peter" is Simon)
+const HUNGARIAN_SHARED = `Vince Erik Rudolf Arnold Albert Viktor Patrik Roland Norbert Martin Dominik Noel Alex Kevin Emil
+Valentin Julianna Marianna Melinda Brigitta Henrietta Nikoletta Klaudia Bettina Juli Andi Niki Ervin Viola Andrea Erika
+Anita Gabriella Rita Vera Laura Luca Hanna Lili Bella Mira Maja Liza Petra Barbara Veronika Alexandra Vivien Tamara Regina
+Johanna Zoé Félix Olívia Míra Anna Emma Lara Lia Linda Nina Kiara Simon`;
+// Hungary's common family names (round 23): one that's a given name too, written first before any of Hungary's given names
+// (the shared ones too), is the family name ("Simon Rita", "Albert Ildikó Erika"). With its accents, as Hungarians write
+// it; one whose plain spelling is someone else's given name counts only with them ("Adam Rita" is Adam, "Ádám Rita" no name)
+const HUNGARIAN_FAMILY = `Nagy Kovács Tóth Szabó Horváth Varga Kiss Molnár Németh Farkas Balogh Papp Takács Juhász Lakatos
+Mészáros Oláh Simon Rácz Fekete Szilágyi Török Fehér Balázs Gál Kis Szűcs Kocsis Orsós Pintér Fodor Szalai Sipos Magyar
+Lukács Gulyás Bíró Király Katona László Jakab Bogdán Balog Sándor Boros Fazekas Kelemen Antal Somogyi Orosz Fülöp Veres
+Budai Vincze Vince Hegedűs Deák Pap Bálint Pál Illés Vörös Szőke Fábián Vass Lengyel Bodnár Hajdu Halász Jónás Máté
+Székely Gáspár Dudás Kozma Pásztor Bakos Sárközi Dénes Virág Major Orbán Barta Benkő Hegyi Albert Ádám Dávid Dániel Péter
+Sámuel Ábel Márk Márton Miklós Mihály Imre Benedek Kristóf Tóbiás Lázár Gergely Tamás Ambrus Elek Sebestyén Vida Erdei
+Erdős Kun Csonka Kardos Csizmadia Vámos Kálmán Mátyás Jenei Bencze Barna Huszár Rigó Szekeres Lőrincz Ferenczi Kerekes
+Bognár Bartos Kozák Ágoston Bárány Márkus Dobos Tamási Gergely Zsigmond Barabás`;
 
 // Women's names, and names women go by as often as men (round 21), for a greeting after a woman's courtesy title ("Mrs.
 // Amy Ames" is Amy; "Mrs. John Ames", a wife written by her husband's name, is no name). Positive evidence: a name not
@@ -596,9 +707,15 @@ Polly Rosie Ruthie Sadie Sally Shelly Steph Sue Susie Suzy Tammy Tess Tina Tracy
 Flo Hettie Kitty Lettie Lottie Midge Minnie Netta Nettie Trixie Wendi Pat Sandy Sammie Dani`;
 
 // (a word as these lists key it: small letters, no accents, the letters no accent comes off made plain)
+// Round 23 (finding 2: "Tien Meiling" got no name but "Tien Mei-ling" was greeted "Tien", the list having "Meiling"):
+// and no hyphens, so a name is the same name joined, hyphenated or with a capital inside ("Meiling", "Mei-ling",
+// "Mei-Ling", "MeiLing"; "Min-jun", "Minjun"), on the lists and as typed alike. Every look-up here goes through it
 const PLAIN_LETTERS = { ø: 'o', ł: 'l', đ: 'd', ð: 'd', æ: 'ae', œ: 'oe', ß: 'ss', þ: 'th', ı: 'i', ħ: 'h', ŋ: 'n' };
+const ANY_HYPHEN = /[-\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/gu;
 export const nameKey = (w) => String(w).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-  .replace(/[øłđðæœßþıħŋ]/g, (c) => PLAIN_LETTERS[c]).replace(/[\u2019\u02BC]/g, "'");
+  .replace(/[øłđðæœßþıħŋ]/g, (c) => PLAIN_LETTERS[c]).replace(/[\u2019\u02BC]/g, "'").replace(ANY_HYPHEN, '');
+// (the same with its hyphens kept: which of the list's spellings is the one typed, "Jo-Ann" or "Joann")
+const shapeKey = (w) => String(w).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(ANY_HYPHEN, '-');
 
 let GIVEN = null;
 let FIRST = null;
@@ -610,13 +727,24 @@ let TITLED = null;
 let BEFORE = null;
 let HU = null;
 let HU_ACC = null;
+let HU_SHARED = null;
+let HU_FAMILY = null;
 let WOMAN = null;
+let ANYWHERE = null;
 const words = (list) => list.split(/\s+/).filter(Boolean);
-// (a word as typed, its accents kept: small letters, composed, a curly apostrophe made straight)
-const accented = (w) => String(w).normalize('NFC').toLowerCase().replace(/[\u2019\u02BC]/g, "'");
+// (a word as typed, its accents kept: small letters, composed, a curly apostrophe made straight; no hyphens, round 23)
+const accented = (w) => String(w).normalize('NFC').toLowerCase().replace(/[\u2019\u02BC]/g, "'").replace(ANY_HYPHEN, '');
+const hasAccent = (w) => String(w).normalize('NFKD') !== String(w).normalize('NFC');
 const build = () => {
+  // (each key, and every spelling the lists give it, "Joann", "JoAnn", "Jo-Ann": the first is the one shown unless the
+  // typed one is written as another is)
   GIVEN = new Map();
-  for (const block of NAMES) for (const n of block.split(/\s+/)) if (n && !GIVEN.has(nameKey(n))) GIVEN.set(nameKey(n), n);
+  for (const block of NAMES) for (const n of block.split(/\s+/)) {
+    if (!n) continue;
+    const all = GIVEN.get(nameKey(n));
+    if (!all) GIVEN.set(nameKey(n), [n]); else if (!all.includes(n)) all.push(n);
+  }
+  ANYWHERE = new Set(GIVEN.keys());
   for (const n of NEVER.split(/\s+/)) GIVEN.delete(nameKey(n));
   FIRST = new Set(FAMILY_FIRST_NAMES.split(/\s+/).filter(Boolean).map(nameKey));
   BOTH = new Set(TITLE_TOO.split(/\s+/).map(nameKey));
@@ -624,29 +752,55 @@ const build = () => {
   LONG = new Set(words(TITLE_BEFORE_NAMES).map(nameKey));
   TITLED = new Set(words(TITLE_PAIRS).map((p) => p.split('_').map(nameKey).join(' ')));
   // (each family name, and the given names of every people it's a family name of; round 22: those that are family names
-  // first too count, "Ming Wei", "Joe Min")
+  // first too count, "Ming Wei", "Joe Min". Round 23: every family name of a people's that's a given name on the lists and
+  // not one that always comes first, found here from FAMILY_NAMES_OF, never picked by hand)
   BEFORE = new Map();
-  for (const [people, fams] of FAMILY_FIRST_BEFORE) {
-    for (const f of words(fams).map(nameKey)) {
+  for (const [people, fams] of FAMILY_NAMES_OF) {
+    let theirs = null;
+    for (const f of new Set(words(fams).map(nameKey))) {
+      if (!GIVEN.has(f) || FIRST.has(f)) continue;
+      theirs = theirs || words(people).map(nameKey);
       const own = BEFORE.get(f) || new Set();
-      for (const g of words(people)) own.add(nameKey(g));
+      for (const g of theirs) own.add(g);
       BEFORE.set(f, own);
     }
   }
-  HU = new Set(words(HUNGARIAN).map(nameKey));
+  HU = new Set([...words(HUNGARIAN), ...words(HUNGARIAN_MORE)].map(nameKey));
   HU_ACC = new Set(words(HUNGARIAN_ACCENTED).map(accented));
+  HU_SHARED = new Set(words(HUNGARIAN_SHARED).map(nameKey));
+  // (Hungary's family names that are given names on the lists, as typed: with their accents, or without them only when
+  // the plain spelling is no other people's given name, Bal\u00E1zs and L\u00E1szl\u00F3 being Hungarian however typed, Simon and
+  // Albert having none: never "Adam", "David", "Peter", "Fabian")
+  HU_FAMILY = new Set();
+  for (const f of words(HUNGARIAN_FAMILY)) {
+    if (!GIVEN.has(nameKey(f)) && !HU_ACC.has(accented(f))) continue;
+    HU_FAMILY.add(accented(f));
+    if (!hasAccent(f) || HU.has(nameKey(f))) HU_FAMILY.add(nameKey(f));
+  }
   // (only given names on the lists: one taken out, NEVER's, is never a woman's name to greet either)
   WOMAN = new Set([...words(ENGLISH_WOMEN), ...words(WOMEN)].map(nameKey).filter((k) => GIVEN.has(k)));
   for (const n of words(WOMEN_NOT)) WOMAN.delete(nameKey(n));
   // (each pair, and each hyphenated name on the lists, as its two names: "jo ann" for Jo-Ann)
   PAIRS = new Map(DOUBLE.split(/\s+/).filter(Boolean).map((p) => [p.split('_').map(nameKey).join(' '), p.split('_')]));
-  for (const n of GIVEN.values()) { const h = n.split('-'); if (h.length === 2 && !PAIRS.has(h.map(nameKey).join(' '))) PAIRS.set(h.map(nameKey).join(' '), h); }
+  for (const all of GIVEN.values()) for (const n of all) { const h = n.split('-'); if (h.length === 2 && !PAIRS.has(h.map(nameKey).join(' '))) PAIRS.set(h.map(nameKey).join(' '), h); }
 };
 
-/** The name as the list writes it ("deshawn" \u2192 "DeShawn"), or '' when it isn't a given name on the list */
+/**
+ * The name as the list writes it ("deshawn" \u2192 "DeShawn"), or '' when it isn't a given name on the list. Round 23: found
+ * however it's joined or hyphenated ("Mei-ling" is the list's "Meiling"); of the list's spellings of it, the one written
+ * as typed ("JO-ANN" is Jo-Ann, "JOANN" Joann)
+ */
 export function givenName(w) {
   if (!GIVEN) build();
-  return GIVEN.get(nameKey(w)) || '';
+  const all = GIVEN.get(nameKey(w));
+  if (!all) return '';
+  const shape = shapeKey(w);
+  return all.find((n) => shapeKey(n) === shape) || all.find((n) => n.includes('-') === shape.includes('-')) || all[0];
+}
+/** A word on the names lists at all, the never-greeted ones too ("Loan", "Floor"): never made a place word (round 23) */
+export function onTheLists(w) {
+  if (!ANYWHERE) build();
+  return ANYWHERE.has(nameKey(w));
 }
 /** A family name that comes first ("Nguyen", "Kim", "Lee"): a full name starting with it is greeted by no name */
 export function familyFirst(w) {
@@ -693,20 +847,64 @@ export function familyFirstBefore(a, b) {
   if (!BEFORE) build();
   return !!BEFORE.get(nameKey(a))?.has(nameKey(b));
 }
-/** A given name of a people who write the family name first, Hungary's ("Zoltán", "Péter"): a full name ending in one has its family name first */
+/**
+ * A given name of Hungary's, where the family name comes first ("Zoltán", "Péter"; round 23: the names Hungarians share
+ * with everyone too, "Martin", "Rita", HUNGARIAN_SHARED's). On its own, one of the shared ones says nothing (hungarianOrder)
+ */
 export function givenFamilyFirst(w) {
   if (!HU) build();
-  return HU.has(nameKey(w)) || HU_ACC.has(accented(w));
+  return HU.has(nameKey(w)) || HU_ACC.has(accented(w)) || HU_SHARED.has(nameKey(w));
+}
+// (Hungary's own: a name only Hungarians give, or give so spelt, "Zoltán", "Csongor", "Ádám")
+const hungarianOwn = (w) => HU.has(nameKey(w)) || HU_ACC.has(accented(w));
+/**
+ * A married Hungarian woman's name by her husband's (round 23, finding 3): his given name and "-né", "Zoltánné" (Mrs. Zoltán
+ * ...), "Péterné", "Lászlóné". Without the accent only after one of Hungary's own given names counted however typed
+ * ("Zoltanne"), never "Jeanne", "Joanne" or "Marianne"
+ */
+export function marriedName(w) {
+  if (!HU) build();
+  const a = String(w).normalize('NFC').toLowerCase();
+  if ([...a].length < 5) return false;
+  if (a.endsWith('n\u00E9')) { const base = a.slice(0, -2); return !!givenName(base) || givenFamilyFirst(base); }
+  return a.endsWith('ne') && HU.has(nameKey(a.slice(0, -2)));
+}
+/** One of Hungary's family names that's a given name too, as typed ("Simon", "Albert", "Ádám", "Balazs"; never "Adam") */
+export function hungarianFamily(w) {
+  if (!HU_FAMILY) build();
+  return HU_FAMILY.has(accented(w)) || HU_FAMILY.has(nameKey(w));
+}
+/**
+ * A full name's words (titles and letters set apart) written family name first as Hungarians write it (rounds 21 to 23):
+ * a word after the first that's one of Hungary's own given names ("Simon Zoltán", round 23 any of them, not only the last:
+ * "Simon Katalin Anna") or a married name by her husband's ("Simon Zoltánné"); or one of Hungary's family names that's a
+ * given name too, first, before any of Hungary's given names, the shared ones too ("Simon Rita", "Albert Ildikó Erika")
+ */
+export function hungarianOrder(ws) {
+  if (!HU) build();
+  if (!ws || ws.length < 2) return false;
+  const rest = ws.slice(1);
+  return rest.some((w) => hungarianOwn(w) || marriedName(w)) || (hungarianFamily(ws[0]) && rest.some(givenFamilyFirst));
 }
 /** How many names the lists hold (for the tests and the report) */
 export function listSizes() {
   if (!GIVEN) build();
+  const keys = (list) => new Set(words(list).map(nameKey)).size;
   return { given: GIVEN.size, pairs: PAIRS.size, familyFirst: FIRST.size, titleToo: BOTH.size + CAPS.size, women: WOMAN.size,
-    titleBeforeNames: LONG.size, titlePairs: TITLED.size, hungarian: HU.size + HU_ACC.size, familyFirstBefore: BEFORE.size };
+    titleBeforeNames: LONG.size, titlePairs: TITLED.size, hungarian: HU.size + HU_ACC.size + HU_SHARED.size, familyFirstBefore: BEFORE.size,
+    hungarianOwn: HU.size + HU_ACC.size, hungarianShared: HU_SHARED.size, hungarianFamily: words(HUNGARIAN_FAMILY).length,
+    chinese: keys(CHINESE), japanese: keys(JAPANESE), korean: keys(KOREAN), vietnamese: keys(VIETNAMESE), khmer: keys(KHMER), hmong: keys(HMONG) };
 }
-/** (for the tests: every name rounds 21 and 22's lists mark, as written, so each can be checked to be a given name on the lists) */
+/** (for the tests: every name rounds 21 to 23's lists mark, as written, so each can be checked to be a given name on the lists) */
 export function markedNames() {
+  if (!BEFORE) build();
+  const peoples = ['chinese', 'japanese', 'korean', 'vietnamese', 'khmer', 'hmong'];
   return { women: words(WOMEN), womenNot: words(WOMEN_NOT), titleBeforeNames: words(TITLE_BEFORE_NAMES),
-    titlePairs: words(TITLE_PAIRS).map((p) => p.split('_')), familyFirstBefore: [...new Set(FAMILY_FIRST_BEFORE.flatMap(([, fams]) => words(fams)))],
-    hungarian: words(HUNGARIAN), hungarianAccented: words(HUNGARIAN_ACCENTED) };
+    titlePairs: words(TITLE_PAIRS).map((p) => p.split('_')),
+    // (round 23: found from each people's family names, FAMILY_NAMES_OF, not written by hand)
+    familyFirstBefore: [...new Set(FAMILY_NAMES_OF.flatMap(([, fams]) => words(fams)).filter((w) => BEFORE.has(nameKey(w))))],
+    familyNamesOf: Object.fromEntries(FAMILY_NAMES_OF.map(([, fams], k) => [peoples[k], words(fams)])),
+    givenNamesOf: Object.fromEntries(FAMILY_NAMES_OF.map(([people], k) => [peoples[k], words(people)])),
+    hungarian: [...words(HUNGARIAN), ...words(HUNGARIAN_MORE)], hungarianAccented: words(HUNGARIAN_ACCENTED),
+    hungarianShared: words(HUNGARIAN_SHARED), hungarianFamily: words(HUNGARIAN_FAMILY) };
 }

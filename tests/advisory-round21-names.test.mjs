@@ -180,7 +180,7 @@ test('minor 6: Add compares the whole name, so a relative written the same way i
     // (a given name the list doesn't have after the comma: the address is the words before it, and still never offered as
     // the relative: "Piet" isn't on the list)
     const piet = await plan((await applied('van der Berg, Piet')).id);
-    assert.deepEqual([piet.kind, piet.slug, among(piet)], ['new', 'van-der-berg', []], 'van der Berg, Piet');
+    assert.deepEqual([piet.kind, piet.slug, among(piet)], ['new', 'van-der-berg-piet' /* r23: rule 7, a particle proves a family name: Piet, off the list, is still the given name, in the address */, []], 'van der Berg, Piet');
     // (the same person written the other way round is asked about, both ways)
     const back = await plan((await applied('Maria De La Cruz')).id);
     assert.deepEqual([back.kind, among(back)], ['choose', ['de-la-cruz-maria']]);

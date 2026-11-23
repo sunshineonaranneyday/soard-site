@@ -20,9 +20,10 @@
 
 import { openDoc, fileUrl } from './docs.js';
 import {
-  meetingName, longDate, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, itemFiles, looseFiles, fileTitle, isDate, clock, sectionPlan, MORE,
-  showsOf, booksDraw, isStatement, attendanceCounts, quorumFor, tallyText, minutesFileOf, docxText, heldEarly, todayEastern, shortDate,
+  meetingName, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, itemFiles, looseFiles, fileTitle, isDate, clock, sectionPlan, MORE,
+  showsOf, booksDraw, isStatement, attendanceCounts, quorumFor, tallyText, minutesFileOf, docxText, heldEarly, todayEastern,
 } from '../board-shared.js';
+import { shortDate, longDate, dayText } from './parts.js';
 import { moneyFor, moneyTiles, mixOf, mixLeftOut, mixLessWords, changeOf, ptsOf, storeOf, storeChange, budgetMonthsText, stepText, readChangeAs, changeIn, overIn, budgetName } from './money.js';
 import { minutesState, MINUTES_SAID } from './minutes.js';
 import { reportDom, motionDom } from '../board-report.js';
@@ -46,7 +47,7 @@ function points(text) {
 }
 
 const STAGE_FLOW = ['Awaiting Funding', 'Design', 'Finalization', 'Approval', 'Mobilization', 'Build'];
-const dayWords = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }) : '');
+const dayWords = (d) => dayText(d, 'wmd');
 
 /** The makeovers on paper: a column per stage, each family by name with their reveal */
 function makeoversBox(n) {
@@ -125,8 +126,8 @@ function revenueBox(books) {
   return box;
 }
 
-const fullDate = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
-const shortDay = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
+const fullDate = (d) => dayText(d, 'MDY');
+const shortDay = (d) => dayText(d, 'mdy');
 // (nothing to show: a blank cell, never a dash)
 const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).replace('-', '')}` : '');
 /**

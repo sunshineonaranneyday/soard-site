@@ -11,8 +11,8 @@
  */
 
 import { h, htm, useRef, useEffect } from '../vendor.js';
-import { sized } from './parts.js';
-import { shortDate, clock, plural, initialsOf } from '../board-shared.js';
+import { sized, shortDate } from './parts.js';
+import { clock, plural, initialsOf } from '../board-shared.js';
 
 const html = htm.bind(h);
 export { sized };

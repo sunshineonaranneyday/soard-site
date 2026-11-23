@@ -5,7 +5,8 @@
  */
 
 import { h, htm, useState } from '../vendor.js';
-import { initialsOf, shortDate } from '../board-shared.js';
+import { initialsOf } from '../board-shared.js';
+import { shortDate } from './parts.js';
 import { tierById, fmtScore, TOTAL_MAX } from '../scoring-shared.js';
 import { viewerLink, sizeText, VideoTile } from '../file-viewer.js';
 import { sized } from './kanban.js';
@@ -16,7 +17,7 @@ const API = '/api/board-portal';
 export const STATUSES = ['Approved', 'In Review', 'Applied', 'Denied'];
 const STATUS_TONE = { Approved: 'ok', 'In Review': 'info', Applied: '', Denied: 'quiet', '': 'quiet' };
 const hueOf = (s) => [42, 28, 96, 152, 200, 18][[...String(s)].reduce((a, c) => a + c.charCodeAt(0), 0) % 6];
-export const day = (iso) => (iso ? shortDate(String(iso).slice(0, 10)) : '');
+export const day = (iso) => shortDate(iso);
 export const cache = { list: null, one: new Map() };
 
 export async function read(q) {

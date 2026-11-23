@@ -901,6 +901,8 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 .bp-cash__src { margin: 0; max-width: 24rem; color: var(--muted); font-size: 0.88rem; text-align: right; }
 .bp-cash__months { margin: 0.45rem 0 0; max-width: 34rem; color: var(--muted); font-size: 0.92rem; }
 .bp-cash__months strong { color: var(--ink); font-weight: 750; }
+/* Month-end balances: this month's row is so far this month, never a month's end (./money.js monthSoFar) */
+.bp-cm__now { font-size: inherit; font-weight: 400; color: var(--muted); }
 .bp-up { color: var(--ok); font-weight: 650; }
 .bp-down { color: var(--warn); font-weight: 650; }
 /* One set of columns for every account (subgrid), so each bar is measured on the same track */
@@ -972,7 +974,8 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
   .bp-table.bp-cmp td.bp-cmp__ly { grid-column: 1; text-align: left; color: var(--muted); font-size: 0.84rem; font-weight: 400; }
   .bp-cmp .bp-cmp__ly::before { content: attr(data-label) ": "; }
   .bp-table.bp-cmp td.bp-cmp__chg { grid-column: 2; font-size: 0.84rem; }
-  .bp-mixtable.bp-cmp td small { display: inline; margin-left: 0.4rem; }
+  /* (beside its amount, after the real space between them: a screen reader hears "$700,000 42%") */
+  .bp-mixtable.bp-cmp td small { display: inline; margin-left: 0.15rem; }
 }
 .bp-mixtable tbody th, .bp-mixtable td { vertical-align: top; }
 .bp-mixtable__name { display: inline-flex; align-items: center; gap: 0.5rem; }
@@ -2860,6 +2863,8 @@ p.bp-rp__motion-st { margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--muted
   /* On a phone the answer in its short words, and each job underway a block: its name, then stage, paid and still to come */
   .bc-answer__says:not(.bc-answer__says--short):has(+ .bc-answer__says--short) { display: none; }
   .bc-answer__says--short { display: block; }
+  /* …and its full words shown when a search lands on them (a figure only they say: ./figures.js, #bc-says) */
+  .bc-answer__says.is-found:not(.bc-answer__says--short) { display: block; }
   .bc-under__wrap { overflow: visible; }
   .bc-under__table { min-width: 0; }
   .bc-under__table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }

@@ -23,11 +23,12 @@
 import { h, htm, useState, useEffect, useRef, useMemo } from '../vendor.js';
 import { openDoc, layoutOf, areaOf, partsOf, showOf, docKind, pageWordOf, fileUrl } from './docs.js';
 import {
-  meetingName, longDate, shortDate, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, deckOf, sidePhoto, spreadsOf, pagesText, stopIndex, isDate, clock, todayEastern, MORE,
+  meetingName, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, deckOf, sidePhoto, spreadsOf, pagesText, stopIndex, isDate, clock, todayEastern, MORE,
   sectionPlan, sectionClock, clockText, liveOfStop, facesOf, itemDocs, docsOf, docTitle, formatOf, plural, initialsOf, namesText, LIVE_TITLES,
   hasReport, isNothingNew, NOTHING_NEW, slidesOfItem, slideHeadsOfItem, shownLook,
 } from '../board-shared.js';
 import { useCover, usePages } from '../board-present.js';
+import { shortDate, longDate, dayText, dayIn } from './parts.js';
 import { Report } from '../board-report.js';
 import { BooksSlide, booksTitle } from './books.js';
 import { mdWords, mdPoints, mdFigures, mdNumber, mdPlain } from '../board-md.js';
@@ -664,8 +665,8 @@ function Points({ text }) {
 }
 
 // ─── Live facts at the size of a room ───────────────────────────────
-const dayWords = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) : '');
-const monDay = (d) => { const t = new Date(`${d}T12:00:00Z`); return { mon: t.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }), day: t.getUTCDate() }; };
+const dayWords = (d) => dayText(d, 'wMD');
+const monDay = (d) => ({ mon: dayText(d, 'm'), day: Number(dayIn(d).slice(8, 10)) || NaN });
 const windowStart = (w) => (/^\d{4}-\d{2}$/.test(String(w?.month || '')) ? `${w.month}-${{ early: '01', mid: '11', late: '21' }[w.part] || '01'}` : '');
 function Tile({ d, word = '' }) {
   if (!isDate(d)) return html`<span class="bs-tile is-soft" aria-hidden="true"><span>·</span><strong>${word || '?'}</strong></span>`;
@@ -782,8 +783,8 @@ function RevealsSlide({ n }) {
   const units = stops.reduce((t, g) => t + across(g), 0) + (more ? 1 : 0);
   // One way of saying the months along the whole line: in full when there's room, short when it's busy
   const full = stops.length <= 3 && !more && stops.every((g) => across(g) >= 2);
-  const month = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
-  const weekday = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: full ? 'long' : 'short', timeZone: 'UTC' });
+  const month = (d) => dayText(d, 'md');
+  const weekday = (d) => dayText(d, full ? 'w' : 'ws');
   const sameTime = (g) => g.list.every((x) => x.time === g.first.time);
   const head = (g) => {
     const r = g.first;
@@ -1123,7 +1124,7 @@ function SinceSlide({ v, n, meeting }) {
   // A list longer than that gives its last row to "and N more", so the column is never taller for having more
   const list = (all) => all.slice(0, all.length > cap ? cap - 1 : cap);
   const ref = useFit([JSON.stringify([reveals.map((r) => r.name), events.map((e) => e.title), open.map((a) => a.text)])], { min: 0.84 });
-  const day = (d) => shortDate(d).replace(/, \d{4}$/, '');
+  const day = (d) => dayText(d, 'md');
   const left = (all, shownN, word) => (all.length > shownN ? html`<p class="bs-since__left">and ${all.length - shownN} more ${word}</p>` : null);
   const ev = list(events);
   const acts = list(open);

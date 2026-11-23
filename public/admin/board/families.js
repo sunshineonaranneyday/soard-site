@@ -27,7 +27,7 @@ import { plural } from '../board-shared.js';
 import { criteriaOf, rubricOfSeason, fmtScore, TOTAL_MAX, TIERS } from '../scoring-shared.js';
 import { nbw } from './costs.js';
 import { Blank } from './money.js';
-import { useKept } from './parts.js';
+import { useKept, More } from './parts.js';
 import { Face, Score, asked, place, areaWords, byScore, day, read, cache, seasonsOf, Media } from './family-parts.js';
 import { FamilyMap } from './family-map.js';
 import { STAGES, stageLabel, byStage, isFamily } from './stages.js';
@@ -114,11 +114,10 @@ export function FamiliesPage({ view = 'board', open = '', projects = null, revea
 function Meanings({ crit }) {
   return html`<div class="bf-means">
     <h3 class="bf-means__h">What each score means</h3>
-    ${crit.map((c) => html`<details class="bf-mean" key=${c.key}>
-      <summary>${c.label}</summary>
+    ${crit.map((c) => html`<${More} k=${`mean-${c.key}`} cls="bf-mean" summary=${c.label} key=${c.key}>
       ${c.note ? html`<p class="bf-mean__note">${c.note}</p>` : null}
       <ol class="bf-mean__levels" role="list">${(c.levels || []).map((words, i) => html`<li key=${i}><b>${i + 1}</b> <span>${words}</span></li>`)}</ol>
-    </details>`)}
+    </${More}>`)}
   </div>`;
 }
 

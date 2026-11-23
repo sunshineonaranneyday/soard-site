@@ -38,7 +38,7 @@ import {
   isLive, agendaItems, isFilled, hasSince, reportsOn, showsOf, slidesOf, booksDraw, isStatement, LIVE_TITLES, SHOW_KINDS, tallyText, cleanLive, presentersOf, namesText, itemFiles, guessItem, deckOf, stopIndex, liveOfStop, pagesText, MORE,
   sectionPlan, sectionOf, sectionClock, clockText, facesOf, itemDocs, docTitle, formatOf, docsOf, looseFiles, NOTHING_NEW, isNothingNew, copyOfItem, minutesToRead, packetDocs, minutesFileOf, ownMinutesFile,
   signInKnown, minutesTarget, meetingOver, meetingHeld, inviteIsRecord, shareWaits, cleanTemplate, followAddresses,
-  noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay,
+  noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay, approvedFileOf, FILE_STAYS, askedOf,
 } from './board-shared.js';
 import { openScreen, mirrorUrl, useScreen, usePages, stepKey, useCover } from './board-present.js';
 import { printMinutesTemplate, downloadMinutesDocx } from './board-minutes-template.js';
@@ -106,11 +106,20 @@ const move = (list, i, d) => { const out = [...list]; const [x] = out.splice(i, 
  * sign-in): by name, or "you" when it was this founder's own other tab, never their own name as if someone else's
  * (QA round 6, Nov 21 2026). Everyone whose saves changed what clashes is named (`who`: clashWho's, [{ by, clashes }]),
  * each with what they changed, never only whoever saved last, so Keep mine never drops a change whose maker the question
- * didn't name (Board QA round 10, Nov 22 2026)
+ * didn't name (Board QA round 10, Nov 22 2026). `unknown`: Board can't tell who saved since this page's copy (clashWho
+ * null): said in words, nobody named, never "your other tab" guessed (Board QA round 11, Nov 23 2026)
  */
-export function clashQuestion({ by = '', me = '', what = 'this meeting', clashes = [], who = null }) {
+export function clashQuestion({ by = '', me = '', what = 'this meeting', clashes = [], who = null, unknown = false }) {
   const listOf = (l) => `${l.slice(0, 3).join(', ')}${l.length > 3 ? ' and more' : ''}`;
   const list = listOf(clashes);
+  // (Board can't tell who saved since this page's copy, clashWho: said so, never a name guessed. Board QA round 11)
+  if (unknown) {
+    return {
+      title: `${what.charAt(0).toUpperCase()}${what.slice(1)} changed since this page opened it`,
+      text: `${list.charAt(0).toUpperCase()}${list.slice(1)} changed here and on the site since this page opened it, too long ago for Board to know who changed ${clashes.length === 1 ? 'it' : 'them'}. Keep what’s here, or take what’s saved? Everything else from both is kept.`,
+      yes: 'Keep what’s here', no: 'Take what’s saved',
+    };
+  }
   const mine = (x) => !!x && !!me && sameBy(x, me);
   const people = Array.isArray(who) && who.length ? who : [{ by, clashes }];
   if (people.length === 1 && mine(people[0].by)) {
@@ -138,12 +147,15 @@ const sameBy = (a, b) => String(a || '').toLowerCase() === String(b || '').toLow
  * (`was`): each save the site kept since (`saves`, oldest first, a 409's: functions/api/_board.js savesChain) against
  * the one before it and what's on this page now (`mine`), each with every rename followed first (`follow`), so a
  * rename that only moved an address never counts (Board QA round 9). `shape`: a save's data as a meeting to merge.
- * When the site hasn't every save since (`saves` null): everyone who saved since (`savers`, and `by`, the last), each
- * with every clash, so no change is dropped without its maker named. → [{ by, clashes }] in the order they saved, for
- * clashQuestion. Board QA round 10, Nov 22 2026: a rename that only followed an address was named for the founder's
- * change in another tab, and Keep mine dropped that change
+ * When the site knows everyone who saved since but not each save's words (`saves` null, `savers` a list): each of them
+ * (and `by`, the last), with every clash, so no change is dropped without its maker named. When it doesn't know who
+ * saved since at all (both null: this page's copy is older than the history it keeps): null, for clashQuestion to say
+ * so, never a name guessed from the saves it has (Board QA round 11, Nov 23 2026: past 30 saves, only "your other tab"
+ * was named, and Keep what's here dropped Pat's change). → [{ by, clashes }] in the order they saved, for clashQuestion,
+ * or null. Board QA round 10, Nov 22 2026: a rename that only followed an address was named for the founder's change in
+ * another tab, and Keep mine dropped that change
  */
-export function clashWho({ clashes = [], was, mine, saves = null, savers = [], by = '', shape = (x) => x, follow = (x) => x }) {
+export function clashWho({ clashes = [], was, mine, saves = null, savers = null, by = '', shape = (x) => x, follow = (x) => x }) {
   const out = [];
   const add = (who, list) => {
     const had = out.find((x) => sameBy(x.by, who));
@@ -152,7 +164,8 @@ export function clashWho({ clashes = [], was, mine, saves = null, savers = [], b
   };
   if (!clashes.length) return out;
   if (!Array.isArray(saves)) {
-    for (const who of [...(savers || []), by]) add(who, clashes);
+    if (!Array.isArray(savers)) return null;
+    for (const who of [...savers, by]) add(who, clashes);
     return out;
   }
   let prev = was;
@@ -441,7 +454,7 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
           // renames' addresses followed as the site follows them, so a rename's own rewrite is never a change of its own)
           const follow = (x) => (j.addressesNow ? cleanMeeting(followAddresses(x, j.addressesNow)) : x);
           const who = clashWho({ clashes, was: follow(opened), mine: cleanMeeting(mRef.current), saves: j.saves, savers: j.savers, by: j.current.updatedBy, shape: (d) => cleanMeeting(d), follow });
-          const keepMine = await ask(clashQuestion({ by: j.current.updatedBy, me: data.me, what: 'this meeting', clashes, who }));
+          const keepMine = await ask(clashQuestion({ by: j.current.updatedBy, me: data.me, what: 'this meeting', clashes, who, unknown: who === null }));
           if (!keepMine) prefer = 'theirs';
         }
         saved.current = theirs;
@@ -479,6 +492,12 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
     // Refused for good, by name (functions/api/_board.js holdShare, saveMeeting): those fields put back as the site has
     // them now (the refusal carries the meeting as it is), never from this tab's own copy, which may be older
     refused: (j) => {
+      // (approved minutes' own file put on an item: it comes off the items here, as the site has it on none, and the rest
+      // goes. functions/api/_board.js saveMeeting, Board QA round 11)
+      if (j.status === 409 && Array.isArray(j.refused) && j.refused.includes('docs') && j.fileId) {
+        setM((x) => ({ ...x, sections: x.sections.map((s) => ({ ...s, items: s.items.map((it) => ((it.docs || []).includes(j.fileId) ? { ...it, docs: it.docs.filter((d) => d !== j.fileId) } : it)) })) }));
+        return 'Not put with the item';
+      }
       const fields = j.status === 409 && Array.isArray(j.refused) ? j.refused.filter((f) => EDITABLE.includes(f)) : [];
       if (!fields.length) return '';
       const sv = j.meeting ? cleanMeeting(j.meeting) : saved.current;
@@ -579,6 +598,7 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
       // minutes (functions/api/_board.js sendOnce: 409 { sending | already }), or Resend not answering. It goes on the
       // page (a second tab shows "Email again", not "Email the board"), and a send already going or gone is said as news
       if (j.meeting) take(j.meeting);
+      else if (j.reread) ctx.load({ quick: true });
       const went = !!(j.sending || j.already);
       if (went) settled?.(j);
       addToast(sentence(j.error || 'That didn’t go through. Try again.'), went ? 'info' : 'error');
@@ -586,6 +606,9 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
     }
     if (j.meeting) take(j.meeting);
     settled?.(j);
+    // Done, and a read for the answer didn't answer (functions/api/board-admin.js after): the page looks again by itself,
+    // and shows what the site has a moment later (Board QA round 11)
+    if (j.reread) ctx.load({ quick: true });
     return j;
   };
   const remove = async () => {
@@ -1001,7 +1024,8 @@ function AgendaEditor({ m, set, ctx, keepSaved, onFocusItem = () => {}, template
     if (!files.length) return;
     setBusy(id);
     for (const f of files) {
-      const j = await upload(f, { ownerType: 'meeting', ownerId: m.id, kind: kindOfName(f.name) });
+      // (for this item: on a meeting whose minutes are approved, never their minutes. Board QA round 11)
+      const j = await upload(f, { ownerType: 'meeting', ownerId: m.id, kind: kindOfName(f.name), forItem: true });
       if (!j.ok) { addToast(`${f.name}: ${j.error}`, 'error'); continue; }
       // (sent as the minutes when the minutes are approved: an ordinary file of the meeting, and said. Board QA round 10)
       if (j.asFile) addToast(`${docTitle(j.file.name)}: ${j.asFile}`, 'info');
@@ -1206,7 +1230,8 @@ function AgendaEditor({ m, set, ctx, keepSaved, onFocusItem = () => {}, template
         <ul class="ag-items agx-items">
           ${s.items.map((it, ii) => {
             const files = itemFiles(m, it, data.meetings);
-            const free = m.files.filter((f) => !(it.docs || []).includes(f.id) && f.kind !== 'signed');
+            // (never the approved minutes' own file: it stays their minutes, board-shared.js approvedFileOf. Round 11)
+            const free = m.files.filter((f) => !(it.docs || []).includes(f.id) && f.kind !== 'signed' && f.id !== approvedFileOf(m));
             const live = it.live && it.live !== 'minutes' ? it.live : '';
             const shows = showsOf(it);
             return html`<li class=${`ag-item agx-item ${over === it.id ? 'is-over' : ''} ${live ? 'has-live' : ''} ${drag?.id === it.id ? 'is-dragging' : ''} ${hint?.id === it.id ? (hint.after ? 'drop-after' : 'drop-before') : ''}`} key=${it.id} data-item=${it.id} style=${`view-transition-name: agx-${it.id}`} ...${itemTarget(s, it)}>
@@ -1345,7 +1370,7 @@ export function AgendaTemplate({ ctx }) {
           // renames' addresses followed as the site follows them, so a rename's own rewrite is never a change of its own)
           const follow = (x) => (j.addressesNow ? asMeeting(followAddresses({ sections: x.sections }, j.addressesNow).sections) : x);
           const who = clashWho({ clashes, was: follow(opened), mine: asMeeting(latest.current.sections), saves: j.saves, savers: j.savers, by: j.current.by, shape: (d) => asMeeting(d), follow });
-          const keepMine = await ask(clashQuestion({ by: j.current.by, me: ctx.data?.me, what: 'the agenda template', clashes, who }));
+          const keepMine = await ask(clashQuestion({ by: j.current.by, me: ctx.data?.me, what: 'the agenda template', clashes, who, unknown: who === null }));
           if (!keepMine) prefer = 'theirs';
         }
         seen.current = theirs;
@@ -1578,6 +1603,10 @@ function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved }) {
   const items = agendaItems(m);
   const whereOf = (x) => items.find((it) => m.sections[it.si].items[it.ii].docs?.includes(x.id))?.id || '';
   const name = docTitle(f.name);
+  // Approved minutes' own file stays their minutes while they're approved: nothing that takes it off them is offered
+  // (another kind, Delete, an agenda item), as the site refuses them (functions/api/_board-minutes.js approvedFileNo).
+  // Filed under Minutes it can be, when it isn't. Board QA round 11
+  const stays = f.id === approvedFileOf(m);
   const update = async (f, patch, said = '', undo = null) => {
     const j = await call({ action: 'update-file', id: f.id, ...patch });
     if (!j.ok) { addToast(j.error, 'error'); return false; }
@@ -1614,7 +1643,7 @@ function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved }) {
       ? html`<input class="form-input bf-rename" aria-label=${`New name for ${name}`} value=${name} ref=${(el) => { if (el && !el.dataset.on) { el.dataset.on = '1'; renamed.current = ''; el.focus(); el.select(); } }}
           onKeyDown=${(e) => { if (e.key === 'Enter') { e.preventDefault(); rename(f, e.target.value); } if (e.key === 'Escape') { e.preventDefault(); setRenaming(''); } }} onBlur=${(e) => rename(f, e.target.value)} />`
       : html`<a class="bd-file-name" data-file=${f.id} ...${viewerLink(vf, i)}>${name}</a>`}<div class="bd-row__meta">${[sizeText(f.size), f.at ? `added ${dayOf(f.at)}` : ''].filter(Boolean).join(' · ')}</div></div>
-    ${goes && f.kind !== 'signed' ? html`<${ItemChooser} items=${items} value=${whereOf(f)} label=${`Which agenda item ${name} goes with`} onChange=${place} />` : null}
+    ${goes && f.kind !== 'signed' && !stays ? html`<${ItemChooser} items=${items} value=${whereOf(f)} label=${`Which agenda item ${name} goes with`} onChange=${place} />` : null}
     <button type="button" role="switch" class=${`bf-seen ${f.staffOnly ? 'is-staff' : ''}`} aria-checked=${!f.staffOnly} aria-label=${`The board sees ${name}`}
       onClick=${() => update(f, { staffOnly: !f.staffOnly }, f.staffOnly ? `The board sees ${name}` : `${name} is staff only: only ${youAnd(data.settings.admins, data.me)} see it`, { staffOnly: !!f.staffOnly })}>
       <span class="bf-seen__track" aria-hidden="true"><span class="bf-seen__dot"></span></span><span class="bf-seen__t">${f.staffOnly ? 'Staff only' : 'Board sees it'}</span></button>
@@ -1622,9 +1651,10 @@ function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved }) {
       { icon: 'rename', label: 'Rename', run: () => setRenaming(f.id) },
       { divider: true },
       { heading: 'File it under' },
-      ...kinds.filter((x) => x.id !== 'side' || /^image\//i.test(f.type || '')).map((x) => ({ label: x.label, chosen: x.id === f.kind, run: () => { if (x.id !== f.kind) update(f, { kind: x.id }, `${name} is under ${x.label}`, { kind: f.kind }); } })),
+      ...(stays ? FILE_KINDS.filter((x) => x.id === f.kind || x.id === 'minutes') : kinds).filter((x) => x.id !== 'side' || /^image\//i.test(f.type || ''))
+        .map((x) => ({ label: x.label, chosen: x.id === f.kind, title: stays ? FILE_STAYS : null, run: () => { if (x.id !== f.kind) update(f, { kind: x.id }, `${name} is under ${x.label}`, stays ? null : { kind: f.kind }); } })),
       { divider: true },
-      { icon: 'trash', label: 'Delete the file', danger: true, run: () => remove(f, n) },
+      stays ? null : { icon: 'trash', label: 'Delete the file', danger: true, run: () => remove(f, n) },
     ]} />
   </li>`;
 }
@@ -1850,7 +1880,9 @@ function GettingReady({ m, set, ctx, act, save, saved }) {
     setWorking('');
     // (what it says: words, or { text, kind } for one that went but not all the way: an approval whose email didn't go)
     const said = j && ok ? (typeof ok === 'function' ? ok(j) : ok) : '';
-    if (said) addToast(typeof said === 'string' ? said : said.text, typeof said === 'string' ? 'info' : said.kind);
+    // (`later`: what shows here once the page looks again, when the site's read for the answer didn't answer)
+    const text = typeof said === 'string' ? said : said?.text;
+    if (said) addToast(j.later ? `${sentence(text)} ${j.later}` : text, typeof said === 'string' ? 'info' : said.kind);
     if (j && !body.test) { setDoubt((d) => ({ ...d, [name]: null })); focusNext('.bm-ready'); } else focusTask(task, '.bm-ready');
     return j;
   };
@@ -2148,7 +2180,7 @@ function Coming({ m, ctx, act }) {
   // Who the reminder went to and when, as the site keeps it (functions/api/_board.js remindedOf: the send's own record),
   // so every tab says so, after a reload too, as Email the board does. Board QA round 8, Nov 21 2026: "Asked … just now"
   // lived only in the tab that sent it, and another tab asked the whole board again with the first-time question
-  const reminded = m.reminded || {};
+  const reminded = askedOf(m, data.members);
   const lastAsked = Object.values(reminded).sort().at(-1) || '';
   const askedLast = lastAsked ? board.filter((x) => reminded[x.slug] === lastAsked).map((x) => x.name.split(' ')[0]) : [];
   const allAsked = quiet.length > 0 && quiet.every((p) => reminded[p.slug]);
@@ -2169,7 +2201,7 @@ function Coming({ m, ctx, act }) {
       if (!who.length) { addToast('Everyone on the invite has answered it, so there’s no one to ask.', 'info'); requestAnimationFrame(() => head.current?.focus()); return; }
       // Asked already, as the site has it at the press: said with when, as the other sends' "again" questions are, and
       // asked carefully (the focus on Cancel); someone not asked yet is asked plainly
-      const had = sm.reminded || {};
+      const had = askedOf(sm, d.members);
       const again = who.filter((x) => had[x.slug]);
       const when = new Map();
       for (const x of again) when.set(ago(had[x.slug]), [...(when.get(ago(had[x.slug])) || []), x.name]);
@@ -2184,17 +2216,18 @@ function Coming({ m, ctx, act }) {
     // (coordinator, Board QA round 8); with nothing new in it, it may have gone
     const j = await act({ action: 'remind-rsvp', id: m.id, test }, { lost: ({ was, now }) => {
       if (test) return { text: `${LOST}, so this page can’t tell whether the test went. Look in your inbox before sending it again.`, known: false };
-      const last = (x) => Object.values(x?.reminded || {}).sort().at(-1) || '';
+      const members = look?.ok ? look.members || data.members : data.members;
+      const last = (x) => Object.values(askedOf(x, members)).sort().at(-1) || '';
       const at = last(now);
       if (at && at > last(was)) {
-        const names = board.filter((x) => now.reminded[x.slug] === at).map((x) => x.name);
+        const names = board.filter((x) => askedOf(now, members)[x.slug] === at).map((x) => x.name);
         return { text: `${LOST}, but it went: ${andList(names)} ${names.length === 1 ? 'was' : 'were'} asked ${ago(at)}.`, known: true };
       }
       setDoubt(new Date().toISOString());
       return { text: lostOnce('the reminder went'), known: false };
     }, settled: () => { if (!test) setDoubt(''); } });
     setWorking('');
-    if (j) addToast(test ? `Sent to ${j.to?.[0] || 'you'}` : `Asked ${plural(j.sent, 'board member')}${j.notOnInvite?.length ? `. Not on the invite: ${j.notOnInvite.join(', ')}` : ''}`, 'info');
+    if (j) addToast(test ? `Sent to ${j.to?.[0] || 'you'}` : `Asked ${plural(j.sent, 'board member')}${j.notOnInvite?.length ? `. Not on the invite: ${j.notOnInvite.join(', ')}` : ''}${j.later ? `. ${j.later}` : ''}`, 'info');
     if (j && !test) setDoubt('');
     // The focus on what the press did ("Asked … just now"), else the card's name: never on Ask, nor one key from it
     // (Enter on Ask opens its question on "Ask all 4", and a second Enter sends it to the board)
@@ -2579,7 +2612,7 @@ function WrapUp({ m, set, ctx, act, save, saved, keepSaved }) {
       return { text: lostOnce('the board was emailed'), known: false };
     }, settled: () => { if (!test) setDoubt(''); } });
     setWorking('');
-    if (j) { if (!test) setDoubt(''); addToast(test ? `Sent to ${j.to?.[0] || 'you'}` : `Emailed ${plural(j.sent, 'board member')}`, 'info'); focusNext('.bm-wrap'); } else focusTask(task, '.bm-wrap');
+    if (j) { if (!test) setDoubt(''); addToast(test ? `Sent to ${j.to?.[0] || 'you'}` : `Emailed ${plural(j.sent, 'board member')}${j.later ? `. ${j.later}` : ''}`, 'info'); focusNext('.bm-wrap'); } else focusTask(task, '.bm-wrap');
   };
   // Said once the site has it, never before; one that didn't go says why, and the page shows what the site has (putOnPage)
   const pressed = { set, save, saved, addToast };

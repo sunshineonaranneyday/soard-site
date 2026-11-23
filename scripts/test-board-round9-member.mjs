@@ -574,7 +574,7 @@ try {
     await p.waitForSelector('.bp-mixtable tbody tr', { timeout: 10000 }).catch(() => {});
     await sleep(800);
     const fin = await p.evaluate(() => ({
-      rows: [...document.querySelectorAll('.bp-mixtable tbody tr')].map((tr) => ({ name: tr.querySelector('.bp-mixtable__name')?.textContent.trim() || '', amount: tr.querySelector('td.num')?.firstChild?.textContent || '', share: tr.querySelector('td.num small')?.textContent || '', change: tr.querySelector('.bp-cmp__chg')?.innerText.trim() || '' })),
+      rows: [...document.querySelectorAll('.bp-mixtable tbody tr')].map((tr) => ({ name: tr.querySelector('.bp-mixtable__name')?.textContent.trim() || '', amount: (tr.querySelector('td.num')?.firstChild?.textContent || '').trim() /* r11: a real space now parts the amount from its share, so a screen reader hears them apart */, share: tr.querySelector('td.num small')?.textContent || '', change: tr.querySelector('.bp-cmp__chg')?.innerText.trim() || '' })),
       less: (document.querySelector('#mix-less')?.textContent || '').replace(/\u00a0/g, ' '),
     }));
     // (each part's readout on hover)
@@ -787,11 +787,12 @@ try {
     await open(p, '#/');
     await sleep(1200);
     for (const [q, title, line] of [
-      ['$376K', `${Y0} revenue so far on the year’s chart, against ${LY}’s same days`, `Up $376,045 ($376K) on ${LY}’s same days, in kind included`],
-      ['376045', `${Y0} revenue so far on the year’s chart, against ${LY}’s same days`, `Up $376,045 ($376K) on ${LY}’s same days, in kind included`],
-      ['$226K', `${Y0} revenue, against ${LY}’s same days`, `Up $226,045 ($226K) on ${LY}’s same days, in kind left out`],
+      /* r11: the short form after a comma, never in brackets, which on this page say below zero (Board QA round 11) */
+      ['$376K', `${Y0} revenue so far on the year’s chart, against ${LY}’s same days`, `Up $376,045, or $376K, on ${LY}’s same days, in kind included`],
+      ['376045', `${Y0} revenue so far on the year’s chart, against ${LY}’s same days`, `Up $376,045, or $376K, on ${LY}’s same days, in kind included`],
+      ['$226K', `${Y0} revenue, against ${LY}’s same days`, `Up $226,045, or $226K, on ${LY}’s same days, in kind left out`],
       ['$50K', `${Y0} expenses, against ${LY}’s same days`, `Down $50,000 on ${LY}’s same days, in kind and depreciation left out`],
-      ['$276K', `${Y0} net, against ${LY}’s same days`, `Up $276,045 ($276K) on ${LY}’s same days, in kind and depreciation left out`],
+      ['$276K', `${Y0} net, against ${LY}’s same days`, `Up $276,045, or $276K, on ${LY}’s same days, in kind and depreciation left out` /* r11: the short form after a comma, never in brackets */],
     ]) {
       const found = (await search(p, q)).filter((x) => x.g === 'Money');
       const hit = found.find((x) => x.title === title);

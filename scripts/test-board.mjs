@@ -2187,7 +2187,8 @@ try {
       }
       const rows = await money.$$eval('.bp-mixtable tbody tr', (r) => r.map((x) => x.textContent));
       // (shares of the year's revenue as its figures count it, in kind left out: QA round 2)
-      ok(rows.length === 5 && rows[1] === 'Store salesStore Income, Store Discounts$415,00025%$830,000▼ 50%' && /^Everything elseGolf Classic, Rent, Interest, Makeover\$51,0453%\$0/.test(rows[4]) && rows[3] === 'GrantsGrant Revenue$90,0006%$0New', `Financials: each category with its accounts, beside last year’s same days (one new this year says so, never a dash) (${JSON.stringify(rows)})`);
+      /* r11: a real space parts each amount from its share (Board QA round 11: a screen reader heard "$415,00025%") */
+      ok(rows.length === 5 && rows[1] === 'Store salesStore Income, Store Discounts$415,000 25%$830,000▼ 50%' && /^Everything elseGolf Classic, Rent, Interest, Makeover\$51,045 3%\$0/.test(rows[4]) && rows[3] === 'GrantsGrant Revenue$90,000 6%$0New', `Financials: each category with its accounts, beside last year’s same days (one new this year says so, never a dash) (${JSON.stringify(rows)})`);
       await money.goto(`${SITE}/admin/board/#/meetings/${meetingId}`, { waitUntil: 'networkidle0' });
       ok(await money.waitForSelector('.bp-agitem .bp-agmix', { timeout: 6000 }).then(() => true, () => false), 'the meeting: its money item says where the revenue came from');
       ok(/^Sales\$415K/.test(await money.$eval('.bp-agitem .bp-agstore .bp-store li', (x) => x.textContent).catch(() => '')), 'the meeting: its money item has the store');

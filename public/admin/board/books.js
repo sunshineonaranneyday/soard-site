@@ -15,14 +15,15 @@
  */
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
-import { money, shortDate, mainLines, statementBreaks, linePlaces } from '../board-shared.js';
+import { money, mainLines, statementBreaks, linePlaces } from '../board-shared.js';
+import { More, shortDate, dayText } from './parts.js';
 import { compact, storeOf, storeChange, budgetMonthsText, marginText, changeIn, overIn, Both, Blank, budgetName, yearFigures, spentOf } from './money.js';
 import { lineKeysOf, notesByKey, NoteLine } from './review.js';
 
 const html = htm.bind(h);
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const dayMonth = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' }) : '');
+const dayMonth = (d) => dayText(d, 'MD');
 
 /** "▲ 25%" against last year ('Even', or '' with nothing to set it beside) */
 export const changeWords = (a, p) => {
@@ -211,8 +212,9 @@ export function yearEnds(books) {
 
 /**
  * The year so far against last year, month by month: revenue and expenses side by side (two charts on one axis, so
- * the bigger reads bigger), each with its figures in words above it, the numbers as a table under. Null without the
- * months
+ * the bigger reads bigger), each with its figures in words above it, the numbers as a table under, in a fold Back and
+ * a reload keep open (./parts.js More, `${idp}-months`: Board QA round 11 found it the one fold that came back shut).
+ * Null without the months
  */
 export function YearCompare({ books, idp = 'by', tall = false, as = 'pct' }) {
   const ends = yearEnds(books);
@@ -248,15 +250,14 @@ export function YearCompare({ books, idp = 'by', tall = false, as = 'pct' }) {
         <${YearLines} id=${`${idp}-exp`} title="Expenses" now=${s.spent.now} then=${s.spent.then} year=${s.year} lastYear=${s.lastYear} upTo=${s.upTo} ax=${ax} sameDays=${sameExp} through=${through} tall=${tall} as=${as} />
       </figure>
     </div>
-    <details class="by-table">
-      <summary>The numbers, month by month</summary>
+    <${More} k=${`${idp}-months`} cls="by-table" summary="The numbers, month by month">
       <div class="by-table__scroll"><table>
         <thead><tr><th scope="col">By the end of</th><th scope="col" class="num">Revenue ${s.year}</th>${s.revenue.then ? html`<th scope="col" class="num">${s.lastYear}</th>` : null}<th scope="col" class="num">Expenses ${s.year}</th>${s.spent.then ? html`<th scope="col" class="num">${s.lastYear}</th>` : null}</tr></thead>
         <tbody>${MON.map((mo, i) => html`<tr key=${mo} class=${i === s.upTo ? 'is-now' : ''}><th scope="row">${MONTH[i]}${i === s.upTo && through ? html`<small> through ${dayMonth(through)}</small>` : null}</th>
           <td class="num" id=${`${idp}-m${i}-rn`}>${cellOf(s.revenue.now[i], 'Not yet')}</td>${s.revenue.then ? lastCell(s.revenue.then, sameRev, i, `m${i}-rl`) : null}
           <td class="num" id=${`${idp}-m${i}-en`}>${cellOf(s.spent.now[i], 'Not yet')}</td>${s.spent.then ? lastCell(s.spent.then, sameExp, i, `m${i}-el`) : null}</tr>`)}</tbody>
       </table></div>
-    </details>
+    </${More}>
   </section>`;
 }
 

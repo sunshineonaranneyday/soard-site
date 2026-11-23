@@ -931,6 +931,7 @@ const MAP = { t: 'SOARD', children: [
             const docName = (t) => (p[t]?.name ? `“${p[t].name}”` : { makeover: 'The makeover process Doc', community: 'The community project process Doc', policy: 'The board’s Financial Policy Manual' }[t]);
             const bad = docs.filter((t) => p[t]?.error);
             if (bad.length) return ATTN(`${docName(bad[0])}: ${p[bad[0]].error}${p[bad[0]].readAt ? ' Process shows the copy it last read.' : ''}`, p[bad[0]].readAt || null);
+            if (p.peopleSince && Date.now() - Date.parse(p.peopleSince) >= 30 * 60 * 1000) return ATTN(`The site hasn’t been able to check People since ${stamp(p.peopleSince)}, so it couldn’t tell whose Google Drive to read the Docs as. Process shows the copies it last read.`, p.peopleSince);
             const read = docs.filter((t) => p[t]?.readAt);
             if (!read.length) return ON('Reads the Docs the first time Process opens.');
             // Each Doc is looked over once a year: changed, or marked “Reviewed, no changes” in Process

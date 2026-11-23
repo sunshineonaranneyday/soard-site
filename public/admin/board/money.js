@@ -8,8 +8,8 @@
  */
 
 import { h, htm, useState, useEffect } from '../vendor.js';
-import { money, shortDate, todayEastern, unzip } from '../board-shared.js';
-import { nbw } from './parts.js';
+import { money, todayEastern, unzip } from '../board-shared.js';
+import { nbw, shortDate } from './parts.js';
 
 const html = htm.bind(h);
 
@@ -26,7 +26,19 @@ export const compact = (n) => {
   const a = Math.abs(n);
   // (no minus on what rounds to nothing: "$0", never "−$0")
   const s = n <= -0.5 ? '−' : '';
-  return a >= 1e9 ? `${s}$${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2).replace(/\.?0+$/, '')}B` : a >= 1e6 ? `${s}$${(a / 1e6).toFixed(a >= 1e7 ? 1 : 2).replace(/\.?0+$/, '')}M` : a >= 1e4 ? `${s}$${Math.round(a / 1e3)}K` : `${s}${money(a)}`;
+  if (a < 1e4) return `${s}${money(a)}`;
+  // Rounded to the step its unit is said at, which can carry it to the next unit: $999,700 is "$1M", $999,950,000
+  // "$1B", never "$1000K" or "$1000M" (Board QA round 11)
+  const units = [['K', 1e3, () => 0], ['M', 1e6, (x) => (x >= 10 ? 1 : 2)], ['B', 1e9, (x) => (x >= 10 ? 1 : 2)]];
+  let u = a >= 1e9 ? 2 : a >= 1e6 ? 1 : 0;
+  let said = '';
+  for (; u < units.length; u++) {
+    const [, size, places] = units[u];
+    const x = a / size;
+    said = x.toFixed(places(x));
+    if (Number(said) < 1000 || u === units.length - 1) break;
+  }
+  return `${s}$${said.includes('.') ? said.replace(/\.?0+$/, '') : said}${units[u][0]}`;
 };
 /**
  * An amount as a figure (the money's tiles): whole dollars with a true minus, "−$48,210"; from $10M up the short
@@ -202,6 +214,12 @@ export function cashKnown(data) {
   if (sheet === undefined) readCash(data);
   return cashToShow(liveCash(data), sheet, booksCash(data, data.numbers?.books)) || null;
 }
+/**
+ * Whether a row of month-end cash (data.cashHistory: the heartbeat's, or QuickBooks' months) is this month's, still
+ * under way: its balance is so far this month, never a month's end, wherever it's shown (Board QA round 11: Month-end
+ * balances and search called November's on November 23 "at the month's end")
+ */
+export const monthSoFar = (r, today = todayEastern()) => !!r?.month && String(r.month) === String(today || '').slice(0, 7);
 /** "Nov 2, 2026" → "Nov 2", the month and day never apart on two lines */
 export const shortAsOf = (s) => String(s || '').replace(/, \d{4}$/, '').replace(/^([A-Za-z]{3,9}\.?) (\d)/, '$1\u00a0$2');
 
@@ -349,15 +367,30 @@ export function withBooks(sheet, books) {
   // Expenses as SOARD's budget counts them, without in kind (last year's the same way, once the daily read has it)
   const lyCash = typeof books.nonCash !== 'number' ? [ly?.expenses, ly?.full?.expenses]
     : typeof ly?.nonCash === 'number' && typeof ly?.full?.nonCash === 'number' ? [less(ly.expenses, ly.nonCash), less(ly.full.expenses, ly.full.nonCash)] : [null, null];
+  // One revenue, counted one way: the year so far's (./yearFigures), its in-kind gifts left out whenever QuickBooks
+  // says what's in kind, whatever the budget is (QuickBooks', a sheet's) or with none, so the tiles, The year so far,
+  // the mix and the search have the same figure and revenue less expenses is the net (Board QA round 11: with no budget
+  // the tile's $1.88M kept the in kind the net beside it left out). Last year's same days the same way, to set it
+  // beside; how far along last year was by now (its pace, a share) is its whole revenue's, as QuickBooks has it, since
+  // its whole year's in kind isn't read
+  const yf = yearFigures(books);
+  const given = yf.inKind?.given || 0;
+  const revenue = typeof books.nonCash === 'number'
+    ? { ...line(yf.revenue, sheet?.revenue, yf.last?.revenue, null), ...(ly?.full?.revenue > 0 && typeof ly.revenue === 'number' ? { share: ly.revenue / ly.full.revenue } : {}), ...(given > 0 ? { inKind: given } : {}) }
+    : line(books.revenue, sheet?.revenue, ly?.revenue, ly?.full?.revenue);
   return {
     year: same && sheet.label ? sheet.label : books.year, asOf: shortDate(books.through), live: true, at: books.at,
-    // Against QuickBooks' own budget (in kind on both sides) revenue leaves the in kind out too, so the two figures are
-    // cash in and cash out (the sheet's budget counts in-kind gifts as revenue). Last year's pace stays its whole revenue's
-    revenue: sheet?.qbo ? { ...line(books.revenue - inKindOf(books.sources), sheet.revenue, ly?.revenue, ly?.full?.revenue), inKind: inKindOf(books.sources) } : line(books.revenue, sheet?.revenue, ly?.revenue, ly?.full?.revenue),
+    revenue,
     expenses: { ...line(spentOf(books), sheet?.expenses, ...lyCash), inKind: books.nonCash > 0 ? books.nonCash : 0 }, programs: null,
     meeting: sheet?.meeting || null, file: sheet?.file || null, qbo: sheet?.qbo || '',
   };
 }
+/**
+ * How far along last year was by this day, as a share of its whole year (0.75), for a figure against its budget: its
+ * same days over its whole year, or the share kept when its whole year isn't counted the same way (./withBooks); null
+ * with neither
+ */
+export const paceOf = (x) => (x?.last != null && x.lastFull > 0 ? x.last / x.lastFull : typeof x?.share === 'number' ? x.share : null);
 export function useBudget(data, upTo = '', n = null) {
   const books = booksFor(data, upTo, n);
   const own = booksBudget(books);
@@ -383,7 +416,7 @@ export function booksBudget(books) {
 }
 export const pctOf = (x) => (x?.budget ? Math.round((x.actual / x.budget) * 100) : null);
 /** "31% by now last year": how much of last year's whole year had come in (or gone out) by this day, beside this year's share of its budget */
-export const paceText = (x) => (x?.budget && x.last != null && x.lastFull > 0 ? `${Math.round((x.last / x.lastFull) * 100)}% by now last year` : '');
+export const paceText = (x) => (x?.budget && paceOf(x) != null ? `${Math.round(paceOf(x) * 100)}% by now last year` : '');
 /** "▲ 12% on last year by now": this year's so far against last year's same days, when there's no budget to measure by */
 export const growthText = (x, as = 'pct') => {
   if (!(x?.last > 0)) return '';
@@ -431,7 +464,8 @@ export function moneyTiles({ cash, budget, n, due = false, as = '' }) {
   // While a budget sheet is read: its two figures' places, so the tiles never move when they arrive
   // (QuickBooks' figures at once when it's connected, as Home has them; the budget's share follows)
   const books = typeof n?.books?.revenue === 'number' ? n.books : null;
-  if (budget === undefined && (due || books)) for (const [k, word, v] of [['rev', 'revenue', books?.revenue], ['exp', 'expenses', books ? spentOf(books) : null]]) tile({ k, label: `${(books?.year || todayEastern().slice(0, 4))} ${word}`, pct: 0, sub: '\u00a0' }, ($) => ({ value: typeof v === 'number' ? $(k === 'rev' ? 'rev:books' : 'exp', v, amount) : '…' }));
+  // (the revenue counted as it will be once the budget is in, ./yearFigures: the figure never changes when it arrives)
+  if (budget === undefined && (due || books)) for (const [k, word, v] of [['rev', 'revenue', books ? yearFigures(books).revenue : null], ['exp', 'expenses', books ? spentOf(books) : null]]) tile({ k, label: `${(books?.year || todayEastern().slice(0, 4))} ${word}`, pct: 0, sub: '\u00a0' }, ($) => ({ value: typeof v === 'number' ? $(k, v, amount) : '…' }));
   for (const [k, x, word] of [['rev', budget?.revenue, 'revenue'], ['exp', budget?.expenses, 'expenses']]) {
     if (!x) continue;
     // (against last year's same days in dollars, the pick's way, when there's no budget to measure by)
@@ -445,7 +479,9 @@ export function moneyTiles({ cash, budget, n, due = false, as = '' }) {
   // Mercury's own record (the year so far, the forecast) only once its banks are the cash shown
   if (cash?.live && cash.banks?.includes('Mercury') && !n?.mercury?.empty && f?.ytd) {
     const spent = (p) => (p.makeovers || 0) + (p.store || 0) + (p.operating || 0);
-    if (!budget?.revenue) tile({ k: 'ytd', label: `${f.ytd.year} so far`, tone: f.ytd.net >= 0 ? 'up' : 'down' }, ($) => ({ value: $('ytd:net', f.ytd.net, (v) => `${v >= 0.5 ? '+' : ''}${amount(v)}`), sub: `${$('ytd:in', f.ytd.income)} in · ${$('ytd:out', spent(f.ytd))} out, through ${new Date(`${f.ytd.through}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })}` }));
+    // (each figure keyed as Financials' "Money in and out" keys it, io:net, io:in, io:out, so search has it once:
+    // Board QA round 11 found each twice, this tile's and Financials' row)
+    if (!budget?.revenue) tile({ k: 'ytd', label: `${f.ytd.year} so far`, tone: f.ytd.net >= 0 ? 'up' : 'down' }, ($) => ({ value: $('io:net', f.ytd.net, (v) => `${v >= 0.5 ? '+' : ''}${amount(v)}`), sub: `${$('io:in', f.ytd.income)} in · ${$('io:out', spent(f.ytd))} out, through ${new Date(`${String(f.ytd.through).slice(0, 7)}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })}` }));
     if (f.cash?.lowest) tile({ k: 'low', label: 'Lowest ahead', tone: f.cash.belowFloor ? 'down' : '' }, ($) => ({ value: $('low', f.cash.lowest.dollars, amount), sub: `${f.cash.lowest.week ? `Week of ${shortDate(f.cash.lowest.week).replace(/, \d{4}$/, '')}` : 'In the forecast'} · ${$('in13', f.cash.in13Weeks)} in 13 weeks` }));
   }
   return out;
@@ -472,11 +508,11 @@ export const stepText = (step) => (step === 3 ? ', each quarter’s figure sprea
 // amount. An account outside them takes a color left free; whatever is left over is Everything else, in gray
 const MIX_TONE = { donations: 1, store: 2, gala: 3, inkind: 4, grants: 5 };
 /**
- * Whether the year's revenue is said without its in-kind gifts, as the revenue figure beside it says it (./withBooks):
- * against QuickBooks' own budget (in kind on both sides) it leaves them out and says "Not counting $220K in kind"; a
- * budget sheet counts in-kind gifts as revenue, so with one (or none) the revenue keeps them
+ * Whether the year's revenue is said without its in-kind gifts, as the revenue figure beside it says it (./withBooks,
+ * ./yearFigures): whenever QuickBooks says what's in kind, with a budget or without one ("Not counting $220K in kind").
+ * Board QA round 11: with no budget the mix counted in kind as 12% of a revenue the figures beside it left it out of
  */
-export const inKindLeftOut = (books) => !!booksBudget(books) && inKindOf(books?.sources) > 0;
+export const inKindLeftOut = (books) => (yearFigures(books).inKind?.given || 0) > 0;
 /**
  * The year's revenue as parts, in their colors' order: the categories of 2% or more (five at most), then Everything
  * else; each with the same days last year when the daily read has them. The same revenue as the figure above it, so
@@ -648,7 +684,9 @@ export function MixHead({ books, as = 'p', cls = 'bp-fig__label', id = null }) {
 
 /**
  * The revenue as one bar, a part per category, and a key giving each its amount and share; over a part, its exact
- * amount and the same days last year. `table` (Financials): every category beside last year, with its accounts
+ * amount and the same days last year. `table` (Financials): every category beside last year, with its accounts, each
+ * amount and its share apart by a real space (Board QA round 11: on a phone, where the share sits beside it, a screen
+ * reader heard "$700,00042%")
  */
 export function RevenueMix({ books, table = false }) {
   const mix = mixOf(books);
@@ -668,7 +706,7 @@ export function RevenueMix({ books, table = false }) {
       <thead><tr><th scope="col">Category</th><th scope="col" class="num">${mix.year} so far</th>${parts.some((x) => x.last != null) ? html`<th scope="col" class="num">${mix.lastYear}, same days</th><th scope="col" class="num">Change</th>` : null}</tr></thead>
       <tbody>${parts.map((x) => html`<tr key=${x.key} id=${`mix-${x.key}`}>
         <th scope="row"><span class="bp-mixtable__name"><i class=${`bp-tone--${x.tone}`} aria-hidden="true"></i>${x.name}</span>${x.accounts?.length && !(x.accounts.length === 1 && x.accounts[0] === x.name) ? html`<small>${x.accounts.join(', ')}</small>` : null}</th>
-        <td class="num">${money(x.amount)}<small>${x.share}</small></td>
+        <td class="num">${`${money(x.amount)} `}<small>${x.share}</small></td>
         ${x.last != null ? html`<td class="num bp-cmp__ly" data-label=${`${mix.lastYear}, same days`}>${money(x.last)}</td><td class="num bp-cmp__chg">${changeOf(x.amount, x.last) || (x.last === 0 && x.amount > 0 ? 'New' : html`<${Blank} say="Nothing to compare" />`)}</td>` : null}
       </tr>`)}</tbody>
     </table>`

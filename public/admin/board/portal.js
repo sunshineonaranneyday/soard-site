@@ -27,12 +27,12 @@
  */
 
 import { h, htm, render, useState, useEffect, useRef, useMemo } from '../vendor.js';
-import { Icon, PageNav, Avatar, Faces, DateTile, WindowTile, windowStart, SecHead, More, openFoldsAround, kept, keep, useKept, hueOf, noon, partsOf, together, nbw, mapsHref } from './parts.js';
+import { Icon, PageNav, Avatar, Faces, DateTile, WindowTile, windowStart, SecHead, More, openFoldsAround, kept, keep, useKept, hueOf, noon, partsOf, together, nbw, mapsHref, shortDate, longDate, dayText } from './parts.js';
 import { pageKept, useFirstPage, FileBadge, Cover, coverWord } from './covers.js';
 import { OrgFacts, factsOf, factHay, FORM_PAPERS } from './facts.js';
 import { viewerLink, openViewer, sizeText } from '../file-viewer.js';
 import {
-  RSVP, DOC_KINDS, FILE_KINDS, meetingName, longDate, shortDate, timeRange, clock, money, plural, noteBlocks, liveLines, attendanceCounts, isDate, todayEastern, monthName, answerOf, fileTitle,
+  RSVP, DOC_KINDS, FILE_KINDS, meetingName, timeRange, clock, money, plural, noteBlocks, liveLines, attendanceCounts, isDate, todayEastern, monthName, answerOf, fileTitle,
   videoOf, isHeic, asJpeg, isLive, agendaItems, tallyText, unzip, quorumFor, itemFiles, minutesFileOf, presentersOf, sectionPlan, sectionClock, clockText, formatOf, docTitle, itemDocs, signsAs, initialsOf, CONSENT_TEXT, SIGN_STYLES, styleFont, MEMBER_HOW, dueOn, dueWords,
   reportsOn, namesText, showsOf, booksDraw, isStatement, mainLines, forBoard, cleanMeeting, heldEarly, minutesToSign,
   NOTHING_NEW, isNothingNew, LIMITS, slidesOfItem, reportAlone, decidesAlone, facesOf, hasReport, LIVE_TITLES, orderUnits,
@@ -52,8 +52,8 @@ import { STAGE_OF_JOB, stageLabel, isFamily } from './stages.js';
 import { FamiliesPage, FamilyPage } from './families.js';
 import { MakeoversCard, itemsOf } from './lifecycle.js';
 import { read as readFamilies, cache as familyCache } from './family-parts.js';
-import { useCashNow, cashKnown, budgetKnown, useBudget, liveCash, Both, compact, shortAsOf, pctOf, andText, moneyTiles, fromBooks, monthsPhrase, paceText, mixOf, RevenueMix, MixHead, mixLeftOut, storeOf, StoreFigures, StoreTable, budgetDue, budgetMonthsText as budgetMonths, stepText, useChangeAs, changeIn, overIn, yearFigures, inKindWords, budgetName, Blank } from './money.js';
-import { figureTiles, moneyFigures, giftWho, giftAbout } from './figures.js';
+import { useCashNow, cashKnown, budgetKnown, useBudget, liveCash, Both, compact, shortAsOf, pctOf, andText, moneyTiles, fromBooks, monthsPhrase, paceText, paceOf, monthSoFar, mixOf, RevenueMix, MixHead, mixLeftOut, storeOf, StoreFigures, StoreTable, budgetDue, budgetMonthsText as budgetMonths, stepText, useChangeAs, changeIn, overIn, yearFigures, inKindWords, budgetName, Blank } from './money.js';
+import { figureTiles, moneyFigures, giftWho, giftAbout, moneyTileId } from './figures.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -111,7 +111,7 @@ const readRoute = () => {
 };
 
 // ─── Words and dates ────────────────────────────────────────────────
-const dayOf = (d) => (isDate(d) ? new Date(noon(d)).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' }) : '');
+const dayOf = (d) => dayText(d, 'wMD');
 const weekdayOf = (d) => (isDate(d) ? new Date(noon(d)).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }) : '');
 const monthOf = (ym) => new Date(`${ym}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
 const firstName = (n) => String(n || '').split(/\s+/)[0];
@@ -265,8 +265,19 @@ document.addEventListener('click', (e) => {
     else el.click();
   });
 }, true);
+/**
+ * A page change drawn at once (no view transition: less motion asked for, a page to type on) still puts its place a
+ * moment after (`after`: a new page's scroll to the top): a search's landing waits for it (./useFocusTarget), never
+ * made before it and undone by it (Board QA round 11's full check: a meeting's money tile, and a gift, picked from
+ * another page with less motion, landed and were scrolled back to the top)
+ */
+let settling = null;
 function transition(update, { kind = 'tab', morphTo = null, after = () => {}, instant = false } = {}) {
-  if (instant || !document.startViewTransition || reduceMotion() || document.visibilityState !== 'visible') { update(); tick().then(after); return; }
+  if (instant || !document.startViewTransition || reduceMotion() || document.visibilityState !== 'visible') {
+    update();
+    const s = settling = tick().then(after).finally(() => { if (settling === s) settling = null; });
+    return;
+  }
   const root = document.documentElement;
   root.dataset.vt = kind;
   const t = document.startViewTransition(async () => {
@@ -400,6 +411,8 @@ function useFocusTarget() {
       // 9's full check: the store's line found by "$380,000" was marked but neither in view nor focused). The wait for
       // what's still to come starts from there. (A change that doesn't finish is skipped within 1.5s: ./transition)
       if (activeVT) { const vt = activeVT; vt.finished.catch(() => {}).finally(() => { until = Date.now() + 2000; requestAnimationFrame(find); }); return; }
+      // (and a change drawn at once, until its own scroll to the top is done: ./transition)
+      if (settling) { settling.catch(() => {}).finally(() => { until = Date.now() + 2000; requestAnimationFrame(find); }); return; }
       const el = locate();
       // (the search box still closing would give the focus back to its button after this: wait for it)
       if (!el || document.querySelector('dialog.bp-finder[open]')) { if (Date.now() < until) setTimeout(find, el ? 40 : 120); else done(); return; }
@@ -408,13 +421,15 @@ function useFocusTarget() {
       if (Date.now() < until && openFoldsAround(el)) { setTimeout(find, 80); return; }
       done();
       const behavior = reduceMotion() ? 'auto' : 'smooth';
-      // (`inline` too: a card on the makeovers board is brought in from the side)
-      el.scrollIntoView({ block: 'center', inline: 'center', behavior });
-      // (one place marked at a time: the last search's comes off)
+      // (one place marked at a time: the last search's comes off). Marked before it's brought into view: a place a
+      // narrow screen leaves out until it's what was found (a phone's full answer under What makeovers cost) is
+      // there to scroll to
       document.querySelectorAll('.is-found').forEach((x) => { if (x !== el) x.classList.remove('is-found'); });
       el.classList.remove('is-found');
       void el.offsetWidth;
       el.classList.add('is-found');
+      // (`inline` too: a card on the makeovers board is brought in from the side)
+      el.scrollIntoView({ block: 'center', inline: 'center', behavior });
       markFound(el);
       // (the agenda's rail marks the part it landed in, not the one whose heading is still above)
       const part = el.closest('[id^="s-"]');
@@ -779,7 +794,7 @@ function Meter({ x }) {
   if (x.waiting) return html`<span class="bp-fig__meter" aria-hidden="true"></span>`;
   const p = pctOf(x);
   if (p == null) return null;
-  const pace = x.last != null && x.lastFull > 0 ? Math.round((x.last / x.lastFull) * 100) : null;
+  const pace = paceOf(x) != null ? Math.round(paceOf(x) * 100) : null;
   return html`<span class=${`bp-fig__meter ${p > 100 ? 'is-over' : ''}`} style=${`--p:${Math.min(100, p)}%${pace != null ? `;--pace:${Math.min(100, pace)}%` : ''}`} aria-hidden="true"><i></i>${pace != null ? html`<b></b>` : null}</span>`;
 }
 
@@ -1038,7 +1053,7 @@ function GiftsYear({ g, since }) {
   const shown = all ? g.list : g.list.slice(0, GIFTS_SHOWN);
   return html`<section class="bp-card bp-gifts bp-gifts--year" aria-labelledby="gifts-y-h" id="gifts">
     <${SecHead} id="gifts-y-h" title="Major gifts" sub=${nbw(`From Zeffy, every gift of $1,000 or more${g.stale ? `, as of ${giftDay(Date.parse(g.at) / 1000)}` : ''}`)} />
-    ${g.count ? html`<p class="bp-gifts__total"><strong>${money(g.total / 100)}</strong> ${nbw(`from ${plural(g.count, 'gift')} in ${g.year}`)}</p>
+    ${g.count ? html`<p class="bp-gifts__total" id="gifts-total"><strong>${money(g.total / 100)}</strong> ${nbw(`from ${plural(g.count, 'gift')} in ${g.year}`)}</p>
       <ul class="bp-gifts__list">${shown.map((x) => html`<${GiftRow} g=${x} since=${since} key=${x.id} />`)}</ul>
       ${g.count > GIFTS_SHOWN ? html`<button type="button" class="bp-more-btn" aria-expanded=${all} onClick=${() => setAll(!all)}>${all ? `Show the newest ${GIFTS_SHOWN}` : `Show all ${g.count}`}</button>` : null}`
     : html`<p class="bp-muted">No gifts of $1,000 or more yet in ${g.year}.</p>`}
@@ -2371,7 +2386,7 @@ function ReportPage({ id, itemId, ctx }) {
       </div>
       ${clash ? html`<div class="bp-rp__clash" role="alert">
         <p><strong>${byMe ? 'You' : clash.reportBy || 'Someone'} changed this report${clash.reportAt ? ` at ${new Date(clash.reportAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : ''}</strong>${byMe ? ' in another tab or on another device while you were writing here' : ' while you were writing'}. Which one should the board read?</p>
-        <details class="bp-rp__theirs"><summary>${byMe ? 'See the other one' : `See ${clash.reportBy ? `${clash.reportBy.split(' ')[0]}’s` : 'their'} version`}</summary>${clash.report ? html`<${Report} text=${clash.report} />` : html`<p class="bp-muted">${byMe ? 'It was emptied there.' : 'They emptied it.'}</p>`}</details>
+        <${More} k=${`theirs-${it.id}`} cls="bp-rp__theirs" summary=${byMe ? 'See the other one' : `See ${clash.reportBy ? `${clash.reportBy.split(' ')[0]}’s` : 'their'} version`}>${clash.report ? html`<${Report} text=${clash.report} />` : html`<p class="bp-muted">${byMe ? 'It was emptied there.' : 'They emptied it.'}</p>`}</${More}>
         <div class="bp-btns"><button type="button" class="bp-btn" onClick=${() => take(false)}>${byMe ? 'Use the other one' : 'Use theirs'}</button><button type="button" class="bp-btn bp-btn--primary" onClick=${() => take(true)}>${byMe ? 'Keep this one' : 'Keep mine'}</button></div>
       </div>` : null}
       ${stuck ? html`<div class="bp-rp__clash bp-rp__stuck" role="alert">
@@ -2942,7 +2957,9 @@ function CashBlock({ n, data, m, asFiles = [], notes = null, again = false }) {
     <span class="bp-fig__label">${t.label}</span><span class="bp-agfig__value">${t.value}</span>${t.sub ? html`<span class=${`bp-fig__sub ${t.tone ? `is-${t.tone}` : ''}`}>${nbw(t.sub)}</span>` : null}
   </li>`)}</ul>`;
   const fv = asViewer(asFiles);
-  return html`${tiles.length ? html`<ul class="bp-agfigs">${tiles.map((t) => html`<li class="bp-agfig" key=${t.k}>
+  // (each tile a place of its own, #mt-<meeting>-<tile>: a search for one of its figures lands on it, in view and
+  // marked, never on the whole item: ./figures.js moneyTileId)
+  return html`${tiles.length ? html`<ul class="bp-agfigs">${tiles.map((t) => html`<li class="bp-agfig" key=${t.k} id=${moneyTileId(m, t)}>
     <span class="bp-fig__label">${t.label}</span><span class="bp-agfig__value">${t.value}</span>${t.sub ? html`<span class=${`bp-fig__sub ${t.tone ? `is-${t.tone}` : ''}`}>${nbw(t.sub)}</span>` : null}
   </li>`)}</ul>` : null}
     <${YearCompare} books=${books} idp=${`y${m.id}`} as=${as} />
@@ -2977,7 +2994,7 @@ function DatesBlock({ rows }) {
 function LiveBlock({ kind, n, m, data, asFiles = [], notes = null, again = false }) {
   if (!n || !kind || kind === 'minutes') return null;
   // (the money and what makeovers cost say their own date: today's for a meeting today or ahead)
-  const stamp = kind === 'cash' || kind === 'costs' ? null : html`<p class="bp-aglive__when">${m.snapshot ? `As of ${shortDate(m.snapshot.at.slice(0, 10))}, locked for this meeting` : 'As of today'}</p>`;
+  const stamp = kind === 'cash' || kind === 'costs' ? null : html`<p class="bp-aglive__when">${m.snapshot ? `As of ${shortDate(m.snapshot.at)}, locked for this meeting` : 'As of today'}</p>`;
   let body = null;
   if (kind === 'projects') body = html`<${Kanban} projects=${n.projects} reveals=${n.reveals} variant="agenda" />`;
   else if (kind === 'cash') body = html`<${CashBlock} n=${n} data=${data} m=${m} asFiles=${asFiles} notes=${notes} again=${again} />`;
@@ -3231,29 +3248,30 @@ function MeetingDetail({ m, ctx, notes = null, lv = null }) {
 // ─── Financials ─────────────────────────────────────────────────────
 function Bars({ s }) {
   const other = s.totalRevenue - (s.contributions || 0) - (s.storeRevenue || 0);
+  // (each line a place of its own, #gl-<its key>, where search lands on its figure: ./figures.js, the same keys)
   const income = [
-    ['Contributions', s.contributions, 'a'],
-    ['The store', s.storeRevenue, 'b'],
-    other > 0 ? ['Everything else', other, 'c'] : null,
+    ['Contributions', s.contributions, 'a', 'contrib'],
+    ['The store', s.storeRevenue, 'b', 'store'],
+    other > 0 ? ['Everything else', other, 'c', 'other'] : null,
   ].filter((x) => x && typeof x[1] === 'number' && x[1] > 0);
   const spend = typeof s.programExpenses === 'number'
-    ? [['Programs', s.programExpenses, 'a'], ['Management', s.managementExpenses, 'b'], ['Fundraising', s.fundraisingExpenses, 'c']].filter((x) => typeof x[1] === 'number' && x[1] > 0)
+    ? [['Programs', s.programExpenses, 'a', 'programs'], ['Management', s.managementExpenses, 'b', 'management'], ['Fundraising', s.fundraisingExpenses, 'c', 'fundraising']].filter((x) => typeof x[1] === 'number' && x[1] > 0)
     : [];
   const top = Math.max(s.totalRevenue || 0, s.totalExpenses || 0) || 1;
-  const bar = (label, total, parts) => html`<div class="bp-meter">
-    <div class="bp-meter__head"><span>${label}</span><strong>${money(total)}</strong></div>
+  const bar = (label, total, parts, id) => html`<div class="bp-meter">
+    <div class="bp-meter__head" id=${`gl-${id}`}><span>${label}</span><strong>${money(total)}</strong></div>
     <div class="bp-meter__track" style=${`--w:${(total / top) * 100}%`} role="img" aria-label=${`${label}: ${parts.map(([k, v]) => `${k} ${money(v)}`).join(', ')}`}>
       ${parts.map(([k, v, tone]) => html`<span class=${`bp-meter__seg bp-meter__seg--${tone}`} style=${`--p:${(v / total) * 100}%`} key=${k}></span>`)}
     </div>
-    <ul class="bp-legend">${parts.map(([k, v, tone]) => html`<li key=${k}><i class=${`bp-meter__seg--${tone}`} aria-hidden="true"></i>${k}<strong>${money(v)}</strong><span>${Math.round((v / total) * 100)}%</span></li>`)}</ul>
+    <ul class="bp-legend">${parts.map(([k, v, tone, key]) => html`<li key=${k} id=${`gl-${key}`}><i class=${`bp-meter__seg--${tone}`} aria-hidden="true"></i>${k}<strong>${money(v)}</strong><span>${Math.round((v / total) * 100)}%</span></li>`)}</ul>
   </div>`;
   const left = (s.totalRevenue || 0) - (s.totalExpenses || 0);
   return html`<div class="bp-meters">
-    ${s.totalRevenue && income.length ? bar('Money in', s.totalRevenue, income) : null}
-    ${s.totalExpenses && spend.length ? bar('Money out', s.totalExpenses, spend) : null}
+    ${s.totalRevenue && income.length ? bar('Money in', s.totalRevenue, income, 'in') : null}
+    ${s.totalExpenses && spend.length ? bar('Money out', s.totalExpenses, spend, 'out') : null}
     <dl class="bp-meters__foot">
-      ${s.totalRevenue && s.totalExpenses ? html`<div><dt>${left >= 0 ? 'Left over' : 'Spent beyond income'}</dt><dd>${left >= 0 ? '+' : '−'}${money(Math.abs(left))}</dd></div>` : null}
-      ${typeof s.netAssets === 'number' ? html`<div><dt>Net assets at year end</dt><dd>${money(s.netAssets)}</dd></div>` : null}
+      ${s.totalRevenue && s.totalExpenses ? html`<div id="gl-left"><dt>${left >= 0 ? 'Left over' : 'Spent beyond income'}</dt><dd>${left >= 0 ? '+' : '−'}${money(Math.abs(left))}</dd></div>` : null}
+      ${typeof s.netAssets === 'number' ? html`<div id="gl-assets"><dt>Net assets at year end</dt><dd>${money(s.netAssets)}</dd></div>` : null}
       ${s.programPct ? html`<div><dt>To programs</dt><dd>${s.programPct}%</dd></div>` : null}
     </dl>
   </div>`;
@@ -3270,9 +3288,9 @@ function ChangeAs({ as, setAs }) {
 const signedMoney = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : html`<${Blank} />`);
 /** A change both ways (% | $, ./money.js Both), or a blank when there's nothing to set it beside */
 const BothOr = ({ as, pct, usd }) => (pct || usd ? html`<${Both} as=${as} pct=${pct} usd=${usd} />` : html`<${Blank} say="Nothing to compare" />`);
-const dayMonth = (d) => shortDate(d).replace(/, \d{4}$/, '');
+const dayMonth = (d) => dayText(d, 'md');
 /** "September 30, 2026" */
-const fullDate = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
+const fullDate = (d) => dayText(d, 'MDY');
 
 /**
  * A statement from QuickBooks (./_quickbooks.js statementRows): each line with the same day a year before and the
@@ -3347,17 +3365,17 @@ function Statements({ s, books, idp = 'st', notes = null }) {
 }
 
 /** Parts of a whole as one bar: the first three by name in fixed colors, the rest as "Everything else" in gray */
-function PartsBar({ label, parts, total }) {
+function PartsBar({ label, parts, total, idp = '' }) {
   const named = parts.slice(0, 3);
   const rest = Math.max(0, total - named.reduce((t, p) => t + p.amount, 0));
   const list = [...named.map((p, i) => ({ ...p, tone: ['a', 'b', 'd'][i] })), ...(rest >= total * 0.005 ? [{ name: 'Everything else', amount: rest, tone: 'c' }] : [])];
   if (!(total > 0) || !list.length) return null;
   return html`<div class="bp-meter">
-    <div class="bp-meter__head"><span>${label}</span><strong>${money(total)}</strong></div>
+    <div class="bp-meter__head" id=${idp ? `${idp}-total` : null}><span>${label}</span><strong>${money(total)}</strong></div>
     <div class="bp-meter__track" role="img" aria-label=${`${label}: ${list.map((p) => `${p.name} ${money(p.amount)}`).join(', ')}`}>
       ${list.map((p) => html`<span class=${`bp-meter__seg bp-meter__seg--${p.tone}`} style=${`--p:${(p.amount / total) * 100}%`} key=${p.name}></span>`)}
     </div>
-    <ul class="bp-legend">${list.map((p) => html`<li key=${p.name}><i class=${`bp-meter__seg--${p.tone}`} aria-hidden="true"></i>${p.name}<strong>${money(p.amount)}</strong><span>${Math.round((p.amount / total) * 100)}%</span></li>`)}</ul>
+    <ul class="bp-legend">${list.map((p, i) => html`<li key=${p.name} id=${idp ? `${idp}-${i < named.length ? i : 'rest'}` : null}><i class=${`bp-meter__seg--${p.tone}`} aria-hidden="true"></i>${p.name}<strong>${money(p.amount)}</strong><span>${Math.round((p.amount / total) * 100)}%</span></li>`)}</ul>
   </div>`;
 }
 
@@ -3388,7 +3406,7 @@ function BooksYear({ b }) {
       <strong class="bp-yfigs__value">${signedMoney(a)}</strong>
       ${ly && typeof p === 'number' && changeIn(a, p, 'pct') ? html`<span class="bp-yfigs__chg"><${Both} as=${as} pct=${`${changeIn(a, p, 'pct')} on ${ly.year}’s same days`} usd=${`${changeIn(a, p, 'usd', { short: true })} on ${ly.year}’s same days`} /></span>` : null}
     </li>`)}</ul>
-    ${y.inKind ? html`<p class="bp-note bp-yfigs__left">${nbw(inKindWords(y.inKind))}</p>` : null}
+    ${y.inKind ? html`<p class="bp-note bp-yfigs__left" id="yf-left">${nbw(inKindWords(y.inKind))}</p>` : null}
     <${YearCompare} books=${b} idp="fy" as=${as} />
     <${More} k="year-lines" summary=${ly ? `Line by line, beside ${ly.year}’s same days` : 'Line by line'}>
     <table class="bp-table bp-cmp">
@@ -3396,7 +3414,7 @@ function BooksYear({ b }) {
       <tbody>${rows.map(([label, a, p, kind]) => html`<tr class=${`bp-row--${kind}`} key=${label} id=${`yl-${KEY[label]}`}><th scope="row">${label}</th><td class="num">${signedMoney(a)}</td>${ly ? html`<td class="num bp-cmp__ly" data-label=${`${ly.year}, same days`}>${signedMoney(p)}</td><td class="num bp-cmp__chg"><${BothOr} as=${as} pct=${changeIn(a, p, kind === 'net' ? 'usd' : 'pct')} usd=${changeIn(a, p, 'usd')} /></td>` : null}</tr>`)}</tbody>
     </table>
     ${own ? html`<p class="bp-note" id="year-own">${nbw(own)}</p>` : null}
-    ${ly?.full?.revenue > 0 ? html`<p class="bp-note" id="year-ly">${nbw(`By this day last year, ${Math.round((ly.revenue / ly.full.revenue) * 100)}% of ${ly.year}’s revenue (${compact(ly.full.revenue)}) had come in${lySpent?.[1] > 0 ? `, and ${Math.round((lySpent[0] / lySpent[1]) * 100)}% of its spending had gone out` : ''}.`)}</p>` : null}
+    ${ly?.full?.revenue > 0 ? html`<p class="bp-note" id="year-ly">${nbw(`By this day last year, ${Math.round((ly.revenue / ly.full.revenue) * 100)}% of ${ly.year}’s revenue, ${compact(ly.full.revenue)}, had come in${lySpent?.[1] > 0 ? `, and ${Math.round((lySpent[0] / lySpent[1]) * 100)}% of its spending had gone out` : ''}.`)}</p>` : null}
     </${More}>
   </section>`;
 }
@@ -3409,7 +3427,7 @@ function MoneyMix({ b }) {
   return html`<section class="bp-card bp-mixcard" aria-labelledby="mix-h2" id="mixcard">
     <${SecHead} id="mix-h2" title="Where the money came from" sub=${nbw(`${b.year} so far, by category${left ? `, ${left}` : ''}`)} />
     ${mixOf(b) ? html`<${RevenueMix} books=${b} table=${true} />` : null}
-    ${b.functions ? html`<div class="bp-meters bp-meters--went"><${PartsBar} label="Where it went, by purpose" parts=${b.functions.list} total=${b.functions.total} /></div>` : null}
+    ${b.functions ? html`<div class="bp-meters bp-meters--went"><${PartsBar} label="Where it went, by purpose" parts=${b.functions.list} total=${b.functions.total} idp="fn" /></div>` : null}
   </section>`;
 }
 
@@ -3425,8 +3443,15 @@ function StoreCard({ b }) {
   </section>`;
 }
 
+/**
+ * How a month of month-end cash is named: a finished month by its name ("October 2026", short "Oct 2026"), this month,
+ * still under way, by the day its balance is from, so far ("Nov 23 (so far this month)": ./money.js monthSoFar). The
+ * day read from the heartbeat's time or QuickBooks' day alike (./parts.js dayIn: Board QA round 11 found the label "
+ * (so far this month)", no day, from the heartbeat's "2026-11-23T15:04:00Z")
+ */
+const soFarName = (r, today) => `${dayMonth(r.at) || dayMonth(today)} (so far this month)`;
 /** Cash at each month's end for 13 months (QuickBooks' month-ends, in any order): a bar a month from zero, oldest to this month (in gold) */
-function CashChart({ rows }) {
+function CashChart({ rows, today }) {
   // The bar under the pointer says its month, its balance and the change on the month before
   const [tip, setTip] = useState(-1);
   const list = [...rows].sort((a, b) => a.month.localeCompare(b.month)).slice(-13);
@@ -3435,13 +3460,13 @@ function CashChart({ rows }) {
   const last = list.at(-1);
   const low = list.reduce((a, b) => (b.total < a.total ? b : a));
   const mon = (ym) => new Date(`${ym}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' });
-  const nameOf = (r) => (r === last ? `${dayMonth(r.at || `${r.month}-28`)}, so far` : new Date(`${r.month}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }));
+  const nameOf = (r) => (monthSoFar(r, today) ? soFarName(r, today) : new Date(`${r.month}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' }));
   const t = list[tip];
   const was = tip > 0 ? list[tip - 1] : null;
   return html`<div class="bp-years bp-cashchart" onMouseLeave=${() => setTip(-1)}>
     <ol class="bp-years__bars" aria-label=${`Cash at each month’s end, ${monthOf(list[0].month)} to ${monthOf(last.month)}`}>
       ${list.map((r, i) => {
-        const say = `${r === last ? `${dayMonth(r.at || `${r.month}-28`)} (so far this month)` : monthOf(r.month)}: ${money(r.total)}`;
+        const say = `${monthSoFar(r, today) ? soFarName(r, today) : monthOf(r.month)}: ${money(r.total)}`;
         return html`<li key=${r.month} class=${`${r === last ? 'is-now' : ''} ${i === tip ? 'is-tip' : ''}`} style=${`--h:${(r.total / top) * 100}%;--i:${i}`} onMouseEnter=${() => setTip(i)}>
           <span class="bp-years__hit" role="img" aria-label=${say}>
             ${r === last || r === low ? html`<span class="bp-years__val">${compact(r.total)}</span>` : null}
@@ -3472,7 +3497,7 @@ function BudgetCard({ b }) {
   const vf = b.file ? asViewer([b.file]) : null;
   return html`<section class="bp-card bp-budget" aria-labelledby="bud-h" id="budget">
     <${SecHead} id="bud-h" title=${`${b.year} against its budget`.trim()} sub=${b.live ? `QuickBooks’ year so far, through ${shortAsOf(b.asOf)}` : `The actuals as of ${shortAsOf(b.asOf)}, from the budget sheet`} />
-    <ul class="bp-budget__list">${rows.map(([label, x]) => html`<li key=${label}>
+    <ul class="bp-budget__list">${rows.map(([label, x]) => html`<li key=${label} id=${`bud-${label === 'Revenue' ? 'rev' : 'exp'}`}>
       <p class="bp-budget__head"><span>${label}</span><strong>${money(x.actual)}</strong></p>
       <${Meter} x=${x} />
       <p class="bp-budget__sub">${nbw(`${pctOf(x)}% of the ${money(x.budget)} budget${paceText(x) ? ` · ${paceText(x)}` : ''}${x.inKind ? ` · not counting ${compact(x.inKind)} in kind` : ''}`)}</p>
@@ -3501,21 +3526,21 @@ function CashCard({ data }) {
         <h2 class="bp-h2" id="cash-h">Cash in the bank</h2>
         <p class="bp-cash__total">${money(cash.total)}</p>
         <p class="bp-muted">${cash.asOf ? `As of ${cash.asOf}` : ''}${change != null ? (Math.round(change) === 0 ? ` · even with ${cash.priorAsOf || 'a year earlier'}` : html` · <span class=${change >= 0 ? 'bp-up' : 'bp-down'}>${change >= 0 ? 'up' : 'down'} ${money(Math.abs(change))}</span> from ${cash.priorAsOf || 'a year earlier'}`) : ''}</p>
-        ${cash.months != null ? html`<p class="bp-cash__months"><strong>${nbw(monthsPhrase(cash.months))}</strong>${nbw(` of spending${cash.perMonth ? `, at the ${money(cash.perMonth)} a month that left the bank in the last 12 months (moves between SOARD’s own accounts aside)` : ''}`)}</p>` : null}
+        ${cash.months != null ? html`<p class="bp-cash__months" id="cash-months"><strong>${nbw(monthsPhrase(cash.months))}</strong>${nbw(` of spending${cash.perMonth ? `, at the ${money(cash.perMonth)} a month that left the bank in the last 12 months (moves between SOARD’s own accounts aside)` : ''}`)}</p>` : null}
       </div>
       ${cash.live
         ? html`<p class="bp-cash__src">${nb(fromBooks(cash) || `Straight from ${andText(cash.banks)}, read ${cash.today ? `today at ${clockAt(cash.at)}` : cash.asOf}`)}${cash.stale.length ? html`<br />${andText(cash.stale)} hasn’t answered since then` : null}</p>`
         : html`<p class="bp-cash__src">From the <a class="bp-link" ...${viewerLink(vf, 0)}>statement of financial position</a> in the <a class="bp-link" href=${`#/meetings/${cash.meeting.id}`} onClick=${claimMorph}>${meetingName(cash.meeting)}</a> packet</p>`}
     </div>
-    ${shown.length > 1 ? html`<ul class="bp-accounts">${shown.map((a) => html`<li key=${a.name}>
+    ${shown.length > 1 ? html`<ul class="bp-accounts">${shown.map((a) => html`<li key=${a.name} id=${`cash-a${cash.accounts.indexOf(a)}`}>
       <span class="bp-accounts__name">${a.name}</span>
       <span class="bp-accounts__bar" aria-hidden="true"><span style=${`--p:${(a.balance / top) * 100}%`}></span></span>
       <span class="bp-accounts__n">${money(a.balance)}</span>
-    </li>`)}${small.length ? html`<li class="bp-accounts__rest">
+    </li>`)}${small.length ? html`<li class="bp-accounts__rest" id="cash-a-rest">
       <span class="bp-accounts__name">${andText(small.map((a) => a.name))}</span>
       <span class="bp-accounts__n">${money(small.reduce((t, a) => t + a.balance, 0))}</span>
     </li>` : null}</ul>` : null}
-    ${cash.owed?.length ? html`<ul class="bp-accounts bp-accounts--owed" aria-label="Owed on the cards">${cash.owed.map((o) => html`<li key=${o.name}>
+    ${cash.owed?.length ? html`<ul class="bp-accounts bp-accounts--owed" aria-label="Owed on the cards">${cash.owed.map((o, i) => html`<li key=${o.name} id=${`cash-owed${i}`}>
       <span class="bp-accounts__name">${o.name}</span>
       <span class="bp-accounts__note">${o.limit ? `Owed, of a ${money(o.limit)} limit` : 'Owed'}</span>
       <span class="bp-accounts__n">${money(o.balance)}</span>
@@ -3577,17 +3602,17 @@ function FinancialsPage({ ctx }) {
   // the major gifts, what makeovers cost, the statements, and the year's papers
   const cashTime = f?.cash || history.length > 1 ? html`<section class="bp-card" aria-labelledby="cashtime-h" id="cashtime">
       <h2 class="bp-h2" id="cashtime-h">Cash over time</h2>
-      ${history.length > 1 ? html`<${CashChart} rows=${history} />` : null}
+      ${history.length > 1 ? html`<${CashChart} rows=${history} today=${data.today} />` : null}
       ${f?.cash ? html`<div class="bp-live">
         <div class="bp-live__label">The next 13 weeks</div>
         <ul>
-          <li id="ct-low">The lowest point: ${money(f.cash.lowest.dollars)}${f.cash.lowest.week ? `, the week of ${shortDate(f.cash.lowest.week)}` : ''}${f.cash.cautiousLowest && f.cash.cautiousLowest.dollars !== f.cash.lowest.dollars ? ` (a cautious guess: ${money(f.cash.cautiousLowest.dollars)})` : ''}</li>
+          <li id="ct-low">The lowest point: ${money(f.cash.lowest.dollars)}${f.cash.lowest.week ? `, the week of ${shortDate(f.cash.lowest.week)}` : ''}${f.cash.cautiousLowest && f.cash.cautiousLowest.dollars !== f.cash.lowest.dollars ? `; a cautious guess, ${money(f.cash.cautiousLowest.dollars)}` : ''}</li>
           <li id="ct-in13">In 13 weeks: ${money(f.cash.in13Weeks)}</li>
           ${f.cash.floor ? html`<li id="ct-floor">The least we keep in the bank: ${money(f.cash.floor)}${f.cash.belowFloor ? html` <span class="bp-chip bp-chip--warn">The forecast dips under it</span>` : null}</li>` : null}
         </ul>
       </div>` : null}
       ${history.length > 1 ? html`<${More} k="cash-months" summary="Month-end balances"><table class="bp-table"><thead><tr><th scope="col">Month</th><th scope="col" class="num">Balance</th><th scope="col" class="num">Change</th></tr></thead><tbody>
-        ${history.map((r, k) => { const prev = history[k + 1]; const dd = prev ? r.total - prev.total : null; return html`<tr key=${r.month}><th scope="row">${monthOf(r.month)}</th><td class="num" id=${`cm-${r.month}`}>${money(r.total)}</td><td class="num" id=${`cm-${r.month}-chg`}>${dd == null ? '' : Math.round(dd) === 0 ? 'Even' : `${dd >= 0 ? '+' : '−'}${money(Math.abs(dd))}`}</td></tr>`; })}
+        ${history.map((r, k) => { const prev = history[k + 1]; const dd = prev ? r.total - prev.total : null; return html`<tr key=${r.month}><th scope="row">${monthOf(r.month)}${monthSoFar(r, data.today) ? html`<small class="bp-cm__now">, so far this month</small>` : null}</th><td class="num" id=${`cm-${r.month}`}>${money(r.total)}</td><td class="num" id=${`cm-${r.month}-chg`}>${dd == null ? '' : Math.round(dd) === 0 ? 'Even' : `${dd >= 0 ? '+' : '−'}${money(Math.abs(dd))}`}</td></tr>`; })}
       </tbody></table><//>` : null}
     </section>` : null;
   // Without QuickBooks, Mercury's own record of the year
@@ -3946,7 +3971,7 @@ function SignBar({ fields, vals, next }) {
  */
 const mayntSign = (m, ctx) => !(ctx.d.me?.seat === 'secretary' && m.shared && minutesToSign(m, ctx.data.minutesSigned?.[m.id]));
 /** Who signed the minutes, and the signed copy said on its own while it's being made (where the focus goes on signing) */
-const SignedLine = ({ s, id }) => html`<p class="mfix-signed bp-noprint" id=${`minutes-signed-${id}`} tabindex="-1">Signed by ${s.name}, ${shortDate(s.at.slice(0, 10)).replace(/, \d{4}$/, '')}${s.changed ? '. The minutes changed after that.' : s.made ? '' : '. The signed copy is being made.'}</p>`;
+const SignedLine = ({ s, id }) => html`<p class="mfix-signed bp-noprint" id=${`minutes-signed-${id}`} tabindex="-1">Signed by ${s.name}, ${dayText(s.at, 'md')}${s.changed ? '. The minutes changed after that.' : s.made ? '' : '. The signed copy is being made.'}</p>`;
 /** The focus to the words that say the minutes are signed, once they're drawn (the box that asked has gone) */
 function toSignedLine(id) {
   const until = Date.now() + 3000;
@@ -4123,7 +4148,7 @@ function SignForm({ d: doc, ctx, vals = {}, mark = null, setMark = () => {}, nee
       </div>`
       : html`<p class="bp-sign__or">Can’t sign it as written? <button type="button" class="bp-linkbtn" id=${`${id}-decline`} disabled=${!!busy} onClick=${() => { setDeclining(true); setWhy(doc.declinedByMe?.reason || ''); requestAnimationFrame(() => document.getElementById(`${id}-why`)?.focus()); }}>${doc.declinedByMe ? 'Change what you told SOARD' : 'Tell SOARD why'}</button></p>`}
     ${problem ? html`<p class="bp-sign__problem" id=${`${id}-p`} role="alert" tabindex="-1">${problem}</p>` : null}
-    <details class="bp-sign__how"><summary>How signing works</summary><p>${MEMBER_HOW}</p></details>
+    <${More} k=${`${id}-how`} cls="bp-sign__how" summary="How signing works"><p>${MEMBER_HOW}</p></${More}>
   </form>`;
 }
 
@@ -4393,11 +4418,11 @@ function DocPage({ id, ctx }) {
       </div>
       ${written ? html`<p class="bp-btns bp-noprint"><button type="button" class="bp-btn bp-btn--sm" onClick=${() => ctx.load().then(() => requestAnimationFrame(() => window.print()))}><${Icon} name="print" size=${16} />Print it</button></p>` : null}
     </header>
-    ${doc.sign && (doc.signedEarlier || sinceLast) && !me ? html`<div class="bp-doc__changed bp-noprint"><p>${doc.signedEarlier ? 'It changed since you signed: read it, then sign again.' : `It changed since you signed it for ${last.year}${lastOn ? ` on ${lastOn}` : ''}: read it, then sign it for ${year}.`}</p>${changes ? html`<details class="bp-whatchanged"><summary><span>What changed</span></summary>
+    ${doc.sign && (doc.signedEarlier || sinceLast) && !me ? html`<div class="bp-doc__changed bp-noprint"><p>${doc.signedEarlier ? 'It changed since you signed: read it, then sign again.' : `It changed since you signed it for ${last.year}${lastOn ? ` on ${lastOn}` : ''}: read it, then sign it for ${year}.`}</p>${changes ? html`<${More} k=${`changed-${doc.id}`} cls="bp-whatchanged" summary=${html`<span>What changed</span>`}>
       ${changes.changed.length ? html`<p class="bp-whatchanged__h">Changed</p><ul>${changes.changed.slice(0, 20).map((l, i) => html`<li key=${i} class=${l.h ? 'is-h' : null}>${runsOf(l.diff).map((r, j) => (r.op === '+' ? html`<ins key=${j}>${r.w}</ins> ` : r.op === '-' ? html`<del key=${j}>${r.w}</del> ` : `${r.w} `))}</li>`)}</ul>` : null}
       ${changes.added.length ? html`<p class="bp-whatchanged__h">New</p><ul>${changes.added.slice(0, 20).map((l, i) => html`<li key=${i} class=${l.h ? 'is-h' : null}>${l.h ? html`<strong>${l.t}</strong>` : l.t}</li>`)}</ul>${changes.added.length > 20 ? html`<p class="bp-whatchanged__more">and ${plural(changes.added.length - 20, 'more new line')}</p>` : null}` : null}
       ${changes.removed.length ? html`<p class="bp-whatchanged__h">Taken out</p><ul>${changes.removed.slice(0, 20).map((l, i) => html`<li key=${i} class=${l.h ? 'is-h' : null}><s>${l.h ? html`<strong>${l.t}</strong>` : l.t}</s></li>`)}</ul>${changes.removed.length > 20 ? html`<p class="bp-whatchanged__more">and ${plural(changes.removed.length - 20, 'more line')} taken out</p>` : null}` : null}
-    </details>` : null}</div>` : null}
+    </${More}>` : null}</div>` : null}
     ${written && doc.sign && fieldsOf.length && data.me.slug && !me ? html`<${SignBar} fields=${fieldsOf} vals=${vals} next=${() => onward(0)} />` : null}
     ${written ? html`<article class="bp-card bp-docpage__words bp-rise" style=${rise(1)}><${Report} text=${doc.body} level=${2} slot=${doc.sign ? (b) => html`<${FieldBox} b=${b} doc=${doc} me=${!!data.me.slug} vals=${vals} setVal=${setVal} mark=${mark} needMark=${needMark} onward=${onward} />` : null} /></article>`
       : html`<div class="bp-card bp-docpage__file bp-rise" style=${rise(1)}>

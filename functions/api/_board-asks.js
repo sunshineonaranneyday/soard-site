@@ -32,12 +32,12 @@
  * a meeting ahead not shared yet that they present in (only their own items), so the ask's link opens.
  */
 
-import { getMeeting, listMeetings, patchMeeting, setOnMeeting, roster, attachToItem, getSettings, sendApprovedAgenda, presenterGate, snapshotFor, boardCopy, SITE } from './_board.js';
-import { peopleRows, boardAdmins, readState, writeState, readSettings, normEmail, isStaffEmail } from './_board-roles.js';
+import { getMeeting, listMeetings, patchMeeting, setOnMeeting, roster, attachToItem, getSettings, sendApprovedAgenda, agendaReads, presenterGate, snapshotFor, boardCopy, SITE } from './_board.js';
+import { peopleRows, boardAdmins, readState, writeState, readSettings, normEmail, isStaffEmail, readDown, PEOPLE_DOWN } from './_board-roles.js';
 import { organizerFor } from './_board-invite.js';
 import { accessToken, GMAIL_READ_SCOPE } from './_google-calendar.js';
 import { header, bytesOf, partsOf } from './_mailbox.js';
-import { sendTrouble } from './_broadcast-notify.js';
+import { sendTrouble, emailConfigured } from './_broadcast-notify.js';
 import { booksNow } from './_quickbooks.js';
 import {
   presentersOf, reportsOn, agendaIsDraft, meetingName, sectionPlan, isFilled, forBoard, todayEastern, isDate, LIMITS, showsOf, timeRange, isNothingNew, cleanMeeting,
@@ -1356,6 +1356,11 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
     }
     return { approvedAt: nowIso(now), approvedBy: asker.name, test: true };
   }
+  // Everything that decides who gets the agenda's email (whether the board has had the sign-in email, who's on the board
+  // at which address, who it's from), read for certain before the approval is written: People not answering refuses the
+  // approval in round 10's words with nothing saved, never "approved, but its email didn't go … tries again by itself"
+  // (Board QA round 11, Nov 23 2026: the approval was kept, and with the sign-in email not sent nothing tried again)
+  const reads = emailConfigured(env) ? await agendaReads(env).catch((e) => { throw e?.unread ? readDown(PEOPLE_DOWN, e.cause || e) : e; }) : null;
   // One approval, whoever presses at once (a double press, a second tab, the other admin, the chair): each write goes only
   // while the meeting has none (one statement, so only one of them writes it), and the others are told it's approved
   const at = nowIso(now);
@@ -1376,7 +1381,7 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
   // then goes to the board the way any approved agenda does (QA round 6, Nov 21 2026)
   let madeBoard = false;
   if (m.notBoard) {
-    await setOnMeeting(env.DB, m.id, { notBoard: false }, { by: asker.email || '' });
+    await setOnMeeting(env.DB, m.id, { notBoard: false }, { by: asker.email || '', was: m });
     madeBoard = true;
   }
   // The approval is what emails the board the agenda (./_board.js sendApprovedAgenda), or once they've had the sign-in
@@ -1384,7 +1389,7 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
   let agenda = '';
   let agendaError = '';
   try {
-    const r = await sendApprovedAgenda(env, m.id, { now });
+    const r = await sendApprovedAgenda(env, m.id, { now, reads, meeting: reads ? { ...m, notBoard: false } : null });
     agenda = r?.sent || r?.going ? 'sent' : r?.waiting ? 'waiting' : '';
   } catch (e) {
     console.error('[board-asks] agenda email', e.message);

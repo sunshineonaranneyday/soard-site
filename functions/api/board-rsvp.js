@@ -70,9 +70,13 @@ function whenBlock(m) {
 }
 /** A link's meeting, by name, and where its answer goes now */
 async function toInvite(env, tok) {
-  // (People not answering is said as that, never "This link is from an older email": round 10)
+  // (any read not answering, People's or the link's own or its meeting's, is said as that and records nothing, never
+  // "This link is from an older email": that's only for a link read and found old. Rounds 10 and 11)
   let link = null;
-  try { link = await answerLink(env, tok); } catch (err) { if (err?.unread) return notChecked(); }
+  try { link = await answerLink(env, tok); } catch (err) {
+    console.error('[board-rsvp]', err?.message || err);
+    return notChecked();
+  }
   if (!link) return broken();
   if (link.expired) return expired();
   const { meeting: m, member } = link;

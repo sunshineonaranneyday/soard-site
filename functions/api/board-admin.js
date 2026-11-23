@@ -71,9 +71,9 @@ import { maybeSyncBoardCalendar, calendarStatus } from './_board-calendar.js';
 import { maybeReadBoardMail, mailStatus, mailLog, clientIdOf } from './_board-mail.js';
 import { sendInvite, deleteWithInvite, noteInviteChange, projectOf, inviteCheck, maybeCheckInvites } from './_board-invite.js';
 import { meetingName } from '../../public/admin/board-shared.js';
-import { readMinutesInto, undoMinutes, minutesKindNo } from './_board-minutes.js';
+import { readMinutesInto, undoMinutes, minutesKindNo, uploadKind, approvedFileNo } from './_board-minutes.js';
 import { activityOverview, memberActivity, deviceOf, accessIat } from './_board-activity.js';
-import { evidenceOf, exportYear } from './_board-sign.js';
+import { evidenceOf, exportYear, recordDown } from './_board-sign.js';
 import { sendTrouble } from './_broadcast-notify.js';
 // Where an admin's change to a signature came from: its evidence, under the admin's own name
 const evidence = (context) => evidenceOf(context, { deviceOf, accessIat });
@@ -110,6 +110,28 @@ const fromError = (err) => (err.status && (err.status < 500 || (err.status === 5
 // (Board QA round 10: Members empty, "has no email" on every to-do)
 const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));
 
+/**
+ * What a press reads for its answer once its work is done (the meeting as it is now, the approvals, who has signed): a
+ * read that fails leaves it to the page's next look, said in words (`later`) with `reread` for the page to look again
+ * by itself, never an error that reads as nothing done (Board QA round 11, Nov 23 2026: the reminder had gone to the
+ * board, and the founder was told nothing was sent). → { v } or { reread, later }
+ */
+const readAfter = (read, later) => read.then((v) => ({ v }), (err) => {
+  console.error('[board-admin] reading the answer after a press', err?.message || err);
+  return { reread: true, later };
+});
+const SHOWS_SOON = 'This page shows it in a moment.';
+/**
+ * Who runs Board, for a send's replies: read before the send, so People not answering is said as a send's refusal ("so
+ * nothing was sent"), as every other read of the press is (Board QA round 11: Email the board said "nothing was changed")
+ */
+const sendersOf = (DB) => getSettings(DB).then((s) => s.admins, (e) => { throw asSend(e); });
+/** A press's answer: what it read, or `reread` with its words when a read failed (readAfter) */
+const answerOf = (reads) => {
+  const missed = Object.values(reads).find((x) => x.reread);
+  return missed ? { reread: true, later: missed.later } : Object.fromEntries(Object.entries(reads).map(([k, x]) => [k, x.v]));
+};
+
 async function gate(context) {
   const me = context.data?.userEmail || '';
   await ensureSchema(context.env.DB);
@@ -133,7 +155,7 @@ async function once(context, id, send) {
   try {
     return await going;
   } catch (err) {
-    if (err.status === 409 && (err.extra?.sending || err.extra?.already)) return fail(err.message, 409, { ...err.extra, meeting: await getMeeting(context.env.DB, id) });
+    if (err.status === 409 && (err.extra?.sending || err.extra?.already)) return fail(err.message, 409, { ...err.extra, ...answerOf({ meeting: await readAfter(getMeeting(context.env.DB, id), SHOWS_SOON) }) });
     if (err.went) {
       console.error('[board-admin] send', id, err.message);
       return fail('These emails may have gone: the site stopped partway through sending them. Ask a board member whether theirs came before pressing it again.', 500, { unsure: true, meeting: await getMeeting(context.env.DB, id).catch(() => null) });
@@ -238,8 +260,9 @@ export async function onRequestGet(context) {
       packetTo: recipients.length,
     });
   } catch (err) {
-    // (a signing record for an auditor is never one missing people: refused in People's words, as any other press is)
-    return q.has('record') ? fromError(err) : pageError(err);
+    // (a signing record for an auditor is never one missing people: refused in People's words, as any other press is;
+    // anything else that stopped it is said as nothing downloaded, in words: Board QA round 11)
+    return q.has('record') ? fromError(err.status ? err : recordDown(err)) : pageError(err);
   }
 }
 
@@ -288,13 +311,13 @@ export async function onRequestPost(context) {
       // A meeting's file only: a paper's file goes with its save (above), a signed copy with its signature, and a
       // signing record is the site's own
       if (String(form.get('ownerType') || '') !== 'meeting') return fail('Add a paper’s file from Documents, and a signed copy from Who’s signed', 400);
-      // (sent as the minutes of a meeting whose minutes are approved and in Board: kept as an ordinary file, and said.
-      // ./_board-minutes.js minutesKindNo. Board QA round 10)
-      const kind = String(form.get('kind') || 'other');
-      const asFile = kind === 'minutes' ? await minutesKindNo(env, { meetingId: String(form.get('ownerId') || '') }) : '';
+      // (sent as the minutes of a meeting whose minutes are approved and in Board: kept as an ordinary file, and said;
+      // for one of an approved meeting's items (`forItem`, an item's upload): never its own minutes. ./_board-minutes.js
+      // uploadKind. Board QA rounds 10 and 11)
+      const { kind, asFile } = await uploadKind(env, { meetingId: String(form.get('ownerId') || ''), kind: String(form.get('kind') || 'other'), forItem: form.get('forItem') === 'true' });
       const file = await putFile(env, {
         ownerType: 'meeting', ownerId: String(form.get('ownerId') || ''), file: form.get('file'),
-        kind: asFile ? 'other' : kind, staffOnly: form.get('staffOnly') === 'true', by: me,
+        kind, staffOnly: form.get('staffOnly') === 'true', by: me,
       });
       await audit(env, me, 'created', `Board file added: ${file.name}`);
       return Response.json({ ok: true, file, ...(asFile ? { asFile } : {}) });
@@ -357,17 +380,18 @@ export async function onRequestPost(context) {
         // Board's own way to approve, the same as on the chair's review: it's what sends the agenda to the board
         needId();
         const r = await chairApprove(env, { meetingId: id }, { admin: true, adminEmail: me }, { always: true });
-        const m = await getMeeting(env.DB, id);
-        if (!r.already) await audit(env, me, 'updated', `Board agenda approved: ${meetingName(m)}`);
-        return Response.json({ ok: true, ...r, meeting: m, approvals: await agendaApprovals(env.DB) });
+        // (approved: what it reads for its answer never says it wasn't. Board QA round 11)
+        const [m, approvals] = await Promise.all([readAfter(getMeeting(env.DB, id), SHOWS_SOON), readAfter(agendaApprovals(env.DB), SHOWS_SOON)]);
+        if (!r.already) await audit(env, me, 'updated', `Board agenda approved: ${m.v ? meetingName(m.v) : id}`);
+        return Response.json({ ok: true, ...r, ...answerOf({ meeting: m, approvals }) });
       }
       case 'send-packet': {
         needId();
-        const admins = (await getSettings(env.DB)).admins;
+        const admins = await sendersOf(env.DB);
         const r = await once(context, id, () => sendPacket(env, id, { by: me, to: body.test ? [me] : null, replyTo: admins }));
         if (r instanceof Response) return r;
         if (!body.test && r.sent) await audit(env, me, 'updated', `Board emailed the link to the agenda and documents (${r.sent} board members)`);
-        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.once), meeting: await getMeeting(env.DB, id) });
+        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.once), ...answerOf({ meeting: await readAfter(getMeeting(env.DB, id), SHOWS_SOON) }) });
       }
       case 'action-done':
         return Response.json({ ok: true, ...(await setActionDone(env.DB, String(body.actionId || ''), !!body.done, { by: me })) });
@@ -409,16 +433,20 @@ export async function onRequestPost(context) {
       }
       case 'update-file': {
         needId();
-        // (filed under Minutes on a meeting whose minutes are approved and in Board: refused, nothing changed. Round 10)
-        const no = body.kind === 'minutes' ? await minutesKindNo(env, { fileId: id }) : '';
+        // (filed under Minutes on a meeting whose minutes are approved and in Board: refused, nothing changed. Round 10.
+        // The approved minutes' own file filed under anything else: refused alike, it stays theirs. Round 11)
+        const no = body.kind === undefined ? '' : body.kind === 'minutes' ? await minutesKindNo(env, { fileId: id }) : await approvedFileNo(env, id, { kind: String(body.kind) });
         if (no) return fail(no, 409);
         return Response.json({ ok: true, file: await updateFile(env.DB, id, { kind: body.kind, staffOnly: body.staffOnly, name: body.name }) });
       }
       case 'delete-file': {
         needId();
-        // (a signed copy, a record, or a signed paper's file is SOARD's record: kept)
+        // (a signed copy, a record, or a signed paper's file is SOARD's record: kept; and approved minutes' own file stays
+        // theirs while they're approved, ./_board-minutes.js approvedFileNo. Round 11)
         const locked = await fileLocked(env.DB, id);
         if (locked) return fail(locked, 409, { kept: true });
+        const stays = await approvedFileNo(env, id);
+        if (stays) return fail(stays, 409, { kept: true });
         await deleteFile(env, id);
         await audit(env, me, 'deleted', 'Board file deleted');
         return Response.json({ ok: true });
@@ -468,7 +496,7 @@ export async function onRequestPost(context) {
         } catch (err) {
           // Already out, with nothing to change (a second tab that never heard it went), or going out right now from
           // another tab or from Board by itself (one send at a time): said, with the meeting as it is now
-          if (err.status === 409 && (err.extra?.already || err.extra?.sending)) return fail(err.message, 409, { ...err.extra, meeting: await getMeeting(env.DB, id) });
+          if (err.status === 409 && (err.extra?.already || err.extra?.sending)) return fail(err.message, 409, { ...err.extra, ...answerOf({ meeting: await readAfter(getMeeting(env.DB, id), SHOWS_SOON) }) });
           throw err;
         }
         await audit(env, me, 'updated', `Board meeting invite sent or updated: ${meetingName(m)}`);
@@ -482,23 +510,24 @@ export async function onRequestPost(context) {
       }
       case 'remind-rsvp': {
         needId();
-        const admins = (await getSettings(env.DB)).admins;
+        const admins = await sendersOf(env.DB);
         const r = await once(context, id, () => remindRsvp(env, id, { to: body.test ? [me] : null, replyTo: admins, by: me }));
         if (r instanceof Response) return r;
-        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.once) });
+        // (gone, and the meeting not read back: who was asked shows on the page's next look. Board QA round 11)
+        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.once), ...(r.reread ? { later: 'Who was asked shows here in a moment.' } : {}) });
       }
       case 'send-minutes': {
         needId();
-        const admins = (await getSettings(env.DB)).admins;
+        const admins = await sendersOf(env.DB);
         const r = await once(context, id, () => sendMinutesNotice(env, id, { to: body.test ? [me] : null, replyTo: admins, by: me }));
         if (r instanceof Response) return r;
         if (!body.test && r.sent) await audit(env, me, 'updated', `Board told the minutes are up (${r.sent})`);
-        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.once), meeting: await getMeeting(env.DB, id) });
+        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.once), ...answerOf({ meeting: await readAfter(getMeeting(env.DB, id), SHOWS_SOON) }) });
       }
       case 'ask-to-sign': {
         // An email asking each board member picked (none: the whole board) who hasn't signed this year's papers to;
         // `test`: to the admin asking only. Their codes have to come: a member added minutes ago is put on Access's list first
-        const admins = (await getSettings(env.DB)).admins;
+        const admins = await sendersOf(env.DB);
         if (!body.test && accessConfigured(env)) {
           let st = await accessStatus(env);
           if (!st.current || !st.ok) st = await syncBoardAccess(env);
@@ -512,12 +541,15 @@ export async function onRequestPost(context) {
           context.waitUntil?.(going.catch(() => {}));
           r = await going;
         } catch (e) {
+          // (the emails went and their record didn't: said as that, with how many went. Board QA round 11)
+          if (e?.went && e.extra?.unrecorded) return Response.json({ ok: false, ...e.extra, error: e.message }, { status: 500 });
           const err = asSend(e);
-          if (err.status) return Response.json({ ok: false, sent: 0, error: err.message }, { status: err.status });
+          if (err.status) return Response.json({ ok: false, sent: 0, error: err.message, ...(err.extra || {}) }, { status: err.status });
           throw err;
         }
         if (!body.test && r.sent) await audit(env, me, 'updated', `Board asked ${r.sent === 1 ? 'a board member' : `${r.sent} board members`} by email to sign this year’s papers`);
-        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.ask), ...(body.test ? {} : { members: await memberStatus(env.DB) }) });
+        // (asked: Members read back for the answer, or on the page's next look when that read fails. Board QA round 11)
+        return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.ask), ...(body.test ? {} : answerOf({ members: await readAfter(memberStatus(env.DB), 'Members shows who was asked in a moment.') })) });
       }
       case 'email-all': {
         let r;
@@ -535,7 +567,7 @@ export async function onRequestPost(context) {
         return Response.json({ ok: true, ...r });
       }
       case 'send-welcome': {
-        const admins = (await getSettings(env.DB)).admins;
+        const admins = await sendersOf(env.DB);
         // Only once their codes will come: a member added minutes ago is put on Access's list now (not at the next
         // heartbeat), and the list has to be on the admin app. Checked inside the send's claim, so the page shows it going out
         const check = body.test || !accessConfigured(env) ? null : async () => {
@@ -553,7 +585,7 @@ export async function onRequestPost(context) {
           r = await going;
         } catch (e) {
           const err = asSend(e);
-          if (err.status) return Response.json({ ok: false, sent: 0, error: err.message }, { status: err.status });
+          if (err.status) return Response.json({ ok: false, sent: 0, error: err.message, ...(err.extra || {}) }, { status: err.status });
           throw err;
         }
         if (!body.test && r.sent) await audit(env, me, 'updated', `Board page sign-in email sent to ${r.sent} board members`);

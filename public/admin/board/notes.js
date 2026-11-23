@@ -20,6 +20,7 @@
 
 import { h, htm, useState, useEffect, useRef, useMemo } from '../vendor.js';
 import { uid, clock, endedClock } from '../board-shared.js';
+import { dayText } from './parts.js';
 import { minutesOutline, approveWords, noteLines } from '../board-minutes-template.js';
 import { findToDos } from '../board-todos.js';
 
@@ -38,7 +39,7 @@ const RESULTS = [['passed', 'Passed'], ['failed', 'Failed'], ['tabled', 'Tabled'
 const RESULT_WORDS = { passed: 'Passed', failed: 'Failed', tabled: 'Tabled' };
 const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 const blank = (s) => !String(s ?? '').trim();
-const shortDay = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+const shortDay = (d) => dayText(d, 'md');
 const number = (n) => typeof n === 'number';
 const sameWords = (a, b) => String(a || '').replace(/\s+/g, ' ').trim().toLowerCase() === String(b || '').replace(/\s+/g, ' ').trim().toLowerCase();
 const isWords = (k) => k === 'guests' || k.startsWith('n:');

@@ -17,7 +17,7 @@ import { onRequest, _resetKeyCacheForTests } from '../functions/api/_middleware.
 import * as admin from '../functions/api/board-admin.js';
 import { saveMeeting, getMeeting, putFile, patchMeeting, ensureSchema, listMeetings, boardCopy, getSettings } from '../functions/api/_board.js';
 import { maybeFinishMinutes } from '../functions/api/_board-minutes.js';
-import { cleanMeeting, todayEastern } from '../public/admin/board-shared.js';
+import { cleanMeeting, todayEastern, askedOf } from '../public/admin/board-shared.js'; /* r11: askedOf */
 
 const TEAM = 'soard';
 const AUD = 'aud-tag';
@@ -314,8 +314,11 @@ test('F2: a reminder to answer the invite leaves who was asked and when on the s
   const r = await api({ action: 'remind-rsvp', id: made.id });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.sent, 2);
+  /* r11: who was asked is kept by email, as it went, and Board's page matches each to the member at that address from its
+     own list of the board (board-shared.js askedOf): never a read of People in every meeting read (Board QA round 11) */
   const asked = r.body.meeting?.reminded || {};
-  assert.deepEqual(Object.keys(asked).sort(), ['alex-rivera', 'sam-ortiz'], `the answer carries who was asked (${JSON.stringify(r.body.meeting?.reminded)})`);
+  assert.deepEqual(Object.keys(asked).sort(), ['alex.board@example.com', 'sam.board@example.org'], `the answer carries who was asked (${JSON.stringify(r.body.meeting?.reminded)})`);
+  assert.deepEqual(Object.keys(askedOf(r.body.meeting, [{ slug: 'alex-rivera', email: 'Alex.Board@example.com' }, { slug: 'sam-ortiz', email: 'sam.board@example.org' }, { slug: 'taylor-nguyen', email: 'taylor.board@example.net' }])).sort(), ['alex-rivera', 'sam-ortiz'], 'the page names them');
   assert.ok(Object.values(asked).every((t) => Date.now() - Date.parse(t) < 60_000), 'and when');
   // Another tab, or a reload: Board's data has it
   const other = (await listMeetings(env.DB)).find((x) => x.id === made.id);
@@ -328,7 +331,8 @@ test('F2: a reminder to answer the invite leaves who was asked and when on the s
   await env.DB.prepare("UPDATE board_state SET data = json_set(data, '$.had.\"alex.board@example.com\"', ?, '$.had.\"sam.board@example.org\"', ?) WHERE key = ?")
     .bind(new Date(Date.now() - 11 * 60_000).toISOString(), new Date(Date.now() - 11 * 60_000).toISOString(), `board-send:remind:${made.id}`).run();
   const aged = (await getMeeting(env.DB, made.id)).reminded;
-  assert.ok(Math.round((Date.now() - Date.parse(aged['alex-rivera'])) / 60_000) === 11, 'the record’s own time');
+  /* r11: by email (above) */
+  assert.ok(Math.round((Date.now() - Date.parse(aged['alex.board@example.com'])) / 60_000) === 11, 'the record’s own time');
   // Never on the meeting's own record (a save, a server write), nor on the board page
   await patchMeeting(env.DB, made.id, (cur) => ({ ...cur, title: 'Q1 Board Meeting' }));
   const row = await env.DB.prepare('SELECT data FROM board_meetings WHERE id = ?').bind(made.id).first();

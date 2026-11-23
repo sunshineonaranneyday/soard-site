@@ -40,7 +40,7 @@ test('finding 1: a name ending in one of Hungary\'s common given names is writte
   // (a plain spelling that's a common given name elsewhere says nothing, as round 21 had it; nor do names Hungarians share
   // with everyone: the first word is still theirs)
   ['Simon Robert', '', 'Simon'], ['Simon Peter', '', 'Simon'], ['Simon Maria', '', 'Simon'], ['Simon Nora', '', 'Simon'], ['Simon Julia', '', 'Simon'],
-  ['Simon Anna', '', 'Simon'], ['Simon Rita', '', 'Simon'], ['Simon Viktor', '', 'Simon'], ['Eva Simon', '', 'Eva'], ['Grace Lukacs', '', 'Grace'],
+  ['Simon Anna', '', ''] /* r23: Anna, Rita and Viktor are Hungary's given names too (the lead's rule 5, all 72 of the tester's), so after Simon, a Hungarian family name, the name is written family name first: no name */, ['Simon Rita', '', ''] /* r23: as Simon Anna */, ['Simon Viktor', '', ''] /* r23: as Simon Anna */, ['Eva Simon', '', 'Eva'], ['Grace Lukacs', '', 'Grace'],
 ]));
 
 test('finding 1: the Hungarian lists are written out (a few hundred), every accents-only name has an accent, and a name whose plain spelling the site knows as a given name elsewhere counts only with its accents', () => {
@@ -53,7 +53,7 @@ test('finding 1: the Hungarian lists are written out (a few hundred), every acce
   const known = new Set(['Zoltán', 'László', 'Balázs', 'István', 'Ferenc', 'Csaba', 'Attila', 'Katalin', 'Erzsébet', 'Zsófia', 'Margit']);
   assert.deepEqual(m.hungarian.filter((w) => givenName(w) && !known.has(w)), [], 'counted without accents, but another people\'s given name');
   for (const w of ['Andras', 'Gyorgy', 'Antal', 'András', 'Márta', 'Nóra', 'Róbert', 'Ágota', 'Agota']) assert.ok(givenFamilyFirst(w), w);
-  for (const w of ['Peter', 'Maria', 'Eva', 'Robert', 'Nora', 'Marta', 'Julia', 'Anna', 'Simon', 'Viktor', 'Lukacs', 'Gellert', 'Jonas']) assert.ok(!givenFamilyFirst(w), w);
+  for (const w of ['Peter', 'Maria', 'Eva', 'Robert', 'Nora', 'Marta', 'Julia', /* r23: Anna, Simon and Viktor are Hungary's given names that everyone shares now (rule 5), counted only after a Hungarian family name */ 'Lukacs', 'Gellert', 'Jonas']) assert.ok(!givenFamilyFirst(w), w);
 });
 
 // ─── Finding 2: a family name written first that's a given name too ──
@@ -101,7 +101,9 @@ test('finding 3: the name they go by is set aside when it\'s the full name\'s fa
 test('finding 3: across every family name the lists know as written first, typed as the name they go by before one of their people\'s given names, never greeted', () => {
   const marked = markedNames;
   const givenAfter = { Tien: 'Yu-ting', Jen: 'Hsin-yi', Kai: 'Yuki', Yuki: 'Hiroshi', Aida: 'Hiroshi', Miki: 'Hiroshi', Sakura: 'Hiroshi', Joe: 'Min-jun', Yong: 'Min-jun', Thanh: 'Minh',
-    Vinh: 'Minh', Trang: 'Minh', Luc: 'Minh', Hoa: 'Minh', Quang: 'Minh', Sam: 'Sokha', Em: 'Sokha', Nou: 'Sokha' };
+    Vinh: 'Minh', Trang: 'Minh', Luc: 'Minh', Hoa: 'Minh', Quang: 'Minh', Sam: 'Sokha', Em: 'Sokha', Nou: 'Sokha',
+    /* r23: the family names round 23 finds from each people's own list (Japanese, Korean, Cambodian ones), each before its people's given name */
+    Kawai: 'Hiroshi', Ken: 'Hiroshi', Rin: 'Hiroshi', Hiro: 'Hiroshi', Ike: 'Hiroshi', Seung: 'Min-jun', Ann: 'Min-jun', Sem: 'Sokha' };
   const bad = [];
   for (const fam of marked().familyFirstBefore) {
     const fullName = `${fam} ${givenAfter[fam] || 'Xiaoming'}`;
@@ -147,8 +149,9 @@ test('finding 4: no word on the place and organization lists is a given name on 
   const FAMILY = `park parks stanley lee mercer farmer austin houston dallas denver washington jackson lincoln madison tucker kitchen kitchens pool woods
     meadows hill hills banks bell brooks stone glass marble lake rivers bay grove ridge plaza arena montana colorado maine cleveland durham henderson
     richmond rochester birmingham montgomery lancaster salem reno irvine stockton fremont toledo mesa orlando dayton raleigh burbank lafayette decatur
-    dunwoody chamblee norcross covington conyers calhoun dalton cumming milton forsyth cobb fulton clayton macon rome boston coffee dance grill gallery
-    baker cook carpenter mason painter turner fisher hunter gardner miller butler porter cooper barber potter church christian marina orchard saint`
+    dunwoody norcross covington conyers calhoun dalton cumming milton forsyth cobb fulton clayton macon rome boston grill gallery
+    baker cook carpenter mason painter turner fisher hunter gardner miller butler porter cooper barber potter church christian marina saint`
+    /* r23: chamblee (a Georgia city, rule 6d), coffee and dance (business kinds, rule 6c) and orchard (orchards' singular, rule 6b) are place words now, the lead's decision */
     .split(/\s+/).filter(Boolean);
   assert.deepEqual(FAMILY.filter((w) => placeWord(w) || whereWord(w)), [], 'a family name on a place list');
 });
@@ -175,7 +178,7 @@ test('finding 5: a whole name before the comma (it starts with a given name) is 
   // an organization after it, or anything else)
   for (const [n, address] of [['De La Cruz, Maria', 'De La Cruz Maria'], ['Garcia Lopez, Ana', 'Garcia Lopez Ana'], ['van der Berg, Jan', 'van der Berg Jan'],
     ['St. James, Jordan', 'St. James Jordan'], ['Al Fayed, Mohammed', 'Al Fayed Mohammed'], ['De La Cruz, Grace Church', 'De La Cruz'], ['Garcia Lopez, Holly Springs', 'Garcia Lopez'],
-    ['van der Berg, Mercy Hospital', 'van der Berg'], ['St. James, Hope Clinic', 'St. James'], ['De La Cruz, Maria, Atlanta', 'De La Cruz'], ['Del Rey, Compass', 'Del Rey'],
+    ['van der Berg, Mercy Hospital', 'van der Berg'], ['St. James, Hope Clinic', 'St. James'], ['De La Cruz, Maria, Atlanta', 'De La Cruz Maria'] /* r23: rule 8, the name's words only: a place after the second comma is left out of the address, the given name kept */, ['Del Rey, Compass', 'Del Rey'],
     ['De La Cruz, Maria de los Angeles', 'De La Cruz Maria de los Angeles']]) {
     const r = readName(n);
     assert.equal((r.address || r.words).join(' '), address, n);
@@ -240,7 +243,7 @@ test('finding 6: through Add, the same whole name before a comma with anything a
   }
   // (relatives, round 21: never offered; and the words before the comma alone still asked about the person they are)
   for (const [first, second, secondSlug] of [['De La Cruz, Maria', 'De La Cruz, Jose', 'de-la-cruz-jose'], ['Garcia Lopez, Maria', 'Garcia Lopez, Ana', 'garcia-lopez-ana'],
-    ['van der Berg, Piet', 'van der Berg, Klaas', 'van-der-berg-2']]) {
+    ['van der Berg, Piet', 'van der Berg, Klaas', 'van-der-berg-klaas'] /* r23: rule 7, a particle proves a family name, so Piet and Klaas are given names and in their addresses (Piet at van-der-berg-piet) */]) {
     const w = await addWorld();
     await w.addNew(await w.applied(first));
     const b = await w.plan((await w.applied(second)).id);

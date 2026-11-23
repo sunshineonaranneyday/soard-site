@@ -55,10 +55,11 @@ export const nameIn = (m, meetings = []) => { const n = meetingName(m); return m
 export const answerLost = (j) => !!j && !j.ok && !!j.unknown;
 /** Words as one sentence: a full stop at the end, never two ("…try again.." ) */
 export const sentence = (t) => { const s = String(t || '').trim(); return !s ? '' : /[.!?…]$/.test(s) ? s : `${s}.`; };
-/** Upload a file to a meeting or a document */
-export function upload(file, { ownerType, ownerId, kind = 'other', staffOnly = false }) {
+/** Upload a file to a meeting or a document (`forItem`: to go on one of the meeting's agenda items) */
+export function upload(file, { ownerType, ownerId, kind = 'other', staffOnly = false, forItem = false }) {
   const form = new FormData();
   form.set('file', file); form.set('ownerType', ownerType); form.set('ownerId', ownerId); form.set('kind', kind); form.set('staffOnly', String(staffOnly));
+  if (forItem) form.set('forItem', 'true');
   return call(null, { form, query: '?upload=1' });
 }
 

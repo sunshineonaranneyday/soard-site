@@ -19,7 +19,8 @@
  */
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
-import { meetingName, longDate, shortDate, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew } from '../board-shared.js';
+import { meetingName, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew } from '../board-shared.js';
+import { longDate, dayText } from './parts.js';
 import { Report, Motion } from '../board-report.js';
 import { dueText } from './review.js';
 
@@ -33,7 +34,7 @@ const andNames = (list) => (list.length > 2 ? `${list.slice(0, -1).join(', ')} a
 /** "Nov 4" (Atlanta's day) */
 const dayShort = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: ET }) : ''; };
 /** "Thursday" for a meeting's YYYY-MM-DD */
-const weekday = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' }) : '');
+const weekday = (d) => dayText(d, 'w');
 
 async function post(body) {
   try {
@@ -92,7 +93,7 @@ export function reviewTodo(data, d) {
   return {
     href: `#/meetings/${encodeURIComponent(m.id)}/review`,
     title: `Review the agenda for ${weekday(m.date)}`,
-    meta: `The ${meetingName(m)}, ${new Date(`${m.date}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })}`,
+    meta: `The ${meetingName(m)}, ${dayText(m.date, 'md')}`,
   };
 }
 
@@ -273,7 +274,7 @@ function ReviewItem({ m, it, label, ctx, ui, r, who }) {
 }
 
 /** "Monday, Nov 30" for a YYYY-MM-DD */
-const dayWords = (date) => `${weekday(date)}, ${shortDate(date).replace(/, \d{4}$/, '')}`;
+const dayWords = (date) => `${weekday(date)}, ${dayText(date, 'md')}`;
 
 /**
  * A review link that doesn't open the review says the true reason, never one for every case: the review is the

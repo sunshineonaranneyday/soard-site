@@ -563,13 +563,14 @@ try {
     };
     // [what's typed, the title found, words its line has, a mark it has]
     const WANT = [
-      [['$1.66M', '1.66m', '1.66 million'], new RegExp(`^${Y0} revenue$`), '$1,656,045 ($1.66M)', /^1\.66M?$/],
-      [['+$676K', '676k', '676 thousand'], new RegExp(`^${Y0} net$`), '$676,045 (+$676K)', /^676K?$/],
+      /* r11: the short form after a comma, never in brackets, which on this page say below zero (Board QA round 11) */
+      [['$1.66M', '1.66m', '1.66 million'], new RegExp(`^${Y0} revenue$`), '$1,656,045, or $1.66M', /^1\.66M?$/],
+      [['+$676K', '676k', '676 thousand'], new RegExp(`^${Y0} net$`), '$676,045, or +$676K' /* r11: the short form after a comma, never in brackets */, /^676K?$/],
       [['net income'], new RegExp(`^${Y0} net$`), '$676,045', null],
       /* r9: a statement line says its short form beside its amount when it rounds, as other money results do (round 9, finding 4) */
-      [['net income', '$189,248', '189248'], /^Net Income$/, '$189,248 ($189K), on the statement of activities', null],
-      [['$870,767', 'total assets'], /^TOTAL ASSETS$/, '$870,767 ($871K), on the statement of financial position', null],
-      // (a round amount's line has it once: "$700,000", never "$700,000 ($700K)")
+      [['net income', '$189,248', '189248'], /^Net Income$/, '$189,248, or $189K, on the statement of activities' /* r11: the short form after a comma, never in brackets */, null],
+      [['$870,767', 'total assets'], /^TOTAL ASSETS$/, '$870,767, or $871K, on the statement of financial position' /* r11: the short form after a comma, never in brackets */, null],
+      // (a round amount's line has it once: "$700,000", never "$700,000, or $700K")
       [['$700K', '700 thousand'], /^Donations$/, '$700,000, 42% of', /^700(,000)?$/],
     ];
     for (const [who, w] of [[SAM, 1280], [MARIA, 390]]) {

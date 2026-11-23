@@ -19,6 +19,7 @@
 
 import { h, htm, useState, useEffect, useRef, useMemo } from '../vendor.js';
 import { money } from '../board-shared.js';
+import { dayText } from './parts.js';
 import { compact, Blank, budgetName } from './money.js';
 
 const html = htm.bind(h);
@@ -54,8 +55,8 @@ export const withLineNotes = (data, meetingId, itemId, list) => ({
 
 const ET = 'America/New_York';
 const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : html`<${Blank} />`);
-const short = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
-const fullDate = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
+const short = (d) => dayText(d, 'mdy');
+const fullDate = (d) => dayText(d, 'MDY');
 /** "+$12,345" / "−$12,345" against the year before ('' with nothing to set it beside) */
 const diffText = (a, p) => (typeof a === 'number' && typeof p === 'number' ? (a === p ? 'Same' : `${a > p ? '+' : '−'}${money(Math.abs(a - p))}`) : '');
 /** "▲ 12%", "New" when last year had none */

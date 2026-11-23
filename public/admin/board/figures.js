@@ -11,20 +11,22 @@
  * other way a tile writes it (Board QA round 9: the budgets, last year, the gifts' total, what makeovers cost, the tax
  * return, the changes and the forecast were drawn but never found, and "$1.88M", the chart's 2026 so far, found only a
  * statement's $1,884,217). Round 10: one entry a figure, landing on its own place (the store's three of a year were one),
- * and the month-by-month tables, the month-end balances and Mercury's record found too. DOM-free: it runs in node too
- * (tests/board-round9-member.test.mjs, tests/board-round10-member.test.mjs)
+ * and the month-by-month tables, the month-end balances and Mercury's record found too. Round 11: every figure lands on
+ * a place of its own (a meeting's money tile, a line of a card, never the card or the meeting's whole agenda item), one
+ * key a figure wherever it's drawn (Mercury's year), this month's cash so far, never a month's end, and no amount above
+ * zero in brackets. DOM-free: it runs in node too (tests/board-round9-member.test.mjs to board-round11-member.test.mjs)
  */
 
-import { money, shortDate, todayEastern, plural, showsOf, meetingName } from '../board-shared.js';
-import { compact, writer, moneyTiles, yearFigures, mixOf, storeOf, storeChange, pctOf, growthText, monthsPhrase, spentOf, budgetDue, shortAsOf, andText } from './money.js';
+import { money, todayEastern, plural, showsOf, meetingName } from '../board-shared.js';
+import { compact, writer, moneyTiles, yearFigures, mixOf, storeOf, storeChange, pctOf, paceOf, growthText, monthsPhrase, spentOf, budgetDue, shortAsOf, andText, monthSoFar } from './money.js';
 import { yearEnds } from './books.js';
-import { planOf, typicalLately, statsOf, operatingOf } from '../makeover-costs-shared.js';
-import { answerText, screenText, toComeText } from './costs.js';
+import { planOf, typicalLately, statsOf, operatingOf, recentSeasons } from '../makeover-costs-shared.js';
+import { answerText, screenText, toComeText, answerSub } from './costs.js';
 import { underwayOf } from './stages.js';
-import { windowStart } from './parts.js';
+import { windowStart, shortDate, dayText } from './parts.js';
 import { prep, termsOf, norm } from './find.js';
 
-const dayMonth = (d) => shortDate(d).replace(/, \d{4}$/, '');
+const dayMonth = (d) => dayText(d, 'md');
 /** Dollars with a true minus: "−$12,000" */
 export const dollars = (n) => `${n < 0 ? '−' : ''}${money(Math.abs(n))}`;
 /** The amount a short form says: "$1.88M" → 1880000 */
@@ -32,10 +34,13 @@ const shortValue = (c) => { const m = String(c).match(/([\d.,]+)\s?([KMB])?$/); 
 /** A figure's short form, its sign with it: "−$12K", "$1.88M" */
 const shortSigned = (v) => `${v < 0 ? '−' : ''}${compact(Math.abs(v))}`;
 /**
- * An amount as a result's line says it: exact, with the short form beside it only when that rounds ("$1,656,045
- * ($1.66M)", never "$415,000 ($415K)"); `short`, the short form a tile writes it in ("+$676K", "$62K")
+ * An amount as a result's line says it: exact, with the short form after it only when that rounds ("$1,656,045, or
+ * $1.66M", never "$415,000, or $415K"); `short`, the short form a tile writes it in ("+$676K", "$62K"). Never in
+ * brackets, which on this page say below zero (Board QA round 11: "($1.66M)" reads as a loss)
  */
-export const both = (v, short = shortSigned(v)) => (Math.abs(shortValue(short) - Math.abs(v)) >= 0.5 ? `${dollars(v)} (${short})` : dollars(v));
+export const both = (v, short = shortSigned(v)) => (Math.abs(shortValue(short) - Math.abs(v)) >= 0.5 ? `${dollars(v)}, or ${short}` : dollars(v));
+/** A line's amount and the words after it: a comma between when the amount ends with its short form ("…, or $1.66M, on 2025’s same days") */
+const joined = (said, tail) => (/, or \S+$/.test(said) && tail && !/^[,.:;]/.test(tail) ? `${said},${tail}` : `${said}${tail}`);
 /**
  * An amount as it's written and said, for finding it typed any of those ways: exact ("$1,656,045"), in short as a tile
  * writes it ("$1.66M", "$676K"), in words ("1.66 million", "676 thousand"), and below zero with its sign ("−$12,000")
@@ -70,7 +75,8 @@ export function figureTiles({ data, cash, budget, variant = 'home' }) {
   const waiting = (actual) => ({ actual, budget: null, waiting: true });
   // Without QuickBooks, a budget sheet still being read keeps its two figures' places
   const sheet = budget === undefined && !books && budgetDue(data);
-  const rev = budget?.revenue || (books ? waiting(books.revenue) : sheet ? waiting(null) : null);
+  // (the revenue counted one way, as it will be once the budget is in: ./money.js withBooks, yearFigures)
+  const rev = budget?.revenue || (books ? { ...waiting(yearFigures(books).revenue), inKind: yearFigures(books).inKind?.given || 0 } : sheet ? waiting(null) : null);
   // Expenses as the budget counts them, without in kind (./money.js spentOf), and saying what's left out
   const exp = budget?.expenses || (books && typeof books.expenses === 'number' ? { ...waiting(spentOf(books)), inKind: books.nonCash > 0 ? books.nonCash : 0 } : sheet ? waiting(null) : null);
   const yr = budget?.year || books?.year || (sheet ? todayEastern().slice(0, 4) : '');
@@ -80,7 +86,7 @@ export function figureTiles({ data, cash, budget, variant = 'home' }) {
   const asOf = budget && !budget.live && budget.asOf ? `, as of ${shortAsOf(budget.asOf).replace(/^(\w{3})\w*/, '$1')}` : '';
   const against = ($, k, x) => (x.waiting ? 'The year so far' : x.budget ? `${pctOf(x)}% of the ${$(`${k}:bud`, x.budget)} budget${asOf}` : growthText(x) || `Through ${shortAsOf(budget.asOf)}`);
   // (a line kept for it while the budget is read)
-  const pace = (x) => (x.waiting ? ' ' : x.budget && x.last != null && x.lastFull > 0 ? `Last year by now: ${Math.round((x.last / x.lastFull) * 100)}% of its year` : '');
+  const pace = (x) => (x.waiting ? ' ' : x.budget && paceOf(x) != null ? `Last year by now: ${Math.round(paceOf(x) * 100)}% of its year` : '');
   // (a change in dollars, "Even" when it rounds to nothing, as every change is: QA round 9)
   const moved = ($, k, a, p, words, even) => (Math.round(a) === Math.round(p) ? even : `${a > p ? '▲' : '▼'} ${$(k, Math.abs(a - p))} ${words}`);
   const tile = (t, fill) => { const figs = []; return { ...t, ...fill(writer(figs)), figs }; };
@@ -106,7 +112,7 @@ export function figureTiles({ data, cash, budget, variant = 'home' }) {
   const yf = b ? yearFigures(b) : null;
   const lyNet = yf?.last?.net ?? null;
   const net = typeof yf?.net === 'number' ? tile({ key: 'net', label: `${b.year} net so far`, href: '#year', tone: lyNet != null && Math.round(yf.net) !== Math.round(lyNet) ? (yf.net > lyNet ? 'up' : 'down') : '',
-    sub: b.through ? `January 1 to ${shortDate(b.through).replace(/, \d{4}$/, '')}` : 'The year so far' }, ($) => ({
+    sub: b.through ? `January 1 to ${dayMonth(b.through)}` : 'The year so far' }, ($) => ({
     value: $('net', yf.net, (v) => `${v < 0 ? '−' : '+'}${compact(Math.abs(v))}`),
     note: lyNet != null ? moved($, 'net:chg', yf.net, lyNet, `on ${b.lastYear.year}’s same days`, `Even with ${b.lastYear.year}’s same days`) : '',
   })) : null;
@@ -133,6 +139,7 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   const ly = books?.lastYear || null;
   const LY = ly?.year || String(Number(Y) - 1);
   const span = books?.through ? `January 1 to ${dayMonth(books.through)}` : `${Y} so far`;
+  const mercY = data.numbers?.finance?.ytd?.year || Y;
   /**
    * A figure (`k`, what it is; `v`, its amount): its title, the words before and after its amount in its line (`head`, a
    * change's way, "Up "; `tail`), the words it's found by, where it lands, and the ways it's written there (`said`;
@@ -211,9 +218,11 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
       'exp:lyall': { title: `${LY} expenses, the whole year`, tail: `, all of ${LY}`, words: 'expenses spending last year whole year in all full', focus: 'year' },
       'rev:yearchg': { title: `${Y} revenue so far on the year’s chart, against ${LY}’s same days`, head: dirOf(ends?.rev.now, ends?.rev.by), tail: ` on ${LY}’s same days${chartRev}`, words: 'revenue change chart last year up down', focus: 'year' },
       'exp:yearchg': { title: `${Y} expenses so far on the year’s chart, against ${LY}’s same days`, head: dirOf(ends?.exp.now, ends?.exp.by), tail: ` on ${LY}’s same days${chartExp}`, words: 'expenses change chart last year up down', focus: 'year' },
-      'ytd:net': { title: `${Y} so far, from Mercury`, tail: ', money in less money out, Mercury’s record', words: 'net year so far mercury', focus: 'year' },
-      'ytd:in': { title: `Money in, ${Y} so far`, tail: ', Mercury’s record', words: 'money in income mercury year so far', focus: 'year' },
-      'ytd:out': { title: `Money out, ${Y} so far`, tail: ', Mercury’s record', words: 'money out spending mercury year so far', focus: 'year' },
+      // (Mercury's record of the year, as Financials' "Money in and out" and a meeting's tile both key it: one figure,
+      // one result, Board QA round 11)
+      'io:net': { title: `Net, ${mercY} so far`, tail: ', money in less money out, Mercury’s record', words: 'net year so far mercury money in less money out', focus: 'io-net' },
+      'io:in': { title: `Money in, ${mercY} so far`, tail: ', Mercury’s record', words: 'money in income mercury year so far', focus: 'io-in' },
+      'io:out': { title: `Money out, ${mercY} so far`, tail: ', Mercury’s record', words: 'money out spending mercury year so far', focus: 'io-out' },
       low: { title: 'Lowest ahead', tail: ', the lowest the cash goes in the next 13 weeks', words: 'lowest ahead forecast low point cash 13 weeks', focus: 'cashtime' },
       in13: { title: 'Cash in 13 weeks', tail: ', in the cash forecast', words: 'in 13 weeks forecast cash ahead', focus: 'cashtime' },
     })[k] || { title: k, tail: '', words: '' };
@@ -226,12 +235,15 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   if (cash && Number.isFinite(cash.total)) {
     put('cash', cash.total, { ...WHAT('cash'), focus: 'cash' });
     if (cash.prior != null) put('cash:chg', Math.abs(cash.total - cash.prior), { ...WHAT('cash:chg'), focus: 'cash' });
-    if (cash.perMonth) put('cash:month', cash.perMonth, { ...WHAT('cash:month'), focus: 'cash' });
+    if (cash.perMonth) put('cash:month', cash.perMonth, { ...WHAT('cash:month'), focus: 'cash-months' });
+    // (each account on its own line of the card, as ./portal.js CashCard draws them: #cash-a<its place in the list>, the
+    // smaller ones together on #cash-a-rest; one account alone is the total, drawn as that)
     const held = (cash.accounts || []).filter((a) => a.balance && a.name);
-    for (const a of held) put(`cash:${a.bank || ''}:${a.name}`, a.balance, WHAT(`cash:${a.bank || ''}:${a.name}`));
     const small = held.length > 4 ? held.filter((a) => a.balance < cash.total * 0.01) : [];
-    if (small.length) put('cash:small', small.reduce((t, a) => t + a.balance, 0), { title: andText(small.map((a) => a.name)), tail: `, the smaller accounts together, in Cash in the bank${cashAsOf}`, words: 'bank accounts cash', focus: 'cash' });
-    for (const o of cash.owed || []) put(`owed:${o.name}`, o.balance, { title: o.name, tail: ', owed on the card', words: `${o.name} owed card credit card`, focus: 'cash', cols: o.limit ? [{ v: o.limit, tail: `, the card’s limit, ${o.name}` }] : [] });
+    const lines = held.filter((a) => !small.includes(a));
+    if (lines.length > 1) for (const a of lines) put(`cash:${a.bank || ''}:${a.name}`, a.balance, { ...WHAT(`cash:${a.bank || ''}:${a.name}`), focus: `cash-a${cash.accounts.indexOf(a)}` });
+    if (small.length) put('cash:small', small.reduce((t, a) => t + a.balance, 0), { title: andText(small.map((a) => a.name)), tail: `, the smaller accounts together, in Cash in the bank${cashAsOf}`, words: 'bank accounts cash', focus: 'cash-a-rest' });
+    (cash.owed || []).forEach((o, i) => put(`owed:${o.name}`, o.balance, { title: o.name, tail: ', owed on the card', words: `${o.name} owed card credit card`, focus: `cash-owed${i}`, cols: o.limit ? [{ v: o.limit, tail: `, the card’s limit, ${o.name}` }] : [] }));
   }
 
   // The year so far: the three figures, each against last year's same days, what they leave out; the year's two charts'
@@ -240,8 +252,8 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
     const yl = y.last;
     const three = [['rev', y.revenue, yl?.revenue], ['exp', y.expenses, yl?.expenses], ['net', y.net, yl?.net]];
     for (const [k, v] of three) put(k, v, { ...WHAT(k, v), focus: `yf-${k}` });
-    if (y.inKind?.given > 0) put('inkind', y.inKind.given, { ...WHAT('inkind'), focus: 'year' });
-    if (y.inKind?.used > 0 && Math.round(y.inKind.used) !== Math.round(y.inKind.given)) put('exp:nc', y.inKind.used, { ...WHAT('exp:nc'), focus: 'year' });
+    if (y.inKind?.given > 0) put('inkind', y.inKind.given, { ...WHAT('inkind'), focus: 'yf-left' });
+    if (y.inKind?.used > 0 && Math.round(y.inKind.used) !== Math.round(y.inKind.given)) put('exp:nc', y.inKind.used, { ...WHAT('exp:nc'), focus: 'yf-left' });
     if (ends) {
       for (const [key, e, same] of [['rev', ends.rev, ends.sameRev], ['exp', ends.exp, ends.sameExp]]) {
         const own = key === 'rev' ? (ends.s.cashIn ? 'rev' : 'rev:books') : (ends.s.cash ? 'exp' : 'exp:books');
@@ -279,7 +291,7 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
     const { s: ser } = ends;
     const through = books.through || '';
     const longMonth = (i) => new Date(Date.UTC(2001, i, 15)).toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
-    const longDay = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
+    const longDay = (d) => dayText(d, 'MD');
     const sameDay = through && Number(through.slice(5, 7)) - 1 === ser.upTo;
     for (const [key, m, same, what, basis] of [['rev', ser.revenue, ends.sameRev, 'revenue', chartRev], ['exp', ser.spent, ends.sameExp, 'expenses', chartExp]]) {
       const e = ends[key];
@@ -315,9 +327,9 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   // The year against its budget
   for (const [k, x] of [['rev', budget?.revenue], ['exp', budget?.expenses]]) {
     if (!(x?.budget > 0)) continue;
-    put(k, x.actual, { ...WHAT(k, x.actual), focus: 'budget' });
-    put(`${k}:bud`, x.budget, { ...WHAT(`${k}:bud`), title: `${budget.year || Y} ${k === 'rev' ? 'revenue' : 'expenses'} budget`, focus: 'budget' });
-    if (x.inKind) put(k === 'rev' ? 'inkind' : 'exp:nc', x.inKind, { ...WHAT(k === 'rev' ? 'inkind' : 'exp:nc'), focus: 'budget' });
+    put(k, x.actual, { ...WHAT(k, x.actual), focus: `bud-${k}` });
+    put(`${k}:bud`, x.budget, { ...WHAT(`${k}:bud`), title: `${budget.year || Y} ${k === 'rev' ? 'revenue' : 'expenses'} budget`, focus: `bud-${k}` });
+    if (x.inKind) put(k === 'rev' ? 'inkind' : 'exp:nc', x.inKind, { ...WHAT(k === 'rev' ? 'inkind' : 'exp:nc'), focus: `bud-${k}` });
   }
 
   // The store: each of its lines a figure of its own, this year's and last year's same days (Board QA round 10: a year's
@@ -342,20 +354,29 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   // Where the revenue came from: each part (last year's same days beside it), what's below zero, the smaller accounts
   if (mix) {
     for (const x of mix.parts) put(`mix:${x.key}`, x.amount, { key: `mix:${x.key}`, title: x.name, tail: `, ${x.share} of ${mix.year}’s revenue so far`, words: [x.name, ...(x.key === 'rest' ? [] : x.accounts || []), 'revenue raised income money'].join(' '), focus: `mix-${x.key}`, cols: typeof x.last === 'number' && x.last ? [{ v: x.last, tail: `, ${x.name} in ${mix.lastYear}’s same days` }] : [] });
-    if (mix.inKind) put('inkind', mix.inKind, { ...WHAT('inkind'), focus: 'year' });
+    if (mix.inKind) put('inkind', mix.inKind, { ...WHAT('inkind'), focus: 'yf-left' });
     for (const x of mix.less) put(`less:${x.key}`, -x.amount, { title: x.name || 'Income accounts below zero', tail: `, ${mix.year}’s revenue so far, said under where it came from`, words: [x.name, ...(x.accounts || []), 'revenue less below zero refunds'].join(' '), focus: 'mix-less' });
     const named = new Set(mix.parts.filter((x) => x.key !== 'rest').map((x) => x.key));
     for (const src of (books?.sources || []).filter((x) => !named.has(x.key) && x.amount > 0 && !(mix.inKind && x.key === 'inkind'))) put(`src:${src.key}`, src.amount, { key: `src:${src.key}`, title: src.name, tail: ` of ${mix.year}’s revenue so far, in Everything else`, words: [src.name, ...(src.accounts || []), 'revenue'].join(' '), focus: 'mix-rest' });
   }
   // Where it went, by purpose
-  for (const x of books?.functions?.list || []) put(`fn:${x.name}`, x.amount, { title: x.name, tail: `, where ${Y}’s money went, by purpose`, words: `${x.name} where it went purpose spending`, focus: 'mixcard' });
-  if (books?.functions?.total > 0) put('fn:total', books.functions.total, { title: 'Where it went, by purpose', tail: `, ${Y} so far`, words: 'where it went purpose spending', focus: 'mixcard' });
+  // (as ./portal.js PartsBar draws them: the first three by name, #fn-0 to #fn-2, the rest together, #fn-rest)
+  const fns = books?.functions?.list || [];
+  fns.slice(0, 3).forEach((x, i) => put(`fn:${x.name}`, x.amount, { title: x.name, tail: `, where ${Y}’s money went, by purpose`, words: `${x.name} where it went purpose spending`, focus: `fn-${i}` }));
+  if (books?.functions?.total > 0) {
+    put('fn:total', books.functions.total, { title: 'Where it went, by purpose', tail: `, ${Y} so far`, words: 'where it went purpose spending', focus: 'fn-total' });
+    const rest = books.functions.total - fns.slice(0, 3).reduce((t, x) => t + x.amount, 0);
+    if (rest >= books.functions.total * 0.005) put('fn:rest', rest, { title: 'Everything else, by purpose', tail: `, where ${Y}’s money went${fns.length > 3 ? `: ${andText(fns.slice(3).map((x) => x.name))}` : ''}`, words: `${fns.slice(3).map((x) => x.name).join(' ')} everything else where it went purpose spending`, focus: 'fn-rest' });
+  }
 
   // The major gifts: the year's total, and each gift
   const g = data.gifts;
-  if (g?.count) put('gifts', g.total / 100, { title: 'Major gifts', tail: ` from ${plural(g.count, 'gift')} of $1,000 or more in ${g.year}`, words: 'major gifts zeffy donations donors total year', focus: 'gifts' });
+  if (g?.count) put('gifts', g.total / 100, { title: 'Major gifts', tail: ` from ${plural(g.count, 'gift')} of $1,000 or more in ${g.year}`, words: 'major gifts zeffy donations donors total year', focus: 'gifts-total' });
 
-  // What makeovers cost, as its card works it out (./costs.js useCosts) and writes it
+  // What makeovers cost, as its card works it out (./costs.js useCosts) and writes it, each figure landing on the part
+  // of the card it's written in (./costs.js: #bc-free, the answer and what it rests on; #bc-says, its sentence;
+  // #bc-median; #bc-under-sum and a makeover underway's row, #bc-j-…; a family waiting, #bc-f-…; a completed makeover's
+  // row, #bc-m-…), never the whole card (Board QA round 11)
   const c = data.numbers?.costs;
   if (c) {
     const operating = operatingOf(data.numbers);
@@ -363,26 +384,40 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
     const plan = planOf({ cash: cash?.total, operating, makeovers, waiting: c.waiting || [], underway: c.underway || [] });
     const typical = typicalLately(makeovers);
     const stats = statsOf(typical?.seasons ? makeovers.filter((x) => typical.seasons.includes(Number(x.season))) : makeovers);
-    const at = { focus: 'costs', icon: 'financials' };
+    const icon = 'financials';
     const said = new Set();
-    const cost = (k, v, title, tail, words = '') => { if (typeof v === 'number' && Math.abs(v) >= 0.5) { said.add(Math.round(Math.abs(v))); put(k, v, { title, tail, words: `what makeovers cost ${words}`, ...at }); } };
+    // (the card's lines, each where it's written: an amount lands on the first that writes it, or nowhere when none does)
+    const lines = plan ? [['bc-free', answerSub(cash, operating, plan)], ['bc-says', answerText(plan, typical)], ...(screenText(plan, typical) !== answerText(plan, typical) ? [['bc-says-short', screenText(plan, typical)]] : []), ...(plan.jobs?.length ? [['bc-under-sum', toComeText(plan)]] : [])] : [];
+    const written = (v) => lines.find(([, t]) => String(t).includes(dollars(Math.abs(v))))?.[0] || '';
+    const cost = (k, v, title, tail, words = '', focus = written(v)) => { if (typeof v === 'number' && Math.abs(v) >= 0.5 && focus) { said.add(Math.round(Math.abs(v))); put(k, v, { title, tail, words: `what makeovers cost ${words}`, focus, icon }); } };
     if (plan) {
-      cost('costs:free', plan.free < 0 ? -plan.free : plan.free, 'For makeovers now', plan.free < 0 ? ` short: ${dollars(plan.cash)} in the bank, less ${dollars(operating)} kept to run SOARD${plan.committed > 0 ? ` and ${dollars(plan.committed)} still to come` : ''}` : `, what’s over the ${dollars(operating)} kept to run SOARD and what’s underway`, 'free for makeovers now short over');
+      if (plan.free != null) cost('costs:free', plan.free < 0 ? -plan.free : plan.free, 'For makeovers now', plan.free < 0 ? ` short: ${dollars(plan.cash)} in the bank, less ${dollars(operating)} kept to run SOARD${plan.committed > 0 ? ` and ${dollars(plan.committed)} still to come` : ''}` : `, what’s over the ${dollars(operating)} kept to run SOARD and what’s underway`, 'free for makeovers now short over', 'bc-free');
       if (plan.over > 0) cost('costs:over', plan.over, 'Over the operating balance', `, the cash in the bank over the ${dollars(operating)} kept to run SOARD`, 'over operating balance');
       cost('costs:tocome', plan.committed, 'Still to come on the makeovers underway', `, what the ${plural(plan.jobs.length - (plan.unknown || 0), 'makeover')} underway still need`, 'still to come underway committed');
       cost('costs:paid', plan.paid, 'Paid so far on the makeovers underway', ', what’s been paid on the makeovers underway', 'paid so far underway');
-      cost('costs:need', plan.need, 'Needed for the next family', ', what the next family waiting needs more', 'needs more next family waiting');
+      const next = (plan.families || []).find((f) => !f.covered);
+      // (on that family's line, "Needs $X more", only while something's free: else the card says nothing is)
+      cost('costs:need', plan.need, 'Needed for the next family', ', what the next family waiting needs more', 'needs more next family waiting', written(plan.need || 0) || (next && plan.free >= 0 ? `bc-f-${next.key}` : ''));
       cost('costs:left', plan.left, 'Left for makeovers', ', left once the families covered are started', 'left over');
-      for (const j of plan.jobs || []) { cost(`costs:j:${j.key}`, j.left, `${j.name}’s makeover, still to come`, `, still to come, ${j.status}`, `${j.name} underway still to come`); cost(`costs:jp:${j.key}`, Number(j.paid) || 0, `${j.name}’s makeover, paid so far`, `, paid so far, ${j.status}`, `${j.name} underway paid`); }
-      for (const f of plan.families || []) { cost(`costs:f:${f.key}`, f.net, `${f.name}’s makeover, about`, ', about what it will likely cost, waiting on the money', `${f.name} waiting family`); if (f.pledged) cost(`costs:fp:${f.key}`, f.pledged, `Pledged for ${f.name}`, ', pledged by a sponsor', `${f.name} pledged sponsor`); if (f.estimate?.cost) cost(`costs:fe:${f.key}`, f.estimate.cost, `${f.name}’s makeover, before what’s pledged`, ', the median of its rooms', `${f.name} estimate`); }
+      for (const j of plan.jobs || []) { cost(`costs:j:${j.key}`, j.left, `${j.name}’s makeover, still to come`, `, still to come, ${j.status}`, `${j.name} underway still to come`, `bc-j-${j.key}`); cost(`costs:jp:${j.key}`, Number(j.paid) || 0, `${j.name}’s makeover, paid so far`, `, paid so far, ${j.status}`, `${j.name} underway paid`, `bc-j-${j.key}`); }
+      for (const f of plan.families || []) {
+        if (!f.estimate) continue;
+        cost(`costs:f:${f.key}`, f.net, `${f.name}’s makeover, about`, ', about what it will likely cost, waiting on the money', `${f.name} waiting family`, `bc-f-${f.key}`);
+        if (f.pledged) cost(`costs:fp:${f.key}`, f.pledged, `Pledged for ${f.name}`, ', pledged by a sponsor', `${f.name} pledged sponsor`, `bc-f-${f.key}`);
+        if (f.pledged && f.estimate.cost) cost(`costs:fe:${f.key}`, f.estimate.cost, `${f.name}’s makeover, before what’s pledged`, ', the median of its rooms', `${f.name} estimate`, `bc-f-${f.key}`);
+      }
     }
     cost('costs:keep', operating, 'Kept to run SOARD', ', the operating balance What makeovers cost keeps aside', 'kept to run soard operating balance reserve');
-    if (typical?.cost) cost('costs:median', typical.cost, 'Median makeover', ', what the median completed makeover cost lately', 'median typical makeover');
-    if (stats) { cost('costs:avg', stats.average, 'Average makeover', ', of the completed makeovers lately', 'average'); cost('costs:low', stats.low, 'Lowest-cost makeover', `, ${stats.lowOf?.name || ''}`, 'low lowest'); cost('costs:high', stats.high, 'Highest-cost makeover', `, ${stats.highOf?.name || ''}`, 'high highest'); }
-    for (const m of makeovers) cost(`costs:m:${m.key}`, m.cost, `${m.name}’s makeover`, `, what SOARD paid, ${m.season}`, `${m.name} completed makeover paid`);
-    // (and any amount the card's sentences write that isn't one of those: what they say, by itself)
-    for (const text of plan ? [answerText(plan, typical), screenText(plan, typical), plan.jobs?.length ? toComeText(plan) : ''] : []) {
-      for (const m of String(text).matchAll(/\$[\d,]+/g)) { const v = Number(m[0].replace(/[$,]/g, '')); if (!said.has(v)) { said.add(v); put(`costs:said:${v}`, v, { title: 'What makeovers cost', tail: `: ${text.slice(0, 140)}`, words: 'what makeovers cost', ...at }); } }
+    if (typical?.cost) cost('costs:median', typical.cost, 'Median makeover', ', what the median completed makeover cost lately', 'median typical makeover', 'bc-median');
+    if (stats) { cost('costs:avg', stats.average, 'Average makeover', ', of the completed makeovers lately', 'average', 'bc-median'); cost('costs:low', stats.low, 'Lowest-cost makeover', `, ${stats.lowOf?.name || ''}`, 'low lowest', 'bc-median'); cost('costs:high', stats.high, 'Highest-cost makeover', `, ${stats.highOf?.name || ''}`, 'high highest', 'bc-median'); }
+    // (each completed makeover in "Every completed makeover", the seasons it opens on: ./costs.js CostsCard)
+    const recent = recentSeasons(makeovers);
+    for (const m of recent?.length ? makeovers.filter((x) => recent.includes(Number(x.season))) : makeovers) cost(`costs:m:${m.key}`, m.cost, `${m.name}’s makeover`, `, what SOARD paid, ${m.season}`, `${m.name} completed makeover paid`, `bc-m-${m.key}`);
+    // (and any amount the card's lines write that isn't one of those: what they say, by itself, where it's said, its title
+    // its own, never one title for two amounts; the cash in the bank they start from is the cash's own figure)
+    if (cash && Number.isFinite(cash.total)) said.add(Math.round(cash.total));
+    for (const [focus, text] of lines) {
+      for (const m of String(text).matchAll(/\$[\d,]+/g)) { const v = Number(m[0].replace(/[$,]/g, '')); if (!said.has(v)) { said.add(v); put(`costs:said:${v}`, v, { title: `What makeovers cost, ${dollars(v)}`, tail: `: ${text.slice(0, 140)}`, words: 'what makeovers cost', focus, icon }); } }
     }
   }
 
@@ -422,7 +457,7 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
       ['other', other > 0 ? other : null, `${s.year} everything else`, 'other revenue'], ['out', s.totalExpenses, `${s.year} money out`, 'expenses spending total'],
       ['programs', s.programExpenses, `${s.year} programs`, 'program expenses'], ['management', s.managementExpenses, `${s.year} management`, 'management expenses'], ['fundraising', s.fundraisingExpenses, `${s.year} fundraising`, 'fundraising expenses'],
       ['left', s.totalRevenue && s.totalExpenses ? left : null, `${s.year} ${left >= 0 ? 'left over' : 'spent beyond income'}`, 'net left over surplus deficit'], ['assets', s.netAssets, `${s.year} net assets at year end`, 'net assets year end'],
-    ]) put(`tax:${k}`, v, { title, tail: from, words: `${words} tax return 990 at a glance`, focus: 'glance' });
+    ]) put(`tax:${k}`, v, { title, tail: from, words: `${words} tax return 990 at a glance`, focus: `gl-${k}` });
   }
 
   // Cash at each month's end (Cash over time: its chart, and "Month-end balances", each month's change on the one before
@@ -430,12 +465,16 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   // round 10: on the whole card, a month's −$20,000 marked the $20,000 of another figure too)
   const monthOf = (ym) => new Date(`${ym}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
   const hist = [...(data.cashHistory || [])].sort((a, b) => b.month.localeCompare(a.month));
+  // (this month's, still under way, is so far this month, never a month's end, as the chart and the table say it:
+  // ./money.js monthSoFar, Board QA round 11)
+  const cashIn = (r) => (monthSoFar(r, data.today) ? `Cash so far this month, ${monthOf(r.month)}` : `Cash at the end of ${monthOf(r.month)}`);
   if (hist.length > 1) hist.forEach((r, i) => {
-    put(`month:${r.month}`, r.total, { title: `Cash at the end of ${monthOf(r.month)}`, tail: ', at the month’s end, in Cash over time', words: `cash month end balance ${monthOf(r.month)}`, focus: `cm-${r.month}` });
+    const now = monthSoFar(r, data.today);
+    put(`month:${r.month}`, r.total, { title: cashIn(r), tail: now ? `, as of ${dayMonth(r.at) || dayMonth(data.today)}, in Cash over time` : ', at the month’s end, in Cash over time', words: `cash month end balance ${monthOf(r.month)}${now ? ' so far this month now' : ''}`, focus: `cm-${r.month}` });
     const was = hist[i + 1];
     // (its way said as the table says it, with its sign, "−$11,250" or "+$11,000": typed with it, it's found and marked)
     const d = was ? r.total - was.total : 0;
-    if (Math.round(d)) put(`month:chg:${r.month}`, d, { title: `Cash at the end of ${monthOf(r.month)}, against the month before`, head: d > 0 ? '+' : '', tail: ` on ${monthOf(was.month)}, in Month-end balances`, words: `cash month end balance change month before ${monthOf(r.month)} up down`, focus: `cm-${r.month}-chg` });
+    if (Math.round(d)) put(`month:chg:${r.month}`, d, { title: `${cashIn(r)}, against the month before`, head: d > 0 ? '+' : '', tail: ` on ${monthOf(was.month)}, in Month-end balances`, words: `cash month end balance change month before ${monthOf(r.month)} up down`, focus: `cm-${r.month}-chg` });
   });
   const funded = !!data.numbers?.mercury && !data.numbers.mercury.empty;
   const f = funded && !books ? data.numbers.finance : null;
@@ -451,7 +490,9 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
     const spent = (p) => (p.makeovers || 0) + (p.store || 0) + (p.operating || 0);
     const rows = [['in', 'Money in', (p) => p.income], ['out', 'Money out', spent], ['makeovers', 'Makeovers', (p) => p.makeovers], ['store', 'The Sunny & Ranney store', (p) => p.store], ['operating', 'Running SOARD', (p) => p.operating], ['net', 'Net', (p) => p.net]];
     for (const [k, label, val] of rows) {
-      put(`io:${k}`, val(f.ytd), { title: `${label}, ${f.ytd.year} so far`, tail: ', Mercury’s record', words: `${label} mercury year so far`, focus: `io-${k}`, cols: f.lastYtd && typeof val(f.lastYtd) === 'number' ? [{ v: val(f.lastYtd), tail: `, ${label}, ${f.lastYtd.year}’s same days` }] : [] });
+      // (money in, out and the net as WHAT has them, the keys a meeting's tile writes them by: ./money.js moneyTiles)
+      const own = WHAT(`io:${k}`);
+      put(`io:${k}`, val(f.ytd), { title: `${label}, ${f.ytd.year} so far`, tail: ', Mercury’s record', words: `${label} mercury year so far`, ...(own.title !== `io:${k}` ? own : {}), focus: `io-${k}`, cols: f.lastYtd && typeof val(f.lastYtd) === 'number' ? [{ v: val(f.lastYtd), tail: `, ${label}, ${f.lastYtd.year}’s same days` }] : [] });
     }
     if (f.perMakeover?.average) put('io:per', f.perMakeover.average, { title: `A makeover finished in ${f.ytd.year}, on average`, tail: `, each of the ${plural(f.perMakeover.count, 'makeover')} finished this year, Mercury’s record`, words: 'average makeover finished this year each cost mercury', focus: 'io-note' });
     const short = (ym) => new Date(`${ym}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
@@ -461,13 +502,13 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   }
 
   // The meeting's money (its Financial item, and its slide on the screen): the next meeting's, each figure as its tile
-  // writes it, landing on the item
+  // writes it, landing on that tile (./portal.js CashBlock, #mt-<meeting>-<tile>), never the whole item (Board QA round
+  // 11: on a phone, the item 2,000px tall, centered, put the figure above the screen)
   const m = [...(data.meetings || [])].filter((x) => x.date >= data.today).sort((a, b) => a.date.localeCompare(b.date)).find((x) => (x.sections || []).some((sec) => (sec.items || []).some((it) => showsOf(it).includes('cash'))));
   if (m) {
-    const it = m.sections.flatMap((sec) => sec.items).find((x) => showsOf(x).includes('cash'));
     const n = m.snapshot || data.numbers;
     const where = `, in the ${meetingName(m)}’s money`;
-    fromTiles(moneyTiles({ cash, budget, n }), () => ({ href: `#/meetings/${m.id}`, focus: `i-${it.id}` }));
+    fromTiles(moneyTiles({ cash, budget, n }), (t) => ({ href: `#/meetings/${m.id}`, focus: moneyTileId(m, t) }));
     for (const e of list) if (e.href === `#/meetings/${m.id}` && !e.tail.includes(where)) e.tail += where;
   }
 
@@ -479,6 +520,9 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   }
   return out;
 }
+
+/** Where a meeting's money tile is drawn (./portal.js CashBlock), and where a search for its figures lands */
+export const moneyTileId = (m, t) => `mt-${m.id}-${t.k}`;
 
 // (a gift as the board page names it: ./portal.js has the same)
 const GIFT_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' });
@@ -497,7 +541,7 @@ const marksOf = (v, said = []) => [...new Set(termsOf([dollars(v), money(Math.ab
 function entryOf(e) {
   const cols = [{ v: e.v, head: e.head, tail: e.tail, said: [...e.said] }, ...e.cols];
   const shortFor = (c) => (c === cols[0] && e.short ? e.short(c.v) : shortSigned(c.v));
-  const line = (c, form) => `${c.head || ''}${form ? `${dollars(c.v)} (${form})` : both(c.v, shortFor(c))}${c.tail}`;
+  const line = (c, form) => `${c.head || ''}${joined(form ? `${dollars(c.v)}, or ${form}` : both(c.v, shortFor(c)), c.tail)}`;
   const base = `${e.title} ${e.words}`;
   const says = [];
   for (const c of cols) {

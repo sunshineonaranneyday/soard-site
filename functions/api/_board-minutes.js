@@ -27,7 +27,7 @@
 import { fileText, attendanceIn, dateIn } from './_board-mail.js';
 import { getMeeting, patchMeeting, listMeetings, roster, boardFiles, updateFile, approveMinutes, putFile, deleteFile, fileLocked, MAX_FILE, ID } from './_board.js';
 import { readState, writeState } from './_board-roles.js';
-import { parseAgendaText, agendaIsDraft, meetingName, shortDate, isDate, uid, LIVE_TITLES, todayEastern, cleanMeeting, mergeMeeting, minutesIn } from '../../public/admin/board-shared.js';
+import { parseAgendaText, agendaIsDraft, meetingName, shortDate, isDate, uid, LIVE_TITLES, todayEastern, cleanMeeting, mergeMeeting, minutesHeld, approvedFileOf, FILE_KINDS, FILE_STAYS } from '../../public/admin/board-shared.js';
 import { viaGateway, aiCapped, AI_REST_MS } from './_ai.js';
 
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
@@ -778,18 +778,18 @@ export async function maybeFinishMinutes(env, { now = Date.now() } = {}) {
 // ─── The admin's upload ─────────────────────────────────────────────
 
 /**
- * Minutes marked approved, with minutes in Board (minutesIn: read in, typed, or only a file kept with them), are the
- * record, however a file comes to them: no file becomes their minutes. One added as the minutes (Every file's Add files
- * or a drop on it, the upload API) is kept as an ordinary file of the meeting (AS_A_FILE says so), and a file's kind
- * changed to Minutes is refused (NOT_THE_MINUTES); a drop in the minutes box is refused by readMinutesInto, and the
- * email reader keeps one for staff (./_board-mail.js). A meeting marked approved with no minutes in Board yet still
- * takes them, as minutesNotReady asks. Board QA round 10, Nov 22 2026: approved minutes kept only as a file were
- * replaced through Every file with only a toast, and the board page opened the new file as "The minutes as written"
+ * Minutes marked approved, with minutes in Board (../../public/admin/board-shared.js minutesHeld: read in, typed, or a
+ * file of theirs on the approval's record, approvedFileOf), are the record, however a file comes to them: no file
+ * becomes their minutes. One added as the minutes (Every file's Add files or a drop on it, an item's upload, the upload
+ * API) is kept as an ordinary file of the meeting (AS_A_FILE says so), and a file's kind changed to Minutes is refused
+ * (NOT_THE_MINUTES); a drop in the minutes box is refused by readMinutesInto, and the email reader keeps one for staff
+ * (./_board-mail.js). A meeting marked approved with no minutes in Board yet still takes them, as minutesNotReady asks.
+ * Board QA round 10, Nov 22 2026: approved minutes kept only as a file were replaced through Every file with only a
+ * toast, and the board page opened the new file as "The minutes as written"
  */
 export const AS_A_FILE = 'The minutes are approved, so this was added as a file, not as the minutes. Mark them as draft first to replace them.';
 export const NOT_THE_MINUTES = 'The minutes are approved, so this stays a file, not the minutes. Mark them as draft first to replace them.';
-/** Whether a meeting's minutes are approved and in Board, leaving out the file `fileId` (the one asked about) */
-export const minutesHeld = (m, fileId = '') => m?.minutes === 'approved' && minutesIn({ ...m, files: (m.files || []).filter((x) => x.id !== fileId) });
+export { minutesHeld };
 /**
  * Why a file can't be this meeting's minutes ('' when it can): `meetingId` for one being added, `fileId` for one of its
  * files whose kind is being changed (one filed as the minutes already stays as it is)
@@ -803,6 +803,40 @@ export async function minutesKindNo(env, { meetingId = '', fileId = '' } = {}) {
   }
   const m = ID.test(String(id || '')) ? await getMeeting(env.DB, id) : null;
   return minutesHeld(m, fileId) ? (fileId ? NOT_THE_MINUTES : AS_A_FILE) : '';
+}
+/**
+ * The kind a file sent to a meeting is kept as (Every file's Add files, an item's upload: POST /api/board-admin's
+ * upload), and what's said: `kind` as asked, except the minutes of a meeting whose minutes are approved and in Board,
+ * kept as an ordinary file and said (AS_A_FILE); and a minutes file going onto one of an approved meeting's agenda
+ * items (`forItem`), never this meeting's own minutes (those are approved), kept as an ordinary file of that item.
+ * Board QA rounds 10 and 11. → { kind, asFile: words | '' }
+ */
+export async function uploadKind(env, { meetingId = '', kind = 'other', forItem = false } = {}) {
+  if (kind !== 'minutes') return { kind, asFile: '' };
+  const asFile = await minutesKindNo(env, { meetingId });
+  if (asFile) return { kind: 'other', asFile };
+  if (!forItem) return { kind, asFile: '' };
+  const m = ID.test(String(meetingId || '')) ? await getMeeting(env.DB, meetingId) : null;
+  return { kind: m?.minutes === 'approved' ? 'other' : kind, asFile: '' };
+}
+
+/**
+ * Approved minutes' own file (the approval's record: approvedFileOf) stays their minutes while they're approved: filed
+ * under another kind, deleted, or put on an agenda item (./_board.js saveMeeting), each refused in FILE_STAYS's words,
+ * nothing changed. Mark them as draft and it can change. Board QA round 11, Nov 23 2026: approved minutes were replaced
+ * in two steps, their file filed under Other (or deleted, or put on an item) and then a new file added as the minutes
+ */
+export { FILE_STAYS };
+/**
+ * Why a meeting's file can't change so ('' when it can): `kind`, the kind it's being filed under (null: it's being
+ * deleted). Filed under Minutes, or under the kind it has, it stays theirs; anything else takes it off them
+ */
+export async function approvedFileNo(env, fileId, { kind = null } = {}) {
+  const row = await env.DB.prepare('SELECT owner_type, owner_id, kind FROM board_files WHERE id = ?').bind(fileId).first();
+  if (!row || row.owner_type !== 'meeting') return '';
+  if (kind !== null && (kind === 'minutes' || kind === row.kind || !FILE_KINDS.some((k) => k.id === kind))) return '';
+  const m = ID.test(String(row.owner_id || '')) ? await getMeeting(env.DB, row.owner_id) : null;
+  return m && approvedFileOf(m) === fileId ? FILE_STAYS : '';
 }
 
 /**
@@ -840,11 +874,12 @@ export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now
   const refused = rec ? undoRefused(rec, m) : NOTHING_TO_UNDO;
   const replacing = !refused;
   // Minutes marked approved are the record, however they came onto the meeting (read in, typed, or only a file kept
-  // with it: minutesIn, the rule approving them goes by): nothing is read onto them, in the words read-in minutes get
-  // (approved after their read: Undo's). A meeting marked approved with no minutes in Board yet (a past meeting added
-  // from its agenda) still takes them, as minutesNotReady asks. Board QA round 9, Nov 22 2026: approved minutes kept
-  // only as a file were read over with no question, and their file deleted
-  const approvedNo = (x) => (x.minutes !== 'approved' || !minutesIn({ ...x, files: (x.files || []).filter((g) => g.id !== fileId) }) ? ''
+  // with it, by the approval's record: minutesHeld, whatever has happened to that file since): nothing is read onto
+  // them, in the words read-in minutes get (approved after their read: Undo's). A meeting marked approved with no
+  // minutes in Board yet (a past meeting added from its agenda) still takes them, as minutesNotReady asks. Board QA
+  // round 9, Nov 22 2026: approved minutes kept only as a file were read over with no question, and their file
+  // deleted; round 11: once their file was filed under Other, deleted or put on an item, they were read over again
+  const approvedNo = (x) => (!minutesHeld(x, fileId) ? ''
     : rec && undoRefused(rec, x) === APPROVED_SINCE ? APPROVED_SINCE : APPROVED_NOW);
   if (approvedNo(m) && !dry) throw Object.assign(new Error(approvedNo(m)), { status: 409, why: 'approved', extra: { meeting: m } });
   // ...and minutes with no Undo record of their read (Board's email reader's, or read before Undo kept one): what their

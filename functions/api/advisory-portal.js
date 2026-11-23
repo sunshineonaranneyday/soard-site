@@ -15,7 +15,8 @@
  * Each of their writes lands at the address they have as it's written, found by the email they signed in with, never
  * the address read when the request began (./_member-write.js; Advisory Board QA round 21), and the notice to whoever
  * runs the group names whose record it landed on, as that same write found them (Advisory Board QA round 22: never read
- * again by the record's address afterwards, which during a swap of two addresses was the other person).
+ * again by the record's address afterwards, which during a swap of two addresses was the other person), and a renewal's
+ * date is the term that same write saved (round 23: ./_advisory.js termWritten).
  */
 
 import { whoIs, answerAsk, addIntro, requestHost, signDoc, renew, getSettings } from './_advisory.js';

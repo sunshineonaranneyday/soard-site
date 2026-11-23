@@ -222,7 +222,8 @@ test('1: approved minutes from before approval kept a file (or with none yet): t
   await putFile(env, { ownerType: 'meeting', ownerId: m.id, file: pdf('Minutes-revised.pdf'), kind: 'minutes', by: FOUNDER });
   const after = await getMeeting(env.DB, m.id);
   assert.deepEqual(opened(after), { editor: 'Minutes.docx', board: 'Minutes.docx' }, 'the first that came, both ways: never the newest, never any PDF');
-  assert.equal(after.approvedFile, '', 'approved with no file in Board, so none kept');
+  /* r11: an approval that kept no file has the one the meeting had for them fixed as theirs by the first look that finds it (round 11, item 1) */
+  assert.equal(after.approvedFile, after.files.find((f) => f.name === 'Minutes.docx').id, 'approved with no file kept: fixed by the first look that finds one');
   // ...and the next write keeps that one as the approved file
   const kept = await api({ action: 'save-meeting', meeting: { ...after, location: 'Example Hall' }, base: after.updatedAt });
   assert.equal(kept.body.meeting.approvedFile, after.files.find((f) => f.name === 'Minutes.docx').id);
