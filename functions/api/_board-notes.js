@@ -32,7 +32,9 @@
  * what a founder changed in Board since stays theirs, and is said.
  */
 
-import { getMeeting, patchMeeting, saveMeeting, listMeetings, getSettings, approveMinutes, putFile, rewriteFile, deleteFile, roster, ID } from './_board.js';
+import { getMeeting, patchMeeting, listMeetings, getSettings, approveMinutes, putFile, rewriteFile, deleteFile, roster, ID, addressesNow } from './_board.js';
+import { namesIn } from './_member-places.js';
+import { asSend } from './_board-roles.js';
 import { mergeAttendance, minutesPeople } from './_board-minutes.js';
 import { minutesDocx, minutesFileName, approveWords, noteLines } from '../../public/admin/board-minutes-template.js';
 import { isDate, todayEastern, endedClock, minutesTarget } from '../../public/admin/board-shared.js';
@@ -144,14 +146,17 @@ export async function notesFor(env, id, w, { quick = false } = {}) {
  * what each box of words started from; `wasText`: the same for a row's words. Words saved over it since by someone else
  * stay: → { at, clashes: [{ key, theirs, field }] } (`field: 'text'`: a row's words, and the whole row waits for the choice)
  */
-export async function saveNotes(env, id, { changes, was = null, wasText = null } = {}, w, { now = Date.now() } = {}) {
+export async function saveNotes(env, id, { changes: sentChanges, was: sentWas = null, wasText = null } = {}, w, { now = Date.now() } = {}) {
   const m = await meetingFor(env, id, w);
   if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
-  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) throw no('What changed?', 400);
-  const entries = Object.entries(changes);
-  if (entries.length > MAX_KEYS) throw no('That’s too much to save at once', 413);
+  if (!sentChanges || typeof sentChanges !== 'object' || Array.isArray(sentChanges)) throw no('What changed?', 400);
+  if (Object.keys(sentChanges).length > MAX_KEYS) throw no('That’s too much to save at once', 413);
   const at = iso(now);
-  if (!entries.length) return { at, clashes: [] };
+  if (!Object.keys(sentChanges).length) return { at, clashes: [] };
+  // A person's mark and a to-do's owner at the address their person has now: a page whose roll was read before a rename
+  // never keeps the old one (Board QA round 9: Sam's "Here" was lost, and the minutes said he wasn't there)
+  const { changes, was, from, gone, moved } = await notesFollow(env.DB, m, sentChanges, sentWas);
+  const entries = Object.entries(changes);
   const patch = Object.fromEntries(entries.map(([k, v]) => [k, cleanChange(k, v)]));
   const clashes = [];
   const asked = (map) => !!map && typeof map === 'object' && entries.some(([k]) => k in map);
@@ -166,7 +171,8 @@ export async function saveNotes(env, id, { changes, was = null, wasText = null }
       // What it started from, and what it tried to save with no answer back (the server may well have it)
       const started = [].concat(was[k]);
       if (guarded(k)) {
-        const theirs = cur[k] ?? '';
+        // (a mark followed to its person's new address: what's there, else what's still at the old one)
+        const theirs = (k in cur || !from[k] ? cur[k] : cur[from[k]]) ?? '';
         if (!started.map((x) => cleanChange(k, x) ?? '').includes(theirs) && theirs !== (patch[k] ?? '')) { clashes.push({ key: k, theirs }); delete patch[k]; }
       } else if (k[0] === 'm' && patch[k] && 'result' in patch[k]) {
         const theirs = cur[k]?.result ?? '';
@@ -174,7 +180,10 @@ export async function saveNotes(env, id, { changes, was = null, wasText = null }
       }
     }
   }
-  if (!Object.keys(patch).length) return { at, clashes };
+  const told = Object.keys(moved).length ? { addressesNow: moved } : {};
+  if (!Object.keys(patch).length) return { at, clashes, ...told };
+  // (the old address's box goes with it: nobody's now, and never left to bring them back)
+  for (const k of gone) if (!(k in patch)) patch[k] = null;
   const json = JSON.stringify(patch);
   if (json.length > MAX_ROW) throw no('That’s too much to save at once', 413);
   const by = w.member?.email || w.adminEmail || '';
@@ -185,7 +194,46 @@ export async function saveNotes(env, id, { changes, was = null, wasText = null }
   const r = await env.DB.prepare(`INSERT INTO board_minutes_notes (meeting_id, data, updated_at, updated_by, took) VALUES (?1, json_patch('{}', ?2), ?3, ?4, NULLIF(?6, ''))
     ON CONFLICT(meeting_id) DO UPDATE SET data = json_patch(data, ?2), updated_at = CASE WHEN ?7 = 1 THEN updated_at ELSE ?3 END, updated_by = ?4, took = CASE WHEN json_patch(data, ?2) = '{}' THEN NULL ELSE COALESCE(took, NULLIF(?6, '')) END WHERE length(data) + length(?2) < ?5`).bind(id, json, at, by, MAX_ROW, took, quiet).run();
   if (!((r?.meta?.changes ?? r?.changes ?? 0) > 0)) throw no('These notes have grown too long to keep here. Send what you have, then keep going in a Word file.', 413);
-  return { at: quiet ? '' : at, clashes };
+  return { at: quiet ? '' : at, clashes, ...told };
+}
+
+// (any rename at all: a mark the meeting's roll can't have is followed whenever its person's new address is on it)
+const EVER = '1970-01-01T00:00:00.000Z';
+/**
+ * The notes' person keys (`r:<key>`) and to-do owners followed through People's renames (./_board.js addressesNow): an
+ * address the meeting doesn't name, whose person was renamed to one it does, is theirs, whoever has the old one now (a
+ * newcomer given it is never marked there in their place). A read that fails throws, a 503 in words, and nothing is saved.
+ * → { changes, was, from: { newKey: oldKey }, gone: [old keys], moved: { old: new } }
+ */
+export async function notesFollow(DB, m, changes, was = null) {
+  const slugOk = (x) => typeof x === 'string' && /^[a-z0-9-]{1,80}$/.test(x) && !namesIn(m, x);
+  const asked = new Set();
+  for (const [k, v] of Object.entries(changes)) {
+    if (k.startsWith('r:') && slugOk(k.slice(2))) asked.add(k.slice(2));
+    if (k.startsWith('a:') && v && typeof v === 'object' && slugOk(v.owner)) asked.add(v.owner);
+  }
+  const moved = asked.size ? await addressesNow(DB, [...asked], { since: EVER, moved: (slug) => namesIn(m, slug) }) : {};
+  if (!Object.keys(moved).length) return { changes, was, from: {}, gone: [], moved };
+  const out = {};
+  const wasOut = was && typeof was === 'object' ? {} : was;
+  const from = {};
+  const gone = [];
+  for (const [k, v] of Object.entries(changes)) {
+    let key = k;
+    let val = v;
+    if (k.startsWith('r:') && moved[k.slice(2)]) {
+      key = `r:${moved[k.slice(2)]}`;
+      gone.push(k);
+      // (the page sent the new address's box too: that one stands)
+      if (key in changes) continue;
+      from[key] = k;
+    }
+    if (k.startsWith('a:') && v && typeof v === 'object' && moved[v.owner]) val = { ...v, owner: moved[v.owner] };
+    out[key] = val;
+    if (wasOut && was && k in was) wasOut[key] = was[k];
+  }
+  if (wasOut && was) for (const [k, v] of Object.entries(was)) if (!(k in changes)) wasOut[k] = v;
+  return { changes: out, was: wasOut, from, gone, moved };
 }
 
 const said = (v) => (typeof v === 'string' ? words(v, MAX_NOTE).trim() : '');
@@ -294,7 +342,13 @@ export function applyNotes(cur, notes, { sent = null, people = [], target = null
   const person = (p, status) => ({ ...(p.slug ? { slug: p.slug } : {}), name: p.name, org: p.org || '', kind: ['staff', 'guest'].includes(p.kind) ? p.kind : 'board', status });
   const read = [];
   for (const p of list) { const status = marked.get(p.key) || p.status || checkins[p.slug] || ''; if (status) read.push(person(p, status)); }
-  for (const [key, status] of marked) { if (list.some((x) => x.key === key)) continue; const p = people.find((x) => x.slug === key); if (p) read.push(person(p, status)); }
+  // (a mark for nobody on the list or on People is never dropped without a word: `unplaced`, and the send says so. Round 9)
+  const unplaced = [];
+  for (const [key, status] of marked) {
+    if (list.some((x) => x.key === key)) continue;
+    const p = people.find((x) => x.slug === key);
+    if (p) read.push(person(p, status)); else if (status !== 'absent') unplaced.push({ key, status });
+  }
   const touched = marked.size > 0 || list.some((p) => !p.status && checkins[p.slug]);
   const merged = touched ? mergeAttendance({ ...cur, attendance: list }, { attendance: read }, { keepMarked: false }) : list;
   const attendance = [...merged, ...guests.filter((name) => !merged.some((p) => p.key === `guest:${name.toLowerCase()}`)).map((name) => ({ key: `guest:${name.toLowerCase()}`, name, org: '', kind: 'guest', status: 'present', rsvp: '' }))];
@@ -401,6 +455,7 @@ export function applyNotes(cur, notes, { sent = null, people = [], target = null
     },
     approves: target && minutesItem && votes[minutesItem.id]?.result === 'passed' ? target.id : '',
     kept,
+    unplaced,
     read: { notes: Object.keys(shown).length, motions: motions.length, actions: actions.length },
     // What the Word file says: the same as the meeting, never what was only typed
     record: {
@@ -474,10 +529,19 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
     if (!m) throw no('That meeting is gone', 404);
     if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
     if (nothing(row)) throw no('Nothing is typed yet', 400);
-    const notes = parse(row?.data);
+    // Marks and to-dos at the addresses their people have now (a page that saved them before a rename reached it, or a
+    // draft from before saves followed them), kept that way in the draft too, so the old address is nobody's for good
+    const typedNotes = parse(row?.data);
+    const followed = await notesFollow(env.DB, m, typedNotes);
+    const notes = followed.changes;
+    if (followed.gone.length) {
+      await env.DB.prepare('UPDATE board_minutes_notes SET data = ? WHERE meeting_id = ? AND data = ?').bind(JSON.stringify(notes), id, row.data).run().catch((e) => console.error('[board] notes followed', e?.message || e));
+    }
     const lastSent = parse(row?.sent);
     const anything = anythingIn(notes);
-    const [people, meetings, settings, seats, checkins] = await Promise.all([minutesPeople(env.DB), listMeetings(env.DB), getSettings(env.DB), roster(env.DB, { withEmails: true }), checkinsOf(env.DB, id)]);
+    // (People not answering: nothing is sent, said so: never a file or an email naming nobody, round 10)
+    const [people, meetings, settings, seats, checkins] = await Promise.all([minutesPeople(env.DB), listMeetings(env.DB), getSettings(env.DB), roster(env.DB, { withEmails: true }), checkinsOf(env.DB, id)])
+      .catch((e) => { throw asSend(e); });
     const target = minutesTarget(m, meetings.filter((x) => !x.practice));
     const by = w.member?.email || w.adminEmail || '';
     const fileName = minutesFileName(m);
@@ -487,6 +551,9 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
     let tookBy = '';
     if (anything) {
       const seen = applyNotes(m, notes, opts);
+      // A mark for someone not on this meeting's list or on People, after following renames: named, and nothing goes,
+      // never the minutes saying whoever it was for wasn't there
+      if (seen.unplaced.length) throw Object.assign(no(await unplacedWords(env.DB, seen.unplaced), 409), { extra: { unplaced: seen.unplaced.map((x) => `r:${x.key}`) } });
       // The secretary, once they've typed anything; else whoever kept them, who isn't always who pressed Send (nobody known: nobody named)
       const typedBy = [...seats.board, ...seats.staff].find((p) => p.email && String(p.email).toLowerCase() === String(row.updated_by || '').toLowerCase());
       tookBy = 'by' in lastSent ? lastSent.by : row.took || typedBy?.name || staffName(seats.staff, row.updated_by) || '';
@@ -510,7 +577,8 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
     }
     if (lastSent.approved && lastSent.approved !== approved) {
       const t = await getMeeting(env.DB, lastSent.approved);
-      if (t?.minutes === 'approved') { await saveMeeting(env.DB, { ...t, minutes: 'draft', approvedOn: '' }, { by }); withdrawn = true; }
+      // (only the approval taken back, on the meeting as it is: never a copy of it read before)
+      if (t?.minutes === 'approved') { await patchMeeting(env.DB, t.id, (cur) => ({ ...cur, minutes: 'draft', approvedOn: '' }), { by }); withdrawn = true; }
     }
 
     // (what was sent, to bring the kept Word file up to a founder's fixes without what's only typed since)
@@ -539,6 +607,18 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
   } finally {
     await releaseSending(env.DB, id);
   }
+}
+
+const HOW_SAID = { present: 'Here', remote: 'on video', excused: 'Excused' };
+/** "Sam Ortiz is marked Here in your notes, but isn’t on this meeting’s list…": who, by the name they last had on People */
+async function unplacedWords(DB, list) {
+  const named = [];
+  for (const x of list) {
+    const r = await DB.prepare("SELECT entity_name FROM audit_log WHERE entity_type = 'team' AND entity_slug = ? AND entity_name IS NOT NULL ORDER BY id DESC LIMIT 1").bind(x.key).first().catch(() => null);
+    named.push(`${r?.entity_name || `“${x.key}”`} (${HOW_SAID[x.status] || x.status})`);
+  }
+  const who = named.length > 1 ? `${named.slice(0, -1).join(', ')} and ${named.at(-1)}` : named[0];
+  return `${who} ${named.length > 1 ? 'are' : 'is'} marked in your notes but ${named.length > 1 ? 'aren’t' : 'isn’t'} on this meeting’s list, so the minutes weren’t sent. Mark them on the list again, or take that mark out, then send.`;
 }
 
 /**

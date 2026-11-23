@@ -16,7 +16,7 @@
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
 import { money, shortDate, mainLines, statementBreaks, linePlaces } from '../board-shared.js';
-import { compact, storeOf, storeChange, budgetMonthsText, spentOf, marginText, changeIn, overIn, Both } from './money.js';
+import { compact, storeOf, storeChange, budgetMonthsText, marginText, changeIn, overIn, Both, Blank, budgetName, yearFigures, spentOf } from './money.js';
 import { lineKeysOf, notesByKey, NoteLine } from './review.js';
 
 const html = htm.bind(h);
@@ -34,8 +34,9 @@ export const changeWords = (a, p) => {
 /**
  * Month by month, each added to the months before it: this year through the month it's in, last year all twelve.
  * Expenses leave out what never left the bank (in kind, depreciation) once the read has it by month, as the board's
- * figures do (`cash`); an older read has it in.
- * → { year, lastYear, upTo, cash, revenue: { now, then }, spent: { now, then } } (arrays of 12, this year null after
+ * figures do (`cash`); an older read has it in. Revenue leaves out its in-kind gifts the same way once the read has
+ * them by month (`cashIn`: each month's nonCashIncome); before that it's QuickBooks' own, in kind in.
+ * → { year, lastYear, upTo, cash, cashIn, revenue: { now, then }, spent: { now, then } } (arrays of 12, this year null after
  * upTo), or null without the months (an older read, a locked meeting's numbers from before they were kept)
  */
 export function yearSeries(books) {
@@ -44,17 +45,18 @@ export function yearSeries(books) {
   const at = (m) => Number(String(m || '').slice(5, 7)) - 1;
   const upTo = Math.max(...mo.months.map((x) => at(x.month)).filter((i) => i >= 0 && i < 12));
   const cash = [...mo.months, ...(mo.last || [])].every((x) => typeof x.nonCash === 'number');
+  const cashIn = cash && [...mo.months, ...(mo.last || [])].every((x) => typeof x.nonCashIncome === 'number');
   const run = (list, value, last) => {
     const by = Array(12).fill(0);
     for (const x of list || []) { const i = at(x.month); if (i >= 0 && i < 12) by[i] += value(x); }
     let t = 0;
     return by.map((v, i) => { t += v; return i <= last ? Math.round(t) : null; });
   };
-  const rev = (x) => Number(x.revenue) || 0;
+  const rev = (x) => (Number(x.revenue) || 0) - (cashIn ? Number(x.nonCashIncome) || 0 : 0);
   const out = (x) => (Number(x.spent) || 0) - (cash ? Number(x.nonCash) || 0 : 0);
   const has = (mo.last || []).length > 0;
   return {
-    year: mo.year || books.year || '', lastYear: mo.lastYear || books.lastYear?.year || '', upTo, cash,
+    year: mo.year || books.year || '', lastYear: mo.lastYear || books.lastYear?.year || '', upTo, cash, cashIn,
     revenue: { now: run(mo.months, rev, upTo), then: has ? run(mo.last, rev, 11) : null },
     spent: { now: run(mo.months, out, upTo), then: has ? run(mo.last, out, 11) : null },
   };
@@ -74,8 +76,13 @@ function axisOf(values) {
   if (top === bottom) return { top: 1, bottom: 0, ticks: [0] };
   return { top, bottom, ticks: bottom < 0 ? (top > 0 ? [bottom, 0, top] : [bottom, bottom / 2, 0]) : [0, top / 2, top] };
 }
-/** Dollars with a real minus: "−$250,000" */
-const sm = (v) => (typeof v !== 'number' ? '–' : v < 0 ? `−${money(-v)}` : money(v));
+/** Dollars with a real minus: "−$250,000" ('' with none) */
+const sm = (v) => (typeof v !== 'number' ? '' : v < 0 ? `−${money(-v)}` : money(v));
+/** A line's name free to wrap after each "/" too ("Individual/" "Corporate Revenue"), so on a phone it's never the
+ *  longest word that sets how much room the figures have */
+const wrapAt = (s) => String(s ?? '').split('/').map((x, i) => (i ? html`/<wbr />${x}` : x));
+/** A table's cell of dollars, or its blank (a month still to come: "Not yet") */
+const cellOf = (v, say = 'None') => (typeof v === 'number' ? sm(v) : html`<${Blank} say=${say} />`);
 
 /**
  * One measure, this year against last, added up month by month, drawn at the size it's shown (its words stay their
@@ -180,41 +187,64 @@ function YearLines({ id, title, now, then, year, lastYear, upTo, ax, sameDays = 
 }
 
 /**
+ * What the year's two charts end at, as their captions say it: this year so far, last year by the same day (its revenue
+ * without its in-kind gifts, its expenses without in kind, once the months leave them out, as the year's figures have
+ * them) and last year's whole. The captions are drawn from this and the search finds them by it (./figures.js).
+ * → { s (./yearSeries), sameRev, sameExp, rev: { now, by, all }, exp: { now, by, all } } | null without the months
+ */
+export function yearEnds(books) {
+  const s = yearSeries(books);
+  if (!s) return null;
+  const ly = books.lastYear;
+  const through = books.through || '';
+  const sameRev = typeof ly?.revenue !== 'number' ? null : !s.cashIn ? ly.revenue : yearFigures(books).last?.revenue ?? null;
+  const sameExp = typeof ly?.expenses !== 'number' ? null : !s.cash ? ly.expenses : typeof ly.nonCash === 'number' ? ly.expenses - ly.nonCash : null;
+  // (this year's end is the year so far, as the figures have it: QuickBooks' month by month adds up to it; last year's
+  // whole its full year's, counted the same way, else the months' own)
+  const y = yearFigures(books);
+  const nowRev = s.cashIn ? y.revenue : books.revenue;
+  const nowExp = s.cash ? spentOf(books) : books.expenses;
+  const fullExp = typeof ly?.full?.expenses !== 'number' ? null : !s.cash ? ly.full.expenses : typeof ly.full.nonCash === 'number' ? ly.full.expenses - ly.full.nonCash : null;
+  const end = (m, same, now, full) => ({ now: typeof now === 'number' ? now : m.now[s.upTo], by: typeof same === 'number' && through ? same : m.then?.[s.upTo] ?? null, all: m.then ? (typeof full === 'number' ? full : m.then[11]) : null });
+  return { s, sameRev, sameExp, rev: end(s.revenue, sameRev, nowRev, s.cashIn ? null : ly?.full?.revenue), exp: end(s.spent, sameExp, nowExp, fullExp) };
+}
+
+/**
  * The year so far against last year, month by month: revenue and expenses side by side (two charts on one axis, so
  * the bigger reads bigger), each with its figures in words above it, the numbers as a table under. Null without the
  * months
  */
 export function YearCompare({ books, idp = 'by', tall = false, as = 'pct' }) {
-  const s = yearSeries(books);
-  if (!s) return null;
-  const ly = books.lastYear;
+  const ends = yearEnds(books);
+  if (!ends) return null;
+  const { s, sameRev, sameExp } = ends;
   const through = books.through || '';
-  // Last year by this year's own day, as the figures have it (its expenses without in kind once the months leave it out)
-  const sameRev = typeof ly?.revenue === 'number' ? ly.revenue : null;
-  const sameExp = typeof ly?.expenses !== 'number' ? null : !s.cash ? ly.expenses : typeof ly.nonCash === 'number' ? ly.expenses - ly.nonCash : null;
+  // What the revenue line has in it, when the figures above it leave in kind out
+  const revSays = s.cashIn ? 'in kind left out' : yearFigures(books).inKind?.given > 0 ? 'in kind included, as the books have them' : '';
   const ax = axisOf([s.revenue, s.spent].flatMap((m) => [...m.now, ...(m.then || [])]).filter((v) => v !== null));
   const lastAt = (series, same, i) => (i === s.upTo && typeof same === 'number' && through ? same : series?.[i] ?? null);
   const monthEnd = (i) => `${MONTH[i]} ${new Date(Date.UTC(Number(s.lastYear) || 2001, i + 1, 0)).getUTCDate()}`;
-  const lastCell = (series, same, i) => {
+  // (each amount in the month-by-month table in a place of its own, #fy-m3-rl, where search lands on it: ./figures.js
+  // monthCells, read from the same series)
+  const lastCell = (series, same, i, id) => {
     const v = lastAt(series, same, i);
     const whole = series?.[i] ?? null;
-    return html`<td class="num">${sm(v)}${v !== whole && whole !== null ? html`<small class="by-table__whole">${sm(whole)} by ${monthEnd(i)}</small>` : null}</td>`;
+    return html`<td class="num" id=${`${idp}-${id}`}>${cellOf(v)}${v !== whole && whole !== null ? html`<small class="by-table__whole" id=${`${idp}-${id}w`}>${sm(whole)} by ${monthEnd(i)}</small>` : null}</td>`;
   };
   // Above each chart, what its lines end at: this year so far, last year by the same day (with the change), its year
-  const figs = (m, same) => {
-    const nowEnd = m.now[s.upTo];
-    const by = typeof same === 'number' && through ? same : m.then?.[s.upTo] ?? null;
-    return html`<span class="by-cap__figs"><span class="by-cap__now">${s.year} so far <b>${compact(nowEnd)}</b></span>${m.then ? html`<span class="by-cap__then">${s.lastYear} ${typeof same === 'number' && through ? `by ${dayMonth(through)}` : `by the end of ${MONTH[s.upTo]}`} <b>${compact(by)}</b>${changeIn(nowEnd, by, as, { short: true }) ? html` <em><${Both} as=${as} pct=${changeIn(nowEnd, by, 'pct', { short: true })} usd=${changeIn(nowEnd, by, 'usd', { short: true })} /></em>` : null} · ${compact(m.then[11])} in all</span>` : null}</span>`;
+  const figs = (m, same, e) => {
+    const { now: nowEnd, by } = e;
+    return html`<span class="by-cap__figs"><span class="by-cap__now">${s.year} so far <b>${compact(nowEnd)}</b></span>${m.then ? html`<span class="by-cap__then">${s.lastYear} ${typeof same === 'number' && through ? `by ${dayMonth(through)}` : `by the end of ${MONTH[s.upTo]}`} <b>${compact(by)}</b>${changeIn(nowEnd, by, as, { short: true }) ? html` <em><${Both} as=${as} pct=${changeIn(nowEnd, by, 'pct', { short: true })} usd=${changeIn(nowEnd, by, 'usd', { short: true })} /></em>` : null} ·\u00a0${compact(e.all)}\u00a0in\u00a0all</span>` : null}</span>`;
   };
   return html`<section class="by" aria-label=${`${s.year} against ${s.lastYear}, month by month`}>
     <p class="by-legend" aria-hidden="true"><span><i class="by-key by-key--now"></i>${s.year} so far</span>${s.revenue.then ? html`<span><i class="by-key by-key--then"></i>${s.lastYear}</span>` : null}<span class="by-legend__how">Added up month by month, from QuickBooks</span></p>
     <div class="by-charts">
       <figure class="by-fig">
-        <figcaption class="by-cap"><span class="by-cap__t">Revenue</span>${figs(s.revenue, sameRev)}</figcaption>
+        <figcaption class="by-cap" id=${`${idp}-rev-cap`}><span class="by-cap__t">Revenue${revSays ? html`<small>${revSays}</small>` : null}</span>${figs(s.revenue, sameRev, ends.rev)}</figcaption>
         <${YearLines} id=${`${idp}-rev`} title="Revenue" now=${s.revenue.now} then=${s.revenue.then} year=${s.year} lastYear=${s.lastYear} upTo=${s.upTo} ax=${ax} sameDays=${sameRev} through=${through} tall=${tall} as=${as} />
       </figure>
       <figure class="by-fig">
-        <figcaption class="by-cap"><span class="by-cap__t">Expenses<small>${s.cash ? 'in kind and depreciation left out' : 'in kind included, as the books have them'}</small></span>${figs(s.spent, sameExp)}</figcaption>
+        <figcaption class="by-cap" id=${`${idp}-exp-cap`}><span class="by-cap__t">Expenses<small>${s.cash ? 'in kind and depreciation left out' : 'in kind included, as the books have them'}</small></span>${figs(s.spent, sameExp, ends.exp)}</figcaption>
         <${YearLines} id=${`${idp}-exp`} title="Expenses" now=${s.spent.now} then=${s.spent.then} year=${s.year} lastYear=${s.lastYear} upTo=${s.upTo} ax=${ax} sameDays=${sameExp} through=${through} tall=${tall} as=${as} />
       </figure>
     </div>
@@ -223,8 +253,8 @@ export function YearCompare({ books, idp = 'by', tall = false, as = 'pct' }) {
       <div class="by-table__scroll"><table>
         <thead><tr><th scope="col">By the end of</th><th scope="col" class="num">Revenue ${s.year}</th>${s.revenue.then ? html`<th scope="col" class="num">${s.lastYear}</th>` : null}<th scope="col" class="num">Expenses ${s.year}</th>${s.spent.then ? html`<th scope="col" class="num">${s.lastYear}</th>` : null}</tr></thead>
         <tbody>${MON.map((mo, i) => html`<tr key=${mo} class=${i === s.upTo ? 'is-now' : ''}><th scope="row">${MONTH[i]}${i === s.upTo && through ? html`<small> through ${dayMonth(through)}</small>` : null}</th>
-          <td class="num">${s.revenue.now[i] === null ? '–' : sm(s.revenue.now[i])}</td>${s.revenue.then ? lastCell(s.revenue.then, sameRev, i) : null}
-          <td class="num">${s.spent.now[i] === null ? '–' : sm(s.spent.now[i])}</td>${s.spent.then ? lastCell(s.spent.then, sameExp, i) : null}</tr>`)}</tbody>
+          <td class="num" id=${`${idp}-m${i}-rn`}>${cellOf(s.revenue.now[i], 'Not yet')}</td>${s.revenue.then ? lastCell(s.revenue.then, sameRev, i, `m${i}-rl`) : null}
+          <td class="num" id=${`${idp}-m${i}-en`}>${cellOf(s.spent.now[i], 'Not yet')}</td>${s.spent.then ? lastCell(s.spent.then, sameExp, i, `m${i}-el`) : null}</tr>`)}</tbody>
       </table></div>
     </details>
   </section>`;
@@ -261,21 +291,25 @@ export function StatementLines({ rows, asOf, priorAsOf, all = false, cls = '', h
   const unit = as !== 'usd' && nums.every((r) => r.p > 0) ? 'pct' : 'usd';
   // Each change both ways in its cell, the column as wide as the longer (money.js Both), so % | $ moves no column
   const pctUnit = nums.every((r) => r.p > 0) ? 'pct' : 'usd';
-  const chgCell = (r, u) => (heads ? overIn(r.a, r.p, u) : changeIn(r.a, r.p, u) || '–');
+  const chgCell = (r, u) => (heads ? overIn(r.a, r.p, u) : changeIn(r.a, r.p, u));
+  // (nothing to set it beside: a blank, said so to a screen reader)
+  const chg = (r) => (chgCell(r, pctUnit) || chgCell(r, 'usd') ? html`<${Both} as=${unit} pct=${chgCell(r, pctUnit)} usd=${chgCell(r, 'usd')} />` : html`<${Blank} say="Nothing to compare" />`);
   return html`<table class=${`by-stmt ${cls}`}>
     <thead><tr><th scope="col"><span class="sr-only">Line</span></th><th scope="col" class="num">${heads ? heads[0] : shortDate(asOf)}</th>${prior ? html`<th scope="col" class="num">${heads ? heads[1] : shortDate(priorAsOf)}</th><th scope="col" class="num">${heads ? heads[2] : 'Change'}</th>` : null}</tr></thead>
     <tbody>${shown.map((r, i) => (r.k === 'head'
       ? html`<tr class="by-stmt__h" key=${i} data-d=${r.d}><th scope="colgroup" colspan=${cols}>${r.label}</th></tr>`
-      : [html`<tr class=${`by-stmt__${r.k}`} key=${i} style=${`--d:${r.d}`} data-d=${r.k === 'sum' ? -1 : r.d} data-a=${Math.abs(Number(r.a) || 0)}><th scope="row">${r.label}</th><td class="num">${signed(r.a)}</td>${prior ? html`<td class="num by-stmt__prior">${signed(r.p)}</td><td class="num by-stmt__chg"><${Both} as=${unit} pct=${chgCell(r, pctUnit)} usd=${chgCell(r, 'usd')} /></td>` : null}</tr>`,
+      : [html`<tr class=${`by-stmt__${r.k}`} key=${i} style=${`--d:${r.d}`} data-d=${r.k === 'sum' ? -1 : r.d} data-a=${Math.abs(Number(r.a) || 0)}><th scope="row">${wrapAt(r.label)}</th><td class="num">${signed(r.a)}</td>${prior ? html`<td class="num by-stmt__prior">${signed(r.p)}</td><td class="num by-stmt__chg">${chg(r)}</td>` : null}</tr>`,
         noteOf(r) ? html`<tr class="by-stmt__note" key=${`${i}-n`} style=${`--d:${r.d}`} data-d=${r.k === 'sum' ? -1 : r.d}><td colspan=${cols}><${NoteLine} note=${noteOf(r)} /></td></tr>` : null]))}</tbody>
   </table>`;
 }
 
 /**
  * A statement on the screen at a size a room reads (the deck gives it as many slides as its lines take), fitted to it
- * only past that: a little smaller (to 90%) while it runs past the bottom, then as few lines off as it takes (the
- * deepest first, the smallest of those first; never a heading of the statement or its bottom lines), then as big
- * again as it can be; it says how many are off and where every line is
+ * only past that: first to its width, every column on the screen (a phone's: the figures as much smaller as it takes,
+ * the columns' long headers on two lines and the lines' names wrapped already, ./portal.css); then a little smaller
+ * (to 90% of that) while it runs past the bottom, then as few lines off as it takes (the deepest first, the smallest
+ * of those first; never a heading of the statement or its bottom lines), then as big again as the width lets it be; it
+ * says how many are off and where every line is
  */
 function FitLines(props) {
   const ref = useRef(null);
@@ -284,6 +318,8 @@ function FitLines(props) {
     const el = ref.current;
     if (!el) return undefined;
     const over = () => el.scrollHeight > el.clientHeight + 1;
+    // How much wider the table is than its box (over 1: a column past the screen's edge)
+    const width = () => { const t = el.querySelector('table'); const w = el.getBoundingClientRect().width; return t && w > 0 ? t.getBoundingClientRect().width / w : 1; };
     // A line and the presenter's note under it go together
     const show = (r, on) => { r.hidden = !on; const n = r.nextElementSibling; if (n?.classList.contains('by-stmt__note')) n.hidden = !on; };
     const size = (k) => el.style.setProperty('--fit', String(k));
@@ -292,14 +328,23 @@ function FitLines(props) {
       rows.forEach((r) => show(r, true));
       let k = 1;
       size(k);
-      while (k > 0.9 && over()) { k = Math.round((k - 0.05) * 100) / 100; size(k); }
+      // The width first: a table too wide is as wide as its figures, and they're sized in em, so it narrows with the
+      // font; down to the size that fits (a hundredth at a time from there, never under half)
+      const w = width();
+      if (w > 1.001) {
+        k = Math.max(0.5, Math.floor((k / w) * 100) / 100);
+        size(k);
+        while (k > 0.5 && width() > 1.001) { k = Math.round((k - 0.01) * 100) / 100; size(k); }
+      }
+      const top = k;
+      while (k > top - 0.1 && over()) { k = Math.round((k - 0.05) * 100) / 100; size(k); }
       let hid = 0;
       const deep = rows.filter((r) => Number(r.dataset.d) >= 1).sort((x, y) => Number(y.dataset.d) - Number(x.dataset.d) || Number(x.dataset.a || 0) - Number(y.dataset.a || 0));
       for (const r of deep) { if (!over()) break; show(r, false); hid++; }
       // (never a line cut in half: smaller still, the last resort)
-      while (k > 0.6 && over()) { k = Math.round((k - 0.05) * 100) / 100; size(k); }
-      // With lines off, back up toward the room's size while it still fits
-      while (hid && k < 1) { size(Math.round((k + 0.05) * 100) / 100); if (over()) { size(k); break; } k = Math.round((k + 0.05) * 100) / 100; }
+      while (k > Math.min(top, 0.6) && over()) { k = Math.round((k - 0.05) * 100) / 100; size(k); }
+      // With lines off, back up toward the size the width allows while it still fits
+      while (hid && k < top) { const up = Math.min(top, Math.round((k + 0.05) * 100) / 100); size(up); if (over()) { size(k); break; } k = up; }
       setOff(hid || (over() ? -1 : 0));
     };
     fit();
@@ -333,22 +378,22 @@ export function BooksSlide({ books, kind, page = 0, notes = null, as = 'pct' }) 
   }
   if (kind === 'year') {
     // Without the months (a read from before them): the year so far against last year's same days, as the figures
-    // have them (the expenses without in kind)
+    // have them (./money.js yearFigures: in kind left out of both)
     const ser = yearSeries(books);
     return html`<div class="by-slide">
       <p class="bs-eyebrow">From QuickBooks${books.through ? `, January 1 to ${dayMonth(books.through)}` : ''}</p>
       <h1 class="bs-display by-slide__title">${books.year} against ${books.lastYear?.year || 'last year'}</h1>
-      ${ser ? html`<${YearCompare} books=${books} idp="bys" tall as=${as} />` : html`<${StatementLines} all as=${as} rows=${[
-        { k: 'line', d: 0, label: 'Revenue', a: books.revenue, p: books.lastYear?.revenue },
-        { k: 'line', d: 0, label: 'Expenses', a: spentOf(books), p: books.lastYear ? spentOf(books.lastYear) : null },
-      ]} asOf=${books.through} priorAsOf=${books.lastYear?.through} cls="is-big" />`}
+      ${ser ? html`<${YearCompare} books=${books} idp="bys" tall as=${as} />` : html`<${FitLines} all as=${as} rows=${[
+        { k: 'line', d: 0, label: 'Revenue', a: yearFigures(books).revenue, p: yearFigures(books).last?.revenue ?? null },
+        { k: 'line', d: 0, label: 'Expenses', a: yearFigures(books).expenses, p: yearFigures(books).last?.expenses ?? null },
+      ]} asOf=${books.through} priorAsOf=${books.lastYear?.through} />`}
     </div>`;
   }
   if (kind === 'budget') {
     // QuickBooks' budget (the board's) against the actuals, to the statements' day: the main lines, over (under) beside each
     const b = books?.budget;
     return html`<div class="by-slide">
-      <p class="bs-eyebrow">QuickBooks’ budget, ${b?.name}, January 1 to ${dayMonth(b?.asOf)}${b ? `: ${budgetMonthsText(b.months)} of ${b.of} months` : ''}</p>
+      <p class="bs-eyebrow">${budgetName(b, books?.year)}, January 1 to ${dayMonth(b?.asOf)}${b ? `: ${budgetMonthsText(b.months)} of ${b.of} months` : ''}</p>
       <h1 class="bs-display by-slide__title">Budget against actual${page ? ', continued' : ''}</h1>
       <${FitLines} rows=${(b?.rows || []).map((r) => ({ ...r, p: r.b }))} heads=${['Actual', 'Budget', 'Over (under)']} which="bud" notes=${notes} as=${as} page=${page} />
     </div>`;

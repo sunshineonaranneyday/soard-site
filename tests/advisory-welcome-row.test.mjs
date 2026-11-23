@@ -112,7 +112,8 @@ test('with the Advisory Board’s emails off, a press on their row sends their s
   assert.equal(r.again, false);
   assert.ok(inGroup().includes('ada@private.example'), 'the sign-in list was brought up to date before it went');
   assert.deepEqual(welcomes().map((e) => [e.to].flat()[0]), ['ada@private.example']);
-  assert.match(welcomes()[0].html, /Welcome, Ada/);
+  // (r20: "Ada Advisor" ends in an office word, "Advisor", so no name in the welcome's heading)
+  assert.match(welcomes()[0].html, /Welcome to the Advisory Board/);
   assert.deepEqual([welcomes()[0].reply_to].flat(), ['mary@private.example'], 'replies reach whoever runs the group');
   // The row says when it went, and the record is had at her address
   const row = await rowOf('ada-advisor');

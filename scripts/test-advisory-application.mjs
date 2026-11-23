@@ -773,6 +773,67 @@ await phone.close();
   await pw.close();
 }
 {
+  // Round 15 (admin). Someone on People matched only by the web address a new record would take: the box says that, and
+  // whose it is, never "a name like this one"
+  await onPeople('pat-newman', { name: 'Zed Other', group: 'advisory', order: 9 });
+  const bn = (await submitApplication(env, { ...base, fullName: 'Pat Newman', email: 'pat.newman@example.org', signature: 'Pat Newman' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pn = await open(390, `/admin/__advisory.html#advisory-applications/${bn.id}`, 844);
+  await pn.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pn, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pn.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null); await sleep(300);
+  const said = await text(pn, '.ava-dialog').catch(() => '');
+  ok(/Zed Other on People → Advisory has the web address this name would get \(pat-newman\)/.test(said) && !/a name like this one|has this name/.test(said),
+    `a match by web address only: said as the address, with whose it is (${said.slice(0, 240)})`);
+  const wide = await pn.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+  ok(wide, 'and the box fits a phone, nothing sideways');
+  await pn.close();
+}
+{
+  // Round 16 (admin). Among several it could be, one found only by the web address the name would get: said as that, on
+  // their own line; and a new person beside someone elsewhere on People with that address: never "already a <name>"
+  await onPeople('quin-vale', { name: 'Pat Other', group: 'advisory', order: 10 });
+  await onPeople('quin-vale-2', { name: 'Quin Vale', group: 'advisory', order: 11 });
+  const bq = (await submitApplication(env, { ...base, fullName: 'Quin Vale', email: 'quin.vale@example.org', signature: 'Quin Vale' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pq = await open(390, `/admin/__advisory.html#advisory-applications/${bq.id}`, 844);
+  await pq.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pq, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pq.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null); await sleep(300);
+  const many = await text(pq, '.ava-dialog').catch(() => '');
+  ok(/2 people on People → Advisory could be them, by a name like this one or by the web address this name would get/.test(many) && /Pat Other[\s\S]*Has the web address this name would get \(quin-vale\)/.test(many) && !/2 people on People → Advisory have a name like this one/.test(many),
+    `several it could be, one only by the web address: said as that, on their line (${many.slice(0, 260)})`);
+  ok(await pq.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'and the box fits a phone');
+  await pq.close();
+  await onPeople('wes-roe', { name: 'Lee Other', group: 'board' });
+  const bw = (await submitApplication(env, { ...base, fullName: 'Wes Roe', email: 'wes.roe@example.org', signature: 'Wes Roe' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pr = await open(1280, `/admin/__advisory.html#advisory-applications/${bw.id}`, 900);
+  await pr.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 });
+  await clickText(pr, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pr.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null); await sleep(300);
+  const fresh = await text(pr, '.ava-dialog').catch(() => '');
+  ok(/Lee Other on People → Board has the web address this name would get \(wes-roe\), so Wes Roe is added as a new person at wes-roe-2\./.test(fresh) && !/already a Lee Other/.test(fresh),
+    `a new person beside someone with the address their name would get: said as that (${fresh.slice(0, 260)})`);
+  await pr.close();
+}
+{
+  // Round 15 (admin). A delete that stops, of an application whose headshot became their People photo: it says only that
+  // it didn't finish, never that the headshot is no longer shown or used (it's their photo on People)
+  const bp = (await submitApplication(env, { ...base, fullName: 'Pia Photo', email: 'pia.photo@example.org', signature: 'Pia Photo' }, { headshot: await headshotOf(GOOD_JPG) })).app;
+  const pp = await open(1280, `/admin/__advisory.html#advisory-applications/${bp.id}`, 900);
+  await pp.waitForSelector('.ava-drawer .ava-shot', { timeout: 8000 });
+  await clickText(pp, '.ava-drawer button', /^Add to Advisory Board$/);
+  await pp.waitForSelector('.ava-dialog', { timeout: 4000 }).catch(() => null); await sleep(300);
+  await clickText(pp, '.ava-dialog button', /^Add them$/);
+  await pp.waitForFunction(() => !document.querySelector('.ava-dialog'), { timeout: 8000 }).catch(() => null);
+  const photo = JSON.parse((await DB.prepare("SELECT data FROM team WHERE slug = 'pia-photo'").first())?.data || '{}').photo || '';
+  await DB.prepare('UPDATE advisory_applications SET deleting_at = ? WHERE id = ?').bind(new Date().toISOString(), bp.id).run();
+  await pp.reload({ waitUntil: 'networkidle0' });
+  await pp.waitForSelector('.ava-drawer .ava-qa', { timeout: 8000 }); await sleep(300);
+  const half = await text(pp, '.ava-drawer').catch(() => '');
+  ok(!!photo && /Deleting this application didn’t finish: it’s still here\. Press Delete application below to finish it\./.test(half) && !/no longer shown or used/.test(half),
+    `a stopped delete of someone whose headshot is their People photo: only that it didn't finish (${JSON.stringify({ photo: !!photo, said: half.slice(0, 200) })})`);
+  await pp.close();
+}
+{
   // Their People record being renamed or deleted on People right now: the box says that, never that someone is adding them
   await onPeople('eve-edit', { name: 'Eve Edit', group: 'advisory', publishStatus: 'published' });
   await DB.prepare("INSERT INTO reveal_board_emails VALUES ('eve-edit', 'eve.work@example.org', null)").run();
@@ -1523,6 +1584,305 @@ if (DIST) {
       await w.close();
     }
   }
+  // Round fifteen. The review, its answers seeded and a photo kept on this device, at a size (`sending`: "This may
+  // already have been sent" from a send whose answer never came); an iPhone photo's reader held back `block` ms, then not
+  // arriving (a dropped connection). Its page errors count. (`on`: another browser, one started without its
+  // back-forward cache)
+  const seededReview = async (ip, who, { width = 375, height = 667, mobile = width < 1000, sending = false, block = 6000, on = browser } = {}) => {
+    const sp = await on.newPage();
+    await sp.setViewport({ width, height, deviceScaleFactor: mobile ? 2 : 1, isMobile: mobile, hasTouch: mobile });
+    await sp.setCacheEnabled(false);
+    await sp.setRequestInterception(true);
+    sp.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) { await sleep(block); return req.abort('failed'); } if (await answer(req, ip) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+    sp.on('pageerror', (e) => errors.push(e.message));
+    await sp.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+    await sp.evaluate(async (answers, b64, sendingNow) => {
+      localStorage.clear();
+      sessionStorage.clear();
+      await new Promise((res) => { const d = indexedDB.deleteDatabase('soard-advisory'); d.onsuccess = d.onerror = d.onblocked = () => res(); });
+      localStorage.setItem('soard-advisory-application', JSON.stringify({ answers, step: 5, screen: 0, field: null, furthest: 5, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+      if (sendingNow) localStorage.setItem('soard-advisory-sending', JSON.stringify({ at: Date.now(), id: 'x' }));
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      await new Promise((res) => { const o = indexedDB.open('soard-advisory', 1); o.onupgradeneeded = () => o.result.createObjectStore('photos'); o.onsuccess = () => { const tx = o.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new File([bytes], 'h.jpg', { type: 'image/jpeg' }), name: 'h.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { o.result.close(); res(); }; }; });
+      localStorage.setItem('soard-advisory-photo-seq', '1');
+    }, { ...base, ...who }, readFileSync(GOOD_JPG).toString('base64'), sending);
+    await sp.reload({ waitUntil: 'networkidle0' }); await sleep(400);
+    await sp.click('#adv-go');
+    await sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: 6000 }).catch(() => null);
+    const all = await sp.$('#adv-review-all'); if (all) { await all.click(); await sleep(300); }
+    return sp;
+  };
+  const r15 = {
+    title: (sp) => text(sp, '#adv-title'),
+    // (the words over Send, while they show)
+    overSend: (sp) => sp.evaluate(() => { const e = document.getElementById('adv-send-error'); return !e.hidden && e.getClientRects().length ? e.textContent : ''; }),
+    card: (sp) => sp.evaluate(() => !!document.querySelector('[data-field="headshot"]')?.getClientRects().length),
+    nav: (sp) => sp.evaluate(() => ({ title: document.getElementById('adv-title').textContent.trim(), part: document.getElementById('adv-part').textContent.trim(), back: !document.getElementById('adv-back').hidden && !!document.getElementById('adv-back').getClientRects().length, next: document.getElementById('adv-next').textContent.trim() })),
+    edit: (sp, i) => sp.evaluate((n) => document.querySelector(`#adv-review .adv-review-edit[data-edit="${n}"]`)?.click(), i),
+    change: (sp, id) => sp.evaluate((x) => document.querySelector(`#adv-review [data-answer="${x}"]`)?.click(), id),
+    onReview: (sp, ms = 6000) => sp.waitForFunction(() => document.getElementById('adv-title')?.textContent.trim() === 'Review and send', { timeout: ms }).catch(() => null),
+    settled: (sp, ms = 25000) => sp.waitForFunction(() => document.querySelector('[data-photo="headshot"]')?.dataset.state !== 'busy', { timeout: ms }).catch(() => null),
+    // (the photo's warning, where it sits against the room between the bar across the top and Back / Continue)
+    warnAt: (sp) => sp.evaluate(() => {
+      const st = document.getElementById('adv-headshot-status');
+      const top = document.querySelector('[data-adv-top]').getBoundingClientRect().bottom;
+      const bottom = document.querySelector('.adv-nav').getBoundingClientRect().top;
+      const r = st.getBoundingClientRect();
+      return { kind: st.dataset.kind || '', words: st.textContent.slice(0, 40), top: Math.round(r.top), bottom: Math.round(r.bottom), room: [Math.round(top), Math.round(bottom)], inView: !!st.textContent && r.top >= top - 1 && r.bottom <= bottom + 1 };
+    }),
+  };
+  /** Continue until the headshot's card is on screen (as people do) */
+  r15.toCard = async (sp) => { for (let k = 0; k < 8 && !(await r15.card(sp)); k++) { await sp.click('#adv-next'); await sleep(900); } return r15.card(sp); };
+  /** Start over, pressed twice (the second deletes) */
+  r15.startOver = async (sp) => { await sp.click('#adv-start-over'); await sleep(400); await sp.click('#adv-start-over'); await sleep(900); };
+  for (const [width, height] of [[375, 667], [1280, 800]]) {
+    // Round fifteen. Start over after a step opened from the review (its Edit, Save and exit on its last screen): the new,
+    // empty application starts at its start, as any does, never as if opened from the review (Back on its empty first
+    // screen, to a review of nothing; its last screen "Back to review")
+    const sp = await seededReview(`198.51.100.${width < 500 ? 110 : 111}`, { fullName: `Over ${width}`, email: `over.${width}@example.org`, signature: `Over ${width}` }, { width, height });
+    await r15.edit(sp, 0); await sleep(1000);
+    const from = await r15.nav(sp);
+    await r15.toCard(sp);
+    const last = await r15.nav(sp);
+    await sp.click('#adv-exit'); await sleep(800);
+    await r15.startOver(sp);
+    if (width < 500) {
+      // The browser's Forward then, onto the screens of the answers it deleted: the application from its start too
+      await sp.evaluate(() => history.forward()); await sleep(1200);
+      const fwd = { open: await sp.evaluate(() => document.documentElement.classList.contains('adv-focus')), ...(await r15.nav(sp)) };
+      ok(!fwd.open || (fwd.title === 'About you' && /^Part 1 of/.test(fwd.part) && !fwd.back && fwd.next === 'Continue'),
+        `${width} × ${height}: the browser’s Forward after Start over never brings back the deleted application’s place, nor “from the review” (${JSON.stringify(fwd)})`);
+      if (fwd.open) { await sp.click('#adv-exit'); await sleep(800); }
+    }
+    await sp.click('#adv-go'); await sleep(1000);
+    const fresh = await r15.nav(sp);
+    await sp.type('#adv-fullName', 'Fresh Start');
+    for (const [id, v] of [['email', 'fresh.start@example.org'], ['phone', '404 555 0181']]) {
+      for (let k = 0; k < 4 && !(await sp.evaluate((x) => !!document.getElementById(`adv-${x}`)?.getClientRects().length, id)); k++) { await sp.click('#adv-next'); await sleep(900); }
+      await sp.type(`#adv-${id}`, v);
+    }
+    await r15.toCard(sp);
+    const end = await r15.nav(sp);
+    ok(from.back && last.next === 'Back to review' && fresh.title === 'About you' && /^Part 1 of/.test(fresh.part) && !fresh.back && end.next !== 'Back to review' && /^Continue/.test(end.next),
+      `${width} × ${height}: Start over after a step opened from the review, then Start: the empty application starts at its start, no Back on its first screen, and its last screen says Continue, never "Back to review" (${JSON.stringify({ from, last, fresh, end })})`);
+    await sp.close();
+  }
+  {
+    // Round fifteen. Start over pressed in another tab while this one has About you open from the review: here too, the
+    // new application starts at its start
+    const sp = await seededReview('198.51.100.112', { fullName: 'Other Tab', email: 'other.tab@example.org', signature: 'Other Tab' }, { width: 1280, height: 800 });
+    await r15.edit(sp, 0); await sleep(1000);
+    await r15.toCard(sp);
+    const before = await r15.nav(sp);
+    const tb = await open(1280, '/advisory-board/apply/', 800);
+    await tb.click('#adv-start-over'); await sleep(400);
+    await tb.click('#adv-start-over'); await sleep(1200);
+    await tb.close();
+    const lead = await text(sp, '#adv-hub-lead');
+    await sp.click('#adv-go'); await sleep(1000);
+    const fresh = await r15.nav(sp);
+    ok(before.next === 'Back to review' && /Start over was pressed in another tab/.test(lead) && fresh.title === 'About you' && /^Part 1 of/.test(fresh.part) && !fresh.back,
+      `Start over in another tab while About you is open here from the review: the new application here starts at its start, no Back on its first screen (${JSON.stringify({ before, lead, fresh })})`);
+    await sp.close();
+  }
+
+  // ── Round sixteen ──
+  const r16 = {
+    // What's in the boxes and drawn from them: the answers the page holds, a "Did you mean …?", a count, a box marked wrong
+    boxes: (sp) => sp.evaluate(() => ({
+      filled: [...document.querySelectorAll('[data-field] input:not([type=file]), [data-field] textarea')].filter((x) => (x.type === 'radio' || x.type === 'checkbox' ? x.checked : x.value)).map((x) => `${x.name}=${x.type === 'radio' || x.type === 'checkbox' ? x.value : x.value.slice(0, 30)}`),
+      mailFix: [...document.querySelectorAll('[data-field] .adv-mailfix')].filter((m) => !m.hidden && m.textContent).map((m) => m.textContent),
+      counts: [...document.querySelectorAll('[data-field] .adv-count')].filter((c) => !c.hidden && c.textContent).map((c) => c.textContent),
+      invalid: [...document.querySelectorAll('[data-field] [aria-invalid="true"], .adv-field.is-invalid')].map((x) => x.id || x.dataset.field),
+    })),
+    saved: (sp) => sp.evaluate(() => localStorage.getItem('soard-advisory-application') || ''),
+    open: (sp) => sp.evaluate(() => document.documentElement.classList.contains('adv-focus')),
+    rows: (sp) => sp.$$eval('.adv-hub-row', (els) => els.map((b) => (b.disabled ? 'locked' : b.dataset.state || 'open'))),
+    ready: (sp) => sp.waitForFunction(() => document.querySelector('[data-adv]')?.dataset.ready === 'go', { timeout: 10000 }).catch(() => null),
+    send: async (sp) => {
+      try { await DB.exec('DELETE FROM rate_limits'); } catch { /* none sent yet */ } // (every send here comes from one address: five a day)
+      await sp.click('#adv-next');
+      return sp.waitForFunction(() => !document.getElementById('adv-done').hidden, { timeout: 30000 }).then(() => true).catch(() => false);
+    },
+    // (the warning about a photo turned down, the form's own note under it or the card's status line, against the room
+    // between the bar across the top and Back / Continue)
+    noteAt: (sp) => sp.evaluate(() => {
+      const err = document.getElementById('adv-headshot-err');
+      const st = document.getElementById('adv-headshot-status');
+      const note = !err.hidden && err.textContent ? err : st;
+      const top = document.querySelector('[data-adv-top]').getBoundingClientRect().bottom;
+      const bottom = document.querySelector('.adv-nav').getBoundingClientRect().top;
+      const r = note.getBoundingClientRect();
+      return { card: !!document.querySelector('[data-field="headshot"]').getClientRects().length, words: note.textContent.slice(0, 40), at: [Math.round(r.top), Math.round(r.bottom)], room: [Math.round(top), Math.round(bottom)], inView: !!note.textContent && r.top >= top - 1 && r.bottom <= bottom + 1 };
+    }),
+    // A page on another browser (one without its back-forward cache), as `open` makes one
+    page: async (on, width, height, ip) => {
+      const x = await on.newPage();
+      await x.setViewport({ width, height, deviceScaleFactor: 2, isMobile: width < 1000, hasTouch: width < 1000 });
+      await x.setRequestInterception(true);
+      x.on('request', async (req) => { try { if (await answer(req, ip) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+      x.on('pageerror', (e) => errors.push(e.message));
+      await x.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+      return x;
+    },
+  };
+  for (const [way, width, height] of [['reload', 375, 667], ['link', 1280, 800], ['reload', 568, 320], ['link', 320, 568]]) {
+    // Round sixteen. Sent (with Reference and signature opened from the review first: places in the history behind the
+    // review), then the thank-you reloaded, or "Back to the Advisory Board" and the browser's Back; then "Start a new
+    // application" and the browser's Back: the new, empty application's history holds nothing of the sent one (it was
+    // Reference and signature with "Back to review", then a review of the empty application, every step unlocked)
+    const sp = await seededReview(`198.51.100.${160 + width % 30}`, { fullName: `Again ${width}`, email: `again.${width}@example.org`, signature: `Again ${width}` }, { width, height });
+    await r15.edit(sp, 4); await sleep(1000);
+    for (let k = 0; k < 4 && (await r15.title(sp)) !== 'Review and send'; k++) { await sp.click('#adv-next'); await sleep(900); }
+    const sentOk = await r16.send(sp);
+    if (way === 'reload') await sp.reload({ waitUntil: 'networkidle0' });
+    else {
+      await sp.evaluate(() => document.querySelector('#adv-done a[href="/advisory-board/"]').click());
+      await sp.waitForFunction(() => location.pathname === '/advisory-board/', { timeout: 10000 }).catch(() => null); await sleep(800);
+      await sp.goBack({ timeout: 10000 }).catch(() => null);
+    }
+    await r16.ready(sp); await sleep(600);
+    const label = await text(sp, '#adv-go');
+    await sp.click('#adv-go'); await sleep(1200);
+    const fresh = await r15.nav(sp);
+    const backs = [];
+    for (let k = 0; k < 3 && (await r16.open(sp)); k++) { await sp.goBack({ timeout: 4000 }).catch(() => null); await sleep(1000); backs.push({ open: await r16.open(sp), ...(await r15.nav(sp)) }); }
+    const rows = await r16.rows(sp);
+    await sp.screenshot({ path: join(OUT, `r16-again-${way}-${width}x${height}.png`) });
+    ok(sentOk && label === 'Start a new application' && fresh.title === 'About you' && !fresh.back && backs.length === 1 && !backs[0].open && rows.slice(1).every((r) => r === 'locked'),
+      `${width} × ${height}, sent, ${way === 'reload' ? 'the thank-you reloaded' : '"Back to the Advisory Board" and the browser’s Back'}, then "Start a new application": the browser’s Back goes to the overview, never to a place of the sent application, and the overview has only the first step open (${JSON.stringify({ sentOk, label, fresh, backs, rows })})`);
+    await sp.close();
+  }
+  for (const [where, width, height] of [['here', 320, 568], ['here', 568, 320], ['tab', 375, 667], ['here', 1280, 800], ['tab', 1280, 800]]) {
+    // Round sixteen. Start over (here, or in another tab) after a likely typo in the email ("Did you mean …?"), a long
+    // answer near its end (its count) and a box marked wrong: the new, empty application has none of them (pressing the
+    // old "Did you mean" put the deleted address back), and About you is split into screens as on a fresh start
+    const sp = await open(width, '/advisory-board/apply/', height);
+    await sp.evaluate(() => { localStorage.clear(); sessionStorage.clear(); });
+    await sp.reload({ waitUntil: 'networkidle0' });
+    await sp.click('#adv-go'); await sleep(900);
+    const freshPart = await text(sp, '#adv-part');
+    await sp.click('#adv-exit'); await sleep(700);
+    // (name and phone kept, and a photo, so About you can be passed, and how they heard, so Your interest can reach its
+    // long answer; the email typed here)
+    await sp.evaluate(async (b64) => {
+      localStorage.setItem('soard-advisory-application', JSON.stringify({ answers: { fullName: 'Robin Vale', phone: '404 555 0123', heardFrom: 'A friend' }, step: 0, screen: 0, field: null, furthest: 1, startedAt: Date.now() - 900000, session: crypto.randomUUID(), savedAt: Date.now() }));
+      const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+      await new Promise((res) => { const o = indexedDB.open('soard-advisory', 1); o.onupgradeneeded = () => o.result.createObjectStore('photos'); o.onsuccess = () => { const tx = o.result.transaction('photos', 'readwrite'); tx.objectStore('photos').put({ blob: new File([bytes], 'h.jpg', { type: 'image/jpeg' }), name: 'h.jpg', width: 900, height: 1200, at: Date.now(), seq: 1 }, 'headshot'); tx.oncomplete = () => { o.result.close(); res(); }; }; });
+      localStorage.setItem('soard-advisory-photo-seq', '1');
+    }, readFileSync(GOOD_JPG).toString('base64'));
+    await sp.reload({ waitUntil: 'networkidle0' }); await sleep(500);
+    await sp.click('#adv-go'); await sleep(900);
+    for (let k = 0; k < 4 && !(await sp.evaluate(() => !!document.getElementById('adv-email').getClientRects().length)); k++) { await sp.click('#adv-next'); await sleep(900); }
+    await sp.type('#adv-email', 'robin.vale@gmial.com');
+    await sp.$eval('#adv-email', (e) => e.blur()); await sleep(300);
+    for (let k = 0; k < 8 && (await r15.title(sp)) === 'About you'; k++) { await sp.click('#adv-next'); await sleep(900); }
+    for (let k = 0; k < 4 && !(await sp.evaluate(() => !!document.getElementById('adv-why').getClientRects().length)); k++) { await sp.click('#adv-next'); await sleep(900); }
+    await sp.evaluate(() => { const t = document.getElementById('adv-why'); t.focus(); t.value = 'x'.repeat(2795); t.dispatchEvent(new Event('input', { bubbles: true })); });
+    await sp.keyboard.type('hello');
+    // (Continue on with a box still empty: it's marked)
+    for (let k = 0; k < 4 && !(await r16.boxes(sp)).invalid.length; k++) { await sp.click('#adv-next'); await sleep(900); }
+    const before = await r16.boxes(sp);
+    await sp.click('#adv-exit'); await sleep(700);
+    if (where === 'here') await r15.startOver(sp);
+    else {
+      const tb = await open(width, '/advisory-board/apply/', height);
+      await tb.click('#adv-start-over'); await sleep(400);
+      await tb.click('#adv-start-over'); await sleep(1200);
+      await tb.close();
+      await sp.bringToFront(); await sleep(400);
+    }
+    await sp.click('#adv-go'); await sleep(1000);
+    const after = { part: await text(sp, '#adv-part'), ...(await r16.boxes(sp)) };
+    await sp.screenshot({ path: join(OUT, `r16-start-over-${where}-${width}x${height}.png`) });
+    ok(before.mailFix.length && before.counts.length && before.invalid.length && !after.filled.length && !after.mailFix.length && !after.counts.length && !after.invalid.length && after.part === freshPart,
+      `${width} × ${height}, Start over ${where === 'here' ? 'here' : 'in another tab'}: nothing drawn from the deleted answers stays (no "Did you mean …?", no count, no box marked wrong), and About you is split as on a fresh start (${JSON.stringify({ before, after, freshPart })})`);
+    await sp.close();
+  }
+  {
+    // Round sixteen. The page loaded again without its back-forward cache (a phone that let it go; here Chrome started
+    // without one): Chrome puts back what the boxes held when it was left, after the page has loaded. Deleted or sent
+    // answers came back and were saved. The page never takes answers it didn't put there itself
+    const nobf = await puppeteer.launch({ headless: 'shell', args: ['--disable-gpu', '--disable-back-forward-cache', '--disable-features=BackForwardCache', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows'] });
+    for (const [width, height] of [[1280, 800], [320, 568]]) {
+      // Path A: away on another page (a full load) from the review; Start over in another tab; then the browser's Back
+      const who = { fullName: `Away Tab ${width}`, email: `away.${width}@example.org`, signature: `Away Tab ${width}` };
+      const sp = await seededReview(`198.51.100.${170 + width % 20}`, who, { width, height, on: nobf });
+      await r15.edit(sp, 4); await sleep(1000);
+      for (let k = 0; k < 4 && (await r15.title(sp)) !== 'Review and send'; k++) { await sp.click('#adv-next'); await sleep(900); }
+      await sp.goto(`${SITE}/advisory-board/`, { waitUntil: 'networkidle0' });
+      const tb = await r16.page(nobf, width, height, `198.51.100.${171 + width % 20}`);
+      await tb.click('#adv-start-over'); await sleep(400);
+      await tb.click('#adv-start-over'); await sleep(1200);
+      await tb.close();
+      await sp.goBack({ waitUntil: 'networkidle0' }); await r16.ready(sp); await sleep(600);
+      const back = { hub: await text(sp, '#adv-hub-title'), ...(await r16.boxes(sp)), saved: await r16.saved(sp) };
+      await sp.click('#adv-go'); await sleep(1200);
+      const started = { ...(await r15.nav(sp)), ...(await r16.boxes(sp)) };
+      await sp.goBack({ timeout: 4000 }).catch(() => null); await sleep(1000);
+      const left = { open: await r16.open(sp), ...(await r15.nav(sp)), saved: await r16.saved(sp) };
+      await sp.screenshot({ path: join(OUT, `r16-away-back-${width}x${height}.png`) });
+      ok(back.hub === 'Six steps, about 20 minutes' && !back.filled.length && !back.saved.includes(who.fullName) && started.title === 'About you' && !started.filled.length && !left.open && !left.saved.includes(who.fullName),
+        `${width} × ${height}, no back-forward cache: Start over in another tab while this one was on another page, then the browser’s Back here: none of the deleted answers is in the boxes, saved, or a place to go back to (${JSON.stringify({ back, started, left })})`);
+      await sp.close();
+    }
+    for (const [width, height] of [[375, 667], [568, 320]]) {
+      // Path B: sent, away on another page (a full load), the browser's Back, then "Start a new application"
+      const who = { fullName: `Sent Back ${width}`, email: `sent.back.${width}@example.org`, signature: `Sent Back ${width}` };
+      const sp = await seededReview(`198.51.100.${180 + width % 20}`, who, { width, height, on: nobf });
+      const sentOk = await r16.send(sp);
+      await sp.goto(`${SITE}/advisory-board/`, { waitUntil: 'networkidle0' });
+      await sp.goBack({ waitUntil: 'networkidle0' }); await r16.ready(sp); await sleep(600);
+      const back = { hub: await text(sp, '#adv-hub-title'), go: await text(sp, '#adv-go'), ...(await r16.boxes(sp)) };
+      await sp.click('#adv-go'); await sleep(1200);
+      const started = { ...(await r15.nav(sp)), ...(await r16.boxes(sp)) };
+      await sp.click('#adv-exit'); await sleep(800); // (Save and exit: what it saves is the new application's)
+      const saved = await r16.saved(sp);
+      await sp.screenshot({ path: join(OUT, `r16-sent-back-${width}x${height}.png`) });
+      ok(sentOk && back.hub === 'We received your application' && back.go === 'Start a new application' && !back.filled.length && started.title === 'About you' && !started.filled.length && !saved.includes(who.fullName) && !saved.includes(who.email),
+        `${width} × ${height}, no back-forward cache: sent, another page, the browser’s Back, then "Start a new application": it opens empty, nothing of the sent application in its boxes or saved (${JSON.stringify({ sentOk, back, started, saved: saved.slice(0, 160) })})`);
+      await sp.close();
+    }
+    await nobf.close();
+  }
+  for (const [width, height, none] of [[320, 568, true], [568, 320, false], [375, 667, false], [1280, 800, true]]) {
+    // Round sixteen. A photo turned down on its own screen while the tab was behind another (its words never seen), then
+    // a reload: back on that screen, its words are in view between the bar across the top and Back / Continue (they were
+    // drawn behind Back / Continue), as when Continue brings them there. `none`: no earlier photo (the form's own note)
+    const sp = await seededReview(`198.51.100.${190 + width % 9}`, { fullName: `Behind ${width}`, email: `behind.${width}@example.org`, signature: `Behind ${width}` }, { width, height });
+    await r15.change(sp, 'headshot'); await sleep(1000);
+    if (none) { await sp.$eval('[data-photo-remove]', (b) => b.click()); await sleep(600); }
+    await sp.evaluate(() => { Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' }); Object.defineProperty(document, 'hidden', { configurable: true, get: () => true }); document.dispatchEvent(new Event('visibilitychange')); });
+    await (await sp.$('#adv-headshot')).uploadFile(SMALL_JPG);
+    await sleep(300); await r15.settled(sp); await sleep(800);
+    const turned = await sp.evaluate(() => localStorage.getItem('soard-advisory-turned-down') || '');
+    await sp.evaluate(() => { delete document.visibilityState; delete document.hidden; });
+    await sp.reload({ waitUntil: 'networkidle0' }); await sleep(1800);
+    const at = await r16.noteAt(sp);
+    await sp.screenshot({ path: join(OUT, `r16-turned-reload-${width}x${height}.png`) });
+    ok(/too small/.test(turned) && at.card && /too small/.test(at.words) && at.inView,
+      `${width} × ${height}, a photo turned down behind another tab, then a reload onto its screen: its words in view between the bars (${JSON.stringify({ none, at })})`);
+    await sp.close();
+  }
+  if (heicMade) {
+    for (const [width, height] of [[320, 568], [1280, 800]]) {
+      // Round sixteen. An iPhone photo whose reader doesn't load, while they're back on the review: over Send it says to
+      // reload the page. After the reload (and another), it still says the photo couldn't be opened, never "reload the
+      // page" again: that advice was for the page whose reader didn't load
+      const sp = await seededReview(`198.51.100.${198 + width % 2}`, { fullName: `Reload Once ${width}`, email: `reload.once.${width}@example.org`, signature: `Reload Once ${width}` }, { width, height, block: 1500 });
+      await r15.change(sp, 'headshot'); await sleep(1000);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-back'); await r15.onReview(sp);
+      await r15.settled(sp, 15000); await sleep(800);
+      const said = [await r15.overSend(sp)];
+      for (let k = 0; k < 2; k++) { await sp.reload({ waitUntil: 'networkidle0' }); await r15.onReview(sp); await sleep(800); said.push(await r15.overSend(sp)); }
+      await sp.screenshot({ path: join(OUT, `r16-reload-advice-${width}x${height}.png`) });
+      ok(/reload the page/.test(said[0]) && said.slice(1).every((s) => /couldn’t be opened/.test(s) && /earlier headshot is still here/.test(s) && !/reload/i.test(s)),
+        `${width} × ${height}, the reload advice for an iPhone photo's reader is said on the page it failed on, and never again after the reload it asked for (${JSON.stringify(said)})`);
+      await sp.close();
+    }
+  }
+
   if (heicMade) {
     // An iPhone photo on a slow connection (its converter slow to arrive: a slow CPU hardly slows it, the reading runs
     // in a worker): Continue waits, looking busy; Back pressed meanwhile stands, and Continue where it lands is free at
@@ -1968,6 +2328,199 @@ if (DIST) {
         ok(said.shown && said.role === 'alert' && !twice, `a photo turned down while Send waits, none earlier: said over Send and read out once, never twice (${JSON.stringify(said)})`);
       }
       await sp.close();
+    }
+    // Round fifteen. A new photo picked on About you (opened from the review), then Back a screen while it's being got
+    // ready: it's turned down there, out of sight
+    const turnDownAway = async (sp) => {
+      await r15.edit(sp, 0); await sleep(1000);
+      await r15.toCard(sp);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-back'); await sleep(900);
+      const away = !(await r15.card(sp));
+      await r15.settled(sp, SLOW_MS + 15000); await sleep(800);
+      return away;
+    };
+    const TURNED_WORDS = /couldn’t be opened just now[\s\S]*Your earlier headshot is still here/;
+    {
+      // (m1) Turned down out of sight, then a reload, or another tab: said over Send there too, as it is without one.
+      // A tab already on the review hears of it; one opened after says it; this tab, reloaded, says it (and its card
+      // does: on its screen it's in view, and once they've had it there it's over, here and in the other tab)
+      const sp = await seededReview('198.51.100.113', { fullName: 'Kept Word', email: 'kept.word@example.org', signature: 'Kept Word' });
+      const tb = await open(375, '/advisory-board/apply/', 667);
+      await tb.click('#adv-go'); await r15.onReview(tb);
+      const bBefore = await r15.overSend(tb);
+      const away = await turnDownAway(sp);
+      await sleep(600);
+      const bLive = await r15.overSend(tb);
+      const tc = await open(375, '/advisory-board/apply/', 667);
+      await tc.click('#adv-go'); await r15.onReview(tc); await sleep(600);
+      const cOpened = await r15.overSend(tc);
+      await tc.close();
+      await sp.reload({ waitUntil: 'networkidle0' }); await sleep(1200);
+      const cardAfterReload = await text(sp, '#adv-headshot-status');
+      await sp.click('#adv-exit'); await sleep(800);
+      await sp.click('#adv-go'); await r15.onReview(sp); await sleep(600);
+      const aReloaded = await r15.overSend(sp);
+      ok(away && !bBefore && TURNED_WORDS.test(bLive) && TURNED_WORDS.test(cOpened) && TURNED_WORDS.test(aReloaded) && TURNED_WORDS.test(cardAfterReload),
+        `a photo turned down out of sight is said over Send in a tab already on the review, in one opened after, and after a reload, its card saying it too (${JSON.stringify({ away, bBefore, bLive: bLive.slice(0, 50), cOpened: cOpened.slice(0, 50), aReloaded: aReloaded.slice(0, 50), cardAfterReload: cardAfterReload.slice(0, 50) })})`);
+      // (m2 at 375) On its screen, it's in view; once they've had it there and go on, it's over, here and in the other tab
+      await r15.edit(sp, 0); await sleep(1000);
+      await r15.toCard(sp); await sleep(1200);
+      const at = await r15.warnAt(sp);
+      await sp.click('#adv-next'); await r15.onReview(sp); await sleep(800);
+      const after = { here: await r15.overSend(sp), there: await r15.overSend(tb) };
+      ok(at.kind === 'warn' && at.inView && !after.here && !after.there, `on its screen after the reload, the warning is in view; had there, it's gone from Send, here and in the other tab (${JSON.stringify({ at, after })})`);
+      await tb.close();
+      await sp.close();
+    }
+    for (const [width, height] of [[320, 568], [568, 320]]) {
+      // (m2) Said over Send, then its own screen (Edit, Continue to it): the warning brought into view between the bar
+      // across the top and Back / Continue, never left behind them; had in view, then on, it's over
+      const sp = await seededReview(`198.51.100.${width === 320 ? 114 : 115}`, { fullName: `View ${width}`, email: `view.${width}@example.org`, signature: `View ${width}` }, { width, height });
+      await turnDownAway(sp);
+      await sp.click('#adv-exit'); await sleep(800);
+      await sp.click('#adv-go'); await r15.onReview(sp); await sleep(500);
+      const said = await r15.overSend(sp);
+      await r15.edit(sp, 0); await sleep(1000);
+      await r15.toCard(sp); await sleep(1200);
+      const at = await r15.warnAt(sp);
+      await sp.screenshot({ path: join(OUT, `r15-warning-in-view-${width}x${height}.png`) });
+      await sp.click('#adv-next'); await r15.onReview(sp); await sleep(800);
+      const after = await r15.overSend(sp);
+      ok(TURNED_WORDS.test(said) && at.kind === 'warn' && at.inView && !after, `${width} × ${height}: a photo turned down out of sight, then its screen: its warning in view between the bars, never behind Back / Continue; then gone from Send (${JSON.stringify({ said: said.slice(0, 40), at, after })})`);
+      await sp.close();
+    }
+    {
+      // (m2) Drawn on its screen in a tab that isn't in front is never seen: turned down there, the tab in front says it
+      // over Send (a tab behind another can't be read)
+      const sp = await seededReview('198.51.100.116', { fullName: 'Back Tab', email: 'back.tab@example.org', signature: 'Back Tab' });
+      await r15.change(sp, 'headshot'); await sleep(1000);
+      const onCard = await r15.card(sp);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      // (the tab with the card goes behind another, on the review, as a phone's tab switcher puts it)
+      await sp.evaluate(() => { Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true }); document.dispatchEvent(new Event('visibilitychange')); });
+      const tb = await open(375, '/advisory-board/apply/', 667);
+      await tb.click('#adv-go'); await r15.onReview(tb);
+      await r15.settled(sp, SLOW_MS + 15000); await sleep(800);
+      const there = await r15.overSend(tb);
+      ok(onCard && TURNED_WORDS.test(there), `a photo turned down on its card in a tab behind another: the tab in front says it over Send (${JSON.stringify({ onCard, there: there.slice(0, 60) })})`);
+      await tb.close();
+      await sp.close();
+    }
+    for (const how of ['photo', 'remove']) {
+      // (m3) "This may already have been sent" and a photo turned down, both over Send; then another tab puts a new photo
+      // in (or takes it off): the photo's words go, "may already have been sent" stays, never wiped with them
+      const sp = await seededReview(`198.51.100.${how === 'photo' ? 117 : 118}`, { fullName: `Maybe ${how}`, email: `maybe.${how}@example.org`, signature: `Maybe ${how}` }, { sending: true });
+      await r15.change(sp, 'headshot'); await sleep(1000);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-back'); await r15.onReview(sp);
+      await r15.settled(sp, SLOW_MS + 15000); await sleep(800);
+      const both = await r15.overSend(sp);
+      const tb = await open(375, '/advisory-board/apply/', 667);
+      await tb.click('#adv-go'); await r15.onReview(tb);
+      await r15.change(tb, 'headshot'); await sleep(1000);
+      if (how === 'photo') { await (await tb.$('#adv-headshot')).uploadFile(GOOD_JPG); await tb.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 15000 }).catch(() => null); } else await tb.click('[data-photo-remove]');
+      await sleep(1500);
+      const after = await r15.overSend(sp);
+      ok(/may already have been sent/.test(both) && TURNED_WORDS.test(both) && /may already have been sent/.test(after) && !/still here|couldn’t be opened/.test(after),
+        `“may already have been sent” beside a photo turned down, then a photo ${how === 'photo' ? 'put in' : 'taken off'} in another tab: the photo’s words go, “may already have been sent” stays (${JSON.stringify({ both: both.slice(0, 30), after })})`);
+      await tb.close();
+      await sp.close();
+    }
+    {
+      // (m3) On the overview: a photo turned down there (Save and exit while it's being got ready) says so beside "may
+      // already have been sent", never over it; and the review then says both over Send
+      const sp = await seededReview('198.51.100.119', { fullName: 'Hub Both', email: 'hub.both@example.org', signature: 'Hub Both' }, { sending: true });
+      await r15.change(sp, 'headshot'); await sleep(1000);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-exit'); await sleep(600);
+      await r15.settled(sp, SLOW_MS + 15000); await sleep(800);
+      const lead = await text(sp, '#adv-hub-lead');
+      await sp.screenshot({ path: join(OUT, 'r15-overview-both-375.png') });
+      await sp.click('#adv-go'); await r15.onReview(sp); await sleep(600);
+      const over = await r15.overSend(sp);
+      ok(/may already have been sent/.test(lead) && /Your photo didn’t go in: /.test(lead) && /may already have been sent/.test(over) && TURNED_WORDS.test(over),
+        `a photo turned down on the overview: “may already have been sent” and why the photo didn’t go in, both said there, and both over Send after (${JSON.stringify({ lead, over: over.slice(0, 40) })})`);
+      await sp.close();
+    }
+    for (const [width, height, sending] of [[375, 667, false], [320, 568, true]]) {
+      // (m4) A photo still being got ready while "Back to review" waits on another of About you's screens (Full name's
+      // Change), then turned down: said once (never in the polite region as well as the alert), and over Send on the
+      // review it goes on to, never over the step (at 320 it covered the Full name box)
+      const sp = await seededReview(`198.51.100.${width === 375 ? 120 : 121}`, { fullName: `Wait ${width}`, email: `wait.${width}@example.org`, signature: `Wait ${width}` }, { width, height, sending });
+      await r15.change(sp, 'headshot'); await sleep(1000);
+      await (await sp.$('#adv-headshot')).uploadFile(HEIC); await sleep(300);
+      await sp.click('#adv-back'); await r15.onReview(sp); await sleep(500);
+      await r15.change(sp, 'fullName'); await sleep(1000);
+      const onStep = await r15.nav(sp);
+      await sp.evaluate(() => {
+        window.__polite = []; window.__onStep = [];
+        const live = document.getElementById('adv-live');
+        new MutationObserver(() => window.__polite.push(live.textContent)).observe(live, { childList: true, characterData: true, subtree: true });
+        const e = document.getElementById('adv-send-error');
+        new MutationObserver(() => { if (!e.hidden && e.getClientRects().length && document.getElementById('adv-title').textContent.trim() !== 'Review and send') window.__onStep.push(e.textContent); }).observe(e, { childList: true, characterData: true, subtree: true, attributes: true });
+      });
+      await sp.click('#adv-next'); // ("Back to review", waiting on the photo)
+      await r15.settled(sp, SLOW_MS + 15000);
+      await r15.onReview(sp, 4000); await sleep(800);
+      const out = { title: await r15.title(sp), over: await r15.overSend(sp), polite: await sp.evaluate(() => window.__polite.filter((t) => /didn’t go in|couldn’t be opened/.test(t))), onStep: await sp.evaluate(() => window.__onStep) };
+      ok(onStep.title === 'About you' && onStep.next === 'Back to review' && out.title === 'Review and send' && TURNED_WORDS.test(out.over) && (!sending || /may already have been sent/.test(out.over)) && !out.polite.length && !out.onStep.length,
+        `${width} × ${height}: a photo turned down while “Back to review” waits on another screen: on to the review, said once, over Send there, never over the step (${JSON.stringify({ onStep, ...out, over: out.over.slice(0, 50) })})`);
+      await sp.close();
+    }
+    {
+      // (m5) A browser whose IndexedDB hangs, blocked, or answers; an iPhone photo whose reader doesn't load. Told to reload
+      // only where a reload keeps everything: never with a photo still being kept (it isn't yet, and a reload would lose
+      // it), never in a browser that can't keep photos, even as its first pick; and the words stay, never put over
+      const idbPage = async (ip, mode) => {
+        const x = await browser.newPage();
+        await x.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        await x.setCacheEnabled(false);
+        await x.setRequestInterception(true);
+        x.on('request', async (req) => { try { if (/\/_astro\/heic-to\./.test(req.url())) return req.abort('failed'); if (await answer(req, ip) === false) req.continue(); } catch { req.respond({ status: 500, body: '{}' }); } });
+        x.on('pageerror', (e) => errors.push(e.message));
+        await x.evaluateOnNewDocument((m) => {
+          if (m === 'hung') indexedDB.open = () => ({});
+          if (m === 'blocked') indexedDB.open = () => { throw new DOMException('denied', 'SecurityError'); };
+          if (sessionStorage.getItem('idb')) return;
+          sessionStorage.setItem('idb', '1');
+          localStorage.clear();
+          if (m === 'ok') indexedDB.deleteDatabase('soard-advisory');
+          localStorage.setItem('soard-advisory-application', JSON.stringify({ answers: { fullName: 'Idb Reader', email: 'idb.reader@example.org', phone: '404 555 0182' }, step: 0, screen: 0, field: null, furthest: 0, startedAt: Date.now() - 60000, session: crypto.randomUUID(), savedAt: Date.now() }));
+        }, mode);
+        await x.goto(`${SITE}/advisory-board/apply/`, { waitUntil: 'networkidle0' });
+        await x.click('#adv-go'); await sleep(700);
+        await r15.toCard(x);
+        await x.waitForFunction(() => !document.documentElement.classList.contains('adv-vt'), { timeout: 3000 }).catch(() => null);
+        await sleep(400);
+        return x;
+      };
+      const words = (x) => x.evaluate(() => `${document.getElementById('adv-headshot-status').textContent} ${document.getElementById('adv-headshot-err').hidden ? '' : document.getElementById('adv-headshot-err').textContent}`.trim());
+      const opened = (x) => x.waitForFunction(() => /couldn’t be opened/.test(document.getElementById('adv-headshot-status').textContent + document.getElementById('adv-headshot-err').textContent), { timeout: 15000 }).catch(() => null);
+      {
+        const x = await idbPage('198.51.100.122', 'hung');
+        const input = await x.$('#adv-headshot');
+        await input.uploadFile(GOOD_JPG);
+        await x.waitForFunction(() => /^Added\./.test(document.getElementById('adv-headshot-status').textContent), { timeout: 10000 }).catch(() => null);
+        await sleep(600);
+        await input.uploadFile(HEIC);
+        await opened(x);
+        const now = await words(x);
+        await sleep(5500);
+        const later = await words(x);
+        ok(/couldn’t be opened/.test(now) && !/reload/i.test(now) && /JPEG or PNG/.test(now) && /^This photo couldn’t be opened/.test(later) && /Your earlier headshot is still here/.test(later) && !/reload/i.test(later),
+          `IndexedDB hanging, a photo still being kept, then an iPhone photo whose reader doesn't load: never told to reload (that photo would go), and the words stay, never put over (${JSON.stringify({ now, later })})`);
+        await x.close();
+      }
+      for (const mode of ['blocked', 'hung', 'ok']) {
+        const x = await idbPage(`198.51.100.${{ blocked: 126, hung: 127, ok: 128 }[mode]}`, mode);
+        await (await x.$('#adv-headshot')).uploadFile(HEIC);
+        await opened(x);
+        const said = await words(x);
+        if (mode === 'ok') ok(/couldn’t be opened/.test(said) && /reload the page \(your answers are kept\)/.test(said), `a browser that keeps photos, an iPhone photo as the first pick and its reader not loading: told a reload keeps everything, as it does (${said})`);
+        else ok(/couldn’t be opened/.test(said) && !/reload/i.test(said) && /JPEG or PNG/.test(said), `IndexedDB ${mode}, an iPhone photo as the first pick and its reader not loading: never told to reload, offered another way (${said})`);
+        await x.close();
+      }
     }
     {
       // A photo in, then a slow iPhone photo, Continue (waiting), then a file that isn't a photo: Continue stops, with

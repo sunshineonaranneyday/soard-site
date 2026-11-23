@@ -34,7 +34,7 @@
 import { accessToken, GMAIL_READ_SCOPE } from './_google-calendar.js';
 import { header } from './_mailbox.js';
 import { groupWanted } from './_board-group.js';
-import { readState, normEmail } from './_board-roles.js';
+import { readState, normEmail, EMAILS_DOWN } from './_board-roles.js';
 import { GMAIL_SEND_SCOPE, mimeOf, gmailCall, esc, P } from './_board-asks.js';
 
 export const SUBJECT_MAX = 200;
@@ -184,7 +184,9 @@ export async function emailAll(env, { me, subject, message, test = false, fetchI
   if (!env.GOOGLE_CALENDAR_KEY) throw err('The site has no Google key yet, so it can’t send from your Gmail. Open it in your mail app instead.', 503);
 
   const who = normEmail(me);
-  const want = await groupWanted(env.DB);
+  // (who it goes to, read for certain: one read that fails sends nothing, never an email to a list it shrank. Round 9)
+  let want;
+  try { want = await groupWanted(env.DB); } catch (e) { console.error('email-all who', e?.message || e); throw err(EMAILS_DOWN, 503); }
   const from = { name: want.members.find((p) => p.email === who)?.name || '', email: who };
   const others = want.members.filter((p) => p.email !== who);
   if (!test && !others.length) throw err('Nobody else on the board has an email on file.', 409);

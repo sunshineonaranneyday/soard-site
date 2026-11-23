@@ -189,8 +189,9 @@ export async function onRequestGet(context) {
     const [config, checks, broadcast, schedule, board, advisory] = await Promise.all([
       readConfig(env.DB), readNudgeConfig(env.DB),
       readState(env.DB).catch(() => null), readScheduleRecord(env.DB),
-      boardRoster(env.DB).catch(() => []),
-      boardRoster(env.DB, 'advisory').catch(() => []),
+      // (People not answering: the page says so, never a board of nobody: round 10)
+      boardRoster(env.DB).catch((e) => { if (e?.unread) throw e; return []; }),
+      boardRoster(env.DB, 'advisory').catch((e) => { if (e?.unread) throw e; return []; }),
     ]);
     let upcoming = [];
     let organizerName = null;
@@ -228,7 +229,7 @@ export async function onRequestGet(context) {
       },
     });
   } catch (err) {
-    return Response.json({ ok: false, error: err.message }, { status: 500 });
+    return Response.json({ ok: false, error: err.message }, { status: err.unread ? 503 : 500 });
   }
 }
 
@@ -286,7 +287,7 @@ export async function onRequestPost(context) {
       const onBoard = (await boardRoster(env.DB)).find((m) => m.slug === slug);
       const member = onBoard || (await boardRoster(env.DB, 'advisory')).find((m) => m.slug === slug);
       if (!member) return fail('Not on the board or the Advisory Board on the website');
-      try { await setBoardEmail(env.DB, slug, body.boardEmail.email); } catch (e) { return fail(e.message); }
+      try { await setBoardEmail(env.DB, slug, body.boardEmail.email); } catch (e) { return fail(e.message, e.unread ? 503 : 400); }
       await logAudit(env.DB, { userEmail: me, action: 'updated', entityType: 'team', entitySlug: slug, entityName: `Reveal invite email for ${member.name}`, gitStatus: 'ok' }).catch(() => {});
       context.waitUntil(refreshForBoardChange(env));
       return Response.json({ ok: true, board: await boardRoster(env.DB) });
@@ -328,6 +329,6 @@ export async function onRequestPost(context) {
     const updated = patch.template && body.updateExisting === true && config.enabled ? await reconcileAll(env, { rewrite: true }) : null;
     return Response.json({ ok: true, config, ...(updated ? { updated } : {}) });
   } catch (err) {
-    return Response.json({ ok: false, error: err.message }, { status: 500 });
+    return Response.json({ ok: false, error: err.message }, { status: err.unread ? 503 : 500 });
   }
 }

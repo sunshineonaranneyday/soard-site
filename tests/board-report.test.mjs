@@ -111,7 +111,8 @@ test('an editor document never loses words, whatever it holds (a random walk)', 
 
 import { createD1 } from './lib/d1-shim.mjs';
 import { saveMeeting, saveReport, getMeeting, liveView, portalData, patchMeeting } from '../functions/api/_board.js';
-import { cleanMeeting, forBoard, isFilled, copyOfItem, isCopyName, LIMITS } from '../public/admin/board-shared.js';
+import { cleanMeeting, forBoard, isFilled, copyOfItem, isCopyName, LIMITS, todayEastern } from '../public/admin/board-shared.js';
+const inDays = (n) => new Date(Date.parse(`${todayEastern()}T12:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 import { asBullets } from '../public/admin/board-coach.js';
 
 const PEOPLE = [
@@ -189,10 +190,13 @@ test('a past meeting never shared, or its minutes approved: a member can’t wri
   const hidden = await world({ shared: false, date: '2020-11-05' });
   await assert.rejects(saveReport(hidden.env, 'm_rep1', 'i_gov1', 'Early', { member: ALEX }), (e) => e.status === 404);
   assert.equal((await saveReport(hidden.env, 'm_rep1', 'i_gov1', 'Early', { admin: true, adminEmail: 'jane@soardcharity.com' })).report, 'Early');
-  // A meeting ahead not shared yet: who presents writes the report their email asked for (_board-asks.js); no one else
-  const ahead = await world({ shared: false });
+  // A meeting ahead not shared yet, in the two weeks the asks go out in: who presents writes the report their email
+  // asked for (_board-asks.js); to anyone else it isn't there. Further ahead, it isn't there for anyone on the board
+  const ahead = await world({ shared: false, date: inDays(5) });
   assert.equal((await saveReport(ahead.env, 'm_rep1', 'i_gov1', 'Early', { member: ALEX })).report, 'Early');
-  await assert.rejects(saveReport(ahead.env, 'm_rep1', 'i_gov1', 'Mine', { member: SAM }), (e) => e.status === 403);
+  await assert.rejects(saveReport(ahead.env, 'm_rep1', 'i_gov1', 'Mine', { member: SAM }), (e) => e.status === 404);
+  const far = await world({ shared: false });
+  await assert.rejects(saveReport(far.env, 'm_rep1', 'i_gov1', 'Early', { member: ALEX }), (e) => e.status === 404);
   const done = await world({ minutes: 'approved' });
   await assert.rejects(saveReport(done.env, 'm_rep1', 'i_gov1', 'Late', { member: ALEX }), (e) => e.status === 409);
 });

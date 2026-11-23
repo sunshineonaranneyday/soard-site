@@ -20,8 +20,19 @@ import { noteFileOpen } from './_board-activity.js';
 import { familyFile } from './_board-families.js';
 
 const notFound = () => new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'private, no-store' } });
+// (who's asking, or whose file it is, couldn't be checked: said as that, never a 404 for a file they can open. Round 9)
+const notChecked = (err) => new Response(err.message, { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'private, no-store', 'Retry-After': '5' } });
 
 export async function onRequestGet(context) {
+  try {
+    return await fileGet(context);
+  } catch (err) {
+    if (err?.status === 503) return notChecked(err);
+    throw err;
+  }
+}
+
+async function fileGet(context) {
   const { env, request } = context;
   const q = new URL(request.url).searchParams;
   const id = q.get('id') || '';

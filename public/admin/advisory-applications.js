@@ -463,13 +463,23 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
           : 'It’s being deleted in another tab, or by someone else. This box closes if it goes, and shows what Add does if it doesn’t.'}</p>
       <//>`;
     }
+    if (plan.busyEditing && plan.busyGone) {
+      // (theirs, or someone they could be, being deleted on People; or the record at the address they'd get, which the
+      // delete frees: said as a delete, as the press says it, never "being changed")
+      const address = plan.busyEditing === 'address';
+      return html`<${Dialog} title=${address ? 'The web address they’d get is being freed' : plan.busyName ? `${plan.busyName} is being deleted on People` : 'A People record is being deleted'} onClose=${onClose} footer=${cancel}>
+        <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and press Add to Advisory Board again in a minute.'
+          : address ? 'The web address this box would give them is being freed by a delete on People right now. Look again once that’s done.'
+            : `${plan.busyName || 'That person'} is being deleted on People right now. Look again once that’s done.`}</p>
+      <//>`;
+    }
     if (plan.busyEditing) {
-      // (theirs, or someone they could be, being renamed or deleted; or another record taking the address they'd get)
+      // (theirs, or someone they could be, being renamed; or another record taking the address they'd get)
       const address = plan.busyEditing === 'address';
       return html`<${Dialog} title=${address ? 'The web address they’d get is being used on People' : plan.busyName ? `${plan.busyName}’s People record is being changed` : 'A People record is being changed'} onClose=${onClose} footer=${cancel}>
         <p role="status">${plan.stuck ? 'It’s taking longer than it should. Close this and press Add to Advisory Board again in a minute.'
           : address ? 'Someone is changing a People record to the web address this box would give them, right now. This box shows what Add does as soon as that’s done.'
-            : `Someone is changing ${plan.busyName ? `${plan.busyName}’s` : 'that'} People record right now (its web address, or a delete). This box shows what Add does as soon as that’s done.`}</p>
+            : `Someone is changing ${plan.busyName ? `${plan.busyName}’s` : 'that'} People record right now (its web address). This box shows what Add does as soon as that’s done.`}</p>
       <//>`;
     }
     return html`<${Dialog} title=${`Someone is adding ${(other && plan.busyName) || app.name} right now`} onClose=${onClose} footer=${cancel}>
@@ -535,13 +545,14 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
     // (one: the choice in the foot; several: each in the box with what it does, so however many and however long their
     // names, every one can be reached, on a phone too)
     const pick = (key, cls, onClick, words, does) => html`<li key=${key}><button class=${`btn ${cls} ava-pick`} onClick=${onClick} aria-disabled=${wait} aria-describedby=${`ava-does-${key}`}>${busy ? 'Adding…' : words}</button><p id=${`ava-does-${key}`}>${firstUp(sentence(does))}</p></li>`;
-    return html`<${Dialog} title=${many ? `Is ${app.name} one of these people?` : `Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${many ? cancel : html`${cancel}
+    // (one found by the web address the name would get has another name: never "the same Jordan Ames")
+    return html`<${Dialog} title=${many ? `Is ${app.name} one of these people?` : plan.byAddress ? `Is ${app.name} the same person as ${p.name}?` : `Is this the same ${app.name}?`} busy=${busy} onClose=${onClose} footer=${many ? cancel : html`${cancel}
         <button class="btn btn-ghost" onClick=${press('new')} aria-disabled=${wait}>${busy ? 'Adding…' : 'A different person'}</button>
         <button class="btn btn-primary" onClick=${press('same')} aria-disabled=${wait}>${busy ? 'Adding…' : 'The same person'}</button>`}>
       ${testLine}${statusLine}
-      <p>${many ? `${all.length} people on People → Advisory have a name like this one, so say who this is.` : html`Someone on People → Advisory has ${p.name === app.name ? 'this name' : 'a name like this one'}. ${theirs}, so say who this is.`}</p>
+      <p>${many ? (all.some((x) => x.addressOnly) ? `${all.length} people on People → Advisory could be them, by a name like this one or by the web address this name would get, so say who this is.` : `${all.length} people on People → Advisory have a name like this one, so say who this is.`) : plan.byAddress ? html`${p.name} on People → Advisory has the web address this name would get (${p.slug}). ${theirs}, so say who this is.` : html`Someone on People → Advisory has ${p.name === app.name ? 'this name' : 'a name like this one'}. ${theirs}, so say who this is.`}</p>
       <dl class="ava-compare">
-        ${all.map((x) => html`<dt>On People</dt><dd>${face(x.photo, x.name)}<span><strong>${x.name}</strong><br />${who(x)}</span></dd>`)}
+        ${all.map((x) => html`<dt>On People</dt><dd>${face(x.photo, x.name)}<span><strong>${x.name}</strong><br />${who(x)}${many && x.addressOnly ? html`<br />Has the web address this name would get (${x.slug})` : null}</span></dd>`)}
         <dt>This application</dt><dd>${face(shot ? headshotSrc(shot, 80) : '', app.name)}<span><strong>${app.name}</strong><br />${[app.email || 'no email', app.company].filter(Boolean).join(' · ')}</span></dd>
       </dl>
       ${many ? html`<ul class="ava-picks">
@@ -552,6 +563,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
           <li><strong>A different person</strong> ${sentence(newParts())}</li>
         </ul>`}
       <p>Either way, this application is marked Joined.</p>
+      ${plan.namesakeToo ? html`<p class="ava-note">There’s already a ${plan.namesakeToo.name}${plan.namesakeToo.status === 'memorial' ? ' (In memoriam)' : ''} on ${plan.namesakeToo.where}.</p>` : null}
       ${many ? all.map((x) => onFileOf(x, true)) : onFile}
       ${unusable}
       ${softLine}
@@ -587,7 +599,11 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
       <li>shows them to the other Advisory Board members on the Advisory Board page,</li>
       <li>and marks this application Joined.</li>
     </ul>
-    ${plan.namesake ? html`<p class="ava-note">There’s already a ${plan.namesake.name}${plan.namesake.status === 'memorial' ? ' (In memoriam)' : ''} on ${plan.namesake.where}. ${app.name} is added as a new person.</p>` : null}
+    ${[plan.namesake, plan.namesakeToo].filter(Boolean).map((n) => html`<p class="ava-note">${n.addressOnly
+      // (one with another name, found only by the address this name would get: never "already a Pat Smith". Someone with
+      // the name itself elsewhere on People is named too, each as the box names them alone)
+      ? html`${n.name}${n.status === 'memorial' ? ' (In memoriam)' : ''} on ${n.where} has the web address this name would get (${n.slug}), so ${app.name} is added as a new person at ${plan.slug}.`
+      : html`There’s already a ${n.name}${n.status === 'memorial' ? ' (In memoriam)' : ''} on ${n.where}. ${app.name} is added as a new person.`}</p>`)}
     ${unusable}
     ${softLine}
     <p>The public site doesn’t show them until you${shot ? '' : ' add a photo,'} turn on Show on the site, then publish.</p>
@@ -781,6 +797,8 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
   };
   const welcomeWords = (w) => (!w ? '' : w.sent ? 'They’ve been emailed how to sign in.'
     : w.waiting && w.why === 'send' ? 'Their sign-in email didn’t go just now. The site sends it again in a few minutes.'
+    // (People or their email couldn't be read for it just now: never "add a working email", which they may have)
+    : w.waiting && w.why === 'check' ? 'The site couldn’t check their email just now, so their sign-in email goes by itself in a few minutes.'
     : w.waiting && w.why === 'setup' ? 'Their sign-in email waits until the board’s sign-in is set up all the way (Board → Members says what’s left). It goes by itself once it is.'
     : w.waiting ? 'Their sign-in email goes in a few minutes, once the sign-in knows them.'
       : w.off ? 'Advisory Board emails are off, so their sign-in email goes once those are turned on.'
@@ -861,8 +879,7 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
             </div>
             ${linked ? html`<div class="ava-callout is-good" tabindex="-1">On People → Advisory as ${linked.name}${linked.publishStatus === 'draft' ? ' (hidden from the public site for now)' : ''}${app.status !== 'joined' ? '. This application isn’t marked Joined: Add to Advisory Board below finishes adding them (their sign-in and welcome) and marks it Joined' : ''}. ${kit.onOpenPerson ? html`<button class="btn btn-ghost btn-sm" onClick=${() => kit.onOpenPerson(linked.slug)}>Open their page</button>` : ''}</div>` : null}
             ${app.deleting ? html`<div class="ava-callout" role="alert">${app.deletingNow ? 'This application is being deleted right now, in another tab or by someone else.'
-                : app.hadHeadshot ? 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application below to finish it.'
-                  : 'Deleting this application didn’t finish: it’s still here. Press Delete application below to finish it.'}</div>`
+                : 'Deleting this application didn’t finish: it’s still here. Press Delete application below to finish it.'}</div>`
               : linked && app.status === 'joined' ? null
               : html`${linked ? null : gone ? html`<p class="ava-note">This was linked to someone who isn’t on People any more.</p>`
                   : left ? html`<p class="ava-note">This was linked to ${person.name}, who isn’t on the Advisory Board now.</p>`

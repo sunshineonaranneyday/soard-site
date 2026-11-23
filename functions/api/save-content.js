@@ -23,12 +23,29 @@ import { commitFile } from './_github.js';
 import { logAudit, diffJson, getEntityName } from './_audit.js';
 import { refreshForBoardChange } from './_reveal-invites.js';
 import { getsRevealInvites } from './_team.js';
-import { HISTORY_TABLES, SITE_COLLECTION, recordVersion as recordContentVersion } from './_content-history.js';
+import { HISTORY_TABLES, SITE_COLLECTION, recordVersion as recordContentVersion, ensureHistory, versionStatements, pruneHistory } from './_content-history.js';
 import { coverOf } from './_job-covers.js';
 import { syncCoverForKid } from './_kid-status.js';
 import { recheckWaiting } from './_kid-partners.js';
 import { wakeRevealDesigns } from './_reveal-design-auto.js';
 import { keepGiftsForPartnerName } from './_donor-crm.js';
+import { addressTaken, isPutBack } from './_people-address.js';
+
+/** What keeps an address someone else's, as a new person on People is told (./_people-address.js addressTaken) */
+function newPersonWords(slug, { why, note }) {
+  return {
+    person: `There’s one at that address already: someone added it since this list was read. Nothing was changed.`,
+    history: `“${slug}” was someone’s address on People, and History keeps their versions under it. Give this person another address.`,
+    board: `“${slug}” was a former board member’s address, and their board records are kept under it. Give this person another address.`,
+    advisory: `“${slug}” was an Advisory Board member’s address, and their records on the Advisory Board page are kept under it. Give this person another address.`,
+    adding: `Someone new is being added to the Advisory Board at “${slug}” (their Add stopped partway, and pressing Add to Advisory Board on their application again finishes it). Give this person another address.`,
+    application: `An Advisory Board application points at “${slug}”, so it’s kept for whoever that is. Give this person another address.`,
+    welcome: `“${slug}” was an Advisory Board member’s address, and the record of their sign-in email is kept under it. Give this person another address.`,
+    renaming: note?.stuck
+      ? `“${slug}” was in a change of web address that couldn’t finish by itself (“${note.from}” to “${note.to}”), and a person needs to settle it first, in the note at the top of People. Give this person another address.`
+      : `“${slug}” was someone’s address a moment ago, and their records are still moving off it. Give this person another address.`,
+  }[why] || `“${slug}” is kept for someone else. Give this person another address.`;
+}
 
 export async function onRequestPost(context) {
   try {
@@ -98,6 +115,14 @@ export async function onRequestPost(context) {
       if (oldRaw === jsonStr) return Response.json({ success: true, sha: await generateSha(oldRaw), same: true });
       return Response.json({ success: false, error: 'There’s one at that address already: someone added it since this list was read. Nothing was changed.' }, { status: 409 });
     }
+    // A save to People with no sha (an add: the Add dialog, Paste a list, a new person in the editor) onto a record that's
+    // there: never written over it, whoever's it is (Board QA round 8: an Add from a list read before someone was added,
+    // or renamed onto that address, replaced their record and gave the newcomer their sign-in). The very record sent
+    // again (its answer lost) is done already
+    if (parsed.table === 'team' && !clientSha && create !== true && oldRaw !== null) {
+      if (oldRaw === jsonStr) return Response.json({ success: true, sha: await generateSha(oldRaw), same: true });
+      return Response.json({ success: false, error: 'There’s one at that address already: someone added it since this list was read. Nothing was changed.' }, { status: 409 });
+    }
     // A person loaded with a sha whose row is gone was renamed or deleted
     // meanwhile: saving would bring the old record back as a duplicate
     if (clientSha && oldRaw === null && parsed.table === 'team') {
@@ -107,13 +132,39 @@ export async function onRequestPost(context) {
       );
     }
 
-    // A new person at an address a former board member's board records are kept under (their signatures, sign-ins,
-    // signing record): never someone else's (rename-content.js refuses renaming to one the same way)
-    if (isCreate && parsed.table === 'team') {
-      for (const t of ['board_signatures', 'board_signins', 'board_activity', 'board_sign_events']) {
-        const had = await DB.prepare(`SELECT slug FROM ${t} WHERE slug = ? LIMIT 1`).bind(parsed.slug).first().catch(() => null);
-        if (had) return Response.json({ success: false, error: `“${parsed.slug}” was a former board member’s address, and their board records are kept under it. Give this person another address.` }, { status: 409 });
+    // A person whose web address is changing right now (a rename holds it, and the address it's going to), or who's being
+    // deleted: a save meanwhile is refused in words, never written where the rename has just read it from (Board QA round
+    // 8: the Photos review's framing and People's editor were undone). A press of Add holds the record without this, and
+    // saves through here itself
+    if (parsed.table === 'team') {
+      let why;
+      try { why = (await (await import('./_advisory-add.js')).whyHeld(DB, [parsed.slug]))[0]?.by || null; } catch (e) {
+        console.error('[save-content] hold check', e?.message);
+        return Response.json({ success: false, error: 'The site’s database didn’t answer just now, so nothing was saved. Please try again in a moment.' }, { status: 503 });
       }
+      // (said as what it is: someone there now whose address is changing or who's being deleted, or an address being given
+      // to someone by a rename, or freed by a delete)
+      const here = oldRaw !== null;
+      if (why === 'deleting') return Response.json({ success: false, error: here ? 'This person is being deleted on People right now, so nothing was saved.' : `“${parsed.slug}” is being freed by a delete on People right now, so nothing was saved. Try again in a moment.` }, { status: 409 });
+      if (why === 'people') return Response.json({ success: false, error: here ? 'Their web address is changing right now, so nothing was saved. Try again in a moment.' : `Someone is giving “${parsed.slug}” to another People record right now, so nothing was saved. Give this person another address, or try again in a moment.` }, { status: 409 });
+    }
+
+    // A new person on People, at an address something of someone else's is still kept under: never given to them, by the
+    // one rule Add to Advisory Board and a rename onto an address ask too (./_people-address.js; Advisory Board QA round
+    // 19: a new person took a renamed member's Advisory Board page records). The same person put back (Undo after a
+    // delete: the very record History's last delete kept) is theirs to have again; Add's own save, at the address it wrote
+    // down for its application, is its own (context.data.addingFor, set only by ./_advisory-add.js, never by a request).
+    // A check that can't be made saves nothing, never a guess that it's free
+    if (isCreate && parsed.table === 'team') {
+      let taken;
+      try {
+        const putBack = await isPutBack(DB, parsed.slug, data);
+        taken = await addressTaken(DB, parsed.slug, { app: context.data?.addingFor ?? null, putBack });
+      } catch (e) {
+        console.error('[save-content] address check', e?.message);
+        return Response.json({ success: false, error: 'The site’s database didn’t answer just now, so nothing was saved. Please try again in a moment.' }, { status: 503 });
+      }
+      if (taken) return Response.json({ success: false, error: newPersonWords(parsed.slug, taken) }, { status: 409 });
     }
 
     if (clientSha && oldRaw !== null) {
@@ -144,6 +195,20 @@ export async function onRequestPost(context) {
       await keepGiftsForPartnerName(DB, { slug: parsed.slug, name: data?.name, by: userEmail, now: Date.parse(now) });
     }
 
+    // People's saved version is written with the record, in the same write (a rename moving History never leaves one
+    // behind at the address the person left: Board QA round 8). Its table made first: one that can't be stops the save
+    const withRecord = parsed.table === 'team';
+    let versions = [];
+    if (withRecord) {
+      try {
+        await ensureHistory(DB);
+        versions = await versionStatements(DB, { collection: 'team', slug: parsed.slug, data, previous: oldData, userEmail, now, table: 'team' });
+      } catch (e) {
+        console.error('[save-content] history before save', e?.message);
+        return Response.json({ success: false, error: 'The site’s database didn’t answer just now, so nothing was saved. Please try again in a moment.' }, { status: 503 });
+      }
+    }
+
     // 1. Write to D1 FIRST (source of truth — prebuild reads from D1, not GitHub)
     if (parsed.type === 'site') {
       await DB.prepare(
@@ -155,14 +220,17 @@ export async function onRequestPost(context) {
 
       // A create (create: true) is a plain INSERT: two at one address at the same moment, the second is refused by the
       // database itself, never written over the first
-      const verb = create === true ? 'INSERT' : 'INSERT OR REPLACE';
-      const taken = (e) => { if (create === true && /UNIQUE constraint/i.test(String(e?.message || e))) throw Object.assign(new Error('There’s one at that address already: someone added it a moment ago. Nothing was changed.'), { status: 409 }); throw e; };
+      // (and every add to People: no record was there as read, so one there by now is someone else's, never written over)
+      const adding = create === true || table === 'team';
+      const verb = adding ? 'INSERT' : 'INSERT OR REPLACE';
+      const taken = (e) => { if (adding && /UNIQUE constraint/i.test(String(e?.message || e))) throw Object.assign(new Error('There’s one at that address already: someone added it a moment ago. Nothing was changed.'), { status: 409 }); throw e; };
       if (extractor && !isCreate) {
         // Written only if the stored record is still the one read above: a sync or a credit card landing between
         // that read and this write isn't overwritten (the editor is told to reload instead)
         const [colNames, colValues] = extractor(data);
         const sets = ['"data" = ?', '"updated_at" = ?', ...colNames.map((c) => `${c} = ?`)];
-        const r = await DB.prepare(`UPDATE ${table} SET ${sets.join(', ')} WHERE slug = ? AND data = ?`).bind(jsonStr, now, ...colValues, slug, oldRaw).run();
+        const write = DB.prepare(`UPDATE ${table} SET ${sets.join(', ')} WHERE slug = ? AND data = ?`).bind(jsonStr, now, ...colValues, slug, oldRaw);
+        const r = versions.length ? (await DB.batch([write, ...versions]))[0] : await write.run();
         if (!r?.meta?.changes) {
           return Response.json({ success: false, error: 'Conflict: this item was changed since you loaded it. Reload to get the latest version.' }, { status: 409 });
         }
@@ -172,9 +240,8 @@ export async function onRequestPost(context) {
         const placeholders = allCols.map(() => '?').join(', ');
         const allValues = [slug, jsonStr, now, ...colValues];
 
-        await DB.prepare(
-          `${verb} INTO ${table} (${allCols.join(', ')}) VALUES (${placeholders})`
-        ).bind(...allValues).run().catch(taken);
+        const write = DB.prepare(`${verb} INTO ${table} (${allCols.join(', ')}) VALUES (${placeholders})`).bind(...allValues);
+        await (versions.length ? DB.batch([write, ...versions]) : write.run()).catch(taken);
       } else {
         await DB.prepare(
           `${verb} INTO ${table} (slug, data, updated_at) VALUES (?, ?, ?)`
@@ -212,7 +279,8 @@ export async function onRequestPost(context) {
 
     // Every saved version is kept, so the editors can show history and restore
     const historyOf = parsed.type === 'site' ? { collection: SITE_COLLECTION, slug: parsed.key } : HISTORY_TABLES[parsed.table] ? { collection: parsed.table, slug: parsed.slug } : null;
-    if (historyOf) {
+    if (historyOf && withRecord) await pruneHistory(DB, historyOf.collection, historyOf.slug).catch((e) => console.error(`[save-content] ${historyOf.collection} history:`, e.message));
+    else if (historyOf) {
       try { await recordContentVersion(DB, { ...historyOf, data, previous: oldData, userEmail, now }); }
       catch (e) { console.error(`[save-content] ${historyOf.collection} history:`, e.message); }
     }

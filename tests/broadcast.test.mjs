@@ -6,8 +6,13 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import { fakeKitTags } from './lib/fake-kit-tags.mjs';
+import { holdClockAt } from './lib/clock.mjs';
 
 // ─── Time travel ────────────────────────────────────────────────────
+// (held at midday Eastern: the reveal is set two days ahead and the clock travels a day, so the day-before email says
+// "Tomorrow". Run on the real clock between 11:30 PM and midnight Eastern the reveal really was later that day and the
+// email rightly said "Today", failing the test; found Nov 22 2026 by a run at 11:35 PM)
+const restoreClock = holdClockAt('2026-11-10T17:00:00Z');
 const realNow = Date.now;
 let offset = 0;
 Date.now = () => realNow() + offset;
@@ -98,7 +103,7 @@ before(async () => {
   };
 });
 
-after(() => { Date.now = realNow; globalThis.fetch = realFetch; });
+after(() => { Date.now = realNow; restoreClock(); globalThis.fetch = realFetch; });
 
 test('schema + defaults', async () => {
   await b.ensureSchema(env.DB);

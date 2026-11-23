@@ -29,6 +29,25 @@ async function post(body) {
   }
 }
 
+/**
+ * Whether the words under its agenda are the minutes: read in from a file of them, or typed in the secretary's notes
+ * and sent (either one records itself as minutesFrom: ../../../functions/api/_board-minutes.js applyMinutes,
+ * _board-notes.js). Until then those words are the agenda's own background (Board's "Background for the board", an
+ * emailed or imported agenda's points), written before the meeting, never minutes
+ */
+export const minutesOnPage = (m) => !!m?.minutesFrom;
+/**
+ * Where a held meeting's minutes are: 'approved'; 'draft' once they're in (read in from a file, typed and sent, or a
+ * file of them kept with it: ../board-shared.js minutesIn, as Board says "The minutes are in") and the board hasn't
+ * approved them; 'none' before then, which is never called a draft, whatever background its agenda has
+ */
+export function minutesState(m) {
+  if (m?.minutes === 'approved') return 'approved';
+  return minutesIn(m) ? 'draft' : 'none';
+}
+/** Each in a few words, for a chip */
+export const MINUTES_SAID = { approved: 'Minutes approved', draft: 'Draft minutes', none: 'No minutes yet' };
+
 /** A word diff as runs: the words next to each other that changed the same way, one mark */
 export const runsOf = (diff) => diff.reduce((out, p) => { const last = out.at(-1); if (last && last.op === p.op) last.w += ` ${p.w}`; else out.push({ ...p }); return out; }, []);
 /** Two lines' words, the old against the new: [{ w, op: '' (both), '+' (new), '-' (gone) }] (the longest run they share kept) */
@@ -113,7 +132,8 @@ function Box({ m, ctx, target, was, label, kind, onClose, onSent, kept, shut }) 
       return;
     }
     await load({ keep: true });
-    say(`Sent. ${secretary ? `${secretary.name.split(/\s+/)[0]} will see it.` : 'SOARD will see it.'}`);
+    // (the email about it waits for People when it couldn't be read: said, never as gone)
+    say(`Sent. ${secretary ? `${secretary.name.split(/\s+/)[0]} will see it.` : 'SOARD will see it.'}${j.later ? ` ${j.later}` : ''}`);
     onSent(j.correction?.id);
   };
   const useNew = () => { setRead(was); setText(was); requestAnimationFrame(() => { box.current?.focus({ preventScroll: true }); grow(); }); };
@@ -151,7 +171,7 @@ function Row({ c, m, ctx, Icon, decider, onBack }) {
     if (!j.ok) { say(j.error || 'That didn’t go through. Try again.', 'warn', { stay: !!j.unsent }); if (j.reload || j.stale) load({ keep: true }); return; }
     await load({ keep: true });
     focusOn(`c-${c.id}`);
-    say(!make ? (j.state === 'made' ? 'The minutes already say that, so it’s marked as made.' : 'The minutes stay as they are.') : c.kind === 'other' ? 'Marked as made.' : j.fileKeeps ? 'Made on this page. The file of the minutes keeps its words until a newer one is sent.' : 'Made. The minutes say that now.');
+    say(`${!make ? (j.state === 'made' ? 'The minutes already say that, so it’s marked as made.' : 'The minutes stay as they are.') : c.kind === 'other' ? 'Marked as made.' : j.fileKeeps ? 'Made on this page. The file of the minutes keeps its words until a newer one is sent.' : 'Made. The minutes say that now.'}${j.later ? ` ${j.later}` : ''}`);
   };
   const takeBack = async () => {
     setBusy('back');
@@ -235,7 +255,8 @@ export function ReadFirst({ m, ctx, readOnly = false }) {
   const { data } = ctx;
   // (the next one still to come: one held already isn't when the board votes on these)
   const next = data.meetings.filter((x) => x.date > m.date && x.date >= data.today).sort((a, b) => a.date.localeCompare(b.date))[0] || null;
-  const written = (m.sections || []).some((s) => s.notes || s.items.some((it) => it.notes));
+  // (words under the agenda take a correction right under them only when they're the minutes, never its background)
+  const written = minutesOnPage(m) && (m.sections || []).some((s) => s.notes || s.items.some((it) => it.notes));
   return html`<div class="bp-minutes bp-noprint" role="group" aria-labelledby=${`rf-${m.id}`}>
     <p class="bp-minutes__q" id=${`rf-${m.id}`}>Read before the vote</p>
     <p class="bp-minutes__said">${next ? `The board votes on these at the ${meetingName(next)}, ${day(next.date)}.` : 'The board votes on these at its next meeting.'}${readOnly ? '' : written ? ' See something wrong? Suggest a correction right under it.' : ' See something wrong? Suggest a correction under Anything else, below.'}</p>

@@ -38,7 +38,8 @@
  *                                                    presents the item (an admin's, any); empty text takes it off (_board-asks.js)
  * POST { action: 'operating-balance', amount }       a Board admin's: what SOARD keeps for running itself; the money over it
  *                                                    is what makeovers can use ("What makeovers cost")
- * POST { action: 'chair-approve', meetingId }        the chair approves the agenda ahead (or an admin)
+ * POST { action: 'chair-approve', meetingId }        the chair approves the agenda their review shows them (or an admin, any
+ *                                                    meeting ahead); any other meeting answers 404 (_board-asks.js chairGate)
  * POST { action: 'chair-note', meetingId, itemId, text }  the chair's own note on an item (the chair's and the admins' only)
  * POST { action: 'ask-presenter', meetingId, itemId, question }  the chair sends a report back to who presents it with a
  *                                                    question, by email from the asker's Gmail; their answer goes under the report
@@ -51,12 +52,14 @@
  *                                                    words started from (words saved over it since come back as `clashes`)
  * POST { action: 'notes-send', meetingId }           those notes put on the meeting, from its day on, with a Word file as the record
  * POST { action: 'activity', events, touch, now }  what a member looked at and for how long (../../public/admin/board/activity.js)
+ * Anything a member can't see (a meeting not on the board page, its items and action items, a paper not shared) answers
+ * 404, as if it weren't there; only what they can see says whose it is (403).
  * A member's sign-ins, looks and answers are kept for Board → Members (_board-activity.js); an admin's never are.
  * An admin looking can't answer, sign, check in or vote for anyone: they have no board seat. In a practice meeting
  * (theirs alone, simulated members) they check in and vote as themselves.
  */
 
-import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings } from './_board.js';
+import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings, sayable } from './_board.js';
 import { readBoardWords } from './_board-file-words.js';
 import { isBoardAdmin } from './_board-roles.js';
 import { secretarySends } from './_board-minutes.js';
@@ -71,7 +74,8 @@ import { portalExtras, saveLineNote, chairApprove, chairNote, askPresenter } fro
 import { shorterFor } from './_board-shorter.js';
 import { orgFacts } from './_org-facts.js';
 import { groupWanted } from './_board-group.js';
-import { normEmail } from './_board-roles.js';
+import { normEmail, EMAILS_DOWN, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
+import { sameMember } from './_member-places.js';
 import { familiesList, familyOne } from './_board-families.js';
 
 const fail = (error, status = 400, extra = {}) => Response.json({ ok: false, error, ...extra }, { status });
@@ -85,7 +89,14 @@ async function who(context) {
 }
 // After the answer when the platform allows (waitUntil), else before it (tests)
 const later = async (context, p) => { if (context.waitUntil) context.waitUntil(p); else await p; };
-const fromError = (err) => (err.status && err.status < 500 ? fail(err.message, err.status, err.extra || {}) : Response.json({ ok: false, error: err.message }, { status: 500 }));
+// (a 503 is ours and in words: a read that decides something didn't answer, so nothing was done, and the page offers Try
+// again: a founder whose check of who runs Board failed is never told the page is for the board. Board QA round 9)
+const fromError = (err) => (err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? fail(err.message, err.status, err.extra || {}) : Response.json({ ok: false, error: sayable(err) }, { status: 500 }));
+// The page's read of People that didn't answer: the sign-in's words with Try again, never a board page with an empty
+// directory or members missing their emails (Board QA round 10)
+const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));
+/** The page that sent this was opened by someone else (another sign-in in this browser since), never by them before their own rename */
+const notMe = async (env, as, member) => !!as && !(await sameMember(env.DB, String(as), member.slug));
 
 export async function onRequestGet(context) {
   try {
@@ -107,7 +118,8 @@ export async function onRequestGet(context) {
     }
     if (q.has('family')) {
       const id = String(q.get('family') || '');
-      if (!/^[A-Za-z0-9]{6,32}$/.test(id)) return fail('Which family?');
+      // (a link cut short or mistyped is a family that isn't here, said as a well-formed one that isn't: Board QA round 9)
+      if (!/^[A-Za-z0-9]{6,32}$/.test(id)) return fail('That family isn’t on the board page', 404);
       return Response.json({ ok: true, ...(await familyOne(context.env, id)) }, { headers: { 'Cache-Control': 'private, no-store' } });
     }
     if (q.has('live')) {
@@ -128,17 +140,19 @@ export async function onRequestGet(context) {
     // Beside it: the notes on the money's lines, a member's own report asks (when each is due), and a meeting ahead
     // not shared yet that they present in (their items only), so the ask's link opens (_board-asks.js)
     // and SOARD's facts for Documents, as the site has them saved (_org-facts.js)
-    const [data, extras, org, group] = await Promise.all([portalData(context.env, w), listMeetings(context.env.DB).then((meetings) => portalExtras(context.env, { ...w, meetings })), orgFacts(context.env), groupWanted(context.env.DB)]);
+    // (who Email all reaches, read for certain: a read that fails sends nothing, never a list shrunk to whoever came back)
+    const [data, extras, org, group] = await Promise.all([portalData(context.env, w), listMeetings(context.env.DB).then((meetings) => portalExtras(context.env, { ...w, meetings })), orgFacts(context.env), groupWanted(context.env.DB).catch((e) => { console.error('[board-portal] email all', e?.message || e); return null; })]);
     // Notes typed that never went on their meeting: only theirs to know, and how they stay reachable once it's approved
     const typed = w.admin || w.member?.seat === 'secretary' ? await notesState(context.env.DB) : { waiting: [], typedBy: {} };
     // People's Email all: the same people Board → Members writes to, each by their own address, less whoever's looking
     const viewer = normEmail(context.data?.userEmail);
-    const emailAll = { to: group.members.map((p) => p.email).filter((e) => e !== viewer), missing: group.missing.map((p) => p.name) };
-    // Corrections suggested to minutes not approved yet, and who signed the ones that were
-    const [corrections, minutesSigned] = await Promise.all([correctionsForPage(context.env.DB, w), signedMinutes(context.env.DB)]);
+    const emailAll = group ? { to: group.members.map((p) => p.email).filter((e) => e !== viewer), missing: group.missing.map((p) => p.name) } : { to: [], missing: [], unread: EMAILS_DOWN };
+    // Corrections suggested to minutes not approved yet, and who signed the ones that were: for a board member, only
+    // meetings on the board page, as everything else here (a founder looking sees what Board admin shows them)
+    const [corrections, minutesSigned] = await Promise.all([correctionsForPage(context.env.DB, w), signedMinutes(context.env.DB, null, { boardOnly: !w.admin })]);
     return Response.json({ ok: true, ...data, ...extras, org, notesWaiting: typed.waiting, minutesTypedBy: typed.typedBy, emailAll, corrections, minutesSigned }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (err) {
-    return fromError(err);
+    return pageError(err);
   }
 }
 
@@ -209,7 +223,7 @@ async function post(context) {
       if (!ID.test(String(q.get('signed') || ''))) return fail('Which document?');
       let form = null;
       try { form = await request.formData(); } catch { return fail('Send your signed copy as a file'); }
-      if (form.get('as') && String(form.get('as')) !== w.member.slug) return fail(`This browser is signed in as ${w.member.name} now. Reload the page to sign as yourself.`, 409, { who: true });
+      if (await notMe(env, form.get('as'), w.member)) return fail(`This browser is signed in as ${w.member.name} now. Reload the page to sign as yourself.`, 409, { who: true });
       // The wording on their page when they added it (a newer one is read first)
       const version = form.get('version');
       // (an iPhone photo comes twice: the JPEG a browser shows as "file", the HEIC as it was taken as "original")
@@ -291,7 +305,7 @@ async function post(context) {
         return Response.json({ ok: true, ...(await setActionDone(env.DB, String(body.actionId || ''), !!body.done, { by: member.email, slug: member.slug })) });
       // The secretary's signature on minutes the board approved; their signed copy is made after the answer (the heartbeat finishes one that stops)
       case 'sign-minutes': {
-        if (body.as && body.as !== member.slug) return fail(`This browser is signed in as ${member.name} now. Reload the page to sign as yourself.`, 409, { who: true });
+        if (await notMe(env, body.as, member)) return fail(`This browser is signed in as ${member.name} now. Reload the page to sign as yourself.`, 409, { who: true });
         const signed = await signMinutes(env, String(body.meetingId || ''), member, { mark: body.mark && typeof body.mark === 'object' ? body.mark : null, consent: body.consent === true, evidence: evidence(context) });
         context.waitUntil?.(buildMinutesRecord(env, String(body.meetingId || '')).catch(() => {}));
         return Response.json({ ok: true, ...signed });
@@ -299,7 +313,7 @@ async function post(context) {
       case 'sign':
         if (!ID.test(String(body.docId || ''))) return fail('Which document?');
         // (the page was opened by someone else: another sign-in in this browser since)
-        if (body.as && body.as !== member.slug) return fail(`This browser is signed in as ${member.name} now. Reload the page to sign as yourself.`, 409, { who: true });
+        if (await notMe(env, body.as, member)) return fail(`This browser is signed in as ${member.name} now. Reload the page to sign as yourself.`, 409, { who: true });
         // (today's page: their adopted mark, each initial and answer, agreeing to sign electronically, the year it says;
         // a page from before those, a name alone, reloads: nobody signs here without agreeing to sign electronically)
         if (!body.mark || typeof body.mark !== 'object') return fail('The board page was updated. Reload it to sign.', 409, { reload: true });
@@ -316,7 +330,7 @@ async function post(context) {
       // Can't sign it as written: why, kept, and the admins told (they can still sign it later)
       case 'decline': {
         if (!ID.test(String(body.docId || ''))) return fail('Which document?');
-        if (body.as && body.as !== member.slug) return fail(`This browser is signed in as ${member.name} now. Reload the page.`, 409, { who: true });
+        if (await notMe(env, body.as, member)) return fail(`This browser is signed in as ${member.name} now. Reload the page.`, 409, { who: true });
         const d = await declineDoc(env.DB, body.docId, member, { reason: body.reason, evidence: evidence(context), year: Number.isInteger(body.year) ? body.year : null });
         if (d.tell) context.waitUntil?.(tellDeclined(env, { doc: d.doc, member, reason: d.reason, year: d.year }).catch(() => {}));
         return Response.json({ ok: true, declined: { at: d.at, reason: d.reason }, told: d.tell });

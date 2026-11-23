@@ -19,7 +19,7 @@
 
 import { h, htm, useState, useEffect, useRef, useMemo } from '../vendor.js';
 import { money } from '../board-shared.js';
-import { compact } from './money.js';
+import { compact, Blank, budgetName } from './money.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -53,7 +53,7 @@ export const withLineNotes = (data, meetingId, itemId, list) => ({
 // ─── Words and numbers ──────────────────────────────────────────────
 
 const ET = 'America/New_York';
-const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : '–');
+const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : html`<${Blank} />`);
 const short = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
 const fullDate = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
 /** "+$12,345" / "−$12,345" against the year before ('' with nothing to set it beside) */
@@ -318,7 +318,7 @@ export function FinanceReview({ books, meeting, item, notes = [], due = null, ca
         : show === 'pos' ? html`<${Lines} which="pos" rows=${s.position} asOf=${s.asOf} priorAsOf=${s.priorAsOf} caption="Balance sheet" ...${shared} key="pos" />`
         : html`<${Lines} which="act" rows=${s.activity} asOf=${s.asOf} priorAsOf=${s.priorAsOf} caption="Profit and loss" ...${shared} key="act" />`}
     </div>
-    ${show === 'bud' && budget?.asOf ? html`<p class="fr-how">QuickBooks’ ${budget.name ? `budget “${budget.name}”` : 'budget'}, January 1 through ${fullDate(budget.asOf)}.</p>` : null}
+    ${show === 'bud' && budget?.asOf ? html`<p class="fr-how">${budgetName(budget)}, January 1 through ${fullDate(budget.asOf)}.</p>` : null}
     <p class="fr-foot">${count ? `${count === 1 ? 'Your note shows' : `Your ${count} notes show`} under ${count === 1 ? 'its line' : 'their lines'} for the board: on the agenda, on the screen and in Print it all.` : canEdit ? 'Notes show under their lines for the board: on the agenda, on the screen and in Print it all.' : 'No notes on these numbers yet.'}</p>
   </section>`;
 }

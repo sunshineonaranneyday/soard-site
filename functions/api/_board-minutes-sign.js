@@ -14,7 +14,7 @@
  * minutes reopened and changed afterwards say the signature is on the old words.
  */
 
-import { getMeeting, listMeetings, roster, putFile, boardFiles, ensureSchema, keepMark, ID } from './_board.js';
+import { getMeeting, listMeetings, roster, putFile, boardFiles, ensureSchema, keepMark, ID, boardCopy } from './_board.js';
 import { sha256Hex, canonical, cleanMark, appendEvents, recordHtml, printPdf, finishPdf, fontFaces, CONSENT_TEXT } from './_board-sign.js';
 import { minutesFileOf, meetingName, signsAs, longDate, shortDate, timeRange, MINUTES_SIGN_FROM, docxText } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
@@ -190,8 +190,13 @@ export async function maybeFinishSignedMinutes(env, { now = Date.now(), limit = 
   return made;
 }
 
-/** Who signed each meeting's minutes, for the pages: `changed`, the words aren't the ones they signed any more → { meetingId: { name, at, how, made, changed } } */
-export async function signedMinutes(DB, meetings = null) {
+/**
+ * Who signed each meeting's minutes, for the pages: `changed`, the words aren't the ones they signed any more →
+ * { meetingId: { name, at, how, made, changed } }. `boardOnly` (the board page, for a board member): only meetings on
+ * the board page (_board.js boardCopy), so a meeting taken off it, or never a board meeting, says nothing there, not
+ * even that its minutes were signed
+ */
+export async function signedMinutes(DB, meetings = null, { boardOnly = false } = {}) {
   await ensureSchema(DB);
   const rows = (await DB.prepare('SELECT meeting_id, name, at, how, hash, file_id FROM board_minutes_signed').all()).results || [];
   if (!rows.length) return {};
@@ -199,7 +204,7 @@ export async function signedMinutes(DB, meetings = null) {
   const out = {};
   for (const r of rows) {
     const m = all.find((x) => x.id === r.meeting_id);
-    if (!m) continue;
+    if (!m || (boardOnly && !boardCopy(m))) continue;
     out[r.meeting_id] = { name: r.name, at: r.at, how: r.how, made: !!r.file_id, changed: (await minutesHash(m)) !== r.hash };
   }
   return out;

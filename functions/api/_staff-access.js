@@ -135,7 +135,10 @@ export async function syncStaffDirectory(env, { fetchImpl = fetch, now = Date.no
   if (!env.GOOGLE_CALENDAR_KEY) return fail(Object.assign(new Error('GOOGLE_CALENDAR_KEY is not set'), { needs: 'key' }));
 
   // The founder that worked last time, then each founder: only "not a Workspace admin" is worth trying the next one for
-  const subjects = [...new Set([prev.subject, ...founderEmails(await peopleRows(env.DB))].filter(Boolean))];
+  // (People not answering: nothing changes, said in the status, and the next look asks again: round 10)
+  let founders;
+  try { founders = founderEmails(await peopleRows(env.DB)); } catch (err) { return fail(err); }
+  const subjects = [...new Set([prev.subject, ...founders].filter(Boolean))];
   if (!subjects.length) return fail(new Error('No founder on People → Team to read Google’s accounts as'));
   let read = null, subject = null, lastErr = null;
   for (const s of subjects) {

@@ -4,6 +4,7 @@
  * Run: node --test tests/reminder-signups.test.mjs
  */
 import { test, before, after } from 'node:test';
+import { holdClockAt } from './lib/clock.mjs';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
 import { fakeKitTags } from './lib/fake-kit-tags.mjs';
@@ -479,7 +480,9 @@ async function confirmEmails(list) {
   }
 }
 
-test('a reminder is one Kit email to the sign-ups, however many: never one each from Resend, and never twice', async () => {
+test('a reminder is one Kit email to the sign-ups, however many: never one each from Resend, and never twice', async (t) => {
+  // (a reveal 20 hours ahead is tomorrow's only from 4 AM in Atlanta: held at mid-morning, whatever time the suite runs)
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const list = Array.from({ length: 330 }, (_, i) => `bulk${String(i).padStart(3, '0')}@example.com`);
   await confirmEmails(list);
   const cfg = await b.readConfig(DB);

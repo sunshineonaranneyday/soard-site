@@ -371,16 +371,17 @@ test('the emails read well without the site: plain text and the staff list defau
 
 test('the thank-you calls them by their name, never a title ("Dr. Jordan Smith" is Jordan; "Mrs. Lee", alone, stays so)', () => {
   assert.equal(greetName({ fullName: 'Dr. Jordan Smith' }), 'Jordan');
-  assert.equal(greetName({ fullName: 'Prof. Dr. Ana Ruiz' }), 'Ana');
-  assert.equal(greetName({ fullName: 'Mrs. Lee' }), 'Mrs. Lee');
+  // (r20, greeted only on positive evidence: more than one title, a title and a family name, or a comma: no name)
+  assert.equal(greetName({ fullName: 'Prof. Dr. Ana Ruiz' }), '');
+  assert.equal(greetName({ fullName: 'Mrs. Lee' }), '');
   assert.equal(greetName({ fullName: 'Jordan Avery' }), 'Jordan');
-  assert.equal(greetName({ fullName: 'Smith, John' }), 'John', 'written last name first: their first name');
+  assert.equal(greetName({ fullName: 'Smith, John' }), '', 'written last name first: no name');
   assert.equal(greetName({ fullName: 'Dr. Jordan Smith', preferredName: 'Mary Beth' }), 'Mary Beth');
   assert.equal(greetName({}), '');
   const mail = applicantEmail({ id: 'x', answers: { ...GOOD, preferredName: '', fullName: 'Dr. Jordan Smith' } });
   assert.match(String(mail.text), /^Thank you, Jordan\./);
-  // (written last name first: their copy thanks them by their first name)
-  assert.match(String(applicantEmail({ id: 'x', answers: { ...GOOD, preferredName: '', fullName: 'Ames, Jordan' } }).text), /^Thank you, Jordan\./);
+  // (written last name first: r20, a comma means no name, "Thank you.")
+  assert.match(String(applicantEmail({ id: 'x', answers: { ...GOOD, preferredName: '', fullName: 'Ames, Jordan' } }).text), /^Thank you\.\n/);
 });
 
 // ─── The headshot ──────────────────────────────────────────────────────
@@ -918,7 +919,8 @@ test('greetings: a title is skipped (“Dr. Jordan Smith” is Jordan), and the 
   await sendWelcome(env, { slugs: ['jordan-smith', 'ms-lane'] });
   const by = Object.fromEntries(welcomes().map((w) => [w.to[0], w]));
   assert.match(by['js@example.org'].text, /^Hi Jordan,/);
-  assert.match(by['lane@example.org'].text, /^Hi Ms\. Lane,/, 'a title with only a surname stays whole');
+  // (r20: a title and a family name is no given name, so "Hello," rather than "Hi Ms. Lane,")
+  assert.match(by['lane@example.org'].text, /^Hello,/, 'a title with only a surname: no name');
 });
 
 test('a welcome waiting on the sign-in’s setup says so, not "a few minutes"', async () => {

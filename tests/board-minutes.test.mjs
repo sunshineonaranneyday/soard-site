@@ -260,7 +260,8 @@ test('a written agenda keeps every item and its documents; each takes its notes 
   assert.deepEqual(next.motions.map((x) => [x.id, x.tally?.for ?? null]), [['v_live1', 3]]);
   assert.deepEqual(next.actions.map((x) => x.text), ['Send the venue options for the spring gala', 'Book the photographer']);
   assert.deepEqual(next.actions[1].ownerName, 'Pat Visitor');
-  assert.deepEqual(next.minutesFrom, { name: 'Q3 minutes.pdf', at: AT, ai: false, tries: 1 }, 'read by the rules alone: marked to be read again by the model');
+  // (marks: 1, what it put on is marked, so Replace can take it off with no Undo record: Board QA round 8)
+  assert.deepEqual(next.minutesFrom, { name: 'Q3 minutes.pdf', at: AT, ai: false, tries: 1, marks: 1 }, 'read by the rules alone: marked to be read again by the model');
   // The same minutes again: nothing doubled
   const twice = applyMinutes(next, read, { fileName: 'Q3 minutes.pdf', now: Date.parse(AT) });
   assert.deepEqual(twice.sections.map((s) => s.items.length), next.sections.map((s) => s.items.length));

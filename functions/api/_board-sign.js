@@ -624,12 +624,34 @@ export async function maybeRunSigning(env, opts = {}) {
     // An email changed on People: the old address told, once
     const changed = ((await DB.prepare("SELECT seq, slug, detail FROM board_sign_events WHERE kind = 'email-changed' ORDER BY seq DESC LIMIT 20").all()).results || []);
     const told = new Set(((await DB.prepare("SELECT detail FROM board_sign_events WHERE kind = 'notice-sent'").all()).results || []).map((r) => { try { return JSON.parse(r.detail).for; } catch { return null; } }));
-    for (const c of changed) {
-      if (told.has(c.seq)) continue;
+    const notices = changed.filter((c) => !told.has(c.seq));
+    // …and the emails a press owes (a signature taken off, a correction suggested or decided: ./_board-notices.js)
+    const owed = await dueNotices(DB);
+    if (!notices.length && !owed.length) return;
+    // Who's on the board and who runs Board, read for certain: a read of People that fails sends nothing and puts
+    // nothing in the chain (never "not on the board" for good about a sitting member: Board QA round 10), so every
+    // notice stays due for the next look, and this look's status says so (Site → Automations, after half an hour)
+    const unread = async () => writeState(DB, LOOK, unreadStatus(await readState(DB, LOOK)));
+    let reads;
+    try { reads = await noticeReads(DB); } catch (err) {
+      if (!err?.unread) throw err;
+      await unread();
+      return;
+    }
+    if ((await readState(DB, LOOK)).unread) await writeState(DB, LOOK, { ok: true, at: new Date().toISOString() });
+    if (owed.length) {
+      try { await sendDueNotices(env, reads); } catch (err) {
+        if (!err?.unread) throw err;
+        await unread();
+        return;
+      }
+    }
+    const board = new Set(reads.board.map((p) => p.slug));
+    for (const c of notices) {
       let d = {};
       try { d = JSON.parse(c.detail); } catch { continue; }
       if (!d.from) continue;
-      if (!(await activeBoard(DB)).some((p) => p.slug === c.slug)) { await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: c.slug, by: 'SOARD board page', detail: { for: c.seq, skipped: 'not on the board' } }] })); continue; }
+      if (!board.has(c.slug)) { await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: c.slug, by: 'SOARD board page', detail: { for: c.seq, skipped: 'not on the board' } }] })); continue; }
       const r = await sendEmailOne(env, { to: d.from, from: fromBoard(), replyTo: admins, tags: [{ name: 'kind', value: 'board-email-changed' }], idempotencyKey: `email-changed:${c.seq}`, ...emailChangedEmail(d) });
       if (r.sent || r.already) await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: c.slug, by: 'SOARD board page', detail: { for: c.seq, to: d.from } }] }));
       return;
@@ -665,7 +687,10 @@ export function voidEmail({ doc, year, reason = '', replacedByCopy = false }) {
 // ─── Due dates, declining, asking again by itself, the whole board signed ──────────
 
 import { isEmail, emailConfigured } from './_broadcast-notify.js';
-import { activeBoard, readState } from './_board-roles.js';
+import { activeBoard, readState, writeState, unreadStatus } from './_board-roles.js';
+import { dueNotices, noticeReads, sendDueNotices } from './_board-notices.js';
+/** The signing look's own status: a read of People that didn't answer (./unreadStatus), cleared by the next that does */
+const LOOK = 'signing-look';
 import { todayEastern, welcomeHad } from '../../public/admin/board-shared.js';
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -1100,7 +1125,10 @@ export async function signingFacts(env) {
     board.getSettings(DB),
     one('SELECT COUNT(*) AS n, MAX(at) AS last FROM board_action_reminders'),
   ]);
+  const look = await readState(DB, LOOK);
   return {
+    // (People not answering the signing look since then: the notices it sends wait for it: ./_board-notices.js)
+    peopleSince: look.unread ? look.failingSince || null : null,
     browser: !!env.BROWSER, remind: settings.remind, actionRemind: settings.actionRemind, actionReminders: Number(actions.n) || 0, actionRemindersLast: actions.last || null,
     copies: Number(copies.n) || 0, copiesLast: copies.last || null, waiting: Number(waiting.n) || 0, failed: Number(failed.n) || 0,
     receipts: Number(receipts.n) || 0, receiptsLast: receipts.last || null, reminders: Number(reminders.n) || 0, remindersLast: reminders.last || null, declines: Number(declines.n) || 0,

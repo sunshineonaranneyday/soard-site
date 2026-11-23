@@ -20,7 +20,7 @@
  * added to it once in the dashboard, and the site checks that it is.
  */
 
-import { activeBoard, activeAdvisors, readState, writeState } from './_board-roles.js';
+import { activeBoard, activeAdvisors, readState, writeState, PEOPLE_DOWN } from './_board-roles.js';
 import { isEmail } from './_broadcast-notify.js';
 
 const API = 'https://api.cloudflare.com/client/v4';
@@ -34,7 +34,11 @@ const LOOK_MS = 5 * 60 * 1000;
 
 export const accessConfigured = (env) => Boolean(String(env.CF_ACCESS_API_TOKEN || '').trim() && env.CF_ACCOUNT_ID && env.CF_ACCESS_AUD);
 
-/** The active board's sign-in emails, A to Z, and who has none on file */
+/**
+ * The active board's sign-in emails, A to Z, and who has none on file. A sure read: People or the private emails not
+ * answering throws, never an empty list (Board QA round 9: one failed read emptied Access's list, the whole board and
+ * Advisory Board locked out until the next look)
+ */
 export async function boardSignIns(DB) {
   const board = await activeBoard(DB);
   // Only addresses that are whole (the mailer's rule): one malformed one would stop Cloudflare taking the list at all
@@ -81,9 +85,12 @@ const emailsIn = (group) => (group?.include || []).map((r) => r?.email?.email).f
  */
 export async function syncBoardAccess(env, { fetchImpl = fetch, now = Date.now() } = {}) {
   const prev = await readState(env.DB, KEY);
-  const { emails } = await everyoneSignIns(env.DB);
+  if (!accessConfigured(env)) return { ...prev, ok: false, configured: false, hash: await everyoneSignIns(env.DB).then((x) => hashOf(x.emails), () => prev.hash || null) };
+  let emails;
+  // (who signs in, read for certain: a read that fails changes nothing in Cloudflare, and says so in the status Board →
+  // Members shows, as Cloudflare not answering does. The heartbeat asks again at its next look)
+  try { ({ emails } = await everyoneSignIns(env.DB)); } catch (err) { return unread(env, prev, err, now); }
   const hash = await hashOf(emails);
-  if (!accessConfigured(env)) return { ...prev, ok: false, configured: false, hash };
   const o = { fetchImpl };
   try {
     let group = null;
@@ -105,8 +112,15 @@ export async function syncBoardAccess(env, { fetchImpl = fetch, now = Date.now()
     });
   } catch (err) {
     // failingSince: when this run of failures began, so a passing outage reads as one (a working sync clears it)
-    return await writeState(env.DB, KEY, { ...prev, ok: false, configured: true, error: err.message, failedAt: new Date(now).toISOString(), failingSince: prev.failingSince || new Date(now).toISOString() });
+    return await writeState(env.DB, KEY, { ...prev, ok: false, configured: true, unread: false, error: err.message, failedAt: new Date(now).toISOString(), failingSince: prev.failingSince || new Date(now).toISOString() });
   }
+}
+
+/** A read of who signs in that didn't answer: nothing sent to Cloudflare, said in the status as a failing sync is (failingSince) */
+async function unread(env, prev, err, now) {
+  console.error('[board-access] who signs in', err?.message || err);
+  const at = new Date(now).toISOString();
+  return writeState(env.DB, KEY, { ...prev, ok: false, configured: true, unread: true, error: PEOPLE_DOWN, failedAt: at, failingSince: prev.failingSince || at });
 }
 
 /**
@@ -117,13 +131,25 @@ export async function syncBoardAccess(env, { fetchImpl = fetch, now = Date.now()
 export async function canSignIn(env, email) {
   const e = String(email || '').trim().toLowerCase();
   if (!isEmail(e)) return false;
-  const [state, everyone] = await Promise.all([readState(env.DB, KEY), everyoneSignIns(env.DB)]);
+  // (a read that fails: not yet, so nothing goes out on it)
+  const [state, everyone] = await Promise.all([readState(env.DB, KEY), everyoneSignIns(env.DB).catch(() => null)]);
+  if (!everyone) return false;
   return Boolean(state.ok && state.attached && everyone.emails.includes(e) && state.hash === await hashOf(everyone.emails));
 }
 
 /** For the admin: whether board members can sign in, and who can't yet */
 export async function accessStatus(env) {
-  const [state, { emails, missing }, everyone] = await Promise.all([readState(env.DB, KEY), boardSignIns(env.DB), everyoneSignIns(env.DB)]);
+  const state = await readState(env.DB, KEY);
+  let board;
+  let everyone;
+  try {
+    [board, everyone] = await Promise.all([boardSignIns(env.DB), everyoneSignIns(env.DB)]);
+  } catch (err) {
+    // (who signs in couldn't be read: said as that, never as "nobody can sign in" or "up to date")
+    console.error('[board-access] status', err?.message || err);
+    return { ...state, configured: accessConfigured(env), ok: false, unread: true, error: PEOPLE_DOWN, current: false, failingSince: state.failingSince || state.failedAt || new Date().toISOString(), emails: state.emails ?? 0, missing: [] };
+  }
+  const { emails, missing } = board;
   const hash = await hashOf(everyone.emails);
   return {
     ...state,
@@ -143,7 +169,8 @@ export async function maybeSyncBoardAccess(env, { fetchImpl = fetch, now = Date.
     if (now - (Number(runs.lookedAt) || 0) < LOOK_MS) return null;
     await writeState(env.DB, 'access-runs', { lookedAt: now });
     const state = await readState(env.DB, KEY);
-    const { emails } = await everyoneSignIns(env.DB);
+    let emails;
+    try { ({ emails } = await everyoneSignIns(env.DB)); } catch (err) { return await unread(env, state, err, now); }
     const stale = !state.syncedAt || now - Date.parse(state.syncedAt) > RECHECK_MS || !state.attached;
     if (state.ok && state.hash === await hashOf(emails) && !stale) return null;
     return await syncBoardAccess(env, { fetchImpl, now });

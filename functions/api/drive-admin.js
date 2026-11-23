@@ -33,6 +33,6 @@ export async function onRequestGet(context) {
     return reply({ success: true, ...(await searchDrive(env, { me, q: p.get('q') || '', account: p.get('account') || '', images: p.get('images') === '1' })) });
   } catch (err) {
     if (!err.status) console.error('[drive-admin]', err);
-    return reply({ success: false, error: err.message || 'Couldn’t search Drive' }, err.status && err.status < 500 ? err.status : 500);
+    return reply({ success: false, error: err.message || 'Couldn’t search Drive' }, err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? err.status : 500);
   }
 }

@@ -35,6 +35,7 @@ import { personStatus } from './_team.js';
 import { sendEmails, SITE_ORIGIN, slackPost } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
 import * as mail from './_email-shell.js';
+import { readDown, PEOPLE_DOWN } from './_board-roles.js';
 
 export const STATUSES = [
   { id: 'new', label: 'New' },
@@ -122,13 +123,16 @@ export const DEFAULT_COMMITTEE = 'Advisory Board';
 const COMMITTEE_MAX = 60;
 const sameName = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
 
-/** Active board members on a committee, with their private email (People → Board) */
+/**
+ * Active board members on a committee, with their private email (People → Board). A read that fails throws (Board QA
+ * round 10): never a committee of nobody, so a new application's notice isn't counted as sent to fewer (it's sent again)
+ * nor a save told "nobody on the committee has an email". A table not made yet is nobody
+ */
 export async function committeeMembers(DB, committee) {
   if (!String(committee || '').trim()) return [];
-  let rows = [];
-  try { rows = (await DB.prepare('SELECT slug, data FROM team').all()).results || []; } catch { return []; }
-  let emails = {};
-  try { emails = Object.fromEntries(((await DB.prepare('SELECT slug, email FROM reveal_board_emails').all()).results || []).map((r) => [r.slug, r.email])); } catch { /* no emails saved yet */ }
+  const sure = (e) => { if (/no such table/i.test(e?.message || '')) return null; console.error('[advisory] committee', e?.message || e); throw readDown(PEOPLE_DOWN, e); };
+  const rows = (await DB.prepare('SELECT slug, data FROM team').all().catch(sure))?.results || [];
+  const emails = Object.fromEntries(((await DB.prepare('SELECT slug, email FROM reveal_board_emails').all().catch(sure))?.results || []).map((r) => [r.slug, r.email]));
   return rows.map((r) => ({ slug: r.slug, d: parse(r.data, {}) || {} }))
     .filter(({ d }) => d.group === 'board' && (d.status || 'active') === 'active' && !/^in memoriam\b/i.test(d.name || '')
       && Array.isArray(d.committees) && d.committees.some((c) => sameName(c, committee)))
@@ -314,20 +318,23 @@ export async function retryForgottenImages(env, { fetchImpl = fetch, now = Date.
 
 /**
  * Store one from the site's form. The answers are checked here too (the page
- * checks first). A second send of the same answers within a month (a double
+ * checks first), unless the caller already checked them for this send and
+ * passes that check as `checked` (/api/advisory-apply does: round 22, so a
+ * send's answers are checked once). A second send of the same answers within a month (a double
  * tap, a flaky connection, a page closed while it sent and sent again later)
  * is the same application.
  * Returns { app } or { problems }.
  */
 const SEND_ID = /^[0-9a-z-]{16,64}$/i;
-export async function submitApplication(env, raw, { ipHash = null, now = Date.now(), headshot = null, sendId = null, photoAt = 0, photoSeq = 0, fetchImpl = fetch, reserve = null, unreserve = null } = {}) {
+export async function submitApplication(env, raw, { ipHash = null, now = Date.now(), headshot = null, sendId = null, photoAt = 0, photoSeq = 0, fetchImpl = fetch, reserve = null, unreserve = null, checked = null } = {}) {
   const { DB } = env;
   await ensureAdvisorySchema(DB);
   const send = SEND_ID.test(String(sendId || '')) ? String(sendId).toLowerCase() : null;
   // The same send again (a second tab, a retry while the first was still on its way): the one it made
   const sameSend = async () => (send ? DB.prepare('SELECT * FROM advisory_applications WHERE send_id = ?').bind(send).first() : null);
-  // A photo's answer is whether the photo came (readHeadshot's), never what the page said about it
-  const { answers, problems } = checkAnswers({ ...raw, ...Object.fromEntries(PHOTO_FIELDS.map((f) => [f.id, headshot ? PHOTO_ADDED : ''])) });
+  // A photo's answer is whether the photo came (readHeadshot's), never what the page said about it. `checked`: the
+  // public form's own check of these answers with this photo, made a moment ago (round 22: the checks run once a send)
+  const { answers, problems } = checked || checkAnswers({ ...raw, ...Object.fromEntries(PHOTO_FIELDS.map((f) => [f.id, headshot ? PHOTO_ADDED : ''])) });
   if (Object.keys(problems).length) return { problems };
   for (const f of PHOTO_FIELDS) delete answers[f.id]; // the picture is kept on its own, never as an answer
   const json = JSON.stringify(answers);
@@ -671,7 +678,7 @@ export async function deleteAdvisoryApplication(env, id, { fetchImpl = fetch } =
     // off: left marked, and pressing Delete again finishes)
     if (!gone && await unmark()) throw e;
     console.error('[advisory] delete stopped partway', e?.message || e);
-    throw Object.assign(new Error(hs?.id ? UNFINISHED : UNFINISHED_BARE), { status: 500 });
+    throw Object.assign(new Error(UNFINISHED), { status: 500 });
   }
   try {
     // One sent to the old form: its copy kept from Jotform goes too (else it would come back in on the next visit),
@@ -682,14 +689,13 @@ export async function deleteAdvisoryApplication(env, id, { fetchImpl = fetch } =
   } catch (e) {
     if (!gone && await unmark()) throw e;
     console.error('[advisory] delete stopped partway', e?.message || e);
-    throw Object.assign(new Error(hs?.id ? UNFINISHED : UNFINISHED_BARE), { status: 500 });
+    throw Object.assign(new Error(UNFINISHED), { status: 500 });
   }
 }
-// (the same, for an application that never had a headshot)
-export const UNFINISHED_BARE = 'Deleting this application didn’t finish: it’s still here. Press Delete application again to finish it.';
-// (said where a delete stopped once it was under way: the application stays, marked, its headshot never shown or made
-// anyone's photo, until Delete is pressed again; never "its headshot is gone", which a delete stopped early can't say)
-export const UNFINISHED = 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application again to finish it.';
+// (said where a delete stopped once it was under way, whatever its headshot: the application stays, marked, its headshot
+// never shown or made anyone's photo, until Delete is pressed again; never "its headshot is gone", which a delete stopped
+// early can't say)
+export const UNFINISHED = 'Deleting this application didn’t finish: it’s still here. Press Delete application again to finish it.';
 
 /**
  * The Jotform backfill's copy of an Advisory Board application: its answers and its files gone, so it never comes

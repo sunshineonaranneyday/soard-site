@@ -93,9 +93,10 @@ async function get(context) {
     try {
       const plan = await addPlan(env, planFor);
       // (busyName and busyOther: who that press is adding, and whether it's from another application; busyDeleting: it's
-      // this application being deleted, not anyone being added)
+      // this application being deleted, not anyone being added; busyEditing: a People record being changed, busyGone: by
+      // a delete)
       const busy = await addBusy(env.DB, plan);
-      return ok({ plan: { ...plan, busy: !!busy, ...(busy ? { busyName: busy.name, busyOther: busy.other, ...(busy.deleting ? { busyDeleting: true } : {}), ...(busy.editing ? { busyEditing: busy.editing } : {}) } : {}) } });
+      return ok({ plan: { ...plan, busy: !!busy, ...(busy ? { busyName: busy.name, busyOther: busy.other, ...(busy.deleting ? { busyDeleting: true } : {}), ...(busy.editing ? { busyEditing: busy.editing } : {}), ...(busy.gone ? { busyGone: true } : {}) } : {}) } });
     } catch (e) { return failed(e); }
   }
   const id = url.searchParams.get('id');

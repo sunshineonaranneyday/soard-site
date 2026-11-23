@@ -168,8 +168,9 @@ describe('who is “now”', () => {
   test('a list in the way’s order: applying first, revealed last, then not chosen and no status', () => {
     assert.deepEqual([F('a', 'revealed'), F('b', 'none'), F('c', 'applied'), F('d', 'denied'), F('e', 'build')].sort(byStage).map((f) => f.stage), ['applied', 'build', 'revealed', 'denied', 'none']);
   });
-  test('the map’s key: the building steps as one', () => {
-    assert.deepEqual(['applied', 'review', 'approved', 'funding', 'build', 'revealed', 'denied', 'none', 'weird'].map((s) => keyOf({ stage: s })), ['applied', 'review', 'building', 'building', 'building', 'revealed', 'denied', 'none', 'none']);
+  // (QA round 5, m9: approved and awaiting funding haven't started, so the key says them apart, as the line over it does)
+  test('the map’s key: the steps being built as one, approved and awaiting funding apart', () => {
+    assert.deepEqual(['applied', 'review', 'approved', 'funding', 'design', 'build', 'revealed', 'denied', 'none', 'weird'].map((s) => keyOf({ stage: s })), ['applied', 'review', 'approved', 'funding', 'building', 'building', 'revealed', 'denied', 'none', 'none']);
     assert.equal(stageLabel('denied'), 'Not chosen');
   });
 });

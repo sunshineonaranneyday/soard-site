@@ -29,7 +29,7 @@
 
 import { accessToken } from './_google-calendar.js';
 import { isEmail } from './_broadcast-notify.js';
-import { activeBoard, activeAdvisors, boardAdmins, founderEmails, normEmail, peopleRows, privateEmails, readState, writeState, isStaffEmail } from './_board-roles.js';
+import { activeBoard, boardAdmins, founderEmails, normEmail, peopleRows, peopleWithEmails, privateEmails, readState, writeState, isStaffEmail, PEOPLE_DOWN } from './_board-roles.js';
 
 export const GROUP_EMAIL = 'board@soardcharity.com';
 export const GROUP_SCOPE = 'https://www.googleapis.com/auth/admin.directory.group.member';
@@ -58,6 +58,8 @@ async function primaryOf(DB) {
  * The same people the meeting invite goes to (./_board-invite.js guestsFor).
  */
 export async function groupWanted(DB) {
+  // (read for certain: a read of People or the emails that fails throws, never a list shrunk to whoever came back.
+  // Board QA round 9: a member's Email all went to one address)
   const [board, admins, people, primary] = await Promise.all([activeBoard(DB), boardAdmins(DB), peopleRows(DB), primaryOf(DB)]);
   const byEmail = new Map();
   for (const p of board) if (isEmail(p.email)) byEmail.set(primary(p.email), p.name);
@@ -134,14 +136,22 @@ function failedText(failing) {
 /** Only plain members who are people are the site's to remove: owners, managers, groups and the domain stay */
 const keptBySite = (m) => m.email && m.role === 'MEMBER' && (m.type === 'USER' || m.type === 'EXTERNAL');
 
-/** Who belongs in advisory@soardcharity.com: the active advisors and whoever runs the group, plus the Board area's admins */
+/**
+ * Who belongs in advisory@soardcharity.com: the active Advisory Board members and whoever runs the group, plus the Board
+ * area's admins. The members and whether People was read at all come from one sure read of People and the emails: one
+ * that fails throws, so the group is left as it is (Board QA round 9: one failed read of the emails took every Advisory
+ * Board member off, said as "removed", and with their emails off nobody was put back)
+ */
 export async function advisoryGroupWanted(DB) {
-  const [advisors, admins, people, emails, primary, state] = await Promise.all([activeAdvisors(DB), boardAdmins(DB), peopleRows(DB), privateEmails(DB), primaryOf(DB), readState(DB, 'advisory')]);
+  // (each record with its email in one statement, so a rename between two reads never leaves a member with no email and
+  // off the group: ./_board-roles.js peopleWithEmails)
+  const [admins, people, primary, state] = await Promise.all([boardAdmins(DB), peopleWithEmails(DB), primaryOf(DB), readState(DB, 'advisory')]);
+  const advisors = people.filter((p) => p.group === 'advisory' && p.status === 'active');
   const byEmail = new Map();
   for (const a of advisors) if (isEmail(a.email)) byEmail.set(primary(a.email), a.name);
   const lead = state.lead || 'mary-atchley';
   const leadPerson = people.find((p) => p.slug === lead);
-  if (leadPerson && isEmail(emails[lead] || '')) byEmail.set(primary(emails[lead]), leadPerson.name);
+  if (leadPerson && isEmail(leadPerson.email || '')) byEmail.set(primary(leadPerson.email), leadPerson.name);
   for (const e of admins) if (!byEmail.has(primary(e))) byEmail.set(primary(e), e);
   const members = [...byEmail].map(([email, name]) => ({ email, name })).sort((a, b) => a.email.localeCompare(b.email));
   return { members, board: advisors.filter((a) => isEmail(a.email)).length, missing: advisors.filter((a) => !isEmail(a.email)).map((a) => ({ slug: a.slug, name: a.name })), peopleRead: people.length };
@@ -163,11 +173,14 @@ async function syncGroup(env, cfg, { fetchImpl = fetch, now = Date.now(), adding
   const MEMBERS_API = membersApi(cfg.email);
   const prev = await readState(env.DB, KEY);
   const at = new Date(now).toISOString();
-  const want = await cfg.wanted(env.DB);
-  const hash = await runHash(want.members, adding);
+  const want = await cfg.wanted(env.DB).catch((e) => { console.error('[board-group] who belongs', cfg.email, e?.message || e); return null; });
+  const hash = want ? await runHash(want.members, adding) : prev.triedHash || null;
   // failingSince: when this run of failures began, so a passing outage reads as one
-  const fail = (err) => writeState(env.DB, KEY, { ...prev, ok: false, configured: true, triedHash: hash, error: err.message, needs: err.needs || null, failedAt: at, failingSince: prev.failingSince || at });
+  const fail = (err) => writeState(env.DB, KEY, { ...prev, ok: false, configured: true, triedHash: hash, error: err.message, needs: err.needs || null, unread: !!err.unread, failedAt: at, failingSince: prev.failingSince || at });
   if (!env.GOOGLE_CALENDAR_KEY) return { ...prev, ok: false, configured: false };
+  // (who belongs in it couldn't be read: nothing in the group changes, and the panel says why, as Google not answering
+  // is said. The next look asks again)
+  if (!want) return fail(Object.assign(new Error(PEOPLE_DOWN), { unread: true }));
   // (nobody wanted from a read of People that found nobody at all: never acted on. advisory@ with People read and
   // nobody left on it with an email: the last one comes off)
   if (!want.board && !(cfg.canEmpty && want.peopleRead > 0)) return fail(Object.assign(new Error(cfg.empty), { needs: 'empty' }));
@@ -175,7 +188,10 @@ async function syncGroup(env, cfg, { fetchImpl = fetch, now = Date.now(), adding
   // The founder that worked last time, then staff sign-in's, then each founder: only "not a Workspace admin" is worth trying the next one for
   let staffSubject = '';
   try { staffSubject = JSON.parse((await env.DB.prepare("SELECT data FROM staff_state WHERE key = 'directory'").first())?.data || '{}').subject || ''; } catch { /* not read yet */ }
-  const subjects = [...new Set([prev.subject, staffSubject, ...founderEmails(await peopleRows(env.DB))].filter(Boolean))];
+  // (People not answering: nothing in the group changes, said in the panel as `unread`, and the next look asks again)
+  let founders;
+  try { founders = founderEmails(await peopleRows(env.DB)); } catch (err) { return fail(err); }
+  const subjects = [...new Set([prev.subject, staffSubject, ...founders].filter(Boolean))];
   if (!subjects.length) return fail(Object.assign(new Error('No founder on People → Team to ask Google as'), { needs: 'founder' }));
   let token = null, subject = null, current = null, lastErr = null;
   for (const s of subjects) {
@@ -184,7 +200,8 @@ async function syncGroup(env, cfg, { fetchImpl = fetch, now = Date.now(), adding
   if (!current) return fail(lastErr);
 
   // Names for whoever leaves: anyone on People with that private email (former board members too)
-  const [people, emails] = await Promise.all([peopleRows(env.DB), privateEmails(env.DB)]);
+  let people, emails;
+  try { [people, emails] = await Promise.all([peopleRows(env.DB), privateEmails(env.DB)]); } catch (err) { return fail(err); }
   const nameOf = new Map([...Object.entries(emails).map(([slug, e]) => [e, people.find((p) => p.slug === slug)?.name]), ...(prev.names || []), ...want.members.map((m) => [m.email, m.name])].filter(([, n]) => n));
 
   const wanted = new Set(want.members.map((m) => m.email));
@@ -216,7 +233,7 @@ async function syncGroup(env, cfg, { fetchImpl = fetch, now = Date.now(), adding
   const outsideRefused = adds.length > 0 && adds.every((f) => f.outside);
   const changes = added.length || removed.length ? [{ at, added, removed }, ...(prev.changes || [])].slice(0, KEEP_CHANGES) : (prev.changes || []);
   return writeState(env.DB, KEY, {
-    ok: !failing.length, configured: true, subject, group: cfg.email,
+    ok: !failing.length, configured: true, unread: false, subject, group: cfg.email,
     members: current.length + added.length - removed.length, wanted: want.members.length,
     owners: current.filter((m) => m.role !== 'MEMBER').length,
     // Caught up only when everything went: anything left is tried again
@@ -234,15 +251,19 @@ export const syncAdvisoryGroup = (env, o) => syncGroup(env, ADVISORY, o);
 
 /** For the admin: whether the group follows its people, and its last changes (names only) */
 async function statusOf(env, cfg) {
-  const [state, want] = await Promise.all([readState(env.DB, cfg.key), cfg.wanted(env.DB)]);
+  const [state, read] = await Promise.all([readState(env.DB, cfg.key), cfg.wanted(env.DB).catch(() => null)]);
+  // (who belongs in it couldn't be read just now: said as that, never as up to date or as a group of nobody)
+  const want = read || { members: [], board: state.wanted ?? 0, missing: [] };
+  const unread = !read || (!state.ok && !!state.unread);
+  const ok = !!state.ok && !!read;
   const hash = await hashOf(want.members.map((m) => m.email));
   return {
     group: cfg.email,
     configured: Boolean(env.GOOGLE_CALENDAR_KEY),
-    ok: !!state.ok, syncedAt: state.syncedAt || null, failedAt: state.failedAt || null, failingSince: state.ok ? null : state.failingSince || state.failedAt || null,
-    error: state.ok ? null : state.error || null, needs: state.ok ? null : state.needs || null,
-    current: state.hash === hash, members: state.members ?? null, owners: state.owners ?? 0,
-    wanted: want.members.length, board: want.board, missing: want.missing, everyone: want.members,
+    ok, unread, syncedAt: state.syncedAt || null, failedAt: state.failedAt || null, failingSince: ok ? null : state.failingSince || state.failedAt || (read ? null : new Date().toISOString()),
+    error: ok ? null : !read ? PEOPLE_DOWN : state.error || null, needs: ok ? null : state.needs || null,
+    current: !!read && state.hash === hash, members: state.members ?? null, owners: state.owners ?? 0,
+    wanted: read ? want.members.length : state.wanted ?? null, board: want.board, missing: want.missing, everyone: want.members,
     failing: (state.failing || []).map((f) => ({ name: f.name || f.email, error: f.error, removing: !!f.removing })),
     changes: (state.changes || []).slice(0, 5).map((c) => ({ at: c.at, added: c.added.map((m) => m.name || m.email), removed: c.removed.map((m) => m.name || m.email) })),
   };
@@ -259,7 +280,10 @@ async function maybeSync(env, cfg, { fetchImpl = fetch, now = Date.now(), adding
     if (now - (Number(runs.lookedAt) || 0) < LOOK_MS) return null;
     await writeState(env.DB, cfg.runs, { lookedAt: now });
     const state = await readState(env.DB, cfg.key);
-    const hash = await runHash((await cfg.wanted(env.DB)).members, adding);
+    // (who belongs couldn't be read: the sync reads it again, and says so in the panel when it still can't, changing nothing)
+    const want = await cfg.wanted(env.DB).catch(() => null);
+    if (!want) return await syncGroup(env, cfg, { fetchImpl, now, adding });
+    const hash = await runHash(want.members, adding);
     const last = Date.parse((state.ok ? state.syncedAt : state.failedAt) || '') || 0;
     // A young outage (Google erring, nothing to set) is asked again at each look for its first half hour, as the panel says
     const young = !state.ok && !state.needs && state.failingSince && now - Date.parse(state.failingSince) < RETRY_MS;

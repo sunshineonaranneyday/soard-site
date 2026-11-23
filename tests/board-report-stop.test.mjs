@@ -229,8 +229,8 @@ test('what rounds to nothing reads as nothing: "$0" (never −$0 or +$0), "Under
   // Overdrawn by 30¢ is $0 in the bank, not "Overdrawn $0"; a total that isn't a figure says so
   const tile = (total) => moneyTiles({ cash: { total, asOf: 'Nov 2, 2026', live: true, accounts: [] }, budget: null, n: null })[0];
   assert.deepEqual([tile(-0.3).label, tile(-0.3).value, tile(-0.3).quiet], ['Cash in the bank', '$0', false]);
-  assert.equal(tile(NaN).value, '–');
-  assert.equal(tile(undefined).value, '–');
+  assert.equal(tile(NaN).value, 'Not known', 'in words, never a dash a screen reader reads out');
+  assert.equal(tile(undefined).value, 'Not known');
   // Mercury's year so far: a sign only on a figure that has one
   const ytd = (net) => moneyTiles({ cash: { total: 5000, asOf: '', live: true, banks: ['Mercury'], accounts: [] }, budget: null, n: { finance: { ytd: { year: 2026, net, income: 1000, makeovers: 0, store: 0, operating: 1000, through: '2026-10-31' } } } }).find((t) => t.k === 'ytd').value;
   assert.deepEqual([ytd(0), ytd(-0.4), ytd(0.4), ytd(1200), ytd(-1200)], ['$0', '$0', '$0', '+$1,200', '−$1,200']);

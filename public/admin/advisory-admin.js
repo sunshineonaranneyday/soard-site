@@ -560,7 +560,9 @@ function GroupCard({ ctx }) {
   const g = data.group;
   const [busy, setBusy] = useState(false);
   const missing = g?.missing?.length || 0;
-  const line = !data.settings.emails ? 'The group fills in by itself once emails are on.'
+  // (People didn't answer the site: the group was left as it is, emails on or off, and said: Board QA round 9)
+  const line = g?.unread ? 'The site couldn’t check People just now, so the group was left as it is. It asks again by itself.'
+    : !data.settings.emails ? 'The group fills in by itself once emails are on.'
     : !g ? 'The group’s list isn’t being kept yet.'
     : g.error ? (/HTTP \d|answered \d/.test(g.error) ? 'Google didn’t answer the last time. The site will try again.' : `Google didn’t take the last change: ${g.error}`)
       : g.current === false ? 'A change is on its way to the group.'

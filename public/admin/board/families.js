@@ -26,6 +26,7 @@ import { h, htm, useState, useEffect, useMemo } from '../vendor.js';
 import { plural } from '../board-shared.js';
 import { criteriaOf, rubricOfSeason, fmtScore, TOTAL_MAX, TIERS } from '../scoring-shared.js';
 import { nbw } from './costs.js';
+import { Blank } from './money.js';
 import { useKept } from './parts.js';
 import { Face, Score, asked, place, areaWords, byScore, day, read, cache, seasonsOf, Media } from './family-parts.js';
 import { FamilyMap } from './family-map.js';
@@ -33,6 +34,8 @@ import { STAGES, stageLabel, byStage, isFamily } from './stages.js';
 import { itemsOf, inSeason, sumLine, Track, LifeBoard, SeasonSwitch, StageChip, STAGE_SCHEME, Journey, toStep } from './lifecycle.js';
 
 const html = htm.bind(h);
+/** A score, or a blank said to a screen reader (scoring-shared.js fmtScore writes a dash for none) */
+const scoreOf = (n) => (n == null || !Number.isFinite(Number(n)) ? html`<${Blank} say="Not scored" />` : fmtScore(n));
 const external = (href) => /^\//.test(href);
 
 /** Every family from application to reveal: a board, a list or the map, now or a season at a time */
@@ -45,7 +48,8 @@ export function FamiliesPage({ view = 'board', open = '', projects = null, revea
     return () => { live = false; };
   }, []);
   const all = useMemo(() => itemsOf(data, projects), [data, projects]);
-  const seasons = useMemo(() => seasonsOf(data?.families), [data]);
+  // (a makeover with no application is in its season too: ../../../functions/api/_board-families.js makeoverSeason)
+  const seasons = useMemo(() => seasonsOf([...(data?.families || []), ...(data?.makeovers || [])]), [data]);
   const app = data?.application || null;
   // It opens on now, or on the season of the family it opens on (the map, with them open)
   const [season, setSeason] = useKept('lc-page-season', '');
@@ -80,7 +84,7 @@ export function FamiliesPage({ view = 'board', open = '', projects = null, revea
       <p class="bf-sum">${nbw(sumLine(list, shownSeason, app)) || 'Nobody here.'}</p>
       <${Track} list=${list} application=${windowed} onStep=${view === 'board' ? toStep : view === 'list' ? (k) => setStage(k) : null} />
       ${!data.jobs ? html`<p class="lc-note">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
-      ${view === 'map' ? html`<${FamilyMap} key="map" families=${families} boundary=${data.boundary} open=${open} tall=${true} scheme=${STAGE_SCHEME} />`
+      ${view === 'map' ? html`<${FamilyMap} key="map" families=${families} boundary=${data.boundary} open=${open} tall=${true} scheme=${STAGE_SCHEME} level=${2} away=${list.filter((x) => !isFamily(x))} />`
       : view === 'board' ? html`<${LifeBoard} key=${shownSeason} list=${list} application=${windowed} reveals=${reveals} />
         ${aside ? html`<p class="lc-note">${nbw(`${plural(aside, 'family', 'families')} not chosen or with no status ${aside === 1 ? 'isn’t' : 'aren’t'} on the board.`)} <a class="bp-link" href="#/families/list">See them in the list</a></p>` : null}`
       : html`
@@ -93,7 +97,7 @@ export function FamiliesPage({ view = 'board', open = '', projects = null, revea
           const job = !isFamily(f);
           const href = job ? f.page || '' : `#/families/${encodeURIComponent(f.id)}`;
           const inner = html`<${Face} f=${{ ...f, photo: f.card?.photo || f.photo }} size=${44} />
-            <span class="bf-row__who"><strong>${(job ? f.card?.name : f.name) || 'A family'}</strong><span>${[asked(f), place(f)].filter(Boolean).join(' · ') || (job ? (f.revealYear ? `Revealed in ${f.revealYear}, from before the applications` : 'From before the applications') : '')}</span></span>
+            <span class="bf-row__who"><strong>${(job ? f.card?.name : f.name) || 'A family'}</strong><span>${[asked(f), place(f)].filter(Boolean).join(' · ') || (job ? (f.revealYear ? `Revealed in ${f.revealYear}, no application in Board` : 'No application in Board') : '')}</span></span>
             <span class="bf-row__status"><${StageChip} f=${f} /><small>${nbw([f.season, f.applied ? `applied ${day(f.applied)}` : ''].filter(Boolean).join(' · '))}</small></span>
             <span class="bf-row__score">${job ? null : html`<${Score} s=${f.score} />`}</span>`;
           return html`<li key=${f.id}>${href ? html`<a class="bf-row" href=${href} ...${external(href) ? { target: '_blank', rel: 'noopener' } : {}}>${inner}</a>` : html`<div class="bf-row">${inner}</div>`}</li>`;
@@ -102,18 +106,42 @@ export function FamiliesPage({ view = 'board', open = '', projects = null, revea
   </div>`;
 }
 
+/**
+ * What each score means, criterion by criterion, on the page itself: each opens to its five, 1 first, in the rubric's
+ * own words (../scoring-shared.js, Peter's), so a phone and a keyboard reach them as well as a mouse (a score's hover
+ * says its own too)
+ */
+function Meanings({ crit }) {
+  return html`<div class="bf-means">
+    <h3 class="bf-means__h">What each score means</h3>
+    ${crit.map((c) => html`<details class="bf-mean" key=${c.key}>
+      <summary>${c.label}</summary>
+      ${c.note ? html`<p class="bf-mean__note">${c.note}</p>` : null}
+      <ol class="bf-mean__levels" role="list">${(c.levels || []).map((words, i) => html`<li key=${i}><b>${i + 1}</b> <span>${words}</span></li>`)}</ol>
+    </details>`)}
+  </div>`;
+}
+
 /** One family: what they asked for, the facts their score rests on, and each scorer's card */
 export function FamilyPage({ id, reveals = [] }) {
   const [f, setF] = useState(cache.one.get(id) || null);
-  const [err, setErr] = useState('');
+  const [err, setErr] = useState(null);
   useEffect(() => {
     let live = true;
-    read(`family=${encodeURIComponent(id)}`).then((j) => { if (!live) return; if (!j.ok) { setErr(j.error); return; } cache.one.set(id, j.family); setF(j.family); });
+    read(`family=${encodeURIComponent(id)}`).then((j) => { if (!live) return; if (!j.ok) { setErr({ text: j.error, gone: j.status === 404 }); return; } cache.one.set(id, j.family); setF(j.family); });
     return () => { live = false; };
   }, [id]);
-  useEffect(() => { if (f) document.title = `${f.name} · SOARD Board`; }, [f]);
+  // (the tab says what's open: a family's name, or that the link leads to none, as a dead meeting's or document's does)
+  useEffect(() => { if (f) document.title = `${f.name} · SOARD Board`; else if (err) document.title = `${err.gone ? 'Family not found' : 'Makeovers'} · SOARD Board`; }, [f, err]);
   const back = html`<a class="bp-back" href="#/families">← Makeovers</a>`;
-  if (err) return html`<div class="bf">${back}<p class="bf-err" role="alert">${err}</p></div>`;
+  // A link that leads to no family (cut short, mistyped, or one no longer on the board page) says so in plain words
+  // under a heading, as a dead meeting or document link does (Board QA round 9: only "Which family?")
+  if (err) {
+    return html`<div class="bf">${back}<div class="bp-card bp-empty bp-gap" role=${err.gone ? null : 'alert'}>
+      <h1 class="bp-h2">${err.gone ? 'That family isn’t on the board page' : 'That family didn’t open'}</h1>
+      <p class="bp-muted">${err.gone ? html`The link may be cut short or out of date. Every family is in <a class="bp-link" href="#/families">Makeovers</a>.` : err.text}</p>
+    </div></div>`;
+  }
   if (!f) return html`<div class="bf">${back}<p class="bp-muted">Opening…</p></div>`;
   const x = f.facts || {};
   const facts = [
@@ -157,12 +185,13 @@ export function FamilyPage({ id, reveals = [] }) {
             <thead><tr><th scope="col">Criterion</th>${f.score?.count ? html`<th scope="col" class="num">Average</th>` : null}${cards.map((c, i) => html`<th scope="col" class="num" key=${i} title=${c.name}>${String(c.name || '').split(/\s+/)[0]}${c.complete ? '' : html`<small> partway</small>`}</th>`)}</tr></thead>
             <tbody>${crit.map((c) => html`<tr key=${c.key} class=${talk.has(c.key) ? 'is-talk' : ''}>
               <th scope="row">${c.label}${talk.has(c.key) ? html`<span class="bf-talk">Worth talking about</span>` : null}</th>
-              ${f.score?.count ? html`<td class="num"><b>${fmtScore(avg[c.key])}</b></td>` : null}
-              ${cards.map((card, i) => html`<td class="num" key=${i} title=${card.scores?.[c.key] ? c.levels?.[card.scores[c.key] - 1] || '' : ''}>${card.scores?.[c.key] ?? '–'}</td>`)}
+              ${f.score?.count ? html`<td class="num"><b>${scoreOf(avg[c.key])}</b></td>` : null}
+              ${cards.map((card, i) => html`<td class="num" key=${i} title=${card.scores?.[c.key] ? c.levels?.[card.scores[c.key] - 1] || '' : ''}>${card.scores?.[c.key] ?? html`<${Blank} say="Not scored" />`}</td>`)}
             </tr>`)}</tbody>
-            <tfoot><tr><th scope="row">Total, of ${TOTAL_MAX}</th>${f.score?.count ? html`<td class="num"><b>${fmtScore(f.score.total)}</b></td>` : null}${cards.map((c, i) => html`<td class="num" key=${i}>${c.complete ? fmtScore(c.total) : '–'}</td>`)}</tr></tfoot>
+            <tfoot><tr><th scope="row">Total, of ${TOTAL_MAX}</th>${f.score?.count ? html`<td class="num"><b>${scoreOf(f.score.total)}</b></td>` : null}${cards.map((c, i) => html`<td class="num" key=${i}>${c.complete ? scoreOf(c.total) : html`<${Blank} say="Not finished" />`}</td>`)}</tr></tfoot>
           </table></div>
-          <p class="bf-note">Each criterion is scored 1 to 5. Hover a score for what it means.</p>`}
+          <p class="bf-note">Each criterion is scored 1 to 5.</p>
+          <${Meanings} crit=${crit} />`}
       </section>
     </div>
   </div>`;

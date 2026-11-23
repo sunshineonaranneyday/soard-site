@@ -44,6 +44,8 @@ export const STATUS_SCHEME = {
 // This many on the map and each pin is drawn smaller
 const CROWDED = 30;
 const isFar = (f) => f.area === 'outside' && f.areaMiles > FAR_MILES;
+// A family with a home in JobTread has a pin; one without has none, on the map or beside their name in the list
+const hasPin = (f) => f.lat != null && f.lng != null;
 const ARROW = html`<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
 const BACK = html`<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>`;
 
@@ -55,8 +57,11 @@ export function seasonLine(list) {
   return nbw([fams ? plural(fams, 'family', 'families') : '', orgs ? plural(orgs, 'community project') : '', out ? `${out} outside the service area` : ''].filter(Boolean).join(' · '));
 }
 
-/** A family in the list's place: what they sent, first */
-function FamilyCard({ f, onBack, back, scheme = STATUS_SCHEME }) {
+/**
+ * A family in the list's place: what they sent, first. `level`: their name's heading, the next under the page's (an h2
+ * under the Makeovers page's h1, an h3 in Home's Makeovers card under its h2), so headings go in order
+ */
+function FamilyCard({ f, onBack, back, scheme = STATUS_SCHEME, level = 3 }) {
   const [d, setD] = useState(cache.one.get(f.id) || null);
   const [err, setErr] = useState('');
   const head = useRef(null);
@@ -80,7 +85,7 @@ function FamilyCard({ f, onBack, back, scheme = STATUS_SCHEME }) {
     <button type="button" class="fm-back" onClick=${onBack}>${BACK}${back}</button>
     <div class="fm-card__head">
       <${Face} f=${f} size=${48} />
-      <div><h3 class="fm-card__name" ref=${head} tabindex="-1">${f.name}</h3><p class="fm-card__meta">${scheme.chip(f)}<span>${nbw([f.season, f.kind === 'organization' ? 'Community project' : ''].filter(Boolean).join(' · '))}</span></p></div>
+      <div><${`h${level}`} class="fm-card__name" ref=${head} tabindex="-1">${f.name}</${`h${level}`}><p class="fm-card__meta">${scheme.chip(f)}<span>${nbw([f.season, f.kind === 'organization' ? 'Community project' : ''].filter(Boolean).join(' · '))}</span></p></div>
     </div>
     ${!d && !err ? html`<div class="fm-card__wait" role="status">Opening what they sent…</div>` : null}
     ${m?.video ? html`<${Video} m=${m} set=${set} who=${who} />` : null}
@@ -97,10 +102,38 @@ function FamilyCard({ f, onBack, back, scheme = STATUS_SCHEME }) {
 }
 
 /**
- * The map and who's on it. `families`: the season's, each as the list has them; `boundary`: the service area;
- * `open`: a family to open with; `tall`: Families → Map's height, and the wheel zooms there
+ * How many of `list` are at each stage, in the key's words and order: "1 awaiting funding, 2 building" (the key's own
+ * labels, so a reader adds each to its row in the key)
  */
-export function FamilyMap({ families, boundary, open = '', tall = false, scheme = STATUS_SCHEME }) {
+export function byStageWords(list, scheme = STATUS_SCHEME) {
+  const by = new Map();
+  for (const x of list || []) { const k = scheme.keyOf(x); by.set(k, (by.get(k) || 0) + 1); }
+  const label = (k) => (scheme.rows?.find((r) => r.key === k)?.label || scheme.word({ stage: k, status: k }) || '').toLowerCase();
+  const order = scheme.rows ? scheme.rows.map((r) => r.key).filter((k) => by.has(k)) : [...by.keys()];
+  return order.map((k) => `${by.get(k)} ${label(k)}`).join(', ');
+}
+
+/**
+ * The makeovers the line over the map counts that have no pin, said beside the key so the two add up (QA round 6: the
+ * line said 3 building and 1 awaiting funding while the key said Building 1): "3 more makeovers aren’t on the map (2
+ * building, 1 awaiting funding): no application in Board for them, so no address". Only what's known is said (QA round
+ * 7: "from before the applications" was a guess; all the page knows is that there's no application for them). `away`:
+ * the makeovers whose family isn't an applicant (./lifecycle.js itemsOf); those who applied with no home in JobTread
+ * yet are said under the key the same way, stage by stage (FamilyMap's noPointBy, ../family-map.js MapLegend)
+ */
+export function awayLine(away, scheme = STATUS_SCHEME) {
+  const n = away?.length || 0;
+  if (!n) return '';
+  const parts = byStageWords(away, scheme);
+  return `${n} more ${n === 1 ? 'makeover isn’t' : 'makeovers aren’t'} on the map${parts ? ` (${parts})` : ''}: no application in Board for ${n === 1 ? 'it' : 'them'}, so no address`;
+}
+
+/**
+ * The map and who's on it. `families`: the season's, each as the list has them; `boundary`: the service area;
+ * `open`: a family to open with; `tall`: Families → Map's height, and the wheel zooms there; `level`: an open family's
+ * name's heading (FamilyCard); `away`: the season's makeovers with no application, so no pin (said beside the key)
+ */
+export function FamilyMap({ families, boundary, open = '', tall = false, scheme = STATUS_SCHEME, level = 3, away = [] }) {
   const box = useRef(null);
   const st = useRef({});
   const listEl = useRef(null);
@@ -117,7 +150,7 @@ export function FamilyMap({ families, boundary, open = '', tall = false, scheme 
   const nearMiles = boundary?.nearMiles ?? 0;
 
   const rows = useMemo(() => [...families].sort(scheme.sort || byScore), [families]);
-  const onMap = useMemo(() => rows.filter((f) => f.lat != null && f.lng != null), [rows]);
+  const onMap = useMemo(() => rows.filter(hasPin), [rows]);
   const showing = useMemo(() => onMap.filter((f) => !hidden.has(scheme.keyOf(f))), [onMap, hidden]);
   const counts = useMemo(() => onMap.reduce((c, f) => ({ ...c, [scheme.keyOf(f)]: (c[scheme.keyOf(f)] || 0) + 1 }), {}), [onMap]);
   const listed = rows.filter((f) => !hidden.has(scheme.keyOf(f)));
@@ -129,7 +162,7 @@ export function FamilyMap({ families, boundary, open = '', tall = false, scheme 
   const frame = (animate, everyone = wide) => {
     const s = st.current;
     if (!s.map) return;
-    const key = box.current?.parentElement?.querySelector('.apl-legend');
+    const key = box.current?.parentElement?.querySelector('.fm-key');
     const left = key && getComputedStyle(key).position === 'absolute' ? key.offsetWidth + 22 : 22;
     frameArea(L, s.map, { polygon: poly, nearMiles, points: showing.filter((f) => everyone || !isFar(f)).map((f) => [f.lat, f.lng]), left, animate: animate && !s.still });
   };
@@ -239,29 +272,36 @@ export function FamilyMap({ families, boundary, open = '', tall = false, scheme 
 
   const toggle = (status) => setHidden((h) => { const n = new Set(h); if (n.has(status)) n.delete(status); else n.add(status); return n; });
   const noPoint = rows.length - onMap.length;
+  // (and stage by stage, so the key and the line over the map add up for them too: QA round 7)
+  const noPointBy = noPoint ? byStageWords(rows.filter((f) => !hasPin(f)), scheme) : '';
   const outside = onMap.filter((f) => f.area === 'outside').length;
   const far = showing.filter(isFar).length;
   const widen = () => { const next = !wide; setWide(next); frame(true, next); };
 
+  // The key first, then the map: the keyboard reaches its switches in the order they're seen (a phone has the key
+  // above the map; a wider screen over its top corner), never the map's pins and links first (QA round 7)
   return html`<div class=${`fm ${tall ? 'fm--tall' : ''}`}>
     <div class="fm-stage">
+      <div class="fm-key">
+        <${MapLegend} counts=${counts} hidden=${hidden} onToggle=${toggle} outside=${outside} nearMiles=${nearMiles} noPoint=${noPoint} noPointBy=${noPointBy} rows=${scheme.rows ? scheme.rows.filter((r) => counts[r.key]) : null} />
+        ${away.length ? html`<p class="fm-key__note">${nbw(`${awayLine(away, scheme)}.`)}</p>` : null}
+      </div>
       ${err ? html`<p class="fm-opening">The map couldn’t load. Reload the page to try again.</p>` : html`<div class="fm-map" ref=${box} role="region" aria-label="Map of the families who applied and the service area"></div>`}
       ${!L && !err ? html`<p class="fm-opening">Opening the map…</p>` : null}
-      <${MapLegend} counts=${counts} hidden=${hidden} onToggle=${toggle} outside=${outside} nearMiles=${nearMiles} noPoint=${noPoint} rows=${scheme.rows ? scheme.rows.filter((r) => counts[r.key]) : null} />
       ${L && (far || L.Browser.mobile) ? html`<div class="fm-under">
         ${far ? html`<button type="button" class="fm-far" onClick=${widen}>${wide ? 'Back to the service area' : `Show ${far} farther out`}</button>` : null}
         ${L.Browser.mobile ? html`<p class="fm-hint">Two fingers move the map</p>` : null}
       </div>` : null}
     </div>
     <aside class="fm-side" aria-label=${picked ? picked.name : 'Who’s on the map'}>
-      ${picked ? html`<${FamilyCard} key=${picked.id} f=${picked} onBack=${close} back=${plural(rows.length, 'family', 'families').replace(/^(\d+) /, 'All $1 ')} scheme=${scheme} />` : html`
+      ${picked ? html`<${FamilyCard} key=${picked.id} f=${picked} onBack=${close} back=${plural(rows.length, 'family', 'families').replace(/^(\d+) /, 'All $1 ')} scheme=${scheme} level=${level} />` : html`
         ${listed.length ? html`<ul class=${`fm-list ${all ? 'is-all' : ''}`} ref=${listEl}>${listed.map((f) => html`<li key=${f.id}>
           <button type="button" class="fm-row" data-id=${f.id} onClick=${() => pick(f.id, true)} onMouseEnter=${() => lightPin(f.id, true)} onMouseLeave=${() => lightPin(f.id, false)} onFocus=${() => lightPin(f.id, true)} onBlur=${() => lightPin(f.id, false)}>
             <${Face} f=${f} size=${38} />
             <span class="fm-row__who"><strong>${f.name}</strong><span>${[asked(f), f.city].filter(Boolean).join(' · ') || scheme.word(f)}</span></span>
             <span class="fm-row__end">
               ${f.score?.ranked ? html`<b class="fm-row__score">${fmtScore(f.score.total)}</b>` : null}
-              <span class="apl-pin fm-row__pin" style=${`--c:${scheme.colorOf(f)}`} title=${scheme.word(f)}></span><span class="sr-only">${scheme.word(f)}</span>
+              ${hasPin(f) ? html`<span class="apl-pin fm-row__pin" style=${`--c:${scheme.colorOf(f)}`} title=${scheme.word(f)}></span><span class="sr-only">${scheme.word(f)}</span>` : html`<span class="sr-only">${scheme.word(f)}, not on the map</span>`}
             </span>
           </button>
         </li>`)}</ul>` : html`<p class="bp-muted fm-none">No family here.</p>`}

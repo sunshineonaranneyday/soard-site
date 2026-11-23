@@ -323,6 +323,9 @@ async function handle(context) {
           return Response.redirect(back.toString(), 302);
         }
       }
+      // The monthly ask email's button is pressed by a person, on a page: told so in words, what they typed kept to press
+      // again (./advisory-action.js; Advisory Board QA round 22), never JSON
+      if (url.pathname === '/api/advisory-action') return (await import('./advisory-action.js')).pressLater(context.request, { wait });
       return Response.json(
         { ok: false, error: 'Too many attempts. Please wait a minute and try again.' },
         { status: 429, headers: { ...publicCors, 'Retry-After': String(wait) } }
@@ -400,8 +403,17 @@ async function handle(context) {
   // whoIs); an advisor (People → Advisory) reaches only the advisors' routes;
   // anyone else Access somehow let in reaches nothing (see _board-roles.js)
   if (!isStaffEmail(context.data.userEmail)) {
-    const member = await boardMemberFor(context.env.DB, context.data.userEmail).catch(() => null);
-    const advisor = member ? null : await advisorFor(context.env.DB, context.data.userEmail).catch(() => null);
+    // (a read that failed is said as that, never as "not on the list": a board member told the board page isn't theirs
+    // during a moment the database didn't answer. Board QA round 8, Nov 22 2026)
+    let member = null;
+    let advisor = null;
+    try {
+      member = await boardMemberFor(context.env.DB, context.data.userEmail);
+      advisor = member ? null : await advisorFor(context.env.DB, context.data.userEmail);
+    } catch (e) {
+      console.error('[middleware] who signed in', e?.message || e);
+      return Response.json({ success: false, error: 'We couldn’t check your sign-in just now. Please try again in a moment.' }, { status: 503, headers: { ...cors, 'Retry-After': '5' } });
+    }
     if (!routesFor({ member, advisor }).includes(url.pathname)) {
       return Response.json(
         member

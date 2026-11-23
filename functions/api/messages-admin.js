@@ -647,6 +647,7 @@ export async function buildPreview(env, id, { lang = 'en', me = '', now = Date.n
       });
     case 'board-meeting-invite': {
       const m = sampleBoardMeeting();
+      // not sure: a sample email's "from" line in a preview, read-only; a failed read says it in words
       const organizer = await organizerFor(env.DB).catch(() => '') || 'The organizer on Board → Members';
       return {
         channel: 'invite', from: `${organizer}'s Google Calendar`, to: 'Every active board member with an email on People → Board, plus Peter and Holly',

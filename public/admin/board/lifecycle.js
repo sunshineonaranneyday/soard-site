@@ -30,7 +30,7 @@ import { sized, revealTag, cardId } from './kanban.js';
 import { Face, asked, read, cache, seasonsOf, day, byScore } from './family-parts.js';
 import { FamilyMap } from './family-map.js';
 import { nbw } from './costs.js';
-import { STAGES, PHASES, STAGE_KEYS, STAGE_OF_JOB, stageInfo, stageLabel, phaseOf, keyOf, colorOf, inMotion, countsOf, shownStages, trackStages, windowWords, byStage, isFamily } from './stages.js';
+import { STAGES, PHASES, STAGE_KEYS, STAGE_OF_JOB, stageInfo, stageLabel, phaseOf, keyOf, colorOf, inMotion, countsOf, phaseCount, shownStages, trackStages, windowWords, byStage, isFamily, UNDERWAY } from './stages.js';
 
 const html = htm.bind(h);
 const ARROW = html`<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg>`;
@@ -46,7 +46,7 @@ export const StageChip = ({ f }) => html`<span class="lc-chip" style=${`--c:${co
 
 /** The map keyed by step (./family-map.js FamilyMap `scheme`) */
 export const STAGE_SCHEME = {
-  keyOf, colorOf, word: (f) => stageLabel(f.stage), rank: (f) => ({ applied: 500, review: 400, building: 300, revealed: 200 }[keyOf(f)] || 0),
+  keyOf, colorOf, word: (f) => stageLabel(f.stage), rank: (f) => ({ applied: 500, review: 400, approved: 340, funding: 320, building: 300, revealed: 200 }[keyOf(f)] || 0),
   rows: STAGE_KEYS, sort: (a, b) => byStage(a, b) || byScore(a, b), chip: (f) => html`<${StageChip} f=${f} />`,
 };
 
@@ -73,8 +73,8 @@ export function itemsOf(fam, projects) {
   const theirs = new Set(families.map((f) => f.jobId).filter(Boolean));
   const others = (fam.makeovers || []).filter((m) => !theirs.has(m.jobId)).map((m) => {
     const p = jobs.get(m.jobId);
-    // (its photo and name from JobTread's list; its step and its reveal's year as the server read them)
-    return p ? { ...fromProject(p), stage: m.stage || fromProject(p).stage, ...(m.revealYear ? { revealYear: m.revealYear } : {}) } : { ...m, card: { name: m.name, photo: m.photo || null, slug: slugOf(m.page), kind: m.kind === 'organization' ? 'community' : undefined } };
+    // (its photo and name from JobTread's list; its step, its season and its reveal's year as the server read them)
+    return p ? { ...fromProject(p), stage: m.stage || fromProject(p).stage, season: m.season || '', ...(m.revealYear ? { revealYear: m.revealYear } : {}) } : { ...m, card: { name: m.name, photo: m.photo || null, slug: slugOf(m.page), kind: m.kind === 'organization' ? 'community' : undefined } };
   });
   return [...families, ...others];
 }
@@ -90,15 +90,21 @@ const hrefOf = (x) => (isFamily(x) ? `#/families/${encodeURIComponent(x.id)}` : 
 const nameOf = (x) => x.card?.name || x.name || (x.kind === 'organization' ? 'A community project' : 'A family');
 const external = (href) => /^\//.test(href) && !href.startsWith('#');
 
-/** "2 families applying for 2027 · 9 makeovers being built · 6 revealed" */
+/**
+ * "2 families applying for 2027 · 1 approved · 1 awaiting funding · 3 makeovers being built · 6 revealed": each count
+ * its own, so they add up. Being built is underway (./stages.js UNDERWAY): approved and awaiting funding haven't started
+ */
 export function sumLine(list, season, application) {
   const by = (ph) => list.filter((x) => phaseOf(x.stage) === ph).length;
+  const at = (st) => list.filter((x) => x.stage === st).length;
   const applying = by('applying');
-  const building = by('building');
+  const building = list.filter((x) => UNDERWAY.has(x.stage)).length;
   const revealed = by('revealed');
   const out = list.filter((x) => x.stage === 'denied').length;
   return [
     applying || (season === 'now' && application?.open) ? `${plural(applying, 'family', 'families')} applying${season === 'now' && application?.year ? ` for ${application.year}` : ''}` : '',
+    at('approved') ? `${at('approved')} approved` : '',
+    at('funding') ? `${at('funding')} awaiting funding` : '',
     building ? `${plural(building, 'makeover')} being built` : '',
     revealed ? `${revealed} revealed` : '',
     out ? `${out} not chosen` : '',
@@ -107,16 +113,18 @@ export function sumLine(list, season, application) {
 
 /**
  * The way from application to reveal, every step with how many are at it, the steps grouped as applying, building
- * and revealed. The application's window sits over its two steps, so a closed application says so
+ * and revealed. The application's window sits over its two steps, so a closed application says so. A phone shows each
+ * stretch as one count (./stages.js phaseCount), the same the line above says: Building is those being built, and the
+ * ones approved or awaiting funding are said under it
  */
 export function Track({ list, application = null, onStep = null }) {
   const counts = countsOf(list);
   const steps = trackStages(counts);
-  const phases = PHASES.map((p) => ({ ...p, steps: steps.filter((s) => s.phase === p.key) }));
+  const phases = PHASES.map((p) => ({ ...p, steps: steps.filter((s) => s.phase === p.key), count: phaseCount(counts, p.key) }));
   const words = windowWords(application);
   return html`<div class="lc-track" style=${`grid-template-columns:${phases.map((p) => `${Math.max(1, p.steps.length)}fr`).join(' ')}`}>
     ${phases.map((p) => html`<section class=${`lc-phase is-${p.key}`} key=${p.key} aria-label=${p.label}>
-      <p class="lc-phase__head"><span>${p.label}<b class="lc-phase__n" aria-hidden="true">${p.steps.reduce((t, s) => t + (counts[s.key] || 0), 0)}</b></span>${p.key === 'applying' && words ? html`<small class=${application?.open ? 'is-open' : ''}>${words}</small>` : null}</p>
+      <p class="lc-phase__head"><span><b class="lc-phase__n">${p.count.n}<span class="sr-only"> </span></b>${p.label}</span>${p.key === 'applying' && words ? html`<small class=${application?.open ? 'is-open' : ''}>${words}</small>` : null}${p.count.also.length ? html`<small class="lc-phase__also">${nbw(p.count.also.join(' · '))}</small>` : null}</p>
       <ol class="lc-steps">${p.steps.map((s) => {
         const n = counts[s.key] || 0;
         const inner = html`<b>${n}</b><span>${s.label}</span>`;
@@ -229,11 +237,12 @@ export function MakeoversCard({ n }) {
     return () => { live = false; };
   }, []);
   const all = useMemo(() => itemsOf(fam, n.projects), [fam, n.projects]);
-  const seasons = useMemo(() => seasonsOf(fam?.families), [fam]);
+  const seasons = useMemo(() => seasonsOf([...(fam?.families || []), ...(fam?.makeovers || [])]), [fam]);
   const app = fam?.application || null;
   const list = useMemo(() => inSeason(all, season, app), [all, season, app]);
   const families = useMemo(() => list.filter(isFamily), [list]);
-  const away = list.length - families.length;
+  // (the makeovers with no application: no pin, said beside the map's key)
+  const away = useMemo(() => list.filter((x) => !isFamily(x)), [list]);
   return html`<section class="bp-card lc" id="makeovers" aria-labelledby="lc-h">
     <div class="bp-cardhead">
       <h2 class="bp-h2" id="lc-h">Makeovers</h2>
@@ -251,7 +260,7 @@ export function MakeoversCard({ n }) {
     ${fam ? html`<${Track} list=${list} application=${season === 'now' || season === app?.year ? app : null} onStep=${view === 'board' ? toStep : null} />` : null}
     ${fam && !fam.jobs ? html`<p class="lc-note">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
     ${view === 'map' && fam
-      ? html`<${FamilyMap} key="lc-map" families=${families} boundary=${fam.boundary} scheme=${STAGE_SCHEME} />${away ? html`<p class="lc-note">${nbw(`${plural(away, 'makeover')} from before the applications ${away === 1 ? 'isn’t' : 'aren’t'} on the map.`)}</p>` : null}`
+      ? html`<${FamilyMap} key="lc-map" families=${families} boundary=${fam.boundary} scheme=${STAGE_SCHEME} away=${away} />`
       : html`<${LifeBoard} key=${`${fam ? 'all' : 'jobs'}-${season}`} list=${list} application=${season === 'now' || season === app?.year ? app : null} reveals=${n.reveals || []} limit=${true} />`}
   </section>`;
 }

@@ -157,9 +157,10 @@ export function signsAs(typed, name) {
  * name said twice ("Budget FY26 PL - FY26 PL") once, a scan by its day, and a name that's only an id "Document"
  */
 export function docTitle(name) {
-  // A date's dashes are kept as slashes ("2-9-26" stays a date once the other dashes are spaces)
-  // and a year's month or a fiscal year ("2025-11", "2026-27") keeps its dash
-  let t = fileTitle(String(name || '').replace(/\+/g, ' ').replace(KEPT_DATE, '($1\u2011$2\u2011$3)').replace(/\b(\d{1,2})-(\d{1,2})-(\d{2,4})\b/g, '$1/$2/$3').replace(/(?<!\d)((?:19|20)\d{2})-(\d{2})(?!\d)/g, '$1\u2011$2')).replace(/\u2011/g, '-');
+  // A date's dashes are kept as slashes ("2-9-26" stays a date once the other dashes are spaces), then a whole date
+  // written year first keeps both its dashes ("2025-09-25"), and a year's month or a fiscal year ("2025-11",
+  // "2026-27") keeps its dash
+  let t = fileTitle(String(name || '').replace(/\+/g, ' ').replace(KEPT_DATE, '($1\u2011$2\u2011$3)').replace(/\b(\d{1,2})-(\d{1,2})-(\d{2,4})\b/g, '$1/$2/$3').replace(/(?<!\d)((?:19|20)\d{2})-(\d{2})-(\d{2})(?!\d)/g, '$1\u2011$2\u2011$3').replace(/(?<!\d)((?:19|20)\d{2})-(\d{2})(?!\d)/g, '$1\u2011$2')).replace(/\u2011/g, '-');
   if (/^[0-9a-f]{8}( [0-9a-f]{4}){3} [0-9a-f]{12}$/i.test(t)) return 'Document';
   // A scanner's "doc20260209130015": the day it was scanned
   const scan = /^doc(\d{4})(\d{2})(\d{2})\d{6}$/i.exec(t);
@@ -310,6 +311,8 @@ export const isDate = (s) => DATE.test(String(s || '')) && !Number.isNaN(Date.pa
 const date = (v) => (isDate(v) ? v : '');
 const time = (v) => (TIME.test(String(v || '')) ? v : '');
 const ID = /^[a-z0-9_]{3,40}$/i;
+/** What forBoard puts for approved minutes' file when it's staff only: the board has none, never another in its place */
+const APPROVED_HIDDEN = 'staff-only';
 const idOr = (v, prefix) => (ID.test(String(v || '')) ? String(v) : uid(prefix));
 const bool = (v) => v === true;
 const httpUrl = (v) => { const s = one(v, 500); return /^https:\/\/[^\s]+$/i.test(s) ? s : ''; };
@@ -380,14 +383,40 @@ export const welcomeHad = (welcome, p, onBoard = []) => {
   const moved = p.email && Object.keys(w.addresses || {}).find((k) => w.addresses[k] === p.email && members[k] && !onBoard.includes(k));
   return moved ? members[moved] : null;
 };
+/**
+ * Whether the board knows how to sign in, by the server's rule for sending an approved agenda (functions/api/_board.js
+ * boardTold): the whole board's send told them (sentAt), or each board member with an address the mailer can use has had
+ * the email or has signed in already; never while one is going out (`sending`). `board`: Board admin's members
+ * ({ slug, email, lastSeen }). → { told, waiting: those still to have it }
+ */
+export function signInKnown(welcome, board = [], { sending = false } = {}) {
+  const w = welcome || {};
+  const ids = board.map((p) => p.slug);
+  const usable = board.filter((p) => usableEmail(p.email));
+  const waiting = w.sentAt ? [] : usable.filter((p) => !p.lastSeen && !welcomeHad(w, p, ids));
+  return { told: !sending && (!!w.sentAt || (usable.length > 0 && !waiting.length)), waiting };
+}
 
 /** An address the mailer can send to (its own rule, _broadcast-notify.js isEmail): kim@gmail.c and kim@example.net, aren't */
 export const usableEmail = (e) => /^(?!\.)(?!.*\.\.)(?!.*\.@)[^\s@<>()[\],;:"]+@[^\s@<>()[\],;:".]+(?:\.[^\s@<>()[\],;:".]+)*\.[^\s@<>()[\],;:".]{2,}$/.test(String(e || '').trim());
+/**
+ * A member's visit to the board page, one rule wherever it's counted: it lasts while they're on the page (a page read,
+ * a look the page's tracker reports, an answer, a meeting followed live) and ends once this long goes by with none.
+ * What's new since their last visit is new since the one before this (functions/api/_board.js keepVisit), and Board →
+ * Members' sittings are the same visits (functions/api/_board-activity.js visitsOf, ./board-activity.js sittingsOf)
+ */
+export const VISIT_GAP_MS = 30 * 60_000;
 /** Today in Atlanta (YYYY-MM-DD) */
 export const todayEastern = (now = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now));
 
 // ─── A clean meeting ────────────────────────────────────────────────
 
+/**
+ * The mark a minutes read leaves on what it put on a meeting (functions/api/_board-minutes.js applyMinutes): a short
+ * fingerprint of the words as read, so Replace can take off what came from a read even with no Undo record of it, and
+ * what a person changed since is theirs. Only kept when it's one
+ */
+const readMark = (v) => (/^[a-z0-9]{1,16}$/.test(String(v || '')) ? String(v) : '');
 function cleanItem(raw) {
   const live = ['projects', 'reveals', 'events', 'cash', 'meetings', 'costs', 'minutes'].includes(raw?.live) ? raw.live : '';
   // The live lists it shows after its first (`live`): the makeovers and the reveals under one item, say
@@ -397,6 +426,8 @@ function cleanItem(raw) {
     title: one(raw?.title, LIMITS.title),
     presenter: one(raw?.presenter),
     who: [...new Set((Array.isArray(raw?.who) ? raw.who : []).filter((s) => /^[a-z0-9-]{1,80}$/.test(String(s))))].slice(0, 3),
+    // Who presents from outside People, each as typed: one person a name, whatever's in it ("Dana Smith, CPA")
+    guests: [...new Set((Array.isArray(raw?.guests) ? raw.guests : []).map((g) => one(g, 120)).filter(Boolean))].slice(0, 3),
     notes: str(raw?.notes, LIMITS.notes),
     staffNote: str(raw?.staffNote, LIMITS.notes),
     // The presenter's report, in Markdown (./board-md.js), and who last wrote it when: written on the board page by
@@ -416,6 +447,8 @@ function cleanItem(raw) {
     also,
     about: ID.test(String(raw?.about || '')) ? raw.about : '',
     docs: [...new Set((Array.isArray(raw?.docs) ? raw.docs : []).filter((id) => ID.test(String(id))))].slice(0, 20),
+    // (its notes as a minutes read put them: readMark)
+    ...(readMark(raw?.notesRead) ? { notesRead: readMark(raw.notesRead) } : {}),
   };
 }
 function cleanPerson(raw) {
@@ -428,6 +461,8 @@ function cleanPerson(raw) {
     name, org: one(raw?.org, 120), kind,
     status: pick(raw?.status, ATTEND),
     rsvp: pick(raw?.rsvp, RSVP),
+    // (the attendance a minutes read gave them: readMark)
+    ...(ATTEND.some((a) => a.id === raw?.readStatus) ? { readStatus: raw.readStatus } : {}),
   };
 }
 
@@ -440,6 +475,7 @@ export function cleanMeeting(raw = {}) {
     minutes: Number(s?.minutes) > 0 ? Math.min(600, Math.round(Number(s.minutes))) : 0,
     // What the secretary noted about the part itself, open forum above all (../../functions/api/_board-notes.js)
     notes: str(s?.notes, LIMITS.notes),
+    ...(readMark(s?.notesRead) ? { notesRead: readMark(s.notesRead) } : {}),
     items: (Array.isArray(s?.items) ? s.items : []).slice(0, LIMITS.items).map(cleanItem),
   }));
   const seen = new Set();
@@ -469,6 +505,8 @@ export function cleanMeeting(raw = {}) {
     live: cleanLive(raw.live),
     minutes: raw.minutes === 'approved' ? 'approved' : 'draft',
     approvedOn: raw.minutes === 'approved' ? date(raw.approvedOn) : '',
+    // Which file approved minutes are: the server's to set, as they're approved (approvedFileAfter). Board QA round 10
+    approvedFile: raw.minutes === 'approved' && (ID.test(String(raw.approvedFile || '')) || raw.approvedFile === APPROVED_HIDDEN) ? raw.approvedFile : '',
     attendance,
     sections,
     motions: (Array.isArray(raw.motions) ? raw.motions : []).slice(0, LIMITS.rows).map((x) => ({
@@ -477,6 +515,7 @@ export function cleanMeeting(raw = {}) {
       tally: cleanTally(x?.tally),
       // Decided in the meeting without the board page's vote (the last minutes approved from the agenda): not to vote on
       voice: bool(x?.voice),
+      ...(readMark(x?.read) ? { read: readMark(x.read) } : {}),
     })).filter((x) => x.text),
     actions: (Array.isArray(raw.actions) ? raw.actions : []).slice(0, LIMITS.rows).map((x) => ({
       id: idOr(x?.id, 'a_'), text: str(x?.text, 1000),
@@ -484,6 +523,7 @@ export function cleanMeeting(raw = {}) {
       due: date(x?.due), done: bool(x?.done), doneOn: bool(x?.done) ? date(x?.doneOn) : '',
       // The agenda item or part it was caught under (./board-todos.js): a reminder never quotes a board-only item's
       ...(/^[a-z0-9_]{3,40}$/i.test(String(x?.from || '')) ? { from: String(x.from) } : {}),
+      ...(readMark(x?.read) ? { read: readMark(x.read) } : {}),
     })).filter((x) => x.text),
     files: (Array.isArray(raw.files) ? raw.files : []).slice(0, LIMITS.rows).map((f) => ({
       id: ID.test(String(f?.id || '')) ? f.id : '', name: one(f?.name, 200), type: one(f?.type, 100), size: Number(f?.size) > 0 ? Math.round(f.size) : 0,
@@ -513,13 +553,23 @@ export function cleanMeeting(raw = {}) {
       replies: cleanReplies(raw.invite.replies),
       // The board members Board put on it, slug → email: only they ever come off it (functions/api/_board-invite.js maybeFollowBoard)
       who: Object.fromEntries(Object.entries(raw.invite.who && typeof raw.invite.who === 'object' ? raw.invite.who : {}).slice(0, 100).map(([slug, e]) => [one(slug, 100), one(e, 200)]).filter(([slug, e]) => slug && e)),
+      // Who Board put on it as running Board (Settings → Who runs Board): they come off it once they don't (adminsOff)
+      ...(Array.isArray(raw.invite.admins) ? { admins: raw.invite.admins.map((e) => one(e, 200)).filter(Boolean).slice(0, 50) } : {}),
     } : null,
     // When the invite was deleted in Google Calendar (functions/api/_board-calendar.js): server-set
     inviteGone: one(raw.inviteGone, 40),
     agendaFrom: raw.agendaFrom && typeof raw.agendaFrom === 'object' && AGENDA_FROM.includes(raw.agendaFrom.kind)
       ? { kind: raw.agendaFrom.kind, name: one(raw.agendaFrom.name, 200), at: one(raw.agendaFrom.at, 40), ...(Number(raw.agendaFrom.v) > 0 ? { v: Math.round(Number(raw.agendaFrom.v)) } : {}) } : null,
     // The minutes file that filled in who was there, the notes, the motions and the action items (functions/api/_board-minutes.js)
-    minutesFrom: raw.minutesFrom && typeof raw.minutesFrom === 'object' && one(raw.minutesFrom.name, 200) ? { name: one(raw.minutesFrom.name, 200), at: one(raw.minutesFrom.at, 40), ai: bool(raw.minutesFrom.ai), tries: Math.min(9, Math.max(0, Math.round(Number(raw.minutesFrom.tries) || 0))), typed: bool(raw.minutesFrom.typed), ...(one(raw.minutesFrom.first, 40) ? { first: one(raw.minutesFrom.first, 40) } : {}) } : null,
+    minutesFrom: raw.minutesFrom && typeof raw.minutesFrom === 'object' && one(raw.minutesFrom.name, 200) ? { name: one(raw.minutesFrom.name, 200), at: one(raw.minutesFrom.at, 40), ai: bool(raw.minutesFrom.ai), tries: Math.min(9, Math.max(0, Math.round(Number(raw.minutesFrom.tries) || 0))), typed: bool(raw.minutesFrom.typed), ...(one(raw.minutesFrom.first, 40) ? { first: one(raw.minutesFrom.first, 40) } : {}),
+      // A read that marks what it puts on (readMark): Replace can take it off with no Undo record of it
+      ...(raw.minutesFrom.marks ? { marks: 1 } : {}),
+      // What the heartbeat's read would have added after they were approved, and didn't (functions/api/_board-minutes.js
+      // maybeFinishMinutes): named in the founders' view only (forBoard takes it off)
+      ...(raw.minutesFrom.late && typeof raw.minutesFrom.late === 'object' ? { late: { motions: [].concat(raw.minutesFrom.late.motions || []).map((x) => one(x, 300)).filter(Boolean).slice(0, 20), actions: [].concat(raw.minutesFrom.late.actions || []).map((x) => one(x, 300)).filter(Boolean).slice(0, 20) } } : {}) } : null,
+    // Minutes files that came by email after the minutes were approved, kept for staff and never read in (functions/api/
+    // _board-mail.js): named in the founders' view only (forBoard takes it off). Board QA round 9, Nov 22 2026
+    ...(Array.isArray(raw.lateMinutesFiles) && raw.lateMinutesFiles.some((x) => one(x?.name, 200)) ? { lateMinutesFiles: raw.lateMinutesFiles.map((x) => ({ name: one(x?.name, 200), at: one(x?.at, 40) })).filter((x) => x.name).slice(0, 20) } : {}),
     // Who Google Meet saw join (functions/api/_board-attendance.js): server-set
     fromMeet: raw.fromMeet && typeof raw.fromMeet === 'object' && one(raw.fromMeet.at, 40) ? {
       at: one(raw.fromMeet.at, 40), status: ['ok', 'none', 'needs-setup', 'error'].includes(raw.fromMeet.status) ? raw.fromMeet.status : 'error', error: one(raw.fromMeet.error, 300),
@@ -633,12 +683,12 @@ export function sectionClock(plan, sectionId, sectionAt, now = Date.now()) {
 /** 754 → "12:34"; −95 → "1:35" */
 export const clockText = (sec) => { const a = Math.abs(sec); return `${Math.floor(a / 60)}:${String(a % 60).padStart(2, '0')}`; };
 
-/** A closed vote in words: "Passed 8–1, 1 abstained" ('' when it wasn't voted on the board page) */
+/** A closed vote in words: "Passed 8 to 1, 1 abstained" ('' when it wasn't voted on the board page; no dash in words people read) */
 export function tallyText(motion) {
   const t = motion?.tally;
   if (!t) return '';
   const said = RESULTS.find((r) => r.id === motion.result)?.label || 'Recorded';
-  return `${said} ${t.for}–${t.against}${t.abstain ? `, ${t.abstain} abstained` : ''}`;
+  return `${said} ${t.for} to ${t.against}${t.abstain ? `, ${t.abstain} abstained` : ''}`;
 }
 /** Where an agenda can come from (cleanMeeting's agendaFrom) */
 export const AGENDA_FROM = ['template', 'last-meeting', 'email', 'drive', 'typed'];
@@ -650,10 +700,33 @@ export const AGENDA_FROM = ['template', 'last-meeting', 'email', 'drive', 'typed
  */
 export const AGENDA_READER = 2;
 export const readAgain = (m) => ['drive', 'email'].includes(m?.agendaFrom?.kind) && (m.agendaFrom.v || 1) < AGENDA_READER;
+/**
+ * The agenda template as the site keeps it (functions/api/_board.js saveSettings): everything the template's editor sets
+ * (./board-meeting.js AgendaTemplate), with their ids: each part's name and its items; each item's name, who presents it
+ * (from People or typed in) and every live list it shows (its first, `live`, and the others, `also`). A part or an item
+ * not named yet is kept as typed: it's work in progress, and only a meeting made from the template leaves it out
+ * (namedTemplate). The editor knows what's saved by this too: what the site answered, never what it sent (QA round 4,
+ * Nov 21 2026: the template said "Saved" for a second live list and an unnamed part the site threw away)
+ */
+export const cleanTemplate = (sections) => cleanMeeting({ sections }).sections.map((sec) => ({
+  id: sec.id,
+  title: sec.title,
+  items: sec.items.map((it) => ({
+    id: it.id, title: it.title, ...(it.presenter ? { presenter: it.presenter } : {}), ...(it.who.length ? { who: it.who } : {}),
+    ...(it.guests.length ? { guests: it.guests } : {}), ...(it.live ? { live: it.live } : {}), ...(it.also.length ? { also: it.also } : {}),
+  })),
+}));
+/**
+ * The parts and items of the template a meeting gets: the named ones. One not named yet is the template's work in
+ * progress (cleanTemplate), never a blank on a meeting's agenda, as before the template kept them
+ */
+export const namedTemplate = (template) => (template || []).filter((s) => s?.title).map((s) => ({ ...s, items: (s.items || []).filter((it) => it?.title) }));
 /** Sections that are the usual outline, untouched: its section and item names, no presenters or notes */
-const isOutline = (sections, template = DEFAULT_TEMPLATE) => sections.length === template.length && sections.every((s, i) => s.title === template[i].title
-  && s.items.length === (template[i].items || []).length
-  && s.items.every((it, j) => (it.live === 'minutes' || it.title === template[i].items[j].title) && !it.presenter && !it.notes && !it.staffNote && !it.docs?.length));
+const isOutline = (sections, template = DEFAULT_TEMPLATE) => {
+  const t = namedTemplate(template);
+  return sections.length === t.length && sections.every((s, i) => s.title === t[i].title && s.items.length === t[i].items.length
+    && s.items.every((it, j) => (it.live === 'minutes' || it.title === t[i].items[j].title) && !it.presenter && !it.notes && !it.staffNote && !it.docs?.length));
+};
 /**
  * An agenda nobody has written: the template (or a draft from the last meeting, made before every agenda began on the
  * template), until someone writes in it or uses it. A meeting from before agendaFrom counts by its look. One with a
@@ -700,18 +773,32 @@ export function facesOf(it) {
  */
 export const reportsOn = (it) => isFilled(it) && !!(it.who?.length || String(it.presenter || '').trim()) && it.live !== 'minutes' && !facesOf(it);
 /**
+ * Whether the last meeting's minutes are still for the board to approve at a meeting on `date`: not once they were
+ * approved before that day (marked approved early, or by a vote in between). Approved on the day itself, they were
+ * approved at that meeting, and its agenda keeps the item it approved them by
+ */
+export const minutesUpFor = (prev, date = '') => !!prev && !(prev.minutes === 'approved' && String(prev.approvedOn || '') < String(date || todayEastern()));
+/**
  * The agenda a meeting ahead starts on and stays on until someone writes in it: SOARD's template, with the last
  * meeting's minutes up for approval and the live facts where its items have them. Nothing comes from the last agenda
  * (Peter, Nov 5 2026: "the agendas should be the template, not copying things" like a new member's welcome).
+ * Minutes the board approved before the meeting's `date` aren't put to it again: the item that would ask is left out,
+ * and a part left with nothing in it by that (the template's "Approve meeting minutes") goes with it. A part or item
+ * of the template not named yet is left out (namedTemplate), and every live list an item shows comes with it.
  */
-export function templateAgenda(prev, { template = DEFAULT_TEMPLATE } = {}) {
-  return (template?.length ? template : DEFAULT_TEMPLATE).map((s) => ({
-    id: uid('s_'), title: s.title,
-    items: (s.items || []).map((it) => ({
-      ...cleanItem({ title: it.live === 'minutes' && prev ? minutesItemTitle(prev) : it.title, presenter: it.presenter, who: it.who, live: it.live || liveOfTitle(it.title, s.title), about: it.live === 'minutes' && prev ? prev.id : '' }),
-      id: uid('i_'),
-    })),
-  }));
+export function templateAgenda(prev, { template = DEFAULT_TEMPLATE, date = '' } = {}) {
+  const done = !!prev && !minutesUpFor(prev, date);
+  const named = namedTemplate(template);
+  return (named.length ? named : DEFAULT_TEMPLATE)
+    .map((s) => ({ s, items: (s.items || []).filter((it) => !(done && it.live === 'minutes')) }))
+    .filter(({ s, items }) => items.length || !(s.items || []).length)
+    .map(({ s, items }) => ({
+      id: uid('s_'), title: s.title,
+      items: items.map((it) => ({
+        ...cleanItem({ title: it.live === 'minutes' && prev ? minutesItemTitle(prev) : it.title, presenter: it.presenter, who: it.who, guests: it.guests, live: it.live || liveOfTitle(it.title, s.title), also: it.also, about: it.live === 'minutes' && prev ? prev.id : '' }),
+        id: uid('i_'),
+      })),
+    }));
 }
 /**
  * A practice meeting's agenda when none is ahead, drafted from the last one: its sections and items in
@@ -722,7 +809,7 @@ export function templateAgenda(prev, { template = DEFAULT_TEMPLATE } = {}) {
  * under an item comes along.
  */
 export function draftAgenda(prev, { template = DEFAULT_TEMPLATE } = {}) {
-  const liveOf = new Map([...DEFAULT_TEMPLATE, ...template].flatMap((s) => (s.items || []).filter((it) => it.live && it.live !== 'minutes').map((it) => [it.title.toLowerCase(), it.live])));
+  const liveOf = new Map([...DEFAULT_TEMPLATE, ...namedTemplate(template)].flatMap((s) => (s.items || []).filter((it) => it.live && it.live !== 'minutes').map((it) => [it.title.toLowerCase(), it.live])));
   return prev.sections.map((s) => {
     const approving = /minutes/i.test(s.title) && /approv|consent|minutes/i.test(s.title);
     let minutesDone = false;
@@ -752,6 +839,41 @@ export const draftName = (prev) => `${meetingName(prev)} (${shortDate(prev.date)
  * own notes, a staff-only file or an agenda row left empty; a live list with
  * no title called what it shows. Null for a meeting not shared yet.
  */
+/** Every People address a meeting (or the agenda template's parts) names: who presents each item, who's on the roll, whose each to-do is */
+export const addressesIn = (m) => [...new Set([
+  ...(Array.isArray(m?.sections) ? m.sections : []).flatMap((s) => (Array.isArray(s?.items) ? s.items : []).flatMap((it) => (Array.isArray(it?.who) ? it.who : []))),
+  ...(Array.isArray(m?.attendance) ? m.attendance : []).map((p) => p?.slug),
+  ...(Array.isArray(m?.actions) ? m.actions : []).map((a) => a?.owner),
+].filter((x) => typeof x === 'string' && x))];
+/**
+ * A meeting (or the template's parts: { sections }) with each address in `now` ({ old: new }: someone renamed on People)
+ * at their new one (functions/api/_board.js addressesNow): presenters, the roll (one row a person, its answer kept) and
+ * to-dos. The site's saves and the page that sent them follow the same rule. Board QA round 8
+ */
+export function followAddresses(m, now, { people = null } = {}) {
+  if (!m || !now || !Object.keys(now).length) return m;
+  const at = (x) => (typeof x === 'string' && Object.hasOwn(now, x) ? now[x] : x);
+  const out = { ...m };
+  // Who presents and its presenter line are one thing (the board page's agenda and search read the line): a line written
+  // from who presented before (its names as People has them now: a newcomer given a renamed member's old address, say)
+  // is written again from who presents now, so the two never disagree. Board QA round 9. `people`: [{ slug, name }]
+  const line = (it) => namesText(presentersOf(it, people || []).map((p) => p.name));
+  const moved = (it) => {
+    const next = { ...it, who: [...new Set(it.who.map(at))] };
+    if (people?.length && String(it.presenter || '') === line(it) && line(next)) next.presenter = line(next);
+    return next;
+  };
+  if (Array.isArray(m.sections)) out.sections = m.sections.map((s) => ({ ...s, items: (Array.isArray(s?.items) ? s.items : []).map((it) => (Array.isArray(it?.who) && it.who.some((x) => at(x) !== x) ? moved(it) : it)) }));
+  if (Array.isArray(m.attendance)) {
+    const rows = m.attendance.map((p) => (p?.slug && at(p.slug) !== p.slug ? { ...p, slug: at(p.slug), key: at(p.slug) } : p));
+    const keyOf = (p) => p?.key || p?.slug || p?.name;
+    // (someone on the roll twice once followed: the row with an answer kept)
+    out.attendance = rows.filter((p, i) => { const k = keyOf(p); const twin = rows.findIndex((q, j) => j !== i && keyOf(q) === k); return twin < 0 || (p.status ? !rows[twin].status || i < twin : !rows[twin].status && i < twin); });
+  }
+  if (Array.isArray(m.actions)) out.actions = m.actions.map((a) => (a?.owner && at(a.owner) !== a.owner ? { ...a, owner: at(a.owner) } : a));
+  return out;
+}
+
 export function forBoard(m) {
   if (!m?.shared) return null;
   const seen = new Set(m.files.filter((f) => !f.staffOnly).map((f) => f.id));
@@ -767,6 +889,13 @@ export function forBoard(m) {
     agendaFrom: undefined,
     fromMeet: undefined,
     updatedBy: undefined,
+    // The founders' own: who was asked to answer the invite and when (functions/api/_board.js withState), and what the
+    // heartbeat didn't add to approved minutes, nor the email reader read in after them
+    reminded: undefined,
+    minutesFrom: m.minutesFrom ? (({ late, ...rest }) => rest)(m.minutesFrom) : m.minutesFrom,
+    lateMinutesFiles: undefined,
+    // (approved minutes whose file is staff only: none for the board, never another file in its place)
+    approvedFile: m.approvedFile && !seen.has(m.approvedFile) && m.files.some((f) => f.id === m.approvedFile) ? APPROVED_HIDDEN : m.approvedFile,
   };
 }
 
@@ -790,14 +919,21 @@ function personNamed(name, people) {
   return first.length === 1 ? first[0] : null;
 }
 /**
- * Who presents an item, as people: those picked (who), else the names as written ("Traci & Holly") matched to
- * People where only one person fits. → [{ slug?, name, photo?, title? }]
+ * Who presents an item, as people: those picked (who) and the guests typed in (guests), each guest one person as
+ * typed, whatever their name has in it ("Dana Smith, CPA" is one guest, never Dana Smith and CPA). An item from before
+ * guests were kept (or one written elsewhere: an imported agenda, an email) has only the names as written ("Traci &
+ * Holly"), split on & + , / and, and matched to People where only one person fits. → [{ slug?, name, photo?, title? }]
  */
 export function presentersOf(it, people = []) {
   const picked = (it?.who || []).map((s) => people.find((p) => p.slug === s)).filter(Boolean);
-  if (picked.length) return picked;
-  return String(it?.presenter || '').split(/\s*(?:&|\+|,|\/|\band\b)\s*/i).map((n) => n.trim()).filter(Boolean)
-    .map((n) => personNamed(n, people) || { name: n });
+  const guests = (it?.guests || []).filter(Boolean).map((name) => ({ name }));
+  if (picked.length) return [...picked, ...guests];
+  // The rest of the names as written (namesText: "A, B & C"), with each guest's taken out whole first, where it stands
+  // between those marks (never out of the middle of someone else's name)
+  let rest = String(it?.presenter || '');
+  for (const g of guests) rest = rest.replace(new RegExp(`(^|,\\s*|\\s*&\\s*)${g.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s*(?:,|&|$))`), '$1');
+  return [...rest.split(/\s*(?:&|\+|,|\/|\band\b)\s*/i).map((n) => n.trim()).filter(Boolean)
+    .map((n) => personNamed(n, people) || { name: n }), ...guests];
 }
 /** "Traci Lee & Holly Ranney", "Ann, Bo & Cy" */
 export const namesText = (names) => (names.length > 2 ? `${names.slice(0, -1).join(', ')} & ${names.at(-1)}` : names.join(' & '));
@@ -805,9 +941,49 @@ export const namesText = (names) => (names.length > 2 ? `${names.slice(0, -1).jo
 /** The meeting whose minutes an item asks the board to approve, and its minutes (the PDF before the Word copy) */
 export function minutesFileOf(prev) {
   const list = (prev?.files || []).filter((f) => f.kind === 'minutes' && !f.staffOnly);
+  const approved = approvedMinutesFile(prev, list);
+  if (approved !== undefined) return approved;
+  return draftPick(prev, list);
+}
+/** Of minutes files (`list`), the one the board reads: the latest of the file they were read from or typed into, else the PDF before the Word copy */
+function draftPick(m, list) {
   // The latest of the file the minutes were read from or typed into, when a newer one replaced an older (never the older)
-  const from = list.filter((f) => f.name === prev?.minutesFrom?.name).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))[0];
+  const from = list.filter((f) => f.name === m?.minutesFrom?.name).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))[0];
   return from || list.find((f) => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) || list[0] || null;
+}
+/**
+ * Approved minutes' own file, the one their approval kept (approvedFile), wherever they're opened: the board page's "The
+ * minutes as written", the editor's "Written up in", the secretary's signing, the next meeting's approve-the-minutes
+ * item. Never a newer file, nor any PDF: so the founders and the board always open the same file, and it's the one the
+ * board approved. Approved before approval kept one (or with no file of theirs yet), they're the file the board was shown
+ * by the day they were approved (as the board page then chose it); none there by then, the one they were read from, else
+ * the first that came. Board QA round 10, Nov 22 2026: a newer file put on approved minutes became the minutes as written
+ * `list`: the minutes files to choose from (the board's, or the meeting's own). → the file, null, or undefined (a draft)
+ */
+function approvedMinutesFile(m, list) {
+  if (m?.minutes !== 'approved') return undefined;
+  if (m.approvedFile === APPROVED_HIDDEN) return null;
+  const kept = m.approvedFile ? (m.files || []).find((f) => f.id === m.approvedFile && f.kind === 'minutes') : null;
+  if (kept) return list.includes(kept) ? kept : null;
+  // (never the last meeting's minutes on one of this meeting's items)
+  const onItem = new Set((m.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
+  const own = list.filter((f) => !onItem.has(f.id));
+  const by = own.filter((f) => Number.isFinite(Date.parse(f.at || '')) && todayEastern(Date.parse(f.at)) <= String(m.approvedOn || ''));
+  if (by.length) return draftPick(m, by);
+  return own.filter((f) => f.name === m.minutesFrom?.name).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))[0]
+    || [...own].sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))[0] || null;
+}
+/**
+ * Which file minutes are approved as, set by the server on every write (functions/api/_board.js saveMeeting and
+ * patchMeeting): as they're approved, the file the board was shown (minutesFileOf, this meeting's own files), else its
+ * own minutes file (a staff-only one); once approved, the one they were approved as, as it is (never a newer one);
+ * a draft has none. `cur`: the meeting as it is, `next`: as it's written. → a file id, or ''
+ */
+export function approvedFileAfter(cur, next) {
+  if (next?.minutes !== 'approved') return '';
+  if (cur?.minutes === 'approved') return ownMinutesFile(cur)?.id || '';
+  const onItem = new Set((cur?.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
+  return (minutesFileOf({ ...cur, files: (cur?.files || []).filter((f) => !onItem.has(f.id)) }) || ownMinutesFile(cur || {}))?.id || '';
 }
 /** A copy of an item, called so until it has a name of its own (nobody's asked for a report on one: _board-asks.js wanted) */
 const COPY_MARK = ' (copy)';
@@ -822,19 +998,45 @@ export function copyOfItem(it, id) {
   };
 }
 /** This meeting's own minutes file, if any: a minutes file on an agenda item is the last meeting's, up for approval */
-export const ownMinutesFile = (m) => { const onItem = new Set((m.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || []))); return (m.files || []).filter((f) => f.kind === 'minutes' && !onItem.has(f.id)).at(-1) || null; };
+export const ownMinutesFile = (m) => {
+  const onItem = new Set((m.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
+  const own = (m.files || []).filter((f) => f.kind === 'minutes' && !onItem.has(f.id));
+  // (approved: the file they were approved as, as minutesFileOf has it. Board QA round 10)
+  const approved = approvedMinutesFile(m, own);
+  return approved !== undefined ? approved : own.at(-1) || null;
+};
 /** The meeting an agenda's "approve the minutes" item is about: the one it names, else the last one the board had */
 /** Whether a meeting has its minutes: typed or read from a file, or a file of them kept with it */
 export const minutesIn = (m) => !!m?.minutesFrom || !!ownMinutesFile(m);
 /** Signing on the board page starts with the minutes approved from here on: the secretary is never asked for years gone by */
 export const MINUTES_SIGN_FROM = '2026-11-01';
-/** Approved minutes still to be signed: nothing signed is kept with them */
-export const minutesToSign = (m) => m?.minutes === 'approved' && String(m.approvedOn || '') >= MINUTES_SIGN_FROM && !(m.files || []).some((f) => f.kind === 'signed');
+/**
+ * Approved minutes still to be signed, the one rule every place that asks goes by (Home's For you, the meeting's Sign
+ * the minutes): the signature on record ends the asking (`signature`: the page's minutesSigned[m.id], the moment it's
+ * given, never waiting on the signed copy made from it), unless the minutes changed after it was given. With no
+ * signature, a signed copy kept with them (one put in by hand) ends it
+ */
+export const minutesToSign = (m, signature = null) => m?.minutes === 'approved' && String(m.approvedOn || '') >= MINUTES_SIGN_FROM
+  && (signature ? !!signature.changed : !(m.files || []).some((f) => f.kind === 'signed'));
 
 export function minutesTarget(m, meetings) {
   const it = (m.sections || []).flatMap((s) => s.items).find((x) => x.live === 'minutes');
   const named = it?.about ? meetings.find((x) => x.id === it.about) : null;
   return named || meetings.filter((x) => x.id !== m.id && x.shared && !x.notBoard && !x.practice && isDate(x.date) && x.date < m.date).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+}
+/**
+ * The meeting whose agenda puts this meeting's minutes to the board's vote: minutesTarget from the other side. Of the
+ * board meetings after this one (never one kept off the board page, nor a practice), the first whose "approve the
+ * minutes" item names them, else the first whose agenda takes them by minutesTarget's rule, else simply the first. Never
+ * the next meeting still ahead when an earlier one after this one is the one that had them (Board QA round 5, Nov 21
+ * 2026: Jun 24's draft minutes named Nov 30, whose agenda approves Sep 22's). → that meeting, or null
+ */
+export function minutesApprover(m, meetings) {
+  if (!m?.id || !isDate(m.date)) return null;
+  const all = meetings || [];
+  const after = all.filter((x) => x.id !== m.id && !x.notBoard && !x.practice && isDate(x.date) && x.date > m.date).sort((a, b) => a.date.localeCompare(b.date));
+  const names = (x) => (x.sections || []).flatMap((s) => s.items).some((it) => it.live === 'minutes' && it.about === m.id);
+  return after.find(names) || after.find((x) => minutesTarget(x, all)?.id === m.id) || after[0] || null;
 }
 /**
  * Peter, Nov 5 2026: "why not just send out the minutes before the next meeting for the board to review?" The meeting
@@ -1454,8 +1656,8 @@ export const sidePhoto = (it, files = []) => (hasReport(it) && !reportAlone(it) 
 /** A financial statement as a file (a balance sheet, a P&L): QuickBooks draws them once it's connected. A budget isn't one */
 export const isStatement = (f) => f?.kind === 'financials' && !/budget/i.test(String(f.name || ''));
 
-/** A spread's pages in words ([0, 1] → "pages 1–2", [0, 2] past a blank one → "pages 1 and 3", [4] → "page 5") */
-export const pagesText = (pages, word = 'page') => (pages.length > 1 ? `${word}s ${pages[0] + 1}${pages[1] === pages[0] + 1 ? '–' : ' and '}${pages[1] + 1}` : `${word} ${(pages[0] || 0) + 1}`);
+/** A spread's pages in words ([0, 1] → "pages 1 and 2", [0, 2] past a blank one → "pages 1 and 3", [4] → "page 5"): no dash in words people read */
+export const pagesText = (pages, word = 'page') => (pages.length > 1 ? `${word}s ${pages[0] + 1} and ${pages[1] + 1}` : `${word} ${(pages[0] || 0) + 1}`);
 /** The most parts a very tall page is shown in (./board/docs.js showOf), each like a page of its own */
 export const PAGE_PARTS = 8;
 /**
@@ -1604,6 +1806,103 @@ export function previousMeeting(m, meetings) {
 
 /** Held before the day it's set for: the chair started and ended it early (a meeting moved up), so it's past */
 export const heldEarly = (m, today = todayEastern()) => !!m?.live?.endedAt && isDate(m.date) && m.date > today;
+/**
+ * Whether a meeting reaches the board (its board page, its email) only once its agenda is approved: one whose day is
+ * today or ahead and that hasn't been ended in Board. One held (its day gone, or ended in Board), a practice meeting and
+ * one that isn't a board meeting aren't held back. The one rule for the site (functions/api/_board.js holdUntilApproved)
+ * and, through shareWaits, for what Board offers (./board-meeting.js After the meeting), so Board never offers what the
+ * site refuses
+ */
+export const waitsForApproval = (m, today = todayEastern()) => !m?.practice && !m?.notBoard && isDate(m?.date) && m.date >= today && !m.live?.endedAt;
+/** The time in Atlanta, "HH:MM" */
+export const clockEastern = (now = Date.now()) => new Intl.DateTimeFormat('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(now));
+/** On its day, a meeting is over once its minutes are in or its end time has passed: Board's home and the meeting page say the same */
+export const meetingOver = (m, now = Date.now()) => minutesIn(m) || (/^\d{2}:\d{2}$/.test(m?.end || '') && clockEastern(now) >= m.end);
+/**
+ * Held: its day (Atlanta time) has gone by, or the chair ended it (one moved up and held early is held, whatever its
+ * date says), or on its day its minutes are in or its end time has passed (meetingOver: the secretary's minutes may
+ * come that afternoon). The one rule for what the meeting page calls "Held" (./board-meeting.js) and for its calendar
+ * invite on the site (functions/api/_board-invite.js), so neither treats a meeting as held that the other doesn't
+ * (Board QA round 4, Nov 21 2026)
+ */
+export function meetingHeld(m, now = Date.now()) {
+  if (m?.live?.endedAt) return true;
+  if (!isDate(m?.date)) return false;
+  const today = todayEastern(now);
+  return m.date < today || (m.date === today && meetingOver(m, now));
+}
+/**
+ * The day a meeting held was held, in Atlanta: its date, or the day the chair ended it when that came first (one moved
+ * up and held early). '' for one not held (meetingHeld)
+ */
+export function heldOn(m, now = Date.now()) {
+  if (!meetingHeld(m, now)) return '';
+  const ended = Date.parse(m.live?.endedAt || '');
+  const endedDay = Number.isFinite(ended) ? todayEastern(ended) : '';
+  return endedDay && (!isDate(m.date) || endedDay < m.date) ? endedDay : m.date;
+}
+/** The day and times an invite has at Google, as Board last sent them (its `when`, "YYYY-MM-DD HH:MM-HH:MM"): { date, start, end } */
+export function inviteSlot(invite) {
+  const [date = '', span = ''] = String(invite?.when || '').split(' ');
+  const [start = '', end = ''] = span.split('-');
+  return { date, start, end };
+}
+/**
+ * A calendar invite that's a record, left exactly as it is: nothing on it changes, it doesn't follow the board list, and
+ * deleting the meeting doesn't cancel it. Only when BOTH the meeting is held and the slot its invite has at Google is
+ * held by the same rule (meetingHeld). While either is still ahead the invite is live: a change reaches it, it follows
+ * People → Board, and deleting the meeting cancels it (Google tells the guests). So a meeting moved to a day gone by
+ * takes its invite with it (Google emails the guests once, since their calendar has the wrong day), and only then is it
+ * a record. An invite with no slot kept (older code's) goes by the meeting's own (Board QA round 4, Nov 21 2026)
+ */
+export function inviteIsRecord(m, now = Date.now()) {
+  if (!m?.invite) return false;
+  const slot = inviteSlot(m.invite);
+  return meetingHeld(m, now) && meetingHeld(isDate(slot.date) ? { ...m, ...slot } : m, now);
+}
+/**
+ * Why no calendar invite goes out for a meeting, in words, or '' when one can: one kept off the board page as "not a
+ * board meeting", or one held (an invite already out is then a record, left as it was: inviteIsRecord). The rule
+ * functions/api/_board-invite.js noInviteFor refuses a send by, here so Board offers no invite the site refuses and says
+ * why in the same words (Board QA round 5, Nov 21 2026). tests/board-round5-editor.test.mjs holds the two to one answer
+ */
+export function noInviteFor(m, now = Date.now()) {
+  if (m?.notBoard) return 'This meeting is kept off the board page (it isn’t a board meeting), so no calendar invite goes out for it.';
+  const out = !!m?.invite?.eventId;
+  if (!isDate(m?.date) || (out ? inviteIsRecord(m, now) : meetingHeld(m, now))) return `This meeting has already been held, so no calendar invite goes out for it.${out ? ' The one it had stays as it was.' : ''}`;
+  return '';
+}
+/**
+ * Whether sharing a meeting (Share with the board) waits for its agenda's approval. Sharing one kept off the board page
+ * as "not a board meeting" makes it a board meeting (functions/api/_board.js notBoardAfter), so its agenda waits as any
+ * board meeting's does (QA round 4, Nov 21 2026). The one rule for the site's hold on a save that shares
+ * (functions/api/_board.js holdShare) and for Share in Board (./board-meeting.js After the meeting), so Board never
+ * offers a Share the site refuses, and says the words a board meeting's gets
+ */
+export const shareWaits = (m, today = todayEastern()) => waitsForApproval({ ...m, notBoard: false }, today);
+/** How many days before a meeting the chair gets its agenda to review (functions/api/_board-asks.js chairAt) */
+export const CHAIR_DAYS = 6;
+/**
+ * Whether the chair's review of a meeting is over before it goes: its agenda approved (`approved`), or the meeting on
+ * the board page already, which counts as approved (nothing ahead goes there before its agenda is approved:
+ * functions/api/_board.js holdUntilApproved). The one rule for the chair's review email, the review page
+ * (functions/api/_board-asks.js runAsks, underReview, reviewShutWhy) and Board's line about it (chairReviewDay), so
+ * the three agree. QA round 7, Nov 21 2026: the chair was emailed to review a meeting already on the board page, and
+ * the review page opened for it, while Board said nothing of a review
+ */
+export const reviewOver = (m, { approved = false } = {}) => !!approved || !!m?.shared;
+/**
+ * The day the chair's review of a meeting's agenda will go out, or '' when it won't: the review emails on (Board →
+ * the reports' emails, On), a chair on People → Board with an email, the review not over (reviewOver: the agenda not
+ * approved, the meeting not on the board page), a board meeting, and more than CHAIR_DAYS ahead (nearer, it's gone or
+ * never will). So Board says "The chair reviews it" only when the chair will (QA round 6, Nov 21 2026: it said so on
+ * the meeting's own day, and for a coffee)
+ */
+export function chairReviewDay(m, { asks = 'test', chair = false, approved = false, today = todayEastern() } = {}) {
+  if (asks !== 'on' || !chair || !m || reviewOver(m, { approved }) || m.notBoard || m.practice || !isDate(m.date)) return '';
+  const day = new Date(Date.parse(`${m.date}T12:00:00Z`) - CHAIR_DAYS * 86400000).toISOString().slice(0, 10);
+  return day > today ? day : '';
+}
 /** When the chair ended it, "09:47" Eastern, if that was on the meeting's own day (a practice run's end isn't), else '' */
 export function endedClock(m) {
   const t = Date.parse(m?.live?.endedAt || '');
@@ -1611,9 +1910,14 @@ export function endedClock(m) {
   return new Date(t).toLocaleTimeString('en-GB', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
 }
 
-/** The next meeting from today on, else null: one held early is past, one held today is still today's */
+/**
+ * The next board meeting from today on, else null: one held early is past, one held today is still today's. Never one
+ * Board keeps off the board page as "not a board meeting" (notBoard: a coffee, another organization's board), nor a
+ * practice: Board's home names the next board meeting, and the other one shows among the others, as what it is (Board QA
+ * round 5, Nov 21 2026: a coffee three days ahead was Home's next meeting, offering an invite the site refuses)
+ */
 export function nextMeeting(meetings, today = todayEastern()) {
-  return [...(meetings || [])].filter((m) => isDate(m.date) && m.date >= today && !heldEarly(m, today)).sort((a, b) => a.date.localeCompare(b.date))[0] || null;
+  return [...(meetings || [])].filter((m) => !m.notBoard && !m.practice && isDate(m.date) && m.date >= today && !heldEarly(m, today)).sort((a, b) => a.date.localeCompare(b.date))[0] || null;
 }
 
 /** A majority of the board: 13 → 7, 12 → 7 */
@@ -1636,9 +1940,13 @@ export function attendanceCounts(m) {
 /**
  * A new meeting from a template: the board as the attendance list, open
  * action items from earlier meetings carried onto it, and the last
- * meeting's minutes up for approval.
+ * meeting's minutes up for approval. From board meetings only, since this one goes to the board: never one kept off
+ * the board page (notBoard: a coffee, another organization's board, whose to-dos and name aren't the board's) nor a
+ * practice. A board meeting's open to-dos come along before its minutes are shared too: they're the board's own
+ * follow-up, on the next agenda
  */
-export function newMeeting({ date: d = '', template = DEFAULT_TEMPLATE, board = [], staff = [], meetings = [], defaults = {} } = {}) {
+export function newMeeting({ date: d = '', template = DEFAULT_TEMPLATE, board = [], staff = [], meetings: all = [], defaults = {} } = {}) {
+  const meetings = (all || []).filter((x) => !x.notBoard && !x.practice);
   const prev = previousMeeting({ date: d || '9999-12-31' }, meetings);
   return cleanMeeting({
     id: uid('m_'),
@@ -1651,7 +1959,7 @@ export function newMeeting({ date: d = '', template = DEFAULT_TEMPLATE, board = 
       ...board.map((p) => ({ slug: p.slug, name: p.name, org: p.org || '', kind: 'board' })),
       ...staff.map((p) => ({ slug: p.slug, name: p.name, org: 'SOARD', kind: 'staff' })),
     ],
-    sections: templateAgenda(prev, { template }),
+    sections: templateAgenda(prev, { template, date: d }),
     actions: openActions(meetings).map((a) => ({ ...a, id: a.id })),
     agendaFrom: { kind: 'template', name: prev ? draftName(prev) : '', at: '' },
   });
@@ -2031,36 +2339,182 @@ function pick3(base, mine, theirs, prefer = 'mine') {
   if (same(theirs, base) || same(mine, theirs)) return { value: mine };
   return { value: prefer === 'theirs' ? theirs : mine, clash: true };
 }
-/** A list of records by id: each record merged field by field, additions from both kept, removals honored */
-function mergeList(base = [], mine = [], theirs = [], key = (x) => x.id, label = (x) => '', skip = [], prefer = 'mine') {
-  const b = new Map(base.map((x) => [key(x), x]));
-  const t = new Map(theirs.map((x) => [key(x), x]));
-  const out = [];
-  const clashes = [];
-  const seen = new Set();
-  for (const x of mine) {
-    const k = key(x); seen.add(k);
-    const was = b.get(k); const th = t.get(k);
-    if (!th) { if (!was || !same(x, was)) out.push(x); continue; } // they removed it: gone, unless I changed it
-    if (!was) { out.push(x); continue; }
-    const rec = { ...x };
-    for (const f of new Set([...Object.keys(x), ...Object.keys(th)])) {
-      if (skip.includes(f)) { rec[f] = x[f]; continue; }
-      const r = pick3(was[f], x[f], th[f], prefer);
-      rec[f] = r.value;
-      if (r.clash) clashes.push(label(x) || f);
-    }
-    out.push(rec);
+// Fields that are one thing, merged together: who presents an item and its presenter line ("Sam Ortiz & Alex Rivera"),
+// which the board page's agenda and search read, so the two never disagree whichever way a merge goes (Board QA round 9:
+// "Take theirs" kept their who and this page's line)
+const TOGETHER = [['who', 'presenter']];
+/** Two records merged field by field against what both had → { value, clash } */
+function pickFields(was, mine, theirs, prefer) {
+  const rec = { ...mine };
+  let clash = false;
+  const grouped = new Set(TOGETHER.flat());
+  for (const f of new Set([...Object.keys(mine), ...Object.keys(theirs)])) {
+    if (grouped.has(f)) continue;
+    const r = pick3(was?.[f], mine[f], theirs[f], prefer);
+    rec[f] = r.value;
+    if (r.clash) clash = true;
   }
-  for (const th of theirs) if (!seen.has(key(th)) && !b.has(key(th))) out.push(th); // theirs is new
-  return { value: out, clashes };
+  for (const fields of TOGETHER) {
+    if (!fields.some((f) => f in mine || f in theirs)) continue;
+    const of = (x) => Object.fromEntries(fields.map((f) => [f, x?.[f]]));
+    const r = pick3(was ? of(was) : undefined, of(mine), of(theirs), prefer);
+    for (const f of fields) { if (r.value[f] === undefined) delete rec[f]; else rec[f] = r.value[f]; }
+    if (r.clash) clash = true;
+  }
+  return { value: rec, clash };
+}
+/**
+ * The merged order of `ids`: mine, unless only they changed the order of what both kept (then theirs; both: `prefer`'s,
+ * and `moved` says so). What only one way has goes in after whatever comes before it there (first, with nothing before).
+ * `placed`: what both ways put here that wasn't here before (an item both moved into this part) was placed by each: put
+ * after different things, that's both changing the order too (`moved`), never one of them picked without asking
+ */
+function orderOf(ids, base, mine, theirs, prefer = 'mine', { placed = false } = {}) {
+  const keep = new Set(ids);
+  const both = (list) => list.filter((k) => keep.has(k) && mine.includes(k) && theirs.includes(k));
+  const shared = (list) => both(list).filter((k) => base.includes(k));
+  const mineMoved = !same(shared(mine), shared(base));
+  const theirsMoved = !same(shared(theirs), shared(base));
+  // (what comes before it there, of what both ways have here)
+  const before = (list, k) => both(list).slice(0, both(list).indexOf(k)).sort();
+  const placedApart = placed && both(mine).some((k) => !base.includes(k) && !same(before(mine, k), before(theirs, k)));
+  const moved = (mineMoved && theirsMoved && !same(shared(mine), shared(theirs))) || placedApart;
+  const [first, second] = moved ? (prefer === 'theirs' ? [theirs, mine] : [mine, theirs]) : theirsMoved && !mineMoved ? [theirs, mine] : [mine, theirs];
+  const out = first.filter((k, i) => keep.has(k) && first.indexOf(k) === i);
+  const at = new Set(out);
+  second.forEach((k, i) => {
+    if (!keep.has(k) || at.has(k)) return;
+    let j = i - 1;
+    while (j >= 0 && !at.has(second[j])) j -= 1;
+    out.splice(j >= 0 ? out.indexOf(second[j]) + 1 : 0, 0, k);
+    at.add(k);
+  });
+  for (const k of ids) if (!at.has(k)) { out.push(k); at.add(k); }
+  return { value: out, moved };
+}
+/**
+ * A list of records by id: each record merged field by field, additions from both kept, removals honored. A record
+ * one way removed and the other changed is a clash (`prefer`'s: mine keeps or drops it as I did, theirs as they did)
+ */
+function mergeList(base = [], mine = [], theirs = [], key = (x) => x.id, label = (x) => '', prefer = 'mine') {
+  const b = new Map(base.map((x) => [key(x), x]));
+  const m = new Map(mine.map((x) => [key(x), x]));
+  const t = new Map(theirs.map((x) => [key(x), x]));
+  const kept = new Map();
+  const clashes = [];
+  for (const k of new Set([...m.keys(), ...t.keys()])) {
+    const was = b.get(k); const mi = m.get(k); const th = t.get(k);
+    if (mi && th) {
+      const r = pickFields(was, mi, th, prefer);
+      kept.set(k, r.value);
+      if (r.clash) clashes.push(label(mi) || String(k));
+      continue;
+    }
+    const one = mi || th;
+    if (!was) { kept.set(k, one); continue; } // new, one way
+    if (same(one, was)) continue; // removed one way, not changed the other: gone
+    clashes.push(label(one) || String(k)); // removed one way, changed the other
+    if ((prefer === 'theirs') === !mi) kept.set(k, one);
+  }
+  const order = orderOf([...kept.keys()], base.map(key), mine.map(key), theirs.map(key), prefer).value;
+  return { value: order.map((k) => kept.get(k)), clashes };
+}
+
+/**
+ * The agenda, merged as one: each item by its id wherever it is, so moving an item to another part is a move (never
+ * a delete in one and an add in the other) and an item is there once. Field by field, and which part it's in, the same
+ * way as any value. A clash: both changed the same thing (an item's words, where it goes, a part's name, the order of
+ * the same things), one took off an item the other changed, or one took off a part the other changed, added to or
+ * moved an item into. `prefer` settles clashes: a part kept is kept as that side has it, with its items.
+ * → { sections, clashes: [in words] }
+ */
+function mergeAgenda(base = [], mine = [], theirs = [], prefer = 'mine') {
+  const clashes = [];
+  const partLabel = (s) => `the part “${s.title || 'untitled'}”`;
+  const itemLabel = (it) => `“${it.title || 'an item'}”`;
+  const bare = ({ items, ...rest }) => rest;
+  // Where each item is, each way: id → { it, sec }
+  const where = (list) => new Map(list.flatMap((s) => s.items.map((it) => [it.id, { it, sec: s.id }])));
+  const B = where(base); const M = where(mine); const T = where(theirs);
+  const parts = (list) => new Map(list.map((s) => [s.id, s]));
+  const BS = parts(base); const MS = parts(mine); const TS = parts(theirs);
+  // An item one way has in a part, that way's own doing: added there, changed, or moved there
+  const did = (W, sid) => [...W.values()].some(({ it, sec }) => sec === sid && (!B.has(it.id) || !same(it, B.get(it.id).it) || B.get(it.id).sec !== sid));
+
+  // 1. The parts: kept both ways (merged), new one way, or taken off one way (gone, unless the other way did something there)
+  const part = new Map(); // id → the part's own fields
+  const keptAs = new Map(); // a part one way took off and the clash kept: id → 'mine' | 'theirs'
+  for (const sid of new Set([...MS.keys(), ...TS.keys()])) {
+    const was = BS.get(sid); const mi = MS.get(sid); const th = TS.get(sid);
+    if (mi && th) {
+      const r = pickFields(was && bare(was), bare(mi), bare(th), prefer);
+      part.set(sid, r.value);
+      if (r.clash) clashes.push(partLabel(mi));
+      continue;
+    }
+    const one = mi || th;
+    if (!was) { part.set(sid, bare(one)); continue; }
+    if (same(bare(one), bare(was)) && !did(mi ? M : T, sid)) continue;
+    clashes.push(partLabel(one));
+    const side = mi ? 'mine' : 'theirs';
+    if (prefer === side) { part.set(sid, bare(one)); keptAs.set(sid, side); }
+  }
+
+  // 2. The items: each once, field by field, in the part it's merged into
+  const placed = new Map(); // id → { it, sec, alt: the other way's part, for when the merged one is gone }
+  for (const id of new Set([...M.keys(), ...T.keys()])) {
+    const b = B.get(id); const m = M.get(id); const t = T.get(id);
+    if (m && t) {
+      const r = pickFields(b?.it, m.it, t.it, prefer);
+      const sec = pick3(b?.sec, m.sec, t.sec, prefer);
+      if (r.clash || sec.clash) clashes.push(itemLabel(m.it));
+      placed.set(id, { it: r.value, sec: sec.value, alt: sec.value === m.sec ? t.sec : m.sec });
+      continue;
+    }
+    const one = m || t;
+    const side = m ? 'mine' : 'theirs';
+    // New one way, or in a part one way took off and the clash kept as the other way has it (with its items)
+    if (!b || keptAs.get(one.sec) === side) { placed.set(id, { it: one.it, sec: one.sec }); continue; }
+    if (same(one.it, b.it) && one.sec === b.sec) continue; // taken off one way, not changed the other: gone
+    clashes.push(itemLabel(one.it)); // taken off one way, changed the other
+    if (prefer === side) placed.set(id, { it: one.it, sec: one.sec });
+  }
+  // Both its parts gone, though both ways kept it (one took off the part it was moved into, the other the part it was
+  // moved out of): never lost with them. The part it's in as `prefer` has it stays, with it, and that's said too
+  const [W, WS] = prefer === 'theirs' ? [T, TS] : [M, MS];
+  for (const [id, x] of placed) {
+    if (x.alt === undefined || part.has(x.sec) || part.has(x.alt)) continue;
+    const sid = W.get(id).sec;
+    part.set(sid, bare(WS.get(sid)));
+    clashes.push(partLabel(WS.get(sid)));
+  }
+  for (const [id, x] of placed) {
+    if (part.has(x.sec)) continue;
+    // Its part is gone: where the other way has it, else (one way's only) gone with it
+    if (x.alt && part.has(x.alt)) x.sec = x.alt; else placed.delete(id);
+  }
+
+  // 3. In order: the parts, then each part's items
+  const ids = (list) => list.map((s) => s.id);
+  const order = orderOf([...part.keys()], ids(base), ids(mine), ids(theirs), prefer);
+  if (order.moved) clashes.push('the order of the agenda');
+  const sections = order.value.map((sid) => {
+    const here = [...placed].filter(([, x]) => x.sec === sid).map(([id]) => id);
+    const inPart = (S) => (S.get(sid)?.items || []).map((it) => it.id);
+    const items = orderOf(here, inPart(BS), inPart(MS), inPart(TS), prefer, { placed: true });
+    if (items.moved) clashes.push(`the order of ${partLabel(part.get(sid))}`);
+    return { ...part.get(sid), items: items.value.map((id) => placed.get(id).it) };
+  });
+  return { sections, clashes };
 }
 
 /**
  * Merge my unsaved meeting with one saved meanwhile (by Holly, the calendar,
  * board mail), against the version I started from. Separate items, people,
- * motions and action items merge on their own; only the same thing changed
- * both ways is a clash. → { merged, clashes: [what clashed, in words] }
+ * motions and action items merge on their own, and the agenda as one (an item
+ * moved to another part is moved, never lost or twice); only the same thing
+ * changed both ways, or taken off one way and changed the other, is a clash.
+ * → { merged, clashes: [what clashed, in words] }
  */
 export function mergeMeeting(base, mine, theirs, { prefer = 'mine' } = {}) {
   const merged = { ...theirs };
@@ -2070,21 +2524,14 @@ export function mergeMeeting(base, mine, theirs, { prefer = 'mine' } = {}) {
     merged[f] = r.value;
     if (r.clash) clashes.push({ date: 'the date', start: 'the time', end: 'the time', title: 'the name', location: 'the place', address: 'the address', inviteNote: 'the invite notes', video: 'the video link', shared: 'sharing', noSince: 'the slide Since we last met', minutes: 'the minutes status', approvedOn: 'the minutes status' }[f]);
   }
-  // The agenda: sections in my order, each section's items merged one by one
-  const secs = mergeList(base.sections, mine.sections, theirs.sections, (s) => s.id, (s) => `the section “${s.title}”`, ['items'], prefer);
-  merged.sections = secs.value.map((s) => {
-    const was = base.sections.find((x) => x.id === s.id); const th = theirs.sections.find((x) => x.id === s.id); const mi = mine.sections.find((x) => x.id === s.id);
-    if (!was || !th || !mi) return s;
-    const items = mergeList(was.items, mi.items, th.items, (it) => it.id, (it) => `“${it.title || 'an item'}”`, [], prefer);
-    clashes.push(...items.clashes);
-    return { ...s, items: items.value };
-  });
-  clashes.push(...secs.clashes);
-  const people = mergeList(base.attendance, mine.attendance, theirs.attendance, (p) => p.key, (p) => `${p.name}’s attendance`, [], prefer);
+  const agenda = mergeAgenda(base.sections, mine.sections, theirs.sections, prefer);
+  merged.sections = agenda.sections;
+  clashes.push(...agenda.clashes);
+  const people = mergeList(base.attendance, mine.attendance, theirs.attendance, (p) => p.key, (p) => `${p.name}’s attendance`, prefer);
   merged.attendance = people.value;
   clashes.push(...people.clashes);
   for (const f of ['motions', 'actions']) {
-    const r = mergeList(base[f], mine[f], theirs[f], (x) => x.id, (x) => `“${String(x.text || '').slice(0, 40)}”`, [], prefer);
+    const r = mergeList(base[f], mine[f], theirs[f], (x) => x.id, (x) => `“${String(x.text || '').slice(0, 40)}”`, prefer);
     merged[f] = r.value;
     clashes.push(...r.clashes);
   }

@@ -25,20 +25,21 @@
  */
 
 import {
-  cleanMeeting, newMeeting, isFilled, isDate, todayEastern, FILE_KINDS,
+  cleanMeeting, newMeeting, isFilled, isDate, todayEastern, FILE_KINDS, addressesIn, followAddresses,
 } from '../../public/admin/board-shared.js';
 import { accessToken, eventIdFor } from './_google-calendar.js';
-import { ensureSchema, filesOf, putFile, updateFile, deleteFile } from './_board.js';
+import { ensureSchema, filesOf, putFile, updateFile, deleteFile, addressesNow } from './_board.js';
+import { personOf } from './_member-write.js';
 import {
   organizerFor, gcal, times, whenOf, placeOf, meetReady, driftOf, changeGuests, followOf, whoOf, cancelInvite,
 } from './_board-invite.js';
 import { activeAdvisors, boardAdmins, normEmail, peopleRows, privateEmails, readState, writeState } from './_board-roles.js';
 import { isEmail } from './_broadcast-notify.js';
 import { photoUrl } from '../../public/admin/team-shared.js';
-import { getSettings, ensureAdvisory } from './_advisory.js';
+import { getSettings, ensureAdvisory, MEETINGS_TABLE } from './_advisory.js';
 
 const SITE = 'https://sunshineonaranneyday.com';
-const SCHEMA = 'CREATE TABLE IF NOT EXISTS advisory_meetings (id TEXT PRIMARY KEY, date TEXT, data TEXT NOT NULL, updated_at TEXT, updated_by TEXT)';
+const SCHEMA = MEETINGS_TABLE;
 const STATE_KEY = 'advisory-meetings';
 const LOOK_MS = 5 * 60 * 1000;
 const READ_MS = 60 * 60 * 1000;
@@ -64,7 +65,8 @@ const err = (message, status = 400) => Object.assign(new Error(message), { statu
 /** Something that talks to Google: anything it says goes out in plain words, with what did and didn't happen */
 async function fromGoogle(fn, what) {
   try { return await fn(); } catch (e) {
-    if (e.ours) throw e;
+    // (People not answering is said as that, never as Google: round 10)
+    if (e.ours || e.unread) throw e;
     console.error('[advisory-meetings] Google', e.message);
     throw err(`Google isn’t answering right now, so ${what}. Try again in a few minutes.`, 503);
   }
@@ -172,6 +174,45 @@ async function patch(DB, id, fn, { by = '' } = {}) {
   throw new Error('The meeting kept changing; try again');
 }
 
+/**
+ * Who an invite names, with the email each signs in with, read in one statement (a People rename moves a record and
+ * its email together, so two reads could fall either side of one): the active Advisory Board members with an email
+ * and whoever runs the group (as guestsOf), and `pairs`, every address and its email as read, for the write's own check
+ */
+async function peopleNow(DB) {
+  const s = await getSettings(DB);
+  const rows = (await DB.prepare('SELECT t.slug AS slug, t.data AS data, lower(trim(e.email)) AS email FROM team t LEFT JOIN reveal_board_emails e ON e.slug = t.slug').all()).results || [];
+  const all = rows.map((r) => ({ ...personOf(r.data, r.slug), email: r.email || '' }));
+  const members = all.filter((p) => p.group === 'advisory' && p.status === 'active' && isEmail(p.email));
+  const lead = all.find((p) => p.slug === s.lead && isEmail(p.email) && !members.some((a) => a.slug === p.slug));
+  return {
+    people: [...members, ...(lead ? [lead] : [])].map((p) => ({ slug: p.slug, email: normEmail(p.email) })),
+    pairs: rows.filter((r) => r.email).map((r) => `${r.slug}\t${r.email}`),
+  };
+}
+// (People's addresses and emails exactly as read: a rename since moves one of them, a person added or an email changed
+// is a pair more or different)
+const SAME_PEOPLE = '(SELECT COUNT(*) FROM reveal_board_emails e JOIN team t ON t.slug = e.slug) = ? AND (SELECT COUNT(*) FROM reveal_board_emails e JOIN team t ON t.slug = e.slug WHERE e.slug || char(9) || lower(trim(e.email)) IN (SELECT value FROM json_each(?))) = ?';
+/**
+ * A change of the server's own that names people by their address (the invite's answers, who it's to), onto the
+ * meeting as it is now, with the people as they are now: `fn(cur, people)` is given them read after the meeting, and
+ * the write lands only while the meeting and every address and email are still as read (Advisory Board QA round 21: the
+ * heartbeat's answers, worked out from People read before a rename, were written after it under the address the member
+ * had left, never moved, and the rename's own move of the meeting was written over). Changed since: read again
+ */
+async function patchNaming(DB, id, fn, { by = '' } = {}) {
+  for (let i = 0; i < 5; i++) {
+    const cur = await getAdvisoryMeeting(DB, id);
+    if (!cur) return null;
+    const { people, pairs } = await peopleNow(DB);
+    const next = { ...fn(cur, people), id, updatedAt: nowIso(), updatedBy: by || cur.updatedBy || '' };
+    const r = await DB.prepare(`UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ? AND ${SAME_PEOPLE}`)
+      .bind(next.date || '', stored(next), next.updatedAt, next.updatedBy, id, cur.updatedAt, pairs.length, JSON.stringify(pairs), pairs.length).run();
+    if ((r?.meta?.changes ?? r?.changes ?? 0) > 0) return getAdvisoryMeeting(DB, id);
+  }
+  throw new Error('The meeting kept changing; try again');
+}
+
 /** A whole date a meeting could be on: a year still being typed reads as 0202 */
 const sensibleDay = (d) => isDate(d) && Number(d.slice(0, 4)) >= 2000 && Number(d.slice(0, 4)) <= 2100;
 
@@ -193,29 +234,61 @@ export async function createAdvisoryMeeting(env, { date, by = '' }, { now = Date
   return { meeting: await getAdvisoryMeeting(env.DB, m.id), existing: false };
 }
 
-/** A save from the editor. What's the server's stays the server's: sharing, the invite. `base`: the updatedAt it started from */
-export async function saveAdvisoryMeeting(DB, raw, { by = '', base = null, now = Date.now() } = {}) {
+const UNCHECKED = 'We couldn’t check People just now, so nothing was changed. Please try again in a moment.';
+/**
+ * A save from the editor. What's the server's stays the server's: sharing, the invite. `base`: the updatedAt it started
+ * from. Who presents each item is saved at the address their person has now, as a Board meeting's save is (./_board.js
+ * saveMeeting: addressesNow, followAddresses), and said (`addressesNow`) so the page that sent it takes the same: an
+ * editor open since before a rename never saves the address its person left (Board QA round 9). A check that can't be
+ * made refuses the save in words, never saves an address unchecked (503: the editor keeps what was typed)
+ */
+export async function saveAdvisoryMeeting(DB, raw0, { by = '', base = null, now = Date.now() } = {}) {
   await ensure(DB);
-  const cur = await getAdvisoryMeeting(DB, String(raw?.id || ''));
-  if (!cur) throw err('That meeting is gone', 404);
-  if (base !== null && cur.updatedAt && cur.updatedAt !== base) {
-    throw Object.assign(err(`${cur.updatedBy || 'Someone'} saved this meeting since you opened it`, 409), { current: cur });
+  // (written only over the meeting as read, and only while no rename is moving records off an address it names: a
+  // rename between the check and the write is read again, its addresses followed, never written over: round 21)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    let moved;
+    // (who of those it names is on People as it's checked: each still there as it's written, so one renamed between the
+    // check and the write is checked again and followed)
+    let onPeople;
+    try {
+      const named0 = addressesIn(raw0 || {});
+      onPeople = new Set(((await DB.prepare('SELECT slug FROM team WHERE slug IN (SELECT value FROM json_each(?))').bind(JSON.stringify(named0)).all()).results || []).map((r) => r.slug));
+      moved = await addressesNow(DB, named0);
+    } catch (e) {
+      console.error('[advisory-meetings] addresses', e?.message || e);
+      throw err(UNCHECKED, 503);
+    }
+    const raw = Object.keys(moved).length ? followAddresses(raw0, moved) : raw0;
+    const cur = await getAdvisoryMeeting(DB, String(raw?.id || ''));
+    if (!cur) throw err('That meeting is gone', 404);
+    if (base !== null && cur.updatedAt && cur.updatedAt !== base) {
+      throw Object.assign(err(`${cur.updatedBy || 'Someone'} saved this meeting since you opened it`, 409), { current: cur });
+    }
+    // Which files are on which item is the file actions' (attach-file, upload): an upload finishing while someone types
+    // is never undone by the save that follows. A new item starts with none
+    const onItems = new Map(cur.sections.flatMap((s) => s.items).map((it) => [it.id, it.docs]));
+    const sections = (Array.isArray(raw.sections) ? raw.sections : []).map((s) => ({ ...s, items: (s?.items || []).map((it) => ({ ...it, docs: onItems.get(it?.id) || [] })) }));
+    const m = shape({
+      ...cur,
+      date: raw.date, start: raw.start, end: raw.end, title: raw.title, location: raw.location, address: raw.address, inviteNote: raw.inviteNote, sections, recap: raw.recap,
+      updatedAt: nowIso(now), updatedBy: by,
+    });
+    if (!m.date || !sensibleDay(m.date)) throw err('Check the meeting’s date');
+    if (m.start && m.end && m.end <= m.start) throw err('A meeting has to end after it starts. Check the times.');
+    const clash = (await listAll(DB)).find((x) => x.id !== m.id && x.date === m.date);
+    if (clash) throw err(`${advisoryName(clash)} is already on that day`, 409);
+    const named = addressesIn(m);
+    const kept = named.filter((x) => onPeople.has(x));
+    const r = await DB.prepare(`UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at IS ?
+        AND NOT EXISTS (SELECT 1 FROM board_state WHERE key IN (SELECT 'rename-finish:' || value FROM json_each(?)))
+        AND (SELECT COUNT(*) FROM team WHERE slug IN (SELECT value FROM json_each(?))) = ?`)
+      .bind(m.date || '', stored(m), m.updatedAt, m.updatedBy || '', m.id, cur.updatedAt ?? null, JSON.stringify(named), JSON.stringify(kept), kept.length).run();
+    if (!(Number(r?.meta?.changes) > 0)) continue;
+    const out = await getAdvisoryMeeting(DB, m.id);
+    return out && Object.keys(moved).length ? { ...out, addressesNow: moved } : out;
   }
-  // Which files are on which item is the file actions' (attach-file, upload): an upload finishing while someone types
-  // is never undone by the save that follows. A new item starts with none
-  const onItems = new Map(cur.sections.flatMap((s) => s.items).map((it) => [it.id, it.docs]));
-  const sections = (Array.isArray(raw.sections) ? raw.sections : []).map((s) => ({ ...s, items: (s?.items || []).map((it) => ({ ...it, docs: onItems.get(it?.id) || [] })) }));
-  const m = shape({
-    ...cur,
-    date: raw.date, start: raw.start, end: raw.end, title: raw.title, location: raw.location, address: raw.address, inviteNote: raw.inviteNote, sections, recap: raw.recap,
-    updatedAt: nowIso(now), updatedBy: by,
-  });
-  if (!m.date || !sensibleDay(m.date)) throw err('Check the meeting’s date');
-  if (m.start && m.end && m.end <= m.start) throw err('A meeting has to end after it starts. Check the times.');
-  const clash = (await listAll(DB)).find((x) => x.id !== m.id && x.date === m.date);
-  if (clash) throw err(`${advisoryName(clash)} is already on that day`, 409);
-  await write(DB, m);
-  return getAdvisoryMeeting(DB, m.id);
+  throw err('This wasn’t saved: someone it names is having their web address changed on People right now. Try again in a few minutes.', 503);
 }
 
 /** Deleted: its invite comes off the calendar first (a refusal stops the delete), then its files */
@@ -348,9 +421,10 @@ export async function sendAdvisoryInvite(env, id, { fetchImpl = fetch, now = Dat
   const on = (ev.attendees || attendees).map((a) => normEmail(a.email));
   const invite = {
     eventId: ev.id || eventId, organizer, sentAt: m.invite?.sentAt || at, updatedAt: at, meet: ev.hangoutLink || '', guests: on.length, emails: on,
-    place, location: ev.location || '', when: whenOf(m), notes: notesKey(m), replies: repliesFrom(ev.attendees || attendees, people), who: whoOf(m.invite, people, on),
+    place, location: ev.location || '', when: whenOf(m), notes: notesKey(m),
   };
-  return patch(env.DB, id, (cur) => ({ ...cur, invite, inviteGone: '' }));
+  // (who answered and who it's to, by the address each has as it's written: patchNaming)
+  return patchNaming(env.DB, id, (cur, now2) => ({ ...cur, invite: { ...invite, replies: repliesFrom(ev.attendees || attendees, now2), who: whoOf(cur.invite || m.invite, now2, on) }, inviteGone: '' }));
 }
 
 const loudChange = (m) => (placeOf(m) && placeOf(m) !== m.invite.place) || whenOf(m) !== m.invite.when;
@@ -387,12 +461,12 @@ export async function maybeSyncAdvisoryMeetings(env, { fetchImpl = fetch, now = 
         else if (sending && (plan.add.length || plan.drop.length)) {
           const emails = await changeGuests(env, m, plan, { fetchImpl, now });
           if (emails) {
-            const keep = new Set(people.map((p) => p.slug));
-            await patch(env.DB, m.id, (cur) => (cur.invite?.eventId !== m.invite.eventId ? cur : {
+            // (by the address each person has as it's written: patchNaming)
+            await patchNaming(env.DB, m.id, (cur, now2) => (cur.invite?.eventId !== m.invite.eventId ? cur : {
               ...cur,
               invite: {
-                ...cur.invite, emails, guests: emails.length, updatedAt: at, who: whoOf(cur.invite, people, emails),
-                replies: { ...Object.fromEntries(people.filter((p) => emails.includes(p.email)).map((p) => [p.slug, 'invited'])), ...Object.fromEntries(Object.entries(cur.invite.replies || {}).filter(([s]) => keep.has(s))) },
+                ...cur.invite, emails, guests: emails.length, updatedAt: at, who: whoOf(cur.invite, now2, emails),
+                replies: { ...Object.fromEntries(now2.filter((p) => emails.includes(p.email)).map((p) => [p.slug, 'invited'])), ...Object.fromEntries(Object.entries(cur.invite.replies || {}).filter(([s]) => now2.some((p) => p.slug === s))) },
               },
             }));
             did.added += plan.add.length;
@@ -435,7 +509,9 @@ async function readInvite(env, id, people, did, { fetchImpl, now, sending = true
   }
   const replies = { ...(inv.replies || {}), ...repliesFrom(ev.attendees, people) };
   if (JSON.stringify(replies) !== JSON.stringify(inv.replies || {}) || (drift || '') !== (inv.differs || '')) {
-    await patch(env.DB, id, (cur) => (cur.invite?.eventId === inv.eventId ? { ...cur, invite: { ...cur.invite, replies, differs: drift } } : cur));
+    // (onto the answers as they are now, by the address each person has as it's written: patchNaming. Never the answers
+    // as read before, written back over a rename's move of them)
+    await patchNaming(env.DB, id, (cur, now2) => (cur.invite?.eventId === inv.eventId ? { ...cur, invite: { ...cur.invite, replies: { ...(cur.invite.replies || {}), ...repliesFrom(ev.attendees, now2) }, differs: drift } } : cur));
     did.replies += 1;
   }
 }

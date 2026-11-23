@@ -1366,6 +1366,7 @@ const MAP = { t: 'SOARD', children: [
             if (!g) return null;
             if (!g.browser) return ATTN('The BROWSER binding is missing, so signed copies can’t be printed and receipts wait.');
             if (g.failed) return ATTN(`${plural(g.failed, 'signed copy', 'signed copies')} couldn’t be made after 3 tries (the admins were emailed). The signatures are kept.`, g.copiesLast);
+            if (g.peopleSince && Date.now() - Date.parse(g.peopleSince) >= 30 * 60 * 1000) return ATTN(`The site hasn’t been able to check People since ${stamp(g.peopleSince)}, so the emails it owes (an old address told its board page email changed, a member told a signature was taken off, a correction suggested or decided) are waiting. They go once People answers.`, g.peopleSince);
             return ON(`${plural(g.copies, 'signed copy', 'signed copies')} made${g.waiting ? `, ${g.waiting} on the way` : ''}; ${plural(g.receipts, 'receipt')} sent this year.${g.declines ? ` ${plural(g.declines, 'member')} said they can’t sign a paper as written.` : ''}`, g.receiptsLast || g.copiesLast);
           } },
         { t: 'Remind by email', s: 'off', k: 'schedule',
@@ -1401,6 +1402,7 @@ const MAP = { t: 'SOARD', children: [
             const c = f.board?.calendar;
             if (!c) return null;
             if (!c.configured) return ATTN('GOOGLE_CALENDAR_KEY is missing, so Board can’t send invites or read their answers.');
+            if (c.unread && Date.now() - Date.parse(c.unread) >= 30 * 60 * 1000) return ATTN(`The site hasn’t been able to check People since ${stamp(c.unread)}, so the invites’ answers aren’t being read. Every answer already in stays.`, c.unread);
             if (c.failing) return ATTN(`Couldn’t read ${plural(c.failing, 'invite')} on the last look. Board → Meetings says why.`, c.checkedAt);
             if (!c.checkedAt) return ATTN('Hasn’t looked yet. It rides on the live hub’s heartbeat, so check the Heartbeat entry.');
             if (stale(c.checkedAt, 3 * HOUR)) return ATTN(`Hasn’t looked since ${stamp(c.checkedAt)}. Check the Heartbeat entry.`, c.checkedAt);

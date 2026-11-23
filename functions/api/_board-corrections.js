@@ -25,12 +25,12 @@
  *   state    waiting → made | declined | withdrawn (making: claimed, for the moment it's being made)
  */
 
-import { getMeeting, listMeetings, patchMeeting, roster, getSettings, ensureSchema, ID, SITE } from './_board.js';
+import { getMeeting, listMeetings, patchMeeting, roster, ensureSchema, ID, SITE } from './_board.js';
 import { refreshMinutesFile, claimSending, releaseSending, boxPath, withBox, anythingIn } from './_board-notes.js';
 import { minutesIn, meetingName, uid } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
 import { limit } from './_rate-limit.js';
-import { sendEmailOne, emailConfigured, EMAIL_FROM } from './_broadcast-notify.js';
+import { oweNotice, noticeName } from './_board-notices.js';
 import { emailShell, button, esc } from './_email-shell.js';
 
 const ROLL = ['present', 'remote', 'excused', 'absent'];
@@ -155,12 +155,11 @@ export async function suggestCorrection(env, { meetingId, target, words, was = n
   const cid = had?.id || uid('c_');
   if (had) await env.DB.prepare('UPDATE board_minutes_corrections SET was = ?, words = ?, at = ? WHERE id = ?').bind(before, said, at, cid).run();
   else await env.DB.prepare('INSERT INTO board_minutes_corrections (id, meeting_id, target, kind, was, words, by_slug, by_name, by_email, at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(cid, id, String(target), t.kind, before, said, me.slug, me.name, me.email, at, 'waiting').run();
-  // (a word changed in one already sent isn't news: the email said to open the page)
-  if (!had) {
-    const told = tellSecretary(env, m, { by: me, t }).catch((err) => console.error('[board] correction email', err?.message || err));
-    if (waitUntil) waitUntil(told); else await told;
-  }
-  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' } };
+  // (a word changed in one already sent isn't news: the email said to open the page). Written down as due before People
+  // is read, so a read that fails or a send that doesn't go is sent by the signing look, and the correction stands
+  // either way: they're told the email follows (Board QA round 10: ./_board-notices.js)
+  const owed = had ? {} : await oweNotice(env, `correction:${cid}`, { kind: 'correction', meetingId: id, cid, by: { name: me.name, email: me.email || '' }, where: whereOf(t) }, { waitUntil, who: 'the secretary and the founders', now });
+  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' }, ...(owed.later ? { later: owed.later } : {}) };
 }
 
 /** POST { action: 'correction-withdraw', id }: theirs, while it's waiting */
@@ -302,17 +301,16 @@ export async function decideCorrection(env, { id, make = false, reason = '', saw
   const me = await authorOf(env, w);
   const state = doing ? 'made' : 'declined';
   await env.DB.prepare('UPDATE board_minutes_corrections SET state = ?, decided_by = ?, decided_at = ?, reason = ? WHERE id = ?').bind(state, me.name, iso(now), doing ? '' : cleanWords(reason).slice(0, 1000), cid).run();
-  if (c.by_slug !== me.slug) {
-    const told = tellProposer(env, m, c, { made: doing, by: me.name }).catch((err) => console.error('[board] correction email', err?.message || err));
-    if (waitUntil) waitUntil(told); else await told;
-  }
-  return { id: cid, state, ...made };
+  // (whoever suggested it is told, through the list of notices due: ./_board-notices.js, as a suggestion is)
+  const owed = c.by_slug !== me.slug
+    ? await oweNotice(env, `correction-decided:${cid}`, { kind: 'correction-decided', meetingId: m.id, cid, made: doing, byName: me.name, toEmail: c.by_email || '', toSlug: c.by_slug }, { waitUntil, who: noticeName(c.by_name), now })
+    : {};
+  return { id: cid, state, ...made, ...(owed.later ? { later: owed.later } : {}) };
 }
 
 // ─── The two emails: who and where, never the words ─────────────────
 // The minutes stay on the board page; an email can be forwarded and can't be taken back.
 
-const fromBoard = () => EMAIL_FROM.replace(/^[^<]*/, 'SOARD Board ');
 const FOOTER = 'You’re getting this as a member of the Sunshine on a Ranney Day Board of Directors.';
 const whereOf = (t) => (!t?.where ? '' : t.secret ? 'a board-only item' : t.where);
 
@@ -346,22 +344,7 @@ export function correctionDecidedEmail(m, { made = false, by = '', test = false 
   };
 }
 
-async function tellSecretary(env, m, { by, t }) {
-  if (!emailConfigured(env)) return;
-  const [people, settings] = await Promise.all([roster(env.DB, { withEmails: true }), getSettings(env.DB)]);
-  const secretary = people.board.find((p) => p.seat === 'secretary');
-  const to = [...new Set([secretary?.email, ...settings.admins].filter(Boolean).map((e) => String(e).toLowerCase()))].filter((e) => e !== String(by.email || '').toLowerCase());
-  const mail = correctionEmail(m, { by: by.name, where: whereOf(t) });
-  for (const address of to) await sendEmailOne(env, { to: address, from: fromBoard(), ...mail, replyTo: by.email || settings.admins, tags: [{ name: 'kind', value: 'board-correction' }] });
-}
-
-async function tellProposer(env, m, c, { made, by }) {
-  if (!emailConfigured(env)) return;
-  const to = c.by_email || (await roster(env.DB, { withEmails: true })).board.find((p) => p.slug === c.by_slug)?.email;
-  if (!to) return;
-  const { admins } = await getSettings(env.DB);
-  await sendEmailOne(env, { to, from: fromBoard(), ...correctionDecidedEmail(m, { made, by }), replyTo: admins, tags: [{ name: 'kind', value: 'board-correction-decided' }] });
-}
+// (who's told, and when: ./_board-notices.js sends both emails, from the list of notices due)
 
 /** For Board's own words, and a test: what a roll correction says */
 export const rollWords = (status) => HOW[status] || status;

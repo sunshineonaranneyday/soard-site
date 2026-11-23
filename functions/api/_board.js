@@ -23,7 +23,8 @@
  *                       (its copy too) once they sign the next one
  *   board_doc_versions  each wording of a paper written in Board, kept: what
  *                       each signature was on
- *   board_seen         a member's last visit to the board page
+ *   board_seen         a member's visits to the board page: when this one (the latest) began, their last look in it,
+ *                       and when the one before began
  *   board_sign_asks    a member asked by email to sign this year's papers: when last, by whom, how many times
  *   board_cash          the bank balance, one row per month (the heartbeat)
  *   board_state         settings and caches (./_board-roles.js)
@@ -39,14 +40,17 @@ import {
   cleanMeeting, forBoard, meetingName, openActions, nextMeeting, todayEastern, isDate, uid, parseAgendaText, fileTitle, plural, minutesFileOf, minutesToRead,
   longDate, timeRange, shortDate, DOC_KINDS, FILE_KINDS, RSVP, DEFAULT_TEMPLATE, newMeeting, LIMITS, repliesOf, inviteOut,
   agendaIsDraft, draftAgenda, templateAgenda, previousMeeting, draftName, callName, readAgain, AGENDA_READER, isLive, cleanLive, majority, guessItem, orgName, signsAs,
-  isFilled, LIVE_TITLES, agendaItems, presentersOf, reportsOn, namesText, sectionPlan, clock, docTitle, videoOf, packetDocs, partName,
+  isFilled, LIVE_TITLES, agendaItems, presentersOf, reportsOn, namesText, sectionPlan, clock, docTitle, videoOf, packetDocs, partName, minutesIn,
+  addressesIn, followAddresses, approvedFileAfter,
 } from '../../public/admin/board-shared.js';
-import { welcomeHad, REPORT_LOOKS, SLIDE_PIECE } from '../../public/admin/board-shared.js';
+import { welcomeHad, REPORT_LOOKS, SLIDE_PIECE, VISIT_GAP_MS, waitsForApproval, shareWaits, cleanTemplate, meetingHeld } from '../../public/admin/board-shared.js';
 import { comparePeople, photoUrl } from '../../public/admin/team-shared.js';
 import { reachedCount } from '../../public/admin/community-shared.js';
-import { peopleRows, privateEmails, activeBoard, boardAdmins, readState, writeState, readSettings, normEmail } from './_board-roles.js';
-import { cachedReveals, fetchJobs, loadKids, loadProjects, matchProject, isProject, isRehearsalJob, FIELD_JOB_STATUS, BUILDING_STATUSES } from './_reveals.js';
-import { sendEmails, sendEmailItems, emailConfigured, EMAIL_FROM } from './_broadcast-notify.js';
+import { peopleRows, privateEmails, activeBoard, boardAdmins, readState, writeState, readSettings, normEmail, readDown, asSend, PEOPLE_DOWN, stateReady } from './_board-roles.js';
+import { namesIn, sameMember } from './_member-places.js';
+import { ownRow } from './_member-write.js';
+import { cachedReveals, fetchJobs, loadKids, loadProjects, matchProject, isProject, isRehearsalJob, parseJobName, FIELD_JOB_STATUS, BUILDING_STATUSES } from './_reveals.js';
+import { sendEmailItems, emailConfigured, EMAIL_FROM } from './_broadcast-notify.js';
 import { isEmail } from './_broadcast-notify.js';
 import { emailShell, button, esc, facts, link, panel, INK, MUTED, SANS, SERIF } from './_email-shell.js';
 import { sniffType } from './upload-file.js';
@@ -108,6 +112,8 @@ const SCHEMA = [
     device TEXT, signin_at TEXT, consent_hash TEXT, event_hash TEXT, file_id TEXT, record_tries INTEGER, record_claim_at TEXT)`,
   // Which reminders each action item has had (./_board-actions.js)
   'CREATE TABLE IF NOT EXISTS board_action_reminders (action_id TEXT NOT NULL, stage TEXT NOT NULL, at TEXT, PRIMARY KEY (action_id, stage))',
+  // Each write of a meeting or a practice meeting, its last few (keepSave): what a person edits as it was left, and who
+  'CREATE TABLE IF NOT EXISTS board_saves (record TEXT NOT NULL, at TEXT NOT NULL, was TEXT, by TEXT, data TEXT, PRIMARY KEY (record, at))',
 ];
 const _ready = new WeakSet();
 export async function ensureSchema(DB) {
@@ -126,6 +132,9 @@ export async function ensureSchema(DB) {
   await addColumns(DB, 'board_files', { words: 'TEXT', words_v: 'INTEGER', words_next: 'INTEGER', words_try: 'INTEGER', words_at: 'TEXT', words_fail: 'INTEGER', words_part: 'TEXT', slug: 'TEXT', sha256: 'TEXT', superseded_at: 'TEXT', original_id: 'TEXT' });
   // How many of a member's asks this year Remind by email sent itself (at most MAX_REMINDERS)
   await addColumns(DB, 'board_sign_asks', { reminders: 'INTEGER' });
+  // The start of a member's visit before this one (portalData's lastSeen), kept beside this visit's start (`at`), and
+  // their last look in this one (`last`: a visit lasts until VISIT_GAP_MS goes by without one, ./keepVisit)
+  await addColumns(DB, 'board_seen', { prev: 'TEXT', last: 'TEXT' });
   // (copies from before `slug`: whose each is, from the signature it was added for)
   await DB.prepare("UPDATE board_files SET slug = COALESCE((SELECT slug FROM board_signatures WHERE file_id = board_files.id), (SELECT slug FROM board_signatures_earlier WHERE file_id = board_files.id)) WHERE owner_type = 'signed' AND slug IS NULL").run().catch(() => {});
   _ready.add(DB);
@@ -139,13 +148,25 @@ export const ID = /^[a-z0-9_]{3,40}$/i;
 
 export const DEFAULT_SETTINGS = Object.freeze({ quorum: 0, defaults: { start: '08:00', end: '10:00', location: '', address: '', video: '' }, template: DEFAULT_TEMPLATE });
 
+/**
+ * The agenda template with an id on every part and item, the same in every tab that opens it, so two tabs' changes to it
+ * merge item by item (public/admin/board-meeting.js AgendaTemplate). One saved before the template kept them, and the
+ * default, are numbered by place. A meeting made from it gets ids of its own (board-shared.js templateAgenda)
+ */
+const templateIds = (t) => t.map((s, si) => ({ ...s, id: ID.test(String(s?.id || '')) ? String(s.id) : `s_tpl${si}`,
+  items: (s?.items || []).map((it, ii) => ({ ...it, id: ID.test(String(it?.id || '')) ? String(it.id) : `i_tpl${si}_${ii}` })) }));
+const templateOf = (s) => templateIds(Array.isArray(s.template) && s.template.length ? s.template : DEFAULT_TEMPLATE);
+
 /** Settings with every default filled in, and who can open the Board area */
 export async function getSettings(DB) {
   const s = await readSettings(DB);
   return {
     quorum: Number(s.quorum) > 0 ? Math.round(s.quorum) : 0,
     defaults: { ...DEFAULT_SETTINGS.defaults, ...(s.defaults || {}) },
-    template: Array.isArray(s.template) && s.template.length ? s.template : DEFAULT_TEMPLATE,
+    template: templateOf(s),
+    // When the template was last saved, and by whom: an editor's save of it goes over only the one it opened (saveSettings)
+    templateAt: String(s.templateAt || ''),
+    templateBy: String(s.templateBy || ''),
     admins: await boardAdmins(DB, s),
     adminsSaved: Array.isArray(s.admins) && s.admins.length > 0,
     invitesFrom: await (await import('./_board-invite.js')).organizerFor(DB),
@@ -161,9 +182,185 @@ export async function getSettings(DB) {
   };
 }
 
-/** Save Settings (admins, quorum, meeting defaults, the agenda template). Keeps at least the person saving as an admin. */
-export async function saveSettings(DB, patch, by) {
-  const s = await readSettings(DB);
+const SETTINGS_KEPT_CHANGING = 'The settings kept changing while they were saved. Nothing was lost: try again.';
+/**
+ * Save Settings (admins, quorum, meeting defaults, the agenda template). Keeps at least the person saving as an admin.
+ * Written only over the settings it was made from, as a meeting is (writeOver): two saves at once (a quorum here, the
+ * template in another tab) never drop either one, each is made again from what's there now. The template keeps when it
+ * was saved and by whom: a save of it from an editor (`base`, the templateAt it opened) that someone saved since is
+ * refused, 409 with theirs (`current`: { template, at, by }) to merge, as a meeting's is
+ */
+export async function saveSettings(DB, patch, by, { base = null } = {}) {
+  // (who presents, at the address their person has now: addressesNow, renames since the template the page opened too)
+  const template = Array.isArray(patch.template);
+  const stored = template && base ? { sections: templateOf(await readSettings(DB)) } : null;
+  const moved = template ? await addressesNow(DB, addressesIn({ sections: patch.template }), { since: base || '', moved: (slug) => !!stored && namesIn(stored, slug) }) : {};
+  const mine = Object.keys(moved).length ? { ...patch, template: followAddresses({ sections: patch.template }, moved, { people: await namesNow(DB) }).sections } : patch;
+  // (saved meanwhile: the page merges with theirs, and follows the same renames in what it has first)
+  await withMoves(writeSettings(DB, (s) => settingsAfter(s, mine, by, base)), moved, DB, base || '', (cur) => ({ sections: cur.template }));
+  const out = await getSettings(DB);
+  return Object.keys(moved).length ? { ...out, addressesNow: moved } : out;
+}
+/** Who presents as People has them now, for a presenter line written again with who presents (followAddresses). A read that fails throws: the save is refused in words, never a presenter line written from nobody (round 10) */
+const namesNow = (DB) => roster(DB).then((r) => [...r.board, ...r.staff]);
+/**
+ * A save's 409 (saved meanwhile) carrying the renames the page has to follow (`addressesNow`): those this save followed,
+ * and those that moved the record since the copy it opened (`base`), so the page's merge follows them in that copy too
+ */
+const withMoves = (going, moved, DB, base, of = (cur) => cur) => going.catch(async (e) => {
+  if (e?.status === 409 && e.current) {
+    const all = { ...(await renamedInto(DB, of(e.current), base).catch(() => ({}))), ...moved };
+    if (Object.keys(all).length) e.extra = { ...(e.extra || {}), addressesNow: all };
+  }
+  throw e;
+});
+
+/**
+ * Where each address a save names is now, when nobody on People has it but its person was renamed to one somebody has
+ * ({ old: new }): a save never brings back an address its person has left, whatever page sent it (one whose list of
+ * people was read before the rename, a merge that kept a page's own change). Every rename made on People is in the audit
+ * log (rename-content.js writes one for each, and nothing is ever taken out of it); the signing chain's 'renamed' events
+ * (only for people with signing records) are read too, and so is a rename still finishing (its note, rename-finish:<from>,
+ * written in the rename's own batch: Board QA round 9, a save landing between the rename and its audit entry kept the
+ * old address). The latest rename from an address wins, followed while its new address is gone as well. One nobody has
+ * and nobody was renamed from stays as it is. Coordinator, Board QA round 8
+ * `since`: the save's base (when what it edits was last saved, as the page read it). An address in a save means the
+ * person who had it when the page read what it's editing, so a rename made since then is followed even when someone new
+ * has the old address now (Board QA round 9: a newcomer given a renamed member's old address became the template's
+ * presenter), as long as the rename moved that very record (`moved(to)`: it names the new address now): a record the
+ * rename never touched had no address of theirs to bring back, so a newcomer picked there is the newcomer.
+ * Every read here decides what an address becomes: one that fails throws readDown(PEOPLE_DOWN), a 503 (round 9)
+ */
+export async function addressesNow(DB, slugs, { since = '', moved = null } = {}) {
+  const want = [...new Set((slugs || []).filter((x) => typeof x === 'string' && /^[a-z0-9-]{1,80}$/.test(x)))];
+  if (!want.length) return {};
+  // (a table not made yet keeps nothing; any other failure is said, never taken for "no rename")
+  const sure = (e) => { if (/no such table/i.test(e?.message || '')) return null; console.error('[board] addresses now', e?.message || e); throw readDown(PEOPLE_DOWN, e); };
+  const rows = async (st) => (await st.all().catch(sure))?.results || [];
+  const people = new Set((await rows(DB.prepare('SELECT slug FROM team'))).map((r) => r.slug));
+  const gone = want.filter((x) => !people.has(x));
+  const base = typeof since === 'string' && /^\d{4}-\d\d-\d\dT/.test(since) ? since : '';
+  if (!gone.length && !base) return {};
+  const moves = await renameMoves(DB);
+  // (in the order they happened: the audit log's by its own order, a second being all its clock tells)
+  const after = (a, b) => (a.id && b.id ? a.id > b.id : a.at > b.at);
+  const latest = new Map();
+  for (const x of moves.sort((a, b) => (after(a, b) ? 1 : after(b, a) ? -1 : 0))) latest.set(x.from, x);
+  // (an address someone else had after its person left it, renamed into it or added at it and gone since, is never
+  // followed to the one who left it: it may be the other person's)
+  const since2 = async (slug, x) => moves.some((y) => y.to === slug && after(y, x))
+    || !!(await (x.id
+      ? DB.prepare("SELECT 1 AS y FROM audit_log WHERE entity_type = 'team' AND entity_slug = ? AND id > ? LIMIT 1").bind(slug, x.id)
+      : DB.prepare("SELECT 1 AS y FROM audit_log WHERE entity_type = 'team' AND entity_slug = ? AND replace(created_at, ' ', 'T') > ? LIMIT 1").bind(slug, x.at)).first().catch(sure));
+  const out = {};
+  for (const old of want) {
+    let at = old;
+    let ok = true;
+    let last = null;
+    for (let i = 0; i < 10 && ok && latest.has(at); i++) {
+      const x = latest.get(at);
+      // (each step after the one before: a rename and its undo never go round in a circle)
+      if (last && !after(x, last)) break;
+      // Renamed since the page read it, from a record the rename moved: theirs, whoever has the old address now
+      const fresh = !!base && x.at > base && (!moved || moved(x.to) || moved(finalOf(latest, x)));
+      if (people.has(at) && !fresh) break;
+      if (!fresh && await since2(at, x)) ok = false;
+      else { at = x.to; last = x; }
+    }
+    if (ok && at !== old && people.has(at)) out[old] = at;
+  }
+  return out;
+}
+/**
+ * Every rename People has made, as the audit log, the signing chain and a rename still finishing (its note) say:
+ * [{ from, to, at, id? }]. A read that fails throws readDown(PEOPLE_DOWN); a table not made yet has none
+ */
+async function renameMoves(DB) {
+  const sure = (e) => { if (/no such table/i.test(e?.message || '')) return null; console.error('[board] renames', e?.message || e); throw readDown(PEOPLE_DOWN, e); };
+  const rows = async (st) => (await st.all().catch(sure))?.results || [];
+  const moves = [];
+  for (const r of await rows(DB.prepare("SELECT id, changes, created_at FROM audit_log WHERE entity_type = 'team' AND instr(changes, ?) > 0 ORDER BY id").bind('"field":"slug"'))) {
+    let list = [];
+    try { list = JSON.parse(r.changes || '[]'); } catch { /* not ours */ }
+    // (its moment: the rename's own, kept with it since round 9; else the audit log's, to the second, read as its start)
+    for (const c of Array.isArray(list) ? list : []) if (c?.field === 'slug' && c.from && c.to) moves.push({ from: String(c.from), to: String(c.to), at: typeof c.at === 'string' && c.at ? c.at : `${String(r.created_at || '').replace(' ', 'T')}.000Z`, id: Number(r.id) });
+  }
+  for (const r of await rows(DB.prepare("SELECT slug, detail FROM board_sign_events WHERE kind = 'renamed' ORDER BY seq"))) {
+    try { const d = JSON.parse(r.detail || '{}'); if (d?.from) moves.push({ from: String(d.from), to: String(r.slug), at: String(d.at || '') }); } catch { /* not ours */ }
+  }
+  for (const r of await rows(DB.prepare("SELECT data FROM board_state WHERE key >= 'rename-finish:' AND key < 'rename-finish;'"))) {
+    try { const d = JSON.parse(r.data || '{}'); if (d?.from && d?.to && !d.stuck) moves.push({ from: String(d.from), to: String(d.to), at: String(d.at || '') }); } catch { /* not ours */ }
+  }
+  return moves;
+}
+/**
+ * The renames made since `since` that moved this record (it names their new address now): { old: new }. A save that met
+ * a 409 is told them, so the page follows them in the copy it opened as well as in what it has now, and its merge never
+ * asks about a rename or brings back an address (Board QA round 9: a page that had followed Sam by his name was asked
+ * "You both changed Financial" because the copy it opened still had his old address)
+ */
+async function renamedInto(DB, record, since) {
+  if (!record || typeof since !== 'string' || !/^\d{4}-\d\d-\d\dT/.test(since)) return {};
+  const out = {};
+  for (const x of (await renameMoves(DB)).filter((y) => y.at > since)) if (namesIn(record, x.to) && !namesIn(record, x.from)) out[x.from] = x.to;
+  return out;
+}
+/** Where a rename's chain ends (its last step's new address), for whether the record names it */
+function finalOf(latest, x) {
+  let at = x.to;
+  let last = x;
+  for (let i = 0; i < 10 && latest.has(at); i++) { const y = latest.get(at); if (!(y.id && last.id ? y.id > last.id : y.at > last.at)) break; at = y.to; last = y; }
+  return at;
+}
+/**
+ * The settings row written only over the copy it was made from: `make(s)` → the settings to write, made again from
+ * what's there now each time someone saved meanwhile, or null when there's nothing to write. → whether it wrote
+ */
+async function writeSettings(DB, make) {
+  // (the table, made the first time)
+  await readSettings(DB);
+  for (let i = 0; i < 5; i++) {
+    const row = await DB.prepare("SELECT data FROM board_state WHERE key = 'settings'").first();
+    const next = make(parse(row?.data, {}));
+    if (next === null) return false;
+    const json = JSON.stringify(next);
+    const r = row
+      ? await DB.prepare("UPDATE board_state SET data = ?, updated_at = ? WHERE key = 'settings' AND data = ?").bind(json, nowIso(), row.data).run()
+      : await DB.prepare("INSERT OR IGNORE INTO board_state (key, data, updated_at) VALUES ('settings', ?, ?)").bind(json, nowIso()).run();
+    if ((r?.meta?.changes ?? r?.changes ?? 0) > 0) return true;
+    // Saved meanwhile: made again from what's there now
+  }
+  throw Object.assign(new Error(SETTINGS_KEPT_CHANGING), { status: 409 });
+}
+/**
+ * A change to the agenda template that no editor made (a rename on People moving who presents, ./_board-rename.js) is
+ * a save of it like any other: written over the settings as they are (a founder's save meanwhile stays, Who runs Board
+ * included), its time moved on and `by` saying who made it. So an editor open on the template from before meets the 409
+ * and merges item by item (public/admin/board-meeting.js AgendaTemplate), keeping this change wherever the page didn't
+ * change that item, never writing the template it opened back over it (Board QA round 8, Nov 21 2026: the founder's open
+ * template page put a renamed member's old address back, and the meetings on the template followed it).
+ * `change(template)` → the template changed (null: nothing to change). → whether it wrote
+ */
+export async function changeTemplate(DB, change, by) {
+  return writeSettings(DB, (s) => {
+    if (!Array.isArray(s.template)) return null;
+    const template = change(s.template);
+    if (!template || JSON.stringify(template) === JSON.stringify(s.template)) return null;
+    return templateSaved({ ...s, template }, s, by);
+  });
+}
+/**
+ * The template's save, kept with it: when and by whom (templateAt, templateBy), and the last SAVES_KEPT saves of it
+ * (templateSaves: each as it was left, by whom, over which), for a 409's question to name everyone whose save changed what
+ * clashes, never only the last to save (keepSave says why). Board QA round 10
+ */
+function templateSaved(next, s, by) {
+  const at = stampAfter(s.templateAt);
+  const saves = [...(Array.isArray(s.templateSaves) ? s.templateSaves : []), { at, was: String(s.templateAt || ''), by: by || '', data: templateIds(next.template) }];
+  return { ...next, templateAt: at, templateBy: by || '', templateSaves: saves.slice(-SAVES_KEPT) };
+}
+/** The settings `s` with a save's changes on them (saveSettings) */
+function settingsAfter(s, patch, by, base) {
   const next = { ...s };
   if (Array.isArray(patch.admins)) {
     const list = [...new Set(patch.admins.map(normEmail).filter((e) => /^[^\s@]+@soardcharity\.com$/.test(e)))];
@@ -185,19 +382,25 @@ export async function saveSettings(DB, patch, by) {
     next.defaults = { start: clean.start, end: clean.end, location: clean.location, address: clean.address, video: clean.video };
   }
   if (Array.isArray(patch.template)) {
-    next.template = cleanMeeting({ sections: patch.template }).sections
-      .map((sec) => ({ title: sec.title, items: sec.items.filter((it) => it.title).map((it) => ({ title: it.title, ...(it.presenter ? { presenter: it.presenter } : {}), ...(it.who?.length ? { who: it.who } : {}), ...(it.live ? { live: it.live } : {}) })) }))
-      .filter((sec) => sec.title);
+    if (base !== null && String(s.templateAt || '') !== base) {
+      throw Object.assign(new Error(`${s.templateBy || 'Someone'} saved the agenda template since you opened it`), { status: 409, current: { template: templateOf(s), at: String(s.templateAt || ''), by: String(s.templateBy || '') }, extra: savesChain(s.templateSaves, base, String(s.templateAt || '')) });
+    }
+    // Everything its editor sets, as typed, a part or item not named yet too (work in progress: a meeting made from it
+    // leaves those out, board-shared.js namedTemplate). Each part and item keeps its id, so the next tab's change to it
+    // is known as a change to it
+    return templateSaved({ ...next, template: cleanTemplate(patch.template) }, s, by);
   }
-  await writeState(DB, 'settings', next);
-  return getSettings(DB);
+  return next;
 }
 
 // ─── People, as the board page shows them ───────────────────────────
 
-/** The board, staff and Advisory Board for the board page and the admin's pickers */
-export async function roster(DB, { withEmails = false } = {}) {
-  const [people, emails] = await Promise.all([peopleRows(DB), withEmails ? privateEmails(DB) : {}]);
+/**
+ * The board, staff and Advisory Board for the board page and the admin's pickers. A read that fails throws (./_board-roles.js:
+ * never an empty board, nor members with no email); `sure: false` reads it as nobody
+ */
+export async function roster(DB, { withEmails = false, sure = true } = {}) {
+  const [people, emails] = await Promise.all([peopleRows(DB, { sure }), withEmails ? privateEmails(DB, { sure }) : {}]);
   const card = (p) => ({
     slug: p.slug, name: p.name, title: p.title || '', seat: p.seat || '', organization: p.organization || '',
     committees: Array.isArray(p.committees) ? p.committees : [], photo: p.photo ? photoUrl(p, 160) : '', since: p.since || null,
@@ -224,21 +427,68 @@ export async function filesOf(DB, type, ids = null) {
 }
 
 /**
+ * A meeting still ahead: not held (./board-shared.js meetingHeld, the one rule: its day gone by, the chair ended it, or
+ * on its day its minutes in or its end time passed), not under way, a board meeting and not a practice. Its list of
+ * who's on the board follows People → Board (withState, maybeKeepRolls), as its invite does (./_board-invite.js
+ * maybeFollowBoard). One held this morning keeps the board it was held with, whatever People says by the afternoon
+ * (Board QA round 5, Nov 21 2026)
+ */
+const stillAhead = (m, now = Date.now()) => isDate(m.date) && !meetingHeld(m, now) && !m.notBoard && !m.practice && !m.live?.startedAt;
+
+/**
  * Meetings with what lives beside them: their files and each action's done state. Who's coming is the calendar
- * invite's (repliesOf): answers once given on the board page or by email (board_rsvps) never show again
+ * invite's (repliesOf): answers once given on the board page or by email (board_rsvps) never show again.
+ * A meeting still ahead lists the board as People → Board has it now (./_board-invite.js followRoll): someone who joined
+ * is on it and someone who left is off it, for Who's coming, the quorum, the roll call and the minutes template alike, as
+ * the invite and the emails already go by, not as it was when the meeting was made. A meeting held keeps its record as
+ * it was. (People reading empty is taken for a bad read, as the invites take it: the list is left as it is)
  */
 async function withState(DB, meetings) {
   if (!meetings.length) return [];
-  const [files, done] = await Promise.all([
+  const now = Date.now();
+  const [files, done, board, reminded] = await Promise.all([
     filesOf(DB, 'meeting'),
     DB.prepare('SELECT * FROM board_action_state').all().then((r) => Object.fromEntries((r.results || []).map((x) => [x.action_id, x]))),
+    // not sure: a meeting's roll follows People only when People is read; one that fails leaves every roll as it was
+    // stored (read-only here, and nothing is taken off: rollOf keeps m.attendance), or every meeting read would fail with it
+    meetings.some((m) => stillAhead(m, now)) ? activeBoard(DB, { sure: false }) : [],
+    remindedOf(DB, meetings.map((m) => m.id)),
   ]);
-  return meetings.map((m) => cleanMeeting({
-    ...m,
-    files: files[m.id] || [],
-    actions: m.actions.map((a) => (done[a.id] ? { ...a, done: !!done[a.id].done, doneOn: done[a.id].done_on || '' } : { ...a, done: false, doneOn: '' })),
-    attendance: m.attendance.map((p) => ({ ...p, rsvp: '' })),
-  }));
+  const { followRoll } = board.length ? await import('./_board-invite.js') : {};
+  const rollOf = (m) => (board.length && stillAhead(m, now) ? followRoll(m.attendance, board) || m.attendance : m.attendance);
+  return meetings.map((m) => {
+    const c = cleanMeeting({
+      ...m,
+      files: files[m.id] || [],
+      actions: m.actions.map((a) => (done[a.id] ? { ...a, done: !!done[a.id].done, doneOn: done[a.id].done_on || '' } : { ...a, done: false, doneOn: '' })),
+      attendance: rollOf(m).map((p) => ({ ...p, rsvp: '' })),
+    });
+    return reminded[m.id] ? { ...c, reminded: reminded[m.id] } : c;
+  });
+}
+
+/**
+ * Who each meeting's reminder to answer the invite went to, and when (Who's coming → Ask the ones who haven't answered),
+ * as the send itself keeps it (sendOnce's record, board-send:remind:<id>): { meetingId: { slug: when } }. That record is
+ * the one record of it, read by every tab at the press and after a reload, as Email the board's and the minutes email's
+ * are; never kept on the meeting (stored leaves it off) nor shown on the board page (forBoard). Board QA round 8, Nov 21
+ * 2026: "Asked … just now" lived only in the tab that sent it, so a second tab asked the first-time question 11 minutes
+ * on and the whole board was asked twice
+ */
+async function remindedOf(DB, ids) {
+  const want = new Set(ids);
+  const prefix = 'board-send:remind:';
+  const rows = ((await DB.prepare("SELECT key, data FROM board_state WHERE key LIKE 'board-send:remind:%'").all().catch(() => null))?.results || [])
+    .map((r) => [r.key.slice(prefix.length), parse(r.data)]).filter(([id, d]) => want.has(id) && d?.had && Object.keys(d.had).length);
+  if (!rows.length) return {};
+  // (by email, as it went: each to the board member at that address now)
+  const slugAt = new Map(Object.entries(await privateEmails(DB)).map(([slug, e]) => [normEmail(e), slug]));
+  const out = {};
+  for (const [id, d] of rows) {
+    const who = Object.fromEntries(Object.entries(d.had).map(([e, at]) => [slugAt.get(normEmail(e)), String(at || '')]).filter(([slug, at]) => slug && Number.isFinite(Date.parse(at))));
+    if (Object.keys(who).length) out[id] = who;
+  }
+  return out;
 }
 
 /** Every meeting, newest first, with its files, done states and answers. Practice meetings only when asked ({ practice: true }) */
@@ -259,15 +509,84 @@ export async function getMeeting(DB, id) {
 const agendaSkeleton = (m) => JSON.stringify((m.sections || []).map((s) => [s.title, s.minutes || 0, s.items.map((it) => [it.title, it.presenter, it.who, it.notes, it.staffNote, it.confidential, it.docs])]));
 
 const stored = (m) => {
-  // Files, done states and answers live in their own tables
-  const { files, ...rest } = m;
+  // Files, done states and answers live in their own tables, and who was reminded in the reminder's own record (remindedOf)
+  // (addressesNow: a save's answer only)
+  const { files, reminded, addressesNow: _, ...rest } = m;
   return JSON.stringify({ ...rest, actions: rest.actions.map(({ done, doneOn, ...a }) => a), attendance: rest.attendance.map(({ rsvp, ...p }) => p) });
 };
-async function writeMeeting(DB, m) {
+/**
+ * A meeting written only over the copy it was made from: `was` is the updatedAt read (null: a new meeting, written only
+ * if there's none with its id). Anything written in between (an editor's save, a send's record, the calendar's answers)
+ * is never written over: nothing is written, and it says so. Each write is kept in the meeting's save history (keepSave:
+ * `prev`, the meeting it went over, so a write that changed nothing a person edits keeps nothing to compare; named as
+ * the meeting names who saved it last). → whether it was written
+ */
+async function writeOver(DB, m, was, { prev = null } = {}) {
   // Practice meetings live in their own table (see SCHEMA): getMeeting, and every action built on it, never finds one
-  await DB.prepare(`INSERT OR REPLACE INTO ${m.practice ? 'board_practice' : 'board_meetings'} (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)`)
-    .bind(m.id, m.date || '', stored(m), m.updatedAt, m.updatedBy || '').run();
+  const table = m.practice ? 'board_practice' : 'board_meetings';
+  const r = was === null
+    ? await DB.prepare(`INSERT OR IGNORE INTO ${table} (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)`).bind(m.id, m.date || '', stored(m), m.updatedAt, m.updatedBy || '').run()
+    : await DB.prepare(`UPDATE ${table} SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND COALESCE(updated_at, '') = ?`).bind(m.date || '', stored(m), m.updatedAt, m.updatedBy || '', m.id, was || '').run();
+  const wrote = (r?.meta?.changes ?? r?.changes ?? 0) > 0;
+  if (wrote) await keepSave(DB, `${table}:${m.id}`, { at: m.updatedAt, was: was || '', by: m.updatedBy, data: editedOf(m), prev: prev && editedOf(prev) });
+  return wrote;
 }
+
+/**
+ * Each write of a meeting, a practice meeting and the agenda template, kept (the last SAVES_KEPT of each, a month at
+ * most): what a person edits as it was left (`data`, none when the write didn't change it), who made it and over which
+ * write (`was`). So a page whose save meets one made meanwhile is told everyone whose save changed what clashes, save by
+ * save (public/admin/board-meeting.js clashWho), never only whoever saved last. Board QA round 10, Nov 22 2026: the
+ * agenda template's question named a rename on People that had only moved an address, for a change the founder made in
+ * another tab, and Keep mine dropped it. Never in the way of the write itself: one that can't be kept leaves the question
+ * naming everyone who saved since
+ */
+const SAVES_KEPT = 30;
+const EDITED = ['date', 'start', 'end', 'title', 'location', 'address', 'inviteNote', 'video', 'shared', 'noSince', 'minutes', 'approvedOn', 'attendance', 'sections', 'motions', 'actions'];
+/** What a person edits on a meeting, as one string to keep and compare (as mergeMeeting goes by: never an answer or a tick) */
+const editedOf = (m) => {
+  const c = cleanMeeting(m);
+  return JSON.stringify(Object.fromEntries(EDITED.map((k) => [k, k === 'attendance' ? c.attendance.map(({ rsvp, ...p }) => p) : k === 'actions' ? c.actions.map(({ done, doneOn, ...a }) => a) : c[k]])));
+};
+async function keepSave(DB, record, { at, was, by, data, prev }) {
+  try {
+    await DB.batch([
+      DB.prepare('INSERT OR REPLACE INTO board_saves (record, at, was, by, data) VALUES (?, ?, ?, ?, ?)').bind(record, at, was || '', by || '', prev === data ? null : data),
+      DB.prepare('DELETE FROM board_saves WHERE record = ? AND at < (SELECT at FROM board_saves WHERE record = ? ORDER BY at DESC LIMIT 1 OFFSET ?)').bind(record, record, SAVES_KEPT - 1),
+      DB.prepare('DELETE FROM board_saves WHERE at < ?').bind(new Date(Date.now() - 31 * 86400000).toISOString()),
+    ]);
+  } catch (err) { console.error('[board] save history', err?.message || err); }
+}
+/**
+ * The saves since a page's copy (`base`) up to the one it meets (`at`), as a 409 tells the page: `saves`, each in turn
+ * ({ at, by, data: what it left, null when unchanged }), when every one is known; null when one isn't (kept before the
+ * history began, or since cleared), and then `savers`, everyone who saved since, for the page to name them all
+ */
+export function savesChain(rows, base, at) {
+  const list = (rows || []).filter((r) => String(r.at || '') > String(base || '') && String(r.at || '') <= String(at || '')).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const savers = [...new Set(list.map((r) => String(r.by || '')))];
+  let link = String(base || '');
+  for (const r of list) { if (String(r.was || '') !== link) return { saves: null, savers }; link = String(r.at); }
+  return { saves: list.length && link === String(at || '') ? list.map((r) => ({ at: String(r.at), by: String(r.by || ''), data: r.data == null ? null : typeof r.data === 'string' ? parse(r.data, null) : r.data })) : null, savers };
+}
+/** A meeting's saves since `base` (savesChain), for its 409 (more than a page should be sent: everyone who saved, by name) */
+async function savesSince(DB, record, base, at) {
+  const rows = (await DB.prepare('SELECT at, was, by, data FROM board_saves WHERE record = ? AND at > ?').bind(record, String(base || '')).all().catch(() => null))?.results || [];
+  if (rows.reduce((n, r) => n + String(r.data || '').length, 0) > 2_000_000) return { saves: null, savers: [...new Set(rows.filter((r) => String(r.at) <= String(at || '')).map((r) => String(r.by || '')))] };
+  return savesChain(rows, base, at);
+}
+/**
+ * A meeting's next updatedAt: now, or a millisecond after the last one when that's now or later (two writes in the same
+ * millisecond, a clock behind), so every write has a time of its own and an editor holding the last one always hears
+ * of the next
+ */
+const stampAfter = (prev) => {
+  const was = Date.parse(prev || '');
+  return new Date(Number.isFinite(was) && was >= Date.now() ? was + 1 : Date.now()).toISOString();
+};
+const KEPT_CHANGING = 'The meeting kept changing while it was saved. Nothing was lost: try again.';
+/** What an editor is told when the meeting it has open was deleted (in another tab, by the other admin) */
+export const MEETING_DELETED = 'This meeting was deleted, maybe in another tab. Nothing here was saved, and it stays deleted.';
 
 /** A practice meeting by id (null for a board meeting: those are getMeeting's) */
 export async function getPractice(DB, id) {
@@ -300,57 +619,143 @@ export async function patchMeeting(DB, id, fn, { by = '' } = {}) {
   for (let i = 0; i < 5; i++) {
     const cur = await getMeeting(DB, id);
     if (!cur) return null;
-    const next = { ...fn(cur), id, updatedAt: nowIso(), updatedBy: by || cur.updatedBy || '' };
-    const r = await DB.prepare('UPDATE board_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ?')
-      .bind(next.date || '', stored(next), next.updatedAt, next.updatedBy, id, cur.updatedAt).run();
-    if ((r?.meta?.changes ?? r?.changes ?? 0) > 0) return getMeeting(DB, id);
+    const out = fn(cur);
+    // (which file approved minutes are: the server's, never the function's copy. Board QA round 10)
+    const next = { ...out, id, practice: false, approvedFile: approvedFileAfter(cur, out), updatedAt: stampAfter(cur.updatedAt), updatedBy: by || cur.updatedBy || '' };
+    if (await writeOver(DB, next, cur.updatedAt || '', { prev: cur })) return getMeeting(DB, id);
   }
-  throw new Error('The meeting kept changing; try again');
+  throw new Error(KEPT_CHANGING);
 }
+
+/**
+ * Fields only the server sets (a send's record, the invite, the approval's share), written onto the meeting as it is
+ * now in one statement: nothing in between to be overtaken, so a record of something that went (the board's emails,
+ * Google's invite) is never lost to edits saved meanwhile, however many come at once (patchMeeting reads, then writes,
+ * and gives up after five tries of being overtaken). Its time after the last one (stampAfter, in SQL), so a copy open
+ * in an editor merges. Only for fields whose value doesn't come from the meeting: anything worked out from it is
+ * patchMeeting's. → the meeting, or null when it's gone (deleted meanwhile: nothing written)
+ */
+export async function setOnMeeting(DB, id, fields, { by = '' } = {}) {
+  await ensureSchema(DB);
+  const keys = Object.keys(fields).filter((k) => /^[a-zA-Z]+$/.test(k));
+  const stamp = "COALESCE(CASE WHEN COALESCE(updated_at, '') < ? THEN ? ELSE strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') END, ?)";
+  const now = nowIso();
+  const sets = [...keys.map((k) => [`$.${k}`, JSON.stringify(fields[k] ?? null)]), ...(by ? [['$.updatedBy', JSON.stringify(by)]] : [])];
+  // (kept in the meeting's save history as any write is, keepSave: over which write, at the same time, by whom; what a
+  // person edits, after it, when one of these is. Never in the way of the write. Board QA round 10)
+  const record = `board_meetings:${id}`;
+  await DB.prepare(`INSERT OR REPLACE INTO board_saves (record, at, was, by, data) SELECT ?, ${stamp}, COALESCE(updated_at, ''), COALESCE(NULLIF(?, ''), updated_by, ''), NULL FROM board_meetings WHERE id = ?`)
+    .bind(record, now, now, now, by, id).run().catch((err) => console.error('[board] save history', err?.message || err));
+  const r = await DB.prepare(`UPDATE board_meetings SET data = json_set(data, ${sets.map(() => '?, json(?)').join(', ')}, '$.updatedAt', ${stamp}),
+    updated_at = ${stamp}${by ? ', updated_by = ?' : ''} WHERE id = ?`)
+    .bind(...sets.flat(), now, now, now, now, now, now, ...(by ? [by] : []), id).run();
+  if (!((r?.meta?.changes ?? r?.changes ?? 0) > 0)) return null;
+  const after = await getMeeting(DB, id);
+  if (after && keys.some((k) => EDITED.includes(k))) await DB.prepare('UPDATE board_saves SET data = ? WHERE record = ? AND at = ?').bind(editedOf(after), record, after.updatedAt).run().catch(() => {});
+  return after;
+}
+
+/**
+ * Whether a meeting is kept off the board page as "not a board meeting" (notBoard) once a save is written. It's the
+ * server's: the calendar's older rules set it, and Board has nothing that sets it. A save only ever clears it, when a
+ * person shares the meeting (the tag says "Share it to put it back"); an editor's copy never puts it back, so a tab
+ * that last read it before it was shared can't take a shared meeting off the board page again. A new meeting is as made
+ */
+export const notBoardAfter = (current, m) => (current ? !!current.notBoard && !(m.shared && !current.shared) : !!m.notBoard);
 
 /**
  * Save a meeting from the admin. `base` is the updatedAt the editor loaded:
  * a meeting saved by someone else since then is refused (409, with theirs).
  * The packet's numbers and its sent record are the server's to set.
+ * Written only over the copy it was made from (writeOver): anything saved in between (a send's record, a presenter's
+ * report, the calendar) is never written over. With a base, the editor is told (409, with theirs, to merge); without
+ * one (a new meeting, the server's own), it's made again from what's there now. A person's save (`edit`: Board's
+ * save-meeting, with a base or without one: a request made by hand, a page from before bases) goes by the same rules
+ * either way: a meeting that's gone is never a new one (404, `gone`: MEETING_DELETED), and minutes are marked approved
+ * only when there are some (minutesNotReady)
  */
-export async function saveMeeting(DB, raw, { by, base = null } = {}) {
+export async function saveMeeting(DB, raw, opts = {}) {
+  // Its presenters, roll and to-dos at the addresses their people have now (addressesNow), and said (`addressesNow`) so
+  // the page that sent it takes the same. With a base, a rename made since the copy the page opened is followed even
+  // when someone new has the old address, where the rename moved this meeting (Board QA round 9: a practice meeting's
+  // presenter became the newcomer)
+  const base = typeof opts.base === 'string' ? opts.base : '';
+  const id = cleanMeeting(raw).id;
+  const stored = base && id ? (await getPractice(DB, id)) || (await getMeeting(DB, id)) : null;
+  const moved = await addressesNow(DB, addressesIn(raw), { since: base, moved: (slug) => !!stored && namesIn(stored, slug) });
+  if (!Object.keys(moved).length) return withMoves(saveMeetingAs(DB, raw, opts), moved, DB, base);
+  const out = await withMoves(saveMeetingAs(DB, followAddresses(raw, moved, { people: await namesNow(DB) }), opts), moved, DB, base);
+  return out ? { ...out, addressesNow: moved } : out;
+}
+async function saveMeetingAs(DB, raw, { by, base = null, edit = false } = {}) {
+  const person = edit || base !== null;
   await ensureSchema(DB);
   // Practice is the server's to set: a meeting is one only if it was made as one (createPractice)
   const practice = await getPractice(DB, cleanMeeting(raw).id);
   if (practice) return savePractice(DB, practice, raw, { by, base });
   // A practice meeting started over (or cleared after a week) while an editor still had it open: never a new board meeting
-  if (raw?.practice === true && !(await getMeeting(DB, cleanMeeting(raw).id))) throw Object.assign(new Error('That practice meeting is gone. Open Practice again for a new one.'), { status: 404 });
-  const m = { ...cleanMeeting(raw), practice: false };
-  const at = nowIso();
-  if (!m.date) throw Object.assign(new Error('A meeting needs a date'), { status: 400 });
-  const current = await getMeeting(DB, m.id);
-  if (current && base !== null && current.updatedAt && current.updatedAt !== base) {
-    throw Object.assign(new Error(`${current.updatedBy || 'Someone'} saved this meeting since you opened it`), { status: 409, current });
+  if (raw?.practice === true && !(await getMeeting(DB, cleanMeeting(raw).id))) throw Object.assign(new Error('That practice meeting is gone. Open Practice again for a new one.'), { status: 404, extra: { gone: true } });
+  if (!cleanMeeting(raw).date) throw Object.assign(new Error('A meeting needs a date'), { status: 400 });
+  let had = false;
+  for (let i = 0; i < 5; i++) {
+    // (made again each time: what's written goes from the editor's copy and what's there now, never an earlier try's)
+    const m = { ...cleanMeeting(raw), practice: false };
+    const current = await getMeeting(DB, m.id);
+    // (one there a moment ago and gone now was deleted meanwhile: never made again, with a base or without; a person's
+    // save is never a new meeting: new ones come from new-meeting and import-meeting)
+    if (!current && (person || had)) throw Object.assign(new Error(MEETING_DELETED), { status: 404, extra: { gone: true } });
+    had ||= !!current;
+    // Saved by someone else since the copy it was made from: the editor is told, with theirs to merge, before anything
+    // here is judged. What a save changes is judged against that copy, never the copy as a whole: a field the tab never
+    // touched, that the site has changed since (taken off the board page in another tab, say), is theirs to merge, never
+    // a refusal (QA round 4, Nov 21 2026: a stale tab's unchanged "shared" was refused, and it saved in a loop)
+    if (current && base !== null && current.updatedAt && current.updatedAt !== base) {
+      // (with every save since, for the question to name whoever changed what clashes: savesChain. Board QA round 10)
+      throw Object.assign(new Error(`${current.updatedBy || 'Someone'} saved this meeting since you opened it`), { status: 409, current, extra: await savesSince(DB, `board_meetings:${m.id}`, base, current.updatedAt) });
+    }
+    const at = stampAfter(current?.updatedAt);
+    // Marked approved from an editor (Mark them approved): only minutes there are, of a meeting held, as approve-minutes
+    // goes by (minutesNotReady), never a tab left open on a meeting ahead. Refused by name (`refused`), with the meeting
+    // as it is now (`meeting`), so the editor puts only that back, as the site has it, and the rest of the save goes
+    // (judged by the minutes the site has, never a tab's copy of them: a tab opened before an Undo took them off can't
+    // mark them approved. QA round 6, Nov 21 2026)
+    if (current && person && m.minutes === 'approved' && current.minutes !== 'approved') {
+      const why = minutesNotReady({ ...current, ...m, minutesFrom: current.minutesFrom, files: current.files });
+      if (why) throw Object.assign(new Error(why), { status: 409, extra: { refused: ['minutes', 'approvedOn'], meeting: current } });
+    }
+    // Put on the board page by this save: only once its agenda is approved, for a meeting still to be held (holdShare)
+    if (current && person) await holdShare(DB, current, m);
+    const next = {
+      ...m,
+      notBoard: notBoardAfter(current, m),
+      snapshot: current?.snapshot || null,
+      packetSentAt: current?.packetSentAt || '',
+      packetSentTo: current?.packetSentTo || 0,
+      minutesSentAt: current?.minutesSentAt || '',
+      invite: current?.invite || null,
+      inviteGone: current?.inviteGone || '',
+      // A meeting's day, time and place are typed in Board; a link to a calendar event older code made stays as it was
+      calendar: current?.calendar || null,
+      // Who joined by Meet is the server's (./_board-attendance.js). Where the agenda came from is named by
+      // server code that fills it (board mail, the drafts); a person changing the agenda or its notes makes it theirs
+      fromMeet: 'fromMeet' in raw ? m.fromMeet : current?.fromMeet || null,
+      // Which minutes filled the meeting in is the minutes reader's (./_board-minutes.js), never a person's save: a tab's
+      // copy from before an Undo can't put back the minutes Undo took off
+      minutesFrom: !person && 'minutesFrom' in raw ? m.minutesFrom : current?.minutesFrom || null,
+      agendaFrom: 'agendaFrom' in raw ? m.agendaFrom : !current ? null : agendaSkeleton(m) !== agendaSkeleton(current) ? { kind: 'typed', name: '', at } : current.agendaFrom,
+      approvedOn: m.minutes === 'approved' ? (m.approvedOn || current?.approvedOn || todayEastern()) : '',
+      // Which file approved minutes are is the server's, never a save's: the one the board was shown as they're approved,
+      // and that one after (approvedFileAfter). Board QA round 10
+      approvedFile: approvedFileAfter(current, m),
+      createdAt: current?.createdAt || at,
+      updatedAt: at,
+      updatedBy: by || '',
+    };
+    await stampReports(DB, next, current, { by, at });
+    if (await writeOver(DB, next, current ? current.updatedAt || '' : null, { prev: current })) return getMeeting(DB, m.id);
+    // Written meanwhile (or made, or deleted): read again. An editor's (a base) is told, with theirs to merge
   }
-  const next = {
-    ...m,
-    snapshot: current?.snapshot || null,
-    packetSentAt: current?.packetSentAt || '',
-    packetSentTo: current?.packetSentTo || 0,
-    minutesSentAt: current?.minutesSentAt || '',
-    invite: current?.invite || null,
-    inviteGone: current?.inviteGone || '',
-    // A meeting's day, time and place are typed in Board; a link to a calendar event older code made stays as it was
-    calendar: current?.calendar || null,
-    // Who joined by Meet is the server's (./_board-attendance.js). Where the agenda came from is named by
-    // server code that fills it (board mail, the drafts); a person changing the agenda or its notes makes it theirs
-    fromMeet: 'fromMeet' in raw ? m.fromMeet : current?.fromMeet || null,
-    // Which minutes filled the meeting in is the minutes reader's (./_board-minutes.js)
-    minutesFrom: 'minutesFrom' in raw ? m.minutesFrom : current?.minutesFrom || null,
-    agendaFrom: 'agendaFrom' in raw ? m.agendaFrom : !current ? null : agendaSkeleton(m) !== agendaSkeleton(current) ? { kind: 'typed', name: '', at } : current.agendaFrom,
-    approvedOn: m.minutes === 'approved' ? (m.approvedOn || current?.approvedOn || todayEastern()) : '',
-    createdAt: current?.createdAt || at,
-    updatedAt: at,
-    updatedBy: by || '',
-  };
-  await stampReports(DB, next, current, { by, at });
-  await writeMeeting(DB, next);
-  return getMeeting(DB, m.id);
+  throw Object.assign(new Error(KEPT_CHANGING), { status: 409 });
 }
 
 /**
@@ -382,20 +787,42 @@ async function stampReports(DB, next, current, { by, at }) {
   }
 }
 
-/** A practice meeting saved from the chair's screen: what a person edits, never shared, never an invite or a packet */
-async function savePractice(DB, current, raw, { by, base = null } = {}) {
-  if (base !== null && current.updatedAt && current.updatedAt !== base) {
-    throw Object.assign(new Error(`${current.updatedBy || 'Someone'} saved this meeting since you opened it`), { status: 409, current });
+/**
+ * A practice meeting changed by the server (a rename on People moving who's on it, ./_board-rename.js), as patchMeeting
+ * changes a board meeting: onto it as it's stored now, with a newer updatedAt, so a copy open in an editor meets the 409
+ * and merges, never writing what it opened back over the change (Board QA round 8). → the meeting, or null when it's gone
+ */
+export async function patchPractice(DB, id, fn, { by = '' } = {}) {
+  for (let i = 0; i < 5; i++) {
+    const cur = await getPractice(DB, id);
+    if (!cur) return null;
+    const next = { ...fn(cur), id, date: cur.date, practice: true, borrowed: cur.borrowed, docsFrom: cur.docsFrom, updatedAt: stampAfter(cur.updatedAt), updatedBy: by || cur.updatedBy || '' };
+    if (await writeOver(DB, next, cur.updatedAt || '', { prev: cur })) return getPractice(DB, id);
   }
+  throw new Error(KEPT_CHANGING);
+}
+
+/**
+ * A practice meeting saved from the chair's screen: what a person edits, never shared, never an invite or a packet.
+ * Written only over the copy it was made from, as a board meeting is (saveMeeting)
+ */
+async function savePractice(DB, current, raw, { by, base = null } = {}) {
   const m = cleanMeeting(raw);
-  const next = {
-    ...m, id: current.id, date: current.date, practice: true, shared: false, notBoard: false, calendar: null, invite: null, snapshot: null,
-    packetSentAt: '', packetSentTo: 0, minutesSentAt: '', fromMeet: null, agendaFrom: current.agendaFrom,
-    borrowed: current.borrowed || [], docsFrom: current.docsFrom,
-    createdAt: current.createdAt, updatedAt: nowIso(), updatedBy: by || '',
-  };
-  await writeMeeting(DB, next);
-  return getPractice(DB, current.id);
+  for (let i = 0; i < 5; i++) {
+    if (!current) throw Object.assign(new Error('That practice meeting is gone. Open Practice again for a new one.'), { status: 404, extra: { gone: true } });
+    if (base !== null && current.updatedAt && current.updatedAt !== base) {
+      throw Object.assign(new Error(`${current.updatedBy || 'Someone'} saved this meeting since you opened it`), { status: 409, current, extra: await savesSince(DB, `board_practice:${current.id}`, base, current.updatedAt) });
+    }
+    const next = {
+      ...m, id: current.id, date: current.date, practice: true, shared: false, notBoard: false, calendar: null, invite: null, snapshot: null,
+      packetSentAt: '', packetSentTo: 0, minutesSentAt: '', fromMeet: null, agendaFrom: current.agendaFrom,
+      borrowed: current.borrowed || [], docsFrom: current.docsFrom,
+      createdAt: current.createdAt, updatedAt: stampAfter(current.updatedAt), updatedBy: by || '',
+    };
+    if (await writeOver(DB, next, current.updatedAt || '', { prev: current })) return getPractice(DB, current.id);
+    current = await getPractice(DB, current.id);
+  }
+  throw Object.assign(new Error(KEPT_CHANGING), { status: 409 });
 }
 
 /**
@@ -428,25 +855,35 @@ export async function importMeeting(env, parsed, { by }) {
   return saveMeeting(env.DB, m, { by });
 }
 
+/**
+ * A meeting and everything kept beside it, gone. The meeting itself goes first, in one statement that says what it had
+ * as it went (so a delete knows of an invite recorded a moment before: ./_board-invite.js deleteWithInvite), then what's
+ * kept beside it → the meeting as it was when it went, or null when there was none
+ */
 export async function deleteMeeting(env, id) {
   await ensureSchema(env.DB);
+  const row = await env.DB.prepare('DELETE FROM board_meetings WHERE id = ? RETURNING data').bind(id).first();
   const files = (await env.DB.prepare("SELECT id FROM board_files WHERE owner_type = 'meeting' AND owner_id = ?").bind(id).all()).results || [];
   for (const f of files) await deleteFile(env, f.id);
   await env.DB.prepare('DELETE FROM board_rsvps WHERE meeting_id = ?').bind(id).run();
   await env.DB.prepare('DELETE FROM board_minutes_notes WHERE meeting_id = ?').bind(id).run();
   await env.DB.prepare('DELETE FROM board_minutes_corrections WHERE meeting_id = ?').bind(id).run();
   await env.DB.prepare('DELETE FROM board_minutes_signed WHERE meeting_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM board_meetings WHERE id = ?').bind(id).run();
+  return row ? cleanMeeting(parse(row.data)) : null;
 }
 
-/** Done or not, by action id: an admin for any action, a member for their own */
+/**
+ * Done or not, by action id: an admin for any action, a member for their own. A member reaches only the action items
+ * the board page shows (a shared meeting's): one on a meeting they can't see isn't there for them (404), never "someone else's"
+ */
 export async function setActionDone(DB, actionId, done, { by, slug = null } = {}) {
   await ensureSchema(DB);
   if (!ID.test(String(actionId || ''))) throw Object.assign(new Error('Which action item?'), { status: 400 });
   const meetings = await listMeetings(DB, { practice: !slug });
-  const action = meetings.flatMap((m) => m.actions).find((a) => a.id === actionId);
+  const action = (slug ? meetings.filter((m) => boardCopy(m)) : meetings).flatMap((m) => m.actions).find((a) => a.id === actionId);
   if (!action) throw Object.assign(new Error('That action item is gone'), { status: 404 });
-  if (slug && action.owner !== slug) throw Object.assign(new Error('Only the person it’s assigned to can tick it off'), { status: 403 });
+  // (theirs at the moment of their own rename too: the to-do still at the old address, or the sign-in: sameMember)
+  if (slug && !(await sameMember(DB, action.owner, slug))) throw Object.assign(new Error('Only the person it’s assigned to can tick it off'), { status: 403 });
   await DB.prepare('INSERT OR REPLACE INTO board_action_state (action_id, done, done_on, by) VALUES (?, ?, ?, ?)')
     .bind(actionId, done ? 1 : 0, done ? todayEastern() : null, by || '').run();
   return { id: actionId, done: !!done, doneOn: done ? todayEastern() : '' };
@@ -455,22 +892,61 @@ export async function setActionDone(DB, actionId, done, { by, slug = null } = {}
 /**
  * An agenda item someone may write a report for, or put a document with: a board member who presents it (picked, or
  * named in its presenter line) on a meeting the board can see, until its minutes are approved; one of Board's admins,
- * any time. → { m, it }, else throws (404, 403, 409)
+ * any time. A meeting ahead not shared yet opens to who presents in it, on the items they present, in the window the
+ * board page shows it to them (_board-asks.js presentingWindow): anything else of it a member asks for answers as
+ * not there (404), never as someone else's. → { m, it }, else throws (404, 403, 409)
  */
 export async function presenterGate(env, id, itemId, { member = null, admin = false } = {}) {
   if (!ID.test(String(id || '')) || !ID.test(String(itemId || ''))) throw err('Which item?', 400);
   const m = await getMeeting(env.DB, id);
-  // A meeting ahead not shared yet opens to who presents in it (their report was asked for by email: _board-asks.js)
-  const ahead = !!member && isDate(m?.date) && m.date >= todayEastern() && !m.notBoard;
-  if (!m || (!admin && !forBoard(m) && !ahead)) throw err('That meeting isn’t on the board page', 404);
+  const hidden = () => err('That meeting isn’t on the board page', 404);
+  if (!m) throw hidden();
   const it = m.sections.flatMap((s) => s.items).find((x) => x.id === itemId);
-  if (!it) throw err('That item isn’t on the agenda any more', 404);
-  if (member) {
-    const people = await roster(env.DB);
-    if (!presentersOf(it, [...people.board, ...people.staff]).some((p) => p.slug === member.slug)) throw err('Only the person presenting this item can write its report or add documents to it', 403);
-    if (m.minutes === 'approved') throw err('This meeting’s minutes are approved, so its reports stay as they were', 409);
+  if (admin) {
+    if (!it) throw err('That item isn’t on the agenda any more', 404);
+    return { m, it };
   }
+  if (!member) throw hidden();
+  const people = await roster(env.DB);
+  // (theirs at the moment of their own rename too: the item still naming the old address, or the sign-in)
+  const presents = !!it && (presentersOf(it, [...people.board, ...people.staff]).some((p) => p.slug === member.slug)
+    || await someMember(env.DB, it.who, member.slug));
+  const seen = boardCopy(m);
+  if (!seen) {
+    const { presentingWindow } = await import('./_board-asks.js');
+    if (!presents || !presentingWindow(m, todayEastern(), (await getSettings(env.DB)).template)) throw hidden();
+  }
+  // (an item the board page doesn't show, a row left empty, isn't there either)
+  if (!it || (seen && !seen.sections.some((s) => s.items.some((x) => x.id === itemId)))) throw err('That item isn’t on the agenda any more', 404);
+  if (!presents) throw err('Only the person presenting this item can write its report or add documents to it', 403);
+  if (m.minutes === 'approved') throw err('This meeting’s minutes are approved, so its reports stay as they were', 409);
   return { m, it };
+}
+
+/** Whether any of these addresses (an item's who) is the member's own, a rename at that moment included (sameMember) */
+async function someMember(DB, list, slug) {
+  for (const x of Array.isArray(list) ? list : []) if (await sameMember(DB, x, slug)) return true;
+  return false;
+}
+
+/** A meeting written to by a presenter or Board (patchMeeting), deleted meanwhile: not there, as presenterGate says it */
+const stillThere = (saved) => {
+  if (!saved) throw err('That meeting isn’t on the board page', 404);
+  return saved;
+};
+
+/**
+ * The items a board member presents in a meeting ahead not shared yet, inside the window the board page shows it to them
+ * (_board-asks.js presentingWindow, the same as for their report and its documents), each as the board will see it
+ * (forBoard: never a staff-only document or staff note). [] for any other meeting or person
+ */
+export async function presentedBy(DB, m, member) {
+  if (!m || !member?.slug || m.shared) return [];
+  const { presentingWindow } = await import('./_board-asks.js');
+  if (!presentingWindow(m, todayEastern(), (await getSettings(DB)).template)) return [];
+  const people = await roster(DB);
+  const everyone = [...people.board, ...people.staff];
+  return forBoard({ ...m, shared: true }).sections.flatMap((s) => s.items).filter((it) => presentersOf(it, everyone).some((p) => p.slug === member.slug));
 }
 
 /** A file's kind by its name, as Board files a new one (financial statements, else other) */
@@ -490,7 +966,7 @@ export async function attachToItem(env, id, itemId, file, { member = null, admin
       if (!cur.sections.some((s) => s.items.some((x) => x.id === itemId))) throw err('That item isn’t on the agenda any more', 404);
       return { ...cur, sections: cur.sections.map((s) => ({ ...s, items: s.items.map((x) => (x.id === itemId ? { ...x, docs: [...(x.docs || []), stored.id] } : x)) })) };
     }, { by: member?.name || adminEmail });
-    return { file: stored, docs: saved.sections.flatMap((s) => s.items).find((x) => x.id === itemId)?.docs || [] };
+    return { file: stored, docs: stillThere(saved).sections.flatMap((s) => s.items).find((x) => x.id === itemId)?.docs || [] };
   } catch (e) {
     await deleteFile(env, stored.id); // never a file nothing shows
     throw e;
@@ -503,11 +979,13 @@ export async function attachToItem(env, id, itemId, file, { member = null, admin
  */
 export async function detachFromItem(env, id, itemId, fileId, { member = null, admin = false, adminEmail = '' } = {}) {
   await ensureSchema(env.DB);
-  const { it } = await presenterGate(env, id, itemId, { member, admin });
-  if (!(it.docs || []).includes(fileId)) throw err('That document isn’t with this item', 404);
+  const { m, it } = await presenterGate(env, id, itemId, { member, admin });
+  // (a member: only one the board page shows with it, never a staff-only file)
+  const there = (it.docs || []).filter((d) => !member || m.files.some((f) => f.id === d && !f.staffOnly));
+  if (!there.includes(fileId)) throw err('That document isn’t with this item', 404);
   const row = await env.DB.prepare('SELECT by FROM board_files WHERE id = ?').bind(fileId).first();
   if (member && (!row || String(row.by || '').toLowerCase() !== String(member.email || '').toLowerCase())) throw err('Only Board’s admins can take off a document someone else put there', 403);
-  const saved = await patchMeeting(env.DB, id, (cur) => ({ ...cur, sections: cur.sections.map((s) => ({ ...s, items: s.items.map((x) => (x.id === itemId ? { ...x, docs: (x.docs || []).filter((d) => d !== fileId) } : x)) })) }), { by: member?.name || adminEmail });
+  const saved = stillThere(await patchMeeting(env.DB, id, (cur) => ({ ...cur, sections: cur.sections.map((s) => ({ ...s, items: s.items.map((x) => (x.id === itemId ? { ...x, docs: (x.docs || []).filter((d) => d !== fileId) } : x)) })) }), { by: member?.name || adminEmail }));
   if (member && !saved.sections.some((s) => s.items.some((x) => (x.docs || []).includes(fileId)))) await deleteFile(env, fileId);
   return { docs: saved.sections.flatMap((s) => s.items).find((x) => x.id === itemId)?.docs || [] };
 }
@@ -526,7 +1004,7 @@ export async function saveSlideOrder(env, id, itemId, order, { member = null, ad
     if (!cur.sections.some((s) => s.items.some((x) => x.id === itemId))) throw err('That item isn’t on the agenda any more', 404);
     return { ...cur, sections: cur.sections.map((s) => ({ ...s, items: s.items.map((x) => (x.id === itemId ? { ...x, slideOrder } : x)) })) };
   }, { by: member?.name || adminEmail });
-  return { itemId, slideOrder: saved.sections.flatMap((s) => s.items).find((x) => x.id === itemId)?.slideOrder || [] };
+  return { itemId, slideOrder: stillThere(saved).sections.flatMap((s) => s.items).find((x) => x.id === itemId)?.slideOrder || [] };
 }
 
 /**
@@ -560,7 +1038,7 @@ export async function saveReport(env, id, itemId, text, { member = null, admin =
     const patch = { ...(words ? { report, reportBy: report ? by : '', reportAt: report ? at : '' } : {}), ...(reportLook !== undefined ? { reportLook } : {}) };
     return { ...cur, sections: cur.sections.map((s) => ({ ...s, items: s.items.map((x) => (x.id === itemId ? { ...x, ...patch } : x)) })) };
   }, { by: member?.name || adminEmail });
-  return theirs(itemOf(saved));
+  return theirs(itemOf(stillThere(saved)));
 }
 
 /**
@@ -588,7 +1066,7 @@ export async function saveMotion(env, id, itemId, text, { member = null, admin =
     }
     return { ...cur, sections: cur.sections.map((s) => ({ ...s, items: s.items.map((x) => (x.id === itemId ? { ...x, motion } : x)) })) };
   }, { by: member?.name || adminEmail });
-  return { itemId, motion: saved.sections.flatMap((s) => s.items).find((x) => x.id === itemId)?.motion || '' };
+  return { itemId, motion: stillThere(saved).sections.flatMap((s) => s.items).find((x) => x.id === itemId)?.motion || '' };
 }
 
 /** The board already has it on their calendars: Board's invite went out */
@@ -596,9 +1074,22 @@ export const boardHasIt = (m) => !!m?.invite?.sentAt;
 /**
  * A meeting a board member can see something of: a shared one, or one ahead
  * that's on their calendars already but isn't shared yet (its day, time and
- * place only: see portalData's nextPending)
+ * place only: see portalData's nextPending). Never one Board keeps off the board page (notBoard: a coffee the calendar
+ * brought in, another organization's board), shared or not
  */
-export const onBoardPage = (m, today = todayEastern()) => !!m && (m.shared || (!m.notBoard && !m.calendar?.gone && isDate(m.date) && m.date >= today && boardHasIt(m)));
+export const onBoardPage = (m, today = todayEastern()) => !!m && !m.notBoard && (m.shared || (!m.calendar?.gone && isDate(m.date) && m.date >= today && boardHasIt(m)));
+/**
+ * A board meeting the board can see: on the board page (above), and a board meeting, never one Board keeps off it
+ * (a coffee the calendar brought in, another organization's) nor a practice. Every list of meetings the board is
+ * shown (the next ones, the year's, the minutes email's next meeting) is these only
+ */
+export const boardSees = (m, today = todayEastern()) => !!m && !m.notBoard && !m.practice && onBoardPage(m, today);
+/**
+ * A meeting as the board page has it (its agenda, documents, notes and minutes, as forBoard leaves them): a shared
+ * meeting the board sees (boardSees), else null. Every list, page, file and action a member reaches goes by this one
+ * rule, so a meeting is on the board page everywhere or nowhere
+ */
+export const boardCopy = (m) => (m?.shared && boardSees(m) ? forBoard(m) : null);
 /** A meeting's calendar file for the board page, or null when it isn't theirs to see (one not shared yet carries no agenda) */
 export async function boardIcs(DB, id) {
   const m = ID.test(String(id || '')) ? await getMeeting(DB, id) : null;
@@ -1204,8 +1695,10 @@ export async function readFileAsAgenda(env, id) {
 }
 
 /**
- * The file's row if this person may open it: admins any; a member only a shared meeting's or document's, never
- * staff-only, and their own signed copy (`member`)
+ * The file's row if this person may open it: admins any; a member only a meeting's on the board page (boardCopy) or a
+ * shared document's, never staff-only, and their own signed copy (`member`). On a meeting ahead not shared yet, who
+ * presents in it opens their own items' documents, in the window they write their reports in (presentedBy), as their
+ * report and its documents are theirs to write and add to there; nothing else of it
  */
 export async function fileFor(DB, id, { admin = false, member = null } = {}) {
   await ensureSchema(DB);
@@ -1216,13 +1709,18 @@ export async function fileFor(DB, id, { admin = false, member = null } = {}) {
   if (row.owner_type === 'signed' || row.owner_type === 'record') {
     if (!member?.slug) return null;
     if (row.superseded_at) return null;
-    if (row.slug) return row.slug === member.slug ? row : null;
+    // (their own at the moment of their own rename too: sameMember)
+    if (row.slug) return await sameMember(DB, row.slug, member.slug) ? row : null;
     // (a copy from before files said whose: the signature it was added for, this year's or an earlier wording's)
     const sig = await DB.prepare('SELECT slug FROM board_signatures WHERE file_id = ?1 UNION SELECT slug FROM board_signatures_earlier WHERE file_id = ?1').bind(id).first();
-    return sig && sig.slug === member.slug ? row : null;
+    return sig && await sameMember(DB, sig.slug, member.slug) ? row : null;
   }
   if (row.staff_only) return null;
-  if (row.owner_type === 'meeting') return (await getMeeting(DB, row.owner_id))?.shared ? row : null;
+  if (row.owner_type === 'meeting') {
+    const m = await getMeeting(DB, row.owner_id);
+    if (boardCopy(m)?.files.some((f) => f.id === row.id)) return row;
+    return (await presentedBy(DB, m, member)).some((it) => it.docs.includes(row.id)) ? row : null;
+  }
   const doc = await DB.prepare('SELECT data FROM board_docs WHERE id = ?').bind(row.owner_id).first();
   return doc && cleanDoc(parse(doc.data)).shared ? row : null;
 }
@@ -1262,7 +1760,7 @@ export const AWAITING_FUNDING = 'Awaiting Funding';
 
 /**
  * Open makeovers by JobTread status, the building ones with their kid or
- * community project → { byStatus, building: [{ jobId, name, slug, status, url?, kind? }], waiting: [same, Awaiting
+ * community project → { byStatus, building: [{ jobId, name, slug, status, year, url?, kind? }], waiting: [same, Awaiting
  * Funding], open: { [jobId]: status } } (15-minute copy). A project carries kind 'community', and its url only
  * once its page is public. `open` is every open job's status ('' for none): the board's families find where their
  * makeover is by it (./_board-families.js stageOf).
@@ -1288,15 +1786,18 @@ export async function projectsNow(env, { fetchImpl = fetch, now = Date.now(), fr
       const list = BUILDING_STATUSES.has(status) ? building : status === AWAITING_FUNDING ? waiting : null;
       if (!list) continue;
       const hit = matchProject(job.name, [...kids, ...projects], job.id);
+      // The year in the job's name ("… (2026)"), for its season on the board page before it has a page or a reveal
+      // (./_board-families.js makeoverSeason); only the year, never the name itself. QA round 7, Nov 21 2026
+      const year = parseJobName(job.name).year || null;
       if (isProject(hit)) {
         // An organization, by its name and photo on Community even before it's published (the board is SOARD's
         // own; a child's name and photo wait for their page). Linked once its page is public
-        list.push({ jobId: job.id || null, name: hit.name || null, slug: hit.page ? hit.slug : null, status, kind: 'community', url: hit.page || null, ...photoField(hit.heroImage) });
+        list.push({ jobId: job.id || null, name: hit.name || null, slug: hit.page ? hit.slug : null, status, year, kind: 'community', url: hit.page || null, ...photoField(hit.heroImage) });
         continue;
       }
       const kid = hit;
       // By name only with a published kid page: a job's own name in JobTread is internal ("Not Published Yet"). Its photo likewise
-      list.push({ jobId: job.id || null, name: kid?.name || null, slug: kid?.slug || null, status, ...photoField(kid?.name && kid.heroImage) });
+      list.push({ jobId: job.id || null, name: kid?.name || null, slug: kid?.slug || null, status, year, ...photoField(kid?.name && kid.heroImage) });
     }
     const value = { byStatus, building, waiting, open };
     await writeState(env.DB, 'projects', { at: new Date(now).toISOString(), value });
@@ -1426,9 +1927,11 @@ export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } =
     pastReveals: (reveals.past || []).map((r) => revealRow({ ...r, confirmed: true }, photos)),
     events: events.upcoming,
     recentEvents: events.recent,
-    meetings: meetings.filter((m) => m.date >= today).sort((a, b) => a.date.localeCompare(b.date)).map((m) => ({ id: m.id, name: meetingName(m), date: m.date, start: m.start, shared: m.shared })),
-    // The year's board meetings, held and ahead (the screen's "2026 board meetings"), never another organization's
-    thisYear: meetings.filter((m) => isDate(m.date) && m.date.slice(0, 4) === today.slice(0, 4) && !m.notBoard).sort((a, b) => a.date.localeCompare(b.date)).map((m) => ({ id: m.id, name: meetingName(m), date: m.date, start: m.start, shared: m.shared })),
+    // The board meetings ahead the board can see (boardSees: shared, or on their calendars already), never one Board
+    // keeps off the board page
+    meetings: meetings.filter((m) => isDate(m.date) && m.date >= today && boardSees(m, today)).sort((a, b) => a.date.localeCompare(b.date)).map((m) => ({ id: m.id, name: meetingName(m), date: m.date, start: m.start, shared: m.shared })),
+    // The year's board meetings, held and ahead (the screen's "2026 board meetings"), the same ones
+    thisYear: meetings.filter((m) => isDate(m.date) && m.date.slice(0, 4) === today.slice(0, 4) && boardSees(m, today)).sort((a, b) => a.date.localeCompare(b.date)).map((m) => ({ id: m.id, name: meetingName(m), date: m.date, start: m.start, shared: m.shared })),
     impact: kids,
     costs,
     operating: { balance: Number(settings?.operatingBalance) > 0 ? Math.round(Number(settings.operatingBalance)) : OPERATING_BALANCE },
@@ -1453,21 +1956,49 @@ async function cachedCash(env, { fetchImpl, now }) {
   }
 }
 
-/** Lock today's numbers into a meeting's packet */
+/**
+ * A packet's locked numbers as the board sees them: its lists of meetings (the next ones, the year's) hold only board
+ * meetings the board can see (boardSees, whenever they are), so a snapshot locked before that rule never shows one kept
+ * off the board page. `meetings`: every meeting, when they're at hand
+ */
+export function snapshotFor(snapshot, meetings) {
+  if (!snapshot || typeof snapshot !== 'object') return snapshot || null;
+  const ok = new Set(meetings.filter((x) => boardSees(x, '')).map((x) => x.id));
+  const keep = (list) => (Array.isArray(list) ? list.filter((x) => ok.has(x?.id)) : list);
+  return { ...snapshot, meetings: keep(snapshot.meetings), thisYear: keep(snapshot.thisYear) };
+}
+/** The same, reading only the meetings it names (the live screen asks every few seconds) */
+async function boardSnapshot(DB, snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  const ids = [...new Set([...(snapshot.meetings || []), ...(snapshot.thisYear || [])].map((x) => String(x?.id || '')).filter((x) => ID.test(x)))];
+  const rows = ids.length ? (await DB.prepare(`SELECT data FROM board_meetings WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results || [] : [];
+  return snapshotFor(snapshot, rows.map((r) => cleanMeeting(parse(r.data))));
+}
+
+/**
+ * Lock today's numbers into a meeting's packet. Reading them takes a while (the banks, JobTread, QuickBooks), so the
+ * snapshot is put onto the meeting as it is then (patchMeeting): what was saved meanwhile stays
+ */
 export async function takeSnapshot(env, id, { by, fetchImpl = fetch, now = Date.now() } = {}) {
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
   const n = await liveNumbers(env, { fetchImpl, now });
   const snapshot = { at: n.at, by: by || '', cash: n.cash, mercury: n.mercury, finance: n.finance, books: n.books, projects: n.projects, reveals: n.reveals, pastReveals: n.pastReveals, events: n.events, recentEvents: n.recentEvents, meetings: n.meetings.filter((x) => x.id !== id), thisYear: n.thisYear || [], impact: n.impact, costs: n.costs, operating: n.operating };
-  await writeMeeting(env.DB, { ...m, snapshot, updatedAt: nowIso(), updatedBy: by || m.updatedBy });
-  return getMeeting(env.DB, id);
+  // (the server's own field, from the numbers, never from the meeting: one write, never lost to an edit saved meanwhile)
+  const saved = await setOnMeeting(env.DB, id, { snapshot }, { by });
+  if (!saved) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
+  return saved;
 }
 
 // ─── The packet email ───────────────────────────────────────────────
 
-/** Who gets the packet: the active board with an email on file */
+/**
+ * Who gets the packet (and the minutes notice, the reminder to answer the invite, the sign-in email): the active board
+ * with an email on file. A read that fails throws, said as nothing sent (never a send to fewer, nor "no email on file")
+ */
 export async function packetList(DB) {
-  return (await activeBoard(DB)).filter((p) => p.email).map((p) => ({ slug: p.slug, name: p.name, email: p.email }));
+  const board = await activeBoard(DB).catch((e) => { throw asSend(e); });
+  return board.filter((p) => p.email).map((p) => ({ slug: p.slug, name: p.name, email: p.email }));
 }
 
 const FOOTER = 'You’re getting this as a member of the Sunshine on a Ranney Day Board of Directors.';
@@ -1531,9 +2062,11 @@ export function agendaParts(m, people = []) {
   return (m.sections || []).flatMap((s) => {
     const items = s.items.filter(isFilled);
     const open = items.filter((it) => !it.confidential).map((it) => {
-      // Those picked by name, else the name as it was typed: "Dana Smith, CPA" and "A&M Partners" are one presenter
-      const picked = (it.who || []).map((slug) => people.find((p) => p.slug === slug)?.name).filter(Boolean);
-      return { title: it.title || LIVE_TITLES[it.live] || '', by: namesText(picked) || String(it.presenter || '').trim() };
+      // Those picked by name and the guests typed in beside them (presentersOf, as the board page names them), else
+      // the line as it was typed: "Dana Smith, CPA" and "A&M Partners" are one presenter
+      const named = presentersOf(it, people);
+      const picked = named.some((p) => p.slug && (it.who || []).includes(p.slug));
+      return { title: it.title || LIVE_TITLES[it.live] || '', by: picked ? namesText(named.map((p) => p.name)) : String(it.presenter || '').trim() || namesText(it.guests || []) };
     }).filter((it) => it.title || it.by);
     const hidden = items.filter((it) => it.confidential).length;
     const title = partName(s, m);
@@ -1678,6 +2211,8 @@ export async function agendaApprovals(DB) {
     throw err;
   }
 }
+/** Why a meeting ahead isn't on the board page yet: what the site says for every hold (holdUntilApproved, holdShare) */
+const NOT_APPROVED = 'The agenda goes to the board once it’s approved';
 /**
  * Nothing of a meeting still to be held reaches the board before its agenda is approved (Peter, Nov 5 2026: "no agenda
  * should go to the group until the agena is approved, and then the agenda can be sent out to the board"): not the board
@@ -1685,25 +2220,144 @@ export async function agendaApprovals(DB) {
  * back: it goes on the board page with its minutes. A practice meeting is the admins' alone. Throws a 409.
  */
 export async function holdUntilApproved(DB, m) {
-  if (m?.practice || m?.notBoard || !isDate(m?.date) || m.date < todayEastern() || m.live?.endedAt) return;
-  if (!(await agendaApprovals(DB))[m.id]) throw Object.assign(new Error('The agenda goes to the board once it’s approved'), { status: 409 });
+  // (board-shared.js waitsForApproval, the rule Board offers its sends by, so it never offers one this refuses; a save that
+  // shares is holdShare's)
+  if (!waitsForApproval(m)) return;
+  if (!(await agendaApprovals(DB))[m.id]) throw Object.assign(new Error(NOT_APPROVED), { status: 409 });
 }
-/** The same for a save that would put a meeting on the board page: one already there stays */
-export async function holdSharing(DB, raw) {
-  if (raw?.shared !== true) return;
-  const id = cleanMeeting(raw).id;
-  if (await getPractice(DB, id)) return;
-  const was = await getMeeting(DB, id);
-  if (!was?.shared) await holdUntilApproved(DB, was || raw);
+/**
+ * The same for a person's save that would put a meeting on the board page (saveMeeting), judged by what the save
+ * changes: `current` is the copy the editor's base names (a stale copy was told to merge before this), so a save that
+ * turns shared on is one this tab made, and a copy that only still says shared, as the site had it when the tab opened,
+ * never comes here as a change (it was merged first). One on the board page already stays, whatever its day and
+ * whatever it was before (one kept off the board page as "not a board meeting" that's shared stays shared:
+ * notBoardAfter). One coming onto it waits for its agenda's approval while it's still to be held (shareWaits: sharing
+ * one that isn't a board meeting makes it one, so it waits too; the editor offers Share by the same rule), by its day as
+ * stored and as saved: a day changed in the same save never takes it past the approval. Refused by name (`refused`),
+ * with the meeting as it is now (`meeting`), so the editor puts only that back, as the site has it, and saves the rest
+ * (public/admin/board-meeting.js). A practice meeting never comes here (savePractice)
+ */
+async function holdShare(DB, current, m) {
+  if (!m.shared || current.shared) return;
+  if (![current, m].some((x) => shareWaits({ ...x, practice: false }))) return;
+  if ((await agendaApprovals(DB))[m.id]) return;
+  throw Object.assign(new Error(NOT_APPROVED), { status: 409, extra: { refused: ['shared'], meeting: current } });
 }
 
-/** Email the board the link to the agenda and documents, what the documents are, and (to who hasn't answered it) the calendar invite to answer (test: only `to`) */
+// ─── A board email, once ────────────────────────────────────────────
+
+/** A send that never finished lets the next one go after this */
+const SEND_HOLD_MS = 2 * 60 * 1000;
+/** Whoever had the email this recently isn't sent it again (a double press, a second tab, another admin) */
+const SEND_AGAIN_MS = 10 * 60 * 1000;
+/** Resend keeps an idempotency key a day: a send it never answered is asked for again with the same keys until then */
+const SEND_REPLAY_MS = 23 * 60 * 60 * 1000;
+const SEND_TO = { packet: 'the board', minutes: 'the board', remind: 'everyone who hasn’t answered' };
+/** No answer from Resend (a timeout, a dropped connection, a gateway's 502, 503 or 504): it may have gone */
+const noAnswer = (e) => !/^Resend \d+:/.test(String(e)) || /^Resend 50[234]:/.test(String(e));
+const agoWords = (ms) => { const n = Math.floor(ms / 60000); return n < 1 ? 'a moment ago' : n === 1 ? 'a minute ago' : `${n} minutes ago`; };
+/** A meeting Board keeps off the board page (notBoard), shared or not: an email to the board about it would open nothing */
+const OFF_PAGE = 'This meeting is kept off the board page (it isn’t a board meeting), so an email about it would open nothing for the board.';
+/** What an admin is told when Resend didn't answer a send to the board */
+export const UNSURE_SEND = 'Resend didn’t answer, so these emails may have gone. Press it again: Resend sends each one only if it hasn’t already.';
+
+/** The admin who sent it, by first name ('' for none, or the agenda's approval: `by` 'Board') */
+async function senderFirst(DB, by) {
+  if (!by || by === 'Board') return '';
+  return firstName(staffFor(await roster(DB), by)?.name || '') || String(by).split('@')[0];
+}
+
+/**
+ * A board email (the packet, the minutes notice, the reminder: `kind`) to `people` ([{ email, name, slug }]), each
+ * their own (`itemFor(person)` → { to, subject, html, text }), sent once whatever presses it:
+ *   - one send at a time per meeting and kind: another (a double press, a second tab, the other admin, the agenda's
+ *     approval) is told it's going out (409), and a send that never finished lets the next go after two minutes
+ *   - kept before Resend is asked (board_state `board-send:<kind>:<meeting>`): who had it when, so whoever had it in
+ *     the last ten minutes isn't sent it again (all of them: 409, saying when it went), and a send cut off midway
+ *     counts as gone
+ *   - each send has its own number, and its Resend calls carry it as their idempotency key; a send Resend never
+ *     answered is asked for again with the same number (to the same people), so Resend sends each only if it didn't
+ * → { sent, failed, errors, unsure, reached: how many of `people` have had it, skipped: [names had it just now] }
+ */
+async function sendOnce(env, { kind, m, by = '', people, itemFor, tags, replyTo, now = Date.now() }) {
+  const DB = env.DB;
+  const key = `board-send:${kind}:${m.id}`;
+  const hold = `${key}:sending`;
+  await readState(DB, key); // (makes the table)
+  const at = new Date(now).toISOString();
+  const claimed = await DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at WHERE board_state.updated_at < ?')
+    .bind(hold, JSON.stringify({ by }), at, new Date(now - SEND_HOLD_MS).toISOString()).run();
+  // (whoever pressed it, by name: "you" when it's the one pressing now, in another tab. QA round 6, Nov 21 2026: Jane
+  // was told "(Jane sent it)" as if someone else had)
+  const mine = (e) => !!by && !!e && e !== 'Board' && normEmail(e) === normEmail(by);
+  if (!claimed?.meta?.changes) {
+    const other = (await readState(DB, hold)).by;
+    const name = await senderFirst(DB, other);
+    if (mine(other)) throw Object.assign(new Error(`You’re sending this email to ${SEND_TO[kind]} right now, maybe in another tab. It goes once, so there’s nothing to press.`), { status: 409, extra: { sending: true } });
+    const who = other === 'Board' ? ': the agenda’s approval is sending it' : name ? ` (${name} is sending it)` : '';
+    throw Object.assign(new Error(`This email is going out to ${SEND_TO[kind]} right now${who}. It goes once, so there’s nothing to press.`), { status: 409, extra: { sending: true } });
+  }
+  try {
+    const was = await readState(DB, key);
+    const had = Object.fromEntries(Object.entries(was.had || {}).filter(([, t]) => now - Date.parse(t) < 2 * 86_400_000));
+    const byEmail = new Map(people.filter((p) => isEmail(p.email)).map((p) => [normEmail(p.email), p]));
+    // A send Resend never answered, asked for again: the same people under the same number
+    const again = was.unsure && Number(was.n) > 0 && now - Date.parse(was.at) < SEND_REPLAY_MS ? (was.to || []).map((e) => byEmail.get(e)).filter(Boolean) : [];
+    const replay = again.length > 0;
+    let recipients = again;
+    let skipped = [];
+    if (!replay) {
+      const recent = [...byEmail.values()].filter((p) => had[normEmail(p.email)] && now - Date.parse(had[normEmail(p.email)]) < SEND_AGAIN_MS);
+      recipients = [...byEmail.values()].filter((p) => !recent.includes(p));
+      skipped = recent.map((p) => p.name);
+      if (!recipients.length && recent.length) {
+        const last = Math.max(...recent.map((p) => Date.parse(had[normEmail(p.email)])));
+        const name = await senderFirst(DB, was.by);
+        if (mine(was.by)) throw Object.assign(new Error(`You sent this email to ${SEND_TO[kind]} ${agoWords(now - last)}, maybe in another tab, so it didn’t go again. It can go again 10 minutes after the last one.`), { status: 409, extra: { already: true } });
+        const who = was.by === 'Board' ? ' when its agenda was approved' : name ? ` (${name} sent it)` : '';
+        throw Object.assign(new Error(`This email went to ${SEND_TO[kind]} ${agoWords(now - last)}${who}, so it didn’t go again. It can go again 10 minutes after the last one.`), { status: 409, extra: { already: true } });
+      }
+    }
+    if (!recipients.length) return { sent: 0, failed: 0, errors: [], reached: 0, skipped };
+    const n = replay ? Number(was.n) : (Number(was.n) || 0) + 1;
+    const emails = recipients.map((p) => normEmail(p.email));
+    // Kept before it goes: a send cut off midway (the page closed, the Worker stopped, no answer) counts as gone
+    const record = { n, at, by, to: emails, unsure: true, had: { ...had, ...Object.fromEntries(emails.map((e) => [e, replay ? had[e] || at : at])) } };
+    await writeState(DB, key, record);
+    try {
+      const r = await sendEmailItems(env, recipients.map(itemFor), { from: fromBoard(), tags, replyTo, idempotencyKey: `board-${kind}:${m.id}:${n}` });
+      const unsure = r.failed > 0 && r.errors.some(noAnswer);
+      const refused = new Set((r.refused || []).map(normEmail));
+      // Resend's own no: nobody in that call has it. (Asked again under the same key, Resend would have answered with the
+      // first try's success had that gone: its no means the first try didn't either.) They're as they were before it
+      const after = { ...record.had };
+      for (const e of refused) { if (!replay && had[e]) after[e] = had[e]; else delete after[e]; }
+      await writeState(DB, key, { ...record, had: after, unsure: unsure || undefined });
+      return { sent: r.sent + (r.already || 0), failed: r.failed, errors: r.errors, unsure: unsure || undefined, reached: [...byEmail.keys()].filter((e) => after[e]).length, skipped };
+    } catch (err) {
+      // (anything that stops it from here on may come after the emails went: never taken for nothing sent)
+      throw mayHaveGone(err);
+    }
+  } finally {
+    // (a hold that won't come off stops the next send for two minutes at most, never this one's answer)
+    await DB.prepare('DELETE FROM board_state WHERE key = ?').bind(hold).run().catch((err) => console.error('[board] send hold', err.message));
+  }
+}
+/** An error after a board email may have gone (`went`): whatever would send it again leaves it to the send's own record */
+const mayHaveGone = (err) => Object.assign(err instanceof Error ? err : new Error(String(err)), { went: true });
+
+/**
+ * Email the board the link to the agenda and documents, what the documents are, and (to who hasn't answered it) the
+ * calendar invite to answer (test: only `to`), once (sendOnce). What it keeps on the meeting is its own two fields,
+ * written onto the meeting as it is now (patchMeeting): a report or an edit saved while it was going out stays
+ */
 export async function sendPacket(env, id, { by, to = null, replyTo = [] } = {}) {
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
   if (!emailConfigured(env)) throw Object.assign(new Error('Email isn’t set up (RESEND_API_KEY)'), { status: 503 });
   const test = Array.isArray(to);
   if (!test) await holdUntilApproved(env.DB, m);
+  if (!test && m.notBoard) throw Object.assign(new Error(OFF_PAGE), { status: 409 });
   if (!test && !m.shared) throw Object.assign(new Error('Share the meeting with the board first, so the button has something to open'), { status: 409 });
   const people = test ? to.map((email) => ({ email, name: '' })) : await packetList(env.DB);
   if (!people.length) throw Object.assign(new Error('No board member has an email on file (People → Board)'), { status: 409 });
@@ -1722,11 +2376,16 @@ export async function sendPacket(env, id, { by, to = null, replyTo = [] } = {}) 
   const toSign = (p) => signable.filter((d) => !(p.slug && (d.signed[p.slug] || d.declined?.[p.slug])))
     .map((d) => ({ title: d.title, id: d.id, written: !!d.body, due: dueOn(d, year), changed: !!(p.slug && d.earlier?.includes(p.slug)) }));
   const minutes = minutesToRead(m, await listMeetings(env.DB));
-  const items = people.map((p) => ({ to: p.email, ...packetEmail(m, { test, files: docs.names, private: docs.hidden, name: p.name, from, ask: test || open.includes(p.slug), reports: reportsFor(m, p.slug, everyone), toSign: toSign(p), minutes, people: everyone }) }));
+  const itemFor = (p) => ({ to: p.email, ...packetEmail(m, { test, files: docs.names, private: docs.hidden, name: p.name, from, ask: test || open.includes(p.slug), reports: reportsFor(m, p.slug, everyone), toSign: toSign(p), minutes, people: everyone }) });
   const tags = [{ name: 'kind', value: test ? 'board-packet-preview' : 'board-packet' }];
-  const r = await sendEach(env, items, { tags, replyTo });
-  if (!test && r.sent) await writeMeeting(env.DB, { ...m, packetSentAt: nowIso(), packetSentTo: r.sent, updatedAt: m.updatedAt, updatedBy: m.updatedBy });
-  return { sent: r.sent, failed: r.failed, errors: r.errors, to: test ? to : undefined, documents: docs.names.length + docs.hidden };
+  if (test) {
+    const r = await sendEach(env, people.map(itemFor), { tags, replyTo });
+    return { sent: r.sent, failed: r.failed, errors: r.errors, to, documents: docs.names.length + docs.hidden };
+  }
+  const r = await sendOnce(env, { kind: 'packet', m, by, people, itemFor, tags, replyTo });
+  // Its record, on the meeting as it is now in one write (setOnMeeting): never lost to edits saved while it went
+  if (r.sent) await setOnMeeting(env.DB, id, { packetSentAt: nowIso(), packetSentTo: r.reached }).catch((err) => { throw mayHaveGone(err); });
+  return { sent: r.sent, failed: r.failed, errors: r.errors, unsure: r.unsure, ...(r.skipped.length ? { skipped: r.skipped } : {}), documents: docs.names.length + docs.hidden };
 }
 
 /**
@@ -1768,13 +2427,18 @@ export async function sendApprovedAgenda(env, id, { now = Date.now() } = {}) {
   const claim = await env.DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(key, JSON.stringify({ at }), at).run();
   if (!claim?.meta?.changes) return null;
   try {
-    if (!m.shared) await patchMeeting(env.DB, m.id, (cur) => ({ ...cur, shared: true }), { by: 'Board' });
+    if (!m.shared) await setOnMeeting(env.DB, m.id, { shared: true }, { by: 'Board' });
     const r = await sendPacket(env, m.id, { by: 'Board', replyTo: await boardAdmins(env.DB) });
-    if (!r.sent) throw Object.assign(new Error(r.errors?.[0] || 'No email went'), { status: 502 });
+    // (none went: Resend said no to every one, or didn't answer, when asking again sends each only if it hasn't gone)
+    if (!r.sent) throw Object.assign(new Error(r.errors?.[0] || 'No email went'), { status: 502, result: r });
     return r;
   } catch (err) {
-    // Not sent: the heartbeat tries again
-    await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run();
+    // Not sent: the heartbeat tries again (it finds the agenda emailed, when an admin's send of it is what was going out).
+    // Never when it may have gone (an error after its emails: `went`) or the board had it a moment ago (an admin's send):
+    // the claim stays, so the agenda never goes twice
+    if (!err.went && !err.extra?.already) await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run();
+    // An admin's Email the board going out this moment, or gone a moment ago: the board has it, or is getting it
+    if (err.status === 409 && (err.extra?.sending || err.extra?.already)) return { sent: 0, going: true };
     throw err;
   }
 }
@@ -1791,11 +2455,30 @@ export async function maybeSendApprovedAgendas(env, { now = Date.now() } = {}) {
   }
 }
 
-/** The board approved a meeting's minutes (at a later meeting, on its date) */
-export async function approveMinutes(env, id, { on, by }) {
-  const m = await getMeeting(env.DB, id);
+/**
+ * Why a meeting's minutes can't be approved, or the board told they're up, yet ('' when they can): the meeting has to
+ * have been held (its day come, or the chair started it), with its minutes in Board. The same as Board's After the
+ * meeting goes by (public/admin/board-meeting.js), for a tab left open or a request made by hand
+ */
+export function minutesNotReady(m, today = todayEastern()) {
+  if (!m) return 'That meeting is gone';
+  if (!isDate(m.date) || (m.date > today && !m.live?.startedAt)) return 'This meeting hasn’t happened yet, so it has no minutes to approve or send.';
+  if (!minutesIn(m)) return 'This meeting’s minutes aren’t in Board yet. Drop them in first.';
+  return '';
+}
+
+/**
+ * The board approved a meeting's minutes (at a later meeting, on its date): only those two, on the meeting as it is.
+ * `press`: a person asked (Board's approve-minutes), so only minutes there are, of a meeting held (minutesNotReady)
+ */
+export async function approveMinutes(env, id, { on, by, press = false }) {
+  const m = await patchMeeting(env.DB, String(id || ''), (cur) => {
+    const why = press ? minutesNotReady(cur) : '';
+    if (why) throw Object.assign(new Error(why), { status: 409 });
+    return { ...cur, minutes: 'approved', approvedOn: isDate(on) ? on : todayEastern() };
+  }, { by });
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
-  return saveMeeting(env.DB, { ...m, minutes: 'approved', approvedOn: isDate(on) ? on : todayEastern() }, { by });
+  return m;
 }
 
 /** Board members on the meeting's calendar invite who haven't answered it (yes, no or maybe) */
@@ -1834,11 +2517,12 @@ export function reminderEmail(m, { test = false, name: who = '', from = '' } = {
 }
 
 /**
- * Ask the board members on the invite who haven't answered it, each by name (test: only `to`). Who isn't on the
- * invite can't answer it: they come back by name (`notOnInvite`), for the invite to add them
+ * Ask the board members on the invite who haven't answered it, each by name (test: only `to`), once (sendOnce). Who
+ * isn't on the invite can't answer it: they come back by name (`notOnInvite`), for the invite to add them
  */
-export async function remindRsvp(env, id, { to = null, replyTo = [] } = {}) {
+export async function remindRsvp(env, id, { to = null, replyTo = [], by = '' } = {}) {
   const m = await getMeeting(env.DB, id);
+  if (m?.notBoard) throw Object.assign(new Error(OFF_PAGE), { status: 409 });
   if (!m?.shared) throw Object.assign(new Error('Share the meeting with the board first, so the button has something to open'), { status: 409 });
   const test = Array.isArray(to);
   if (!test && !inviteOut(m)) throw Object.assign(new Error('The calendar invite hasn’t gone out yet: Send the invite first, then they can answer it'), { status: 409 });
@@ -1850,9 +2534,11 @@ export async function remindRsvp(env, id, { to = null, replyTo = [] } = {}) {
   const adds = owner && !settings.admins.includes(owner) ? `ask ${staffFor(team, owner)?.name.split(/\s+/)[0] || owner.split('@')[0]} to add ${missing.length === 1 ? 'them' : 'them all'}` : `Send the invite adds ${missing.length === 1 ? 'them' : 'them all'}`;
   if (!people.length) throw Object.assign(new Error(missing.length ? `Everyone on the invite has answered. ${missing.join(', ')} ${missing.length === 1 ? 'isn’t' : 'aren’t'} on it: ${adds}.` : 'Everyone has answered the invite'), { status: 409 });
   const from = inviteFrom(m, team, settings);
-  const items = people.map((p) => ({ to: p.email, ...reminderEmail(m, { test, name: p.name, from }) }));
-  const r = await sendEach(env, items, { tags: [{ name: 'kind', value: test ? 'board-reminder-preview' : 'board-reminder' }], replyTo });
-  return { sent: r.sent, failed: r.failed, errors: r.errors, to: test ? to : undefined, notOnInvite: missing };
+  const itemFor = (p) => ({ to: p.email, ...reminderEmail(m, { test, name: p.name, from }) });
+  const tags = [{ name: 'kind', value: test ? 'board-reminder-preview' : 'board-reminder' }];
+  const r = test ? await sendEach(env, people.map(itemFor), { tags, replyTo }) : await sendOnce(env, { kind: 'remind', m, by, people, itemFor, tags, replyTo });
+  // (the meeting as the site has it now, with who was asked when: remindedOf, for the page's card)
+  return { sent: r.sent, failed: r.failed, errors: r.errors, unsure: r.unsure, ...(r.skipped?.length ? { skipped: r.skipped } : {}), to: test ? to : undefined, notOnInvite: missing, ...(test ? {} : { meeting: await getMeeting(env.DB, id) }) };
 }
 
 /** The minutes notice: which meeting, and (a draft) when the board votes on them */
@@ -1878,17 +2564,33 @@ export function minutesEmail(m, { test = false, next = null } = {}) {
   };
 }
 
-/** Tell the board the minutes are on the board page (test: only `to`) */
-export async function sendMinutesNotice(env, id, { to = null, replyTo = [] } = {}) {
+/**
+ * Tell the board the minutes are on the board page (test: only `to`), once (sendOnce); its sent time is written onto the
+ * meeting as it is now (patchMeeting), never over what was saved while it went
+ */
+export async function sendMinutesNotice(env, id, { to = null, replyTo = [], by = '' } = {}) {
   const m = await getMeeting(env.DB, id);
-  if (!m?.shared) throw Object.assign(new Error('Share the minutes with the board first'), { status: 409 });
-  const list = Array.isArray(to) ? to : (await packetList(env.DB)).map((p) => p.email);
-  if (!list.length) throw Object.assign(new Error('No board member has an email on file (People → Board)'), { status: 409 });
-  const next = (await listMeetings(env.DB)).filter((x) => x.date > m.date).sort((a, b) => a.date.localeCompare(b.date))[0] || null;
-  const mail = minutesEmail(m, { test: Array.isArray(to), next });
-  const r = await sendEmails(env, { to: list, ...mail, from: fromBoard(), tags: [{ name: 'kind', value: Array.isArray(to) ? 'board-minutes-preview' : 'board-minutes' }], replyTo });
-  if (!Array.isArray(to) && r.sent) await writeMeeting(env.DB, { ...m, minutesSentAt: nowIso(), updatedAt: m.updatedAt, updatedBy: m.updatedBy });
-  return { sent: r.sent, failed: r.failed, errors: r.errors, to: Array.isArray(to) ? to : undefined };
+  if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
+  // (never "the minutes are up" before there are any, from a tab left open or a request made by hand)
+  const why = minutesNotReady(m);
+  if (why) throw Object.assign(new Error(why), { status: 409 });
+  if (m.notBoard) throw Object.assign(new Error(OFF_PAGE), { status: 409 });
+  if (!m.shared) throw Object.assign(new Error('Share the minutes with the board first'), { status: 409 });
+  const test = Array.isArray(to);
+  const people = test ? to.map((email) => ({ email, name: '' })) : await packetList(env.DB);
+  if (!people.length) throw Object.assign(new Error('No board member has an email on file (People → Board)'), { status: 409 });
+  // The next meeting the board can see (never one kept off the board page)
+  const next = (await listMeetings(env.DB)).filter((x) => x.date > m.date && boardSees(x)).sort((a, b) => a.date.localeCompare(b.date))[0] || null;
+  const mail = minutesEmail(m, { test, next });
+  const itemFor = (p) => ({ to: p.email, ...mail });
+  const tags = [{ name: 'kind', value: test ? 'board-minutes-preview' : 'board-minutes' }];
+  if (test) {
+    const r = await sendEach(env, people.map(itemFor), { tags, replyTo });
+    return { sent: r.sent, failed: r.failed, errors: r.errors, to };
+  }
+  const r = await sendOnce(env, { kind: 'minutes', m, by, people, itemFor, tags, replyTo });
+  if (r.sent) await setOnMeeting(env.DB, id, { minutesSentAt: nowIso() }).catch((err) => { throw mayHaveGone(err); });
+  return { sent: r.sent, failed: r.failed, errors: r.errors, unsure: r.unsure, ...(r.skipped.length ? { skipped: r.skipped } : {}) };
 }
 
 // Plain text: Google copies an invite's notes into its .ics as they are, and
@@ -2028,6 +2730,47 @@ export function welcomeEmail({ name = '', email = '', test = false, inviter = nu
   };
 }
 
+/**
+ * After a sign-in email send, its marks settled at the members it went to, wherever their record is now: a People rename
+ * while it went moves their marks (./rename-content.js, in its own batch), so each is found by this send's own moment AND
+ * the address it went to (members[k] = at, addresses[k] = their email), their own web address first, never by the web
+ * address the send started with (Board QA round 7: unconfirmed stayed on the old address for good, and the row's send
+ * went again). went: Resend took it, so it's no longer unconfirmed; else a sure no, so their marks go back as they were
+ * before this send. Written only over the record as read, read again on a clash
+ */
+async function settleWelcomeMarks(DB, { at, recipients, was, went }) {
+  await readState(DB, 'welcome');
+  for (let i = 0; i < 5; i++) {
+    const row = await DB.prepare("SELECT data FROM board_state WHERE key = 'welcome'").first();
+    const cur = parse(row?.data, {}) || {};
+    const members = { ...(cur.members || {}) };
+    const addresses = { ...(cur.addresses || {}) };
+    let unconfirmed = [...(cur.unconfirmed || [])];
+    const used = new Set();
+    for (const p of recipients) {
+      const ours = Object.keys(members).filter((k) => !used.has(k) && members[k] === at && addresses[k] === p.email);
+      const k = ours.includes(p.slug) ? p.slug : ours[0];
+      if (!k) continue; // (nothing of this send's under any address now: a send since, or they're gone)
+      used.add(k);
+      if (went) { unconfirmed = unconfirmed.filter((x) => x !== k); continue; }
+      if (was.members?.[p.slug] !== undefined) members[k] = was.members[p.slug]; else delete members[k];
+      if (was.addresses?.[p.slug] !== undefined) addresses[k] = was.addresses[p.slug]; else delete addresses[k];
+      if (!(was.unconfirmed || []).includes(p.slug)) unconfirmed = unconfirmed.filter((x) => x !== k);
+    }
+    // (put back as it was: an empty list where there was none before this send is none again)
+    const kept = (obj, had) => (Object.keys(obj).length || had !== undefined ? obj : undefined);
+    const next = { ...cur, members: kept(members, went ? cur.members : was.members), addresses: kept(addresses, went ? cur.addresses : was.addresses), unconfirmed: unconfirmed.length ? unconfirmed : undefined,
+      // (a sure no: the board's told-or-not as it was before this send, too)
+      ...(went ? {} : { sentAt: was.sentAt, sent: was.sent, lastClick: was.lastClick, lastTo: was.lastTo }) };
+    const json = JSON.stringify(next);
+    const r = row
+      ? await DB.prepare("UPDATE board_state SET data = ?, updated_at = ? WHERE key = 'welcome' AND data = ?").bind(json, nowIso(), row.data).run()
+      : await DB.prepare("INSERT OR IGNORE INTO board_state (key, data, updated_at) VALUES ('welcome', ?, ?)").bind(json, nowIso()).run();
+    if ((r?.meta?.changes ?? 0) > 0) return;
+  }
+  console.error('[board] a sign-in email send’s marks weren’t settled: the record kept changing');
+}
+
 /** Email each active board member (on their own) how to sign in, from the admin sending it (`by`); test: only `to` */
 export async function sendWelcome(env, opts = {}) {
   if (Array.isArray(opts.to)) return sendWelcomeNow(env, opts);
@@ -2087,11 +2830,14 @@ async function sendWelcomeNow(env, { to = null, slugs = null, due = false, again
   const helpers = [...new Set(replyTo.map((e) => firstName(staffFor(people, e)?.name)).filter(Boolean))];
   const signable = signablePapers(docs);
   const items = recipients.filter((p, i) => recipients.findIndex((x) => x.email === p.email) === i).map((p) => ({ to: p.email, ...welcomeEmail({ name: p.name, email: p.email, test, inviter, next, helpers, toSign: signable.filter((d) => !(p.slug && d.signed[p.slug])).map((d) => d.title) }) }));
+  // (this send's own moment: its marks are found again by it and the address each went to, settleWelcomeMarks)
+  let marked = '';
   if (!test) {
     // Recorded before it goes: a send cut off midway (the page closed, the Worker stopped) counts as sent, so it never
     // doubles. Each member's own time (their row on Board → Members) and the address it went to (a corrected one is due
     // again); the board counts as told (sentAt) by the whole board's send, or once a pick has reached everyone
     const at = nowIso();
+    marked = at;
     const members = { ...(was.members || {}), ...Object.fromEntries(recipients.map((p) => [p.slug, at])) };
     const addresses = { ...(was.addresses || {}), ...Object.fromEntries(recipients.map((p) => [p.slug, p.email])) };
     // (one who has signed in already knows how)
@@ -2109,14 +2855,9 @@ async function sendWelcomeNow(env, { to = null, slugs = null, due = false, again
   // (a gateway's 502, 503 or 504 in front of Resend is no answer too). Resend's own error status is a sure no: nobody got
   // it, so the record goes back as it was
   const unsure = !test && r.failed > 0 && r.errors.some((e) => !/^Resend \d+:/.test(String(e)) || /^Resend 50[234]:/.test(String(e)));
-  if (!test && !r.sent && !unsure) await writeState(env.DB, 'welcome', was);
-  // Resend confirmed it: these are no longer unconfirmed
-  else if (!test && !unsure) {
-    const now = await readState(env.DB, 'welcome');
-    const sentTo = new Set(recipients.map((p) => p.slug));
-    const unconfirmed = (now.unconfirmed || []).filter((k) => !sentTo.has(k));
-    await writeState(env.DB, 'welcome', { ...now, unconfirmed: unconfirmed.length ? unconfirmed : undefined });
-  }
+  // Resend confirmed it: these are no longer unconfirmed; a sure no: their marks go back as they were. Either way at the
+  // members it went to, wherever their record is now (a People rename while it went moved their marks)
+  if (!test && !unsure) await settleWelcomeMarks(env.DB, { at: marked, recipients, was, went: !!r.sent });
   return { sent: r.sent, ...(!test && r.sent && recipients.length !== items.length ? { reached: recipients.length } : {}), failed: r.failed, errors: r.errors, unsure: unsure || undefined, ...(unusable.length ? { unusable } : {}), ...(signedIn.length ? { signedIn } : {}), to: test ? to : undefined };
 }
 
@@ -2180,6 +2921,8 @@ export function signAskEmail({ name = '', email = '', papers = [], from = '', fi
 export async function noteOpened(DB, docId, member, evidence = {}) {
   await ensureSchema(DB);
   const doc = (await listDocs(DB)).find((d) => d.id === docId);
+  // (a paper not on the board page isn't there for them, whether it exists or not)
+  if (member?.slug && !doc?.shared) throw Object.assign(new Error('That paper isn’t on the board page'), { status: 404 });
   if (!doc?.sign || !doc.shared || !member?.slug) return false;
   const year = thisYear();
   return appendEvents(DB, async () => {
@@ -2319,13 +3062,34 @@ export async function portalWords(env, { member = null } = {}) {
   await ensureSchema(env.DB);
   const [meetings, docs, financials] = await Promise.all([listMeetings(env.DB), listDocs(env.DB), siteDoc(env.DB, 'financials')]);
   const ids = [
-    ...meetings.map(forBoard).filter(Boolean).flatMap((m) => m.files.map((f) => f.id)),
+    ...meetings.map(boardCopy).filter(Boolean).flatMap((m) => m.files.map((f) => f.id)),
     ...docs.filter((d) => (d.shared || !member) && d.file && !d.file.staffOnly).map((d) => d.file.id),
   ];
   const { wordsFor, filingWordsFor, stillToRead } = await import('./_board-file-words.js');
   return { files: await wordsFor(env.DB, ids), filings: await filingWordsFor(env.DB, filingsOf(financials).map((f) => f.url)), reading: await stillToRead(env.DB) };
 }
 
+/**
+ * A member on the board page at `t` (ms): the page read (portalData), or something they did on it (./_board-activity.js:
+ * a look the page's tracker reports, an answer, a meeting followed live, a file opened). A visit lasts while they're
+ * there, each of these keeping it going, and ends once VISIT_GAP_MS goes by with none (../../public/admin/board-shared.js:
+ * the same sittings Board → Members counts). The first after that starts the next, and this one becomes the one before
+ * (in one statement, so two at once agree; each column set from the row as it was). One older than the visit's last (a
+ * report sent again late) changes nothing
+ */
+export async function keepVisit(DB, who, t = Date.now()) {
+  await ensureSchema(DB);
+  await stateReady(DB);
+  const at = new Date(t).toISOString();
+  const gap = new Date(t - VISIT_GAP_MS).toISOString();
+  // (only at the address that's theirs this moment, never one a rename is moving or has moved: ./_member-write.js ownRow)
+  const [own, mine] = await ownRow(DB, who);
+  await DB.prepare(`INSERT INTO board_seen (slug, at, prev, last) SELECT me.s, ?, NULL, ? ${own} ON CONFLICT(slug) DO UPDATE SET
+      prev = CASE WHEN COALESCE(board_seen.last, board_seen.at, '') < ? THEN board_seen.at ELSE board_seen.prev END,
+      at = CASE WHEN COALESCE(board_seen.last, board_seen.at, '') < ? THEN excluded.at ELSE board_seen.at END,
+      last = MAX(COALESCE(board_seen.last, ''), excluded.last)`)
+    .bind(at, at, ...mine, gap, gap).run();
+}
 /** Everything the board page shows, for a member (`member`) or an admin looking (`admin`) */
 export async function portalData(env, { member = null, admin = false, adminEmail = '', now = Date.now() } = {}) {
   await ensureSchema(env.DB);
@@ -2334,14 +3098,18 @@ export async function portalData(env, { member = null, admin = false, adminEmail
     listMeetings(env.DB), listDocs(env.DB), liveNumbers(env, { now }), cashHistory(env.DB), roster(env.DB, { withEmails: true }),
     siteDoc(env.DB, 'financials'), siteDoc(env.DB, 'financial-snapshot'), getSettings(env.DB), giftsNow(env.DB, { now }).catch(() => null),
   ]);
-  let seen = null;
+  // The visit before this one, for what's new since: the same for the whole visit, every reload, tab and device. This
+  // read is a look too (a reload, a tab coming back, the page reading itself again), and so is everything they do on
+  // the page while it's open (./keepVisit)
+  let lastSeen = null;
   if (member) {
-    seen = await env.DB.prepare('SELECT at FROM board_seen WHERE slug = ?').bind(member.slug).first();
-    if (!seen || now - Date.parse(seen.at) > 10 * 60 * 1000) await env.DB.prepare('INSERT OR REPLACE INTO board_seen (slug, at) VALUES (?, ?)').bind(member.slug, new Date(now).toISOString()).run();
+    await keepVisit(env.DB, member, now);
+    lastSeen = (await env.DB.prepare('SELECT prev FROM board_seen WHERE slug = ?').bind(member.slug).first())?.prev || null;
   }
   // A member's own documents (put with an item they present) are marked, so they can take them off again
   const own = member?.email ? new Set(((await env.DB.prepare('SELECT id FROM board_files WHERE lower(by) = ?').bind(String(member.email).toLowerCase()).all()).results || []).map((r) => r.id)) : new Set();
-  const shared = meetings.map(forBoard).filter(Boolean).map((m) => (own.size ? { ...m, files: m.files.map((f) => (own.has(f.id) ? { ...f, mine: true } : f)) } : m));
+  const shared = meetings.map(boardCopy).filter(Boolean).map((m) => (own.size ? { ...m, files: m.files.map((f) => (own.has(f.id) ? { ...f, mine: true } : f)) } : m))
+    .map((m) => (m.snapshot ? { ...m, snapshot: snapshotFor(m.snapshot, meetings) } : m));
   // Their adopted signature and initials (from the last time they signed), and whether they've agreed to sign electronically
   const marked = member?.slug ? await env.DB.prepare('SELECT mark, initials, consent_at FROM board_member_marks WHERE slug = ?').bind(member.slug).first().catch(() => null) : null;
   const myMark = marked ? { ...parse(marked.mark, {}), initials: marked.initials || '', consented: !!marked.consent_at } : null;
@@ -2391,9 +3159,9 @@ export async function portalData(env, { member = null, admin = false, adminEmail
       location: pending.location, address: pending.address, video: pending.video || pending.invite?.meet || '',
       onCalendar: !!pendingInvite, myInvite: pendingInvite, inviteOut: inviteOut(pending), inviteBy: inviteFrom(pending, people, settings),
     } : null,
-    // lastSeen: the visit before this one (a visit lasts 10 minutes), for what's new since
+    // lastSeen: when the visit before this one began (above), for what's new since
     // An admin looking: who they are on People (`as`), so the item they present asks them for its report too
-    me: member ? { name: member.name, slug: member.slug, title: member.title, email: member.email, admin, lastSeen: seen?.at || null, ...(myMark ? { mark: myMark } : {}) }
+    me: member ? { name: member.name, slug: member.slug, title: member.title, email: member.email, admin, lastSeen, ...(myMark ? { mark: myMark } : {}) }
       : { name: null, slug: null, admin, as: people.staff.find((p) => String(adminEmail).toLowerCase().startsWith(`${String(p.name).split(/\s+/)[0].toLowerCase()}@`))?.slug || null },
     today,
     // Their own answer here, else how they answered the calendar invite (which also means it's on their calendar)
@@ -2450,6 +3218,16 @@ const isoOf = (ms) => new Date(ms).toISOString();
 const HOW = ['present', 'remote'];
 const VOTE_CHOICES = ['for', 'against', 'abstain'];
 const err = (message, status) => Object.assign(new Error(message), { status });
+/**
+ * What a page is told of an error the code never meant to say (a program's own, the database's): plain words, and the
+ * real one in the log. Anything Board says on purpose is said as it is
+ */
+export function sayable(e) {
+  const raw = e instanceof TypeError || e instanceof ReferenceError || e instanceof RangeError || e instanceof SyntaxError || /D1_ERROR|SQLITE|constraint failed|no such (table|column)|Cannot read propert/i.test(String(e?.message || e));
+  if (!raw) return String(e?.message || e || '');
+  console.error('[board]', e?.stack || e);
+  return 'Something went wrong on the site’s side. Reload the page to see what was saved, then try again.';
+}
 
 /**
  * A practice meeting's simulated board members, worked out from the clock (never stored, the same on every
@@ -2497,7 +3275,7 @@ async function liveMeeting(DB, id, { member = null, admin = false } = {}) {
   const m = await getMeeting(DB, id);
   if (m) {
     // An admin previews it on the screen before it's shared (as the board will see it), acting in nothing
-    if (!m.shared && !(admin && !member)) throw err('That meeting isn’t on the board page', 404);
+    if (!boardCopy(m) && !(admin && !member)) throw err('That meeting isn’t on the board page', 404);
     return { m, canAct: !!member };
   }
   const p = admin && !member ? await getPractice(DB, id) : null;
@@ -2551,14 +3329,14 @@ export async function liveView(env, id, { member = null, admin = false, adminEma
   const seen = m.practice ? m : forBoard({ ...m, shared: true });
   const sections = seen.sections.map((sec) => ({
     id: sec.id, title: sec.title, minutes: sec.minutes || 0,
-    items: sec.items.filter(isFilled).map((it) => ({ id: it.id, title: it.title, motion: it.motion || '', presenter: it.presenter, who: it.who, notes: it.notes, confidential: it.confidential, live: it.live, also: it.also, about: it.about, docs: it.docs,
+    items: sec.items.filter(isFilled).map((it) => ({ id: it.id, title: it.title, motion: it.motion || '', presenter: it.presenter, who: it.who, guests: it.guests || [], notes: it.notes, confidential: it.confidential, live: it.live, also: it.also, about: it.about, docs: it.docs,
       report: it.report, reportBy: it.reportBy, reportAt: it.reportAt, reportLook: it.reportLook || '', slideOrder: it.slideOrder || [] })),
   }));
   // The last meeting's minutes, for an item that asks the board to approve them (only from a meeting the board can see)
   const prior = [];
   for (const id of new Set(seen.sections.flatMap((sec) => sec.items.filter((it) => it.live === 'minutes' && it.about).map((it) => it.about)))) {
     const prev = await getMeeting(env.DB, id);
-    if (!prev?.shared) continue;
+    if (!boardCopy(prev)) continue;
     const f = minutesFileOf(prev);
     // Its date and name for the screen's "since we last met"; its minutes for the item that approves them
     prior.push({ id: prev.id, date: prev.date, name: meetingName(prev), files: f ? [f] : [] });
@@ -2575,7 +3353,7 @@ export async function liveView(env, id, { member = null, admin = false, adminEma
     // What the screen shows: the board's files (never a staff-only one), the last meeting's minutes, the locked numbers
     files: seen.files.map((f) => ({ id: f.id, name: f.name, type: f.type, size: f.size, kind: f.kind, at: f.at })),
     prior,
-    snapshot: m.snapshot || null,
+    snapshot: m.practice ? m.snapshot || null : await boardSnapshot(env.DB, m.snapshot),
     here: { board: here.size, of: board.length, quorum: q, met: q ? here.size >= q : null, remote: [...here.values()].filter((h) => h === 'remote').length },
     // The roll call on the screen: the board on the meeting's list, each one here (in the room or by video) or not yet
     roll: board.map((p) => ({ slug: p.slug || '', name: p.name, how: here.get(p.slug || p.key) || '' })),
@@ -2700,7 +3478,7 @@ export async function createPractice(env, { by = '', now = Date.now(), fresh = f
     }
     if (prev) docsFrom = prev.date;
   }
-  await writeMeeting(env.DB, { ...m, borrowed, docsFrom });
+  if (!(await writeOver(env.DB, { ...m, borrowed, docsFrom }, null))) throw new Error('A practice meeting with that id is already there; try again');
   return getPractice(env.DB, m.id);
 }
 
@@ -2762,6 +3540,28 @@ export async function maybeLockNumbers(env, { fetchImpl = fetch, now = Date.now(
 }
 
 /**
+ * Each meeting still ahead keeps the board as People → Board has it written down (the list withState shows), each
+ * heartbeat it differs: so the day it's held, the record it keeps is the board of that day, never the board from when it
+ * was made. People reading empty is taken for a bad read and nothing is written. Never throws. → ids written
+ */
+export async function maybeKeepRolls(env, { now = Date.now() } = {}) {
+  const kept = [];
+  try {
+    const today = todayEastern(now);
+    const rows = (await env.DB.prepare('SELECT data FROM board_meetings WHERE date >= ?').bind(today).all()).results || [];
+    const ahead = rows.map((r) => cleanMeeting(parse(r.data))).filter((m) => stillAhead(m, now));
+    const board = ahead.length ? await activeBoard(env.DB) : [];
+    if (!board.length) return kept;
+    const { followRoll } = await import('./_board-invite.js');
+    // (written from the meeting as it's read now, which has the board as it is: patchMeeting writes it over only that copy)
+    for (const m of ahead) if (followRoll(m.attendance, board) && (await patchMeeting(env.DB, m.id, (cur) => cur, { by: 'Board' }))) kept.push(m.id);
+  } catch (err) {
+    console.error('[board] keeping the board on meetings ahead', err.message);
+  }
+  return kept;
+}
+
+/**
  * Each meeting ahead that nobody has written an agenda for is on the template (templateAgenda): one drafted from the
  * last agenda goes back to it, a changed template reaches it, and when a meeting is added or moved before it, its
  * minutes item follows. A person's change makes the agenda theirs and it's left alone. Every ten minutes at most, or
@@ -2779,10 +3579,10 @@ export async function maybeTemplateAgendas(env, { now = Date.now(), force = fals
     for (const m of real.filter((x) => x.date >= today && agendaIsDraft(x, settings.template))) {
       const prev = previousMeeting(m, real);
       const name = prev ? draftName(prev) : '';
-      const fresh = keepDocs(m.sections, templateAgenda(prev, { template: settings.template }));
+      const fresh = keepDocs(m.sections, templateAgenda(prev, { template: settings.template, date: m.date }));
       if (m.agendaFrom?.kind === 'template' && m.agendaFrom.name === name && agendaSkeleton({ sections: fresh }) === agendaSkeleton(m)) continue;
       const done = await patchMeeting(env.DB, m.id, (cur) => (agendaIsDraft(cur, settings.template)
-        ? { ...cur, sections: keepDocs(cur.sections, templateAgenda(prev, { template: settings.template })), agendaFrom: { kind: 'template', name, at: new Date(now).toISOString() } }
+        ? { ...cur, sections: keepDocs(cur.sections, templateAgenda(prev, { template: settings.template, date: cur.date })), agendaFrom: { kind: 'template', name, at: new Date(now).toISOString() } }
         : cur));
       if (done) changed.push(m.id);
     }
@@ -2805,7 +3605,9 @@ export async function maybeRereadEmailAgendas(env, { now = Date.now() } = {}) {
     for (const m of (await listMeetings(env.DB)).filter((x) => x.agendaFrom?.kind === 'email' && readAgain(x) && !x.minutesFrom?.typed)) {
       const f = m.files.find((x) => x.name === m.agendaFrom.name);
       let parsed = null;
-      if (f) { try { parsed = await readFileAsAgenda(env, f.id); } catch (err) { console.error('[board] reading again', f.name, err.message); } }
+      // (People not answering: nothing is marked read again, and the next heartbeat reads it: never an agenda read
+      // against nobody, nor one that's done with for want of a read. Round 10)
+      if (f) { try { parsed = await readFileAsAgenda(env, f.id); } catch (err) { if (err?.unread) throw err; console.error('[board] reading again', f.name, err.message); } }
       const better = !!parsed?.sections.some((s) => s.items.length);
       await patchMeeting(env.DB, m.id, (cur) => (cur.agendaFrom?.kind === 'email' && readAgain(cur) && !cur.minutesFrom?.typed
         ? { ...cur, ...(better ? { sections: parsed.sections } : {}), agendaFrom: { ...cur.agendaFrom, ...(better ? { at: new Date(now).toISOString() } : {}), v: AGENDA_READER } }
@@ -2853,9 +3655,14 @@ export async function maybeRunBoard(env, { fetchImpl = fetch, now = Date.now() }
     await maybeSyncBoardAccess(env, { fetchImpl, now });
     await (await import('./_board-group.js')).maybeSyncBoardGroup(env, { fetchImpl, now });
     await maybeSyncBoardCalendar(env, { fetchImpl, now });
+    // A People rename whose board and Advisory Board page records didn't all follow it: finished (./_rename-finish.js);
+    // one that can't be finished as it stands is said to the staff once, in Needs attention, as Board's alerts are
+    const renames = await import('./_rename-finish.js');
+    await renames.maybeFinishRenames(env.DB, { now, ...renames.alertsFor(env) }).catch((e) => console.error('[board] renames', e?.message));
     const invites = await import('./_board-invite.js');
     await invites.maybeRefreshInvites(env, { fetchImpl, now });
     await invites.maybeFollowBoard(env, { fetchImpl, now });
+    await maybeKeepRolls(env, { now });
     await (await import('./_board-schedule.js')).maybeScheduleAhead(env, { fetchImpl, now });
     await invites.maybeCheckInvites(env, { fetchImpl, now });
     await maybeSendApprovedAgendas(env, { now });
@@ -2913,7 +3720,7 @@ export async function boardFacts(env) {
     env.DB.prepare('SELECT data FROM board_meetings').all().then((r) => (r.results || []).map((x) => parse(x.data))),
     calendarStatus(env.DB),
     mailStatus(env.DB),
-    readState(env.DB, 'invite-pending'),
+    import('./_board-invite.js').then((x) => x.pendingInvites(env.DB)),
     inviteCheck(env.DB),
     bankFacts(env),
     booksFacts(env),
@@ -2946,7 +3753,7 @@ export async function boardFacts(env) {
       read: stored.filter((m) => m.fromMeet?.status === 'ok').length, needsSetup: stored.filter((m) => m.fromMeet?.status === 'needs-setup').length,
       failing: stored.filter((m) => m.fromMeet?.status === 'error').length, lastAt: stored.map((m) => m.fromMeet?.at).filter(Boolean).sort().at(-1) || null,
     },
-    calendar: { configured: Boolean(env.GOOGLE_CALENDAR_KEY), ok: !!cal.ok, checkedAt: cal.checkedAt || null, invites: cal.invites || 0, gone: cal.gone || 0, failing: (cal.errors || []).length },
+    calendar: { configured: Boolean(env.GOOGLE_CALENDAR_KEY), ok: !!cal.ok, checkedAt: cal.checkedAt || null, invites: cal.invites || 0, gone: cal.gone || 0, failing: (cal.errors || []).length, unread: cal.unread && !cal.ok ? cal.failingSince || null : null },
     mail: {
       configured: Boolean(env.GOOGLE_CALENDAR_KEY), ok: !!mail.ok, needsScope: !!mail.needsScope, checkedAt: mail.checkedAt || null, waiting: mail.backlog ?? mail.waiting ?? 0, failing: (mail.errors || []).length,
       meetings: mail.totals?.meetings || 0, files: mail.totals?.files || 0, skipped: mail.totals?.skipped || 0,

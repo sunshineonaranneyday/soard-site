@@ -40,6 +40,6 @@ export async function onRequestGet(context) {
     return reply({ success: true, ...(await searchMail(env, { me, mailbox, q: p.get('q') || '', max: p.get('max'), page: p.get('page') || '' })) });
   } catch (err) {
     if (!err.status) console.error('[mailbox-admin]', err);
-    return reply({ success: false, error: err.message || 'Couldn’t read that mailbox' }, err.status && err.status < 500 ? err.status : 500);
+    return reply({ success: false, error: err.message || 'Couldn’t read that mailbox' }, err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? err.status : 500);
   }
 }

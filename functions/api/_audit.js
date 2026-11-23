@@ -86,6 +86,19 @@ export async function logAudit(DB, entry) {
 }
 
 /**
+ * The same entry as a statement, for a change's own batch: written with it or not at all, never swallowed (a record that
+ * goes only once the audit log holds it: ./_member-places.js, where a person's older record is folded into the newer).
+ * `onlyIf`: [sql, ...binds], a condition the entry is written under (the change it records went through)
+ */
+export function auditStatement(DB, entry, onlyIf = null) {
+  const vals = [entry.userEmail || 'unknown', entry.action, entry.entityType, entry.entitySlug || null, entry.entityName || null,
+    entry.changes ? JSON.stringify(entry.changes) : null, entry.path || null, entry.gitStatus || null];
+  const [cond, ...binds] = onlyIf || [];
+  return DB.prepare(`INSERT INTO audit_log (user_email, action, entity_type, entity_slug, entity_name, changes, path, git_status, created_at)
+    SELECT ?, ?, ?, ?, ?, ?, ?, ?, datetime('now')${cond ? ` WHERE ${cond}` : ''}`).bind(...vals, ...binds);
+}
+
+/**
  * Resolve a human-readable entity name from parsed data.
  */
 export function getEntityName(data, entityType) {

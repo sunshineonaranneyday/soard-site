@@ -342,9 +342,14 @@ try {
   await kim.evaluate(() => [...document.querySelectorAll('.bf .lc-seasons button')].find((b) => b.textContent.trim() === '2026').click());
   await sleep(300);
   const list = await textOf(kim, '.bf');
-  ok(/^4 families · 2 ranked · 2 Strong Candidate$/.test(await textOf(kim, '.bf-rank')), `a season: families counted as families (${await textOf(kim, '.bf-rank')})`);
+  // (2026's makeovers with no application are in it too, by their kid pages' year, or the year in their JobTread name:
+  // QA round 7, m3. Four applied, four revealed with no application in Board, and Max's, being built, "Max Example (2026)"
+  // in JobTread with no kid page yet, so no name)
+  ok(/^9 families · 2 ranked · 2 Strong Candidate$/.test(await textOf(kim, '.bf-rank')), `a season: families counted as families (${await textOf(kim, '.bf-rank')})`);
   const order = await kim.$$eval('.bf-row__who strong', (els) => els.map((e) => e.textContent));
-  ok(order.join('|') === 'Iris Example|Jay Example|Nora Example|Omar Example', `ranked best first, then partway, then the rest; no TEST (${order.join(', ')})`);
+  ok(order.slice(0, 4).join('|') === 'Iris Example|Jay Example|Nora Example|Omar Example' && order.slice(4).sort().join('|') === 'A family|Ava|Ben|Gia & Rosa|Hal', `ranked best first, then partway, then the rest (the makeovers with no application last); no TEST (${order.join(', ')})`);
+  const noApp = await kim.$$eval('.bf-row__who', (els) => els.filter((e) => /^(Ava|Ben|Gia & Rosa|Hal)$/.test(e.querySelector('strong')?.textContent || '')).map((e) => e.querySelector('span')?.textContent || ''));
+  ok(noApp.length === 4 && noApp.every((t) => /no application in Board/i.test(t)), `each says it has no application in Board (${noApp.join(' · ')})`);
   ok(/38\.5\s*Strong Candidate/.test(list) && /33\.5\s*Strong Candidate/.test(list), 'scores with their tiers');
   ok(/1 of 2 scored/.test(list), 'Nora: partway');
   ok(await kim.$eval('.bp-nav a[aria-current="page"]', (a) => a.getAttribute('href')).then((h) => h === '#/', () => false), 'Home stays lit in the menu');

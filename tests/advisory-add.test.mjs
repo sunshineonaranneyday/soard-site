@@ -1159,8 +1159,9 @@ test('names, round nine: family names that are also letters (Mba, Ma, Do) stay n
   const gen = await plan((await applied('Gen Lam', 'gl@x.org')).id);
   assert.deepEqual([gen.kind, gen.namesake], ['new', undefined], 'Gen Lam is never asked about Hon Lam');
   assert.deepEqual(among(await plan((await applied('Hon. Hon Lam', 'hl2@x.org')).id)), ['hon-lam']);
-  assert.equal(greetName({ fullName: 'Hon Lam Wong' }), 'Hon');
-  assert.equal(greetName({ fullName: 'Gen Tanaka' }), 'Gen');
+  // (r20: "Hon" and "Gen" without their stop are names too, as before, but not on the given-names list: no name)
+  assert.equal(greetName({ fullName: 'Hon Lam Wong' }), '');
+  assert.equal(greetName({ fullName: 'Gen Tanaka' }), '');
   assert.equal(greetName({ fullName: 'Hon. Jordan Smith' }), 'Jordan');
   // Last name first, with a comma
   await person('jordan-ames', { name: 'Jordan Ames', group: 'advisory' }, 'ja@x.org');
@@ -1180,7 +1181,7 @@ test('names, round nine: family names that are also letters (Mba, Ma, Do) stay n
 
 // ─── Round ten ──────────────────────────────────────────────────────
 
-test('written last name first ("Ames, Jordan"): greeted by their first name, in their copy and their welcome, and added as Jordan Ames at jordan-ames', async () => {
+test('written last name first ("Ames, Jordan"): added as Jordan Ames at jordan-ames; their copy and their welcome greet them alike, by no name (r20: a comma)', async () => {
   const { writeState } = await import('../functions/api/_board-roles.js');
   const { sendWelcome } = await import('../functions/api/_advisory-mail.js');
   const { greetName } = await import('../functions/api/_advisory-form.js');
@@ -1193,8 +1194,9 @@ test('written last name first ("Ames, Jordan"): greeted by their first name, in 
   assert.equal((await rec('jordan-ames')).name, 'Jordan Ames');
   await sendWelcome(env, { slugs: ['jordan-ames'] });
   const welcome = emailsSent.find((e) => /page is ready/.test(e.subject));
-  assert.match(String(welcome?.text || ''), /^Hi Jordan,/);
-  for (const [n, g] of [['De La Cruz, Maria', 'Maria'], ['AMES, JORDAN', 'Jordan'], ['Price, Dana, MBA', 'Dana'], ['Dr. Ames, Jordan', 'Jordan'], ['The Honorable Jordan Ames', 'Jordan'], ['Mrs. Lee', 'Mrs. Lee']]) {
+  // (r20: the welcome greets as the copy does: a comma, so "Hello,", never "Hi Jordan," read from People's "Jordan Ames")
+  assert.match(String(welcome?.text || ''), /^Hello,/);
+  for (const [n, g] of [['De La Cruz, Maria', ''], ['AMES, JORDAN', ''] /* r20: a comma: no name */, ['Price, Dana, MBA', ''] /* r20: a comma: no name */, ['Dr. Ames, Jordan', ''] /* r20: a comma: no name */, ['The Honorable Jordan Ames', ''] /* r20: more than a title and three words (a title it doesn't know, of more than one word, among them): no name */, ['Mrs. Lee', ''] /* r20: a title and a family name is no given name: no name */]) {
     assert.equal(greetName({ fullName: n }), g, n);
   }
 });
@@ -1295,7 +1297,8 @@ test('letters after a comma it doesn’t know (ASID, RD, PharmD, REALTOR®) are 
   const { greetName } = await import('../functions/api/_advisory-form.js');
   await person('jane-doe', { name: 'Jane Doe', group: 'advisory' }, 'jane.work@x.org');
   for (const [k, n] of ['Jane Doe, ASID', 'Jane Doe, RD', 'Jane Doe, LPN', 'Jane Doe, NCIDQ', 'Jane Doe, RD, MS', 'Jane Doe, PharmD', 'Jane Doe, REALTOR®', 'Jane Doe, DPT'].entries()) {
-    assert.equal(greetName({ fullName: n }), 'Jane', n);
+    // (r20: after a comma only letters the file knows are greeted past; "REALTOR®" isn't: no name. Still asked about the same person)
+    assert.equal(greetName({ fullName: n }), /REALTOR/.test(n) ? '' : 'Jane', n);
     const p = await plan((await applied(n, `jd${k}@x.org`)).id);
     assert.deepEqual([p.kind, p.person?.slug, p.asName], ['choose', 'jane-doe', undefined], n);
   }
@@ -1303,8 +1306,10 @@ test('letters after a comma it doesn’t know (ASID, RD, PharmD, REALTOR®) are 
 
 test('greetings, round eleven: capitals with titles or letters, hyphens and apostrophes; Jr. kept after the family name; initials after a comma; "Mr. and Mrs."', async () => {
   const { greetName, readName } = await import('../functions/api/_advisory-form.js');
-  for (const [n, g] of [['Dr. JORDAN AMES', 'Jordan'], ['JORDAN AMES, PhD', 'Jordan'], ['JORDAN AMES Jr.', 'Jordan'], ['MARY-KATE OLSEN', 'Mary-Kate'], ['D’ANDRE SMITH', 'D’Andre'],
-    ['Ames, J.R.', 'J.R.'], ['Mr. and Mrs. Jordan Ames', 'Jordan'], ['Ames, DeShawn', 'DeShawn'], ['Jordan Ames, M.D.', 'Jordan']]) {
+  // ("Dr. JORDAN AMES": no name since round 19, Nov 21 2026, its confident-or-none rule superseding this round's "Jordan": a
+  // title, one word, then an unknown word in capitals may be a family name or letters, "DR. QUILL FACC", nothing says which)
+  for (const [n, g] of [['Dr. JORDAN AMES', 'Jordan'] /* r20: a title on the short list, then a whole name: its first name */, ['JORDAN AMES, PhD', 'Jordan'], ['JORDAN AMES Jr.', 'Jordan'], ['MARY-KATE OLSEN', 'Mary-Kate'], ['D’ANDRE SMITH', 'D\'Andre'] /* r20: every dash, apostrophe and middle dot is read as its plain form */,
+    ['Ames, J.R.', ''] /* r20: a comma: no name */, ['Mr. and Mrs. Jordan Ames', ''] /* r20: two people, or someone not named ("and"): no name */, ['Ames, DeShawn', ''] /* r20: a comma: no name */, ['Jordan Ames, M.D.', 'Jordan']]) {
     assert.equal(greetName({ fullName: n }), g, n);
   }
   assert.equal(readName('Ames, Jordan Jr.').shown, 'Jordan Ames Jr.');
@@ -1344,7 +1349,7 @@ test('a delete marked before anything goes: the mark not saving deletes nothing;
   const r = await remove(a.id);
   env.DB.prepare = real;
   assert.equal(r.success, false);
-  assert.equal(r.error, 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application again to finish it.');
+  assert.equal(r.error, 'Deleting this application didn’t finish: it’s still here. Press Delete application again to finish it.');
   assert.equal(deleted.length, 1);
   const half = await getAdvisoryApplication(env.DB, a.id);
   assert.deepEqual([half.deleting, half.headshot], [true, null]);
@@ -1417,7 +1422,8 @@ test('what someone does, their company or a place, or letters the site didn’t 
     const n = `Jordan Quill, ${w}`;
     // (a name after the comma that could be a first name, "McKinsey", "Atlanta", can't say which is theirs: greeted
     // without one, never a guess; matching still finds Jordan Quill)
-    assert.equal(greetName({ fullName: n }), ['McKinsey', 'Atlanta'].includes(w) ? '' : 'Jordan', n);
+    // (r20: after a comma, only letters the file knows are greeted past; a job, a company or a place: no name)
+    assert.equal(greetName({ fullName: n }), ['Retired', 'Senior', 'Junior', 'Esquire', 'DrPH', 'BSc'].includes(w) ? 'Jordan' : '', n);
     const p = await plan((await applied(n, `jq${k}@x.org`)).id);
     assert.deepEqual([p.kind, p.person?.slug], ['choose', 'jordan-quill'], n);
   }
@@ -1430,19 +1436,21 @@ test('what someone does, their company or a place, or letters the site didn’t 
   // Written last name first with letters after the first name: the letters are set apart, after the whole name
   const amy = await add((await applied('Quill, Amy MD', 'amy.q@x.org')).id, 'new');
   assert.equal(amy.success, true, amy.error);
-  assert.deepEqual([amy.person.slug, (await rec('amy-quill')).name, greetName({ fullName: 'Quill, Amy MD' })], ['amy-quill', 'Amy Quill MD', 'Amy']);
-  // An initial never ends the greeting with a full stop of its own ("Thank you, J.." was said)
-  assert.equal(greetName({ fullName: 'J. Ames' }), 'J');
+  // (r20: a comma: no name)
+  assert.deepEqual([amy.person.slug, (await rec('amy-quill')).name, greetName({ fullName: 'Quill, Amy MD' })], ['amy-quill', 'Amy Quill MD', '']);
+  // An initial never ends the greeting with a full stop of its own ("Thank you, J.." was said); r20: an initial is never
+  // greeted at all
+  assert.equal(greetName({ fullName: 'J. Ames' }), '');
 });
 
 test('two capitals after a comma that aren’t letters it knows are a first name ("Quill, TJ"); "Lee, MD" is still letters', async () => {
   const { greetName } = await import('../functions/api/_advisory-form.js');
   await person('tj-quill', { name: 'TJ Quill', group: 'advisory' }, 'tj.work@x.org');
   for (const [k, n] of ['Quill, TJ', 'Quill, AJ', 'Quill, MJ'].entries()) {
-    assert.equal(greetName({ fullName: n }), n.split(', ')[1], n);
+    assert.equal(greetName({ fullName: n }), '', n); // (r20: a comma: no name; matching is as before)
     if (k === 0) assert.deepEqual(await plan((await applied(n, 'tj.home@x.org')).id).then((p) => [p.kind, p.person?.slug]), ['choose', 'tj-quill']);
   }
-  assert.equal(greetName({ fullName: 'Lee, MD' }), 'Lee');
+  assert.equal(greetName({ fullName: 'Lee, MD' }), ''); // (r20: one word before the comma: no name)
   assert.equal(greetName({ fullName: 'Jane Doe, RD' }), 'Jane');
 });
 
@@ -1521,7 +1529,7 @@ test('a web address changed on People while a press adds them: one waits for the
   await g.reached;
   const r = await add(app.id, 'same', box.key);
   assert.equal(r.success, false);
-  assert.equal(r.error, 'Rex Old’s People record is being changed right now (its web address, or a delete), so nobody was added. Give it a moment, then look at the box again.');
+  assert.equal(r.error, 'Rex Old’s People record is being changed right now (its web address), so nobody was added. Give it a moment, then look at the box again.');
   g.open();
   assert.equal((await renaming).status, 200);
   // then added at the address it has now: active, linked, never put back as it was before
@@ -1554,10 +1562,10 @@ test('someone deleted from People while a press adds them: refused in words unti
 test('titles a person goes by (Pastor, Rabbi, Coach, Det., Rep.), a first initial before the name they use, a title typed against the name, and degrees written with dots, are never what they’re called', async () => {
   const { greetName, readName } = await import('../functions/api/_advisory-form.js');
   for (const [n, g] of [['Pastor John Smith', 'John'], ['Father John Smith', 'John'], ['Rabbi Dana Levy', 'Dana'], ['Deacon Pat Ames', 'Pat'], ['Coach Jordan Ames', 'Jordan'], ['Senator Jordan Ames', 'Jordan'],
-    ['Chef Jordan Ames', 'Jordan'], ['Det. Jordan Ames', 'Jordan'], ['Rep. Jordan Ames', 'Jordan'], ['Bishop Jones', 'Bishop'], ['F. Scott Fitzgerald', 'Scott'], ['J. Jordan Ames', 'Jordan'],
-    ['Dr.Jordan Ames', 'Jordan'], ['Jane Doe, Pharm.D.', 'Jane'], ['Pat Lee, D.Min.', 'Pat'], ['Jane Doe, M.Arch.', 'Jane'], ['Doe, Pharm.D.', 'Doe'], ['Brooks, TJ', 'TJ'], ['Lee, BJ', 'BJ'],
+    ['Chef Jordan Ames', ''] /* r20: "Chef" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['Det. Jordan Ames', 'Jordan'], ['Rep. Jordan Ames', 'Jordan'], ['Bishop Jones', ''] /* r20: a title and a family name is no given name: no name */, ['F. Scott Fitzgerald', ''] /* r20: initials or a word with a full stop: no name */, ['J. Jordan Ames', ''] /* r20: initials or a word with a full stop: no name */,
+    ['Dr.Jordan Ames', ''] /* r20: initials or a word with a full stop: no name */, ['Jane Doe, Pharm.D.', 'Jane'], ['Pat Lee, D.Min.', 'Pat'], ['Jane Doe, M.Arch.', 'Jane'], ['Doe, Pharm.D.', ''] /* r20: a comma: no name */, ['Brooks, TJ', ''] /* r20: a comma: no name */, ['Lee, BJ', ''] /* r20: a comma: no name */,
     // (names that are also titles without their dot stay names)
-    ['Amartya Sen', 'Amartya'], ['Sen Lee', 'Sen'], ['Hon Lam', 'Hon'], ['Ames, J.R.', 'J.R.']]) {
+    ['Amartya Sen', 'Amartya'], ['Sen Lee', ''] /* r20: "Sen" isn't on the given-names list: no name */, ['Hon Lam', ''] /* r20: "Hon" isn't on the given-names list: no name */, ['Ames, J.R.', ''] /* r20: a comma: no name */]) {
     assert.equal(greetName({ fullName: n }), g, n);
   }
   assert.deepEqual(readName('Dr.Jordan Ames').words, ['Jordan', 'Ames']);
@@ -1566,7 +1574,7 @@ test('titles a person goes by (Pastor, Rabbi, Coach, Det., Rep.), a first initia
 
 test('the applicant’s copy in plain text never ends their name with a second full stop ("Thank you, J.R..")', async () => {
   const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
-  for (const [n, first] of [['Ames, J.R.', 'Thank you, J.R.'], ['Jordan Ames', 'Thank you, Jordan.']]) {
+  for (const [n, first] of [['Ames, J.R.', 'Thank you.'] /* r20: a comma: no name */, ['Jordan Ames', 'Thank you, Jordan.']]) {
     const app = await applied(n, `copy.${first.length}@x.org`);
     assert.equal(applicantEmail(app).text.split('\n')[0], first, n);
   }
@@ -1580,22 +1588,23 @@ test('names, round thirteen: van, de, la only start a family name written first;
   // Written first name first, then a company or place: asked about the same person, never flipped into a second record
   // (a company or place after the comma that could be a first name: greeted without one, never a guess; matched as them)
   for (const [slug, name, applying, greet] of [['maria-de-la-cruz', 'Maria de la Cruz', 'Maria de la Cruz, Wells Fargo', ''], ['mai-le-tran', 'Mai Le Tran', 'Mai Le Tran, Delta', ''],
-    ['martin-van-buren', 'Martin Van Buren', 'Martin Van Buren, Kinderhook', ''], ['jordan-quill', 'Jordan Quill', 'Quill, Pastor Jordan', 'Jordan'], ['dana-price', 'Dana Price', 'Price, Coach Dana', 'Dana'],
-    ['jordan-smithers', 'Jordan Smithers', 'JR Smithers', 'JR']]) {
+    ['martin-van-buren', 'Martin Van Buren', 'Martin Van Buren, Kinderhook', ''], ['jordan-quill', 'Jordan Quill', 'Quill, Pastor Jordan', ''] /* r20: a comma: no name */, ['dana-price', 'Dana Price', 'Price, Coach Dana', ''] /* r20: a comma: no name */,
+    ['jordan-smithers', 'Jordan Smithers', 'JR Smithers', ''] /* r20: "JR" reads as letters (Jr.) as often as a name: not on the list */]) {
     await person(slug, { name, group: 'advisory' }, `${slug}@x.org`);
     assert.equal(greetName({ fullName: applying }), greet, applying);
     const p = await plan((await applied(applying, `a.${slug}@x.org`)).id);
     assert.deepEqual([p.kind, p.person?.slug], ['choose', slug], applying);
   }
   // Names that look like a title or letters: their whole name, their own address
-  for (const [n, slug, greet] of [['Deacon Phillippe', 'deacon-phillippe', 'Deacon'], ['Bishop Briggs', 'bishop-briggs', 'Bishop'], ['Ken Iida', 'ken-iida', 'Ken'], ['Annalisa Cima', 'annalisa-cima', 'Annalisa'], ['Olive Senior', 'olive-senior', 'Olive']]) {
+  // (r20: "Deacon" and "Bishop" are titles before a family name, never on the given-names list: no name)
+  for (const [n, slug, greet] of [['Deacon Phillippe', 'deacon-phillippe', ''], ['Bishop Briggs', 'bishop-briggs', ''], ['Ken Iida', 'ken-iida', 'Ken'], ['Annalisa Cima', 'annalisa-cima', 'Annalisa'], ['Olive Senior', 'olive-senior', 'Olive']]) {
     assert.equal(greetName({ fullName: n }), greet, n);
     assert.equal((await plan((await applied(n, `${slug}@y.org`)).id)).slug, slug, n);
   }
   // ...and the same words as titles or letters, where they are
   for (const [n, greet] of [['Bishop John Briggs', 'John'], ['Jordan Quill, Senior', 'Jordan'], ['Pastor John Smith', 'John']]) assert.equal(greetName({ fullName: n }), greet, n);
   // A couple: both greeted, the first one's address, the name as written with its "&"
-  assert.equal(greetName({ fullName: 'Quill, Jordan & Amy' }), 'Jordan and Amy');
+  assert.equal(greetName({ fullName: 'Quill, Jordan & Amy' }), ''); // (r20: two people: no name)
   const couple = await plan((await applied('Rowe, Jordan & Amy', 'rowe@x.org')).id);
   assert.deepEqual([couple.slug, couple.asName ?? couple.name], ['jordan-rowe', couple.asName ?? couple.name]);
   assert.equal((await add(couple.application.id, 'new')).success, true);
@@ -1620,7 +1629,7 @@ test('a delete stopped by the database twice (People can’t be checked, nor the
   env.DB.prepare = (sql) => (/SET deleting_at = NULL/.test(sql) ? throwing : real(sql));
   const r2 = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }))).json();
   env.DB.prepare = real;
-  assert.equal(r2.error, 'Deleting this application didn’t finish: it’s still here, and its headshot is no longer shown or used. Press Delete application again to finish it.');
+  assert.equal(r2.error, 'Deleting this application didn’t finish: it’s still here. Press Delete application again to finish it.');
   assert.equal((await getAdvisoryApplication(env.DB, a.id)).deleting, true);
   refuse = false;
   assert.equal((await (await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }))).json()).success, true, 'Delete again finishes it');
@@ -1661,20 +1670,20 @@ test('a People record being changed to the web address a new applicant would get
 
 test('greetings, round thirteen: two or more initials are the name they go by; more titles set apart (Doctor, Professor, Captain, Sr., Msgr., Atty., Dra., Lic., Canon); a title against the name, twice or before a small letter; a preferred name that is a filler; a name typed in small letters', async () => {
   const { greetName } = await import('../functions/api/_advisory-form.js');
-  for (const [n, g] of [['J. K. Rowling', 'J.K.'], ['C. S. Lewis', 'C.S.'], ['A. J. Smith', 'A.J.'], ['T J Brooks', 'TJ'], ['C. J. Brooks, MD', 'C.J.'], ['F. Scott Fitzgerald', 'Scott'],
-    ['Doctor Jordan Ames', 'Jordan'], ['Professor Jordan Ames', 'Jordan'], ['Captain Jordan Ames', 'Jordan'], ['Sr. Mary Ames', 'Mary'], ['Msgr. John Ames', 'John'], ['Atty. Jordan Ames', 'Jordan'],
-    ['Dra. Maria Lopez', 'Maria'], ['Lic. Juan Perez', 'Juan'], ['Rev. Canon Jordan Ames', 'Jordan'], ['Rev.Dr.Jordan Ames', 'Jordan'], ['Dr.jordan Ames', 'Jordan'], ['jordan ames', 'Jordan'],
+  for (const [n, g] of [['J. K. Rowling', ''] /* r20: initials or a word with a full stop: no name */, ['C. S. Lewis', ''] /* r20: initials or a word with a full stop: no name */, ['A. J. Smith', ''] /* r20: initials or a word with a full stop: no name */, ['T J Brooks', ''] /* r20: "T" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['C. J. Brooks, MD', ''] /* r20: initials or a word with a full stop: no name */, ['F. Scott Fitzgerald', ''] /* r20: initials or a word with a full stop: no name */,
+    ['Doctor Jordan Ames', 'Jordan'], ['Professor Jordan Ames', 'Jordan'], ['Captain Jordan Ames', 'Jordan'], ['Sr. Mary Ames', ''] /* r20: initials or a word with a full stop: no name */, ['Msgr. John Ames', 'John'], ['Atty. Jordan Ames', 'Jordan'],
+    ['Dra. Maria Lopez', 'Maria'], ['Lic. Juan Perez', 'Juan'], ['Rev. Canon Jordan Ames', ''] /* r20: "Canon" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['Rev.Dr.Jordan Ames', ''] /* r20: initials or a word with a full stop: no name */, ['Dr.jordan Ames', ''] /* r20: initials or a word with a full stop: no name */, ['jordan ames', 'Jordan'],
     // (a place or company after the comma that could be a first name: greeted without one, never a guess)
-    ['de la cruz, maria', 'Maria'], ['Jordan Van Dyke, Atlanta', ''], ['Maria De La Cruz, Keller Williams', ''], ['Minh Van Tran, Emory Healthcare', ''], ['Anh Le Nguyen, Decatur', ''],
+    ['de la cruz, maria', ''], ['Jordan Van Dyke, Atlanta', ''], ['Maria De La Cruz, Keller Williams', ''], ['Minh Van Tran, Emory Healthcare', ''], ['Anh Le Nguyen, Decatur', ''],
     // (names that are also titles or words stay names)
-    ['Major Taylor', 'Major'], ['Dean Martin', 'Dean'], ['Gen Tanaka', 'Gen']]) {
+    ['Major Taylor', ''] /* r20: a title and a family name is no given name: no name */, ['Dean Martin', ''] /* r20: "Dean" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['Gen Tanaka', ''] /* r20: "Gen" (a title only with its stop) isn't on the given-names list: no name */]) {
     assert.equal(greetName({ fullName: n }), g, n);
   }
   for (const pref of ['N/A', 'None', 'Same', '-', '.', 'n/a', 'Same as above']) assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: pref }), 'Jordan', pref);
   assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: 'Jo' }), 'Jo');
   // ...and the applicant's copy says the initials once, with one full stop
   const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
-  assert.equal(applicantEmail(await applied('J. K. Rowling', 'jk@x.org')).text.split('\n')[0], 'Thank you, J.K.');
+  assert.equal(applicantEmail(await applied('J. K. Rowling', 'jk@x.org')).text.split('\n')[0], 'Thank you.'); // (r20: initials: no name)
 });
 
 
@@ -1685,14 +1694,15 @@ test('names, round fourteen: a first name that starts like a family name (Van, D
   // (greeted without a first name, never a guess: "Dream Corps" could be one as far as the site can tell)
   for (const [slug, name, applying, greet] of [['van-jones', 'Van Jones', 'Van Jones, Dream Corps', ''], ['del-taylor', 'Del Taylor', 'Del Taylor, Home Depot', ''],
     ['la-donna-brown', 'La Donna Brown', 'La Donna Brown, Keller Williams', ''], ['le-thi-hoa', 'Le Thi Hoa', 'Le Thi Hoa, Delta Air Lines', ''], ['van-morrison', 'Van Morrison', 'Van Morrison, Wells Fargo', ''],
-    ['deacon-phillippe', 'Deacon Phillippe', 'Deacon Phillippe Jr.', 'Deacon'], ['bishop-briggs', 'Bishop Briggs', 'Bishop Briggs PhD', 'Bishop'], ['maria-de-la-cruz', 'Maria De La Cruz', 'DE LA CRUZ, MARIA', 'Maria']]) {
+    ['deacon-phillippe', 'Deacon Phillippe', 'Deacon Phillippe Jr.', ''] /* r20: a title before a family name: no name */, ['bishop-briggs', 'Bishop Briggs', 'Bishop Briggs PhD', ''] /* r20: a title before a family name: no name */, ['maria-de-la-cruz', 'Maria De La Cruz', 'DE LA CRUZ, MARIA', '']]) {
     await person(slug, { name, group: 'advisory' }, `${slug}@x.org`);
     assert.equal(greetName({ fullName: applying }), greet, applying);
     const p = await plan((await applied(applying, `a.${slug}@x.org`)).id);
     assert.deepEqual([p.kind, p.person?.slug], ['choose', slug], applying);
   }
-  // ...and one first name after a family name in parts is still last name first
-  for (const [n, g] of [['Van Buren, Martin', 'Martin'], ['De La Cruz, Maria', 'Maria'], ['St. James, Jordan', 'Jordan'], ['Bishop John Briggs PhD', 'John']]) assert.equal(greetName({ fullName: n }), g, n);
+  // ...and one first name after a family name in parts is greeted without one too (from round fifteen: "Del Taylor,
+  // Compass" is the same shape), matched both ways
+  for (const [n, g] of [['Van Buren, Martin', ''], ['De La Cruz, Maria', ''], ['St. James, Jordan', ''], ['Bishop John Briggs PhD', 'John']]) assert.equal(greetName({ fullName: n }), g, n);
 });
 
 test('the waiting box and People’s refusals say which record is held: someone this could be, or another record taking the address they’d get; a rename to an address someone has says that first', async () => {
@@ -1750,17 +1760,17 @@ test('a delete that stops, of an application that never had a headshot, never sa
 
 test('greetings, round fourteen: initials after a family name in parts; a couple with a title or initials on the second, or two family names; a title alone after the comma; couples’ titles; initials in small letters or typed against the name; a preferred name in small letters or a filler; nothing guessed', async () => {
   const { greetName } = await import('../functions/api/_advisory-form.js');
-  for (const [n, g] of [['Van Dyke, Jordan T.', 'Jordan'], ['Van Dyke, J. Robert', 'Robert'], ['Du Bois, W. E. B.', 'W.E.B.'], ['De La Cruz, M. J.', 'M.J.'], ['Van Dyke, TJ', 'TJ'],
-    ['Jordan & Dr. Amy Quill', 'Jordan and Amy'], ['Jordan & Mrs. Amy Quill', 'Jordan and Amy'], ['Quill, Jordan & Dr. Amy', 'Jordan and Amy'], ['Jordan & T. J. Quill', 'Jordan and T.J.'], ['Jordan Quill & Amy Lee', 'Jordan and Amy'],
-    ['Ames, Dr.', 'Dr. Ames'], ['Quill, Mrs.', 'Mrs. Quill'], ['Dr. and Mrs. Quill', 'Dr. and Mrs. Quill'], ['Mr. & Mrs. Ames', 'Mr. and Mrs. Ames'], ['Drs. Jordan and Amy Quill', 'Jordan and Amy'],
-    ['t.j. brooks', 'T.J.'], ['t j brooks', 'TJ'], ['j.k. rowling', 'J.K.'], ['e. e. cummings', 'E.E.'], ['J.K.Rowling', 'J.K.'], ['F.Scott Fitzgerald', 'Scott'], ['J.Ames', 'J'],
+  for (const [n, g] of [['Van Dyke, Jordan T.', ''], ['Van Dyke, J. Robert', ''], ['Du Bois, W. E. B.', ''], ['De La Cruz, M. J.', ''], ['Van Dyke, TJ', ''], ['Ames, Jordan T.', ''] /* r20: a comma: no name */, ['Bois, W. E. B.', ''] /* r20: a comma: no name */,
+    ['Jordan & Dr. Amy Quill', ''] /* r20: two people ("&" or "+"): no name */, ['Jordan & Mrs. Amy Quill', ''] /* r20: two people ("&" or "+"): no name */, ['Quill, Jordan & Dr. Amy', ''] /* r20: two people ("&" or "+"): no name */, ['Jordan & T. J. Quill', ''] /* r20: two people ("&" or "+"): no name */, ['Jordan Quill & Amy Lee', ''] /* r20: two people ("&" or "+"): no name */,
+    ['Ames, Dr.', ''] /* r20: a comma: no name */, ['Quill, Mrs.', ''] /* r20: a comma: no name */, ['Dr. and Mrs. Quill', ''] /* r20: two people, or someone not named ("and"): no name */, ['Mr. & Mrs. Ames', ''] /* r20: two people ("&" or "+"): no name */, ['Drs. Jordan and Amy Quill', ''] /* r20: two people, or someone not named ("and"): no name */,
+    ['t.j. brooks', ''] /* r20: initials or a word with a full stop: no name */, ['t j brooks', ''] /* r20: "t" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['j.k. rowling', ''] /* r20: initials or a word with a full stop: no name */, ['e. e. cummings', ''] /* r20: initials or a word with a full stop: no name */, ['J.K.Rowling', ''] /* r20: initials or a word with a full stop: no name */, ['F.Scott Fitzgerald', ''] /* r20: initials or a word with a full stop: no name */, ['J.Ames', ''] /* r20: initials or a word with a full stop: no name */,
     // (a degree written with its dots is never split as initials)
     ['Dana Price M.Ed.', 'Dana'], ['Pat Lee, D.Min.', 'Pat'],
     // (two family names, or a company, after a name of two words: no first name guessed)
     ['Garcia Lopez, Maria', '']]) {
     assert.equal(greetName({ fullName: n }), g, n);
   }
-  for (const [pref, g] of [['jordan', 'Jordan'], ['jo-anne', 'Jo-Anne'], ['None.', 'Jordan'], ['NONE.', 'Jordan'], ['Same.', 'Jordan'], ['Same as above.', 'Jordan'], ['Same as full name', 'Jordan'], ['Not applicable', 'Jordan'], ['No preference', 'Jordan'], ['Nil', 'Nil']]) {
+  for (const [pref, g] of [['jordan', 'Jordan'], ['jo-anne', 'Jo-Anne'], ['None.', 'Jordan'], ['NONE.', 'Jordan'], ['Same.', 'Jordan'], ['Same as above.', 'Jordan'], ['Same as full name', 'Jordan'], ['Not applicable', 'Jordan'], ['No preference', 'Jordan'], ['Nil', 'Jordan'] /* r20: "Nil" isn't on the given-names list (a word as often as a name): set aside, their full name's "Jordan" */]) {
     assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: pref }), g, pref);
   }
   // ...and the thank-you's copy, with no name guessed, thanks them for applying
@@ -1768,4 +1778,353 @@ test('greetings, round fourteen: initials after a family name in parts; a couple
   const copy = applicantEmail(await applied('Garcia Lopez, Maria', 'gl@x.org'));
   assert.equal(copy.text.split('\n')[0], 'Thank you.');
   assert.match(copy.html, /Thank you for applying/);
+});
+
+test('names, round fifteen: more than one word before the comma is never read as a family name and first names, or as a name and a company: greeted with no first name, kept as written, and asked about whoever it could be either way', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  const among = (p) => [p.person?.slug, ...(p.others || []).map((o) => o.slug)];
+  const made = new Set();
+  for (const [slug, name, applying] of [
+    ['maria-garcia-lopez', 'Maria Garcia Lopez', 'Garcia Lopez, Maria de los Angeles'], ['maria-garcia-lopez', 'Maria Garcia Lopez', 'Garcia Lopez, Maria (Mia)'],
+    ['maria-garcia-lopez', 'Maria Garcia Lopez', 'Garcia Lopez, maria'], ['ana-garcia-lopez', 'Ana Garcia Lopez', 'Garcia Lopez, Ana Maria Sofia Isabel'],
+    ['martin-van-buren', 'Martin Van Buren', 'Van Buren, Martin (Marty)'], ['martin-van-buren', 'Martin Van Buren', 'Van Buren, Martin "Marty"'], ['martin-van-buren', 'Martin Van Buren', 'Van Buren, Martin Jr.'],
+    ['maria-de-la-cruz', 'Maria De La Cruz', 'De La Cruz, Maria de los Angeles'], ['maria-de-la-cruz', 'Maria De La Cruz', 'De La Cruz, Maria PhD'],
+    // (a name and a one-word company: never "Compass Del Taylor")
+    ['del-taylor', 'Del Taylor', 'Del Taylor, Compass'], ['van-jones', 'Van Jones', 'Van Jones, Google'], ['la-donna-brown', 'La Donna Brown', 'La Donna Brown, Compass']]) {
+    if (!made.has(slug)) { made.add(slug); await person(slug, { name, group: 'advisory' }, `${slug}@x.org`); }
+    assert.equal(greetName({ fullName: applying }), '', applying);
+    const p = await plan((await applied(applying, `a${made.size}.${applying.length}@x.org`)).id);
+    assert.equal(p.kind, 'choose', applying);
+    assert.ok(among(p).includes(slug), `${applying}: ${among(p)}`);
+  }
+  // ...and someone new by such a name is added as they wrote it, at the address of the words before the comma, never
+  // with a company for a first name
+  const app = await applied('Del Rey, Compass', 'del.rey@x.org');
+  const box = await plan(app.id);
+  assert.deepEqual([box.kind, box.asName || app.name, box.slug], ['new', 'Del Rey, Compass', 'del-rey']);
+  const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
+  assert.doesNotMatch(applicantEmail(app).text, /Compass,|Thank you, Del/);
+});
+
+test('names, round fifteen: degree letters that are names too (MD, MBA, MA) after a name typed all in capitals or all in small letters: matched with and without them, never a new record beside the member', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  const among = (p) => [p.person?.slug, ...(p.others || []).map((o) => o.slug)];
+  await person('bishop-briggs', { name: 'Bishop Briggs', group: 'advisory' }, 'bb@x.org');
+  await person('deacon-phillippe', { name: 'Deacon Phillippe', group: 'advisory' }, 'dp@x.org');
+  await person('jordan-ames', { name: 'Jordan Ames', group: 'advisory' }, 'ja@x.org');
+  let k = 0;
+  // (r20: "Bishop" and "Deacon" are titles before a family name, never on the given-names list: no name)
+  for (const [applying, slug, g] of [['BISHOP BRIGGS MD', 'bishop-briggs', ''], ['bishop briggs md', 'bishop-briggs', ''], ['DEACON PHILLIPPE MBA', 'deacon-phillippe', ''],
+    ['JORDAN AMES MD', 'jordan-ames', 'Jordan'], ['jordan ames md', 'jordan-ames', 'Jordan'], ['JORDAN AMES MBA', 'jordan-ames', 'Jordan']]) {
+    assert.equal(greetName({ fullName: applying }), g, applying);
+    const p = await plan((await applied(applying, `d${++k}@x.org`)).id);
+    assert.equal(p.kind, 'choose', applying);
+    assert.ok(among(p).includes(slug), `${applying}: ${among(p)}`);
+  }
+  // ...and two such names that end alike are never taken for each other: "JORDAN AMESB MD" is asked about Jordan Amesb
+  await person('jordan-amesb', { name: 'Jordan Amesb', group: 'advisory' }, 'jb@x.org');
+  await person('jordan-amesa-md', { name: 'JORDAN AMESA MD', group: 'advisory' }, 'jam@x.org');
+  const p = await plan((await applied('JORDAN AMESB MD', 'jbm@x.org')).id);
+  assert.ok(among(p).includes('jordan-amesb'), String(among(p)));
+  assert.ok(!among(p).includes('jordan-amesa-md'), String(among(p)));
+});
+
+test('names, round fifteen: a couple whose second person is already on People is asked about them', async () => {
+  const among = (p) => [p.person?.slug, ...(p.others || []).map((o) => o.slug)];
+  await person('amy-rowe', { name: 'Amy Rowe', group: 'advisory' }, 'ar@x.org');
+  await person('amy-lee', { name: 'Amy Lee', group: 'advisory' }, 'al@x.org');
+  for (const [applying, slug] of [['Jordan & Amy Rowe', 'amy-rowe'], ['Jordan Quill & Amy Lee', 'amy-lee'], ['Rowe, Jordan & Amy', 'amy-rowe']]) {
+    const p = await plan((await applied(applying, `c.${slug}.${applying.length}@x.org`)).id);
+    assert.equal(p.kind, 'choose', applying);
+    assert.ok(among(p).includes(slug), `${applying}: ${among(p)}`);
+  }
+});
+
+test('a rename to the address of someone being deleted from People is told so, and once they’re gone, History keeps their versions under it: never another person’s versions filed under theirs', async () => {
+  const { rename } = await import('../functions/api/rename-content.js');
+  const { deleteItem } = await import('../functions/api/delete-content.js');
+  await person('rae-rook', { name: 'Rae Rook', group: 'advisory' }, 'rae@x.org');
+  await person('sam-sole', { name: 'Sam Sole', group: 'team' }, 'sam@x.org');
+  // (slowed after their row is gone, as the tester did)
+  const g = gate(/^\s*INSERT INTO audit_log/);
+  const deleting = deleteItem(env, { path: 'src/content/team/rae-rook.json', message: 'Remove Rae Rook' }, 'linzi@soardcharity.com');
+  await g.reached;
+  const during = await rename(env, { collection: 'team', from: 'sam-sole', to: 'rae-rook' }, 'linzi@soardcharity.com');
+  assert.deepEqual([during.status, during.body.error], [409, '“rae-rook” is being deleted on People right now. Pick another address.']);
+  g.open();
+  await deleting;
+  const after = await rename(env, { collection: 'team', from: 'sam-sole', to: 'rae-rook' }, 'linzi@soardcharity.com');
+  assert.deepEqual([after.status, after.body.error], [409, '“rae-rook” was someone’s address on People, and History keeps their versions under it. Pick another.']);
+  assert.ok(await rec('sam-sole'), 'Sam keeps the address they had');
+  // ...and a delete while a rename holds them is said as a change on People, as before
+  await env.DB.prepare('INSERT INTO advisory_add_holds (key, at) VALUES (?, ?)').bind('edit:sam-sole', Date.now()).run();
+  await assert.rejects(deleteItem(env, { path: 'src/content/team/sam-sole.json', message: 'x' }, 'linzi@soardcharity.com'),
+    (e) => e.status === 409 && e.message === 'Someone is changing this person on People right now (their web address, or a delete). Try again in a moment.');
+});
+
+test('the database not answering when a press, a rename or a People delete takes its hold: said in words, never "D1_ERROR", and never "stopped partway" when nothing started', async () => {
+  const { rename, onRequestPost: renamePost } = await import('../functions/api/rename-content.js');
+  const { deleteItem, onRequestPost: deletePost } = await import('../functions/api/delete-content.js');
+  await person('hal-held', { name: 'Hal Held', group: 'team' }, 'hal@x.org');
+  const app = await applied('Ivy Hold', 'ivy@x.org');
+  const key = (await plan(app.id)).key;
+  const real = env.DB.prepare.bind(env.DB);
+  const fault = (re) => { let n = 1; env.DB.prepare = (sql) => (re.test(sql) && n-- > 0 ? { bind: () => ({ run: async () => { throw new Error('D1_ERROR: qa fault'); }, first: async () => { throw new Error('D1_ERROR: qa fault'); }, all: async () => { throw new Error('D1_ERROR: qa fault'); } }) } : real(sql)); };
+  fault(/INSERT OR IGNORE INTO advisory_add_holds/);
+  const r = await add(app.id, 'new', key);
+  env.DB.prepare = real;
+  assert.equal(r.error, 'The site’s database didn’t answer just now, so nobody was added. Press Add to Advisory Board again in a moment.');
+  assert.equal(await rec('ivy-hold'), null, 'nobody added');
+  assert.equal((await add(app.id, 'new')).success, true, 'the next press adds them');
+  fault(/INSERT OR IGNORE INTO advisory_add_holds/);
+  const rn = await rename(env, { collection: 'team', from: 'hal-held', to: 'hal-new' }, 'linzi@soardcharity.com');
+  env.DB.prepare = real;
+  assert.deepEqual([rn.status, rn.body.error], [503, 'The site’s database didn’t answer just now, so the address wasn’t changed. Try again in a moment.']);
+  assert.ok(await rec('hal-held'));
+  fault(/INSERT OR IGNORE INTO advisory_add_holds/);
+  await assert.rejects(deleteItem(env, { path: 'src/content/team/hal-held.json', message: 'x' }, 'linzi@soardcharity.com'),
+    (e) => e.status === 503 && e.message === 'The site’s database didn’t answer just now, so nobody was deleted. Try again in a moment.');
+  env.DB.prepare = real;
+  assert.ok(await rec('hal-held'));
+  // ...and any other step that stops the endpoints before anything changed: words, never D1's own
+  const req = (url, body) => ({ env, request: new Request(`https://site.test${url}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), data: { userEmail: 'linzi@soardcharity.com' }, waitUntil: () => {} });
+  // (the delete runs in one batch with the copy History keeps of it: failed as D1 fails a batch, whole)
+  await env.DB.exec("CREATE TRIGGER qa_no_delete BEFORE DELETE ON team BEGIN SELECT RAISE(ABORT, 'D1_ERROR: qa fault'); END");
+  const d = await deletePost(req('/api/delete-content', { path: 'src/content/team/hal-held.json', message: 'x' }));
+  await env.DB.exec('DROP TRIGGER qa_no_delete');
+  assert.deepEqual([d.status, (await d.json()).error], [500, 'Nothing was deleted: the site’s database didn’t answer just now. Try again in a moment.']);
+  assert.ok(await rec('hal-held'));
+  fault(/^SELECT slug FROM team WHERE slug = \?$/);
+  const n = await renamePost(req('/api/rename-content', { collection: 'team', from: 'hal-held', to: 'hal-new' }));
+  env.DB.prepare = real;
+  assert.deepEqual([n.status, (await n.json()).error], [500, 'The address wasn’t changed: the site’s database didn’t answer just now. Try again in a moment.']);
+  // (History that can't be looked at stops the rename too: never taken as nobody's)
+  fault(/FROM content_versions WHERE collection = 'team'/);
+  const h = await renamePost(req('/api/rename-content', { collection: 'team', from: 'hal-held', to: 'hal-new' }));
+  env.DB.prepare = real;
+  assert.equal(h.status, 500);
+  assert.ok(await rec('hal-held'));
+  assert.equal(await rec('hal-new'), null);
+});
+
+test('a delete that stops, of an application whose headshot became their People photo, says only that it didn’t finish', async () => {
+  const a = await applied('Pia Photo', 'pia@x.org');
+  assert.equal((await add(a.id, 'new')).success, true);
+  const real = env.DB.prepare.bind(env.DB);
+  const throwing = { bind: () => ({ run: async () => { throw new Error('D1_ERROR: busy'); } }) };
+  env.DB.prepare = (sql) => (/^DELETE FROM advisory_applications WHERE id = \?$|SET deleting_at = NULL/.test(sql) ? throwing : real(sql));
+  const r = await (await adminApi.onRequestPost(ctx('POST', { remove: { id: a.id } }))).json();
+  env.DB.prepare = real;
+  assert.equal(r.error, 'Deleting this application didn’t finish: it’s still here. Press Delete application again to finish it.');
+  assert.ok((await rec('pia-photo'))?.photo, 'still their photo on People');
+});
+
+test('someone on People matched only by the web address a new record would take is said as that, never as a name like theirs', async () => {
+  await person('pat-newman', { name: 'Zed Other', group: 'advisory' }, 'zo@x.org');
+  const p = await plan((await applied('Pat Newman', 'pn@x.org')).id);
+  assert.deepEqual([p.kind, p.person?.slug, p.byAddress], ['choose', 'pat-newman', true]);
+  await person('jo-ames', { name: 'Jo Ames', group: 'advisory' }, 'jo@x.org');
+  const q = await plan((await applied('Jo Ames', 'jo2@x.org')).id);
+  assert.deepEqual([q.kind, q.person?.slug, q.byAddress], ['choose', 'jo-ames', undefined]);
+});
+
+test('greetings, round fifteen: a family name in parts with no first name is greeted by the title and the whole name, never "Thank you, De"; couples with a title and a family name on the second; initials typed against a name before a comma or O’; degrees with a dot inside; fillers in brackets; nothing guessed', async () => {
+  const { greetName } = await import('../functions/api/_advisory-form.js');
+  for (const [n, g] of [
+    ['Mr. and Mrs. St. James', ''] /* r20: two people, or someone not named ("and"): no name */, ['St. James, Rev.', ''] /* r20: initials or a word with a full stop: no name */, ['Mr. and Mrs. De La Cruz', ''] /* r20: two people, or someone not named ("and"): no name */, ['Mrs. De La Cruz', ''] /* r20: "De" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */,
+    ['Van Dyke, Dr.', ''] /* r20: a comma: no name */, ['Van Dyke, Mrs.', ''] /* r20: a comma: no name */, ['Mrs. Van Dyke', ''] /* r20: "Van" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['MR. AND MRS. QUILL', ''] /* r20: two people, or someone not named ("and"): no name */, ['mr. and mrs. quill', ''] /* r20: two people, or someone not named ("and"): no name */,
+    // (no title: a family name in parts alone, or a first name that may run on, is greeted without a name)
+    ['De La Cruz', ''], ['St. James', ''], ['De La Cruz, M.', ''], ['Van Dyke, J.', ''], ['Van Dyke, Jordan T. Jr.', ''], ['J. Van Dyke', ''], ['La Donna Brown', ''], ['Le Thi Hoa', ''],
+    ['J. De La Cruz', ''] /* r20: initials or a word with a full stop: no name */, ['Van Morrison', ''] /* r20: "Van" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['Del Taylor', ''] /* r20: "Del" isn't on the given-names list (a title it doesn't know, a short form, a family name, or not a name): no name */, ['Maria De La Cruz', ''] /* r20: more than a title and three words (a title it doesn't know, of more than one word, among them): no name */,
+    // (couples)
+    ['T. J. & Amy Quill', ''] /* r20: two people ("&" or "+"): no name */, ['Jordan & Dr. Quill', ''] /* r20: two people ("&" or "+"): no name */, ['Jordan & Mrs. Quill', ''] /* r20: two people ("&" or "+"): no name */, ['Jordan Quill & Mrs. Lee', ''] /* r20: two people ("&" or "+"): no name */,
+    ['Quill, Jordan & Dr. Amy', ''] /* r20: two people ("&" or "+"): no name */, ['Quill, Jordan & Lee, Amy', ''], ['Jordan & Amy Quill', ''] /* r20: two people ("&" or "+"): no name */,
+    // (initials typed against the name)
+    ['J.K.Rowling, PhD', ''] /* r20: a comma: no name */, ['J.K.Rowling, Jr.', ''] /* r20: a comma: no name */, ['T.J.Brooks, CPA', ''] /* r20: a comma: no name */, ["T.J.O'Brien", ''] /* r20: initials or a word with a full stop: no name */, ["A.J.D'Souza", ''] /* r20: initials or a word with a full stop: no name */,
+    // (degrees with a dot inside, and no full stop at the end)
+    ['Jordan Ames, M.Ed', 'Jordan'], ['Jordan Ames, M.Div', 'Jordan'], ['Jordan Ames, M.Sc', 'Jordan'], ['Jordan Ames M.Ed', 'Jordan'], ['Jordan Ames, M.Arch', 'Jordan'], ['Jordan March', 'Jordan']]) {
+    assert.equal(greetName({ fullName: n }), g, n);
+  }
+  for (const [pref, g] of [['N.A.', 'Jordan'], ['N.A', 'Jordan'], ['n.a', 'Jordan'], ['n.a.', 'Jordan'], ['(none)', 'Jordan'], ['[none]', 'Jordan'], ['-none-', 'Jordan'], ['-', 'Jordan'],
+    ['j.j.', 'Jordan'] /* r20: initials or a word with a full stop in the name they go by: set aside, their full name's "Jordan" */, ['d.j.', 'Jordan'] /* r20: initials or a word with a full stop in the name they go by: set aside, their full name's "Jordan" */, ['Jo,', 'Jordan'] /* r20: a comma in the name they go by: set aside, their full name's "Jordan" */, ['(Jo)', 'Jordan'] /* r20: brackets or quotes in the name they go by: set aside, their full name's "Jordan" */, ['"Jo"', 'Jordan'] /* r20: brackets or quotes in the name they go by: set aside, their full name's "Jordan" */, ['Nil', 'Jordan'] /* r20: "Nil" isn't on the given-names list (a word as often as a name): set aside, their full name's "Jordan" */]) {
+    assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: pref }), g, pref);
+  }
+  // ...and a degree with a dot inside is never made part of a new record's address
+  const app = await applied('Jordan Ames M.Ed', 'jam.ed@x.org');
+  assert.equal((await plan(app.id)).slug, 'jordan-ames');
+  // ...and the thank-you's copy reads as one sentence: the title and name, one full stop
+  const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
+  // (r20: two people and titles: no name; a comma in the name they go by: set aside, their full name's first name)
+  assert.equal(applicantEmail(await applied('Mr. and Mrs. St. James', 'stj@x.org')).text.split('\n')[0], 'Thank you.');
+  assert.equal(applicantEmail(await applied('Jordan Ames', 'jo.pref@x.org', { preferredName: 'Jo,' })).text.split('\n')[0], 'Thank you, Jordan.');
+});
+
+// ─── Round 16 ───────────────────────────────────────────────────────
+
+test('round 16: a People delete whose first read doesn’t answer stops: nothing deleted, never gone with nothing kept in History and its address free', async () => {
+  const { onRequestPost: deletePost } = await import('../functions/api/delete-content.js');
+  await person('del-read', { name: 'Del Read', group: 'advisory' }, 'dr@x.org');
+  const real = env.DB.prepare.bind(env.DB);
+  let n = 1;
+  env.DB.prepare = (sql) => (/^SELECT data FROM team WHERE slug = \?$/.test(sql) && n-- > 0 ? { bind: () => ({ first: async () => { throw new Error('D1_ERROR: qa fault'); } }) } : real(sql));
+  const d = await deletePost({ env, request: new Request('https://site.test/api/delete-content', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'src/content/team/del-read.json', message: 'x' }) }), data: { userEmail: 'linzi@soardcharity.com' }, waitUntil: () => {} });
+  env.DB.prepare = real;
+  assert.deepEqual([d.status, (await d.json()).error], [500, 'Nothing was deleted: the site’s database didn’t answer just now. Try again in a moment.']);
+  assert.ok(await rec('del-read'), 'still on People');
+  assert.equal(await emailOf('del-read'), 'dr@x.org');
+});
+
+test('round 16: a rename, or a second delete, of someone being deleted on People is told they’re being deleted', async () => {
+  const { rename } = await import('../functions/api/rename-content.js');
+  const { deleteItem } = await import('../functions/api/delete-content.js');
+  await person('dee-gone', { name: 'Dee Gone', group: 'advisory' }, 'dg@x.org');
+  const g = gate(/^\s*INSERT INTO audit_log/);
+  const deleting = deleteItem(env, { path: 'src/content/team/dee-gone.json', message: 'Remove Dee Gone' }, 'linzi@soardcharity.com');
+  await g.reached;
+  const r = await rename(env, { collection: 'team', from: 'dee-gone', to: 'dee-new' }, 'linzi@soardcharity.com');
+  assert.deepEqual([r.status, r.body.error], [409, 'This person is being deleted on People right now, so their address wasn’t changed.']);
+  await assert.rejects(deleteItem(env, { path: 'src/content/team/dee-gone.json', message: 'x' }, 'linzi@soardcharity.com'),
+    (e) => e.status === 409 && e.message === 'This person is being deleted on People right now, in another tab or by someone else.');
+  g.open();
+  await deleting;
+  assert.equal(await rec('dee-gone'), null);
+});
+
+test('round 16: a press that hasn’t written anything when the database stops answering (its hold on the People record, a read) says nobody was added', async () => {
+  await person('hal-hold', { name: 'Hal Hold', group: 'advisory' }, 'hh@x.org');
+  const app = await applied('Hal Hold', 'hal.new@x.org');
+  const key = (await plan(app.id)).key;
+  const real = env.DB.prepare.bind(env.DB);
+  const throwing = { bind: () => ({ run: async () => { throw new Error('D1_ERROR: qa fault'); }, first: async () => { throw new Error('D1_ERROR: qa fault'); }, all: async () => { throw new Error('D1_ERROR: qa fault'); } }) };
+  const NOBODY = 'The site’s database didn’t answer just now, so nobody was added. Press Add to Advisory Board again in a moment.';
+  // (the third hold is the People record's: the application's and its email's come first)
+  let n = 0;
+  env.DB.prepare = (sql) => (/INSERT OR IGNORE INTO advisory_add_holds/.test(sql) && ++n === 3 ? throwing : real(sql));
+  const r = await add(app.id, 'same', key);
+  env.DB.prepare = real;
+  assert.equal(r.error, NOBODY);
+  // ...and a read inside the press, before it writes
+  let m = 1;
+  env.DB.prepare = (sql) => (/^SELECT data FROM team WHERE slug = \?$/.test(sql) && m-- > 0 ? throwing : real(sql));
+  const r2 = await add(app.id, 'same', key);
+  env.DB.prepare = real;
+  assert.equal(r2.error, NOBODY);
+  assert.ok(!(await getAdvisoryApplication(env.DB, app.id)).personSlug, 'nothing linked');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM advisory_add_holds').first()).n, 0, 'nothing left held');
+  assert.equal((await add(app.id, 'same')).success, true, 'the next press adds them');
+});
+
+test('round 16: names. A couple after a family name of more than one word; degrees with a dot inside that aren’t on any list; a couple’s second title written last name first; letters after a first name typed all in capitals', async () => {
+  const { readName, greetName } = await import('../functions/api/_advisory-form.js');
+  const among = (p) => [p.person?.slug, ...(p.others || []).map((o) => o.slug)];
+  let k = 0;
+  const box = async (n) => plan((await applied(n, `r16.${++k}@x.org`)).id);
+  // A couple after the comma: the other one asked about, by their name with the family name
+  await person('jose-garcia-lopez', { name: 'Jose Garcia Lopez', group: 'advisory' }, 'jgl@x.org');
+  await person('jane-van-buren', { name: 'Jane Van Buren', group: 'advisory' }, 'jvb@x.org');
+  for (const [n, slug] of [['Garcia Lopez, Maria & Jose', 'jose-garcia-lopez'], ['Garcia Lopez, Maria and Jose', 'jose-garcia-lopez'], ['Van Buren, Martin & Jane', 'jane-van-buren']]) {
+    const p = await box(n);
+    assert.equal(p.kind, 'choose', n);
+    assert.ok(among(p).includes(slug), `${n}: ${among(p)}`);
+  }
+  // Degrees written with a dot inside: letters, never split as initials, the name kept as typed
+  await person('jordan-ames', { name: 'Jordan Ames', group: 'advisory' }, 'ja@x.org');
+  for (const d of ['M.Eng', 'B.Eng', 'B.Arch', 'M.Tech', 'B.Tech', 'B.Com', 'M.Com', 'M.Fin', 'B.Pharm', 'M.Pharm', 'B.Des', 'M.Sci']) {
+    for (const n of [`Jordan Ames ${d}`, `Jordan Ames, ${d}`]) {
+      assert.equal(readName(n).shown, n, n);
+      // (r20: letters after the name, with a comma or not, greeted past only when the file knows them: M.Eng, B.Arch, B.Pharm)
+      assert.equal(greetName({ fullName: n }), !['M.Eng', 'B.Eng', 'B.Arch', 'B.Pharm', 'M.Pharm'].includes(d) ? '' : 'Jordan', n);
+      const p = await box(n);
+      assert.deepEqual([p.kind, p.person?.slug], ['choose', 'jordan-ames'], n);
+    }
+  }
+  // ...and two people with the same letters are never taken for each other
+  await person('dana-amesae', { name: 'Dana Amesae M.Eng', group: 'advisory' }, 'da@x.org');
+  assert.equal((await box('Dana Smith M.Eng')).kind, 'new');
+  // (initials typed against a name only where it starts: "J.Ames", "F.Scott Fitzgerald"; a family name in parts typed
+  // together stays a name)
+  // (r20: initials: no name)
+  assert.deepEqual([greetName({ fullName: 'J.Ames' }), greetName({ fullName: 'F.Scott Fitzgerald' }), readName('Mary Jo St.James').words.join(' ')], ['', '', 'Mary Jo St.James']);
+  // A couple's second title, written last name first, kept in the name a new record takes
+  assert.equal(readName('Rowe, Jordan & Dr. Amy').shown, 'Jordan & Dr. Amy Rowe');
+  assert.equal(readName('Rowe, Dr. Jordan & Dr. Amy').shown, 'Dr. Jordan & Dr. Amy Rowe');
+  assert.equal(greetName({ fullName: 'Rowe, Jordan & Dr. Amy' }), ''); // (r20: two people: no name)
+  assert.equal((await box('Roe, Jordan & Dr. Amy')).asName, 'Jordan & Dr. Amy Roe');
+  // Letters after a first name typed all in capitals or small letters: at the end, never in the middle
+  for (const [n, shown] of [['AMES, JORDAN MD', 'JORDAN AMES MD'], ['ames, jordan md', 'jordan ames md'], ['AMES, JORDAN MBA', 'JORDAN AMES MBA']]) {
+    assert.equal(readName(n).shown, shown, n);
+    assert.deepEqual([(await box(n)).kind, (await box(n)).person?.slug], ['choose', 'jordan-ames'], n);
+  }
+  const quill = await box('QUILL, DANA MD');
+  assert.deepEqual([quill.kind, quill.asName, quill.slug], ['new', 'DANA QUILL MD', 'dana-quill']);
+});
+
+test('round 16: someone found only by the web address a new record would take is said as that in every box: among several, and as the record a new one is added beside', async () => {
+  await person('jordan-ames', { name: 'Pat Smith', group: 'advisory' }, 'ps@x.org');
+  await person('jordan-ames-2', { name: 'Jordan Ames', group: 'advisory' }, 'ja2@x.org');
+  const p = await plan((await applied('Jordan Ames', 'ja.new@x.org')).id);
+  const all = [p.person, ...(p.others || [])];
+  assert.equal(p.kind, 'choose');
+  assert.deepEqual(all.map((x) => [x.slug, !!x.addressOnly]).sort(), [['jordan-ames', true], ['jordan-ames-2', false]]);
+  // A new person beside someone elsewhere on People who has the address their name would get: never "already a Pat Smith"
+  await person('dana-roe', { name: 'Lee Other', group: 'board' }, 'lo@x.org');
+  const q = await plan((await applied('Dana Roe', 'dana.roe@x.org')).id);
+  assert.deepEqual([q.kind, q.namesake?.slug, q.namesake?.addressOnly, q.slug], ['new', 'dana-roe', true, 'dana-roe-2']);
+});
+
+test('round 16: a rename moves the private email in the same write as the record: one failing changes nothing, and one left at the new address by nobody is never given to them', async () => {
+  const { rename } = await import('../functions/api/rename-content.js');
+  await person('em-move', { name: 'Em Move', group: 'advisory' }, 'em@x.org');
+  await env.DB.prepare("INSERT INTO reveal_board_emails (slug, email) VALUES ('em-new', 'stranger@x.org')").run();
+  const r = await rename(env, { collection: 'team', from: 'em-move', to: 'em-new' }, 'linzi@soardcharity.com');
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual([await emailOf('em-new'), await emailOf('em-move')], ['em@x.org', null]);
+  await env.DB.exec("CREATE TRIGGER qa_no_email_move BEFORE UPDATE ON reveal_board_emails BEGIN SELECT RAISE(ABORT, 'qa fault'); END");
+  await assert.rejects(rename(env, { collection: 'team', from: 'em-new', to: 'em-newer' }, 'linzi@soardcharity.com'));
+  await env.DB.exec('DROP TRIGGER qa_no_email_move');
+  assert.ok(await rec('em-new'), 'the record where it was');
+  assert.equal(await rec('em-newer'), null);
+  assert.equal(await emailOf('em-new'), 'em@x.org', 'its email with it');
+});
+
+test('round 16, greetings: couples whose second has a title and a family name in parts or letters after it; a title alone for the second, last name first; initials after "&"; degrees with dots inside; preferred names with another in brackets or long dashes', async () => {
+  const { readName, greetName } = await import('../functions/api/_advisory-form.js');
+  for (const [n, g, shown, words] of [
+    ['Jordan & Mrs. St. James', '' /* r20: two people */, 'Jordan & Mrs. St. James', 'Jordan St. James'],
+    ['Jordan & Mrs. De La Cruz', '' /* r20: two people */, 'Jordan & Mrs. De La Cruz', 'Jordan De La Cruz'],
+    ['Jordan Quill & Mrs. Van Dyke', '' /* r20: two people */, 'Jordan Quill & Mrs. Van Dyke', 'Jordan Quill'],
+    ['Jordan & Dr. Van Dyke', '' /* r20: two people */, 'Jordan & Dr. Van Dyke', 'Jordan Van Dyke'],
+    ['Quill, Jordan & Mrs. De La Cruz', '' /* r20: two people */, 'Quill, Jordan & Mrs. De La Cruz' /* r20, rule 8: the second has a family name of their own, so the order typed */, 'Jordan Quill'],
+    ['Jordan & Mrs. Quill MD', '' /* r20: two people */, 'Jordan & Mrs. Quill MD', 'Jordan Quill'],
+    ['Jordan & Mrs. Quill Jr.', '' /* r20: two people */, 'Jordan & Mrs. Quill Jr.', 'Jordan Quill'],
+    ['Quill, Jordan & Mrs.', '' /* r20: two people */, 'Jordan & Mrs. Quill', 'Jordan Quill'],
+    ['Quill, Jordan & Dr. Amy', '' /* r20: two people */, 'Jordan & Dr. Amy Quill', 'Jordan Quill'],
+    ['Jordan & T. J.', '' /* r20: two people */, 'Jordan & T. J.', 'Jordan'],
+    ['Jordan Quill & T. J.', '' /* r20: two people */, 'Jordan Quill & T. J.', 'Jordan Quill'],
+    ['Quill, Jordan & T J', '' /* r20: two people */, 'Jordan & T J Quill', 'Jordan Quill'],
+    ['Jordan Ames M.Sc.Ed', '' /* r20: letters the file doesn't know */, 'Jordan Ames M.Sc.Ed', 'Jordan Ames'],
+    ['Jordan Ames M.Ed.S', '' /* r20: letters the file doesn't know */, 'Jordan Ames M.Ed.S', 'Jordan Ames'],
+    ['Jordan Ames Dr.PH', 'Jordan', 'Jordan Ames Dr.PH', 'Jordan Ames'],
+    ['Jordan Ames D.Ed', '' /* r20: letters the file doesn't know */, 'Jordan Ames D.Ed', 'Jordan Ames'],
+    ['Ames, Jordan M.Eng', '' /* r20: a comma */, 'Jordan Ames M.Eng', 'Jordan Ames'],
+    // (titles typed against a name still set apart where a name starts: at the start, after a comma, after "&")
+    ['Dr.Jordan Ames', '' /* r20: a title typed against the name is no word of letters */, 'Dr. Jordan Ames', 'Jordan Ames'], ['Quill, Dr.Jordan', '' /* r20: a comma */, 'Dr. Jordan Quill', 'Jordan Quill'],
+    ['Jordan & Dr.Amy Quill', '' /* r20: two people */, 'Jordan & Dr. Amy Quill', 'Jordan Quill']]) {
+    const r = readName(n);
+    assert.deepEqual([greetName({ fullName: n }), r.shown, r.words.join(' ')], [g, shown, words], n);
+  }
+  for (const [pref, g] of [['Jo (Joanna)', 'Jordan'] /* r20: brackets or quotes in the name they go by: set aside, their full name's "Jordan" */, ['Bob (Robert)', 'Jordan'] /* r20: brackets or quotes in the name they go by: set aside, their full name's "Jordan" */, ['J.J. (Jordan)', 'Jordan'] /* r20: initials or a word with a full stop in the name they go by: set aside, their full name's "Jordan" */, ['—none—', 'Jordan'], ['–none–', 'Jordan'], ['— none —', 'Jordan'], ['(Jo)', 'Jordan'] /* r20: brackets or quotes in the name they go by: set aside, their full name's "Jordan" */, ['[none]', 'Jordan'], ['-none-', 'Jordan'], ['Jo,', 'Jordan'] /* r20: a comma in the name they go by: set aside, their full name's "Jordan" */]) {
+    assert.equal(greetName({ fullName: 'Jordan Ames', preferredName: pref }), g, pref);
+  }
+  // ...and through the real copy: one sentence, the right name
+  const { applicantEmail } = await import('../functions/api/_advisory-applications.js');
+  // (r20: two people: no name; brackets in the name they go by: set aside, their full name's first name)
+  assert.equal(applicantEmail(await applied('Jordan & Mrs. St. James', 'stj2@x.org')).text.split('\n')[0], 'Thank you.');
+  assert.equal(applicantEmail(await applied('Jordan Ames', 'jo.br@x.org', { preferredName: 'Jo (Joanna)' })).text.split('\n')[0], 'Thank you, Jordan.');
+  // (a couple's other one with a family name of their own is matched by it on People too: nothing to match a title and
+  // a family name alone with)
+  await person('amy-de-la-cruz', { name: 'Amy De La Cruz', group: 'advisory' }, 'adlc@x.org');
+  await person('jordan-st-james', { name: 'Jordan St. James', group: 'advisory' }, 'jsj@x.org');
+  const p = await plan((await applied('Jordan & Mrs. St. James', 'stj3@x.org')).id);
+  assert.deepEqual([p.kind, p.person?.slug], ['choose', 'jordan-st-james']);
 });

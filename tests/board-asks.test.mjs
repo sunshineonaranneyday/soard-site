@@ -410,7 +410,8 @@ test('the presenter sees a meeting ahead before it’s shared (their items only)
   assert.deepEqual(x.myAsks.map((a) => [a.itemId, a.status, a.due]), [['i_fin', 'asked', new Date(easternAt('2026-11-04', '12:00')).toISOString()]]);
   const saved = await saveLineNote(env, { meetingId: 'm_nov5', itemId: 'i_fin', key: 'act|Income/Store Income', line: 'Store Income', text: 'Partly Sunny closed in March.' }, { member: sam });
   assert.deepEqual(saved.notes.map((n) => [n.key, n.text, n.by]), [['act|Income/Store Income', 'Partly Sunny closed in March.', 'Sam Ortiz']]);
-  await assert.rejects(saveLineNote(env, { meetingId: 'm_nov5', itemId: 'i_fin', key: 'act|Income/Store Income', text: 'mine now' }, { member: kim }), /Only the person presenting/);
+  // (Kim can't see Sam's item on a meeting not shared yet: it answers as not there, never as someone else's)
+  await assert.rejects(saveLineNote(env, { meetingId: 'm_nov5', itemId: 'i_fin', key: 'act|Income/Store Income', text: 'mine now' }, { member: kim }), (e) => e.status === 404 && /isn’t on the board page/.test(e.message));
   await assert.rejects(saveLineNote(env, { meetingId: 'm_nov5', itemId: 'i_fin', key: 'nope', text: 'x' }, { member: sam }), /Which line/);
   // Kim sees no notes on a meeting she can't see; the board sees them once it's shared
   assert.deepEqual((await portalExtras(env, { member: kim, meetings, today: '2026-11-03' })).lineNotes, {});
@@ -479,6 +480,41 @@ test('approved before the review went: the founder copied hears it, and no revie
   clock = easternAt('2026-11-04', '12:06');
   await run();
   assert.equal(gmail.sent.filter((m) => hdr(m, 'Subject').startsWith('Agenda for your review')).length, 0);
+});
+
+test('round 7 m3: a meeting already on the board page is never sent for the chair’s review; its review page shows it as over, and its Approve sends nothing', async () => {
+  const { listMeetings } = await import('../functions/api/_board.js');
+  const { underReview, reviewShutWhy } = await import('../functions/api/_board-asks.js');
+  const { chairReviewDay, reviewOver } = await import('../public/admin/board-shared.js');
+  // On the board page, its agenda not approved (shared before the approval rule, as the tester's Nov 30 was)
+  await meeting({ shared: true });
+  await run();
+  clock = easternAt('2026-11-04', '12:06');
+  const did = await run();
+  assert.equal(did.chair, 0, JSON.stringify(did));
+  assert.equal(gmail.sent.filter((m) => hdr(m, 'Subject').startsWith('Agenda for your review')).length, 0, 'no review email to the chair');
+  const meetings = await listMeetings(env.DB);
+  const m = meetings.find((x) => x.id === 'm_nov5');
+  // One rule (reviewOver): Board names no review, and a review link is told it's approved
+  assert.equal(typeof reviewOver, 'function', 'board-shared.js has the one rule');
+  assert.equal(reviewShutWhy(m, { today: '2026-11-04', template: null, on: true })?.why, 'approved');
+  assert.equal(chairReviewDay(m, { asks: 'on', chair: true, today: '2026-10-20' }), '', 'Board names no review for it');
+  // Its review page stays, shown as over (as an approved agenda is), with no Approve: nothing approved, nobody named
+  assert.equal(underReview(meetings, '2026-11-04', null)?.id, 'm_nov5', 'its review page is still there');
+  const x = await portalExtras(env, { member: ALEX, meetings, today: '2026-11-04' });
+  assert.deepEqual([x.review?.meeting?.id, x.review?.over, x.review?.approvedAt, x.review?.approvedBy, x.reviewShut], ['m_nov5', true, '', '', null]);
+  // Its Approve never shares it or emails the board again: said, in words, and nothing is kept as approved
+  const sent = gmail.sent.length;
+  await assert.rejects(chairApprove(env, { meetingId: 'm_nov5' }, { member: ALEX }, opts()), (e) => e.status === 409 && e.message === 'It’s on the board page already, so there’s nothing left to review.' && e.extra?.over === true);
+  assert.equal(gmail.sent.length, sent, 'nothing sent');
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) AS n FROM board_asks WHERE kind = 'chair'").first()).n, 0, 'nothing approved');
+  // What the chair can do on an approved agenda they still can: their own note
+  const n = await chairNote(env, { meetingId: 'm_nov5', itemId: 'i_fin', text: 'Ask about the CD' }, { member: ALEX });
+  assert.equal(n.notes?.i_fin?.text, 'Ask about the CD');
+  // Not on the board page: the review goes as it always has
+  await meeting({ shared: false });
+  clock = easternAt('2026-11-04', '12:10');
+  assert.equal((await run()).chair, 1);
 });
 
 test('a "looks good" reply approves; a change request waits for the founders', async () => {
@@ -566,6 +602,17 @@ test('test mode: every email once, to the asker alone, its subject saying who it
   await meeting();
   assert.equal((await run()).asked, 2);
   assert.equal(hdr(gmail.sent.at(-1), 'Cc'), 'Jane Doe <jane@soardcharity.com>');
+});
+
+test('round 7: test mode previews what will really happen: no chair’s review, nor its approval, for a meeting already on the board page', async () => {
+  await setMode('test');
+  await meeting({ shared: true });
+  const did = await run();
+  const subjects = gmail.sent.map((m) => hdr(m, 'Subject'));
+  assert.ok(!subjects.some((x) => /Agenda for your review/.test(x)), `no review, no approval of it (${subjects.join(' | ')})`);
+  assert.equal(did.tests, 6, 'the other six, as they will go');
+  // (the chair's question can still go from the review page: still shown)
+  assert.equal(subjects.filter((x) => x === '[Test → Sam Ortiz, Alex Rivera & Jane Doe copied] Re: Q4 2026 Board Meeting: your Financial report, due Wed, Nov 4 at noon').length, 2, 'past due (the chair copied) and the chair’s question');
 });
 
 test('off: nothing at all, and the chair’s question says so', async () => {
@@ -797,7 +844,8 @@ test('a motion is kept with its item, written by who presents it, and the chair�
   await meeting();
   const r = await saveMotion(env, 'm_nov5', 'i_fin', 'Move to approve the\n2027 budget as presented.', { member: SAM });
   assert.equal(r.motion, 'Move to approve the 2027 budget as presented.');
-  await assert.rejects(saveMotion(env, 'm_nov5', 'i_fin', 'Mine', { member: { slug: 'kim-park', name: 'Kim Park', email: 'kim.board@example.net' } }), (e) => e.status === 403);
+  // (Kim can't see Sam's item before the meeting is shared: not there for her)
+  await assert.rejects(saveMotion(env, 'm_nov5', 'i_fin', 'Mine', { member: { slug: 'kim-park', name: 'Kim Park', email: 'kim.board@example.net' } }), (e) => e.status === 404);
   assert.equal((await getMeeting(env.DB, 'm_nov5')).sections[1].items.find((x) => x.id === 'i_fin').motion, 'Move to approve the 2027 budget as presented.');
   await postReport(env.DB, { meetingId: 'm_nov5', itemId: 'i_gov', words: 'Nothing new to report this time.', name: 'Kim Park' });
   const m = await getMeeting(env.DB, 'm_nov5');

@@ -314,7 +314,8 @@ try {
   const steps = await kim.$$eval('#makeovers .lc-step', (l) => l.map((e) => `${e.querySelector('b').textContent} ${e.querySelector('span').textContent}`));
   ok(steps.join(' | ') === '4 Applied | 1 In review | 4 Approved | 1 Awaiting funding | 1 Design | 0 Approval | 1 Mobilization | 2 Build | 2 Revealed', `every step and how many are at it (${steps.join(' | ')})`);
   ok(/^Open until /.test(await textOf(kim, '#makeovers .lc-phase.is-applying small')), 'the application’s window over its two steps');
-  ok(/5 families applying for \d{4} · 9 makeovers being built · 2 revealed/.test(await textOf(kim, '#makeovers .lc-sum')), `now in a line (${await textOf(kim, '#makeovers .lc-sum')})`);
+  // (being built is underway, Design to Build: the approved and awaiting funding said on their own, so it adds up)
+  ok(/5 families applying for \d{4} · 4 approved · 1 awaiting funding · 4 makeovers being built · 2 revealed/.test(await textOf(kim, '#makeovers .lc-sum')), `now in a line (${await textOf(kim, '#makeovers .lc-sum')})`);
   const cols = await kim.$$eval('#makeovers .lc-col .bk-col__head > span:first-child', (l) => l.map((e) => e.textContent));
   ok(cols.join(',') === 'Applying,Approved,Awaiting funding,Design,Mobilization,Build,Revealed', `a column for each step someone’s at, in the way’s order (${cols.join(', ')})`);
   ok(await kim.$eval('#makeovers .lc-board', (b) => b.scrollWidth <= b.clientWidth + 1), 'all seven fit a laptop, Revealed in view');
@@ -353,14 +354,16 @@ try {
   console.log('Home, the map');
   await openHomeMap(kim);
   const sum = await textOf(kim, '#makeovers .lc-sum');
-  ok(/5 families applying · 2 makeovers being built · 1 not chosen/.test(sum), `the season in a line (${sum})`);
+  // (the two approved haven't started: approved, never counted as being built)
+  ok(/5 families applying · 2 approved · 1 not chosen/.test(sum), `the season in a line (${sum})`);
   ok(!(await textOf(kim, '#makeovers')).includes('TEST Applicant'), 'a TEST family is never on the map');
   ok(!(await textOf(kim, '#makeovers')).includes('Sample Child'), 'nor a website test run with an ordinary name');
   const pins = await pinsNow(kim);
   await shot(kim, 'home-map-1440', '#makeovers');
   ok(pins.length > 4, `a pin for each family with a home (${pins.length})`);
   const legend = await textOf(kim, '#makeovers .apl-legend');
-  ok(/Applied\s*3/.test(legend) && /In review\s*1/.test(legend) && /Building\s*2/.test(legend) && /Not chosen\s*1/.test(legend) && /No status\s*1/.test(legend) && !/Revealed/.test(legend) && /Service area · 2 outside/.test(legend), `the key: each step’s color, how many, the area (${legend.replace(/\s+/g, ' ')})`);
+  // (the two approved haven't started: keyed Approved, as the line says them, never Building: QA round 5, m9)
+  ok(/Applied\s*3/.test(legend) && /In review\s*1/.test(legend) && /Approved\s*2/.test(legend) && !/Building/.test(legend) && /Not chosen\s*1/.test(legend) && /No status\s*1/.test(legend) && !/Revealed/.test(legend) && /Service area · 2 outside/.test(legend), `the key: each step’s color, how many, the area (${legend.replace(/\s+/g, ' ')})`);
   ok(/1 family has no home in JobTread yet/.test(legend), 'and who isn’t on the map');
   // The map opens on the area, with the family 97 miles out a tap away, and the key off the area
   const inFrame = () => kim.evaluate(() => {
@@ -402,6 +405,9 @@ try {
   await sleep(450);
   ok((await kim.$('.fm-list')) === null, 'the family takes the list’s place');
   ok(await kim.evaluate(() => document.activeElement?.classList.contains('fm-card__name')), 'the keyboard goes with them');
+  // (round 5: its way back sits inside the card, never past its edge where the card's scrolling clips it)
+  const backIn = await kim.evaluate(() => { const b = document.querySelector('.fm-card .fm-back')?.getBoundingClientRect(); const c = document.querySelector('.fm-card')?.getBoundingClientRect(); return b && c ? { past: Math.round((c.left - b.left) * 10) / 10 } : null; });
+  ok(backIn && backIn.past <= 0.5, `the way back to every family sits inside the card (${JSON.stringify(backIn)})`);
   ok((await kim.$$('.fm-map .apl-pin.is-focus')).length === 1, 'their pin stays lit');
   const cardText = await textOf(kim, '.fm-card');
   ok(/Iris Example/.test(cardText) && /Approved/.test(cardText) && /Therapy Room, Bathroom/.test(cardText) && /Roswell, Fulton County/.test(cardText) && /Inside/.test(cardText), `what they asked for and where (${cardText.replace(/\s+/g, ' ').slice(0, 120)})`);
@@ -606,8 +612,10 @@ try {
   await openHome(phone);
   await sleep(300);
   ok((await overflow(phone)) <= 0, 'nothing past the phone’s edge');
-  const phases = await phone.$$eval('#makeovers .lc-phase__n', (l) => l.map((e) => e.textContent));
-  ok(phases.join(',') === '5,9,2', `a phone’s track: how many on each stretch of the way (${phases.join(',')})`);
+  // (the same counts as the line above it: Building is the 4 being built, the approved and awaiting funding said under it,
+  // never in it: QA round 2)
+  const phases = await phone.$$eval('#makeovers .lc-phase', (l) => l.map((e) => [e.querySelector('.lc-phase__n')?.textContent.trim(), (e.querySelector('.lc-phase__also')?.textContent || '').replace(/\u00a0/g, ' ')].filter(Boolean).join(' ')));
+  ok(phases.join(',') === '5,4 4 approved · 1 awaiting funding,2', `a phone’s track: how many on each stretch of the way, as the line above counts them (${phases.join(',')})`);
   ok(await phone.$eval('#makeovers .lc-steps', (e) => getComputedStyle(e).display === 'none'), 'each step counted in its column instead');
   await shot(phone, 'home-makeovers-390', '#makeovers');
   await axe(phone, '#makeovers', 'the Makeovers card on a phone');

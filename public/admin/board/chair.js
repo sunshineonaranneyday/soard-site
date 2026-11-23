@@ -3,7 +3,8 @@
  * ===========================================================================
  * The page the board chair's review email links to (#/meetings/<id>/review): the whole agenda of the meeting ahead,
  * before the board sees it, part by part with its planned times; each item with who presents it, whether its report
- * is in (or late), the report itself and its documents. The chair approves the agenda with one button, keeps their
+ * is in (or late), the report itself and its documents. Once its review is over (approved, or on the board page
+ * already) it's shown as approved, with nothing to approve. The chair approves the agenda with one button, keeps their
  * own notes on any item (theirs and the founders' only), and sends a report back to who presents it with a question,
  * emailed from the founders' address; the answer comes back under the report.
  *
@@ -11,13 +12,14 @@
  * admins, within two weeks of the meeting once its agenda is real. The actions are /api/board-portal's 'chair-approve',
  * 'chair-note' and 'ask-presenter'.
  *
- *   ChairReview    the page (portal.js passes the pieces it draws with: Icon, Presenters, DocTiles, NotFound)
+ *   ChairReview    the page (portal.js passes the pieces it draws with: Icon, Presenters, DocTiles), or why a link
+ *                  to it doesn't open it
  *   reviewTodo     the chair's "Review the agenda" row on Home's For you, or null
  *   ChairNoteLine  the chair's own note under an item on the meeting's page
  */
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
-import { meetingName, longDate, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew } from '../board-shared.js';
+import { meetingName, longDate, shortDate, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew } from '../board-shared.js';
 import { Report, Motion } from '../board-report.js';
 import { dueText } from './review.js';
 
@@ -79,10 +81,13 @@ export function reportsLine(m, reports = []) {
   return { line: `Reports ${inNow} of ${ids.length} in`, late };
 }
 
-/** Home's For you: the chair's agenda to review, until it's approved (the chair only: the founders have Board) */
+/**
+ * Home's For you: the chair's agenda to review, until its review is over (approved, or on the board page already:
+ * functions/api/_board-asks.js reviewFor's `over`), the chair only (the founders have Board)
+ */
 export function reviewTodo(data, d) {
   const r = data.review;
-  if (!r?.meeting || r.approvedAt || data.me.admin || d.me?.seat !== 'chair') return null;
+  if (!r?.meeting || r.approvedAt || r.over || data.me.admin || d.me?.seat !== 'chair') return null;
   const m = r.meeting;
   return {
     href: `#/meetings/${encodeURIComponent(m.id)}/review`,
@@ -199,22 +204,32 @@ function AskBox({ meetingId, it, to, questions, onSent, say }) {
   </div>`;
 }
 
-/** Approve the agenda, or who approved it and when */
+const TICK = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>`;
+/**
+ * Approve the agenda, or who approved it and when; or, its review over without the chair's approval (on the board page
+ * already: functions/api/_board-asks.js reviewFor's `over`), that said plainly, with nothing to press. Everything else on
+ * the page stays as it is for an approved agenda. QA round 7, Nov 21 2026 (the lead)
+ */
 function Approve({ r, ctx, founders }) {
   const { setData, say } = ctx;
   const [busy, setBusy] = useState(false);
-  if (r.approvedAt) return html`<p class="cr-approved"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>Approved by ${first(r.approvedBy) || 'the chair'}, ${dueText(r.approvedAt)}</p>`;
+  if (r.approvedAt) return html`<p class="cr-approved">${TICK}Approved by ${first(r.approvedBy) || 'the chair'}, ${dueText(r.approvedAt)}</p>`;
+  if (r.over) return html`<p class="cr-approved">${TICK}It’s on the board page already, so there’s nothing left to review.</p>`;
   const go = async () => {
     setBusy(true);
     const j = await post({ action: 'chair-approve', meetingId: r.meeting.id });
     setBusy(false);
+    // (put on the board page meanwhile: its review is over, said in the site's words, and Approve goes)
+    if (!j.ok && j.over) { setData((dd) => withReview(dd, { over: true })); say(j.error); return; }
     if (!j.ok) { say(j.error || 'It wasn’t approved. Try again.', 'warn'); return; }
     setData((dd) => withReview(dd, { approvedAt: j.approvedAt, approvedBy: j.approvedBy }));
     // Someone else approved it first: theirs stands, and nothing goes twice
     if (j.already) { say(`${first(j.approvedBy) || 'Someone'} already approved it.`); return; }
+    // Approved, but the agenda's email to the board didn't go (Resend said no): the server's own words, what happens next
+    if (j.agenda === 'failed') { say(j.agendaError || 'The agenda is approved, but its email to the board didn’t go.', 'warn'); return; }
     say(j.agenda === 'sent' ? 'The agenda is approved and on its way to the board.'
       : j.agenda === 'waiting' ? 'The agenda is approved. The board gets it as soon as they’ve had the email on how to sign in.'
-      : `The agenda is approved. ${founders} get word by email.`);
+      : `The agenda is approved. ${founders} ${/ and /.test(founders) ? 'get' : 'gets'} word by email.`);
   };
   return html`<button type="button" class=${`bp-btn bp-btn--primary cr-approve ${busy ? 'is-busy' : ''}`} disabled=${busy} onClick=${go}>${busy ? 'Approving…' : 'Approve the agenda'}</button>`;
 }
@@ -257,20 +272,52 @@ function ReviewItem({ m, it, label, ctx, ui, r, who }) {
   </li>`;
 }
 
+/** "Monday, Nov 30" for a YYYY-MM-DD */
+const dayWords = (date) => `${weekday(date)}, ${shortDate(date).replace(/, \d{4}$/, '')}`;
+
+/**
+ * A review link that doesn't open the review says the true reason, never one for every case: the review is the
+ * chair's; the agenda's already approved (who approved it and when, and the meeting; a meeting ahead on the board page is
+ * approved); not written yet; more than two weeks off (the day it opens); the meeting was held; it isn't on the board
+ * page; or the chair's review isn't turned on yet. `data.reviewShut`: the server's word on the next meeting, the one a review is of (../../../functions/api/
+ * _board-asks.js reviewShutWhy), and while the review isn't on, the later meetings ahead it isn't on for either
+ * (`later`: one rule for every meeting ahead, QA round 7)
+ */
+function ReviewShut({ id, ctx, Icon }) {
+  const { data, d } = ctx;
+  const m = data.meetings.find((x) => x.id === id) || null;
+  const r = data.reviewShut;
+  const shut = r?.meetingId === id ? r : r?.later?.includes(id) ? { meetingId: id, why: 'off' } : null;
+  const say = (title, line) => html`<a class="bp-back" href="#/"><${Icon} name="back" size=${18} />Home</a>
+    <div class="bp-card bp-empty"><h1 class="bp-h2">${title}</h1><p class="bp-muted">${line}</p>
+      ${m ? html`<p class="cr-shut__go"><a class="bp-btn" href=${`#/meetings/${encodeURIComponent(m.id)}`}>See the meeting</a></p>` : html`<p class="cr-shut__go"><a class="bp-btn" href="#/meetings">See the meetings</a></p>`}</div>`;
+  if (!data.me.admin && d.me?.seat !== 'chair') return say('This is the chair’s review', 'Only the board’s chair reviews an agenda before the board sees it.');
+  // (nothing ahead reaches the board page before its agenda is approved: one there is approved)
+  const held = m && (m.date < data.today || m.live?.endedAt);
+  if (shut?.why === 'approved' || (m && !held && !shut)) {
+    const when = dayShort(shut?.approvedAt);
+    return say('This agenda is already approved', shut?.approvedBy ? `${shut.approvedBy} approved it${when ? ` on ${when}` : ''}, so there’s nothing left to review.` : 'It’s on the board page, so there’s nothing left to review.');
+  }
+  if (shut?.why === 'draft') return say('This agenda isn’t written yet', 'The chair’s review opens once SOARD has written it.');
+  if (shut?.why === 'early') return say('This agenda isn’t open for review yet', `The chair’s review opens ${dayWords(shut.opens)}, two weeks before the meeting${shut.draft ? ', once its agenda is written' : ''}.`);
+  if (shut?.why === 'off') {
+    const founders = andNames((data.admins || []).map(first).filter(Boolean)) || 'SOARD';
+    return say('This agenda isn’t open for review', `The chair’s review isn’t turned on yet, so ${founders} ${founders === 'SOARD' || (data.admins || []).length === 1 ? 'approves' : 'approve'} agendas for now.`);
+  }
+  if (held) return say('This meeting has been held', `The chair reviews an agenda before its meeting. This one met on ${dayWords(m.date)}.`);
+  return say('This meeting isn’t on the board page', 'The link may be an old one. Every meeting the board can see is in Meetings.');
+}
+
 /**
  * The chair's review: the meeting, how many reports are in and who's late, Approve, then the agenda part by part.
  * `ui`: the board page's own pieces (Icon, Presenters, DocTiles, NotFound)
  */
 export function ChairReview({ id, ctx, ui }) {
   const { data, d } = ctx;
-  const { Icon, NotFound } = ui;
+  const { Icon } = ui;
   const r = data.review;
   useEffect(() => { document.title = r?.meeting ? `Review: ${meetingName(r.meeting)} · SOARD Board` : 'Review · SOARD Board'; }, [r?.meeting?.id]);
-  if (!r?.meeting || r.meeting.id !== id) {
-    if (!data.me.admin && d.me?.seat !== 'chair') return html`<${NotFound} />`;
-    return html`<a class="bp-back" href="#/"><${Icon} name="back" size=${18} />Home</a>
-      <div class="bp-card bp-empty"><h1 class="bp-h2">This agenda isn’t open for review</h1><p class="bp-muted">The chair’s review opens two weeks before a meeting, once its agenda is written.</p></div>`;
-  }
+  if (!r?.meeting || r.meeting.id !== id) return html`<${ReviewShut} id=${id} ctx=${ctx} Icon=${Icon} />`;
   const m = r.meeting;
   const plan = sectionPlan(m);
   const labels = new Map(agendaItems(m).map((x) => [x.id, x.label]));

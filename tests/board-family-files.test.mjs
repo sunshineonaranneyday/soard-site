@@ -54,6 +54,8 @@ beforeEach(async () => {
     'CREATE TABLE IF NOT EXISTS community (slug TEXT PRIMARY KEY, name TEXT, data TEXT)',
     'CREATE TABLE IF NOT EXISTS team (slug TEXT PRIMARY KEY, name TEXT, "group" TEXT, order_num INTEGER, data TEXT NOT NULL, updated_at TEXT)',
   ]) await DB.exec(sql);
+  /* r9: a member's looks are kept only at an address that's theirs on People (./_member-write.js ownRow), so Kim is on People */
+  await DB.prepare("INSERT OR IGNORE INTO team (slug, name, \"group\", data) VALUES ('kim-park', 'Kim Park', 'board', '{}')").run();
   await applicant('acctIris01', 'Iris Example', { photo: 'https://cdn.jobtread.com/fKid?size=256' });
   await applicant('acctTest01', 'TEST Applicant');
   await applicant('acctRun001', 'Sample Child');
@@ -417,7 +419,9 @@ describe('deleting an application', () => {
     const now = new Date().toISOString();
     await db.prepare("INSERT INTO applications (id, year, child_name, answers, files, jt_account_id, jt_state, status, submitted_at, updated_at) VALUES ('app-del', '2027', 'Iris Example', '{}', '{}', 'acctIris01', '{}', 'done', ?, ?)").bind(now, now).run();
     await writeState(db, 'family-files:acctIris01', { at: Date.now(), pdf: { id: 'fPdf', url: 'https://cdn.jobtread.com/fPdf' } });
-    await db.prepare("INSERT INTO team (slug, name, \"group\", data) VALUES ('kim-park', 'Kim', 'board', '{}')").run().catch(() => {});
+    /* r9: on People, a table of its own made first (a look is kept only at an address that's theirs on People) */
+    await db.exec('CREATE TABLE IF NOT EXISTS team (slug TEXT PRIMARY KEY, name TEXT, "group" TEXT, order_num INTEGER, data TEXT NOT NULL, updated_at TEXT)');
+    await db.prepare("INSERT INTO team (slug, name, \"group\", data) VALUES ('kim-park', 'Kim', 'board', '{}')").run();
     await noteFamilyOpen({ DB: db }, member, new Request('https://x.test/'), 'acctIris01', 'application', 'Iris Example');
     assert.equal((await db.prepare("SELECT sub FROM board_activity WHERE ref = 'acctIris01'").first()).sub, 'application|Iris Example');
 

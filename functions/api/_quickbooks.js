@@ -539,7 +539,9 @@ const leavesOf = (n) => (n.kind === 'acct' ? [n] : n.kind !== 'section' ? [] : n
 
 /**
  * Where the year's money came from, by category: Income's and Other Income's accounts grouped (Donations, Store sales,
- * Gala, In kind, Grants, then any other account by its name), each with the accounts in it, largest first
+ * Gala, In kind, Grants, then any other account by its name), each with the accounts in it, largest first. A category
+ * below zero (refunds, discounts named for nothing else) is kept as it is, so the categories add up to the revenue
+ * (QA round 9: one dropped made the shares beside the revenue add up to 102%; board/money.js mixOf says it apart)
  */
 export function sourcesOf(report) {
   const tree = treeOf(report?.Rows?.Row);
@@ -552,7 +554,7 @@ export function sourcesOf(report) {
     if (leaf.amount) c.accounts.push(accountName(leaf.label));
     by.set(k.key, c);
   }
-  return [...by.values()].map((c) => ({ ...c, amount: round2(c.amount) })).filter((c) => c.amount > 0).sort((a, b) => b.amount - a.amount);
+  return [...by.values()].map((c) => ({ ...c, amount: round2(c.amount) })).filter((c) => c.amount !== 0).sort((a, b) => b.amount - a.amount);
 }
 
 // Spending that never left the bank: donated goods and services the books take in and use at the same value (SOARD's

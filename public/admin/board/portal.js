@@ -27,14 +27,14 @@
  */
 
 import { h, htm, render, useState, useEffect, useRef, useMemo } from '../vendor.js';
-import { Icon, PageNav, Avatar, Faces, DateTile, WindowTile, windowStart, SecHead, More, kept, keep, useKept, hueOf, noon, partsOf, together, nbw, mapsHref } from './parts.js';
+import { Icon, PageNav, Avatar, Faces, DateTile, WindowTile, windowStart, SecHead, More, openFoldsAround, kept, keep, useKept, hueOf, noon, partsOf, together, nbw, mapsHref } from './parts.js';
 import { pageKept, useFirstPage, FileBadge, Cover, coverWord } from './covers.js';
 import { OrgFacts, factsOf, factHay, FORM_PAPERS } from './facts.js';
 import { viewerLink, openViewer, sizeText } from '../file-viewer.js';
 import {
   RSVP, DOC_KINDS, FILE_KINDS, meetingName, longDate, shortDate, timeRange, clock, money, plural, noteBlocks, liveLines, attendanceCounts, isDate, todayEastern, monthName, answerOf, fileTitle,
   videoOf, isHeic, asJpeg, isLive, agendaItems, tallyText, unzip, quorumFor, itemFiles, minutesFileOf, presentersOf, sectionPlan, sectionClock, clockText, formatOf, docTitle, itemDocs, signsAs, initialsOf, CONSENT_TEXT, SIGN_STYLES, styleFont, MEMBER_HOW, dueOn, dueWords,
-  reportsOn, namesText, showsOf, booksDraw, isStatement, mainLines, forBoard, cleanMeeting, heldEarly, minutesToSign, MINUTES_SIGN_FROM,
+  reportsOn, namesText, showsOf, booksDraw, isStatement, mainLines, forBoard, cleanMeeting, heldEarly, minutesToSign,
   NOTHING_NEW, isNothingNew, LIMITS, slidesOfItem, reportAlone, decidesAlone, facesOf, hasReport, LIVE_TITLES, orderUnits,
 } from '../board-shared.js';
 import { YearCompare, booksTitle } from './books.js';
@@ -43,14 +43,17 @@ import { ChairReview, reviewTodo, ChairNoteLine } from './chair.js';
 import { Report, ReportEditor, readTime, Motion } from '../board-report.js';
 import { partFor } from '../board-coach.js';
 import { mdPlain, mdWords, paperFields } from '../board-md.js';
-import { prep, termsOf, termIn as wordIn, stemIn, ENDINGS, planOf, matches, howIn, termAt, scoreOf, marksOf, pageAt, norm as findNorm } from './find.js';
+import { prep, termsOf, termIn as wordIn, stemIn, ENDINGS, planOf, matches, howIn, termAt, scoreOf, marksOf, pageAt, termRe, norm as findNorm } from './find.js';
 import { Screen, ScreenPeek } from './screen.js';
 import { Kanban, sized, hrefOf, cardId } from './kanban.js';
 import { CostsCard } from './costs.js';
-import { Correct, ReadFirst, Counts, Waiting, correctable, correctionsOf, runsOf, wordDiff } from './minutes.js';
+import { Correct, ReadFirst, Counts, Waiting, correctable, correctionsOf, runsOf, wordDiff, minutesState, minutesOnPage, MINUTES_SAID } from './minutes.js';
+import { STAGE_OF_JOB, stageLabel, isFamily } from './stages.js';
 import { FamiliesPage, FamilyPage } from './families.js';
-import { MakeoversCard } from './lifecycle.js';
-import { useCashNow, useBudget, liveCash, Both, compact, shortAsOf, pctOf, andText, moneyTiles, fromBooks, monthsPhrase, paceText, growthText, mixOf, RevenueMix, storeOf, StoreFigures, StoreTable, spentOf, budgetDue, budgetMonthsText as budgetMonths, stepText, useChangeAs, changeIn, overIn } from './money.js';
+import { MakeoversCard, itemsOf } from './lifecycle.js';
+import { read as readFamilies, cache as familyCache } from './family-parts.js';
+import { useCashNow, cashKnown, budgetKnown, useBudget, liveCash, Both, compact, shortAsOf, pctOf, andText, moneyTiles, fromBooks, monthsPhrase, paceText, mixOf, RevenueMix, MixHead, mixLeftOut, storeOf, StoreFigures, StoreTable, budgetDue, budgetMonthsText as budgetMonths, stepText, useChangeAs, changeIn, overIn, yearFigures, inKindWords, budgetName, Blank } from './money.js';
+import { figureTiles, moneyFigures, giftWho, giftAbout } from './figures.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -90,8 +93,12 @@ async function call(body) {
   j.status = r.status;
   return j;
 }
+// A part of a link as it's written: a %-code cut off in the middle ("m_p6pvq352%2", "%") is kept as it is, so the link
+// leads nowhere and says so, as any dead link does (Board QA round 10: decoded unguarded, it threw "URI malformed" and
+// the page was left blank, its tab "SOARD Board"; ./activity.js pageOf reads it the same way)
+const readPart = (x) => { try { return decodeURIComponent(x); } catch { return x; } };
 const readRoute = () => {
-  const [page = '', id = null, sub = '', item = ''] = location.hash.replace(/^#\/?/, '').split('/').map((x) => decodeURIComponent(x));
+  const [page = '', id = null, sub = '', item = ''] = location.hash.replace(/^#\/?/, '').split('/').map(readPart);
   // A meeting's screen (#/meetings/<id>/screen), or the page to write an item's report on (#/meetings/<id>/report/<item>)
   // …or the chair's review of the agenda ahead (#/meetings/<id>/review, ./chair.js)
   const deeper = page === 'meetings' && id ? (sub === 'screen' ? 'screen' : sub === 'report' && item ? 'report' : sub === 'review' ? 'review' : '') : '';
@@ -135,6 +142,18 @@ function phaseOf(m) {
   const now = Number(p.find((x) => x.type === 'hour')?.value || 0) * 60 + Number(p.find((x) => x.type === 'minute')?.value || 0);
   return now < s - 10 ? 'before' : now <= e ? 'now' : 'after';
 }
+/**
+ * On the meeting's day, where it is, the same on Home and on its page: 'now' once the chair starts it (or, until the
+ * chair does, by the clock from ten minutes before), 'after' once it's ended or its minutes are in, 'before' until
+ * then; null on any other day. `lv`: the meeting live, once read (./useLive)
+ */
+function dayPhase(m, today, lv = null) {
+  if (!m || m.date !== today) return null;
+  if (lv?.live?.startedAt && !lv.live.endedAt) return 'now';
+  return lv?.live?.endedAt || m.minutesFrom ? 'after' : phaseOf(m);
+}
+/** The meeting's day in words beside it, on that day: "Happening now", "Earlier today", "Today at 8:00 AM" */
+const dayStatus = (m, phase) => (phase === 'now' ? 'Happening now' : phase === 'after' ? 'Earlier today' : m.start ? `Today at ${clock(m.start)}` : 'Today');
 const norm = (s) => String(s || '').toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[’‘]/g, "'").replace(/\u2044/g, '/');
 const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 /** A time, a size or a length that never breaks before its unit on a narrow phone ("10:00 AM", "51 KB", "130 min") */
@@ -321,6 +340,12 @@ function goBack(hash) {
 
 // What to bring into view once a page opens (a search hit inside a meeting, a person)
 let focusNext = null;
+// …and once the page has taken it, the place it's still bringing into view, until that's drawn and landed on (or the
+// wait for it is over). What draws it reads the aim from aimNow, whenever it's drawn: a statement shown only after the
+// page has taken the aim opens its folded lines for it all the same (Board QA round 9: the financial position, shown
+// once Statements had switched to it, found the aim gone, so "Every account" stayed shut and the row never came)
+let aiming = null;
+const aimNow = () => focusNext || aiming || null;
 // …and the words that were searched for, marked there for a few seconds (the CSS Highlight API: the page's own
 // text isn't touched). Where a browser hasn't the API, the place is marked as before, the words not
 let foundTerms = null;
@@ -356,8 +381,10 @@ function useFocusTarget() {
     if (!focusNext) return;
     const id = focusNext;
     focusNext = null;
+    aiming = id;
     // (one that arrives a moment later, the budget read from its sheet, is waited for)
-    const until = Date.now() + 2000;
+    let until = Date.now() + 2000;
+    const done = () => { if (aiming === id) aiming = null; };
     // "words:…": the first part of a paper's words with all of them (a search that found them there)
     const locate = () => {
       if (!id.startsWith('words:')) return document.getElementById(id);
@@ -366,9 +393,20 @@ function useFocusTarget() {
         || [...document.querySelectorAll('.bp-docpage__words .rp :is(p, li, h2, h3, h4)')].find((e) => termIn(spaced(e.textContent), squashed(e.textContent), terms[0] || ''));
     };
     const find = () => {
+      // (another search's place since: this one's wait is over)
+      if (aiming !== id) return;
+      // Once the page's change has finished drawing: a landing made while it still runs could be undone by it (its scroll
+      // to the top of a new page comes after), and under load the line it focused didn't take the focus (Board QA round
+      // 9's full check: the store's line found by "$380,000" was marked but neither in view nor focused). The wait for
+      // what's still to come starts from there. (A change that doesn't finish is skipped within 1.5s: ./transition)
+      if (activeVT) { const vt = activeVT; vt.finished.catch(() => {}).finally(() => { until = Date.now() + 2000; requestAnimationFrame(find); }); return; }
       const el = locate();
       // (the search box still closing would give the focus back to its button after this: wait for it)
-      if (!el || document.querySelector('dialog.bp-finder[open]')) { if (Date.now() < until) setTimeout(find, el ? 40 : 120); return; }
+      if (!el || document.querySelector('dialog.bp-finder[open]')) { if (Date.now() < until) setTimeout(find, el ? 40 : 120); else done(); return; }
+      // In a fold ("Line by line"), the fold opened and kept open (./parts.js openFoldsAround), and the landing once it
+      // stays open
+      if (Date.now() < until && openFoldsAround(el)) { setTimeout(find, 80); return; }
+      done();
       const behavior = reduceMotion() ? 'auto' : 'smooth';
       // (`inline` too: a card on the makeovers board is brought in from the side)
       el.scrollIntoView({ block: 'center', inline: 'center', behavior });
@@ -385,15 +423,27 @@ function useFocusTarget() {
       el.querySelectorAll('.rp-more[aria-expanded="false"]').forEach((b) => b.click());
       // The focus goes there too: a field waiting for them (the name to sign with), else the thing itself
       // (a file: its link, so Enter opens it)
-      const field = (/^f-/.test(el.id) && el.querySelector('a[href]')) || (matchMedia('(pointer: coarse)').matches ? null : (el.classList.contains('bp-doc') && el.querySelector('a.bp-btn')) || el.querySelector('[data-autofocus]'));
-      if (field) field.focus({ preventScroll: true });
-      else { if (!el.matches('a, button, input, select, textarea, [tabindex]')) el.setAttribute('tabindex', '-1'); el.focus({ preventScroll: true }); }
+      const focusOn = (x) => {
+        const field = (/^f-/.test(x.id) && x.querySelector('a[href]')) || (matchMedia('(pointer: coarse)').matches ? null : (x.classList.contains('bp-doc') && x.querySelector('a.bp-btn')) || x.querySelector('[data-autofocus]'));
+        if (field) field.focus({ preventScroll: true });
+        else { if (!x.matches('a, button, input, select, textarea, [tabindex]')) x.setAttribute('tabindex', '-1'); x.focus({ preventScroll: true }); }
+      };
+      focusOn(el);
       // What arrives above it a moment later (a budget read, photos) doesn't push it away: the jump is aimed again
       let at = el.getBoundingClientRect().top + scrollY;
       let it = el;
       untilTheyMove(2500, () => {
-        // (drawn anew, its card moved to another column as the page filled in: the same id, found again and marked)
-        if (!it.isConnected) { it = locate(); if (!it) return false; it.classList.add('is-found'); }
+        // Drawn anew, its card moved to another column as the page filled in: the same id, found again, its fold opened,
+        // marked and in view, and the focus with it when it had it (gone with the copy it was on: nobody has moved it)
+        if (!it.isConnected) {
+          const had = !document.activeElement || document.activeElement === document.body;
+          it = locate();
+          if (!it) return false;
+          openFoldsAround(it);
+          it.classList.add('is-found');
+          if (had) focusOn(it);
+          at = Number.NEGATIVE_INFINITY;
+        }
         const now = it.getBoundingClientRect().top + scrollY;
         if (Math.abs(now - at) > 6) { at = now; it.scrollIntoView({ block: 'center', inline: 'center', behavior }); }
         return true;
@@ -583,7 +633,10 @@ function App() {
   // (gone with the focus on its button: the focus goes to the page's own place, never to nowhere)
   const gone = () => { if (document.activeElement?.closest?.('.bp-toast')) (document.getElementById('todo-h') || document.getElementById('main'))?.focus({ preventScroll: true }); setNote(null); };
   // (a question that must be answered stays a good while: nothing happens until it is)
-  useEffect(() => { if (note) { const t = setTimeout(gone, note.act?.stay ? 60000 : note.act ? 7000 : 4500); return () => clearTimeout(t); } return undefined; }, [note]);
+  // …and a long one stays as long as it takes to read: a moment to see it, then about twenty letters a second (a send
+  // that didn't go, with what happens next, is never gone in four seconds)
+  const readMs = (text) => Math.min(15000, 1500 + String(text ?? '').length * 50);
+  useEffect(() => { if (note) { const t = setTimeout(gone, note.act?.stay ? 60000 : Math.max(note.act ? 7000 : 4500, readMs(note.text))); return () => clearTimeout(t); } return undefined; }, [note]);
   useEffect(() => {
     if (route.sub === 'screen' || route.sub === 'report') return; // (each names its own window)
     const m = route.page === 'meetings' && route.id && data && [...data.meetings, data.nextPending, ...(data.previews || [])].find((x) => x?.id === route.id);
@@ -706,7 +759,8 @@ function Account({ data, d }) {
 }
 
 // ─── Shared pieces ──────────────────────────────────────────────────
-const MinutesChip = ({ m }) => (m.minutes === 'approved' ? html`<span class="bp-chip bp-chip--ok"><${Icon} name="check" size=${14} />Minutes approved</span>` : html`<span class="bp-chip">Draft minutes</span>`);
+// (nothing written yet is never a draft: ./minutes.js minutesState)
+const MinutesChip = ({ m }) => (minutesState(m) === 'approved' ? html`<span class="bp-chip bp-chip--ok"><${Icon} name="check" size=${14} />Minutes approved</span>` : html`<span class="bp-chip">${MINUTES_SAID[minutesState(m)]}</span>`);
 const rise = (i) => `--i:${i}`;
 
 
@@ -742,55 +796,9 @@ function Spark({ rows }) {
  * Financials' own, the year's net in the makeovers' place, the cash's year drawn under it, each to its card below
  */
 function Figures({ data, variant = 'home' }) {
-  const cash = useCashNow(data);
-  const budget = useBudget(data);
-  const n = data.numbers;
-  // The makeovers under way: every card on the board below (awaiting funding too), so the two always agree
-  const building = n.projects?.building || [];
-  const waitingFunds = n.projects?.waiting || [];
-  const onBoard = building.length + waitingFunds.length;
-  const inBuild = building.filter((b) => b.status === 'Build').length;
-  const next = [...n.reveals].sort((a, b) => String(a.confirmed && a.date ? a.date : windowStart(a.window) || '9').localeCompare(String(b.confirmed && b.date ? b.date : windowStart(b.window) || '9')))[0];
-  const nextWhen = next ? (next.confirmed && next.date ? shortDate(next.date).replace(/, \d{4}$/, '') : next.window?.label || '') : '';
-  // While the budget sheet is read, QuickBooks' year so far shows at once, its bar waiting for the budget: the
-  // figures never change from three to four once the sheet arrives
-  const books = budget === undefined && typeof n.books?.revenue === 'number' ? n.books : null;
-  const waiting = (actual) => ({ actual, budget: null, waiting: true });
-  // Without QuickBooks, a budget sheet still being read keeps its two figures' places
-  const sheet = budget === undefined && !books && budgetDue(data);
-  const rev = budget?.revenue || (books ? waiting(books.revenue) : sheet ? waiting(null) : null);
-  // Expenses as the budget counts them, without in kind (./money.js spentOf), and saying what's left out
-  const exp = budget?.expenses || (books && typeof books.expenses === 'number' ? { ...waiting(spentOf(books)), inKind: books.nonCash > 0 ? books.nonCash : 0 } : sheet ? waiting(null) : null);
-  const yr = budget?.year || books?.year || (sheet ? todayEastern().slice(0, 4) : '');
-  // Against the budget once there is one for the year (QuickBooks' figures can come before the year's sheet: then
-  // against last year's same days), and last year's pace by now on a line of its own
-  // (the budget sheet's own actuals say how old they are; QuickBooks' are this hour's)
-  const asOf = budget && !budget.live && budget.asOf ? `, as of ${shortAsOf(budget.asOf).replace(/^(\w{3})\w*/, '$1')}` : '';
-  const against = (x) => (x.waiting ? 'The year so far' : x.budget ? `${pctOf(x)}% of the ${compact(x.budget)} budget${asOf}` : growthText(x) || `Through ${shortAsOf(budget.asOf)}`);
-  // (a line kept for it while the budget is read)
-  const pace = (x) => (x.waiting ? '\u00a0' : x.budget && x.last != null && x.lastFull > 0 ? `Last year by now: ${Math.round((x.last / x.lastFull) * 100)}% of its year` : '');
-  const tiles = [
-    { key: 'cash', label: 'Cash in the bank', value: cash ? compact(cash.total) : cash === null ? '–' : '…', href: '#/financials',
-      sub: cash ? (cash.months != null ? `${monthsPhrase(cash.months)} of spending` : cash.asOf ? `As of ${shortAsOf(cash.asOf)}` : '') : 'From the balance sheet',
-      note: cash && cash.prior != null ? `${cash.total >= cash.prior ? '▲' : '▼'} ${compact(Math.abs(cash.total - cash.prior))} from a year ago` : '', tone: cash && cash.prior != null ? (cash.total >= cash.prior ? 'up' : 'down') : '' },
-    rev ? { key: 'rev', label: `${yr} revenue`.trim(), value: rev.actual == null ? '…' : compact(rev.actual), meter: rev, sub: against(rev), note: pace(rev), aside: rev.inKind ? `Not counting ${compact(rev.inKind)} in\u00a0kind` : '', href: '#/financials', focus: rev.budget ? 'budget' : '' }
-      : { key: 'reveals', label: 'Reveals ahead', value: String(n.reveals.length), sub: next ? `Next ${nextWhen || 'date to come'}` : 'None scheduled', href: '#makeovers' },
-    exp ? { key: 'exp', label: `${yr} expenses`.trim(), value: exp.actual == null ? '…' : compact(exp.actual), meter: exp, sub: against(exp), note: pace(exp), aside: exp.inKind ? `Not counting ${compact(exp.inKind)} in\u00a0kind` : '', href: '#/financials', focus: exp.budget ? 'budget' : '' } : null,
-    { key: 'build', label: 'Makeovers under way', value: String(onBoard), sub: onBoard ? [`${inBuild} in build`, waitingFunds.length ? `${waitingFunds.length} awaiting funding` : ''].filter(Boolean).join(' · ') : 'None right now', note: rev && nextWhen ? `Next reveal ${nextWhen}` : '', href: '#makeovers' },
-  ].filter(Boolean);
-  // Financials: the net so far beside last year's same days in the makeovers' place, each figure to its card
-  const fin = variant === 'fin';
-  const b = n.books;
-  const lyb = b?.lastYear;
-  const lyNet = typeof lyb?.net === 'number' ? lyb.net : typeof lyb?.revenue === 'number' && typeof lyb?.expenses === 'number' ? lyb.revenue - lyb.expenses : null;
-  const net = fin && typeof b?.net === 'number' ? {
-    key: 'net', label: `${b.year} net so far`, value: `${b.net < 0 ? '−' : '+'}${compact(Math.abs(b.net))}`, href: '#year',
-    sub: b.through ? `January 1 to ${shortDate(b.through).replace(/, \d{4}$/, '')}` : 'The year so far',
-    note: lyNet != null ? `${b.net >= lyNet ? '▲' : '▼'} ${compact(Math.abs(b.net - lyNet))} on ${lyb.year}’s same days` : '', tone: lyNet != null ? (b.net >= lyNet ? 'up' : 'down') : '',
-  } : null;
-  const shown = fin
-    ? [...tiles.filter((t) => t.key === 'cash' || t.key === 'rev' || t.key === 'exp').map((t) => ({ ...t, href: { cash: '#cash', rev: '#year', exp: '#budget' }[t.key], focus: '', ...(t.key === 'cash' ? { spark: data.cashHistory } : {}) })), ...(net ? [net] : [])]
-    : tiles;
+  // (the tiles' words, and each figure in them as it's written, are ./figures.js figureTiles': the search finds them by
+  // the same, so every figure here is found)
+  const shown = figureTiles({ data, cash: useCashNow(data), budget: useBudget(data), variant });
   const go = (e, t) => {
     // Against the budget, a figure opens Financials at the budget
     if (t.focus) focusNext = t.focus;
@@ -798,10 +806,11 @@ function Figures({ data, variant = 'home' }) {
     e.preventDefault();
     document.getElementById(t.href.slice(1))?.scrollIntoView({ behavior: reduceMotion() ? 'auto' : 'smooth', block: 'start' });
   };
+  // (Financials' tiles are where a search for their figures lands: `fin-<tile>`)
   return html`<ul class=${`bp-figs ${shown.length % 2 ? 'is-odd' : ''}`} style=${`--n:${shown.length}`}>${shown.map((t) => html`<li key=${t.key}>
-    <a class="bp-fig" href=${t.href} onClick=${(e) => go(e, t)}>
+    <a class="bp-fig" href=${t.href} id=${variant === 'fin' ? `fin-${t.key}` : null} onClick=${(e) => go(e, t)}>
       <span class="bp-fig__label">${t.label}</span>
-      <span class="bp-fig__value">${t.value}</span>
+      <span class=${`bp-fig__value ${t.words ? 'is-words' : ''}`}>${t.value}</span>
       ${t.spark ? html`<${Spark} rows=${t.spark} />` : null}
       ${t.meter ? html`<${Meter} x=${t.meter} />` : null}
       <span class="bp-fig__sub">${nbw(t.sub)}</span>
@@ -899,7 +908,7 @@ function Impact({ n }) {
         <span class="bp-spark__x" aria-hidden="true"><span>${years[0].year}</span><span>${years.at(-1).year}</span></span>
       </div>
       <dl class="bp-impact__stats">
-        ${now ? html`<div><dt>${thisYear} so far</dt><dd>${word('kids', now.kids)} · ${word('rooms', now.rooms)}${last?.kids ? html`<span class=${now.kids >= last.kids ? 'is-up' : 'is-down'}>${now.kids >= last.kids ? '▲' : '▼'} ${Math.abs(Math.round(((now.kids - last.kids) / last.kids) * 100))}% ${now.kids >= last.kids ? 'more' : 'fewer'} kids than all of ${thisYear - 1}</span>` : null}</dd></div>` : null}
+        ${now ? html`<div><dt>${thisYear} so far</dt><dd>${word('kids', now.kids)} · ${word('rooms', now.rooms)}${last?.kids ? html`<span class=${now.kids >= last.kids ? 'is-up' : 'is-down'}>${nbw(Math.round(((now.kids - last.kids) / last.kids) * 100) === 0 ? `Even with all of ${thisYear - 1}` : `${now.kids >= last.kids ? '▲' : '▼'} ${Math.abs(Math.round(((now.kids - last.kids) / last.kids) * 100))}% ${now.kids >= last.kids ? 'more' : 'fewer'} kids than all of ${thisYear - 1}`)}</span>` : null}</dd></div>` : null}
         <div><dt>Rooms built</dt><dd>${n.impact.rooms.toLocaleString()}</dd></div>
         <div><dt>Makeovers</dt><dd>${years.reduce((t, y) => t + y.makeovers, 0).toLocaleString()}</dd></div>
         ${n.impact.communityProjects ? html`<div><dt>Community projects</dt><dd>${n.impact.communityProjects.toLocaleString()}${n.impact.reached ? html`<span>${n.impact.reached.toLocaleString()} children reached</span>` : null}</dd></div>` : null}
@@ -965,9 +974,8 @@ function ImpactYears({ years, what, setWhat, sel, setSel, thisYear, word }) {
 // (one formatter for every gift: making one a call is slow, and the search lists them all)
 const GIFT_DAY = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' });
 const giftDay = (s) => GIFT_DAY.format(new Date(s * 1000));
-const giftWho = (g) => g.company || g.name || (g.anonymous ? 'Anonymous' : 'No name given');
-// The person who gave for a company, the campaign, monthly (unless the campaign says so), in kind
-const giftAbout = (g) => [g.company && g.name ? g.name : '', g.campaign, g.every && !String(g.campaign || '').toLowerCase().includes(g.every) ? g.every : '', g.inKind ? 'in kind' : ''].filter(Boolean).join(' · ');
+// (who gave, and the person who gave for a company, the campaign, monthly unless the campaign says so, in kind: ./figures.js
+// giftWho and giftAbout, as the search names each gift)
 const giftIsNew = (g, since) => !!since && g.at * 1000 > Date.parse(since);
 /** "$212,000 from 14 gifts of $1,000 or more in 2026", and the day Zeffy was last read when that's over a day ago */
 const giftsSay = (g) => nbw(`${money(g.total / 100)} from ${plural(g.count, 'gift')} of $1,000 or more in ${g.year}${g.stale ? `, as of ${giftDay(Date.parse(g.at) / 1000)}` : ''}`);
@@ -977,7 +985,7 @@ function GiftRow({ g, since }) {
   const fresh = giftIsNew(g, since);
   return html`<li class=${`bp-gift ${fresh ? 'is-new' : ''}`} id=${`gift-${g.id}`}>
     <span class="bp-gift__amt">${money(g.cents / 100)}</span>
-    <span class="bp-gift__who"><strong title=${giftWho(g)}>${giftWho(g)}</strong>${about ? html`<span>${about}</span>` : null}</span>
+    <span class="bp-gift__who"><strong>${giftWho(g)}</strong>${about ? html`<span>${about}</span>` : null}</span>
     <span class="bp-gift__when">${fresh ? html`<span class="bp-gift__new">New</span>` : null}${giftDay(g.at)}</span>
   </li>`;
 }
@@ -1024,9 +1032,9 @@ const GIFTS_SHOWN = 6;
 function GiftsYear({ g, since }) {
   // Home's "All 14 this year" opens Financials here with every one; a gift found by search past the newest few opens
   // them all too, so it's there to land on
-  const [all, setAll] = useKept('gifts-all', /^#\/financials\/gifts\b/.test(location.hash) || (!!focusNext?.startsWith('gift-') && g.list.findIndex((x) => `gift-${x.id}` === focusNext) >= GIFTS_SHOWN));
+  const [all, setAll] = useKept('gifts-all', /^#\/financials\/gifts\b/.test(location.hash) || (!!aimNow()?.startsWith('gift-') && g.list.findIndex((x) => `gift-${x.id}` === aimNow()) >= GIFTS_SHOWN));
   // (a gift found by search lands on that gift instead)
-  useLandAt(/^#\/financials\/gifts\b/, 'gifts', !!focusNext);
+  useLandAt(/^#\/financials\/gifts\b/, 'gifts', !!aimNow());
   const shown = all ? g.list : g.list.slice(0, GIFTS_SHOWN);
   return html`<section class="bp-card bp-gifts bp-gifts--year" aria-labelledby="gifts-y-h" id="gifts">
     <${SecHead} id="gifts-y-h" title="Major gifts" sub=${nbw(`From Zeffy, every gift of $1,000 or more${g.stale ? `, as of ${giftDay(Date.parse(g.at) / 1000)}` : ''}`)} />
@@ -1097,7 +1105,7 @@ function HomePage({ ctx }) {
     </header>
     <section class="bp-sum bp-rise" style=${rise(1)} aria-label="SOARD at a glance">
       <${Figures} data=${data} />
-      ${mixOf(data.numbers.books) ? html`<section class="bp-sum__mix" aria-labelledby="mix-h"><h2 class="bp-fig__label" id="mix-h">Where ${data.numbers.books.year}’s revenue came from</h2><${RevenueMix} books=${data.numbers.books} /></section>` : null}
+      ${mixOf(data.numbers.books) ? html`<section class="bp-sum__mix" aria-labelledby="mix-h"><${MixHead} books=${data.numbers.books} as="h2" id="mix-h" /><${RevenueMix} books=${data.numbers.books} /></section>` : null}
       ${storeOf(data.numbers.books) ? html`<section class="bp-sum__store" aria-labelledby="store-h"><h2 class="bp-fig__label" id="store-h">The store, ${data.numbers.books.year} so far</h2><${StoreFigures} books=${data.numbers.books} /></section>` : null}
       <${Impact} n=${data.numbers} />
     </section>
@@ -1130,14 +1138,16 @@ function NextUp({ m, ctx }) {
   const [lv] = useLive(m.id, today && !m.pending, 20000);
   const running = !!lv?.live.startedAt && !lv.live.endedAt;
   const nowAt = running ? agendaItems(lv).find((it) => it.id === lv.live.itemId) : null;
-  const phase = running ? 'now' : lv?.live.endedAt || (today && m.minutesFrom) ? 'after' : today ? phaseOf(m) : null;
-  const video = videoOf(m);
-  const joinNow = today && video && phase !== 'after';
+  const phase = dayPhase(m, data.today, lv);
+  // Once it's over today, no way to join it (neither the button nor the call in its facts), and no directions to the room
+  const video = phase === 'after' ? '' : videoOf(m);
+  const directions = phase !== 'after' && !!m.address;
+  const joinNow = today && video;
   const fileCount = fileRows(m.files || []).reduce((s, g) => s + g.rows.length, 0);
-  const status = today ? (phase === 'now' ? 'Happening now' : phase === 'after' ? 'Earlier today' : m.start ? `Today at ${clock(m.start)}` : 'Today') : inWords(m.date, data.today);
+  const status = today ? dayStatus(m, phase) : inWords(m.date, data.today);
   const facts = [
     m.start ? nb(timeRange(m.start, m.end)) : 'Time to come',
-    m.location || m.address ? (m.address ? html`<a href=${mapsHref(m.address)} target="_blank" rel="noopener">${m.location || m.address}</a>` : m.location) : 'Place to come',
+    m.location || m.address ? (directions ? html`<a href=${mapsHref(m.address)} target="_blank" rel="noopener">${m.location || m.address}</a>` : m.location || m.address) : 'Place to come',
     video && !joinNow ? html`<a href=${video} target="_blank" rel="noopener">${joinLabel(video).replace(/^Join with /, '')}</a>` : null,
   ].filter(Boolean);
   return html`<section class=${`bp-card bp-next bp-nextup ${today ? 'is-today' : ''}`} aria-labelledby=${`next-h-${m.id}`}>
@@ -1324,20 +1334,7 @@ function useSettled(v, ms = 60) {
   }, [v]);
   return [now, () => setNow(v)];
 }
-/** "Budget" with the words found marked */
-/**
- * A term as it may be written, at a word's start: a number whole with its commas ("7500" is "7,500", never the start
- * of 12,401 or the end of 41,605), a decimal with its point and a time with its colon ("1d2" is 1.2, "6h05" 6:05), a
- * fraction with its slash ("1 2" is "1/2"), a date or an abbreviation its parts apart ("2024 04 25" is 2024.04.25 and
- * 4/25, "p l" is P&L), a word with its hyphens ("twothirds" is "two-thirds")
- */
-const reEsc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-const termRe = (t) => (/^\d+ \d+$/.test(t) ? `(?<![a-z0-9])${t.replace(' ', '[/\u2044]')}(?![0-9])`
-  : t.includes(' ') ? `(?<![a-z0-9])${t.split(' ').map((x) => (/^\d+[dh]\d+$/.test(x) ? x.replace(/[dh]/, (c) => (c === 'd' ? '\\.' : ':')) : reEsc(x))).join('[^a-z0-9]{1,3}')}(?![a-z0-9])`
-    // (a decimal with its point, a time with its colon: "1d2" is 1.2, "6h05" is 6:05)
-    : /^\d+[dh]\d+$/.test(t) ? `(?<![a-z0-9]|\\d[,.:])${t.replace(/[dh]/, (c) => (c === 'd' ? '\\.' : ':'))}(?![0-9]|[,.:]\\d)`
-      : /^\d+$/.test(t) ? `(?<![a-z0-9]|\\d[,.:])${[...t].join(',?')}(?![0-9]|[,.:]\\d)`
-        : `(?<![a-z0-9])${[...t].map(reEsc).join("[-'’.]?")}`);
+/** "Budget" with the words found marked (each term as it may be written: ./find.js termRe) */
 const Marked = ({ text, terms }) => { const marks = markRes(terms); if (!marks.length) return text; const re = new RegExp(`(${marks.join('|')})`, 'ig'); return String(text || '').split(re).map((part, i) => (i % 2 ? html`<mark>${part}</mark>` : part)); };
 /**
  * Finding words the way a person types them (./find.js): each word at the start of a word ("bud" finds Budget,
@@ -1502,7 +1499,7 @@ function MeetingRow({ m, data, terms = [], words = null }) {
   return html`<li key=${m.id} id=${`mr-${m.id}`}><a class="bp-mrow" href=${`#/meetings/${m.id}`} onClick=${open}>
     <${DateTile} d=${m.date} mid=${m.id} />
     <span class="bp-mrow__main">
-      <span class="bp-mrow__title">${meetingName(m)}${ahead ? html`<span class="bp-chip bp-chip--info">${inWords(m.date, data.today)}</span>` : m.minutes !== 'approved' ? html`<span class="bp-chip">Draft minutes</span>` : null}</span>
+      <span class="bp-mrow__title">${meetingName(m)}${ahead ? html`<span class="bp-chip bp-chip--info">${inWords(m.date, data.today)}</span>` : minutesState(m) !== 'approved' ? html`<span class="bp-chip">${MINUTES_SAID[minutesState(m)]}</span>` : null}</span>
       <span class="bp-mrow__meta">${nb([weekdayOf(m.date), m.start ? clock(m.start) : '', m.location].filter(Boolean).join(' · '))}</span>
       ${hit ? html`<span class="bp-hit"><span class="bp-hit__where">${inBody ? hit.where : html`<${Marked} text=${hit.where} terms=${terms} />`}</span>${inBody ? html` <${Snippet} text=${hit.body} terms=${terms} />` : null}</span>` : null}
     </span>
@@ -1547,8 +1544,11 @@ function MeetingsPage({ ctx }) {
         <h3 class="bp-year__label bp-year__label--small">Earlier</h3>
         <div class="bp-yearfolds">${years.slice(2).map((y) => {
           const list = past.filter((m) => m.date.startsWith(y));
-          return html`<details class="bp-yearfold" key=${y} open=${opened.includes(y)} onToggle=${(e) => { if (e.currentTarget.open !== opened.includes(y)) fold(y, e.currentTarget.open); }}>
-            <summary><span class="bp-yearfold__y">${y}</span><span class="bp-yearfold__n">${nbw(plural(list.length, 'meeting'))}</span>${list.some((m) => m.minutes !== 'approved') ? html`<span class="bp-chip">${nbw(plural(list.filter((m) => m.minutes !== 'approved').length, 'draft'))}</span>` : null}<${Icon} name="chevron" size=${18} cls="bp-yearfold__chev" /></summary>
+          // (a draft is minutes written and waiting for the vote; a meeting with none written yet is said so)
+          const drafts = list.filter((m) => minutesState(m) === 'draft').length;
+          const none = list.filter((m) => minutesState(m) === 'none').length;
+          return html`<details class="bp-yearfold" key=${y} data-kept="years" data-kept-item=${y} open=${opened.includes(y)} onToggle=${(e) => { if (e.currentTarget.open !== opened.includes(y)) fold(y, e.currentTarget.open); }}>
+            <summary><span class="bp-yearfold__y">${y}</span><span class="bp-yearfold__what"><span class="bp-yearfold__n">${nbw(plural(list.length, 'meeting'))}</span>${drafts ? html`<span class="bp-chip">${nbw(plural(drafts, 'draft'))}</span>` : null}${none ? html`<span class="bp-chip">${nbw(`${none} without minutes`)}</span>` : null}</span><${Icon} name="chevron" size=${18} cls="bp-yearfold__chev" /></summary>
             <ol class="bp-mlist">${list.map((m) => html`<${MeetingRow} m=${m} data=${data} key=${m.id} />`)}</ol>
           </details>`;
         })}</div>
@@ -1610,10 +1610,14 @@ const canWrite = (m, it, ctx) => !!it && (adminHere(ctx) || owes(m, it, ctx));
 const reportHref = (m, it) => `#/meetings/${encodeURIComponent(m.id)}/report/${encodeURIComponent(it.id)}`;
 /** "Nov 3" (Atlanta's day) */
 const dayShort = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' }) : ''; };
-/** The reports I owe: items I present at a meeting ahead (or today's, before it ends) with nothing written yet */
+/**
+ * The reports I owe: items I present at a meeting ahead (or today's, before it ends) with nothing written yet, on the
+ * board's meetings and on one not shared with the board yet where I present (data.presenting: its own items only)
+ */
 function reportsToWrite(ctx) {
   const { data } = ctx;
-  return data.meetings.filter((m) => m.date >= data.today && !m.live?.endedAt)
+  const shown = new Set(data.meetings.map((m) => m.id));
+  return [...data.meetings, ...(data.presenting || []).filter((m) => !shown.has(m.id))].filter((m) => m.date >= data.today && !m.live?.endedAt && dayPhase(m, data.today) !== 'after')
     .flatMap((m) => m.sections.flatMap((s) => s.items).filter((it) => reportsOn(it) && !it.report && owes(m, it, ctx)).map((it) => ({ m, it })));
 }
 
@@ -1783,7 +1787,8 @@ function MotionBox({ m, it, ctx, onDraft, handle }) {
   const type = (v) => { setText(v); latest.current = v; onDraft(v); keepHere(v); setSt('waiting'); clearTimeout(timer.current); timer.current = setTimeout(save, 900); };
   const done = async () => { if (await save()) { setEditing(false); requestAnimationFrame(() => document.querySelector('.bp-rp__motion-again, .bp-rp__motion-add')?.focus()); } };
   const off = async () => { type(''); if (await save()) { setEditing(false); requestAnimationFrame(() => document.querySelector('.bp-rp__motion-add')?.focus()); } };
-  // Someone else changed it since: theirs, or this page's again (written over theirs, on purpose)
+  // Changed elsewhere since (another tab or device, a co-presenter, Board): that one, or this page's again (written over
+  // it, on purpose)
   const take = (mine) => {
     const theirs = clash;
     clashRef.current = null;
@@ -1802,10 +1807,11 @@ function MotionBox({ m, it, ctx, onDraft, handle }) {
   // Said quietly as it goes; only a failure is announced
   const status = st === 'saving' ? 'Saving…' : st === 'waiting' ? 'Saving in a moment' : st === 'choose' ? 'Waiting for your choice' : st === 'saved' ? (sent.current ? 'Saved' : 'Taken off') : st
     ? html`<span class="bp-rp__err" role="alert">The motion isn’t saved: ${st} <button type="button" class="bp-linkbtn" onClick=${save}>Try again</button></span>` : '';
+  // (who changed it isn't kept with a motion, so it's never said to be someone else: it may be them, in another tab)
   const choice = clash ? html`<div class="bp-rp__clash bp-rp__motion-clash" role="alert">
-    <p><strong>Someone else changed the motion</strong> while you were writing. Which one should the board vote on?</p>
-    <p class="bp-rp__theirs-motion">${clash.motion ? `Theirs: “${clash.motion}”` : 'They took it off.'}</p>
-    <div class="bp-btns"><button type="button" class="bp-btn" onClick=${() => take(false)}>Use theirs</button><button type="button" class="bp-btn bp-btn--primary" onClick=${() => take(true)}>Keep mine</button></div>
+    <p><strong>The motion was changed somewhere else</strong> while you were writing: in another tab, on another device or by someone else. Which one should the board vote on?</p>
+    <p class="bp-rp__theirs-motion">${clash.motion ? `The other one: “${clash.motion}”` : 'It was taken off there.'}</p>
+    <div class="bp-btns"><button type="button" class="bp-btn" onClick=${() => take(false)}>Use the other one</button><button type="button" class="bp-btn bp-btn--primary" onClick=${() => take(true)}>Keep this one</button></div>
   </div>` : null;
   if (!editing && !text.trim()) {
     return html`${choice}<button type="button" class="bp-rp__motion-add" onClick=${() => setEditing(true)}><span class="bp-rp__motion-plus" aria-hidden="true">+</span>Ask the board to vote</button>
@@ -2016,7 +2022,7 @@ function SlideStack({ m, it, files, draft, onOrder = null }) {
         onDrop=${movable && drag ? (e) => { e.preventDefault(); const from = units.findIndex((x) => x.id === drag.id); const at = i + (drag.after ? 1 : 0); setDrag(null); moveTo(drag.id, at > from ? at - 1 : at); } : null}
         onDragEnd=${movable ? () => setDrag(null) : null}>
         ${doc ? html`<div class="bp-rp__slide bp-rp__slide--docs">
-            <p class="bp-rp__slide-h"><span class="bp-rp__slide-n">${u.from === u.to ? u.from : `${u.from}–${u.to}`}</span><span class="bp-rp__slide-name">${nameOfFile(u.stops[0].fileId)}</span><span class="bp-rp__slide-tag">${pagesOf(u) === 1 ? 'One page' : `${pagesOf(u)} pages`}, as the file is</span>${ctl}</p>
+            <p class="bp-rp__slide-h"><span class="bp-rp__slide-n">${u.from === u.to ? u.from : `${u.from} to ${u.to}`}</span><span class="bp-rp__slide-name">${nameOfFile(u.stops[0].fileId)}</span><span class="bp-rp__slide-tag">${pagesOf(u) === 1 ? 'One page' : `${pagesOf(u)} pages`}, as the file is</span>${ctl}</p>
           </div>`
         : u.stops.map((s, k) => {
           const by = slideBy(s, cur);
@@ -2223,8 +2229,11 @@ function ReportPage({ id, itemId, ctx }) {
   if (!m) return html`<${NotFound} />`;
   const back = `#/meetings/${encodeURIComponent(m.id)}`;
   if (!it) {
+    // A meeting not shared yet shows them only the items they present (data.presenting): one that isn't among them may
+    // be someone else's, still on the agenda, so nothing here says it's gone
     return html`<a class="bp-back" href=${back}><${Icon} name="back" size=${18} />${meetingName(m)}</a>
-      <div class="bp-card bp-empty"><h1 class="bp-h2">That item isn’t on the agenda any more</h1><p class="bp-muted">Its report went with it. The meeting’s agenda is as it is now.</p></div>`;
+      ${m.presenting ? html`<div class="bp-card bp-empty"><h1 class="bp-h2">That item isn’t one you present</h1><p class="bp-muted">The board sees this meeting once it’s shared. Until then, only the items you present show here.</p></div>`
+        : html`<div class="bp-card bp-empty"><h1 class="bp-h2">That item isn’t on the agenda any more</h1><p class="bp-muted">Its report went with it. The meeting’s agenda is as it is now.</p></div>`}`;
   }
   const who = presentersOf(it, d.people).map((p) => d.bySlug.get(p.slug) || p);
   const mine = canWrite(m, it, ctx);
@@ -2287,6 +2296,9 @@ function ReportPage({ id, itemId, ctx }) {
   };
   const startFrom = () => { putIn(last.it.report, { inserted: true }); toEditor(); };
   const myName = d.me?.name || (data.me.as ? d.bySlug.get(data.me.as)?.name : '') || '';
+  // A newer version in their own name is theirs from another tab or device, never someone else's (the server keeps the
+  // name a report was written in: one nobody else on the board page has is theirs alone)
+  const byMe = !!clash?.reportBy && clash.reportBy === myName && d.people.filter((p) => p.name === myName).length === 1;
   // Its slide with what's typed (saved or not), said by who's writing it now
   const draft = { report: text, motion, reportBy: myName || it.reportBy, reportLook: look, slideOrder: order, docs: it.docs || [], files: (m.files || []).filter((f) => (it.docs || []).includes(f.id)) };
   // The order of its slides on the screen (board-shared.js orderUnits), as they set it beside the writing: saved at once
@@ -2358,9 +2370,9 @@ function ReportPage({ id, itemId, ctx }) {
         ${[['write', 'Write'], ['preview', 'In the meeting']].map(([k, l]) => html`<button type="button" key=${k} aria-pressed=${view === k} onClick=${() => setView(k)}>${l}</button>`)}
       </div>
       ${clash ? html`<div class="bp-rp__clash" role="alert">
-        <p><strong>${clash.reportBy || 'Someone'} changed this report${clash.reportAt ? ` at ${new Date(clash.reportAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : ''}</strong> while you were writing. Which one should the board read?</p>
-        <details class="bp-rp__theirs"><summary>See ${clash.reportBy ? `${clash.reportBy.split(' ')[0]}’s` : 'their'} version</summary>${clash.report ? html`<${Report} text=${clash.report} />` : html`<p class="bp-muted">They emptied it.</p>`}</details>
-        <div class="bp-btns"><button type="button" class="bp-btn" onClick=${() => take(false)}>Use theirs</button><button type="button" class="bp-btn bp-btn--primary" onClick=${() => take(true)}>Keep mine</button></div>
+        <p><strong>${byMe ? 'You' : clash.reportBy || 'Someone'} changed this report${clash.reportAt ? ` at ${new Date(clash.reportAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}` : ''}</strong>${byMe ? ' in another tab or on another device while you were writing here' : ' while you were writing'}. Which one should the board read?</p>
+        <details class="bp-rp__theirs"><summary>${byMe ? 'See the other one' : `See ${clash.reportBy ? `${clash.reportBy.split(' ')[0]}’s` : 'their'} version`}</summary>${clash.report ? html`<${Report} text=${clash.report} />` : html`<p class="bp-muted">${byMe ? 'It was emptied there.' : 'They emptied it.'}</p>`}</details>
+        <div class="bp-btns"><button type="button" class="bp-btn" onClick=${() => take(false)}>${byMe ? 'Use the other one' : 'Use theirs'}</button><button type="button" class="bp-btn bp-btn--primary" onClick=${() => take(true)}>${byMe ? 'Keep this one' : 'Keep mine'}</button></div>
       </div>` : null}
       ${stuck ? html`<div class="bp-rp__clash bp-rp__stuck" role="alert">
         <p><strong>This can’t be saved now.</strong> ${stuck}. Copy what you wrote so it isn’t lost; this device keeps it too.</p>
@@ -2433,13 +2445,13 @@ function AgendaItem({ m, s, it, ctx, label, numbers, upcoming, moneyFirst = '', 
       <div class="bp-agitem__head">
         <h3 class="bp-item__title bp-agitem__title">${it.title || s.title}</h3>
         ${it.confidential ? html`<span class="bp-chip bp-chip--warn">Board only · please don’t share</span>` : null}
-        ${aboutPrev ? (aboutPrev.minutes === 'approved' ? html`<span class="bp-chip bp-chip--ok"><${Icon} name="check" size=${14} />Approved</span>` : upcoming ? html`<span class="bp-chip">For a vote</span>` : null) : null}
+        ${aboutPrev ? (aboutPrev.minutes === 'approved' ? html`<span class="bp-chip bp-chip--ok"><${Icon} name="check" size=${14} />Approved</span>` : minutesState(aboutPrev) === 'none' ? html`<span class="bp-chip">Not written yet</span>` : upcoming ? html`<span class="bp-chip">For a vote</span>` : null) : null}
         <${Presenters} people=${named ? [] : who} />
       </div>
       ${aboutPrev ? html`<p class="bp-agitem__about"><a class="bp-link" href=${`#/meetings/${aboutPrev.id}`}>The ${meetingName(aboutPrev)}, ${shortDate(aboutPrev.date)}</a></p>` : null}
       <div class="bp-agitem__notes"><${Notes} text=${it.notes} /></div>
       ${aboutPrev ? html`<${Counts} m=${aboutPrev} data=${data} />` : null}
-      ${preview ? null : html`<${Correct} m=${m} ctx=${ctx} Icon=${Icon} target=${`n:${it.id}`} was=${it.notes || ''} about=${it.title || s.title} offer=${!!it.notes} readOnly=${!adminHere(ctx) && !data.me.slug} />`}
+      ${preview ? null : html`<${Correct} m=${m} ctx=${ctx} Icon=${Icon} target=${`n:${it.id}`} was=${it.notes || ''} about=${it.title || s.title} offer=${!!it.notes && minutesOnPage(m)} readOnly=${!adminHere(ctx) && !data.me.slug} />`}
       <${ItemReport} m=${m} it=${it} ctx=${ctx} upcoming=${upcoming} preview=${preview} />
       ${preview ? null : html`<${ChairNoteLine} data=${data} d=${d} m=${m} it=${it} />`}
       ${showsOf(it).map((k) => html`<${LiveBlock} key=${k} kind=${k} n=${numbers} m=${m} data=${data} asFiles=${k === 'cash' ? asFiles : []} notes=${k === 'cash' ? data.lineNotes?.[m.id]?.[it.id] : null} again=${k === 'cash' && it.id !== moneyFirst} />`)}
@@ -2456,6 +2468,9 @@ function MeetingPage({ id, ctx }) {
   // shared, the preview said "The agenda isn't posted yet")
   const m = data.meetings.find((x) => x.id === id) || data.previews?.find((x) => x.id === id) || (d.featured?.pending && d.featured.id === id ? d.featured : null) || null;
   const practice = !m && data.practice?.id === id;
+  // A meeting ahead not shared with the board yet, where they present an item (data.presenting): its name, day and place
+  // and the items they present, where their report's Done and its name lead (never "That meeting isn't on the board page")
+  const theirs = !m && !practice ? data.presenting?.find((x) => x.id === id) || null : null;
   useFocusTarget();
   // The notes for the minutes belong to the meeting, not to how it's shown: they stay open while the chair runs it and after
   const [noting, setNoting] = useKept(`noting-${id}`, false);
@@ -2476,6 +2491,7 @@ function MeetingPage({ id, ctx }) {
     return () => { removeEventListener('online', go); clearInterval(again); };
   }, [can, open, id]);
   const panel = open ? html`<${Noting} key=${id} m=${m} ctx=${ctx} onClose=${() => { setNoting(false); ctx.load({ keep: true }); requestAnimationFrame(() => document.querySelector('.bp-minutes__open')?.focus({ preventScroll: true })); }} />` : null;
+  if (theirs) return html`<${MeetingDetail} m=${theirs} ctx=${ctx} />`;
   if (practice || (m && !m.pending && (isLive(m) || m.date === data.today))) return html`<${LiveMeeting} id=${id} m=${m} ctx=${ctx} notes=${notes} />${panel}`;
   if (!m) return html`<${NotFound} />`;
   return html`<${MeetingDetail} m=${m} ctx=${ctx} notes=${notes} />${panel}`;
@@ -2531,7 +2547,7 @@ function LiveMeeting({ id, m, ctx, notes }) {
   // who never pressed End doesn't keep the board from them. A vote still open stays in the room)
   if (v?.live.startedAt && !(m?.minutesFrom && (v.live.endedAt || !v.live.vote))) return html`<${LiveRoom} v=${v} setV=${setV} m=${m} ctx=${ctx} notes=${notes} />`;
   // On the day, before the chair starts: the meeting as usual, and it turns live by itself
-  if (m) return html`<${MeetingDetail} m=${m} ctx=${ctx} notes=${notes} />`;
+  if (m) return html`<${MeetingDetail} m=${m} ctx=${ctx} notes=${notes} lv=${v} />`;
   if (gone) return html`<${NotFound} />`;
   if (!v) return html`<div class="bp-boot bp-boot--inline"><p>Opening the meeting…</p></div>`;
   return html`<${LiveRoom} v=${v} setV=${setV} m=${null} ctx=${ctx} />`;
@@ -2604,8 +2620,10 @@ function LiveRoom({ v, setV, m, ctx, notes = null }) {
     addEventListener('resize', place);
     return () => { io?.disconnect(); removeEventListener('resize', place); };
   }, [head]);
-  const hereLine = html`<strong>${v.here.board} of ${v.here.of}</strong> board members here${v.here.remote ? `, ${v.here.remote} on video` : ''}`;
-  const quorumChip = v.here.met === true ? html`<span class="bp-livechip is-met"><${Icon} name="check" size=${14} />Quorum</span>` : v.here.met === false ? html`<span class="bp-livechip">${v.here.quorum - v.here.board} more for a quorum</span>` : null;
+  // Who's here: once it's over, who checked in (the page knows no more than that: never "here", never how many more
+  // for a quorum)
+  const hereLine = html`<strong>${v.here.board} of ${v.here.of}</strong> board members ${ended ? 'checked in' : 'here'}${v.here.remote ? `, ${v.here.remote} on video` : ''}`;
+  const quorumChip = v.here.met === true ? html`<span class="bp-livechip is-met"><${Icon} name="check" size=${14} />Quorum</span>` : v.here.met === false && !ended ? html`<span class="bp-livechip">${v.here.quorum - v.here.board} more for a quorum</span>` : null;
   return html`
     <a class="bp-back bp-noprint" href=${m ? '#/meetings' : '#/'}><${Icon} name="back" size=${18} />${m ? 'All meetings' : 'Home'}</a>
     ${started && !ended ? html`<div class=${`bp-livebar bp-noprint ${past ? 'is-on' : ''}`} aria-hidden=${past ? 'false' : 'true'}>
@@ -2643,7 +2661,7 @@ function LiveRoom({ v, setV, m, ctx, notes = null }) {
         </section>` : null}
         ${ended ? html`<section class="bp-now bp-now--ended" aria-labelledby="now-h">
           <p class="bp-eyebrow">The meeting is over</p>
-          <h2 class="bp-now__title" id="now-h">${[decided.length ? plural(decided.length, 'decision') : '', v.actions.length ? plural(v.actions.length, 'action item') : ''].filter(Boolean).join(' and ') || 'Thank you for being here'}</h2>
+          <h2 class="bp-now__title" id="now-h">${[decided.length ? plural(decided.length, 'decision') : '', v.actions.length ? plural(v.actions.length, 'action item') : ''].filter(Boolean).join(' and ') || (v.me.how ? 'Thank you for being here' : 'No decisions or action items yet')}</h2>
           <p class="bp-muted">The minutes come here once they’re written, and the board approves them at the next meeting.</p>
         </section>`
         : cardSec ? html`<section class="bp-now bp-now--part" aria-labelledby="now-h" aria-live="polite" key=${cardSec.id}>
@@ -2680,13 +2698,13 @@ function LiveRoom({ v, setV, m, ctx, notes = null }) {
         </section>
       </div>
       <aside class="bp-room__side bp-stack">
-        ${v.me.canAct && v.me.how ? html`<div class="bp-here"><${Icon} name="check" size=${18} /><span>You’re here, ${v.me.how === 'remote' ? 'on video' : 'in the room'}.</span>${!ended ? html`<button type="button" class="bp-mini" disabled=${!!busy} onClick=${() => act({ action: 'checkin', how: v.me.how === 'remote' ? 'present' : 'remote' }, v.me.how === 'remote' ? 'Now in the room.' : 'Now on video.')}>${v.me.how === 'remote' ? 'I’m in the room now' : 'I’m on video now'}</button>` : null}</div>` : null}
+        ${v.me.canAct && v.me.how ? html`<div class="bp-here"><${Icon} name="check" size=${18} /><span>${ended ? 'You were here' : 'You’re here'}, ${v.me.how === 'remote' ? 'on video' : 'in the room'}.</span>${!ended ? html`<button type="button" class="bp-mini" disabled=${!!busy} onClick=${() => act({ action: 'checkin', how: v.me.how === 'remote' ? 'present' : 'remote' }, v.me.how === 'remote' ? 'Now in the room.' : 'Now on video.')}>${v.me.how === 'remote' ? 'I’m in the room now' : 'I’m on video now'}</button>` : null}</div>` : null}
         <section class="bp-card" aria-labelledby="dec-h">
           <h2 class="bp-h2" id="dec-h">Decisions${decided.length ? html`<span class="bp-count">${decided.length}</span>` : null}</h2>
           ${decided.length ? html`<ul class="bp-motions">${decided.map((x) => { const open = v.vote?.motionId === x.id && !ended; return html`<li class=${`bp-motion ${open ? 'is-open' : ''}`} key=${x.id}>
             <span class="bp-motion__icon" aria-hidden="true"><${Icon} name="gavel" size=${18} /></span>
             <div class="bp-motion__text"><p class="bp-motion__what">${x.text}</p><p class="bp-muted">${open ? 'Voting now' : tallyText(x) || ({ passed: 'Passed', failed: 'Did not pass', tabled: 'Tabled' }[x.result] || '')}</p></div>
-          </li>`; })}</ul>` : html`<p class="bp-muted">Motions show here as the board makes them.</p>`}
+          </li>`; })}</ul>` : html`<p class="bp-muted">${ended ? 'No votes were taken here. The minutes will say what the board decided.' : 'Motions show here as the board makes them.'}</p>`}
         </section>
         ${v.actions.length ? html`<section class="bp-card" aria-labelledby="la-h"><h2 class="bp-h2" id="la-h">Action items</h2>
           <ul class="bp-actions">${v.actions.map((a) => html`<li key=${a.id} class=${a.done ? 'is-done' : ''}>
@@ -2928,7 +2946,7 @@ function CashBlock({ n, data, m, asFiles = [], notes = null, again = false }) {
     <span class="bp-fig__label">${t.label}</span><span class="bp-agfig__value">${t.value}</span>${t.sub ? html`<span class=${`bp-fig__sub ${t.tone ? `is-${t.tone}` : ''}`}>${nbw(t.sub)}</span>` : null}
   </li>`)}</ul>` : null}
     <${YearCompare} books=${books} idp=${`y${m.id}`} as=${as} />
-    ${mixOf(books) ? html`<div class="bp-agmix"><p class="bp-fig__label">Where ${books.year}’s revenue came from</p><${RevenueMix} books=${books} /></div>` : null}
+    ${mixOf(books) ? html`<div class="bp-agmix"><${MixHead} books=${books} /><${RevenueMix} books=${books} /></div>` : null}
     ${storeOf(books) ? html`<div class="bp-agmix bp-agstore"><p class="bp-fig__label">The store, ${books.year} so far</p><${StoreFigures} books=${books} /></div>` : null}
     ${st ? html`<div class="bp-agstmts"><${Statements} s=${st} books=${books} idp=${`m${m.id}`} notes=${notes} /></div>` : null}
     ${asFiles.length ? html`<p class="bp-asfiles">Also as ${asFiles.length === 1 ? 'a file' : 'files'}: ${asFiles.map((f, i) => html`${i ? ', ' : ''}<a class="bp-link" ...${viewerLink(fv, i)}>${docTitle(f.name)}</a>`)}</p>` : null}`;
@@ -3046,17 +3064,29 @@ function AgendaRail({ sections, labels, extra, plan = null }) {
   </nav>`;
 }
 
-function MeetingDetail({ m, ctx, notes = null }) {
+function MeetingDetail({ m, ctx, notes = null, lv = null }) {
   const { data, d } = ctx;
   // (minutes in: the meeting's been held, whether or not the chair pressed End)
   const upcoming = m.date >= data.today && !heldEarly(m, data.today) && !m.minutesFrom;
+  // On its day, where it is, as Home says it (./dayPhase): once it has started, nobody's asked whether they'll come
+  const phase = upcoming ? dayPhase(m, data.today, lv) : null;
+  const started = phase === 'now' || phase === 'after';
+  // Over today (the chair's End, its minutes in, or past its end by the clock): nothing more about coming to it, no way
+  // to join, no calendar to add it to, no directions to the room (as Home's card has it)
+  const over = phase === 'after';
+  // A meeting ahead not shared with the board yet, where they present (data.presenting): only their own items, numbered
+  // as the whole agenda numbers them. Nothing else of it is theirs yet: who's coming, its run of show, the packet
+  const theirs = !!m.presenting;
   // A past meeting shows only the numbers locked into its packet; one ahead shows today's until then (one held early,
   // today's until its own are locked)
   const numbers = m.snapshot || (m.date >= data.today ? data.numbers : null);
   const c = attendanceCounts(m);
   const person = (p) => d.bySlug.get(p.slug) || p;
-  const here = m.attendance.filter((p) => p.status === 'present' || p.status === 'remote');
-  const away = m.attendance.filter((p) => p.status === 'absent' || p.status === 'excused');
+  // Who was there: the board members the count is of, their faces under it; staff and guests there said apart, never in it
+  const here = m.attendance.filter((p) => p.kind === 'board' && (p.status === 'present' || p.status === 'remote'));
+  const away = m.attendance.filter((p) => p.kind === 'board' && (p.status === 'absent' || p.status === 'excused'));
+  const also = m.attendance.filter((p) => p.kind !== 'board' && (p.status === 'present' || p.status === 'remote'));
+  const onVideo = here.filter((p) => p.status === 'remote').length;
   // A file that goes with an agenda item is under that item; the rest come after the agenda
   const placed = new Set(m.sections.flatMap((s) => s.items.flatMap((it) => it.docs || [])));
   const docsOf = (it) => itemFiles(m, it, data.meetings);
@@ -3064,23 +3094,28 @@ function MeetingDetail({ m, ctx, notes = null }) {
   const signed = m.files.filter((f) => f.kind === 'signed').at(-1);
   const signature = data.minutesSigned?.[m.id] || null;
   const looking = !adminHere(ctx) && !data.me.slug;
-  const printable = m.files.some((f) => f.kind !== 'signed') || m.sections.some((s) => s.items.length);
+  // Print it all: the agenda and its files ahead of a meeting; once it's held, its record (who was there, the
+  // decisions, the action items, the minutes) as well
+  const printable = !theirs && (m.files.some((f) => f.kind !== 'signed') || m.sections.some((s) => s.items.length) || m.actions.length > 0
+    || (!upcoming && (m.attendance.some((p) => p.status) || m.motions.some((x) => x.text) || m.files.length > 0)));
   const minutesFile = minutesFileOf(m);
-  const video = upcoming ? videoOf(m) : '';
+  const video = upcoming && !over ? videoOf(m) : '';
   const isNext = upcoming && m.id === d.featured?.id;
   const sections = m.sections.filter((s) => s.title || s.items.length);
   // The first item showing the money has QuickBooks' year and statements; another shows its figures (as the screen)
   const moneyFirst = sections.flatMap((s) => s.items).find((it) => showsOf(it).includes('cash'))?.id || '';
   const hasAgenda = sections.some((s) => s.items.length);
-  const labels = new Map(agendaItems(m).map((x) => [x.id, x.label]));
+  const labels = new Map(theirs ? sections.flatMap((s) => s.items.map((it) => [it.id, labelOf(m, it)])) : agendaItems(m).map((x) => [x.id, x.label]));
+  // (their items' parts by the whole agenda's numbers too)
+  const partNo = (s, si) => String((theirs && s.items[0]?.sectionN) || si + 1).padStart(2, '0');
   // One person (or the same people) presenting every item of a part: named once, on the part, as the screen's card does
   const oneWho = (s) => {
     const whos = s.items.map((it) => presentersOf(it, d.people));
     const key = (ws) => ws.map((p) => p.slug || p.name).join('|');
     return s.items.length > 1 && whos[0].length && whos.every((ws) => key(ws) === key(whos[0])) ? whos[0].map(person) : null;
   };
-  // Ahead of the meeting, each part's time in the run of show ("8:25 · 60 min")
-  const plan = upcoming ? sectionPlan(m) : null;
+  // Ahead of the meeting, each part's time in the run of show ("8:25 · 60 min"): never shared out among only their items
+  const plan = upcoming && !theirs ? sectionPlan(m) : null;
   const timeOf = (s) => { const t = plan?.get(s.id); return t ? nb([t.start ? clock(t.start) : '', `${t.minutes} min`].filter(Boolean).join(' · ')) : ''; };
   const i = d.byDate.findIndex((x) => x.id === m.id);
   const before = i > 0 ? d.byDate[i - 1] : null;
@@ -3089,6 +3124,7 @@ function MeetingDetail({ m, ctx, notes = null }) {
   const quorum = need && c.boardHere ? c.boardHere >= need : null;
   const decided = m.motions.filter((x) => x.text);
   const presenting = [...new Map(m.sections.flatMap((s) => s.items.flatMap((it) => presentersOf(it, d.people))).map((p) => [p.slug || p.name, person(p)])).values()];
+  // Where: its address a way there only while there's still coming to it (held or over, it's said, never linked)
   const place = [m.location, m.address].filter(Boolean);
   const extra = [
     !upcoming && decided.length ? { id: 'decisions', title: 'Decisions', icon: 'gavel' } : null,
@@ -3097,61 +3133,63 @@ function MeetingDetail({ m, ctx, notes = null }) {
   ].filter(Boolean);
   // The minutes as written and the signed copy, under who was there
   const recordLinks = !upcoming && (signed || minutesFile) ? html`<p class="bp-aghero__links bp-noprint">${minutesFile ? html`<a class="bp-link" ...${viewerLink(asViewer([minutesFile]), 0)}>The minutes as written</a>` : null}${signed ? html`<a class="bp-link" ...${viewerLink(asViewer([signed]), 0)}>The signed copy</a>` : null}</p>` : null;
+  const said = minutesState(m);
   const status = upcoming
-    ? (m.date === data.today ? 'Today' : inWords(m.date, data.today))
-    : m.minutes === 'approved' ? `Minutes approved${m.approvedOn ? ` ${shortDate(m.approvedOn).replace(/, \d{4}$/, '')}` : ''}` : 'Draft minutes';
+    ? (m.date === data.today ? dayStatus(m, phase) : inWords(m.date, data.today))
+    : said === 'approved' ? `Minutes approved${m.approvedOn ? ` ${shortDate(m.approvedOn).replace(/, \d{4}$/, '')}` : ''}` : MINUTES_SAID[said];
   return html`
     <a class="bp-back bp-noprint" href="#/meetings"><${Icon} name="back" size=${18} />All meetings</a>
     <header class=${`bp-aghero ${upcoming ? '' : 'is-past'}`}>
       <div class="bp-aghero__main">
-        <p class="bp-eyebrow">${upcoming ? (m.pending ? 'Agenda coming' : 'Board meeting agenda') : 'Board meeting minutes'}<span class=${`bp-soon ${m.minutes === 'approved' && !upcoming ? 'is-ok' : ''}`}>${status}</span>${m.preview ? html`<span class="bp-soon is-preview" title="Only you see it. Share it in Board and the board sees it as it is here">Not shared yet</span>` : null}</p>
+        <p class="bp-eyebrow">${theirs ? 'Board meeting' : upcoming ? (m.pending ? 'Agenda coming' : 'Board meeting agenda') : said === 'none' ? 'Board meeting' : 'Board meeting minutes'}<span class=${`bp-soon ${said === 'approved' && !upcoming ? 'is-ok' : ''} ${phase === 'now' ? 'is-live' : ''}`}>${phase === 'now' ? html`<span class="bp-live-dot" aria-hidden="true"></span>` : null}${status}</span>${m.preview ? html`<span class="bp-soon is-preview" title="Only you see it. Share it in Board and the board sees it as it is here">Not shared yet</span>` : null}${theirs ? html`<span class="bp-soon is-preview">Not shared yet</span>` : null}</p>
         <h1 class="bp-aghero__title">${meetingName(m)}</h1>
         <ul class="bp-aghero__facts">
           <li><${DateTile} d=${m.date} big head /><span><strong>${dayOf(m.date)}</strong><span>${nbw(nb([m.start ? timeRange(m.start, m.end) : '', String(m.date).slice(0, 4)].filter(Boolean).join(' · ')))}</span></span></li>
-          ${place.length ? html`<li><span class="bp-aghero__ico"><${Icon} name="pin" /></span><span><strong>${m.location || m.address}</strong>${m.address ? html`<a href=${mapsHref(m.address)} target="_blank" rel="noopener">${m.location ? m.address : 'Directions'}</a>` : null}</span></li>` : null}
+          ${place.length ? html`<li><span class="bp-aghero__ico"><${Icon} name="pin" /></span><span><strong>${m.location || m.address}</strong>${m.address && upcoming && !over ? html`<a href=${mapsHref(m.address)} target="_blank" rel="noopener">${m.location ? m.address : 'Directions'}</a>` : m.address && m.location ? html`<span>${m.address}</span>` : null}</span></li>` : null}
           ${video && m.date !== data.today ? html`<li><span class="bp-aghero__ico"><${Icon} name="video" /></span><span><strong>${joinLabel(video).replace(/^Join (with|by) /, '').replace(/^video$/, 'Video call')}</strong><a href=${video} target="_blank" rel="noopener">Join from anywhere</a></span></li>` : null}
         </ul>
-        ${upcoming && m.inviteNote ? html`<p class="bp-aghero__note">${m.inviteNote}</p>` : null}
+        ${theirs ? html`<p class="bp-aghero__note">The board sees this meeting once it’s shared. Until then, only the items you present show here.</p>` : upcoming && !over && m.inviteNote ? html`<p class="bp-aghero__note">${m.inviteNote}</p>` : null}
         <div class="bp-aghero__actions bp-noprint">
           ${video && m.date === data.today ? html`<a class="bp-btn bp-btn--primary" href=${video} target="_blank" rel="noopener"><${Icon} name="video" />${joinLabel(video)}</a>` : null}
           ${data.me.admin && !AS_BOARD && !PREVIEW && upcoming && hasAgenda ? html`<a class="bp-btn bp-btn--primary" href=${`/admin/board/?present#/meetings/${encodeURIComponent(m.id)}/screen`} target=${`soard-screen-${m.id}`} rel="noopener" title="The presentation in its own window: → and ← or a clicker move it"><${Icon} name="present" />Present</a>` : null}
           ${adminHere(ctx) && !m.practice ? html`<a class="bp-btn" href=${`/admin/#board/meeting/${encodeURIComponent(m.id)}`}><${Icon} name="edit" />Edit the agenda</a>` : null}
           ${printable ? html`<${PrintAll} m=${m} ctx=${ctx} />` : null}
-          ${upcoming && (!m.pending || m.onCalendar) ? html`<${OnCalendar} m=${m} data=${data} />` : null}
+          ${upcoming && !over && !theirs && (!m.pending || m.onCalendar) ? html`<${OnCalendar} m=${m} data=${data} />` : null}
         </div>
       </div>
       <aside class="bp-aghero__side">
-        ${upcoming && (data.me.slug || AS_BOARD || PREVIEW) ? html`<div class="bp-aghero__card"><${Rsvp} m=${m} ctx=${ctx} /></div>` : null}
+        ${upcoming && !started && !theirs && (data.me.slug || AS_BOARD || PREVIEW) ? html`<div class="bp-aghero__card"><${Rsvp} m=${m} ctx=${ctx} /></div>` : null}
         ${notes?.can ? html`<div class="bp-aghero__card bp-aghero__card--minutes bp-noprint"><${TakeMinutes} m=${m} ctx=${ctx} noting=${notes.noting} setNoting=${notes.setNoting} /></div>` : null}
         ${!notes?.can && !upcoming && correctable(m) ? html`<div class="bp-aghero__card bp-noprint"><${ReadFirst} m=${m} ctx=${ctx} readOnly=${looking} /></div>` : null}
         ${mayntSign(m, ctx) ? null : html`<div class="bp-aghero__card bp-noprint"><${SignMinutes} m=${m} ctx=${ctx} /></div>`}
         ${!upcoming && c.boardHere ? html`<div class="bp-aghero__card bp-who" id="who">
           <p class="bp-aghero__big"><strong>${c.boardHere}</strong> of ${c.board} board members</p>
-          <p class="bp-who__q">${quorum === true ? html`<span class="bp-chip bp-chip--ok"><${Icon} name="check" size=${14} />A quorum</span>` : quorum === false ? html`<span class="bp-chip bp-chip--warn">Short of a quorum (${need})</span>` : null}${c.remote ? html`<span class="bp-muted">${c.remote} by video</span>` : null}</p>
+          <p class="bp-who__q">${quorum === true ? html`<span class="bp-chip bp-chip--ok"><${Icon} name="check" size=${14} />A quorum</span>` : quorum === false ? html`<span class="bp-chip bp-chip--warn">Short of a quorum (${need})</span>` : null}${onVideo ? html`<span class="bp-muted">${onVideo} by video</span>` : null}</p>
           <${Faces} people=${here.map(person)} max=${9} size=${34} />
           ${away.length ? html`<p class="bp-muted bp-who__away">Not there: ${away.map((p) => `${p.name}${p.status === 'excused' ? ' (excused)' : ''}`).join(', ')}</p>` : null}
+          ${also.length ? html`<p class="bp-muted bp-who__also">Also there: ${also.map((p) => `${p.name}${p.status === 'remote' ? ' (by video)' : ''}`).join(', ')}</p>` : null}
           ${recordLinks}
-          ${signature ? html`<${SignedLine} s=${signature} />` : null}
+          ${signature ? html`<${SignedLine} s=${signature} id=${m.id} />` : null}
           <${Correct} m=${m} ctx=${ctx} Icon=${Icon} target="r" readOnly=${looking} cue="Correct who was there" />
         </div>` : null}
-        ${!upcoming && !c.boardHere && recordLinks ? html`<div class="bp-aghero__card">${recordLinks}${signature ? html`<${SignedLine} s=${signature} />` : null}</div>` : null}
+        ${!upcoming && !c.boardHere && (recordLinks || signature) ? html`<div class="bp-aghero__card">${recordLinks}${signature ? html`<${SignedLine} s=${signature} id=${m.id} />` : null}</div>` : null}
       </aside>
     </header>
-    ${hasAgenda && presenting.length ? html`<p class="bp-glance"><${Faces} people=${presenting} max=${7} size=${28} /><span>${presenting.length} presenting</span></p>` : null}
+    ${hasAgenda && presenting.length && !theirs ? html`<p class="bp-glance"><${Faces} people=${presenting} max=${7} size=${28} /><span>${presenting.length} presenting</span></p>` : null}
     <div class=${`bp-ag ${hasAgenda ? '' : 'is-empty'}`}>
-      ${hasAgenda && (sections.length > 2 || extra.length) ? html`<${AgendaRail} sections=${sections} labels=${labels} extra=${extra} plan=${plan} />` : null}
+      ${hasAgenda && !theirs && (sections.length > 2 || extra.length) ? html`<${AgendaRail} sections=${sections} labels=${labels} extra=${extra} plan=${plan} />` : null}
       <div class="bp-ag__body">
         ${hasAgenda ? sections.map((s, si) => html`<section class=${`bp-agsec ${s.items.length ? '' : 'is-open'}`} id=${`s-${s.id}`} key=${s.id} aria-labelledby=${`sh-${s.id}`}>
           <header class="bp-agsec__head">
-            <span class="bp-agsec__n" aria-hidden="true">${String(si + 1).padStart(2, '0')}</span>
+            <span class="bp-agsec__n" aria-hidden="true">${partNo(s, si)}</span>
             <h2 class="bp-agsec__title" id=${`sh-${s.id}`}>${s.title || 'Agenda'}</h2>
             <${Presenters} people=${oneWho(s) || []} />
             ${plan ? html`<span class="bp-agsec__meta bp-agsec__time">${!s.items.length ? 'Open to the floor · ' : ''}${timeOf(s)}</span>`
               : s.items.length > 1 ? html`<span class="bp-agsec__meta">${s.items.length} items</span>` : null}
           </header>
-          ${s.items.length ? html`<ol class="bp-agitems">${s.items.map((it) => html`<${AgendaItem} key=${it.id} m=${m} s=${s} it=${it} ctx=${ctx} label=${labels.get(it.id)} numbers=${numbers} upcoming=${upcoming} moneyFirst=${moneyFirst} named=${!!oneWho(s)} />`)}</ol>` : null}
+          ${s.items.length ? html`<ol class="bp-agitems">${s.items.map((it) => html`<${AgendaItem} key=${it.id} m=${m} s=${s} it=${it} ctx=${ctx} label=${labels.get(it.id)} numbers=${numbers} upcoming=${upcoming && !over} moneyFirst=${moneyFirst} named=${!!oneWho(s)} />`)}</ol>` : null}
           ${s.notes ? html`<div class="bp-agsec__notes"><${Notes} text=${s.notes} /></div>` : null}
-          <${Correct} m=${m} ctx=${ctx} Icon=${Icon} target=${`n:${s.id}`} was=${s.notes || ''} about=${s.title} offer=${!!s.notes} readOnly=${looking} />
+          <${Correct} m=${m} ctx=${ctx} Icon=${Icon} target=${`n:${s.id}`} was=${s.notes || ''} about=${s.title} offer=${!!s.notes && minutesOnPage(m)} readOnly=${looking} />
         </section>`) : html`<div class="bp-card bp-empty">
           <span class="bp-empty__icon"><${Icon} name="list" size=${26} /></span>
           <h2 class="bp-h2">${upcoming ? 'The agenda isn’t posted yet' : minutesFile ? 'The minutes are in the file' : 'No agenda was kept here'}</h2>
@@ -3228,7 +3266,10 @@ function Bars({ s }) {
 function ChangeAs({ as, setAs }) {
   return html`<div class="bp-impact__seg bp-chgas bp-noprint" role="group" aria-label="Changes as">${[['pct', '%', 'As percentages'], ['usd', '$', 'In dollars']].map(([k, l, t]) => html`<button type="button" key=${k} aria-pressed=${as === k} title=${t} onClick=${() => setAs(k)}><span aria-hidden="true">${l}</span><span class="sr-only">${t}</span></button>`)}</div>`;
 }
-const signedMoney = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : '–');
+/** Dollars with a true minus, or a blank said to a screen reader (never a dash, which one reads out as "en dash") */
+const signedMoney = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : html`<${Blank} />`);
+/** A change both ways (% | $, ./money.js Both), or a blank when there's nothing to set it beside */
+const BothOr = ({ as, pct, usd }) => (pct || usd ? html`<${Both} as=${as} pct=${pct} usd=${usd} />` : html`<${Blank} say="Nothing to compare" />`);
 const dayMonth = (d) => shortDate(d).replace(/, \d{4}$/, '');
 /** "September 30, 2026" */
 const fullDate = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
@@ -3239,6 +3280,10 @@ const fullDate = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateStri
  */
 function Statement({ id, title, rows, asOf, priorAsOf, heads = null, which = '', notes = null, as = 'pct' }) {
   const [all, setAll] = useKept(`${id}-all`, false);
+  // A line search found (`${id}-r<its row>`), folded away: every account shown, so it's there to land on
+  const aimed = aimNow();
+  const aim = typeof aimed === 'string' && aimed.startsWith(`${id}-r`) ? Number(aimed.slice(id.length + 2)) : -1;
+  useEffect(() => { if (aim >= 0 && !all && rows?.[aim] && !mainLines(rows, () => null).includes(rows[aim])) setAll(true); }, [aim]);
   if (!rows?.length) return null;
   const prior = rows.some((r) => r.p != null);
   // The presenter's notes (./review.js), each under its line; a line with one is a main line too
@@ -3259,7 +3304,7 @@ function Statement({ id, title, rows, asOf, priorAsOf, heads = null, which = '',
         <thead><tr><th scope="col"><span class="sr-only">Line</span></th><th scope="col" class="num">${heads ? heads[0] : shortDate(asOf)}</th>${prior ? html`<th scope="col" class="num">${heads ? heads[1] : shortDate(priorAsOf)}</th><th scope="col" class="num bp-stmt__chg">${heads ? heads[2] : 'Change'}</th>` : null}</tr></thead>
         <tbody>${shown.map((r, i) => (r.k === 'head'
           ? html`<tr class="bp-stmt__h" key=${i}><th scope="colgroup" colspan=${cols} style=${`--d:${r.d}`}>${r.label}</th></tr>`
-          : [html`<tr class=${`bp-stmt__${r.k} ${noteOf(r) ? 'bp-stmt__noted' : ''}`} key=${i} style=${`--d:${r.d}`}><th scope="row" style=${`--d:${r.d}`}>${r.label}</th><td class="num">${signedMoney(r.a)}</td>${prior ? html`<td class="num bp-stmt__prior" data-label=${heads ? heads[1] : shortDate(priorAsOf)}>${signedMoney(r.p)}</td><td class="num bp-stmt__chg" data-label=${heads ? heads[2] : null}><${Both} as=${as} pct=${heads ? overIn(r.a, r.p, 'pct') : changeIn(r.a, r.p, 'pct') || '–'} usd=${heads ? overIn(r.a, r.p, 'usd') : changeIn(r.a, r.p, 'usd') || '–'} /></td>` : null}</tr>`,
+          : [html`<tr class=${`bp-stmt__${r.k} ${noteOf(r) ? 'bp-stmt__noted' : ''}`} key=${i} id=${`${id}-r${rows.indexOf(r)}`} tabindex="-1" style=${`--d:${r.d}`}><th scope="row" style=${`--d:${r.d}`}>${r.label}</th><td class="num">${signedMoney(r.a)}</td>${prior ? html`<td class="num bp-stmt__prior" data-label=${heads ? heads[1] : shortDate(priorAsOf)}>${signedMoney(r.p)}</td><td class="num bp-stmt__chg" data-label=${heads ? heads[2] : null}><${BothOr} as=${as} pct=${heads ? overIn(r.a, r.p, 'pct') : changeIn(r.a, r.p, 'pct')} usd=${heads ? overIn(r.a, r.p, 'usd') : changeIn(r.a, r.p, 'usd')} /></td>` : null}</tr>`,
             noteOf(r) ? html`<tr class="bp-stmt__note" key=${`${i}-n`} style=${`--d:${r.d}`}><td colspan=${cols}><${NoteLine} note=${noteOf(r)} /></td></tr>` : null]))}</tbody>
       </table>
     </div>
@@ -3272,6 +3317,10 @@ function Statement({ id, title, rows, asOf, priorAsOf, heads = null, which = '',
  */
 function Statements({ s, books, idp = 'st', notes = null }) {
   const [which, setWhich] = useKept(`${idp}-which`, 'act');
+  // A line search found on another statement than the one shown: that one shown (./portal.js search, `${idp}-<which>-r<row>`)
+  const aimed = aimNow();
+  const aim = typeof aimed === 'string' ? (aimed.match(new RegExp(`^${idp}-(act|bud|pos)-r\\d+$`)) || [])[1] : null;
+  useEffect(() => { if (aim && aim !== which) setWhich(aim); }, [aim]);
   const [as, setAs] = useChangeAs();
   // The activities, QuickBooks' budget against them (the board's budget, functions/api/_quickbooks.js budgetOf), and
   // the financial position: the ones the books have
@@ -3279,7 +3328,7 @@ function Statements({ s, books, idp = 'st', notes = null }) {
   const views = [['act', 'Activities', s?.activity?.length], ['bud', 'Budget', bud], ['pos', 'Financial position', s?.position?.length]].filter((v) => v[2]);
   if (!views.length) return null;
   const show = views.some((v) => v[0] === which) ? which : views[0][0];
-  const budWhen = bud ? `QuickBooks’ budget, ${bud.name}, through ${fullDate(bud.asOf)}: ${budgetMonths(bud.months)} of its ${bud.of} months${stepText(bud.step)}. Over (under) is the actual less the budget.` : '';
+  const budWhen = bud ? `${budgetName(bud, books?.year)}, through ${fullDate(bud.asOf)}: ${budgetMonths(bud.months)} of its ${bud.of} months${stepText(bud.step)}. Over (under) is the actual less the budget.` : '';
   return html`<div class="bp-stmts">
     <div class="bp-stmts__top">
       <p class="bp-stmts__when">${show === 'bud' ? budWhen : html`From QuickBooks, as of ${fullDate(s.asOf)}${s.closed ? ', the day the books are closed through' : ', the end of the last full month'}, beside the same day a year before.${books?.qboYearStarts ? ` QuickBooks’ settings start its year in ${books.qboYearStarts}, so its Net Income line counts from ${books.qboYearStarts} 1.` : ''}`}</p>
@@ -3316,42 +3365,49 @@ function PartsBar({ label, parts, total }) {
 function BooksYear({ b }) {
   const [as, setAs] = useChangeAs();
   const ly = b.lastYear;
-  // Expenses as the budget counts them, then the in kind that never left the bank, so the net is still QuickBooks'
-  const nc = b.nonCash > 0;
-  const lyNc = typeof ly?.nonCash === 'number';
-  // Read down, it adds up: revenue, less the cash spent and the in kind used, is the net (the two expense lines side
-  // by side, neither under the other)
-  const lyNet = typeof ly?.net === 'number' ? ly.net : typeof ly?.revenue === 'number' && typeof ly?.expenses === 'number' ? ly.revenue - ly.expenses : null;
+  // The three figures the year comes down to, and they add up: revenue less expenses is the net. In kind is left out
+  // of both sides, as the figures above count it (./money.js yearFigures), and said once under them
+  const y = yearFigures(b);
   const rows = [
-    ['Revenue', b.revenue, ly?.revenue, 'line'],
-    ...(nc ? [['Cash expenses', spentOf(b), lyNc ? ly.expenses - ly.nonCash : null, 'line'], ['In kind expenses (not cash)', b.nonCash, lyNc ? ly.nonCash : null, 'line']] : [['Expenses', b.expenses, ly?.expenses, 'line']]),
-    ['Net', b.net, lyNet, 'net'],
+    ['Revenue', y.revenue, y.last?.revenue ?? null, 'line'],
+    ['Expenses', y.expenses, y.last?.expenses ?? null, 'line'],
+    ['Net', y.net, y.last?.net ?? null, 'net'],
   ];
-  const lySpent = nc ? (lyNc && typeof ly?.full?.nonCash === 'number' ? [ly.expenses - ly.nonCash, ly.full.expenses - ly.full.nonCash] : null) : ly ? [ly.expenses, ly.full?.expenses] : null;
-  // The three figures the year comes down to, each against last year's same days
-  const figs = rows.filter(([label]) => !/^In kind/.test(label));
+  // (each line's place, where a search for its figures lands: ./figures.js)
+  const KEY = { Revenue: 'rev', Expenses: 'exp', Net: 'net' };
+  const nc = typeof b.nonCash === 'number';
+  const lySpent = nc ? (typeof ly?.nonCash === 'number' && typeof ly?.full?.nonCash === 'number' ? [ly.expenses - ly.nonCash, ly.full.expenses - ly.full.nonCash] : null) : ly ? [ly.expenses, ly.full?.expenses] : null;
+  const dollars = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : '');
+  // QuickBooks' own three, in kind and depreciation in (its statement of activities has them so), to read the two together
+  const own = y.inKind && typeof y.books.revenue === 'number' && typeof y.books.expenses === 'number'
+    ? `As QuickBooks has them, with in kind and depreciation: revenue ${dollars(y.books.revenue)}, expenses ${dollars(y.books.expenses)}, net ${dollars(y.books.net)}.` : '';
   return html`<section class="bp-card bp-yearcard" aria-labelledby="by-h" id="year" tabindex="-1">
     <${SecHead} id="by-h" title="The year so far" sub=${`From QuickBooks, January 1 to ${dayMonth(b.through)}`}>${ly ? html`<${ChangeAs} as=${as} setAs=${setAs} />` : null}</${SecHead}>
-    <ul class="bp-yfigs">${figs.map(([label, a, p, kind]) => html`<li key=${label} class=${kind === 'net' ? 'is-net' : ''}>
+    <ul class="bp-yfigs">${rows.map(([label, a, p, kind]) => html`<li key=${label} id=${`yf-${KEY[label]}`} class=${kind === 'net' ? 'is-net' : ''}>
       <span class="bp-yfigs__label">${label}</span>
       <strong class="bp-yfigs__value">${signedMoney(a)}</strong>
-      ${ly && typeof p === 'number' ? html`<span class="bp-yfigs__chg"><${Both} as=${as} pct=${`${changeIn(a, p, 'pct')} on ${ly.year}’s same days`} usd=${`${changeIn(a, p, 'usd', { short: true })} on ${ly.year}’s same days`} /></span>` : null}
+      ${ly && typeof p === 'number' && changeIn(a, p, 'pct') ? html`<span class="bp-yfigs__chg"><${Both} as=${as} pct=${`${changeIn(a, p, 'pct')} on ${ly.year}’s same days`} usd=${`${changeIn(a, p, 'usd', { short: true })} on ${ly.year}’s same days`} /></span>` : null}
     </li>`)}</ul>
+    ${y.inKind ? html`<p class="bp-note bp-yfigs__left">${nbw(inKindWords(y.inKind))}</p>` : null}
     <${YearCompare} books=${b} idp="fy" as=${as} />
     <${More} k="year-lines" summary=${ly ? `Line by line, beside ${ly.year}’s same days` : 'Line by line'}>
     <table class="bp-table bp-cmp">
       <thead><tr><th scope="col"><span class="sr-only">What</span></th><th scope="col" class="num">${b.year} so far</th>${ly ? html`<th scope="col" class="num">${ly.year}, same days</th><th scope="col" class="num">Change</th>` : null}</tr></thead>
-      <tbody>${rows.map(([label, a, p, kind]) => html`<tr class=${`bp-row--${kind}`} key=${label}><th scope="row">${label}</th><td class="num">${signedMoney(a)}</td>${ly ? html`<td class="num bp-cmp__ly" data-label=${`${ly.year}, same days`}>${signedMoney(p)}</td><td class="num bp-cmp__chg"><${Both} as=${as} pct=${changeIn(a, p, kind === 'net' ? 'usd' : 'pct') || '–'} usd=${changeIn(a, p, 'usd') || '–'} /></td>` : null}</tr>`)}</tbody>
+      <tbody>${rows.map(([label, a, p, kind]) => html`<tr class=${`bp-row--${kind}`} key=${label} id=${`yl-${KEY[label]}`}><th scope="row">${label}</th><td class="num">${signedMoney(a)}</td>${ly ? html`<td class="num bp-cmp__ly" data-label=${`${ly.year}, same days`}>${signedMoney(p)}</td><td class="num bp-cmp__chg"><${BothOr} as=${as} pct=${changeIn(a, p, kind === 'net' ? 'usd' : 'pct')} usd=${changeIn(a, p, 'usd')} /></td>` : null}</tr>`)}</tbody>
     </table>
-    ${ly?.full?.revenue > 0 ? html`<p class="bp-note">${nbw(`By this day last year, ${Math.round((ly.revenue / ly.full.revenue) * 100)}% of ${ly.year}’s revenue (${compact(ly.full.revenue)}) had come in${lySpent?.[1] > 0 ? `, and ${Math.round((lySpent[0] / lySpent[1]) * 100)}% of its spending had gone out` : ''}.`)}</p>` : null}
+    ${own ? html`<p class="bp-note" id="year-own">${nbw(own)}</p>` : null}
+    ${ly?.full?.revenue > 0 ? html`<p class="bp-note" id="year-ly">${nbw(`By this day last year, ${Math.round((ly.revenue / ly.full.revenue) * 100)}% of ${ly.year}’s revenue (${compact(ly.full.revenue)}) had come in${lySpent?.[1] > 0 ? `, and ${Math.round((lySpent[0] / lySpent[1]) * 100)}% of its spending had gone out` : ''}.`)}</p>` : null}
     </${More}>
   </section>`;
 }
 
 /** Where the year's money came from, by category, and where it went, by purpose (QuickBooks) */
 function MoneyMix({ b }) {
-  return html`<section class="bp-card bp-mixcard" aria-labelledby="mix-h2">
-    <${SecHead} id="mix-h2" title="Where the money came from" sub=${`${b.year} so far, by category`} />
+  // (the same revenue as the figures above: in kind left out when they leave it out, and said so here too, in the words
+  // the mix says it in wherever it's shown)
+  const left = mixLeftOut(mixOf(b));
+  return html`<section class="bp-card bp-mixcard" aria-labelledby="mix-h2" id="mixcard">
+    <${SecHead} id="mix-h2" title="Where the money came from" sub=${nbw(`${b.year} so far, by category${left ? `, ${left}` : ''}`)} />
     ${mixOf(b) ? html`<${RevenueMix} books=${b} table=${true} />` : null}
     ${b.functions ? html`<div class="bp-meters bp-meters--went"><${PartsBar} label="Where it went, by purpose" parts=${b.functions.list} total=${b.functions.total} /></div>` : null}
   </section>`;
@@ -3361,7 +3417,7 @@ function MoneyMix({ b }) {
 function StoreCard({ b }) {
   return html`<section class="bp-card bp-storecard" aria-labelledby="store-h2" id="store" tabindex="-1">
     <${SecHead} id="store-h2" title="The store" sub=${`${b.year} so far, beside last year’s same days`} />
-    <${StoreFigures} books=${b} />
+    <${StoreFigures} books=${b} idp="store" />
     <${More} k="store-lines" summary="Line by line">
       <${StoreTable} books=${b} />
       <p class="bp-note">${nbw('The store’s staff, rent and utilities are in SOARD’s shared costs in QuickBooks, so its profit is before them.')}</p>
@@ -3395,7 +3451,7 @@ function CashChart({ rows }) {
         </li>`;
       })}
     </ol>
-    ${t ? html`<span class="bp-ytip" style=${`--x:${((tip + 0.5) / list.length) * 100}%;--th:${(t.total / top) * 100}`} aria-hidden="true"><strong>${nameOf(t)}</strong>${money(t.total)}${was ? ` · ${t.total >= was.total ? '▲' : '▼'} ${compact(Math.abs(t.total - was.total))} on the month` : ''}</span>` : null}
+    ${t ? html`<span class="bp-ytip" style=${`--x:${((tip + 0.5) / list.length) * 100}%;--th:${(t.total / top) * 100}`} aria-hidden="true"><strong>${nameOf(t)}</strong>${money(t.total)}${was ? ` · ${changeIn(t.total, was.total, 'usd', { short: true }) === 'Even' ? 'Even with the month before' : `${changeIn(t.total, was.total, 'usd', { short: true })} on the month`}` : ''}</span>` : null}
   </div>`;
 }
 
@@ -3422,7 +3478,7 @@ function BudgetCard({ b }) {
       <p class="bp-budget__sub">${nbw(`${pctOf(x)}% of the ${money(x.budget)} budget${paceText(x) ? ` · ${paceText(x)}` : ''}${x.inKind ? ` · not counting ${compact(x.inKind)} in kind` : ''}`)}</p>
     </li>`)}</ul>
     ${vf ? html`<p class="bp-note">The budget: <a class="bp-link" ...${viewerLink(vf, 0)}>${titleOf(b.file.name)}</a>${b.meeting ? html`, in the <a class="bp-link" href=${`#/meetings/${b.meeting.id}`} onClick=${claimMorph}>${meetingName(b.meeting)}</a> packet` : null}</p>` : null}
-    ${!vf && b.qbo ? html`<p class="bp-note">The budget: QuickBooks’ ${b.qbo}.</p>` : null}
+    ${!vf && b.qbo ? html`<p class="bp-note">The budget: ${budgetName(null, b.year)}.</p>` : null}
   </section>`;
 }
 
@@ -3444,7 +3500,7 @@ function CashCard({ data }) {
       <div>
         <h2 class="bp-h2" id="cash-h">Cash in the bank</h2>
         <p class="bp-cash__total">${money(cash.total)}</p>
-        <p class="bp-muted">${cash.asOf ? `As of ${cash.asOf}` : ''}${change != null ? html` · <span class=${change >= 0 ? 'bp-up' : 'bp-down'}>${change >= 0 ? 'up' : 'down'} ${money(Math.abs(change))}</span> from ${cash.priorAsOf || 'a year earlier'}` : ''}</p>
+        <p class="bp-muted">${cash.asOf ? `As of ${cash.asOf}` : ''}${change != null ? (Math.round(change) === 0 ? ` · even with ${cash.priorAsOf || 'a year earlier'}` : html` · <span class=${change >= 0 ? 'bp-up' : 'bp-down'}>${change >= 0 ? 'up' : 'down'} ${money(Math.abs(change))}</span> from ${cash.priorAsOf || 'a year earlier'}`) : ''}</p>
         ${cash.months != null ? html`<p class="bp-cash__months"><strong>${nbw(monthsPhrase(cash.months))}</strong>${nbw(` of spending${cash.perMonth ? `, at the ${money(cash.perMonth)} a month that left the bank in the last 12 months (moves between SOARD’s own accounts aside)` : ''}`)}</p>` : null}
       </div>
       ${cash.live
@@ -3489,13 +3545,14 @@ function FinancialsPage({ ctx }) {
   const spent = (p) => (p.makeovers || 0) + (p.store || 0) + (p.operating || 0);
   const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${money(Math.abs(n))}` : '');
   const monthShort = (ym) => new Date(`${ym}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+  // (each row's id, where search lands on its figures: ./figures.js, the same keys)
   const ytdRows = [
-    ['Money in', (p) => money(p.income), 'total'],
-    ['Money out', (p) => money(spent(p)), 'total'],
-    ['Makeovers', (p) => money(p.makeovers), 'part'],
-    ['The Sunny & Ranney store', (p) => money(p.store), 'part'],
-    ['Running SOARD', (p) => money(p.operating), 'part'],
-    ['Net', (p) => signed(p.net), 'net'],
+    ['Money in', (p) => money(p.income), 'total', 'in'],
+    ['Money out', (p) => money(spent(p)), 'total', 'out'],
+    ['Makeovers', (p) => money(p.makeovers), 'part', 'makeovers'],
+    ['The Sunny & Ranney store', (p) => money(p.store), 'part', 'store'],
+    ['Running SOARD', (p) => money(p.operating), 'part', 'operating'],
+    ['Net', (p) => signed(p.net), 'net', 'net'],
   ];
   // Tax returns and audits, a year to a row
   const fv = data.filings.map((x) => ({ name: `${x.title}.pdf`, type: 'application/pdf', url: x.url }));
@@ -3503,14 +3560,15 @@ function FinancialsPage({ ctx }) {
   const years = [...new Set(data.filings.filter((x) => typeOf(x) !== 'other').map((x) => String(x.year)))].sort().reverse();
   const shownYears = allYears ? years : years.slice(0, 6);
   const others = data.filings.filter((x) => typeOf(x) === 'other');
-  const cell = (y, t) => { const x = data.filings.find((z) => String(z.year) === y && typeOf(z) === t); return x ? html`<a class="bp-doclink" ...${viewerLink(fv, data.filings.indexOf(x))}><${Icon} name="documents" size=${16} />Open</a>` : html`<span class="bp-muted" aria-label="None">–</span>`; };
+  const cell = (y, t) => { const x = data.filings.find((z) => String(z.year) === y && typeOf(z) === t); return x ? html`<a class="bp-doclink" ...${viewerLink(fv, data.filings.indexOf(x))}><${Icon} name="documents" size=${16} />Open</a>` : html`<span class="bp-muted">None</span>`; };
   // What the page holds, said once at the top (only what's here)
   const lede = `${andText([
     'The cash',
     books || f?.ytd || budgetRows(budget).length || (budget === undefined && budgetDue(data)) ? 'the year in numbers' : '',
     data.gifts ? 'its major gifts' : '',
     data.numbers.costs ? 'what makeovers cost' : '',
-    books?.statements || latest ? 'the statements from each meeting' : '',
+    books?.statements ? 'QuickBooks’ latest statements' : '',
+    latest ? 'the statements from each meeting' : '',
     years.length ? 'every tax return and audit' : '',
   ].filter(Boolean))}.`;
   // Peter, Nov 7 2026: "every card is maximized in size, we should do charts and where its a longer card a show more
@@ -3523,13 +3581,13 @@ function FinancialsPage({ ctx }) {
       ${f?.cash ? html`<div class="bp-live">
         <div class="bp-live__label">The next 13 weeks</div>
         <ul>
-          <li>The lowest point: ${money(f.cash.lowest.dollars)}${f.cash.lowest.week ? `, the week of ${shortDate(f.cash.lowest.week)}` : ''}${f.cash.cautiousLowest && f.cash.cautiousLowest.dollars !== f.cash.lowest.dollars ? ` (a cautious guess: ${money(f.cash.cautiousLowest.dollars)})` : ''}</li>
-          <li>In 13 weeks: ${money(f.cash.in13Weeks)}</li>
-          ${f.cash.floor ? html`<li>The least we keep in the bank: ${money(f.cash.floor)}${f.cash.belowFloor ? html` <span class="bp-chip bp-chip--warn">The forecast dips under it</span>` : null}</li>` : null}
+          <li id="ct-low">The lowest point: ${money(f.cash.lowest.dollars)}${f.cash.lowest.week ? `, the week of ${shortDate(f.cash.lowest.week)}` : ''}${f.cash.cautiousLowest && f.cash.cautiousLowest.dollars !== f.cash.lowest.dollars ? ` (a cautious guess: ${money(f.cash.cautiousLowest.dollars)})` : ''}</li>
+          <li id="ct-in13">In 13 weeks: ${money(f.cash.in13Weeks)}</li>
+          ${f.cash.floor ? html`<li id="ct-floor">The least we keep in the bank: ${money(f.cash.floor)}${f.cash.belowFloor ? html` <span class="bp-chip bp-chip--warn">The forecast dips under it</span>` : null}</li>` : null}
         </ul>
       </div>` : null}
       ${history.length > 1 ? html`<${More} k="cash-months" summary="Month-end balances"><table class="bp-table"><thead><tr><th scope="col">Month</th><th scope="col" class="num">Balance</th><th scope="col" class="num">Change</th></tr></thead><tbody>
-        ${history.map((r, k) => { const prev = history[k + 1]; const dd = prev ? r.total - prev.total : null; return html`<tr key=${r.month}><th scope="row">${monthOf(r.month)}</th><td class="num">${money(r.total)}</td><td class="num">${dd == null ? '' : `${dd >= 0 ? '+' : '−'}${money(Math.abs(dd))}`}</td></tr>`; })}
+        ${history.map((r, k) => { const prev = history[k + 1]; const dd = prev ? r.total - prev.total : null; return html`<tr key=${r.month}><th scope="row">${monthOf(r.month)}</th><td class="num" id=${`cm-${r.month}`}>${money(r.total)}</td><td class="num" id=${`cm-${r.month}-chg`}>${dd == null ? '' : Math.round(dd) === 0 ? 'Even' : `${dd >= 0 ? '+' : '−'}${money(Math.abs(dd))}`}</td></tr>`; })}
       </tbody></table><//>` : null}
     </section>` : null;
   // Without QuickBooks, Mercury's own record of the year
@@ -3537,13 +3595,13 @@ function FinancialsPage({ ctx }) {
       <${SecHead} id="io-h" title="Money in and out" sub=${`Through ${monthName(f.ytd.through)} ${Number(String(f.ytd.through).slice(8, 10)) || ''}`} />
       <table class="bp-table">
         <thead><tr><th scope="col"><span class="sr-only">What</span></th><th scope="col" class="num">${f.ytd.year} so far</th>${f.lastYtd ? html`<th scope="col" class="num">${f.lastYtd.year}, same days</th>` : null}</tr></thead>
-        <tbody>${ytdRows.map(([label, val, kind]) => html`<tr class=${`bp-row--${kind}`} key=${label}><th scope="row">${label}</th><td class="num">${val(f.ytd)}</td>${f.lastYtd ? html`<td class="num">${val(f.lastYtd)}</td>` : null}</tr>`)}</tbody>
+        <tbody>${ytdRows.map(([label, val, kind, k]) => html`<tr class=${`bp-row--${kind}`} key=${label} id=${`io-${k}`}><th scope="row">${label}</th><td class="num">${val(f.ytd)}</td>${f.lastYtd ? html`<td class="num">${val(f.lastYtd)}</td>` : null}</tr>`)}</tbody>
       </table>
-      <p class="bp-note">Live from Mercury’s record. The official books are in Mercury Books.${f.perMakeover ? ` ${plural(f.perMakeover.count, 'makeover')} finished this year, ${money(f.perMakeover.average)} each on average.` : ''}</p>
+      <p class="bp-note" id="io-note">Live from Mercury’s record. The official books are in Mercury Books.${f.perMakeover ? ` ${plural(f.perMakeover.count, 'makeover')} finished this year, ${money(f.perMakeover.average)} each on average.` : ''}</p>
       ${f.months?.length ? html`<${More} k="months" summary="Month by month">
         <table class="bp-table">
           <thead><tr><th scope="col">Month</th><th scope="col" class="num">In</th><th scope="col" class="num">Out</th><th scope="col" class="num">Net</th></tr></thead>
-          <tbody>${[...f.months].reverse().map((r) => html`<tr key=${r.month}><th scope="row">${monthShort(r.month)}</th><td class="num">${money(r.income)}</td><td class="num">${money(spent(r))}</td><td class="num">${signed(r.net)}</td></tr>`)}</tbody>
+          <tbody>${[...f.months].reverse().map((r) => html`<tr key=${r.month}><th scope="row">${monthShort(r.month)}</th><td class="num" id=${`io-m-${r.month}-in`}>${money(r.income)}</td><td class="num" id=${`io-m-${r.month}-out`}>${money(spent(r))}</td><td class="num" id=${`io-m-${r.month}-net`}>${signed(r.net)}</td></tr>`)}</tbody>
         </table>
       <//>` : null}
     </section>` : null;
@@ -3552,17 +3610,19 @@ function FinancialsPage({ ctx }) {
   const storeCard = books && storeOf(books) ? html`<${StoreCard} b=${books} />` : null;
   const mixCard = books && (mixOf(books) || books.functions) ? html`<${MoneyMix} b=${books} />` : null;
   const side = [budgetCard, storeCard].filter(Boolean);
+  // QuickBooks' statements as they are now (as of the last full month's end), then the files of the newest meeting's
+  // packet, each said for what it is: the packet's are as of that meeting, never the ones drawn above
   const statements = books?.statements ? html`<section class="bp-card bp-latest" aria-labelledby="st-h">
-      <${SecHead} id="st-h" title="The statements" sub="The ones each meeting’s packet holds, locked on its day" />
+      <${SecHead} id="st-h" title="The statements" sub="The latest from QuickBooks" />
       <${Statements} s=${books.statements} books=${books} />
-      ${latest ? html`<${More} k="packet" summary=${`From the ${meetingName(latest)} packet, ${longDate(latest.date)}`}><${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} /><//>` : null}
+      ${latest ? html`<${More} k="packet" summary=${`The statements in the ${meetingName(latest)} packet, ${shortDate(latest.date)}`}><${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} /><//>` : null}
     </section>`
     : latest ? html`<section class="bp-card bp-latest" aria-labelledby="st-h">
       <${SecHead} id="st-h" title="The latest statements" sub=${html`From the <a class="bp-link" href=${`#/meetings/${latest.id}`} onClick=${claimMorph}>${meetingName(latest)}</a>, ${longDate(latest.date)}`} />
       <${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} />
     </section>` : html`<section class="bp-card"><h2 class="bp-h2">Financial statements</h2><p class="bp-muted">The income statement and balance sheet from each meeting show here.</p></section>`;
   const papers = [
-    s ? html`<section class="bp-card" aria-labelledby="yr-h" key="yr">
+    s ? html`<section class="bp-card" aria-labelledby="yr-h" key="yr" id="glance">
         <${SecHead} id="yr-h" title=${`${s.year} at a glance`} sub=${`From the ${s.year} tax return`} />
         <${Bars} s=${s} />
       </section>` : null,
@@ -3630,7 +3690,9 @@ function PeoplePage({ ctx }) {
   const { people } = ctx.data;
   useFocusTarget();
   // Email all: the people Board → Members writes to, each by their own address, from the mail this member already uses
-  const { to: everyone = [], missing = [] } = ctx.data.emailAll || {};
+  // (the list couldn't be read just now: Email all says so and looks again, never a list shrunk to whoever came back)
+  const { to: everyone = [], missing = [], unread = '' } = ctx.data.emailAll || {};
+  const notRead = () => { ctx.say(unread, 'warn'); ctx.load(); };
   const copyAll = async () => {
     try { await navigator.clipboard.writeText(everyone.join(', ')); ctx.say(`Copied ${everyone.length === 1 ? 'the address' : `${everyone.length} addresses`}`); } catch { ctx.say('Couldn’t copy them here. Try Email all instead.', 'warn'); }
   };
@@ -3641,7 +3703,7 @@ function PeoplePage({ ctx }) {
     <header class="bp-pagehead bp-rise" style=${rise(0)}><div><h1 class="bp-h1">People</h1><p class="bp-lede">${people.advisory.length ? 'The board, the team and the Advisory Board.' : 'The board and the team.'} Write to a board member from their row, or to everyone with Email all.</p></div></header>
     <section class="bp-card bp-gap bp-rise" style=${rise(1)} aria-labelledby="bd-h">
       <${SecHead} id="bd-h" title="Board of Directors" count=${people.board.length} sub=${everyone.length && missing.length ? `${andText(missing)} ${missing.length === 1 ? 'has' : 'have'} no email on file, so Email all won’t reach ${missing.length === 1 ? 'them' : 'those members'}.` : ''}>
-        ${everyone.length ? html`<p class="bp-person__acts bp-emailall">
+        ${unread ? html`<p class="bp-person__acts bp-emailall"><button type="button" class="bp-btn bp-btn--quiet bp-btn--sm" onClick=${notRead}><${Icon} name="mail" size=${17} />Email all</button></p>` : everyone.length ? html`<p class="bp-person__acts bp-emailall">
           <a class="bp-btn bp-btn--quiet bp-btn--sm" href=${`mailto:${everyone.join(',')}`}><${Icon} name="mail" size=${17} />Email all</a>
           <button type="button" class="bp-iconbtn" onClick=${copyAll} aria-label="Copy everyone’s email address" title="Copy the addresses"><${Icon} name="copy" size=${17} /></button>
         </p>` : null}
@@ -3878,9 +3940,23 @@ function SignBar({ fields, vals, next }) {
   </div>`;
 }
 
-/** Whether this person isn't being asked to sign these minutes: only the secretary is, and only minutes approved and not yet signed (or changed since) */
-const mayntSign = (m, ctx) => !(ctx.d.me?.seat === 'secretary' && m.shared && m.minutes === 'approved' && (minutesToSign(m) || (ctx.data.minutesSigned?.[m.id]?.changed && String(m.approvedOn || '') >= MINUTES_SIGN_FROM)));
-const SignedLine = ({ s }) => html`<p class="mfix-signed bp-noprint">Signed by ${s.name}, ${shortDate(s.at.slice(0, 10)).replace(/, \d{4}$/, '')}${s.changed ? '. The minutes changed after that.' : s.made ? '' : '. The signed copy is being made.'}</p>`;
+/**
+ * Whether this person isn't being asked to sign these minutes: only the secretary is, and only minutes approved and not
+ * yet signed, or changed since (board-shared.js minutesToSign: the signature on record decides, for For you and here)
+ */
+const mayntSign = (m, ctx) => !(ctx.d.me?.seat === 'secretary' && m.shared && minutesToSign(m, ctx.data.minutesSigned?.[m.id]));
+/** Who signed the minutes, and the signed copy said on its own while it's being made (where the focus goes on signing) */
+const SignedLine = ({ s, id }) => html`<p class="mfix-signed bp-noprint" id=${`minutes-signed-${id}`} tabindex="-1">Signed by ${s.name}, ${shortDate(s.at.slice(0, 10)).replace(/, \d{4}$/, '')}${s.changed ? '. The minutes changed after that.' : s.made ? '' : '. The signed copy is being made.'}</p>`;
+/** The focus to the words that say the minutes are signed, once they're drawn (the box that asked has gone) */
+function toSignedLine(id) {
+  const until = Date.now() + 3000;
+  const go = () => {
+    const el = document.getElementById(`minutes-signed-${id}`);
+    if (el) el.focus();
+    else if (Date.now() < until) requestAnimationFrame(go);
+  };
+  requestAnimationFrame(go);
+}
 
 /** The secretary's signature on minutes the board approved: the one they adopted for the board's papers, or a first one */
 function SignMinutes({ m, ctx }) {
@@ -3902,11 +3978,18 @@ function SignMinutes({ m, ctx }) {
     const j = await call({ action: 'sign-minutes', meetingId: m.id, as: data.me.slug, mark: use, consent: !consented && agree });
     setBusy(false);
     if (!j.ok) { setProblem(j.error); if (j.who || j.reload) load({ keep: true }); return; }
-    setData((x) => ({ ...x, me: j.mark ? { ...x.me, mark: { ...j.mark, consented: true } } : x.me }));
+    // The signature ends the asking: this box and For you's to-do go at once, never waiting on the signed copy made
+    // from it after the answer (said on its own under who signed), and the focus goes to the words that say it's signed
+    setData((x) => {
+      const had = x.minutesSigned?.[m.id];
+      return { ...x, me: j.mark ? { ...x.me, mark: { ...j.mark, consented: true } } : x.me,
+        minutesSigned: { ...(x.minutesSigned || {}), [m.id]: { name: j.name, at: j.at, how: j.how, made: j.mark ? false : !!had?.made, changed: false } } };
+    });
+    say('Signed. Thank you. The signed copy stays with the meeting.');
+    toSignedLine(m.id);
     await load({ keep: true });
     // (the copy is made after the answer)
     for (const ms of [6000, 16000]) setTimeout(() => load({ keep: true }), ms);
-    say('Signed. Thank you. The signed copy stays with the meeting.');
   };
   return html`<div class="bp-minutes" role="group" aria-labelledby=${`${id}-t`} id=${id} tabindex="-1">
     <p class="bp-minutes__q" id=${`${id}-t`}>Sign the minutes</p>
@@ -4144,7 +4227,7 @@ function DocumentsPage({ ctx }) {
     data.meetings.some((m) => m.files.length) ? 'every file from every meeting' : '',
   ].filter(Boolean);
   const lede = said.length ? `${said.length > 2 ? `${said.slice(0, -1).join(', ')}, and ${said.at(-1)}` : said.join(' and ')}.`.replace(/^\w/, (c) => c.toUpperCase()) : 'SOARD’s papers, and every file from every meeting.';
-  const orgCard = html`<${OrgFacts} ctx=${ctx} terms=${terms} match=${hits} focus=${focusNext} papers=${formPapers(data)} />`;
+  const orgCard = html`<${OrgFacts} ctx=${ctx} terms=${terms} match=${hits} focus=${aimNow()} papers=${formPapers(data)} />`;
   // A signature that didn't go through on a paper no longer here (taken off, deleted)
   const lost = [...signTrouble.entries()].filter(([id, t]) => t.kind === 'gone' && !docs.some((x) => x.id === id && x.sign)).map(([id, t]) => ({ id, ...t, still: docs.some((x) => x.id === id) }));
   return html`
@@ -4368,6 +4451,35 @@ function loadWords(ids, again = false) {
 }
 const idsOf = (data) => data.meetings.flatMap((m) => m.files.map((f) => f.id)).sort().join(',');
 /**
+ * The families who applied, for the search: read by the route the Makeovers pages read them by (?families, kept in
+ * ./family-parts.js's cache, theirs too), so whoever can open a family's page finds them by name, and nobody else does.
+ * Asked for once the search is about to be used, and again ten minutes on
+ */
+let famsAsk = null;
+let famsAt = 0;
+const famSubs = new Set();
+function loadFamilies() {
+  if (famsAsk && Date.now() - famsAt < 10 * 60 * 1000) return famsAsk;
+  famsAt = Date.now();
+  const ask = famsAsk = readFamilies('families').then((j) => {
+    if (j?.ok) { familyCache.list = j; famSubs.forEach((f) => f(j)); return j; }
+    if (famsAsk === ask) famsAsk = null;
+    return familyCache.list;
+  });
+  return ask;
+}
+/** The families the search finds: what's kept now, then the answer once it comes */
+function useFamilies() {
+  const [fams, setFams] = useState(familyCache.list);
+  useEffect(() => {
+    const f = (j) => setFams(j);
+    famSubs.add(f);
+    loadFamilies().then((j) => { if (j) setFams(j); });
+    return () => famSubs.delete(f);
+  }, []);
+  return fams;
+}
+/**
  * { words, loading, failed, retry }: the files' words once `on` (something's being searched); what's kept already,
  * before. `failed`: they didn't come (the search says only titles were searched, and Try again asks again)
  */
@@ -4399,11 +4511,12 @@ const idle = (f) => (window.requestIdleCallback ? requestIdleCallback(f, { timeo
 function warmFind(soon = false) {
   const c = findCtx;
   if (!c?.data) return;
+  loadFamilies();
   loadWords(idsOf(c.data)).then((words) => {
     if (!words || warmedWords === words) return;
     if (warming?.words === words) { if (soon) warming.soon = true; return; }
     const run = warming = { words, soon };
-    const list = searchIndex(c.data, c.d, words);
+    const list = searchIndex(c.data, c.d, words, familyCache.list);
     let i = 0;
     const step = (deadline) => {
       if (warming !== run) return;
@@ -4414,7 +4527,7 @@ function warmFind(soon = false) {
       warming = null;
       warmSubs.forEach((f) => f());
       // (and the whole index made, so ⌘K opens on it)
-      idle(() => { if (findCtx?.data === c.data) indexFor(c.data, c.d, words); });
+      idle(() => { if (findCtx?.data === c.data) indexFor(c.data, c.d, words, familyCache.list); });
     };
     if (soon) setTimeout(step, 0); else idle(step);
   });
@@ -4460,9 +4573,12 @@ const partName = (t) => { const x = String(t).trim(); if (x.length <= 44) return
  * Everything the search finds, each { group, key, title, sub, hay (what's searched), body? (the words a match shows
  * from), date?, href | file, focus?, icon }. `key` names it across visits (what was opened lately)
  */
-function searchIndex(data, d, words = null) {
+function searchIndex(data, d, words = null, fams = null) {
   const out = [];
-  const byDate = [...data.meetings].sort((a, b) => b.date.localeCompare(a.date));
+  // The board's meetings, and one not shared with the board yet where they present (data.presenting): only what's theirs
+  // of it, its name and their own items with their documents, as its page shows them (the server sends no more)
+  const shown = new Set(data.meetings.map((m) => m.id));
+  const byDate = [...data.meetings, ...(data.presenting || []).filter((m) => !shown.has(m.id))].sort((a, b) => b.date.localeCompare(a.date));
   for (const m of byDate) {
     const sub = `${meetingName(m)} · ${shortDate(m.date)}`;
     const has = meetingTags(m, data, d);
@@ -4502,22 +4618,35 @@ function searchIndex(data, d, words = null) {
     const fw = words?.[`filing:${x.url}`] || '';
     out.push({ group: 'Files', key: `fl:${x.url}`, title: x.title, sub: 'Tax return or audit', hay: `${norm(`${x.title} ${x.year} tax return form 990 audit`)} ${fw}`, body: fw, pages: fw, date: x.year ? `${x.year}-12-31` : '', file: [fv, i], icon: 'financials' });
   });
-  // The money: where the year's revenue came from, and each major gift (who, the campaign)
-  const mix = mixOf(data.numbers.books);
-  for (const x of mix?.parts || []) out.push({ group: 'Money', key: `mix:${x.key}`, title: x.name, sub: `${money(x.amount)} of ${mix.year}’s revenue so far`, hay: norm([x.name, money(x.amount), ...(x.key === 'rest' ? [] : x.accounts || []), 'revenue raised income money'].join(' ')), href: '#/financials', focus: `mix-${x.key}`, icon: 'financials' });
-  // The smaller accounts inside "Everything else", each by its own name and amount
-  const named = new Set((mix?.parts || []).filter((x) => x.key !== 'rest').map((x) => x.key));
-  if (mix) for (const src of (data.numbers.books?.sources || []).filter((x) => !named.has(x.key) && x.amount > 0)) out.push({ group: 'Money', key: `src:${src.key}`, title: src.name, sub: `${money(src.amount)} of ${mix.year}’s revenue so far, in Everything else`, hay: norm([src.name, money(src.amount), ...(src.accounts || []), 'revenue'].join(' ')), href: '#/financials', focus: 'mix-rest', icon: 'financials' });
-  const store = storeOf(data.numbers.books);
-  if (store) out.push({ group: 'Money', key: 'store', title: 'The store', sub: `${money(store.lines[0].amount)} in sales, ${money(store.lines[2].amount)} profit before staff and rent, ${store.year} so far`, hay: norm(['store shop sales profit cost of goods', ...store.lines.flatMap((x) => [...x.accounts, money(x.amount)])].join(' ')), href: '#/financials', focus: 'store', icon: 'financials' });
-  for (const g of data.gifts?.list || []) out.push({ group: 'Money', key: `g:${g.id}`, title: `${money(g.cents / 100)} from ${giftWho(g)}`, sub: [giftAbout(g), giftDay(g.at)].filter(Boolean).join(' · '), hay: norm([giftWho(g), g.name, g.company, g.campaign, 'gift', money(g.cents / 100)].join(' ')), date: g.at ? new Date(g.at * 1000).toISOString().slice(0, 10) : '', href: '#/financials/gifts', focus: `gift-${g.id}`, icon: 'financials' });
+  // The money: every figure Home, Financials and the next meeting's money draw, each found by its amount however it's
+  // typed and in every form it's written there, its line saying it, landing on it marked (./figures.js moneyFigures,
+  // made from what draws them: QA round 7 to 9 found figures drawn that a list kept here beside them didn't have)
+  out.push(...moneyFigures(data, { cash: cashKnown(data), budget: budgetKnown(data) }));
   // The makeovers under way, each to its page
-  for (const b of [...(data.numbers.projects?.waiting || []), ...(data.numbers.projects?.building || [])].filter((x) => x.name)) {
+  const jobs = [...(data.numbers.projects?.waiting || []), ...(data.numbers.projects?.building || [])];
+  for (const b of jobs.filter((x) => x.name)) {
     const href = hrefOf(b);
     // A makeover without a page of its own lands on its card on Home's board
     out.push({ group: 'Makeovers', key: `b:${b.kind || ''}:${b.name}`, title: b.name, sub: b.kind === 'community' ? `Community project · ${b.status === 'Awaiting Funding' ? 'Awaiting funding' : b.status}` : b.status === 'Awaiting Funding' ? 'Awaiting funding' : b.status, hay: norm([b.name, b.status, b.kind === 'community' ? 'community project' : 'makeover kid'].join(' ')), ...(href ? { href, ext: true } : { href: '#/', focus: cardId(b) }), icon: 'home' });
   }
-  if (data.numbers.costs) out.push({ group: 'Makeovers', key: 'costs', title: 'What makeovers cost', sub: 'Each finished makeover, the money over the operating balance, and who it starts', hay: norm('what makeovers cost price paid budget money waiting funding pipeline qualification committee operating balance typical'), href: '#/financials', focus: 'costs', icon: 'financials' });
+  // …and those not named yet (no page up), as the board shows them: one quiet card a stage ("1 family", "2 community
+  // projects"), found by their stage ("awaiting funding", "design") and landing on its column on Home's board
+  const unnamed = new Map();
+  for (const b of jobs.filter((x) => !x.name)) { const k = `${b.status}|${b.kind === 'community' ? 'community' : 'family'}`; unnamed.set(k, (unnamed.get(k) || 0) + 1); }
+  for (const [k, n] of unnamed) {
+    const [status, kind] = k.split('|');
+    const stage = status === 'Awaiting Funding' ? 'Awaiting funding' : status;
+    const org = kind === 'community';
+    out.push({ group: 'Makeovers', key: `bu:${k}`, title: `${stage}: ${org ? plural(n, 'community project') : plural(n, 'family', 'families')}`, sub: org ? 'Not on Community yet' : 'Named once their page is up', hay: norm([stage, org ? 'community project' : 'makeover family families kid', 'makeovers board stage'].join(' ')), href: '#/', focus: STAGE_OF_JOB[status] ? `lc-col-${STAGE_OF_JOB[status]}` : 'makeovers', icon: 'home' });
+  }
+  // The families who applied, each to their own page, found by their name and the name the Makeovers pages show them by
+  // (their kid page's, once it's up): only once the route those pages read has answered (`fams`: ?families, so only for
+  // whoever may open a family's page)
+  for (const f of fams ? itemsOf(fams, data.numbers.projects).filter((x) => isFamily(x) && x.name) : []) {
+    const shown = f.card?.name && norm(f.card.name) !== norm(f.name) ? f.card.name : '';
+    out.push({ group: 'Makeovers', key: `fam:${f.id}`, title: f.name, sub: [f.kind === 'organization' ? 'Community project' : '', stageLabel(f.stage), f.season ? `${f.season} season` : '', shown ? `Shown as ${shown}` : ''].filter(Boolean).join(' · '), hay: norm([f.name, shown].join(' ')), href: `#/families/${encodeURIComponent(f.id)}`, icon: 'people' });
+  }
+  if (data.numbers.costs) out.push({ group: 'Makeovers', key: 'costs', title: 'What makeovers cost', sub: 'Each finished makeover, the money over the operating balance, and who it starts', hay: norm('what makeovers cost price paid budget money waiting awaiting funding pipeline qualification committee operating balance typical'), href: '#/financials', focus: 'costs', icon: 'financials' });
   out.push({ group: 'Makeovers', key: 'families', title: 'Makeovers', sub: 'Every family from application to reveal: their video, photos, application and score', hay: norm('makeovers families applications applicants scores scoring ranked qualification committee approved denied in review applied building design build revealed reveal pipeline board kanban video videos photos pictures'), href: '#/families', icon: 'people' });
   out.push({ group: 'Makeovers', key: 'families-map', title: 'Makeovers map', sub: 'Where every family lives, from application to reveal, against the service area', hay: norm('map where applications applicants families homes service area boundary location makeovers'), href: '#/families/map', icon: 'people' });
   for (const r of data.numbers.reveals) out.push({ group: 'Coming up', key: `r:${r.name}`, title: `${r.name}’s reveal`, sub: r.confirmed && r.date ? dayOf(r.date) : r.window?.label || 'Day not set yet', hay: norm(`${r.name} reveal`), href: r.kidUrl, ext: true, icon: 'home' });
@@ -4560,14 +4689,19 @@ function vocabFor(index) {
  * `lazy`: the list alone, for readying a little at a time
  */
 let indexKept = null;
-function indexFor(data, d, words, { lazy = false } = {}) {
-  if (indexKept && indexKept.data === data && indexKept.words === words) return indexKept.index;
-  const list = searchIndex(data, d, words);
+// (the cash and the budget the search has, each said as one string: a balance sheet or budget sheet read later makes the
+// index again, so their figures are found once they're drawn)
+const cashSigOf = (c) => (c ? `${c.total}|${c.asOf || ''}|${(c.accounts || []).map((a) => `${a.name}:${a.balance}`).join(',')}` : '');
+const budgetSigOf = (b) => (b === undefined ? 'u' : b ? `${b.year}|${b.revenue?.actual}|${b.revenue?.budget}|${b.expenses?.actual}|${b.expenses?.budget}` : '');
+function indexFor(data, d, words, fams = familyCache.list, { lazy = false } = {}) {
+  const cashSig = `${cashSigOf(cashKnown(data))}#${budgetSigOf(budgetKnown(data))}`;
+  if (indexKept && indexKept.data === data && indexKept.words === words && indexKept.fams === fams && indexKept.cashSig === cashSig) return indexKept.index;
+  const list = searchIndex(data, d, words, fams);
   if (lazy) return list;
   // (what counts as its title: a meeting's date and place, a person's role, a file's kind and meeting)
   const titled = (x) => (x.group === 'Meetings' ? `${x.title} ${x.sub} ${x.date} ${x.tags || ''}` : x.group === 'People' ? `${x.title} ${x.person?.title || ''}` : x.title);
   const index = list.map((x) => ({ ...x, sp: prepOf(x.hay, x.prepKey || x.key), tp: prep(titled(x)), np: x.group === 'Files' && x.kind ? prep(x.kind) : '' }));
-  indexKept = { data, words, index };
+  indexKept = { data, words, fams, cashSig, index };
   return index;
 }
 
@@ -4607,7 +4741,10 @@ function Finder({ ctx, onClose }) {
   const ref = useRef(null);
   const listRef = useRef(null);
   const { words, loading, failed, retry } = useFindWords(data, true);
-  const index = useMemo(() => indexFor(data, d, words), [data, words]);
+  const fams = useFamilies();
+  // (the cash and the budget as the board shows them: found by their amounts once they're known, ./money.js cashKnown)
+  const cashSig = `${cashSigOf(useCashNow(data))}#${budgetSigOf(useBudget(data))}`;
+  const index = useMemo(() => indexFor(data, d, words, fams), [data, words, fams, cashSig]);
   // (every word here, so a misspelt one is read as the nearest)
   const vocab = useMemo(() => { VOCAB = vocabFor(index); return VOCAB; }, [index]);
   // What's found follows what's typed a beat behind, so a key is never held up (Enter settles it first): on a slower
@@ -4621,6 +4758,9 @@ function Finder({ ctx, onClose }) {
   const plan = planFor(terms, (asTyped === qs && !!qs) || loading);
   // All of what has to be there is in its title (its words then aren't shown, and a paper opens at its top)
   const inTitle = (x) => matches(x.tp, plan);
+  // A figure (`exact`: its amounts in its words in full) is found by an amount typed exactly only by that amount, never by
+  // a short form that rounds to it: "$25,000" never finds the $25,486 written "$25K" (round 8's rule, the other way)
+  const exactPlan = useMemo(() => ({ ...plan, terms: plan.terms.map((t) => (/^(minus)?\d{3,}$/.test(t.w) ? { w: t.w, alts: [], small: t.small } : t)) }), [plan]);
   // A group shows its first few; "All 43" opens the rest of it
   // (how far each group is opened: "All 43" shows 60 more at a time, so a word in every file never buries the rest)
   const [wide, setWide] = useState({});
@@ -4633,7 +4773,7 @@ function Finder({ ctx, onClose }) {
     const onDate = plan.terms.map((t) => t.w.match(/^(\d{4}) (\d{2}) (\d{2})$/)).find(Boolean);
     const onDay = plan.terms.map((t) => t.w.match(/^md (\d{1,2}) (\d{1,2})$/)).find(Boolean);
     const day = onDate ? `${onDate[1]}-${onDate[2]}-${onDate[3]}` : onDay ? `-${String(onDay[1]).padStart(2, '0')}-${String(onDay[2]).padStart(2, '0')}` : '';
-    const all = index.filter((x) => matches(x.sp, plan)).map((x) => ({ x, s: scoreOf({ title: x.tp, near: x.np, sp: x.sp, date: x.date }, plan, { today: data.today }) + (x.group === 'People' && inTitle(x) ? 3 : 0) + (day && x.group === 'Meetings' && x.date?.endsWith(day) ? 6 : 0) }));
+    const all = index.filter((x) => matches(x.sp, x.exact ? exactPlan : plan)).map((x) => ({ x, s: scoreOf({ title: x.tp, near: x.np, sp: x.sp, date: x.date }, plan, { today: data.today }) + (x.group === 'People' && inTitle(x) ? 3 : 0) + (day && x.group === 'Meetings' && x.date?.endsWith(day) ? 6 : 0) }));
     // Groups in the order of their best match (a person's whole name before the decisions they moved), else as listed
     const out = GROUPS.map((g, i) => { const list = all.filter((y) => y.x.group === g).sort((a, b) => b.s - a.s); return { g, i, all: list.map((y) => y.x), best: list[0]?.s || 0 }; })
       .filter((x) => x.all.length).sort((a, b) => b.best - a.best || a.i - b.i);
@@ -4668,6 +4808,8 @@ function Finder({ ctx, onClose }) {
     dlg.dataset.closing = '1';
     setTimeout(() => dlg.close(), 140);
   };
+  // A figure's line as what was typed found it: last year's column, the budget's, the form a tile writes it in (./figures.js)
+  const sayOf = (x) => { const p = x.exact ? exactPlan : plan; return (x.says && !matches(x.sp0, p) && x.says.find((a) => matches(a.sp, p))) || x; };
   const choose = (x) => {
     if (!x) return;
     keepRecent(x.key);
@@ -4679,7 +4821,8 @@ function Finder({ ctx, onClose }) {
     if (x.ext) { window.open(x.href, '_blank', 'noopener'); return; }
     // A paper found by its words opens on them
     focusNext = x.focus || (x.group === 'Documents' && x.body && terms.length && !inTitle(x) ? `words:${terms.join(' ')}` : null);
-    foundTerms = focusNext && terms.length ? terms : null;
+    // (and a figure's own amount marked where it lands, however that place writes it: "1876045" on the chart's "$1.88M")
+    foundTerms = focusNext && terms.length ? [...terms, ...(x.group === 'Money' ? sayOf(x).marks || [] : [])] : null;
     if (location.hash === x.href) { window.dispatchEvent(new HashChangeEvent('hashchange')); return; }
     location.hash = x.href;
   };
@@ -4724,7 +4867,8 @@ function Finder({ ctx, onClose }) {
               // …and a paper's or a file's words where they matched, when its title doesn't say it (a PDF's page with them)
               const said = x.body && ((x.group === 'In agendas and minutes' && norm(x.body).trim() !== norm(x.title).trim()) || ((x.group === 'Documents' || x.group === 'Files') && !inTitle(x) && saysAny(x.body, terms)));
               const page = said && x.pages ? whereIn(x, plan, terms)?.page : 0;
-              return html`${said ? html`<span class="bp-finder__sub">${page > 1 ? html`<span class="bp-finder__page">Page ${page}</span>` : null}<${Snippet} text=${x.body} terms=${terms} /></span>` : null}<span class="bp-finder__sub">${x.sub}</span>`;
+              // (the money's line says its amount: marked where it's found)
+              return html`${said ? html`<span class="bp-finder__sub">${page > 1 ? html`<span class="bp-finder__page">Page ${page}</span>` : null}<${Snippet} text=${x.body} terms=${terms} /></span>` : null}<span class="bp-finder__sub">${x.group === 'Money' ? html`<${Marked} text=${sayOf(x).sub} terms=${terms} />` : x.sub}</span>`;
             })()}</span>
             ${x.ext ? html`<${Icon} name="external" size=${16} cls="bp-go bp-go--ext" /><span class="sr-only"> (opens in a new tab)</span>` : html`<${Icon} name="arrow" size=${16} cls="bp-go" />`}
           </div>`)}

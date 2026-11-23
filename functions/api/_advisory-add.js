@@ -36,21 +36,22 @@
  * (advisory_add_intents), so the next press finds that record, whichever way it was asked, and never
  * makes a second. Two presses at once (two tabs, two staff, two applications from one person) can't
  * both add: the application, the email and the People record it adds to are held while one does, and
- * the application isn't deleted meanwhile. A new person never gets an address an application or a
- * welcome already points at (someone deleted from People), so nothing of theirs is mixed up with
- * someone else's.
+ * the application isn't deleted meanwhile. A new person never gets an address anything of anyone
+ * else's is still kept under (./_people-address.js: the one rule People's own create and a rename onto
+ * an address ask too), so nothing of theirs is mixed up with someone else's.
  */
 
 import { getAdvisoryApplication, linkAdvisor, ensureAdvisorySchema, STATUSES } from './_advisory-applications.js';
 import { onRequestPost as saveContent } from './save-content.js';
 import { setBoardEmail, refreshForBoardChange, isEmail, normEmail } from './_reveal-invites.js';
-import { welcomeOnJoin, welcomeRecords, hasOrGoing, mailSlugs } from './_advisory-mail.js';
+import { welcomeOnJoin, welcomeRecords, hasOrGoing } from './_advisory-mail.js';
+import { addressTaken } from './_people-address.js';
 import { logAudit } from './_audit.js';
 import { generateSha } from './_collections.js';
 import { slugOf, PLAIN, ADVISORY_TITLE, normalizeLinkedIn, photoUrl } from '../../public/admin/team-shared.js';
 import { personStatus, personName } from './_team.js';
 import { isGroupInbox, isStaffEmail, signInWhy } from './_board-roles.js';
-import { readName, greetName } from './_advisory-form.js';
+import { readName, greetName, ALSO_A_NAME, AFTER_NAME } from './_advisory-form.js';
 import { getSettings as advisorySettings } from './_advisory.js';
 import { queueWelcome } from './_advisory-mail.js';
 
@@ -58,10 +59,11 @@ const parse = (s, d = null) => { try { return s == null ? d : JSON.parse(s); } c
 // (normEmail: lower case, and one person's other address as the one they sign in with, as setBoardEmail saves it)
 const GROUPS = { advisory: 'People → Advisory', board: 'People → Board', team: 'People → Team' };
 const FALLBACK_SLUG = 'advisory-board-member';
-// The tables a former board member's records are kept under: their address is never someone else's (./save-content.js)
-const FORMER_BOARD_TABLES = ['board_signatures', 'board_signins', 'board_activity', 'board_sign_events'];
 const err = (message, status = 409) => Object.assign(new Error(message), { status });
 const GONE = 'This application isn’t here any more: it was deleted, maybe in another tab.';
+// A People delete under way, as the box (public/admin/advisory-applications.js) and a press both say it
+const beingDeleted = (name, so = '') => `${name} is being deleted on People right now${so}. Look again once that’s done.`;
+const ADDRESS_FREED_PRESS = 'The web address they’d be given is being freed by a delete on People right now, so nobody was added. Look again once that’s done.';
 
 /** People and their private emails. A read that fails stops the plan (never "nobody's on People"); no table yet is nobody */
 async function peopleAndEmails(DB) {
@@ -111,7 +113,15 @@ const GERMAN = { ä: 'ae', ö: 'oe', ü: 'ue' };
 const nameWays = (n) => {
   const name = personName({ name: n }).normalize('NFC');
   const dotless = /[äöü]/i.test(name) ? [name.replace(/[äöü]/gi, (c) => { const p = GERMAN[c.toLowerCase()]; return c === c.toLowerCase() ? p : p[0].toUpperCase() + p[1]; })] : [];
-  return [name, ...dotless].map(readName).flatMap((r) => [keyWords(r.words), ...(r.could ? [keyWords(r.could)] : []), ...(r.also ? [keyWords(r.also)] : [])]);
+  // (and a couple's other one, by their own whole name, their letters never part of it: "Jordan & Amy Rowe MD" might be
+  // Amy Rowe; with a last word that might be a family name in capitals kept too, as the first one's)
+  // (round 21: and the words before the comma alone, of a name with more than one there and a name after it, marked as
+  // part of it: "Del Taylor, Compass" might be Del Taylor. Round 22: only when those words are a family name on its own
+  // or might be; a whole name before the comma, "Jordan Ames, Atlanta", is read as that whole name alone, so it's the
+  // same person as "Jordan Ames, Decatur" and "Jordan Ames": _advisory-form.js readName)
+  return [name, ...dotless].map(readName).flatMap((r) => [keyWords(r.words), ...(r.could ? [keyWords(r.could)] : []), ...(r.also ? [keyWords(r.also)] : []),
+    ...(r.partnerWhole ? [keyWords(r.partnerWhole)] : []), ...(r.partnerCould ? [keyWords(r.partnerCould)] : []),
+    ...(r.apart || []).map((w) => Object.assign(keyWords(w), { part: true }))]);
 };
 const nameKey = (n) => nameWords(n).join(' ');
 /**
@@ -119,9 +129,13 @@ const nameKey = (n) => nameWords(n).join(' ');
  * ("Katie" and "Katherine", "Jo" and "Jordan"). Only ever asked about ("Is this the same?"), never taken as them.
  */
 function mightBe(a, b) {
-  // (each way either name might be read: a last word in capitals as letters or as their family name)
-  return nameWays(a).some((x) => nameWays(b).some((y) => mightBeWords(x, y)));
+  // (each way either name might be read: a last word in capitals as letters or as their family name. Part of each name
+  // against part of the other never: round 21, "De La Cruz, Jose" and "De La Cruz, Maria" are two people, though the
+  // words before their commas are alike. A whole name before a comma has no part of it to keep apart: round 22)
+  return nameWays(a).some((x) => nameWays(b).some((y) => !(x.part && y.part) && mightBeWords(x, y)));
 }
+// (a word, as matching keeps it, that may be letters after a name: a degree, a credential, a generation)
+const mayBeLetters = (w) => ALSO_A_NAME.test(w) || AFTER_NAME.test(w);
 function mightBeWords(x, y) {
   if (!x.length || !y.length) return false;
   // (the same letters with or without a space: "山田太郎" and "山田 太郎")
@@ -133,6 +147,10 @@ function mightBeWords(x, y) {
 function alike(x, y) {
   if (x.join(' ') === y.join(' ')) return true;
   if (x.length < 2 || y.length < 2 || x[x.length - 1] !== y[y.length - 1]) return false;
+  // (two names that end alike only in letters that may be a degree or a generation, "JORDAN AMESA MD" and "JORDAN AMESB
+  // MD", any of the letters _advisory-form.js knows: their family names are the words before them. readName sets letters
+  // apart from every family name, so these are the names written in capitals that keep a last word that may be theirs)
+  if (x.length >= 3 && y.length >= 3 && mayBeLetters(x[x.length - 1]) && x[x.length - 2] !== y[y.length - 2]) return false;
   const [f, g] = [x[0], y[0]];
   // (a first initial: "J. Ames" might be Jordan Ames)
   if (f.length === 1 || g.length === 1) return f[0] === g[0];
@@ -155,39 +173,20 @@ async function intentOf(DB, appId) {
 }
 
 /**
- * Addresses that mean someone already: on People, a former board member's records, an application pointed at
- * (or about to be), a welcome had or waiting. A read that fails stops the plan, never a guess that it's free.
+ * An address for a new person from their name: the first that's free by the one rule People's own create and a rename
+ * onto an address ask too (./_people-address.js: on People, History, a board member's or an Advisory Board member's
+ * records, another application's Add written down partway, an application pointed at it, a welcome record, a rename still
+ * to finish or waiting for a person). This application's own written-down address, with no record made at it, is theirs
+ * to use. A read that fails stops the plan, never a guess that it's free.
  */
-async function usedSlugs(DB, appId) {
-  await DB.prepare(INTENTS).run();
-  const rows = async (sql, ...binds) => ((await DB.prepare(sql).bind(...binds).all()).results || []).map((r) => r.slug);
-  return new Set([
-    ...(await rows('SELECT person_slug AS slug FROM advisory_applications WHERE person_slug IS NOT NULL')),
-    // (another application's; this one's own, with no record made at it, is theirs to use)
-    ...(await rows('SELECT slug FROM advisory_add_intents WHERE app_id != ?', appId)),
-    ...(await mailSlugs(DB)),
-    // (an address History still keeps a record under: someone deleted can be put back, so it stays theirs)
-    ...(await rows("SELECT DISTINCT slug FROM content_versions WHERE collection = 'team'").catch((e) => { if (/no such table/i.test(e?.message || '')) return []; throw e; })),
-  ]);
-}
-
-/** An address for a new person from their name: free on People, never a former board member's, never one in use above */
 async function freeSlug(DB, name, people, appId) {
   // (a name with no letters a to z: an address of its own, from its application's, never one another such name is after)
   const base = shortSlug(slugOf(name) || `${FALLBACK_SLUG}-${String(appId).slice(-6)}`);
-  const taken = new Set([...people.map((p) => p.slug), ...(await usedSlugs(DB, appId))]);
+  const onPeople = new Set(people.map((p) => p.slug));
   for (let n = 1; n < 100; n++) {
     const slug = n === 1 ? base : `${base}-${n}`;
-    if (taken.has(slug)) continue;
-    let former = false;
-    for (const t of FORMER_BOARD_TABLES) {
-      let had = null;
-      try { had = await DB.prepare(`SELECT slug FROM ${t} WHERE slug = ? LIMIT 1`).bind(slug).first(); } catch (e) {
-        if (!/no such table/i.test(e?.message || '')) throw e;
-      }
-      if (had) { former = true; break; }
-    }
-    if (!former) return slug;
+    if (onPeople.has(slug)) continue;
+    if (!(await addressTaken(DB, slug, { app: appId }))) return slug;
   }
   throw err('Couldn’t find a free address for them on People. Add them by hand on People → Advisory.', 500);
 }
@@ -219,8 +218,9 @@ export async function addPlan(env, id, { now = Date.now() } = {}) {
     switchSaid(plan) ? (plan.emailsOn ? 'on' : 'off') : '',
     [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.organization || '', shot && p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
       plan.asName || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.name || '', plan.namesake?.where || '',
-      plan.namesake?.status === 'memorial' ? 1 : 0,
-      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.organization || ''}:${o.welcomed ? 1 : 0}:${shot && o.hasPhoto ? 1 : 0}`).join(',')].join('|'),
+      plan.namesake?.status === 'memorial' ? 1 : 0, plan.namesake?.addressOnly ? 1 : 0, plan.byAddress ? 1 : 0,
+      plan.namesakeToo?.name || '', plan.namesakeToo?.where || '', plan.namesakeToo?.status === 'memorial' ? 1 : 0,
+      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.organization || ''}:${o.welcomed ? 1 : 0}:${shot && o.hasPhoto ? 1 : 0}:${o.addressOnly ? 1 : 0}`).join(',')].join('|'),
   ].join('#');
   return plan;
 }
@@ -264,8 +264,9 @@ export async function addBusy(DB, plan, now = Date.now()) {
   const mine = [`app:${app.id}`, ...(app.email ? [`email:${normEmail(app.email)}`] : [])];
   const keys = [...mine, ...peopleKeys(plan)];
   await DB.prepare('CREATE TABLE IF NOT EXISTS advisory_add_holds (key TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
-  // (with People's own changes to those records and addresses: a rename, a delete)
-  const asked = [`del:${app.id}`, ...keys, ...peopleKeys(plan).map((k) => k.replace(/^slug:/, 'edit:'))];
+  // (with People's own changes to those records and addresses: a rename, a delete; a delete holds gone: too, so it's
+  // said as a delete, never "being changed")
+  const asked = [`del:${app.id}`, ...keys, ...peopleKeys(plan).map((k) => k.replace(/^slug:/, 'edit:')), ...peopleKeys(plan).map((k) => k.replace(/^slug:/, 'gone:'))];
   const rows = (await DB.prepare(`SELECT key FROM advisory_add_holds WHERE at >= ? AND key IN (${asked.map(() => '?').join(', ')})`).bind(now - HOLD_MS, ...asked).all()).results || [];
   if (!rows.length) return null;
   // (being deleted, not added: said as that)
@@ -274,9 +275,13 @@ export async function addBusy(DB, plan, now = Date.now()) {
   if (rows.some((r) => mine.includes(r.key))) return { name: app.name || '', other: false };
   const someone = [plan.person, ...(plan.others || [])].find((x) => x && rows.some((r) => r.key === `slug:${x.slug}`));
   // (a People record being renamed or deleted on People right now, not someone being added: said as which. One this
-  // could be, by name; else another record being given the address a new one would take)
-  const edited = [plan.person, ...(plan.others || [])].find((x) => x && rows.some((r) => r.key === `edit:${x.slug}`));
+  // could be, by name; else another record being given the address a new one would take, or freeing it by a delete)
+  const has = (prefix, x) => rows.some((r) => r.key === `${prefix}${x.slug}`);
+  const gone = [plan.person, ...(plan.others || [])].find((x) => x && has('gone:', x));
+  if (gone) return { name: gone.name || '', other: true, editing: 'person', gone: true };
+  const edited = [plan.person, ...(plan.others || [])].find((x) => x && has('edit:', x));
   if (edited) return { name: edited.name || '', other: true, editing: 'person' };
+  if (rows.some((r) => r.key.startsWith('gone:'))) return { name: '', other: true, editing: 'address', gone: true };
   if (rows.some((r) => r.key.startsWith('edit:'))) return { name: '', other: true, editing: 'address' };
   return { name: someone?.name || '', other: true };
 }
@@ -340,17 +345,31 @@ async function planOf(env, id, now = Date.now()) {
   const named = same.filter((p) => p.group === 'advisory' && !memorial(p))
     .sort((a, b) => exact(a) - exact(b) || (personStatus(a) === 'active' ? 0 : 1) - (personStatus(b) === 'active' ? 0 : 1))[0]
     || same.find((p) => nameSlug && p.slug === nameSlug) || same.sort((a, b) => exact(a) - exact(b))[0] || null;
-  const slug = await freeSlug(DB, read.words.join(' '), people, app.id);
+  // (a name kept in the order typed, rule 8 of round 20, has its address from that order: readName's `address`; so, from
+  // round 21, does one with more than one word before the comma and a given name after it, all of it: "De La Cruz,
+  // Maria" is de-la-cruz-maria, "Jordan Ames, she/her" jordan-ames. Round 22: only a family name on its own before the
+  // comma, with no place or organization after it; a whole name before it is the address alone, "Jordan Ames, Grace
+  // Church" and "Jordan Ames, Edward Jones" at jordan-ames)
+  const slug = await freeSlug(DB, (read.address || read.words).join(' '), people, app.id);
+  // (one found by the web address the name would get, not by a name like it: said as that, wherever the box shows them)
+  const addressOnly = (p) => !!nameSlug && p.slug === nameSlug && !mightBe(p.name, app.name);
+  const showAs = (p) => ({ ...show(p), ...(addressOnly(p) ? { addressOnly: true } : {}) });
   // Someone with this name being added right now from another application, their record not made yet (their address
   // written down): held against too, so this box waits for it, and then asks whether it's them
   const pending = await pendingNamed(DB, app, people);
   const extra = { ...(asName !== String(app.name || '').trim() ? { asName } : {}), ...(pending.length ? { pending } : {}) };
+  // (one found only by the web address the name would get never hides someone elsewhere on People with the name itself:
+  // both are named, each as the box would name them alone. Anyone the box asks about on People → Advisory is asked
+  // about already)
+  const namedToo = named && addressOnly(named)
+    ? same.filter((p) => p !== named && !addressOnly(p) && !(p.group === 'advisory' && !memorial(p))).sort((a, b) => exact(a) - exact(b))[0] || null : null;
+  const too = namedToo ? { namesakeToo: show(namedToo) } : {};
   if (named && named.group === 'advisory' && !memorial(named)) {
     // (anyone else on People → Advisory their name could be: "J. Ames" with Jordan and Jamie Ames both there)
-    const others = same.filter((p) => p !== named && p.group === 'advisory' && !memorial(p)).slice(0, 3).map(show);
-    return { kind: 'choose', why: 'name', ...base, person: show(named), slug, ...extra, ...(others.length ? { others } : {}) };
+    const others = same.filter((p) => p !== named && p.group === 'advisory' && !memorial(p)).slice(0, 3).map(showAs);
+    return { kind: 'choose', why: 'name', ...base, person: showAs(named), slug, ...extra, ...(others.length ? { others } : {}), ...(addressOnly(named) ? { byAddress: true } : {}), ...too };
   }
-  return { kind: 'new', ...base, slug, ...extra, ...(named ? { namesake: show(named) } : {}) };
+  return { kind: 'new', ...base, slug, ...extra, ...(named ? { namesake: showAs(named) } : {}), ...too };
 }
 
 /** Addresses other applications wrote down for someone with this name, whose record isn't made yet */
@@ -361,13 +380,16 @@ async function pendingNamed(DB, app, people) {
   return rows.filter((r) => !on.has(r.slug) && mightBe(r.name, app.name)).map((r) => r.slug);
 }
 
-/** The admin's own save (./save-content.js), as staff pressing Save would: its checks, History and GitHub copy */
-async function save(ctx, path, record, message, { create = false, sha = null } = {}) {
+/**
+ * The admin's own save (./save-content.js), as staff pressing Save would: its checks, History and GitHub copy. for: the
+ * application a new record is made for (the address it wrote down for that application is its own to make it at)
+ */
+async function save(ctx, path, record, message, { create = false, sha = null, for: appId = null } = {}) {
   const request = new Request('https://admin.internal/api/save-content', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, content: JSON.stringify(record, null, 2), message, ...(sha ? { sha } : {}), ...(create ? { create: true } : {}) }),
   });
-  const res = await saveContent({ env: ctx.env, request, data: ctx.data || {}, waitUntil: ctx.waitUntil || ((p) => p) });
+  const res = await saveContent({ env: ctx.env, request, data: { ...(ctx.data || {}), ...(appId ? { addingFor: appId } : {}) }, waitUntil: ctx.waitUntil || ((p) => p) });
   const j = await res.json().catch(() => ({}));
   // (refused for a reason staff can act on: its words; the save itself failing (D1): addToBoard says it in words)
   if (!res.ok || !j.success) {
@@ -451,19 +473,21 @@ export async function deletingNow(DB, id, now = Date.now()) {
  * never one halfway through the other (a rename writing back the record as it read it before an Add, an Add linking to
  * someone deleted meanwhile). → the keys held (let go with letGo), or null when an Add, or another change, has one
  */
-export async function holdForPeople(DB, slugs, now = Date.now()) {
+export async function holdForPeople(DB, slugs, { deleting = false, now = Date.now() } = {}) {
   const list = [...new Set(slugs.filter(Boolean))];
-  return hold(DB, [...list.map((x) => `slug:${x}`), ...list.map((x) => `edit:${x}`)], now);
+  // (a delete says so too, gone:, so a rename meanwhile is told the address is being deleted, never given to someone)
+  return hold(DB, [...list.map((x) => `slug:${x}`), ...list.map((x) => `edit:${x}`), ...(deleting ? list.map((x) => `gone:${x}`) : [])], now);
 }
 export const letGo = (DB, keys) => release(DB, keys);
 /**
- * Why holdForPeople couldn't, for each of its records: another change on People (a rename, a delete) holds it, else an
- * Add does → [{ slug, by: 'people' | 'add' }] for the ones held
+ * Why holdForPeople couldn't, for each of its records: a delete on People, another change there (a rename), else an
+ * Add → [{ slug, by: 'deleting' | 'people' | 'add' }] for the ones held
  */
 export async function whyHeld(DB, slugs, now = Date.now()) {
   const out = [];
   for (const x of slugs.filter(Boolean)) {
-    if (await held(DB, `edit:${x}`, now).catch(() => false)) out.push({ slug: x, by: 'people' });
+    if (await held(DB, `gone:${x}`, now).catch(() => false)) out.push({ slug: x, by: 'deleting' });
+    else if (await held(DB, `edit:${x}`, now).catch(() => false)) out.push({ slug: x, by: 'people' });
     else if (await held(DB, `slug:${x}`, now).catch(() => false)) out.push({ slug: x, by: 'add' });
   }
   return out;
@@ -472,6 +496,8 @@ export async function whyHeld(DB, slugs, now = Date.now()) {
 export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by = '', now = Date.now(), fetchImpl = fetch } = {}) {
   const { DB } = env;
   const keys = [];
+  // (whether it has written anything yet: before that, a failure is "nobody was added", never "stopped partway")
+  const did = { wrote: false };
   try {
     const first = await getAdvisoryApplication(DB, id);
     if (!first) throw err(GONE, 404);
@@ -488,11 +514,13 @@ export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by 
       if (g) keys.push(...g);
       return !!g;
     };
-    return await addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAlso });
+    return await addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAlso, did });
   } catch (e) {
     if (e?.status) throw e;
-    // D1 or a save that didn't answer: words for staff (never "D1_ERROR: …"), and the next press finishes it
+    // D1 or a save that didn't answer: words for staff (never "D1_ERROR: …"), and the next press finishes it. Nothing
+    // written yet (a hold, or a read, that didn't answer): nothing started, said as that
     console.error('[advisory-add]', e?.message || e);
+    if (!did.wrote) throw err('The site’s database didn’t answer just now, so nobody was added. Press Add to Advisory Board again in a moment.', 503);
     throw err('Adding them stopped partway: the site’s database didn’t answer just now. Press Add to Advisory Board again in a moment: it finishes what’s left, and never adds them twice.', 503);
   } finally {
     await release(DB, keys);
@@ -557,7 +585,7 @@ function targetOf(plan, as, to) {
   return to ? [plan.person, ...(plan.others || [])].find((x) => x?.slug === to) || null : plan.person;
 }
 
-async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAlso }) {
+async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAlso, did = {} }) {
   const { DB } = env;
   // The box pressed must say what's true now, all of it (a namesake added since, the person moved to alumni, their
   // email changed, another tab added them): if not, nothing is done and the box is asked again
@@ -569,9 +597,11 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
   const target = targetOf(plan, as, to);
   if (target) {
     if (!(await holdAlso([`slug:${target.slug}`, ...(target.also || []).map((x) => `slug:${x}`)]))) {
+      // (a delete on People, said as that: theirs, or the record at the address a new one would get, which it frees)
+      if (await held(DB, `gone:${target.slug}`, now)) throw err(target.made ? ADDRESS_FREED_PRESS : beingDeleted(target.name, ', so nobody was added'));
       if (await held(DB, `edit:${target.slug}`, now)) {
         throw err(target.made ? 'Someone is changing a People record to the web address they’d be given, right now, so nobody was added. Give it a moment, then look at the box again.'
-          : `${target.name}’s People record is being changed right now (its web address, or a delete), so nobody was added. Give it a moment, then look at the box again.`);
+          : `${target.name}’s People record is being changed right now (its web address), so nobody was added. Give it a moment, then look at the box again.`);
       }
       throw err(target.made ? 'Someone is adding a person with this name right now. Give it a moment, then look at the box again.'
         : `Someone is adding ${target.name} right now, from another application. Give it a moment, then look at the box again.`);
@@ -613,16 +643,22 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
     if (await DB.prepare('SELECT slug FROM team WHERE slug = ?').bind(plan.slug).first()) {
       throw err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
     }
-    // Written down first: a press after a failure from here on finds this record (see the top)
+    // Written down first: a press after a failure from here on finds this record (see the top). The note alone is the
+    // press's own, nothing anyone sees: until their People record is there, a failure is "nobody was added" (pressing
+    // again is safe: it finds the note and makes the record at it, or makes it afresh)
     await DB.prepare(INTENTS).run();
     await DB.prepare('INSERT OR REPLACE INTO advisory_add_intents (app_id, slug, at) VALUES (?, ?, ?)').bind(app.id, plan.slug, now).run();
     try {
-      await save(ctxSave, `src/content/team/${plan.slug}.json`, record, `Add to the Advisory Board: ${app.name}`, { create: true });
+      await save(ctxSave, `src/content/team/${plan.slug}.json`, record, `Add to the Advisory Board: ${app.name}`, { create: true, for: app.id });
     } catch (e) {
       // Refused (the address someone else's): no note of it left, so nothing later takes their record for this one's
       if (e?.status === 409 || e?.status === 400) await DB.prepare('DELETE FROM advisory_add_intents WHERE app_id = ?').bind(app.id).run().catch(() => {});
+      // (the save not answering: their record may be there all the same, saved before what didn't answer. Looked for, and
+      // one that can't be looked for is taken as there: "stopped partway" is never said of nothing, nor "nobody" of someone)
+      else if (!e?.status) did.wrote = await DB.prepare('SELECT slug FROM team WHERE slug = ?').bind(plan.slug).first().then((r) => !!r, () => true);
       throw e;
     }
+    did.wrote = true;
     Object.assign(out, { slug: plan.slug, name: record.name, made: true, photoAdded: !!record.photo });
   } else {
     // (the one staff said it is: the person the box found, or another it named as maybe them; held above)
@@ -639,12 +675,14 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
     if (out.restored || out.photoAdded) {
       const sha = await generateSha(row.data); // the version read: a change made since is refused, never written over
       await save(ctxSave, `src/content/team/${slug}.json`, personRecord(next), `${out.restored ? 'Back on the Advisory Board' : 'Headshot from their application'}: ${saved.name || slug}`, { sha });
+      did.wrote = true;
     }
     Object.assign(out, { slug, name: saved.name || slug });
   }
 
   // The application points at them now: a press after anything below fails picks up from here
   await DB.prepare('UPDATE advisory_applications SET person_slug = ?, updated_at = ? WHERE id = ?').bind(out.slug, new Date(now).toISOString(), app.id).run();
+  did.wrote = true;
 
   // Their sign-in email: one they have stays; none on file, this application's
   // (a read that fails stops here: never taken as "none on file", which would save this one over theirs)
@@ -655,7 +693,7 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
   else if (email && plan.emailUsable) {
     await setBoardEmail(DB, out.slug, email).catch((e) => {
       // (setBoardEmail's own words: an address someone else has, one that doesn't look right; anything else is D1)
-      if (/D1_|SQLITE|network|connection/i.test(String(e?.message || ''))) throw e;
+      if (e?.unread || /D1_|SQLITE|network|connection/i.test(String(e?.message || ''))) throw e;
       throw err(`${out.name} is on the Advisory Board, but their email didn’t save: ${e.message}`);
     });
     await logAudit(DB, { userEmail: ctxSave.data.userEmail, action: 'updated', entityType: 'team', entitySlug: out.slug, entityName: `Reveal invite email for ${out.name}`, gitStatus: 'ok' }).catch(() => {});

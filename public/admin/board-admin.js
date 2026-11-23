@@ -21,15 +21,15 @@
 import { useState, useEffect, useRef, useMemo } from './vendor.js';
 import { ask, askToLeave } from './ask.js';
 import { viewerLink, sizeText } from './file-viewer.js';
-import { html, call, upload, ago, firstOf, youAnd, hashFor, readHash, rememberSide, lastSide, TABS, PAGE, viewerFiles, Switch, injectStyles, CHECK, callName, daysFrom, whenWords, driveLink, dayOf, signedHow, Face } from './board-ui.js';
-import { MeetingEditor, AgendaTemplate, agendaSource, meetingOver } from './board-meeting.js';
+import { html, call, upload, ago, firstOf, youAnd, hashFor, readHash, rememberSide, lastSide, TABS, PAGE, viewerFiles, Switch, injectStyles, CHECK, callName, daysFrom, whenWords, driveLink, dayOf, signedHow, Face, answerLost, sentence, nameIn } from './board-ui.js';
+import { MeetingEditor, AgendaTemplate, agendaSource, pathOf } from './board-meeting.js';
 import { ReportEditor, Report, PAPER_LETTERS } from './board-report.js';
 import { mdPlain, paperFields } from './board-md.js';
 import { pdfLines, docxLines, wordsFromLines } from './board-words.js';
-import { BoardActivity } from './board-activity.js';
+import { BoardActivity, signDocsOf, unsignedOf } from './board-activity.js';
 import {
   isHeic, asJpeg, DOC_KINDS, meetingName, quarterOf, longDate, shortDate, timeRange, plural, todayEastern,
-  attendanceCounts, openActions, nextMeeting, parseAgendaText, isDate, docxText, fileTitle, answerOf, repliesOf, agendaIsDraft, majority, agendaItems, isLive, heldEarly, minutesIn,
+  attendanceCounts, openActions, nextMeeting, parseAgendaText, isDate, docxText, fileTitle, answerOf, repliesOf, agendaIsDraft, majority, agendaItems, isLive, heldEarly, minutesIn, meetingOver,
 } from './board-shared.js';
 import { welcomeHad, usableEmail, PROCESS_TEXT, dueOn, dueWords } from './board-shared.js';
 
@@ -38,6 +38,18 @@ import { welcomeHad, usableEmail, PROCESS_TEXT, dueOn, dueWords } from './board-
 // ═══════════════════════════════════════════════════════════════════
 // A plain #board opens on the side this device last had open
 const sideOf = (r) => (r && !r.advisory && /^#board\/?$/.test(location.hash) && lastSide() ? { ...r, advisory: true } : r);
+/**
+ * The site's answer (`j`) onto what's shown (`d`): never an older sign-in email record than a quick look already showed
+ * (welcomeAt), nor an older copy of a meeting than a save or a send put here meanwhile (updatedAt), so a look that
+ * went out before a save landed never puts the meeting back as it was
+ */
+function withNewer(d, j) {
+  if (!d) return j;
+  const kept = new Map((d.meetings || []).map((m) => [m.id, m]));
+  const meetings = (j.meetings || []).map((m) => { const k = kept.get(m.id); return k && String(k.updatedAt || '') > String(m.updatedAt || '') ? k : m; });
+  const out = { ...j, meetings };
+  return d.welcomeAt > j.welcomeAt ? { ...out, welcome: d.welcome, welcomeSending: d.welcomeSending, welcomeSendingTo: d.welcomeSendingTo, welcomeAt: d.welcomeAt } : out;
+}
 
 export function BoardArea({ addToast = () => {}, setGlobalDirty = null }) {
   injectStyles();
@@ -49,23 +61,61 @@ export function BoardArea({ addToast = () => {}, setGlobalDirty = null }) {
   const dirty = useRef(false);
   const looks = useRef(0);
   const dirtyWhere = useRef('this meeting');
+  // (what's shown now: for fresh and the tab coming back into view)
+  const dataRef = useRef(null);
+  dataRef.current = data;
+  // (the quick read on its way, if one is: a second asked for meanwhile waits for it, never a read of its own)
+  const reading = useRef(null);
+  const routeRef = useRef(route);
+  routeRef.current = route;
 
   // Only the newest look shows: a slow one that comes back after a newer one (a send's) is dropped
-  const load = async () => {
+  // (`quick`: a read for a send's question or the tab coming back, which never waits on the invites' answers being read
+  // from Google: that look runs after the answer, and shows on the next read)
+  const load = async ({ quick = false } = {}) => {
     const n = ++looks.current;
-    const j = await call();
+    const j = await call(null, quick ? { query: '?quick' } : {});
     if (n !== looks.current) return j;
-    // ...and never an older sign-in email record than a quick look already showed (welcomeAt)
-    if (j.ok) { setData((d) => (d?.welcomeAt > j.welcomeAt ? { ...j, welcome: d.welcome, welcomeSending: d.welcomeSending, welcomeSendingTo: d.welcomeSendingTo, welcomeAt: d.welcomeAt } : j)); setError(null); } else setError({ text: j.error || 'Couldn’t load the board', refused: j.status === 403 });
+    if (j.ok) { setData((d) => withNewer(d, j)); setError(null); } else setError({ text: j.error || 'Couldn’t load the board', refused: j.status === 403 });
     return j;
   };
+  /** A quick read of Board's data, one at a time: asked for while one is on its way, it's that one's answer */
+  const quickLoad = () => {
+    if (!reading.current) reading.current = load({ quick: true }).finally(() => { reading.current = null; });
+    return reading.current;
+  };
+  /**
+   * Board's data as the site has it now, for a send's question (./board-meeting.js useFresh) and every question Members
+   * asks: always a quick read at the press, so the question names who the site sends to, never the board this tab read
+   * a moment before People → Board changed (QA round 6, Nov 21 2026: within 15 seconds of the last read it named the old
+   * board). → the data, or null when that read fails: then no question is asked and nothing goes, and a question's press
+   * says so (`say`: what didn't happen, 'sent' or 'changed'; none for a look of its own), never a question built from
+   * the board this tab read before (Board QA round 10, Nov 22 2026: one failed read named a member who had left the
+   * board, and the send went to the rest)
+   */
+  const fresh = async ({ say = '' } = {}) => {
+    const j = await quickLoad();
+    if (j?.ok) return withNewer(dataRef.current, j);
+    if (say) addToast(`We couldn’t check People just now, so nothing was ${say}. Please try again in a moment.`, 'error');
+    return null;
+  };
   useEffect(() => { if (!route.advisory && !data) load(); }, [route.advisory]);
+  // The tab back in view, or the window given the focus (two windows side by side): Board's data read again, so what it
+  // says about the board (People → Board changed in another tab or window meanwhile) follows the site's list. One
+  // listener for both, and never two reads at once (quickLoad). Board QA round 5 and 6, Nov 21 2026
+  useEffect(() => {
+    const back = () => { if (document.visibilityState === 'visible' && dataRef.current && !routeRef.current.advisory) quickLoad(); };
+    document.addEventListener('visibilitychange', back);
+    addEventListener('focus', back);
+    return () => { document.removeEventListener('visibilitychange', back); removeEventListener('focus', back); };
+  }, []);
   useEffect(() => { if (route.advisory && !Advisory) import('./advisory-admin.js').then((m) => setAdvisory(() => m.AdvisoryArea)); }, [route.advisory]);
   useEffect(() => {
     const on = () => {
       const r = sideOf(readHash());
       if (!r) return;
-      if (dirty.current && (r.meetingId !== route.meetingId || r.tab !== route.tab || !!r.advisory !== !!route.advisory)) {
+      // (the agenda template and the practice meeting are pages of their own too)
+      if (dirty.current && (r.meetingId !== route.meetingId || r.tab !== route.tab || !!r.advisory !== !!route.advisory || !!r.template !== !!route.template || !!r.practice !== !!route.practice)) {
         askToLeave(dirtyWhere.current).then((ok) => { if (ok) { dirty.current = false; setGlobalDirty?.(false); setRoute(r); } else history.replaceState(null, '', hashFor(route)); });
         return;
       }
@@ -75,11 +125,23 @@ export function BoardArea({ addToast = () => {}, setGlobalDirty = null }) {
     return () => window.removeEventListener('hashchange', on);
   }, [route]);
   const go = (r) => { const next = { tab: 'meetings', meetingId: null, step: null, practice: false, template: false, ...r }; if (hashFor(next) !== location.hash) location.hash = hashFor(next); else setRoute(next); };
+  // A new page in Board (a meeting added or opened, one deleted, back to the list): the focus on its heading when the
+  // press that brought it there left it on nothing (its button gone with the page it was on)
+  // (never on opening Board: only a move from one of its pages to another)
+  const page = `${route.meetingId || ''}|${route.tab}|${!!route.template}|${!!route.practice}|${!!route.advisory}`;
+  const lastPage = useRef(page);
+  useEffect(() => {
+    if (lastPage.current === page) return undefined;
+    lastPage.current = page;
+    const lost = () => !document.activeElement || document.activeElement === document.body || !document.activeElement.isConnected;
+    const t = setTimeout(() => { if (lost()) document.querySelector('.bd [data-page-head]')?.focus({ preventScroll: true }); }, 60);
+    return () => clearTimeout(t);
+  }, [page]);
   // `where`: what's being edited, as the question to leave names it ("this meeting", "this document")
   const markDirty = (d, where = 'this meeting') => { dirty.current = d; if (d) dirtyWhere.current = where; setGlobalDirty?.(d, d ? where : ''); };
   const putMeeting = (m) => setData((d) => ({ ...d, meetings: [m, ...d.meetings.filter((x) => x.id !== m.id)].sort((a, b) => String(b.date).localeCompare(String(a.date))) }));
   const setStep = (step) => setRoute((r) => ({ ...r, step }));
-  const ctx = { data, setData, load, addToast, go, putMeeting, markDirty, setStep };
+  const ctx = { data, setData, load, fresh, addToast, go, putMeeting, markDirty, setStep };
 
   // The Advisory Board's side: the switch and the tabs in the same place, the words in place
   if (route.advisory) {
@@ -92,8 +154,8 @@ export function BoardArea({ addToast = () => {}, setGlobalDirty = null }) {
         <div>
           <h2>${{ meetings: 'Advisory meetings', documents: 'Advisory documents', members: 'Advisory members' }[route.tab]}</h2>
           <p class="page-sub">${{
-            meetings: 'The next meeting and every past one, with its agenda, slides and recap. Advisors see a meeting once it’s shared.',
-            documents: 'The papers advisors read and sign, and the words on their Fundraise page.',
+            meetings: 'The next meeting and every past one, with its agenda, slides and recap. Advisory Board members see a meeting once it’s shared.',
+            documents: 'The papers Advisory Board members read and sign, and the words on their Fundraise page.',
             members: 'The goal and the makeover, what’s waiting on you, this month’s ask, and who’s on the Advisory Board.',
           }[route.tab]}</p>
         </div>
@@ -104,7 +166,7 @@ export function BoardArea({ addToast = () => {}, setGlobalDirty = null }) {
   }
 
   // Not one of its admins: said as that, with who to ask (nothing to try again)
-  if (error && !data && error.refused) return html`<div class="card empty" role="alert"><p class="empty__title">Board is open to its admins</p><p class="empty__text">${error.text}. A founder adds people in Board → Members.</p></div>`;
+  if (error && !data && error.refused) return html`<div class="card empty" role="alert"><p class="empty__title">Board is open to its admins</p><p class="empty__text">${sentence(error.text)} Anyone who already runs Board can add you, in Board → Members under Who runs Board.</p></div>`;
   if (error && !data) return html`<div class="card empty" role="alert"><p class="empty__title">The board didn’t load</p><p class="empty__text">${error.text}</p><div class="empty__actions"><button class="btn btn-ghost btn-sm" onClick=${load}>Try again</button></div></div>`;
   if (!data) return html`<div class="area-loading"><span class="spinner" /></div>`;
   const meeting = route.meetingId ? data.meetings.find((m) => m.id === route.meetingId) : null;
@@ -117,7 +179,7 @@ export function BoardArea({ addToast = () => {}, setGlobalDirty = null }) {
       </div>
       <div class="page-header">
         <div>
-          <h2>${{ meetings: 'Board meetings', documents: 'Board documents', members: 'Board members' }[route.tab]}</h2>
+          <h2 tabindex="-1" data-page-head>${{ meetings: 'Board meetings', documents: 'Board documents', members: 'Board members' }[route.tab]}</h2>
           <p class="page-sub">${{
             meetings: 'The next meeting and what’s left to do for it, then every past meeting with its agenda and minutes. The board sees a meeting once it’s shared.',
             documents: 'Bylaws, policies, budgets and plans, on the board page for every member. Ask for a signature where the board signs each year.',
@@ -160,6 +222,16 @@ function PracticeMeeting({ ctx }) {
     if (j.ok) { setError(''); setM(j.meeting); } else setError(j.error || 'The practice meeting didn’t open');
   };
   useEffect(() => { open({ action: 'practice' }); }, []);
+  // Read again with Board's data (the tab back in view, the window's focus, a list that reads People again), as a
+  // meeting's copy is: a rename on People moving who presents comes onto the page before anyone picks from the list
+  // as People has it now (Board QA round 9: a newcomer given the old address showed as the presenter)
+  const id = m?.id || '';
+  useEffect(() => {
+    if (!id) return undefined;
+    let live = true;
+    call(null, { query: `?practice=${encodeURIComponent(id)}` }).then((j) => { if (live && j.ok && j.meeting?.id === id) setM(j.meeting); });
+    return () => { live = false; };
+  }, [ctx.data]);
   if (error) return html`<div class="card empty" role="alert"><p class="empty__title">The practice meeting didn’t open</p><p class="empty__text">${error}</p><div class="empty__actions"><button class="btn btn-ghost btn-sm" onClick=${() => open({ action: 'practice' })}>Try again</button></div></div>`;
   if (!m) return html`<div class="area-loading"><span class="spinner" /></div>`;
   // Never into the Board area's list of meetings: the editor keeps its own copy
@@ -168,15 +240,11 @@ function PracticeMeeting({ ctx }) {
 }
 
 // ─── Where a meeting stands ─────────────────────────────────────────
-/** Before a meeting, what's left (the same as the meeting's Getting ready; the agenda and the numbers take care of themselves): { id, label, next, done } */
-function prepOf(m) {
-  return [
-    { id: 'invite', label: 'Invite', next: m.inviteGone ? 'send the invite again (it was deleted in Google Calendar)' : 'send the invite', done: !!m.invite },
-    { id: 'agenda', label: 'Agenda', next: '', done: true },
-    { id: 'shared', label: 'Board page', next: 'put the meeting on the board page', done: m.shared },
-    { id: 'packet', label: 'Email', next: 'email the board the link to the agenda and documents', done: !!m.packetSentAt },
-  ];
-}
+/**
+ * Before a meeting, its steps up to the day as its own page has them (./board-meeting.js pathOf, the one rule): the
+ * agenda and its reports, the invite, the approval, the board page and the email; done, next or still to come
+ */
+const prepOf = (m, data) => pathOf(m, data, 'ahead').filter((x) => x.id !== 'day' && x.id !== 'minutes');
 /** Where a past meeting's minutes stand, as a tag */
 const minutesTag = (m) => (m.minutes === 'approved' ? html`<span class="tag tag--success">Minutes approved</span>`
   : m.files.some((f) => f.kind === 'minutes') || m.sections.some((s) => s.items.some((it) => it.notes)) ? html`<span class="tag tag--warn">Draft minutes</span>`
@@ -200,6 +268,13 @@ const whose = (admins = [], me = '', joiner = 'and') => {
 /** Where past meetings' papers come from, and the invites' answers when they couldn't be read */
 function SourcesLine({ data }) {
   const c = data.calendar || {};
+  // People not answering the look: every answer kept as it was, a passing note for half an hour, then a warning (as the
+  // sign-in list and board@ say it), and the look asks again each minute
+  if (c.unread && !c.ok && c.failingSince) {
+    const since = new Date(c.failingSince).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
+    if (Date.now() - Date.parse(c.failingSince) < 30 * 60 * 1000) return html`<p class="bd-muted bh-sources">The site couldn’t check People at ${since}, so every invite’s answers were left as they are. It’s asking again.</p>`;
+    return html`<div class="notice notice--warn"><div class="notice__body"><strong>The invites’ answers aren’t being read.</strong> The site hasn’t been able to check People since ${since}, so new answers to the invites aren’t coming in. Every answer already in stays, and the site keeps trying.</div></div>`;
+  }
   if (c.errors?.length) return html`<div class="notice notice--warn"><div class="notice__body"><strong>Couldn’t read every invite’s answers.</strong> ${c.errors.join(' · ')}</div></div>`;
   return html`<p class="bd-muted bh-sources">Past meetings’ agendas and minutes also come in from ${whose(data.settings.admins, data.me)} email by themselves.</p>`;
 }
@@ -291,7 +366,7 @@ function MailCard({ data }) {
     ${m.errors?.length && !m.needsScope ? html`<div class="notice notice--warn" style="margin:1rem 1.25rem"><div class="notice__body"><strong>Couldn’t read every inbox.</strong> ${m.errors.join(' · ')}</div></div>` : null}
     ${recent.length ? html`<ul class="bd-row-list">${(open ? recent : recent.slice(0, 4)).map((r) => html`<li class="bd-row">
       <div class="bd-row__main"><div class="bd-row__title">${r.subject || '(no subject)'}</div>
-        <div class="bd-row__meta">${[shortDate(String(r.sentAt).slice(0, 10)), String(r.sender || '').replace(/<.*>/, '').trim(), r.result].filter(Boolean).join(' · ')}</div></div>
+        <div class="bd-row__meta">${[dayOf(r.sentAt), String(r.sender || '').replace(/<.*>/, '').trim(), r.result].filter(Boolean).join(' · ')}</div></div>
       ${r.meetingId ? html`<a class="btn btn-ghost btn-sm" href=${hashFor({ meetingId: r.meetingId })}>${r.meeting || 'The meeting'}</a>` : null}
     </li>`)}</ul>
     ${recent.length > 4 ? html`<div style="padding:0.5rem 1.25rem 1rem"><button class="btn btn-ghost btn-sm" onClick=${() => setOpen(!open)}>${open ? 'Show fewer' : `Show all ${recent.length}`}</button></div>` : null}` : null}
@@ -312,8 +387,8 @@ function NextCard({ m, ctx }) {
   // are in or its end time has passed, the same as the meeting page says it (meetingOver)
   const held = ended || (today && !now && meetingOver(m));
   const place = [m.location, m.address].filter(Boolean).join(', ');
-  const prep = prepOf(m);
-  const up = prep.find((x) => !x.done);
+  const prep = prepOf(m, data);
+  const up = prep.find((x) => x.state === 'next');
   const board = m.attendance.filter((x) => x.kind === 'board');
   // Who's coming, as the calendar invite says (the only answer): each board member counted once
   const replies = repliesOf(m);
@@ -340,8 +415,8 @@ function NextCard({ m, ctx }) {
       <button class="btn btn-primary" onClick=${() => go({ meetingId: m.id })}>${today && !held ? 'Open for the meeting' : 'Open the meeting'}</button>
     </div>
     ${held ? html`<p class="bh-nextline">${m.minutes === 'approved' ? html`<strong>The minutes are approved.</strong>` : minutesIn(m) ? html`<strong>The minutes are in.</strong> The board votes on them at the next meeting.` : html`<strong>Next:</strong> its minutes.`}</p>` : today ? html`<p class="bh-nextline">${now ? null : html`<strong>Today.</strong> `}Open it to present the agenda and its documents on the screen.</p>` : html`
-      <ol class="bh-prep" aria-label="Getting ready">${prep.map((x) => html`<li class=${x.done ? 'is-done' : x === up ? 'is-next' : ''}><span class="bh-prep__mark" aria-hidden="true">${x.done ? CHECK : null}</span>${x.label}</li>`)}</ol>
-      <p class="bh-nextline">${up ? html`<strong>Next:</strong> ${up.next}.` : html`<strong>Ready.</strong> The board was emailed the link ${ago(m.packetSentAt)}.`}</p>`}
+      <ol class="bh-prep" aria-label="Getting ready">${prep.map((x) => html`<li class=${`is-${x.state}`} title=${x.sub} aria-current=${x === up ? 'step' : null}><span class="bh-prep__mark" aria-hidden="true">${x.done ? CHECK : null}</span>${x.title}</li>`)}</ol>
+      <p class="bh-nextline">${up ? html`<strong>Next:</strong> ${up.todo}.` : html`<strong>Ready.</strong> The board was emailed the link ${ago(m.packetSentAt)}.`}</p>`}
     ${held ? (here.boardHere ? html`<p class="bh-rsvp"><strong>Who was there:</strong> ${here.boardHere} of ${plural(here.board, 'board member')}</p>` : null)
       : html`<p class="bh-rsvp"><strong>Who’s coming:</strong> ${!invited ? 'the invite hasn’t gone out yet' : [yes && `${yes} coming`, maybe && `${maybe} maybe`, no && `${no} can’t`, quiet && `${quiet} haven’t answered`, off && `${off} not on the invite`].filter(Boolean).join(' · ') || 'nobody has answered yet'}</p>`}
   </div>`;
@@ -409,10 +484,14 @@ function MeetingsTab({ ctx }) {
     go({ meetingId: j.meeting.id });
   };
   const done = async (a) => {
+    // Its row goes once it's done: the focus onto the next one's words (else the one before, else the list's heading)
+    const at = actions.findIndex((x) => x.id === a.id);
+    const near = actions[at + 1]?.id || actions[at - 1]?.id || '';
     const j = await call({ action: 'action-done', actionId: a.id, done: true });
-    if (!j.ok) { addToast(j.error, 'error'); return; }
-    ctx.load();
+    if (!j.ok) { addToast(sentence(j.error), 'error'); return; }
+    await ctx.load();
     addToast(`Done: ${a.text.slice(0, 60)}`, 'info', { label: 'Undo', fn: async () => { await call({ action: 'action-done', actionId: a.id, done: false }); ctx.load(); } });
+    requestAnimationFrame(() => (document.querySelector(`[data-action="${near}"] .bd-row__title`) || document.querySelector('#bh-actions-h') || document.querySelector('.bd [data-page-head]'))?.focus());
   };
   // Action item reminders: off until someone here turns them on (functions/api/_board-actions.js)
   const [reminding, setReminding] = useState('');
@@ -420,8 +499,13 @@ function MeetingsTab({ ctx }) {
     const was = data.settings?.actionRemind || 'off';
     if (reminding || value === was) { if (el) el.value = was; return; }
     if (value === 'on') {
-      const people = [...new Set(actions.filter((a) => a.owner).map((a) => a.ownerName))];
-      const yes = await ask({ title: 'Turn reminders on?', text: `${people.length ? `${people.join(', ')} ${people.length === 1 ? 'gets' : 'get'} an email` : 'Each person with an action item gets an email'} a week before it’s due, the day before, then weekly for three weeks if it’s late, in business hours. Ticking it done stops them.`, yes: 'Turn reminders on', no: 'Cancel', careful: true });
+      // Only the people who'd get an email (the sends' own rule, from the site as it is now: ctx.fresh), and why the rest
+      // get none (a read that fails: nothing asked or changed, and said)
+      const d = await ctx.fresh({ say: 'changed' });
+      if (!d) { if (el) el.value = was; return; }
+      const reach = d.reminders || { to: [], who: '', why: '' };
+      const rest = reach.why ? ` ${reach.to.length ? 'No email goes yet for the other open to-dos.' : 'None of the open to-dos can get one yet.'} ${reach.why}` : '';
+      const yes = await ask({ title: 'Turn reminders on?', text: `${reach.to.length ? `${reach.who} ${reach.to.length === 1 ? 'gets' : 'get'} an email` : 'Each person with an action item gets an email'} a week before it’s due, the day before, then weekly for three weeks if it’s late, in business hours. Ticking it done stops them.${rest}`, yes: 'Turn reminders on', no: 'Cancel', careful: true });
       if (!yes) { if (el) el.value = was; return; }
     }
     setReminding('switch');
@@ -431,12 +515,17 @@ function MeetingsTab({ ctx }) {
     ctx.setData((x) => ({ ...x, settings: { ...x.settings, actionRemind: j.settings?.actionRemind ?? value } }));
     addToast(value === 'on' ? 'Reminders are on' : 'Reminders are off', 'info');
   };
+  // A test to yourself: sent or not, the focus goes to the action items' heading (its button is held while it sends, so
+  // the focus would be left on the page), never back on a send a key pressed a moment later would press again
   const actionPreview = async () => {
     setReminding('preview');
     const j = await call({ action: 'action-remind-preview' });
     setReminding('');
-    if (!j.ok || !j.sent) { addToast(j.error || j.errors?.[0] || 'That didn’t send', 'error'); return; }
-    addToast(`Sent to ${j.to?.[0] || 'you'}`, 'info');
+    requestAnimationFrame(() => document.querySelector('#bh-actions-h')?.focus());
+    // (nobody with an open to-do yet: said as how things are, never as something gone wrong)
+    if (!j.ok || !j.sent) { addToast(sentence(j.error || j.errors?.[0] || 'That didn’t send'), j.none ? 'info' : 'error'); return; }
+    // (with none of their own, the one someone else would get, said whose)
+    addToast(j.as ? `Sent to ${j.to?.[0] || 'you'}: the reminder ${j.as} would get` : `Sent to ${j.to?.[0] || 'you'}`, 'info');
   };
   // New meeting turns into its date, ready to type; Cancel (or Esc) goes back to the button
   const stopAdding = () => { setAdding(false); setDate(''); requestAnimationFrame(() => document.querySelector('.bh-new')?.focus()); };
@@ -468,11 +557,11 @@ function MeetingsTab({ ctx }) {
     </div>
 
     ${actions.length ? html`<div class="card" style="padding:0">
-      <div class="sec-head"><h3>Open action items <span class="count">${actions.length}</span></h3><span class="sec-head__hint">Carried onto each new agenda until done</span></div>
-      <ul class="bd-row-list">${actions.map((a) => html`<li class="bd-row" key=${a.id}>
+      <div class="sec-head"><h3 id="bh-actions-h" tabindex="-1">Open action items <span class="count">${actions.length}</span></h3><span class="sec-head__hint">Carried onto each new agenda until done</span></div>
+      <ul class="bd-row-list">${actions.map((a) => html`<li class="bd-row" key=${a.id} data-action=${a.id}>
         <div class="bd-row__main">
-          <div class="bd-row__title">${a.text}</div>
-          <div class="bd-row__meta">${[a.ownerName || 'No one yet', a.due ? `due ${shortDate(a.due)}` : '', `from the ${a.meetingName}`].filter(Boolean).join(' · ')}</div>
+          <div class="bd-row__title" tabindex="-1">${a.text}</div>
+          <div class="bd-row__meta">${[a.ownerName || 'No one yet', a.due ? `due ${shortDate(a.due)}` : '', `from the ${((x) => (x ? nameIn(x, data.meetings) : a.meetingName))(data.meetings.find((x) => x.id === a.meetingId))}`].filter(Boolean).join(' · ')}</div>
         </div>
         <button class="btn btn-ghost btn-sm" onClick=${() => done(a)}>Mark done</button>
       </li>`)}</ul>
@@ -541,7 +630,7 @@ function ImportPanel({ ctx, onDone }) {
     }
     setSaving(false);
     putMeeting(m);
-    addToast(`${meetingName(m)} is in. Check it over, then share it with the board.`, 'success');
+    addToast(`The ${meetingName(m)}${m.date ? ` (${shortDate(m.date)})` : ''} is in. Check it over, then share it with the board.`, 'success');
     onDone(m);
   };
   const items = parsed ? parsed.sections.reduce((n, s) => n + s.items.length, 0) : 0;
@@ -554,7 +643,7 @@ function ImportPanel({ ctx, onDone }) {
     </div>
     <div class="form-group" style="margin-top:0.75rem">
       <label class="form-label" for="bd-import-text">The agenda’s text</label>
-      <textarea id="bd-import-text" class="form-textarea" rows="8" value=${text} onInput=${(e) => setText(e.target.value)} placeholder="MEETING  SOARD Board – Agenda   DATE 04/30/2026&#10;1. CALL TO ORDER&#10;1. Roll Call&#10;…" />
+      <textarea id="bd-import-text" class="form-textarea" rows="8" value=${text} onInput=${(e) => setText(e.target.value)} placeholder="MEETING  SOARD Board Agenda   DATE 04/30/2026&#10;1. CALL TO ORDER&#10;1. Roll Call&#10;…" />
     </div>
     ${parsed ? html`<div class="bd-preview">
       <div class=${`notice ${parsed.date ? 'notice--info' : 'notice--warn'}`}><div class="notice__body">
@@ -613,6 +702,8 @@ async function addSignedCopy({ d, p, picked, addToast, setBusy = () => {}, repla
   }
   if (!j.ok) { addToast(j.error, 'error'); return null; }
   addToast(`${j.signed.name}’s signed copy is in: signed for ${todayEastern().slice(0, 4)}`, 'info');
+  // (the email telling them waits for People: said, never as sent)
+  if (j.later) addToast(j.later, 'info');
   return j.doc;
 }
 
@@ -656,6 +747,8 @@ function Signers({ d, ctx, onDoc }) {
     setBusy('');
     if (!j.ok) { addToast(j.error, 'error'); return; }
     onDoc(j.doc);
+    // (taken off; the email telling them waits for People: said, never as sent)
+    if (j.later) addToast(j.later, 'info');
     // The focus stays on their row (its button is "Add their signed copy" now)
     requestAnimationFrame(() => document.querySelector(`[data-signer="${p.slug}"] button`)?.focus());
   };
@@ -755,14 +848,8 @@ function DocumentsTab({ ctx }) {
   const dirty = !!draft && snap(draft) !== opened.current;
   useEffect(() => { markDirty(dirty, 'this document'); }, [dirty]);
   useEffect(() => () => markDirty(false), []);
-  // Back to this tab: who's signed as it is now (members sign meanwhile)
-  useEffect(() => {
-    let at = Date.now();
-    const back = () => { if (document.visibilityState === 'visible' && Date.now() - at > 10 * 1000) { at = Date.now(); call().then((r) => { if (r.ok) setData(r); }); } };
-    document.addEventListener('visibilitychange', back);
-    addEventListener('focus', back);
-    return () => { document.removeEventListener('visibilitychange', back); removeEventListener('focus', back); };
-  }, []);
+  // (back to this tab, or this window given the focus: who's signed as it is now, members sign meanwhile. BoardArea's
+  // one listener reads Board's data again for every tab, never two reads at once)
   // Closing the tab or reloading with words changed asks first, as every editor here does
   useEffect(() => {
     if (!dirty) return undefined;
@@ -1070,10 +1157,10 @@ function AccessPanel({ ctx, ready, working, welcome, now }) {
   const some = (list) => (list.length > 3 ? `${list.slice(0, 2).join(', ')} and ${list.length - 2} more` : names(list));
   // A failure younger than half an hour is a passing outage: the site is already asking again
   const passing = (since) => !!since && Date.now() - Date.parse(since) < 30 * 60 * 1000;
+  // (the day and the time as Atlanta has them, as every day on Board is: ./board-ui.js dayOf)
   const clock = (iso) => {
-    const d = new Date(iso);
-    const time = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`;
+    const time = new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
+    return todayEastern(Date.parse(iso)) === todayEastern() ? time : `${dayOf(iso).replace(/, \d{4}$/, '')}, ${time}`;
   };
   // After any action, focus stays on its button, or on its line when the button went away
   const refocus = (btn, row) => requestAnimationFrame(() => {
@@ -1151,6 +1238,10 @@ function AccessPanel({ ctx, ready, working, welcome, now }) {
     : !a.configured && a.groupId ? { warn: true, meta: 'The site’s Cloudflare key is gone, so changes on People → Board can’t reach the sign-in list. Everyone already on it can still sign in.', fix: tokenSteps(false) }
     : !a.configured ? { warn: true, meta: 'Nobody can sign in yet: the site needs a Cloudflare key to keep the list of board emails.', fix: tokenSteps(false) }
     : !a.syncedAt && !a.failedAt ? { meta: 'Making the sign-in list now.' }
+    // (People didn't answer the site: nothing went to Cloudflare, said as that, never as Cloudflare's problem. Round 9)
+    : a.unread && !a.ok ? (passing(a.failingSince)
+      ? { meta: `The site couldn’t check People at ${clock(a.failingSince)}, so the sign-in list was left as it is. It’s asking again.` }
+      : { warn: true, meta: `The site hasn’t been able to check People since ${clock(a.failingSince || a.failedAt)}, so changes on People → Board aren’t reaching the sign-in list. Everyone already on it can still sign in.`, actions: again('sync-access', 'access', 'signin') })
     : a.error && !a.ok ? (badKey(a.error)
       ? { warn: true, meta: 'Cloudflare refused the site’s key, so the sign-in list can’t be kept. Make a new one:', fix: tokenSteps(true), actions: again('sync-access', 'access', 'signin', 'Check now') }
       : passing(a.failingSince) ? { meta: `Cloudflare had a problem at ${clock(a.failingSince)} (${cfWhy(a.error)}). The site is asking again.` }
@@ -1190,6 +1281,9 @@ function AccessPanel({ ctx, ready, working, welcome, now }) {
         <div class="bd-inline" style="margin-top:0.4rem"><span class="bd-code">${GROUP_SCOPE}</span><button class="btn btn-ghost btn-sm" onClick=${copy}>${copied ? 'Copied' : 'Copy'}</button></div></li>
       <li>Choose Check now, or this line updates by itself within half an hour.</li>
     </ol>` }
+    : g.unread && !g.ok ? (passing(g.failingSince)
+      ? { meta: `The site couldn’t check People at ${clock(g.failingSince)}, so the group was left as it is. It’s asking again.${history}` }
+      : { warn: true, meta: `The site hasn’t been able to check People since ${clock(g.failingSince || g.failedAt)}, so changes on People → Board aren’t reaching the group. The site keeps trying.`, actions: again('sync-group', 'group', 'group') })
     : !g.ok && !groupFix && passing(g.failingSince) ? { meta: `Google had a problem at ${clock(g.failingSince)}. The site is asking again.${history}` }
     : !g.ok ? { warn: true, meta: groupFix || (/^Google didn’t take/.test(g.error || '') ? `${g.error}. The site keeps trying every half hour.` : `Google has had a problem since ${clock(g.failingSince || g.failedAt)} (${gWhy(g.error)}), so changes on People → Board aren’t reaching the group. The site keeps trying every half hour.`), actions: again('sync-group', 'group', 'group') }
     : !g.current ? { meta: `Updating the group.${history}` }
@@ -1203,37 +1297,54 @@ function AccessPanel({ ctx, ready, working, welcome, now }) {
   const waitFor = !data.setup.email ? 'the site can send email'
     : !a.configured ? (a.groupId ? 'the site has its Cloudflare key again' : 'the site has its Cloudflare key')
       : !a.syncedAt && !a.failedAt ? 'the sign-in list is made'
+        : a.unread && !a.ok ? 'the site can check People again'
         : a.error && !a.ok ? (badKey(a.error) ? 'Cloudflare takes the site’s new key' : 'Cloudflare answers again')
           : !a.attached ? 'the step above is done' : 'the sign-in list is updated';
-  // Who has had it: the same rule as the server's send and each member's row (board-shared.js)
-  const hadIt = (p) => welcomeHad(w, p, board.map((x) => x.slug));
-  // The email is for signing in: it's still for whoever hasn't signed in yet, at an address it can reach
-  const waiting = board.filter((p) => usableEmail(p.email) && !p.lastSeen);
-  const told = waiting.filter((p) => hadIt(p));
-  const notYet = waiting.filter((p) => !hadIt(p));
-  // Nobody on the board has had it or signed in: the first send, to the whole board
-  const first = !board.some((p) => p.lastSeen || hadIt(p));
+  // Who has had it, who's waiting for it, and who it goes to, from Board's data (`d`): the same rule as the server's send
+  // and each member's row (board-shared.js welcomeHad). The panel shows the tab's; a press asks from the site's now
+  const listsOf = (d, at = now) => {
+    const bd = d.members;
+    const ww = d.welcome || {};
+    const had = (p) => welcomeHad(ww, p, bd.map((x) => x.slug));
+    // The email is for signing in: it's still for whoever hasn't signed in yet, at an address it can reach
+    const wait = bd.filter((p) => usableEmail(p.email) && !p.lastSeen);
+    const toldNow = wait.filter((p) => had(p));
+    // (everyone again, a rebuilt email, but not who had it in the last ten minutes: the server skips them too)
+    const just = toldNow.filter((p) => at - Date.parse(had(p)) < 10 * 60 * 1000);
+    return { bd, had, waiting: wait, told: toldNow, notYet: wait.filter((p) => !had(p)), first: !bd.some((p) => p.lastSeen || had(p)), justSent: just, againTo: toldNow.filter((p) => !just.includes(p)) };
+  };
+  const { had: hadIt, waiting, told, notYet, first, justSent, againTo } = listsOf(data);
   // Resend didn't confirm these (it may not have gone): each one's row sends it again. Who has had it is the rest
   const unconfirmed = told.filter((p) => (w.unconfirmed || []).includes(p.slug));
   const sure = told.filter((p) => !unconfirmed.includes(p));
   const latest = sure.map(hadIt).sort().at(-1) || null;
-  // Everyone again (a rebuilt email), but not who had it in the last ten minutes (the server skips them too)
-  const justSent = told.filter((p) => now - Date.parse(hadIt(p)) < 10 * 60 * 1000);
-  const againTo = told.filter((p) => !justSent.includes(p));
+  // (each question names who the site would email as it is at the press: a quick read then, ctx.fresh. QA round 6, Nov
+  // 21 2026: they named the board as the tab first read it)
+  // (one question at a time: a second press while the quick read is out asks nothing more)
+  const asking = useRef(false);
+  // (a read that fails: nothing asked or sent, and said. Board QA round 10)
+  const fromSite = async () => { asking.current = true; try { const d = await ctx.fresh({ say: 'sent' }); return d ? listsOf(d, Date.now()) : null; } finally { asking.current = false; } };
   const resend = async (e) => {
-    if (busy) return;
+    if (busy || asking.current) return;
     const btn = e.currentTarget;
-    const skip = justSent.length ? ` Not ${names(justSent.map((p) => p.name))}: had it in the last ten minutes.` : '';
-    const whole = board.some((p) => !p.lastSeen && !usableEmail(p.email)) ? ' with a working address' : '';
-    if (await ask({ title: `Email it again to ${againTo.length <= 3 ? names(againTo.map((p) => p.name)) : justSent.length ? `${againTo.length} of the ${told.length}${whole} who haven’t signed in` : `the ${againTo.length}${whole} who haven’t signed in`}?`, text: `${WELCOME_ASK}${skip}`, yes: 'Email them again' })) send(btn, { slugs: againTo.map((p) => p.slug), again: true }, 'again');
+    const L = await fromSite();
+    if (!L) return;
+    if (!L.againTo.length) { addToast(L.told.length ? 'Everyone who hasn’t signed in had it in the last ten minutes, so it can go again after that.' : 'Everyone on the board has signed in now, so there’s no one to email it to again.', 'info'); return; }
+    const skip = L.justSent.length ? ` Not ${names(L.justSent.map((p) => p.name))}: had it in the last ten minutes.` : '';
+    const whole = L.bd.some((p) => !p.lastSeen && !usableEmail(p.email)) ? ' with a working address' : '';
+    if (await ask({ title: `Email it again to ${L.againTo.length <= 3 ? names(L.againTo.map((p) => p.name)) : L.justSent.length ? `${L.againTo.length} of the ${L.told.length}${whole} who haven’t signed in` : `the ${L.againTo.length}${whole} who haven’t signed in`}?`, text: `${WELCOME_ASK}${skip}`, yes: 'Email them again' })) send(btn, { slugs: L.againTo.map((p) => p.slug), again: true }, 'again');
   };
-  const who = (list) => (list.length <= 3 ? names(list.map((p) => p.name)) : `the ${list.length} board members${first ? '' : ' who haven’t had it'}`);
-  const confirm = async (e, list) => {
-    if (busy) return;
+  const confirm = async (e) => {
+    if (busy || asking.current) return;
     const btn = e.currentTarget;
-    if (await ask({ title: `Email ${who(list)} how to sign in?`, text: WELCOME_ASK, yes: list.length === 1 ? `Email ${list[0].name}` : 'Email them' })) {
+    const L = await fromSite();
+    if (!L) return;
+    const list = L.notYet;
+    if (!list.length) { addToast('Everyone still to sign in has had it now, so there’s no one to email.', 'info'); return; }
+    const who = list.length <= 3 ? names(list.map((p) => p.name)) : `the ${list.length} board members${L.first ? '' : ' who haven’t had it'}`;
+    if (await ask({ title: `Email ${who} how to sign in?`, text: WELCOME_ASK, yes: list.length === 1 ? `Email ${list[0].name}` : 'Email them' })) {
       // Exactly who the question named, and only those who still haven't had it when it goes (a stale page can't double anyone)
-      send(btn, { slugs: list.map((p) => p.slug), due: true }, first ? 'all' : 'some');
+      send(btn, { slugs: list.map((p) => p.slug), due: true }, L.first ? 'all' : 'some');
     }
   };
   const preview = html`<button key="preview" class="btn btn-ghost btn-sm" aria-disabled=${busy ? 'true' : null} onKeyDown=${once} onClick=${(e) => send(e.currentTarget, { test: true }, 'preview')}>${working === 'preview' ? 'Sending…' : 'Send it to me'}</button>`;
@@ -1259,7 +1370,7 @@ function AccessPanel({ ctx, ready, working, welcome, now }) {
     // Some haven't had it: one button sends it to just them (the server skips anyone who has it by then)
     : notYet.length ? (canSend
       ? { warn: true, meta: `${first ? 'Not sent yet.' : due}${toldText ? ` ${toldText}` : ''}${doubt}`,
-        actions: html`${preview}<button key="due" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onKeyDown=${once} onClick=${(e) => confirm(e, notYet)}>${working === 'all' || working === 'some' ? 'Sending…' : first ? 'Email the board how to sign in' : notYet.length <= 2 ? `Email ${names(notYet.map((p) => p.name))}` : `Email the ${notYet.length} who haven’t had it`}</button>` }
+        actions: html`${preview}<button key="due" class="btn btn-primary btn-sm" aria-disabled=${busy ? 'true' : null} onKeyDown=${once} onClick=${(e) => confirm(e)}>${working === 'all' || working === 'some' ? 'Sending…' : first ? 'Email the board how to sign in' : notYet.length <= 2 ? `Email ${names(notYet.map((p) => p.name))}` : `Email the ${notYet.length} who haven’t had it`}</button>` }
       : { meta: `${first ? 'Not sent yet.' : due} It can go once ${waitFor}.${toldText ? ` ${toldText}` : ''}${doubt}`, actions: preview })
     // Everyone still to sign in has had it
     // (amber only while a row can send it again now: waiting out the ten minutes, or Cloudflare, is grey)
@@ -1278,12 +1389,14 @@ function AccessPanel({ ctx, ready, working, welcome, now }) {
       if (looking.current || document.visibilityState !== 'visible' || document.querySelector('.ask-overlay') || busy || trying) return;
       looking.current = true;
       const row = document.activeElement?.closest?.('.bd-access')?.id;
-      try { await ctx.load(); } finally { looking.current = false; }
+      // (the same read as BoardArea's on coming back or the window's focus, when that one's on its way: ctx.fresh)
+      try { await ctx.fresh(); } finally { looking.current = false; }
       if (row && (!document.activeElement || document.activeElement === document.body)) document.getElementById(row)?.focus();
     };
     const t = settled ? null : setInterval(look, 60 * 1000);
     document.addEventListener('visibilitychange', look);
-    return () => { if (t) clearInterval(t); document.removeEventListener('visibilitychange', look); };
+    addEventListener('focus', look);
+    return () => { if (t) clearInterval(t); document.removeEventListener('visibilitychange', look); removeEventListener('focus', look); };
   }, [settled, busy, trying]);
   useEffect(() => {
     let stop = false;
@@ -1341,7 +1454,7 @@ function MembersTab({ ctx }) {
   useEffect(() => { sendingSeen.add(setWorkingHere); setWorkingHere(sendingNow); return () => { sendingSeen.delete(setWorkingHere); }; }, []);
   const setWorking = setSendingNow;
   // The papers each member signs this year: written in Board, or a file the board can open (as the sign-in email counts them)
-  const signDocs = data.docs.filter((d) => d.sign && d.shared && (d.body || (d.file && !d.file.staffOnly)));
+  const signDocs = signDocsOf(data);
   // When the sign-in email can go, for Board access and every row alike (the server's own rule): email set up, and the list
   // kept and on the admin's application, or the key gone with the list still matching the board
   const a = data.access;
@@ -1359,7 +1472,11 @@ function MembersTab({ ctx }) {
     setWorking(label);
     // This click, kept on the record with its send: the browser posting it again finds its own send there
     const click = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-    // Who had it before this click: "has it now" only for a send that reached them since
+    // Who had it before this click, as the site has the board now (a quick read: never the list this tab first read):
+    // "has it now" only for a send that reached them since
+    // (that read failing: nothing goes, and said. Board QA round 10)
+    const data = body.test ? ctx.data : await ctx.fresh({ say: 'sent' });
+    if (!data) { setWorking(''); return { ok: false }; }
     const ids = data.members.map((x) => x.slug);
     const before = Object.fromEntries(data.members.map((p) => [p.slug, welcomeHad(data.welcome, p, ids)]));
     // (a send since the click: newer than it, give or take a minute between the server's clock and this one)
@@ -1416,7 +1533,7 @@ function MembersTab({ ctx }) {
     else if (typeof j.sent !== 'number') {
       const expired = /session expired/i.test(j.error || '');
       // (an answer that was an error says the server's words; no answer at all says that)
-      const why = expired ? 'Your admin session expired' : j.status === 200 ? 'The answer was cut off' : j.status ? `The site answered “${String(j.error || `HTTP ${j.status}`).replace(/[.\s]+$/, '')}”` : 'No answer came back';
+      const why = expired ? 'Your admin session expired' : j.status === 200 ? 'The answer was cut off' : j.unknown || !j.status ? 'No answer came back from the site' : `The site answered “${String(j.error || 'something went wrong').replace(/[.\s]+$/, '')}”`;
       if (!ownToast(looked?.welcome)) addToast(`${why}, so it isn’t known whether it went. ${looked?.ok ? 'Board access now shows who has it.' : expired ? 'Reload the page and sign in again to see who has it; sending again never gives anyone a second copy.' : 'Reload the page to see who has it; sending again never gives anyone a second copy.'}`, 'error');
     }
     else if (j.unsure) addToast(`${unsureText}${inAlready}${bad}`, 'error');
@@ -1457,14 +1574,22 @@ function MembersTab({ ctx }) {
     const one = slugs?.length === 1 ? data.members.find((p) => p.slug === slugs[0])?.name : '';
     const left = [j.recent?.length ? `${listed(j.recent)} ${j.recent.length === 1 ? 'was' : 'were'} asked in the last ten minutes` : '',
       j.noEmail?.length ? `${listed(j.noEmail)} ${j.noEmail.length === 1 ? 'has' : 'have'} no email on People → Board` : ''].filter(Boolean).join('; ');
-    if (typeof j.sent !== 'number') addToast(`Couldn’t tell whether it went (${j.error || 'no answer'}). Reload the page to see who was asked.`, 'error');
+    if (answerLost(j)) addToast('No answer came back from the site, so it isn’t known whether it went. Reload the page to see who was asked.', 'error');
+    else if (typeof j.sent !== 'number') addToast(`Not sent: ${sentence(j.error || 'the site didn’t say why')}`, 'error');
     else if (j.unsure) addToast('Resend didn’t confirm it went, so it may have gone. It’s counted as asked; Emails & invites → What went out shows whether it was delivered.', 'error');
     else if (!j.ok) addToast(j.sent ? `Emailed ${j.sent}; ${plural(j.failed, 'email')} didn’t go (${j.error})` : `Not sent: ${j.error}`, 'error');
     else if (!j.sent) addToast(left ? `Nobody was emailed: ${left}.` : one ? `${one} has signed already` : 'Everyone has signed', left ? 'error' : 'info');
     else addToast(`${one && j.sent === 1 ? `Emailed ${one}` : `Emailed ${plural(j.sent, 'board member')}`}, asking them to sign.${left ? ` ${left.replace(/^./, (c) => c.toUpperCase())}.` : ''}`, 'info');
     return j;
   };
-  const askAll = async (unsigned, title) => {
+  // Each question here names who the site would email as it is at the press (ctx.fresh: a quick read then), never the
+  // board this tab first read (QA round 6, Nov 21 2026)
+  const askAll = async (_, title) => {
+    // (that read failing: nothing asked or sent, and said. Board QA round 10)
+    const d = await ctx.fresh({ say: 'sent' });
+    if (!d) return;
+    const unsigned = unsignedOf(d);
+    if (!unsigned.length) { addToast('Everyone who can be asked has signed, or told SOARD why not, so there’s no one to email.', 'info'); return; }
     const n = unsigned.length;
     const first = unsigned[0].name.split(/\s+/)[0];
     if (!(await ask({ title: n === 1 ? `Email ${first}, asking them to sign?` : `Email the ${n} who haven’t signed?`,
@@ -1479,8 +1604,12 @@ function MembersTab({ ctx }) {
     if (working === 'remind') { if (el) el.value = was; return; }
     if (value !== 'off') {
       const often = value === '3' ? 'every 3 days' : 'weekly';
-      // (who'd be emailed: not signed, not declined, an email on file, fewer than 4 reminders this year)
-      const due = data.members.filter((p) => usableEmail(p.email) && (Number(p.asked?.reminders) || 0) < 4 && signDocs.some((d) => !d.signed[p.slug] && !d.declined?.[p.slug]));
+      // (who'd be emailed, as the site has the board now: not signed, not declined, an email on file, fewer than 4
+      // reminders this year; that read failing: nothing asked or changed, and said)
+      const d = await ctx.fresh({ say: 'changed' });
+      if (!d) { if (el) el.value = was; return; }
+      const papers = signDocsOf(d);
+      const due = d.members.filter((p) => usableEmail(p.email) && (Number(p.asked?.reminders) || 0) < 4 && papers.some((x) => !x.signed[p.slug] && !x.declined?.[p.slug]));
       const ok = await ask({
         title: !due.length ? 'Turn reminders on?' : due.length === 1 ? `Remind ${due[0].name}, ${often}?` : `Remind the ${due.length} who haven’t signed, ${often}?`,
         text: `${!due.length ? `Nobody is emailed now: everyone who can be has signed or told SOARD why not.` : `${due.length === 1 ? 'They get' : 'Each gets'} an email listing what’s left to sign ${often === 'weekly' ? 'a week' : '3 days'} after they were last asked or had the sign-in email, on a weekday between 8 AM and 7 PM Eastern, then ${often} until they sign, up to 4 times a year.`} Signing, or telling SOARD they can’t sign as written, stops it. Each January it asks the whole board again.`,
@@ -1497,7 +1626,7 @@ function MembersTab({ ctx }) {
   };
   return html`
     <${AccessPanel} ctx=${ctx} ready=${ready} working=${working} welcome=${welcome} now=${now} />
-    <${BoardActivity} data=${data} signDocs=${signDocs} ready=${ready} working=${working} now=${now} onSay=${addToast} onWelcome=${(slug) => welcome({ slugs: [slug], ...(rowHad(slug) ? {} : { due: true }) }, slug)} onCopy=${onCopy}
+    <${BoardActivity} data=${data} signDocs=${signDocs} ready=${ready} working=${working} now=${now} onSay=${addToast} fresh=${ctx.fresh} onWelcome=${(slug) => welcome({ slugs: [slug], ...(rowHad(slug) ? {} : { due: true }) }, slug)} onCopy=${onCopy}
       onAsk=${(slug) => askSign({ slugs: [slug] }, `ask:${slug}`)} onAskAll=${askAll} onAskPreview=${() => askSign({ test: true }, 'ask:me')} onRemind=${remind} />
     <${RunsBoard} ctx=${ctx} />`;
 }

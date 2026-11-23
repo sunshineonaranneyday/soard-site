@@ -88,8 +88,10 @@ export async function resolveRequest(DB, id, status) {
 
 export async function moveRequests(DB, from, to) {
   await ensureRequests(DB);
-  await DB.prepare('UPDATE profile_requests SET slug = ? WHERE slug = ?').bind(to, from).run();
+  await requestsMove(DB, from, to).run();
 }
+/** The same, as a statement for a rename's own batch (./rename-content.js: call ensureRequests first) */
+export const requestsMove = (DB, from, to) => DB.prepare('UPDATE profile_requests SET slug = ? WHERE slug = ?').bind(to, from);
 
 /** "linkedin.com/in/jane" or a full URL → "https://www.linkedin.com/in/jane"; '' when empty; null when not LinkedIn */
 export function normalizeLinkedIn(raw) {

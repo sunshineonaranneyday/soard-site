@@ -20,12 +20,12 @@ import { parsePath } from './_collections.js';
 import { deleteFile } from './_github.js';
 import { logAudit, getEntityName } from './_audit.js';
 import { setBoardEmail, refreshForBoardChange } from './_reveal-invites.js';
-import { HISTORY_TABLES, recordDeletion } from './_content-history.js';
+import { HISTORY_TABLES, ensureHistory, deletionStatement, pruneHistory } from './_content-history.js';
 
 export async function onRequestPost(context) {
   try {
     const userEmail = context.data?.userEmail || 'unknown';
-    const { path, message } = await context.request.json();
+    const { path, message } = await context.request.json().catch(() => ({}));
 
     if (!path || !message) {
       return Response.json(
@@ -43,9 +43,11 @@ export async function onRequestPost(context) {
     return Response.json({ success: true, gitCommit });
   } catch (err) {
     console.error("[delete-content]", err);
-    // (refused in words, a 409 for one being changed right now, never a 500)
+    // (refused in words, a 409 for one being changed right now; anything else stopped it before the delete was saved, or
+    // as it was, everything after that taking care of itself: nothing deleted, said in words for staff, never
+    // "D1_ERROR: …", and never a 502, which Cloudflare covers with its own page)
     return Response.json(
-      { success: false, error: err.message || "An unexpected error occurred" },
+      { success: false, error: err.status ? err.message : 'Nothing was deleted: the site’s database didn’t answer just now. Try again in a moment.' },
       { status: err.status >= 400 && err.status < 500 ? err.status : 500 }
     );
   }
@@ -73,12 +75,28 @@ export async function deleteItem(env, { path, message }, userEmail = 'unknown', 
   // so an Add never links an application to someone deleted meanwhile (Joined, pointing at nobody)
   if (parsed.table !== 'team') return deleteHeld(env, { path, message, parsed }, userEmail, waitUntil);
   const { holdForPeople, whyHeld, letGo } = await import('./_advisory-add.js');
-  const keys = await holdForPeople(env.DB, [parsed.slug]);
+  let keys;
+  try { keys = await holdForPeople(env.DB, [parsed.slug], { deleting: true }); } catch (e) {
+    console.error('[delete-content] hold', e?.message || e);
+    throw Object.assign(new Error('The site’s database didn’t answer just now, so nobody was deleted. Try again in a moment.'), { status: 503 });
+  }
   if (!keys) {
-    throw Object.assign(new Error((await whyHeld(env.DB, [parsed.slug])).some((h) => h.by === 'people') ? 'Someone is changing this person on People right now (their web address, or a delete). Try again in a moment.'
-      : 'Someone is adding this person to the Advisory Board right now, so they weren’t deleted. Try again in a moment.'), { status: 409 });
+    const by = (await whyHeld(env.DB, [parsed.slug]))[0]?.by;
+    throw Object.assign(new Error(by === 'deleting' ? 'This person is being deleted on People right now, in another tab or by someone else.'
+      : by === 'people' ? 'Someone is changing this person on People right now (their web address, or a delete). Try again in a moment.'
+        : 'Someone is adding this person to the Advisory Board right now, so they weren’t deleted. Try again in a moment.'), { status: 409 });
   }
   try {
+    // A rename of theirs (or onto their address) still finishing: finished first, or nothing is deleted yet, so their
+    // records are never left at an address nobody has (./_rename-finish.js). The list unread is never "none": it waits,
+    // said so; one that couldn't finish as it stood waits for a person, said as that
+    const left = await (await import('./_rename-finish.js')).settleFor(env.DB, [parsed.slug]);
+    if (left.some((n) => n.unread)) throw Object.assign(new Error('Nothing was deleted: the site couldn’t check for an earlier change of web address still finishing. Try again in a moment.'), { status: 503 });
+    const stuck = left.find((n) => n.stuck);
+    if (stuck) throw Object.assign(new Error(`Nothing was deleted: an earlier change of web address (“${stuck.from}” to “${stuck.to}”) couldn’t finish by itself, and a person needs to settle it first, in the note at the top of People.`), { status: 409 });
+    if (left.length) {
+      throw Object.assign(new Error('Nothing was deleted: this person’s records from their last change of web address are still moving. Try again in a minute.'), { status: 409 });
+    }
     return await deleteHeld(env, { path, message, parsed }, userEmail, waitUntil);
   } finally {
     await letGo(env.DB, keys);
@@ -88,26 +106,31 @@ export async function deleteItem(env, { path, message }, userEmail = 'unknown', 
 async function deleteHeld(env, { path, message, parsed }, userEmail, waitUntil) {
   const { DB } = env;
 
-  // 0. Read old value before deleting (for audit trail)
+  // 0. Read old value before deleting (for audit trail, and the copy Recently deleted keeps). A read that doesn't answer
+  // stops the delete (said in words by onRequestPost): never deleted with nothing kept, its History gone and its address
+  // free for anyone. Only a record that can't be read as JSON goes without its copy
   let oldData = null;
   let entityName = null;
-  try {
-    if (parsed.type === 'site') {
-      const row = await DB.prepare('SELECT data FROM site_config WHERE key = ?').bind(parsed.key).first();
-      if (row) { oldData = JSON.parse(row.data); entityName = getEntityName(oldData); }
-    } else {
-      const row = await DB.prepare(`SELECT data FROM ${parsed.table} WHERE slug = ?`).bind(parsed.slug).first();
-      if (row) { oldData = JSON.parse(row.data); entityName = getEntityName(oldData); }
-    }
-  } catch (e) { /* ok */ }
+  const row = parsed.type === 'site'
+    ? await DB.prepare('SELECT data FROM site_config WHERE key = ?').bind(parsed.key).first()
+    : await DB.prepare(`SELECT data FROM ${parsed.table} WHERE slug = ?`).bind(parsed.slug).first();
+  if (row) {
+    try { oldData = JSON.parse(row.data); entityName = getEntityName(oldData); } catch (e) { console.error('[delete-content] unreadable record', parsed.table || parsed.key, e?.message); }
+  }
 
-  // 1. Delete from D1 FIRST (source of truth — prebuild reads from D1)
-  if (parsed.type === 'site') {
-    await DB.prepare('DELETE FROM site_config WHERE key = ?')
-      .bind(parsed.key).run();
+  // 1. Delete from D1 FIRST (source of truth — prebuild reads from D1), in the same write as the copy Recently deleted
+  // keeps: nothing is deleted until its copy is kept. A copy that can't be kept (History's table can't be made, its
+  // write doesn't answer) deletes nothing, said in words by onRequestPost; the batch is all or nothing, so a delete that
+  // fails keeps no copy either, and pressing Delete again does the whole of it once
+  const remove = parsed.type === 'site'
+    ? DB.prepare('DELETE FROM site_config WHERE key = ?').bind(parsed.key)
+    : DB.prepare(`DELETE FROM ${parsed.table} WHERE slug = ?`).bind(parsed.slug);
+  const keep = !!(HISTORY_TABLES[parsed.table] && oldData);
+  if (keep) {
+    await ensureHistory(DB);
+    await DB.batch([deletionStatement(DB, { collection: parsed.table, slug: parsed.slug, data: oldData, userEmail, now: new Date().toISOString() }), remove]);
   } else {
-    await DB.prepare(`DELETE FROM ${parsed.table} WHERE slug = ?`)
-      .bind(parsed.slug).run();
+    await remove.run();
   }
 
   // 2. Delete from GitHub (VCS backup). Non-blocking — D1 already reflects the delete.
@@ -133,9 +156,9 @@ async function deleteHeld(env, { path, message, parsed }, userEmail, waitUntil) 
     gitStatus,
   });
 
-  // A deleted item can come back: keep the record as it was (Recently deleted)
-  if (HISTORY_TABLES[parsed.table] && oldData) {
-    try { await recordDeletion(DB, { collection: parsed.table, slug: parsed.slug, data: oldData, userEmail, now: new Date().toISOString() }); }
+  // A deleted item can come back: its copy was kept with the delete (above); only the newest are kept
+  if (keep) {
+    try { await pruneHistory(DB, parsed.table, parsed.slug); }
     catch (e) { console.error(`[delete-content] ${parsed.table} history:`, e.message); }
   }
 

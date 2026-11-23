@@ -237,7 +237,10 @@ test('rename moves the record, the reveal email and the photo, and deletes the o
   const log = await audits(DB);
   assert.equal(log.length, 1);
   assert.equal(log[0].entity_slug, 'linzi-lawsky');
-  assert.deepEqual(JSON.parse(log[0].changes)[0], { field: 'slug', from: 'linzi-berkowitz', to: 'linzi-lawsky' });
+  /* r9: the rename's entry keeps its own moment (at), which a save's base is compared with (./_board.js addressesNow) */
+  const { at, ...slugChange } = JSON.parse(log[0].changes)[0];
+  assert.deepEqual(slugChange, { field: 'slug', from: 'linzi-berkowitz', to: 'linzi-lawsky' });
+  assert.match(at, /^\d{4}-\d\d-\d\dT[\d:.]+Z$/);
 });
 
 test('rename keeps going when the photo can’t move, and says so', async () => {

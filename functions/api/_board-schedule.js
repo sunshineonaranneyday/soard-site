@@ -76,6 +76,8 @@ export async function maybeScheduleAhead(env, { fetchImpl = fetch, now = Date.no
         quarters[q] = { doneAt: at, date };
         if (had[q]?.toldAt) await sayInviteFixed(env, `ahead:${q}`, `${q} board meeting invite is out`);
       } catch (err) {
+        // Its invite going out right now from Board's page (one send at a time: ./_board-invite.js): looked at again next time
+        if (err.extra?.sending) continue;
         const since = had[q]?.since || at;
         error = String(err.message).replace(/\S+@\S+/g, '…').slice(0, 200);
         console.error('[board-schedule]', date, err.message);

@@ -135,6 +135,7 @@ function problemOf(err) {
 
 /** A Drive token: as the staff member looking, else as Board's admins, the first Google lets in */
 async function tokenFor(env, user, { fetchImpl, now }) {
+  // not sure: only whose Drive to ask as (the staff member looking comes first), read-only; a failed read asks no one else
   const people = [...new Set([isStaffEmail(user) ? user : null, ...(await boardAdmins(env.DB).catch(() => []))].filter(Boolean))];
   let last = null;
   for (const who of people) {
@@ -240,7 +241,8 @@ export async function policyChecks(env, policy) {
   const problems = [];
   let chair = null;
   if (/board chair/i.test(top.by)) {
-    chair = (await activeBoard(env.DB).catch(() => [])).find((p) => p.seat === 'chair') || null;
+    // (People not answering throws, and the check isn't shown: never "Nobody holds the Chair's seat" from a failed read)
+    chair = (await activeBoard(env.DB)).find((p) => p.seat === 'chair') || null;
     if (!chair) problems.push('Nobody holds the Chair’s seat in People → Board.');
     else if (!chair.email || !bigApprovers.includes(chair.email)) problems.push(`${chair.name}, the Board Chair, isn’t a second approver in Job Costs → Bills → Settings.`);
   }
@@ -337,6 +339,7 @@ export function reviewEmail(docKey, d, rv, { agenda = [], reviewedAt = null } = 
 export async function maybeTellReviews(env, { now = Date.now(), send = sendEmails } = {}) {
   if (!env.DB || !emailConfigured(env)) return [];
   await ensure(env.DB);
+  // not sure: no founders read means nothing is sent and nothing marked, so the next heartbeat tries again (read-only here)
   const [reviews, notices, people] = await Promise.all([readReviews(env.DB), readRow(env.DB, 'review-notices'), peopleRows(env.DB).catch(() => [])]);
   const to = founderEmails(people);
   if (!to.length) return [];

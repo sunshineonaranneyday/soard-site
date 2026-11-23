@@ -17,12 +17,15 @@
  *
  * Written from /api/board-portal (GET: the sign-in, and once the page answered, the calendar file and following a
  * meeting while it's held; POST: the answers, and { action: 'activity' } from ../../public/admin/board/activity.js);
- * read by /api/board-admin. Kept two years.
+ * read by /api/board-admin. Kept two years. Whatever's kept of a board member here is them on the page, so it keeps
+ * their visit going too (./_board.js keepVisit: what's new since their last visit stays new while they're here).
  */
 
-import { ID, ensureSchema, getMeeting, cleanDoc, onBoardPage } from './_board.js';
-import { todayEastern, isNothingNew } from '../../public/admin/board-shared.js';
+import { ID, ensureSchema, getMeeting, cleanDoc, onBoardPage, boardSees, keepVisit } from './_board.js';
+import { todayEastern, isNothingNew, VISIT_GAP_MS } from '../../public/admin/board-shared.js';
 import { limit } from './_rate-limit.js';
+import { ownRow } from './_member-write.js';
+import { stateReady } from './_board-roles.js';
 
 const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS board_signins (slug TEXT NOT NULL, iat INTEGER NOT NULL, at TEXT NOT NULL, device TEXT, added TEXT, PRIMARY KEY (slug, iat))',
@@ -49,12 +52,13 @@ export async function ensureActivitySchema(DB) {
 
 const KEEP_MS = 2 * 365 * 86_400_000;
 const MAX_SECS = 4 * 3600;
-// One sitting: activity with no gap longer than this
-export const VISIT_GAP_MS = 30 * 60_000;
 const iso = (ms) => new Date(ms).toISOString();
+// What a board member does here keeps their visit to the board page going (./_board.js keepVisit). The Advisory Board's
+// page keeps its members' looks here too (../advisory-portal.js, ../advisory-file.js): never a visit to the board page
+const stillHere = (DB, member, t) => (member.kind === 'advisor' ? null : keepVisit(DB, member, t));
 
-/** The pages of the board page as the tracker names them (#/meetings/<id> → meeting/<id>) */
-const PAGES = ['home', 'meetings', 'financials', 'gifts', 'people', 'documents', 'introductions', 'fundraise'];
+/** The pages of the board page as the tracker names them (#/meetings/<id> → meeting/<id>; #/families/... → families) */
+const PAGES = ['home', 'meetings', 'financials', 'gifts', 'people', 'documents', 'introductions', 'fundraise', 'families'];
 const idOk = (x) => typeof x === 'string' && ID.test(x);
 const str = (x) => (typeof x === 'string' ? x : '');
 const parse = (x) => { try { return JSON.parse(x || '{}'); } catch { return {}; } };
@@ -109,8 +113,10 @@ async function deviceFor(DB, member, request) {
 async function signedIn(DB, member, request, now) {
   const iat = accessIat(request);
   if (!iat || iat * 1000 > now + 300_000) return;
-  await DB.prepare('INSERT OR IGNORE INTO board_signins (slug, iat, at, device, added) VALUES (?, ?, ?, ?, ?)')
-    .bind(member.slug, iat, iso(iat * 1000), deviceOf(request.headers.get('User-Agent')), iso(now)).run();
+  await stateReady(DB);
+  const [own, mine] = await ownRow(DB, member);
+  await DB.prepare(`INSERT OR IGNORE INTO board_signins (slug, iat, at, device, added) SELECT me.s, ?, ?, ?, ? ${own}`)
+    .bind(iat, iso(iat * 1000), deviceOf(request.headers.get('User-Agent')), iso(now), ...mine).run();
 }
 
 /**
@@ -125,10 +131,14 @@ const PRINTS = ['all', 'form', 'page', 'paper'];
 const sameThing = (a, b) => a.kind === b.kind && (a.ref || '') === (b.ref || '') && (a.sub || '') === (b.sub || '');
 const lastRow = (DB, slug, kind, ref, sub = '') => DB.prepare('SELECT id, until FROM board_activity WHERE slug = ? AND kind = ? AND ref = ? AND sub = ? ORDER BY id DESC LIMIT 1').bind(slug, kind, ref || '', sub || '').first();
 // A new row, only while there's room for it: the count is read as the row is written (one statement), so reports
-// sent at once can't each find room and go past the caps together
-const insert = (DB, slug, r, until, device, now = Date.now()) => DB.prepare(`INSERT OR IGNORE INTO board_activity (slug, kind, ref, sub, secs, at, until, device, look, added)
-  SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE (SELECT COUNT(*) FROM board_activity WHERE slug = ? AND added >= ?) < ? AND (SELECT COUNT(*) FROM board_activity WHERE slug = ? AND added >= ?) < ?`)
-  .bind(slug, r.kind, r.ref || '', r.sub || '', r.secs, iso(r.at), until, device, r.look || null, iso(now), slug, iso(now - 60_000), ROWS_A_MINUTE, slug, iso(now - 86_400_000), ROWS_A_DAY).run();
+// sent at once can't each find room and go past the caps together. And only at the address that's theirs this moment,
+// never one a rename is moving or has moved (./_member-write.js ownRow). `who`: the member (their address and email)
+async function insert(DB, who, r, until, device, now = Date.now()) {
+  const [own, mine] = await ownRow(DB, who);
+  return DB.prepare(`INSERT OR IGNORE INTO board_activity (slug, kind, ref, sub, secs, at, until, device, look, added)
+  SELECT me.s, ?, ?, ?, ?, ?, ?, ?, ?, ? ${own} AND (SELECT COUNT(*) FROM board_activity WHERE slug = me.s AND added >= ?) < ? AND (SELECT COUNT(*) FROM board_activity WHERE slug = me.s AND added >= ?) < ?`)
+    .bind(r.kind, r.ref || '', r.sub || '', r.secs, iso(r.at), until, device, r.look || null, iso(now), ...mine, iso(now - 60_000), ROWS_A_MINUTE, iso(now - 86_400_000), ROWS_A_DAY).run();
+}
 // New rows a member can write in a minute, and in a day (a page open all day makes a few an hour; a long sitting, a
 // few dozen)
 const ROWS_A_MINUTE = 60;
@@ -147,14 +157,15 @@ async function roomFor(DB, slug, now = Date.now()) {
  * ROWS_A_MINUTE new rows a minute and ROWS_A_DAY a day, by when they're written. `stored`: each look's row so far, by
  * its id (noteEvents read them)
  */
-async function add(DB, slug, rows, device, now = Date.now(), stored = new Map()) {
-  let room = await roomFor(DB, slug, now);
+async function add(DB, who, rows, device, now = Date.now(), stored = new Map()) {
+  await stateReady(DB);
+  let room = await roomFor(DB, who.slug, now);
   for (const r of rows) {
     const until = iso(Math.min(now, Math.max(r.at, r.end ?? r.at)));
     const row = r.look ? stored.get(r.look) : null;
     if (row && !sameThing(row, r)) continue; // an id once used for something else
     if (row && LOOKS.includes(r.kind)) await DB.prepare('UPDATE board_activity SET secs = MIN(?, MAX(secs, ?)), until = MAX(until, ?), device = ? WHERE id = ?').bind(MAX_SECS, r.secs, until, device, row.id).run();
-    else if (!row && room-- > 0) await insert(DB, slug, r, until, device, now);
+    else if (!row && room-- > 0) await insert(DB, who, r, until, device, now);
   }
 }
 
@@ -194,7 +205,8 @@ export async function noteLook(env, member, request, kind, ref, { now = Date.now
     if (kind === 'calendar') {
       const was = await lastRow(env.DB, member.slug, 'calendar', ref);
       const full = (await roomFor(env.DB, member.slug, now)) <= 0;
-      if (!full && !(was && now - Date.parse(was.until) < 10 * 60_000)) await insert(env.DB, member.slug, { kind, ref, secs: 0, at: now }, iso(now), device, now);
+      if (!full && !(was && now - Date.parse(was.until) < 10 * 60_000)) await insert(env.DB, member, { kind, ref, secs: 0, at: now }, iso(now), device, now);
+      await stillHere(env.DB, member, now);
       return;
     }
     // A page in the background still looks: its time counts only while the member is at it (their tracker has
@@ -206,10 +218,12 @@ export async function noteLook(env, member, request, kind, ref, { now = Date.now
       const used = (await env.DB.prepare('SELECT at AS u FROM board_activity_reports WHERE slug = ?').bind(member.slug).first())?.u;
       if (!used || now - Date.parse(used) > 120_000) return;
     }
+    // (following it, they're on the page: their visit goes on, as for anything else they do here)
+    await stillHere(env.DB, member, now);
     if (gap > 0 && gap <= 60) await env.DB.prepare('UPDATE board_activity SET secs = MIN(?, secs + ?), until = ?, device = ? WHERE id = ?').bind(MAX_SECS, gap, iso(now), device, last.id).run();
     // A slowed background tab looks now and then: the same following, its time only what came a minute at a time
     else if (gap > 60 && gap <= 30 * 60) await env.DB.prepare('UPDATE board_activity SET until = ?, device = ? WHERE id = ?').bind(iso(now), device, last.id).run();
-    else if (gap > 60 && (await roomFor(env.DB, member.slug, now)) > 0) await insert(env.DB, member.slug, { kind, ref, secs: 0, at: now }, iso(now), device, now);
+    else if (gap > 60 && (await roomFor(env.DB, member.slug, now)) > 0) await insert(env.DB, member, { kind, ref, secs: 0, at: now }, iso(now), device, now);
   } catch (err) {
     console.error('[board-activity] look', err.message);
   }
@@ -225,7 +239,8 @@ export async function noteFileOpen(env, member, request, fileId, { now = Date.no
     await ensureActivitySchema(env.DB);
     const was = await env.DB.prepare("SELECT until FROM board_activity WHERE slug = ? AND kind = 'file' AND ref = ? ORDER BY id DESC LIMIT 1").bind(member.slug, fileId).first();
     if (was && now - Date.parse(was.until) < 60_000) return;
-    await add(env.DB, member.slug, [{ kind: 'file', ref: fileId, sub: '', secs: 0, at: now, end: now, look: `nt${now.toString(36)}` }], await deviceFor(env.DB, member, request), now);
+    await add(env.DB, member, [{ kind: 'file', ref: fileId, sub: '', secs: 0, at: now, end: now, look: `nt${now.toString(36)}` }], await deviceFor(env.DB, member, request), now);
+    await stillHere(env.DB, member, now);
   } catch (err) {
     console.error('[board-activity] open', err.message);
   }
@@ -241,7 +256,8 @@ export async function noteFamilyOpen(env, member, request, account, what, name, 
     await ensureActivitySchema(env.DB);
     const was = await env.DB.prepare("SELECT until FROM board_activity WHERE slug = ? AND kind = 'family' AND ref = ? AND sub LIKE ? ORDER BY id DESC LIMIT 1").bind(member.slug, account, `${what}|%`).first();
     if (was && now - Date.parse(was.until) < 10 * 60_000) return;
-    await add(env.DB, member.slug, [{ kind: 'family', ref: account, sub: `${what}|${String(name || '').slice(0, 80)}`, secs: 0, at: now, end: now, look: `fa${what[0]}${now.toString(36)}` }], await deviceFor(env.DB, member, request), now);
+    await add(env.DB, member, [{ kind: 'family', ref: account, sub: `${what}|${String(name || '').slice(0, 80)}`, secs: 0, at: now, end: now, look: `fa${what[0]}${now.toString(36)}` }], await deviceFor(env.DB, member, request), now);
+    await stillHere(env.DB, member, now);
   } catch (err) {
     console.error('[board-activity] family', err.message);
   }
@@ -277,6 +293,8 @@ export async function noteAnswer(env, member, request, row, { now = Date.now() }
   try {
     await ensureActivitySchema(env.DB);
     const device = await deviceFor(env.DB, member, request);
+    // (an answer is them on the page: their visit goes on)
+    await stillHere(env.DB, member, now);
     // One row for what's one answer: a report or a note saved as it's typed (30 minutes), a vote (its motion, whatever
     // it was changed to: the tally keeps no changes), an action item ticked and unticked (a minute)
     const mins = { report: 30, nothing: 30, note: 30, unnote: 30, motion: 30, unmotion: 30, vote: Infinity, action: 1 }[row.kind];
@@ -285,7 +303,7 @@ export async function noteAnswer(env, member, request, row, { now = Date.now() }
       : await lastRow(env.DB, member.slug, row.kind, row.ref, row.sub)) : null;
     if (was && now - Date.parse(was.until) < mins * 60_000) { await env.DB.prepare('UPDATE board_activity SET until = ?, sub = ?, device = ? WHERE id = ?').bind(iso(now), row.sub || '', device, was.id).run(); return; }
     const full = (await roomFor(env.DB, member.slug, now)) <= 0;
-    if (!full) await insert(env.DB, member.slug, { ...row, secs: 0, at: now }, iso(now), device, now);
+    if (!full) await insert(env.DB, member, { ...row, secs: 0, at: now }, iso(now), device, now);
   } catch (err) {
     console.error('[board-activity] answer', err.message);
   }
@@ -374,7 +392,8 @@ export async function noteEvents(env, member, request, body, { now = Date.now() 
     if (!f) return false;
     if (f.owner_type === 'signed') return theirCopies.has(f.id);
     if (f.staff_only) return false;
-    return f.owner_type === 'meeting' ? !!meetings.get(f.owner_id)?.shared : !!docs.get(f.owner_id)?.shared;
+    // (a meeting's file as fileFor has it: a meeting the board sees, never one kept off the board page)
+    return f.owner_type === 'meeting' ? (() => { const m = meetings.get(f.owner_id); return !!m?.shared && boardSees(m); })() : !!docs.get(f.owner_id)?.shared;
   };
   const today = todayEastern(now);
   const meetingOk = (r, id) => {
@@ -413,8 +432,12 @@ export async function noteEvents(env, member, request, body, { now = Date.now() 
   // sends it all when it's back), claimed in one step: reports sent at once share it, the first taking what's passed
   // and the rest what's left. Only a report that adds time claims it (a screen left on elsewhere takes none)
   const adds = looks.some((r) => r.secs > Number(stored.get(r.look)?.secs || 0));
-  const claim = adds ? await env.DB.prepare('INSERT INTO board_activity_reports (slug, at) VALUES (?, ?) ON CONFLICT(slug) DO UPDATE SET prev = board_activity_reports.at, at = excluded.at RETURNING prev')
-    .bind(member.slug, iso(now)).first() : null;
+  if (adds) await stateReady(env.DB);
+  const [own, mine] = await ownRow(env.DB, member);
+  const claim = adds ? await env.DB.prepare(`INSERT INTO board_activity_reports (slug, at) SELECT me.s, ? ${own} ON CONFLICT(slug) DO UPDATE SET prev = board_activity_reports.at, at = excluded.at RETURNING prev`)
+    .bind(iso(now), ...mine).first() : null;
+  // (their address changing this moment: nothing of this report is written, never a row at an address they're leaving)
+  if (adds && !claim) return { kept: 0 };
   const before = Date.parse(claim?.prev || '') || 0;
   const passed = Math.min(30 * 60_000, Math.max(0, now - before));
   // (two seconds' grace for a minute's report and its rounding: none for reports sent seconds apart)
@@ -429,14 +452,19 @@ export async function noteEvents(env, member, request, body, { now = Date.now() 
   // The page knows an iPad that the browser called a Mac: its sign-in says so too
   const iat = accessIat(request);
   if (iat && body?.touch === true) await env.DB.prepare("UPDATE board_signins SET device = ? WHERE slug = ? AND iat = ? AND device LIKE 'Mac%'").bind(device, member.slug, iat).run();
-  await add(env.DB, member.slug, seen, device, now, stored);
+  await add(env.DB, member, seen, device, now, stored);
+  // They were on the page: their visit goes on from the last moment this report has them there (a look's last counted
+  // second, a file opened, a click), as a page read keeps it going (./_board.js keepVisit). A look with no time in it
+  // (the tab in front, nobody at it) keeps nothing going
+  const lastHere = Math.max(0, ...seen.map((r) => (!LOOKS.includes(r.kind) ? r.at : r.secs > 0 || r.kind === 'file' ? r.end : 0)));
+  if (lastHere) await stillHere(env.DB, member, lastHere);
   if (Math.random() < 0.02) await env.DB.batch([env.DB.prepare('DELETE FROM board_activity WHERE at < ?').bind(iso(now - KEEP_MS)), env.DB.prepare('DELETE FROM board_signins WHERE at < ?').bind(iso(now - KEEP_MS))]);
   return { kept: seen.length };
 }
 
 // ─── Reading it (Board → Members) ───────────────────────────────────
 
-/** Sittings: activity times (ms, sorted) split wherever nothing happened for VISIT_GAP_MS */
+/** Sittings: activity times (ms, sorted) split wherever nothing happened for VISIT_GAP_MS (a visit, as ./_board.js keepVisit has it) */
 export function visitsOf(points) {
   const out = [];
   for (const p of points) {

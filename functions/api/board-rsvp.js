@@ -58,6 +58,7 @@ a{color:var(--link)}
 const boardPage = (label = 'Open the board page', path = BOARD_PAGE) => `<a class="btn" href="${SITE}${esc(path)}">${esc(label)}</a>`;
 const INVITE = 'Answer the calendar invite for it in your email or calendar: yes, no or maybe. That’s where SOARD sees who’s coming.';
 const broken = () => page('Answer the calendar invite', `<h1>Answer the calendar invite</h1><p>This link is from an older email. ${INVITE}</p><div class="actions">${boardPage()}</div>`, { status: 404 });
+const notChecked = () => page('Answer the calendar invite', `<h1>Answer the calendar invite</h1><p>We couldn’t check this link just now. Please try again in a moment.</p><div class="actions">${boardPage()}</div>`, { status: 503 });
 const expired = () => page('Meeting passed', `<h1>This meeting has passed</h1><p>Its minutes go on the board page once they’re up.</p><div class="actions">${boardPage()}</div>`, { status: 410 });
 
 const first = (name) => String(name || '').trim().split(/\s+/)[0] || '';
@@ -69,7 +70,9 @@ function whenBlock(m) {
 }
 /** A link's meeting, by name, and where its answer goes now */
 async function toInvite(env, tok) {
-  const link = await answerLink(env, tok).catch(() => null);
+  // (People not answering is said as that, never "This link is from an older email": round 10)
+  let link = null;
+  try { link = await answerLink(env, tok); } catch (err) { if (err?.unread) return notChecked(); }
   if (!link) return broken();
   if (link.expired) return expired();
   const { meeting: m, member } = link;

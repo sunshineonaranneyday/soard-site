@@ -37,6 +37,7 @@ import { getLiveForm } from './_application-forms.js';
 import { DEFAULT_SERVICE_AREA } from './_application-form.js';
 import { applicantFiles, applicationSettings, cleanYear } from './_applications.js';
 import { projectsNow } from './_board.js';
+import { cachedReveals } from './_reveals.js';
 import { readState, writeState } from './_board-roles.js';
 import { noteFamilyOpen } from './_board-activity.js';
 import { provenParts, fileKind } from '../../public/admin/application-files.js';
@@ -125,15 +126,32 @@ async function applicationWindow(DB) {
 }
 
 /**
+ * The season a makeover with no application in Board belongs to, from what's known about it (QA round 7: Leo's, being
+ * built with a kid page that says 2026, was in no season, so 2026 said one makeover being built while Home said
+ * three): its kid page's year, else the year in its JobTread name ("Leo (2026)": `year`, when the projects' read
+ * keeps it), else its reveal's (the day set, or the month it's planned for). '' when none of them says. (A family who
+ * applied has their application's season: ./row)
+ */
+export function makeoverSeason(p, { pages = null, reveals = [] } = {}) {
+  const page = p?.slug ? Number(pages?.get(p.slug)?.year) : 0;
+  if (page > 2000) return String(page);
+  if (Number(p?.year) > 2000) return String(Number(p.year));
+  const r = p?.slug ? (reveals || []).find((x) => x.slug === p.slug) : null;
+  const at = String((r?.confirmed && r.date) || r?.window?.month || r?.date || '').slice(0, 4);
+  return /^\d{4}$/.test(at) ? at : '';
+}
+
+/**
  * Every family the board can read about, newest first, each where they are from application to reveal →
  * { families, makeovers, boundary, application, jobs, at }. `makeovers`: the open makeovers whose family isn't among
- * them (an older family JobTread doesn't mark as an applicant), by their page; `jobs`: false when JobTread couldn't
- * be read, so the stages are the applications' alone
+ * them (an older family JobTread doesn't mark as an applicant), by their page, each in its season (makeoverSeason);
+ * `jobs`: false when JobTread couldn't be read, so the stages are the applications' alone
  */
 export async function familiesList(env, { fetchImpl = fetch } = {}) {
-  const [list, scores, boundary, projects, application, kids] = await Promise.all([
+  const [list, scores, boundary, projects, application, kids, reveals] = await Promise.all([
     listApplicants(env.DB), scoreSummaries(env.DB).catch(() => new Map()), serviceArea(env.DB),
     projectsNow(env, { fetchImpl }).catch(() => null), applicationWindow(env.DB), kidPages(env.DB),
+    cachedReveals(env).then((r) => r.upcoming || []).catch(() => []),
   ]);
   const pages = new Map(kids.map((k) => [k.slug, k]));
   const tests = await testAccounts(env.DB);
@@ -141,7 +159,7 @@ export async function familiesList(env, { fetchImpl = fetch } = {}) {
   // (a test run's job is its own: the whole list is checked, tests too, before a makeover counts as nobody's)
   const theirs = new Set(list.map((a) => a.jobId).filter(Boolean));
   const makeovers = [...(projects?.waiting || []), ...(projects?.building || [])].filter((p) => p.jobId && !theirs.has(p.jobId)).map((p) => ({
-    id: `job-${p.jobId}`, jobId: p.jobId, name: p.name || '', kind: p.kind === 'community' ? 'organization' : 'family',
+    id: `job-${p.jobId}`, jobId: p.jobId, name: p.name || '', kind: p.kind === 'community' ? 'organization' : 'family', season: makeoverSeason(p, { pages, reveals }),
     stage: p.slug && pages.get(p.slug)?.status === 'completed' ? 'revealed' : STAGE_OF_JOB[p.status] || 'approved',
     ...((p.slug && pages.get(p.slug)?.status === 'completed') || STAGE_OF_JOB[p.status] === 'revealed' ? (p.slug && pages.get(p.slug)?.year ? { revealYear: String(pages.get(p.slug).year) } : {}) : {}),
     ...(p.url || p.slug ? { page: p.url || `/kids/${p.slug}/` } : {}), ...(p.photo ? { photo: p.photo } : {}),
@@ -151,7 +169,7 @@ export async function familiesList(env, { fetchImpl = fetch } = {}) {
   const known = new Set(list.map((a) => a.kid?.slug).filter(Boolean));
   for (const k of kids) {
     if (k.status !== 'completed' || !(k.year >= since) || known.has(k.slug) || (k.jobId && (theirs.has(k.jobId) || makeovers.some((m) => m.jobId === k.jobId)))) continue;
-    makeovers.push({ id: `kid-${k.slug}`, jobId: k.jobId, name: k.name || '', kind: 'family', stage: 'revealed', revealYear: String(k.year), page: `/kids/${k.slug}/`, ...(k.photo ? { photo: k.photo } : {}) });
+    makeovers.push({ id: `kid-${k.slug}`, jobId: k.jobId, name: k.name || '', kind: 'family', season: String(k.year), stage: 'revealed', revealYear: String(k.year), page: `/kids/${k.slug}/`, ...(k.photo ? { photo: k.photo } : {}) });
   }
   return { families: list.filter((a) => !isTest(a) && !tests.has(a.id)).map((a) => row(a, scores.get(a.id), open, pages)), makeovers, boundary, application, jobs: !!open, at: new Date().toISOString() };
 }

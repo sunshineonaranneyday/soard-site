@@ -35,10 +35,10 @@
 
 import { accessToken } from './_google-calendar.js';
 import { easternParts } from './_reveals.js';
-import { activeBoard, boardAdmins, readState, writeState, normEmail } from './_board-roles.js';
+import { activeBoard, boardAdmins, readState, writeState, normEmail, unreadStatus } from './_board-roles.js';
 import { listMeetings, patchMeeting, ensureSchema } from './_board.js';
-import { placeOf, driftOf, sendInvite } from './_board-invite.js';
-import { todayEastern, isDate, meetingName } from '../../public/admin/board-shared.js';
+import { placeOf, driftOf, sendInvite, noInviteFor } from './_board-invite.js';
+import { todayEastern, isDate, meetingName, inviteIsRecord } from '../../public/admin/board-shared.js';
 
 const KEY = 'calendar';
 const EVERY_MS = 60 * 60 * 1000;
@@ -156,11 +156,21 @@ async function handOver(DB, today) {
 async function look(env, { fetchImpl, now, handOver: first }) {
   const today = todayEastern(now);
   const at = new Date(now).toISOString();
+  // Who is on the board, and at which address, before anything: every answer is matched to a member by it. A read of
+  // People that didn't answer changes nothing (never every invite's answers taken for nobody's: Board QA round 10), and
+  // the look says so in its status and stays due, so the next heartbeat reads it again
+  let board, admins;
+  try {
+    [board, admins] = await Promise.all([activeBoard(env.DB), boardAdmins(env.DB)]);
+  } catch (err) {
+    if (!err?.unread) throw err;
+    return writeState(env.DB, KEY, unreadStatus(await readState(env.DB, KEY), now));
+  }
   const handedOver = first ? await handOver(env.DB, today) : 0;
-  const [board, admins] = await Promise.all([activeBoard(env.DB), boardAdmins(env.DB)]);
   const bySlug = Object.fromEntries(board.filter((p) => p.email).map((p) => [normEmail(p.email), p.slug]));
   const counts = { invites: 0, replies: 0, gone: 0, putBack: 0 };
   const errors = [];
+  let unread = false;
   const tokens = new Map();
   const tokenFor = async (email) => {
     if (!tokens.has(email)) tokens.set(email, await accessToken(env, email, { fetchImpl, now }));
@@ -168,7 +178,9 @@ async function look(env, { fetchImpl, now, handOver: first }) {
   };
   for (const m of await listMeetings(env.DB)) {
     const inv = m.invite;
-    if (!inv?.eventId || !inv.organizer || m.practice || !isDate(m.date) || m.date < today) continue;
+    // Each invite for a meeting from today on, and one still live on a meeting moved to a day gone by (its invite still
+    // ahead, on its way to that day: ./board-shared.js inviteIsRecord); a meeting held with its invite held is a record
+    if (!inv?.eventId || !inv.organizer || m.practice || !isDate(m.date) || (m.date < today && inviteIsRecord(m, now))) continue;
     counts.invites += 1;
     try {
       const token = await tokenFor(inv.organizer);
@@ -184,8 +196,11 @@ async function look(env, { fetchImpl, now, handOver: first }) {
       // Its day, time or place changed in Google Calendar: Board's go back on it, once for each change. The same change
       // again (made again, or kept by Google) is never fought over by email: the meeting says so, for a person to decide
       const drift = driftOf(ev, m);
-      if (drift && inv.putBackFor !== drift) {
-        await sendInvite(env, m.id, { fetchImpl, now });
+      // (never for an invite that's a record, or a meeting kept off the board page: Send the invite refuses those, and
+      // the change is only noted, as one made again is. One being sent right now waits for the next look)
+      if (drift && inv.putBackFor !== drift && !noInviteFor(m, now)) {
+        // (People not answering the send: nothing went, and the look says so and stays due, so the next one puts it back)
+        try { await sendInvite(env, m.id, { fetchImpl, now }); } catch (err) { if (err.extra?.sending) continue; if (err.unread) { unread = true; continue; } throw err; }
         await patchMeeting(env.DB, m.id, (cur) => (cur.invite ? { ...cur, invite: { ...cur.invite, putBackAt: at, putBackFor: drift } } : cur));
         counts.putBack += 1;
         continue;
@@ -237,10 +252,10 @@ async function look(env, { fetchImpl, now, handOver: first }) {
   }
   strays.sort((x, y) => x.date.localeCompare(y.date));
   const rehomed = (await rehomeStranded(env, { now })).moved;
-  return writeState(env.DB, KEY, {
-    version: VERSION, ok: !errors.length, configured: true, checkedAt: at,
-    ...counts, handedOver, rehomed, others, strays: strays.slice(0, 20), errors,
-  });
+  const out = { version: VERSION, ok: !errors.length, configured: true, checkedAt: at, ...counts, handedOver, rehomed, others, strays: strays.slice(0, 20), errors };
+  if (!unread) return writeState(env.DB, KEY, out);
+  const prev = await readState(env.DB, KEY);
+  return writeState(env.DB, KEY, unreadStatus({ ...out, checkedAt: prev.checkedAt || '', failingSince: prev.failingSince || '' }, now));
 }
 
 export const calendarStatus = (DB) => readState(DB, KEY);

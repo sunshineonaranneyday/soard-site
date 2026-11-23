@@ -728,6 +728,8 @@ const CSS = `
 .rp-foot__status { margin-left: auto; }
 /* A phone: the tools in one row, a finger's size (its own undo is the phone's: shake, or three fingers) */
 @media (max-width: 640px) { .rp-bar { flex-wrap: nowrap; gap: 0; } .rp-bar:has(.rp-tool--text) { flex-wrap: wrap; } .rp-tool { width: 40px; height: 40px; flex: none; } .rp-tool.rp-tool--text { width: auto; padding: 0 0.5rem; } .rp-tool__more { display: none; } .rp-sep { margin: 0 2px; } .rp-bar__end { display: none; } .rp-link { flex-wrap: wrap; } .rp-bar:has(.rp-link) { flex-wrap: wrap; } .rp-page { padding: 0.85rem 0.9rem 0.5rem; } .rp-foot { padding: 0.45rem 0.9rem 0.6rem; } }
+/* The narrowest phones (320): the tools share the row, each as wide as fits up to a finger's, never past the editor's edge */
+@media (max-width: 360px) { .rp-tool { flex: 1 1 0; width: auto; min-width: 30px; max-width: 40px; } .rp-tool.rp-tool--text { flex: none; } .rp-sep { margin: 0 1px; } }
 @media print { .rp a { text-decoration: none; } .rp .rp-callout, .rp-motion { background: none; } }
 `;
 if (typeof document !== 'undefined' && !document.getElementById('board-report-css')) {

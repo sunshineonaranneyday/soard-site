@@ -40,6 +40,9 @@ export function pageOf(hash) {
   if (page === 'financials') return sub === 'gifts' || id === 'gifts' ? 'gifts' : 'financials';
   // A paper written in Board, read on its own page
   if ((page === 'documents' || page === 'papers') && id) return ID.test(id) ? `paper/${id}` : null;
+  // Makeovers, every view of it (the board, the list, the map, a family's page) as one page: reading there keeps the
+  // visit going, as any other page does (a family's video, application or photos are noted by name besides)
+  if (page === 'families') return 'families';
   return ['people', 'documents', 'introductions', 'fundraise'].includes(page) ? page : null;
 }
 const meetingOf = (page) => (/^(meeting|screen|report|review)\//.test(page || '') ? page.split('/')[1] : '');

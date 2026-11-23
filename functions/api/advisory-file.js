@@ -15,6 +15,8 @@ import { fileHeaders } from '../files/[[path]].js';
 import { noteFileOpen } from './_board-activity.js';
 
 const notFound = () => new Response('Not found', { status: 404, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'private, no-store' } });
+// (who's asking couldn't be checked: said as that, never a 404 for a file they can open. Board QA round 9)
+const notChecked = (err) => new Response(err.message, { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'private, no-store', 'Retry-After': '5' } });
 
 export async function advisoryFileFor(DB, id, w) {
   if (!ID.test(String(id || ''))) return null;
@@ -31,7 +33,8 @@ export async function advisoryFileFor(DB, id, w) {
 
 export async function onRequestGet(context) {
   const { env, request } = context;
-  const w = await whoIs(context).catch(() => null);
+  let w = null;
+  try { w = await whoIs(context); } catch (err) { if (err?.status === 503) return notChecked(err); }
   if (!w) return notFound();
   const id = new URL(request.url).searchParams.get('id') || '';
   const row = await advisoryFileFor(env.DB, id, w);

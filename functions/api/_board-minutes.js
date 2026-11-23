@@ -25,9 +25,9 @@
  */
 
 import { fileText, attendanceIn, dateIn } from './_board-mail.js';
-import { getMeeting, patchMeeting, listMeetings, roster, boardFiles, updateFile, approveMinutes, putFile, deleteFile, MAX_FILE, ID } from './_board.js';
+import { getMeeting, patchMeeting, listMeetings, roster, boardFiles, updateFile, approveMinutes, putFile, deleteFile, fileLocked, MAX_FILE, ID } from './_board.js';
 import { readState, writeState } from './_board-roles.js';
-import { parseAgendaText, agendaIsDraft, meetingName, shortDate, isDate, uid, LIVE_TITLES, todayEastern } from '../../public/admin/board-shared.js';
+import { parseAgendaText, agendaIsDraft, meetingName, shortDate, isDate, uid, LIVE_TITLES, todayEastern, cleanMeeting, mergeMeeting, minutesIn } from '../../public/admin/board-shared.js';
 import { viaGateway, aiCapped, AI_REST_MS } from './_ai.js';
 
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
@@ -444,6 +444,18 @@ export function actionsIn(parts, people = [], meetingDate = '') {
   return dedupe(out, (x) => x.text);
 }
 
+/**
+ * How many of a meeting's items the minutes put notes under (`read`: readMinutes' answer; `m`: the meeting with them
+ * read in, or as it would be): each item whose notes are the minutes' own, never an item's background notes written on
+ * the agenda before the meeting, which minutes with nothing under it leave as they were. The "notes under N items" a
+ * read says (the founders' drop, its look first, and the secretary's send). QA round 7, Nov 21 2026: minutes with only
+ * who was there said "notes under 1 item", counting the agenda's own notes
+ */
+export function notesRead(read, m) {
+  const theirs = new Set((read?.sections || []).flatMap((s) => s.items).map((it) => String(it.notes || '').trim()).filter(Boolean));
+  return (m?.sections || []).reduce((n, s) => n + s.items.filter((it) => theirs.has(String(it.notes || '').trim())).length, 0);
+}
+
 /** Whether a reading found anything to put on a meeting */
 export const readSomething = (read) => !!read && (read.attendance.length > 0 || read.sections.some((s) => s.items.length) || read.motions.length > 0 || read.actions.length > 0);
 
@@ -621,9 +633,63 @@ export function applyMinutes(cur, read, { fileName = '', now = Date.now(), keepM
   for (const x of read.actions) if (!actions.some((y) => similar(y.text, x.text))) actions.push({ id: uid('a_'), text: x.text, owner: x.owner || '', ownerName: x.ownerName || '', due: x.due || '', done: false, doneOn: '' });
   next.actions = actions;
   // Whether the model read them (the motions and action items); minutes read by the rules alone are read again later
-  next.minutesFrom = { name: one(fileName, 200), at, ai: read.said?.by === 'ai', tries: read.said?.by === 'ai' ? 0 : Math.min(9, (cur.minutesFrom?.name === one(fileName, 200) ? cur.minutesFrom.tries || 0 : 0) + 1) };
-  return next;
+  next.minutesFrom = { name: one(fileName, 200), at, ai: read.said?.by === 'ai', tries: read.said?.by === 'ai' ? 0 : Math.min(9, (cur.minutesFrom?.name === one(fileName, 200) ? cur.minutesFrom.tries || 0 : 0) + 1), marks: 1 };
+  return marked(cur, next);
 }
+
+/**
+ * A short fingerprint of words as a minutes read put them (FNV-1a), for its marks: the same words, the same mark; a word
+ * changed by a person since, another (./board-shared.js readMark)
+ */
+export const markOf = (s) => {
+  let h = 0x811c9dc5;
+  for (const c of String(s ?? '')) { h ^= c.codePointAt(0); h = Math.imul(h, 0x01000193) >>> 0; }
+  return h.toString(36);
+};
+/**
+ * The meeting a read made (`next`, from `cur`) with what the read put on it marked: each item's and part's notes it
+ * set, each decision and action item it added, each attendance it gave. So Replace can tell what came from a read even
+ * with no Undo record of it (Board's email reader, the heartbeat), and anything a person writes since is unmarked, or
+ * no longer matches its mark, and stays theirs. Board QA round 8, Nov 21 2026
+ */
+function marked(cur, next) {
+  const was = new Map((cur.sections || []).flatMap((s) => s.items.map((it) => [it.id, it])));
+  const wasPart = new Map((cur.sections || []).map((s) => [s.id, s]));
+  const note = (x, before) => (String(x.notes || '').trim() && (!before || before.notes !== x.notes) ? { ...x, notesRead: markOf(x.notes) } : x);
+  const sections = (next.sections || []).map((s) => ({ ...note(s, wasPart.get(s.id) || { notes: '' }), items: s.items.map((it) => note(it, was.get(it.id))) }));
+  const had = (list) => new Set((list || []).map((x) => x.id));
+  const [motions, actions] = [had(cur.motions), had(cur.actions)];
+  const roll = new Map((cur.attendance || []).map((p) => [p.key || p.slug || p.name, p]));
+  return {
+    ...next, sections,
+    motions: (next.motions || []).map((x) => (motions.has(x.id) ? x : { ...x, read: markOf(x.text) })),
+    actions: (next.actions || []).map((x) => (actions.has(x.id) ? x : { ...x, read: markOf(x.text) })),
+    attendance: (next.attendance || []).map((p) => { const b = roll.get(p.key || p.slug || p.name); return p.status && (!b || b.status !== p.status) ? { ...p, readStatus: p.status } : p; }),
+  };
+}
+/** What a person wrote, there being no marks to tell it from a read's: any notes, decisions, action items or attendance */
+const anythingOn = (m) => (m.sections || []).some((s) => String(s.notes || '').trim() || s.items.some((it) => String(it.notes || '').trim()))
+  || (m.motions || []).some((x) => !x.tally) || (m.actions || []).length > 0 || (m.attendance || []).some((p) => p.status);
+/**
+ * The meeting with what earlier minutes put on it taken off, by their marks (marked): notes still as the read put them
+ * cleared, the decisions and action items it added (unchanged since) gone, the attendance it gave unset. What a person
+ * wrote, or changed since, stays. For minutes with no Undo record of their read (pure)
+ */
+function readOff(m) {
+  const mine = (x) => !!x.notesRead && markOf(x.notes) === x.notesRead;
+  const clear = ({ notesRead, ...x }) => (mine({ ...x, notesRead }) ? { ...x, notes: '' } : notesRead ? { ...x, notesRead } : x);
+  const ours = (x) => !!x.read && markOf(x.text) === x.read;
+  return {
+    ...m,
+    sections: (m.sections || []).map((s) => ({ ...clear(s), items: s.items.map(clear) })),
+    motions: (m.motions || []).filter((x) => !ours(x)),
+    actions: (m.actions || []).filter((x) => !ours(x)),
+    attendance: (m.attendance || []).map(({ readStatus, ...p }) => (readStatus && p.status === readStatus ? { ...p, status: '' } : readStatus ? { ...p, readStatus } : p)),
+    // (their minutes are off: an Undo of the read that replaces them puts the meeting back to this, with none)
+    minutesFrom: null,
+  };
+}
+
 
 /**
  * Whether minutes from this file (`at`: when it was written or sent) may go onto a meeting: no minutes read into
@@ -639,9 +705,22 @@ export function minutesNewer(cur, { name = '', at = '' } = {}) {
   return !!at && !Number.isNaN(Date.parse(at)) && Date.parse(at) > Date.parse(had.at || 0);
 }
 
+/** How many times the heartbeat reads minutes again for their motions and action items (maybeFinishMinutes) */
+const FINISH_TRIES = 3;
+/**
+ * What a read of the model's would have added to minutes approved before it finished: the decisions and action items not
+ * on them already, in its words ({ motions: [text], actions: [text] }), or null when it would have added nothing
+ */
+function lateOf(cur, read) {
+  const motions = read.motions.filter((x) => !(cur.motions || []).some((y) => similar(y.text, x.text))).map((x) => one(x.text, 300));
+  const actions = read.actions.filter((x) => !(cur.actions || []).some((y) => similar(y.text, x.text))).map((x) => one(x.text, 300));
+  return motions.length || actions.length ? { motions, actions } : null;
+}
+
 /**
  * Minutes the heartbeat read without the model (it ran out of time): read again, one meeting every two minutes and
- * three tries each, so their motions and action items still come in. Nothing a person marked is changed. → id | null
+ * three tries each, so their motions and action items still come in. Nothing a person marked is changed, and minutes
+ * approved (or signed) meanwhile are never changed at all: what it would have added is named beside them. → id | null
  */
 export async function maybeFinishMinutes(env, { now = Date.now() } = {}) {
   let m = null;
@@ -649,22 +728,38 @@ export async function maybeFinishMinutes(env, { now = Date.now() } = {}) {
     const runs = await readState(env.DB, 'runs');
     if (runs.minutesAt && now - Date.parse(runs.minutesAt) < 2 * 60 * 1000) return null;
     const meetings = await listMeetings(env.DB);
-    m = meetings.filter((x) => x.minutesFrom?.name && !x.minutesFrom.ai && (x.minutesFrom.tries || 0) < 3).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+    m = meetings.filter((x) => x.minutesFrom?.name && !x.minutesFrom.ai && (x.minutesFrom.tries || 0) < FINISH_TRIES).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
     if (!m) return null;
+    // (who the minutes can name, read before a try is counted: People not answering costs none of its three)
+    const people = await minutesPeople(env.DB);
     await writeState(env.DB, 'runs', { ...runs, minutesAt: new Date(now).toISOString() });
     // The try is counted before the read: a run cut off during the model's long answer would otherwise never count one, and read again every 2 minutes for good
     await patchMeeting(env.DB, m.id, (cur) => (cur.minutesFrom?.name === m.minutesFrom.name ? { ...cur, minutesFrom: { ...cur.minutesFrom, tries: (cur.minutesFrom.tries || 0) + 1 } } : cur));
-    const f = m.files.find((x) => x.name === m.minutesFrom.name) || m.files.filter((x) => x.kind === 'minutes').at(-1);
+    // (renamed since: the meeting's own minutes file, never the last meeting's on an agenda item. Round 9: Undo of a
+    // Replace puts minutes back whose file is gone, and none is read for them)
+    const f = m.files.find((x) => x.name === m.minutesFrom.name) || ownMinutesFiles(m).at(-1);
     const row = f && await env.DB.prepare('SELECT r2_key FROM board_files WHERE id = ?').bind(f.id).first();
     const obj = row && await boardFiles(env)?.get(row.r2_key);
-    const people = await minutesPeople(env.DB);
     const prev = meetings.filter((x) => x.id !== m.id && !x.notBoard && isDate(x.date) && x.date < m.date).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
     const read = obj ? await readMinutes(env, { name: f.name, bytes: new Uint8Array(await new Response(obj.body).arrayBuffer()), meeting: m, people, prev, quick: true, capThrows: true }) : null;
+    // Approved (or signed) minutes are the record: a read that finishes after they were approved adds nothing. It's done
+    // with (never read again), and what it would have added is kept beside the minutes it came from (minutesFrom.late)
+    // for the founders' view to name, never on the board page. Board QA round 8, Nov 21 2026: approved minutes gained a
+    // decision and an action item from the heartbeat, on the site and the board page, and nobody was told
+    const signed = read ? !!(await env.DB.prepare('SELECT 1 AS y FROM board_minutes_signed WHERE meeting_id = ?').bind(m.id).first().catch(() => null)) : false;
+    // (the meeting as this finishing found it and left it: the write that went is the last one patchMeeting made)
+    let found = null;
+    let left = null;
     await patchMeeting(env.DB, m.id, (cur) => {
+      found = null;
       if (cur.minutesFrom?.name !== m.minutesFrom.name || cur.minutesFrom.ai || !read || read.said.by !== 'ai') return cur;
+      if (cur.minutes === 'approved' || signed) return { ...cur, minutesFrom: { ...cur.minutesFrom, tries: FINISH_TRIES, late: lateOf(cur, read) } };
       // Only what the model adds: the motions and action items (the outline and attendance stay as they were read)
-      return applyMinutes(cur, { ...read, attendance: [], sections: [] }, { fileName: cur.minutesFrom.name, now, keepMarked: true });
+      found = cur;
+      left = applyMinutes(cur, { ...read, attendance: [], sections: [] }, { fileName: cur.minutesFrom.name, now, keepMarked: true });
+      return left;
     });
+    if (found) await finishUndo(env.DB, m.id, found, left);
     return m.id;
   } catch (err) {
     // A cap reached: the try is given back and it waits, or its three would go in six minutes and it's never read again
@@ -683,9 +778,48 @@ export async function maybeFinishMinutes(env, { now = Date.now() } = {}) {
 // ─── The admin's upload ─────────────────────────────────────────────
 
 /**
+ * Minutes marked approved, with minutes in Board (minutesIn: read in, typed, or only a file kept with them), are the
+ * record, however a file comes to them: no file becomes their minutes. One added as the minutes (Every file's Add files
+ * or a drop on it, the upload API) is kept as an ordinary file of the meeting (AS_A_FILE says so), and a file's kind
+ * changed to Minutes is refused (NOT_THE_MINUTES); a drop in the minutes box is refused by readMinutesInto, and the
+ * email reader keeps one for staff (./_board-mail.js). A meeting marked approved with no minutes in Board yet still
+ * takes them, as minutesNotReady asks. Board QA round 10, Nov 22 2026: approved minutes kept only as a file were
+ * replaced through Every file with only a toast, and the board page opened the new file as "The minutes as written"
+ */
+export const AS_A_FILE = 'The minutes are approved, so this was added as a file, not as the minutes. Mark them as draft first to replace them.';
+export const NOT_THE_MINUTES = 'The minutes are approved, so this stays a file, not the minutes. Mark them as draft first to replace them.';
+/** Whether a meeting's minutes are approved and in Board, leaving out the file `fileId` (the one asked about) */
+export const minutesHeld = (m, fileId = '') => m?.minutes === 'approved' && minutesIn({ ...m, files: (m.files || []).filter((x) => x.id !== fileId) });
+/**
+ * Why a file can't be this meeting's minutes ('' when it can): `meetingId` for one being added, `fileId` for one of its
+ * files whose kind is being changed (one filed as the minutes already stays as it is)
+ */
+export async function minutesKindNo(env, { meetingId = '', fileId = '' } = {}) {
+  let id = meetingId;
+  if (fileId) {
+    const row = await env.DB.prepare('SELECT owner_type, owner_id, kind FROM board_files WHERE id = ?').bind(fileId).first();
+    if (!row || row.owner_type !== 'meeting' || row.kind === 'minutes') return '';
+    id = row.owner_id;
+  }
+  const m = ID.test(String(id || '')) ? await getMeeting(env.DB, id) : null;
+  return minutesHeld(m, fileId) ? (fileId ? NOT_THE_MINUTES : AS_A_FILE) : '';
+}
+
+/**
  * One of a meeting's files read as its minutes and put on it (POST /api/board-admin read-minutes): the meeting saved,
  * the file filed as the minutes, and the last meeting's minutes marked approved when these say the board approved
- * them. → { meeting, approvedPrev: id | null, read: { attendance: { here, of }, notes, motions, actions, ai } }
+ * them (`prevApproved` names that meeting, for the page to say so).
+ * Minutes read in here already (Replace the minutes): Undo of that read and this new read, in one step, by the same code
+ * (takenOff, afterTakenOff): everything the replaced read put on (its notes, decisions, action items, attendance, the
+ * last meeting's approval, what the heartbeat added to it) comes off as Undo takes it off, this file is read onto the
+ * meeting as it was before that read, a change made since is kept and named (`replaced.left`), and when Undo would
+ * refuse (approved since) this refuses in its words. Board QA round 8, Nov 21 2026: the replaced file's notes and
+ * decisions stayed on the meeting and the board read them as the new minutes'. Minutes with no Undo record (Board's
+ * email reader's, or read before Undo kept one) are read over as before. Minutes marked approved are never read over,
+ * however they came onto the meeting, and the meeting's other minutes files come off here, in the same step, never by
+ * a page's copy (`filesOff`). Board QA round 9, Nov 22 2026.
+ * → { meeting, approvedPrev: id | null, prevApproved: { id, date, title } | null, filesOff: [file id], replaced: { name, fileId, fileKept, left, prevBack } | null,
+ *     read: { attendance: { here, of }, notes, motions, actions, ai } }
  */
 export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now(), dry = false, anyway = false } = {}) {
   const m = await getMeeting(env.DB, id);
@@ -701,43 +835,351 @@ export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now
   const bytes = new Uint8Array(await new Response(obj.body).arrayBuffer());
   const [people, meetings] = await Promise.all([minutesPeople(env.DB), listMeetings(env.DB)]);
   const prev = meetings.filter((x) => x.id !== m.id && !x.notBoard && !x.practice && isDate(x.date) && x.date < m.date).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
-  const read = await readMinutes(env, { name: f.name, bytes, meeting: m, people, prev });
+  // Minutes read in here already, whose read Undo can still take off: replaced, read onto the meeting as it was before them
+  const rec = m.minutesFrom ? await readState(env.DB, UNDO_KEY(id)) : null;
+  const refused = rec ? undoRefused(rec, m) : NOTHING_TO_UNDO;
+  const replacing = !refused;
+  // Minutes marked approved are the record, however they came onto the meeting (read in, typed, or only a file kept
+  // with it: minutesIn, the rule approving them goes by): nothing is read onto them, in the words read-in minutes get
+  // (approved after their read: Undo's). A meeting marked approved with no minutes in Board yet (a past meeting added
+  // from its agenda) still takes them, as minutesNotReady asks. Board QA round 9, Nov 22 2026: approved minutes kept
+  // only as a file were read over with no question, and their file deleted
+  const approvedNo = (x) => (x.minutes !== 'approved' || !minutesIn({ ...x, files: (x.files || []).filter((g) => g.id !== fileId) }) ? ''
+    : rec && undoRefused(rec, x) === APPROVED_SINCE ? APPROVED_SINCE : APPROVED_NOW);
+  if (approvedNo(m) && !dry) throw Object.assign(new Error(approvedNo(m)), { status: 409, why: 'approved', extra: { meeting: m } });
+  // ...and minutes with no Undo record of their read (Board's email reader's, or read before Undo kept one): what their
+  // marks show came from them comes off (readOff); with no marks to tell them from what a person wrote, nothing is
+  // mixed: refused in words (never read over them, so the board read both files as one). Coordinator, round 8
+  const bare = !replacing && !!m.minutesFrom?.name && refused !== APPROVED_SINCE;
+  const bareNo = (x) => (!bare ? '' : !x.minutesFrom?.marks && anythingOn(x) ? untoldWords(x) : '');
+  const base = replacing ? takenOff(rec, m).next : bare && !bareNo(m) ? readOff(m) : m;
+  const read = await readMinutes(env, { name: f.name, bytes, meeting: base, people, prev });
   if (!readSomething(read)) {
     throw Object.assign(new Error(read.said.chars ? 'Board couldn’t find minutes in that file: no attendance, agenda items, motions or action items. Is it the minutes?' : 'Board couldn’t read that file. Minutes can be a PDF (not a scan) or a Word file.'), { status: 422 });
   }
   // Another meeting's minutes, by their own heading or file name: nothing is put on this one unless told to
   if (read.said.other && !anyway && !dry) throw Object.assign(new Error(otherMeetingWords(m, read.said.other)), { status: 409, other: read.said.other, fileId });
+  if (bareNo(m) && !dry) throw Object.assign(new Error(bareNo(m)), { status: 409, why: 'untold', extra: { meeting: m } });
   // A look only (`dry`): what the minutes would put on the meeting, nothing saved
   if (dry) {
-    const would = applyMinutes(m, read, { fileName: f.name, now });
+    const would = applyMinutes(base, read, { fileName: f.name, now });
     const board = would.attendance.filter((p) => p.kind === 'board');
     return {
       dry: true, said: read.said,
       read: {
         attendance: { here: board.filter((p) => p.status === 'present' || p.status === 'remote').length, of: board.length },
-        notes: would.sections.reduce((n, s) => n + s.items.filter((it) => String(it.notes || '').trim()).length, 0),
+        notes: notesRead(read, would),
         motions: read.motions.length, actions: read.actions.length, ai: read.said.by === 'ai',
       },
       would: { attendance: would.attendance.map((p) => ({ name: p.name, kind: p.kind, status: p.status })), motions: would.motions, actions: would.actions, sections: would.sections.map((s) => ({ title: s.title, items: s.items.map((it) => ({ title: it.title, notes: it.notes })) })), approvedPrev: read.approvedPrev },
     };
   }
-  await patchMeeting(env.DB, id, (cur) => applyMinutes(cur, read, { fileName: f.name, now }));
+  // (the meeting the read went onto, its earlier minutes off in the same write, kept for Replace to take this read off
+  // again: `was`; and the meeting as the read found it, earlier minutes and all, for Undo to put back: `found`)
+  let was = null;
+  let found = null;
+  let took = null;
+  let gone = [];
+  const after = await patchMeeting(env.DB, id, (cur) => {
+    took = null;
+    // (approved since this one began: nothing is written, in Undo's words. Other minutes read in, typed or taken off
+    // meanwhile, a Replace pressed at the same moment in another tab above all: nothing is written either, said as this
+    // read's own no, naming the minutes that went on (lostWords), never Undo's. Board QA round 10, Nov 22 2026: the
+    // founder whose Replace lost was told "Undo would take those off too")
+    const lost = !sameMinutes(cur.minutesFrom, m.minutesFrom) ? lostWords(cur, f.name) : '';
+    const no = approvedNo(cur) || lost || (replacing ? undoRefused(rec, cur) : '') || bareNo(cur);
+    if (no) throw Object.assign(new Error(no), { status: 409, why: no === APPROVED_NOW || no === APPROVED_SINCE ? 'approved' : no === lost ? 'lost' : bareNo(cur) ? 'untold' : '', extra: { meeting: cur } });
+    if (replacing) took = takenOff(rec, cur);
+    found = cur;
+    // The meeting's other minutes files (never one on an agenda item: the last meeting's, up for approval), as this
+    // write finds them: the replaced read's goes as Undo takes it off (afterTakenOff), the rest just after
+    gone = ownMinutesFiles(cur).filter((x) => x.id !== fileId && !(took && x.id === rec.fileId));
+    was = took ? took.next : bare ? readOff(cur) : cur;
+    return applyMinutes(was, read, { fileName: f.name, now });
+  });
   if (f.kind !== 'minutes' && f.kind !== 'signed') await updateFile(env.DB, fileId, { kind: 'minutes' });
+  // The replaced read's own file, the last meeting's approval it made, and its Undo record: off, as Undo takes them off
+  const replaced = took ? { name: rec.after.minutesFrom?.name || '', ...(await afterTakenOff(env, rec, m, after, took, { by })) } : null;
+  // Which minutes file the meeting keeps is the site's to say, from the meeting as this write found it, never a page's
+  // copy: the one these minutes are read from, and nothing of the minutes before them (a signed record stays). Board QA
+  // round 9, Nov 22 2026: a page that hadn't seen the email reader's minutes left both files on the board page
+  const filesOff = took && !replaced.fileKept ? [{ id: rec.fileId, name: m.files.find((x) => x.id === rec.fileId)?.name || replaced.name }] : [];
+  for (const x of gone) if (!(await fileLocked(env.DB, x.id)) && await deleteFile(env, x.id)) filesOff.push({ id: x.id, name: x.name });
   let approvedPrev = null;
-  if (read.approvedPrev && prev && prev.minutes !== 'approved') {
-    await approveMinutes(env, prev.id, { on: m.date, by });
-    approvedPrev = prev.id;
+  let approved = null;
+  // (the last meeting as it is now: the replaced read may have just put its approval back)
+  const last = prev && replaced?.prev?.id === prev.id ? replaced.prev : prev;
+  if (read.approvedPrev && last && last.minutes !== 'approved') {
+    approved = await approveMinutes(env, last.id, { on: m.date, by });
+    approvedPrev = last.id;
+  }
+  // The last meeting's minutes as this read found them and as it leaves them (a replaced read's approval off, these
+  // minutes' own on), for Undo to put back as found
+  const touched = approved ? last : replaced?.prevBack ? replaced.prev : null;
+  const foundPrev = touched && (touched.id === prev?.id ? approvalOf(prev) : { minutes: 'approved', approvedOn: rec?.prev?.approvedOn || '' });
+  const leftPrev = touched && approvalOf(approved || touched);
+  if (was && after) {
+    await writeState(env.DB, UNDO_KEY(id), {
+      fileId, at: new Date(now).toISOString(), by, before: undoShape(was), after: undoShape(after),
+      // Undo of a Replace (or of a read over the email reader's minutes) is the meeting as it was before it, the earlier
+      // minutes on it again: never left with none. Board QA round 9, Nov 22 2026: Undo right after Replace left no minutes
+      ...(found !== was ? { found: undoShape(found) } : {}), filesOff,
+      prev: approved ? { id: last.id, approvedOn: approved.approvedOn, before: { minutes: last.minutes, approvedOn: last.approvedOn || '' } } : null,
+      prevFound: touched && JSON.stringify(foundPrev) !== JSON.stringify(leftPrev) ? { id: touched.id, before: foundPrev, after: leftPrev } : null,
+    });
   }
   const meeting = await getMeeting(env.DB, id);
   const board = meeting.attendance.filter((p) => p.kind === 'board');
   return {
     meeting, approvedPrev,
+    // The minutes files that came off with the read, for the page to drop from its copy
+    filesOff: filesOff.map((x) => x.id),
+    // The last meeting whose minutes these marked approved, for the page to name (never guessed from the file)
+    prevApproved: approvedPrev ? { id: last.id, date: last.date, title: meetingName(last) } : null,
+    // What Replace took off first: the file it replaced, a change since kept, the last meeting's minutes a draft again
+    // (unless these approved them in turn)
+    replaced: replaced ? { name: replaced.name, fileId: rec.fileId, fileKept: replaced.fileKept, left: replaced.left, prevBack: approvedPrev && replaced.prevBack?.id === approvedPrev ? null : replaced.prevBack } : null,
     read: {
       attendance: { here: board.filter((p) => p.status === 'present' || p.status === 'remote').length, of: board.length },
-      notes: meeting.sections.reduce((n, s) => n + s.items.filter((it) => String(it.notes || '').trim()).length, 0),
+      notes: notesRead(read, after || meeting),
       motions: read.motions.length, actions: read.actions.length, ai: read.said.by === 'ai',
     },
   };
+}
+
+// ─── Undo, right after the admin's upload ───────────────────────────
+
+/** Where the site keeps a meeting as it was just before minutes were read into it, for Undo (one per meeting: the last read) */
+const UNDO_KEY = (id) => `minutes-undo:${id}`;
+/** The same reading of the same minutes: the file they were read from, at the moment they were read in */
+const sameRead = (a, b) => !!a?.name && a.name === b?.name && (a.at || '') === (b?.at || '');
+/**
+ * What the heartbeat adds while finishing a read (maybeFinishMinutes: the model's motions and action items, or anything
+ * else it puts on) is part of that read: its change (`was` → `now`) goes onto the read's Undo record, so Undo takes it
+ * off too and says so, while whatever a person changed since the read is still theirs, kept and named. Only for the
+ * record of this same read (minutes read in again, or put back, have a record of their own, or none). QA round 7, Nov 21
+ * 2026: Undo after the heartbeat finished the minutes left their decision and to-do on the meeting
+ */
+async function finishUndo(DB, id, was, now) {
+  const key = UNDO_KEY(id);
+  const rec = await readState(DB, key);
+  if (!rec?.after || !sameRead(rec.after.minutesFrom, was.minutesFrom)) return;
+  const { merged } = mergeMeeting(undoShape(was), undoShape(now), rec.after);
+  const ids = (list) => new Set((list || []).map((x) => x.id));
+  const had = { motions: ids(rec.after.motions), actions: ids(rec.after.actions) };
+  const later = {
+    motions: [...(rec.later?.motions || []), ...merged.motions.filter((x) => !had.motions.has(x.id)).map((x) => x.id)],
+    actions: [...(rec.later?.actions || []), ...merged.actions.filter((x) => !had.actions.has(x.id)).map((x) => x.id)],
+  };
+  await writeState(DB, key, { ...rec, after: { ...rec.after, ...merged, minutesFrom: undoShape(now).minutesFrom }, later });
+}
+/**
+ * A meeting as a read and its Undo compare it: what a person or the reader writes (cleanMeeting), without what lives in
+ * tables of its own (files, done ticks, answers to the invite), so only what the read changed can differ
+ */
+const undoShape = (m) => {
+  const c = cleanMeeting(m);
+  return { ...c, files: [], actions: c.actions.map((a) => ({ ...a, done: false, doneOn: '' })), attendance: c.attendance.map((p) => ({ ...p, rsvp: '' })) };
+};
+/** A meeting's own minutes files: a minutes file on an agenda item is the last meeting's, up for approval (as ../../public/admin/board-shared.js ownMinutesFile) */
+const ownMinutesFiles = (m) => { const onItem = new Set((m.sections || []).flatMap((s) => s.items.flatMap((it) => it.docs || []))); return (m.files || []).filter((x) => x.kind === 'minutes' && !onItem.has(x.id)); };
+/** Where a meeting's minutes stand, to compare: approved (on a day) or a draft */
+const approvalOf = (m) => ({ minutes: m?.minutes === 'approved' ? 'approved' : 'draft', approvedOn: m?.minutes === 'approved' ? m.approvedOn || '' : '' });
+const andWords = (l) => (l.length > 1 ? `${l.slice(0, -1).join(', ')} and ${l.at(-1)}` : l[0] || '');
+const fileWords = (name) => String(name || '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/[_-]+/g, ' ').trim();
+
+// Minutes with no Undo record of their read: approved, or with nothing to tell their words from a person's (readMinutesInto)
+const APPROVED_NOW = 'These minutes are marked approved, so Board leaves them as they are. Mark them as draft first (After the meeting), then drop in the new file.';
+const untoldWords = (m) => `Board can’t tell which notes came from the old minutes (${fileWords(m.minutesFrom?.name) || 'the file read in before'}), so it won’t mix the two files. Take the old notes, decisions and action items off by hand, then add the new file.`;
+// The board's secretary sends from the board page, where none of that is to be done: said for their page (secretarySends)
+const SECRETARY_APPROVED = 'These minutes were marked approved since. A founder can mark them a draft again if they need changing.';
+const SECRETARY_UNTOLD = 'Board can’t tell these from the minutes already on this meeting, so it won’t mix the two. A founder can take the old minutes off first.';
+const SECRETARY_LOST = 'Other minutes went onto this meeting just now, so these weren’t read in. Nothing was changed.';
+/** The same minutes on a meeting, as a read began and as it writes: the same file, read in at the same moment (or none) */
+const sameMinutes = (a, b) => (a?.name || '') === (b?.name || '') && (a?.at || '') === (b?.at || '') && !!a?.typed === !!b?.typed;
+/**
+ * A read refused because the minutes on the meeting changed while it was read (another tab's Replace at the same
+ * moment, the email reader, the secretary's send, an Undo): what went on instead, by name, and that nothing changed
+ */
+const lostWords = (cur, name) => (cur.minutesFrom?.name
+  ? `Other minutes went onto this meeting just now (${fileWords(cur.minutesFrom.name)}), so ${fileWords(name)} wasn’t read in. Nothing was changed.`
+  : `The minutes on this meeting were taken off just now, so ${fileWords(name)} wasn’t read in. Nothing was changed.`);
+// Why the last read can't be taken off now (Undo, and Replace, which is Undo and a new read): said in these words
+const NOTHING_TO_UNDO = 'There’s nothing to undo here any more: these minutes were put back already, or other minutes were read in since. Change the meeting by hand if something’s wrong.';
+const OTHER_SINCE = 'Other minutes went onto this meeting after these were read in, so Undo would take those off too. Nothing was changed.';
+const APPROVED_SINCE = 'These minutes were marked approved after they were read in, so Undo leaves them as they are. Mark them as draft first (After the meeting), then drop in the right file.';
+/**
+ * Why the last read (its Undo record `rec`) can't come off the meeting as it is now (`cur`): '' when it can. `fileId`:
+ * the file Undo was pressed for (null: whichever read the record is of, for Replace)
+ */
+function undoRefused(rec, cur, fileId = null) {
+  if (!rec?.fileId || (fileId !== null && rec.fileId !== fileId) || !rec.before || !rec.after) return NOTHING_TO_UNDO;
+  if (cur.minutesFrom?.typed || (cur.minutesFrom?.name || '') !== (rec.after.minutesFrom?.name || '')) return OTHER_SINCE;
+  // Approved since, from what was read: never left approved with no minutes in Board
+  if (cur.minutes === 'approved' && rec.after.minutes !== 'approved') return APPROVED_SINCE;
+  return '';
+}
+/**
+ * The meeting as it is now (`now`) with the last read taken off (pure): who was there, the notes, the motions, the
+ * action items, which minutes it was read from and where its agenda came from put back as the read found them, and
+ * everything changed since the read, by anyone, as it is now (the read's change and the later one merge item by item:
+ * mergeMeeting, theirs kept). `to`: what it goes back to, the meeting the read went onto (Replace: no minutes) unless
+ * Undo says the meeting as the read found it (rec.found: earlier minutes it read over). → { next, clashes }
+ */
+function takenOff(rec, now, to = rec.before) {
+  const { merged, clashes } = mergeMeeting(rec.after, to, undoShape(now), { prefer: 'theirs' });
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  return {
+    clashes,
+    next: {
+      ...now, sections: merged.sections, attendance: merged.attendance, motions: merged.motions, actions: merged.actions,
+      minutesFrom: to.minutesFrom || null,
+      // (a person who changed the agenda since made it theirs: never put back to the read's)
+      agendaFrom: same(now.agendaFrom, rec.after.agendaFrom) ? to.agendaFrom || null : now.agendaFrom,
+    },
+  };
+}
+/**
+ * Every change made since the read that taking it off keeps, by name, beside the ones both ways changed (`clashes`,
+ * named on their own): what the meeting has, once the read is off (`put`), that it didn't have before the read
+ * (`before`): a decision or action item added, changed or taken off since, an item's notes or a part changed, someone's
+ * attendance. → a sentence, or '' when it's all as it was. Board QA round 8, Nov 21 2026: Undo kept an action item a
+ * founder added after the read, said nothing of it, and said "Put back as it was"
+ */
+function keptSince(before, put, clashes) {
+  const said = new Set(clashes);
+  const out = [];
+  const q = (s) => `“${String(s || '').slice(0, 40)}”`;
+  const json = (x) => JSON.stringify(x ?? null);
+  for (const [f, what] of [['motions', 'decision'], ['actions', 'action item']]) {
+    const was = new Map((before[f] || []).map((x) => [x.id, x]));
+    const now = new Map((put[f] || []).map((x) => [x.id, x]));
+    for (const [id, x] of now) {
+      if (said.has(q(x.text))) continue;
+      if (!was.has(id)) out.push(`the ${what} ${q(x.text)}, added since`);
+      else if (json(x) !== json(was.get(id))) out.push(`the ${what} ${q(x.text)}, changed since`);
+    }
+    for (const [id, x] of was) if (!now.has(id) && !said.has(q(x.text))) out.push(`the ${what} ${q(x.text)}, taken off since`);
+  }
+  const items = (m) => new Map((m.sections || []).flatMap((s) => s.items.map((it) => [it.id, { it, sec: s.id }])));
+  const [wasItems, nowItems] = [items(before), items(put)];
+  const itemLabel = (it) => `“${it.title || 'an item'}”`;
+  for (const [id, { it, sec }] of nowItems) {
+    if (said.has(itemLabel(it))) continue;
+    const b = wasItems.get(id);
+    if (!b) out.push(`the item ${itemLabel(it)}, added since`);
+    else if (json(it) !== json(b.it) || sec !== b.sec) out.push(`${itemLabel(it)}, changed since`);
+  }
+  for (const [id, { it }] of wasItems) if (!nowItems.has(id) && !said.has(itemLabel(it))) out.push(`the item ${itemLabel(it)}, taken off since`);
+  const parts = (m) => new Map((m.sections || []).map(({ items: _, ...s }) => [s.id, s]));
+  const [wasParts, nowParts] = [parts(before), parts(put)];
+  for (const [id, s] of nowParts) {
+    const label = `the part “${s.title || 'untitled'}”`;
+    if (said.has(label)) continue;
+    if (!wasParts.has(id)) out.push(`${label}, added since`);
+    else if (json(s) !== json(wasParts.get(id))) out.push(`${label}, changed since`);
+  }
+  const keyOf = (p) => p.key || p.slug || p.name;
+  const wasRoll = new Map((before.attendance || []).map((p) => [keyOf(p), p]));
+  for (const p of put.attendance || []) {
+    const label = `${p.name}’s attendance`;
+    if (said.has(label)) continue;
+    const b = wasRoll.get(keyOf(p));
+    if (!b ? !!p.status : (b.status || '') !== (p.status || '')) out.push(`${label}, changed since`);
+  }
+  if (!out.length) return '';
+  const words = andWords(out);
+  // ("The action item “Book the spring venue”, added since, is kept.")
+  return `${words[0].toUpperCase()}${words.slice(1)}, ${out.length === 1 ? 'is' : 'are'} kept.`;
+}
+/**
+ * The rest of taking a read off once the meeting is written (`cur`: as it was just before, `put`: as written, `took`:
+ * takenOff's answer): the read's file off, the last meeting's minutes back to draft when the read approved them, its
+ * Undo record gone, and what was kept or couldn't be put back said, a sentence each. `undo`: Undo's (the meeting and
+ * the last meeting's minutes back as the read found them, every file it took off that can't come back named), not
+ * Replace's (only this read off).
+ * → { prev: the last meeting as it is now | null, prevBack / prevAgain: { id, date, title } when it's a draft again /
+ *     approved again | null, left, also }
+ */
+async function afterTakenOff(env, rec, cur, put, took, { by = '', undo = false } = {}) {
+  const left = [];
+  const { clashes } = took;
+  const to = undo ? rec.found || rec.before : rec.before;
+  if (clashes.length) left.push(`${andWords(clashes)} ${clashes.length === 1 ? 'was' : 'were'} changed after the minutes were read, so ${clashes.length === 1 ? 'it stays' : 'they stay'} as ${clashes.length === 1 ? 'it is' : 'they are'} now.`);
+  // Each change since that it keeps, by name, not only the ones both ways changed
+  const kept = keptSince(to, undoShape(took.next), clashes);
+  if (kept) left.push(kept);
+  // What the heartbeat read from them afterwards (finishUndo) and taking them off took off as well: said, as the read
+  // itself never said it ("Read from the minutes: notes under 4 items" was all the founder heard)
+  const off = (f) => (rec.later?.[f] || []).filter((x) => (cur[f] || []).some((y) => y.id === x) && !(put?.[f] || []).some((y) => y.id === x)).length;
+  const these = (n, one, many) => (n === 1 ? `the ${one}` : `the ${n} ${many}`);
+  const [mo, ac] = [off('motions'), off('actions')];
+  const later = [mo ? these(mo, 'decision', 'decisions') : '', ac ? these(ac, 'action item', 'action items') : ''].filter(Boolean);
+  const also = later.length ? `${andWords(later).replace(/^t/, 'T')} Board read from them afterwards ${mo + ac > 1 ? 'are' : 'is'} off too.` : '';
+  // The file goes too (unless it's become SOARD's record of a signature since)
+  const locked = await fileLocked(env.DB, rec.fileId);
+  if (locked) left.push(`${fileWords(cur.files.find((f) => f.id === rec.fileId)?.name) || 'The file'} stays with the meeting: ${locked.replace(/[.\s]+$/, '')}.`);
+  else await deleteFile(env, rec.fileId);
+  // Read over earlier minutes, whose file was taken off once these were in: their notes are back, their file isn't
+  const earlier = undo ? to.minutesFrom?.name : '';
+  const back = !!earlier && earlier !== rec.after.minutesFrom?.name && !cur.files.some((f) => f.name === earlier && f.id !== rec.fileId);
+  if (back) left.push(`The earlier minutes (${fileWords(earlier)}) are back on the meeting, but their file was removed when these were read in: drop it in again to keep it with them.`);
+  // ...and any other minutes file the read took off (one kept with the meeting, never read in): named, as it can't come
+  // back. Board QA round 9, Nov 22 2026: Undo said "as it was" with the meeting's minutes file gone for good
+  const files = undo ? (rec.filesOff || []).filter((x) => x.id !== rec.fileId && !(back && x.name === earlier) && !cur.files.some((f) => f.id === x.id)).map((x) => fileWords(x.name)) : [];
+  if (files.length) left.push(files.length === 1 ? `The earlier minutes file (${files[0]}) was removed when these were read in: drop it in again to keep it with the meeting.` : `The earlier minutes files (${andWords(files)}) were removed when these were read in: drop them in again to keep them with the meeting.`);
+  // The last meeting's minutes, approved by the read: back to draft, unless they've been marked again since. Undo puts
+  // them back as the read found them (a Replace's take-off of the earlier read's approval undone too: prevFound)
+  const pr = undo && 'prevFound' in rec ? rec.prevFound : rec.prev;
+  let prev = null;
+  let prevBack = null;
+  let prevAgain = null;
+  if (pr?.id) {
+    const p = await getMeeting(env.DB, pr.id);
+    const asLeft = (x) => (pr.after ? JSON.stringify(approvalOf(x)) === JSON.stringify(pr.after) : x?.minutes === 'approved' && x.approvedOn === pr.approvedOn);
+    const goes = { minutes: pr.before?.minutes === 'approved' ? 'approved' : 'draft', approvedOn: pr.before?.approvedOn || '' };
+    if (p && asLeft(p)) {
+      prev = await patchMeeting(env.DB, p.id, (x) => (asLeft(x) ? { ...x, ...goes } : x), { by });
+      const said = prev && { id: prev.id, date: prev.date, title: meetingName(prev) };
+      if (prev && p.minutes === 'approved' && prev.minutes !== 'approved') prevBack = said;
+      else if (prev && p.minutes !== 'approved' && prev.minutes === 'approved') prevAgain = said;
+    } else if (p) {
+      prev = p;
+      if (p.minutes === 'approved' && goes.minutes !== 'approved') left.push(`The ${meetingName(p)} (${shortDate(p.date)}) minutes stay approved: they were marked approved again after these were read.`);
+      else if (p.minutes !== 'approved' && goes.minutes === 'approved') left.push(`The ${meetingName(p)} (${shortDate(p.date)}) minutes stay a draft: they were marked as draft after these were read.`);
+    }
+  }
+  await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(UNDO_KEY(put?.id || cur.id)).run();
+  return { prev, prevBack, prevAgain, left, also, fileKept: !!locked };
+}
+
+/**
+ * Undo of reading minutes in (POST /api/board-admin undo-minutes { id, fileId }), in one step on the site: the meeting
+ * put back as the site kept it at the read (readMinutesInto: who was there, the notes, the motions, the action items,
+ * which minutes it was read from, where its agenda came from: everything applyMinutes sets), the file taken off, and
+ * the last meeting's minutes back to draft when the read approved them (`prevBack` says so). Anything changed since the
+ * read, by anyone, is left as it is now (takenOff), and said in `left`, a sentence each: every such change, not only
+ * the ones both ways changed (keptSince). Minutes replaced since (another file, typed ones) are never undone from under
+ * them. Peter's QA round 6, Nov 21 2026: Undo said "Put back as it was" and changed nothing on the site. What the
+ * heartbeat added while finishing the same read is part of it (finishUndo), so it comes off too, and `also` says so. A
+ * no (409) carries the meeting as it is now. Replace (readMinutesInto) is this and a new read, in one step. Undo of a
+ * Replace (or of a read over the email reader's minutes) puts the earlier minutes back as the read found them (rec.found),
+ * and the last meeting's minutes too (prevAgain: approved again), naming every file it can't bring back. Board QA round
+ * 9, Nov 22 2026: Undo right after Replace left the meeting with no minutes at all, and said "Put back as it was"
+ * → { meeting, prev: the last meeting as it is now | null, prevBack, prevAgain, left: [sentences], also: a sentence | '', fileKept }
+ */
+export async function undoMinutes(env, id, fileId, { by = '' } = {}) {
+  const rec = await readState(env.DB, UNDO_KEY(id));
+  const cur = await getMeeting(env.DB, id);
+  if (!cur) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
+  // A no carries the meeting as the site has it now, so the page shows why (approved in another tab, other minutes read
+  // in since). QA round 7, Nov 21 2026: a tab whose copy was older said "marked approved" and still showed Draft
+  const why = undoRefused(rec, cur, fileId);
+  if (why) throw Object.assign(new Error(why), { status: 409, extra: { meeting: cur } });
+  let took = null;
+  const put = await patchMeeting(env.DB, id, (now) => { took = takenOff(rec, now, rec.found || rec.before); return took.next; }, { by });
+  const r = await afterTakenOff(env, rec, cur, put, took, { by, undo: true });
+  return { meeting: await getMeeting(env.DB, id), ...r };
 }
 
 /**
@@ -770,6 +1212,10 @@ export async function secretarySends(env, id, file, w, { now = Date.now(), anywa
   try {
     r = await readMinutesInto(env, id, f.id, { by, now, anyway: true });
   } catch (err) {
+    // (refused as the minutes on the meeting are: in words for the secretary's page, naming nothing only founders see)
+    if (err?.why === 'approved') err.message = SECRETARY_APPROVED;
+    else if (err?.why === 'untold') err.message = SECRETARY_UNTOLD;
+    else if (err?.why === 'lost') err.message = SECRETARY_LOST;
     // A clear no (not minutes): it doesn't stay on the meeting as its minutes, for the board or the agenda email to find
     if (err?.status && await deleteFile(env, f.id).then(() => true, () => false)) err.message = `${err.message.replace(/\.?$/, '.')} It wasn’t kept.`;
     throw err;

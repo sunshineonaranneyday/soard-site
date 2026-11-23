@@ -109,8 +109,11 @@ export async function onRequestPost(context) {
   if (!multipart) return json({ ok: false, code: 'reload', error: RELOAD }, 400);
   // Answers first: a fixable mistake must not spend the applicant's Turnstile check (each token works once).
   // The headshot's answer is whether a photo we can use came, never what the page said about it
+  // (checked once a send, round 22: this check is the one the application is stored from, below; each answer is cut to
+  // its box's limit before anything else reads it, so a send of 64 KB of spaces is as quick as any other)
   const shot = await readHeadshot(file);
-  const { problems: early } = checkAnswers({ ...(body?.answers || {}), headshot: shot.headshot ? PHOTO_ADDED : '' });
+  const checked = checkAnswers({ ...(body?.answers || {}), headshot: shot.headshot ? PHOTO_ADDED : '' });
+  const early = { ...checked.problems };
   if (shot.problem) early.headshot = shot.problem;
   if (Object.keys(early).length) return json({ ok: false, problems: early, error: problemsSaid(early) }, 422);
   const ip = clientIp(request);
@@ -126,7 +129,7 @@ export async function onRequestPost(context) {
   let stored;
   try {
     stored = await submitApplication(env, body?.answers || {}, {
-      ipHash: hash, now, headshot: shot.headshot, sendId: body?.sendId, photoAt: body?.photoAt, photoSeq: body?.photoSeq,
+      ipHash: hash, now, headshot: shot.headshot, sendId: body?.sendId, photoAt: body?.photoAt, photoSeq: body?.photoSeq, checked,
       reserve: () => takeOne(env.DB, limitKey, PER_DAY, 24 * 3600, now), unreserve: () => giveBack(env.DB, limitKey),
     });
   } catch (e) {

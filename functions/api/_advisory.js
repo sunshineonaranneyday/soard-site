@@ -25,10 +25,14 @@
  * advisory@soardcharity.com reaches the group (./_board-group.js keeps it).
  */
 
-import { peopleRows, privateEmails, readState, writeState, normEmail, activeAdvisors, isBoardAdmin, ADVISORY_COMMITTEE } from './_board-roles.js';
+import { peopleRows, privateEmails, readState, writeState, normEmail, activeAdvisors, isBoardAdmin, ADVISORY_COMMITTEE, readDown, SIGN_IN_DOWN, PEOPLE_DOWN } from './_board-roles.js';
+import { sameMember } from './_member-places.js';
 import { isEmail } from './_broadcast-notify.js';
 import { todayEastern } from './_reveals.js';
 import { photoUrl } from '../../public/admin/team-shared.js';
+import { rowsPlace, moveJsonRows, tallyJsonRows } from './_member-places.js';
+import { writeAsMember, stillTheirs, movingOff, personOf, GONE_STAFF, MOVING_STAFF } from './_member-write.js';
+import { stateReady } from './_board-roles.js';
 
 export const GROUP_ADDRESS = 'advisory@soardcharity.com';
 const STATE = 'advisory';
@@ -70,6 +74,11 @@ export const DOC_KINDS = [
   { id: 'library', label: 'Document' },
 ];
 
+/** The monthly ask email's links: one per ask and member, only its hash kept (./_advisory-mail.js) */
+export const LINKS_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_links (hash TEXT PRIMARY KEY, ask_id TEXT NOT NULL, slug TEXT NOT NULL, expires TEXT NOT NULL)';
+/** The Advisory Board's meetings, each kept as JSON (./_advisory-meetings.js) */
+export const MEETINGS_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_meetings (id TEXT PRIMARY KEY, date TEXT, data TEXT NOT NULL, updated_at TEXT, updated_by TEXT)';
+
 const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS advisory_asks (id TEXT PRIMARY KEY, data TEXT NOT NULL, sent_at TEXT, closed_at TEXT, at TEXT NOT NULL, by TEXT)',
   'CREATE TABLE IF NOT EXISTS advisory_answers (ask_id TEXT NOT NULL, slug TEXT NOT NULL, answer TEXT NOT NULL, note TEXT, at TEXT NOT NULL, via TEXT, PRIMARY KEY (ask_id, slug))',
@@ -84,6 +93,10 @@ const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS advisory_signatures (doc_id TEXT NOT NULL, slug TEXT NOT NULL, year INTEGER NOT NULL, name TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, at TEXT NOT NULL, PRIMARY KEY (doc_id, slug, year))',
   // A gift from another Zeffy campaign credited to an advisor: only which payment and who; the amount is read live, so a refund falls out
   'CREATE TABLE IF NOT EXISTS advisory_credits (payment_id TEXT PRIMARY KEY, slug TEXT, note TEXT, at TEXT NOT NULL, by TEXT)',
+  // The monthly ask email's buttons (./_advisory-mail.js linkFor) and the meetings (./_advisory-meetings.js): made here
+  // with the rest, so a rename's move never meets a table not made yet (Advisory Board QA round 20)
+  LINKS_TABLE,
+  MEETINGS_TABLE,
 ];
 const ready = new WeakSet();
 export async function ensureAdvisory(DB) {
@@ -135,8 +148,88 @@ export async function getSettings(DB) {
   const saved = await readState(DB, STATE);
   return { ...DEFAULTS, ...saved, pages: saved.pages || {}, carried: Array.isArray(saved.carried) ? saved.carried : [] };
 }
-export async function saveSettings(DB, patch) {
-  const cur = await getSettings(DB);
+/** Who runs the group: an active board member */
+const runsGroup = (p) => p?.group === 'board' && p?.status === 'active';
+export const PICK_LEAD = 'Pick an active board member';
+export const LEAD_MOVED = 'This board member’s web address on People changed just now, so nothing was saved. Reload and pick them again.';
+/**
+ * Each role a save of the settings can name someone in (saveSettings `as`): who may fill it, and its own true words
+ * when the address named isn't theirs as the save is written (Advisory Board QA round 22: who runs the group, a board
+ * member, was refused as "isn't on the Advisory Board", or told "Pick an active board member" while she was one, in the
+ * moment her address changed on People)
+ *   lead  who runs the group: an active board member at that address. Their address changed just now (nobody is at it
+ *         and the person who had it is an active board member at a new one, ./_board.js addressesNow, or a rename is
+ *         still moving records off it): LEAD_MOVED; nobody else's, or someone who isn't an active board member now:
+ *         PICK_LEAD
+ *   page  a Zeffy page's person (./_advisory-money.js matchPage): anyone on People at that address
+ */
+const ROLES = {
+  lead: {
+    fits: runsGroup,
+    async refused(DB, slug, at) {
+      if (at?.moving) return err(LEAD_MOVED, 409);
+      if (at) return err(PICK_LEAD, 400);
+      const { addressesNow } = await import('./_board.js');
+      const to = (await addressesNow(DB, [slug]))[slug];
+      return to && runsGroup((await atAddress(DB, to))?.person) ? err(LEAD_MOVED, 409) : err(PICK_LEAD, 400);
+    },
+  },
+  page: {
+    fits: () => true,
+    refused: async (DB, slug, at) => (at?.moving ? Object.assign(err(MOVING_STAFF, 503), { moving: true }) : err(GONE_STAFF, 409)),
+  },
+};
+/**
+ * Whoever is at this address on People this moment, in one read (an address a staff save names is whoever has it now:
+ * never found through an email read first, which during a swap of two addresses is the other person by the time its
+ * record is read) → { slug, data, person, moving } or null (`moving`: a rename is moving records off it)
+ */
+async function atAddress(DB, slug) {
+  await stateReady(DB);
+  // (a read of People that fails says so, 503, never "pick an active board member": Board QA round 10's rule)
+  const r = slug ? await DB.prepare(`SELECT t.slug AS slug, t.data AS data, ${movingOff('t.slug')} AS moving FROM team t WHERE t.slug = ?`).bind(slug).first()
+    .catch((e) => { if (/no such table/i.test(e?.message || '')) return null; throw readDown(PEOPLE_DOWN, e); }) : null;
+  const person = r ? personOf(r.data, r.slug) : null;
+  return person ? { slug: r.slug, data: r.data, person, moving: !!r.moving } : null;
+}
+/** The person an address names in a role, as things are this moment: { slug, data, person }; else the role's words, thrown */
+async function namedNow(DB, slug, as) {
+  const role = ROLES[as] || ROLES.page;
+  const at = await atAddress(DB, typeof slug === 'string' ? slug : '');
+  if (at && !at.moving && role.fits(at.person)) return at;
+  throw await role.refused(DB, typeof slug === 'string' ? slug : '', at);
+}
+/** Who runs the group as staff name them (./advisory-admin.js save-settings): the address of an active board member there now, else ROLES.lead's words */
+export async function leadNamed(DB, slug) {
+  return (await namedNow(DB, slug, 'lead')).slug;
+}
+/**
+ * The settings saved, written only over the settings as read (Advisory Board QA round 21: a save read before a rename's
+ * move of the settings wrote the old address back over it): changed meanwhile, read again and the patch made again
+ * over the newest. `patch` may be a function of the settings as they are. `naming`: an address the patch puts in, in
+ * the role `as` (ROLES: who runs the group, a page's person), written only over that person's People record exactly as
+ * read for the role, with no rename moving records off it; else the role's words
+ */
+export async function saveSettings(DB, patch0, { naming = '', as = 'page' } = {}) {
+  await readState(DB, STATE); // (the table)
+  for (let i = 0; i < 5; i++) {
+    const row = await DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(STATE).first();
+    let saved = {};
+    try { saved = row ? JSON.parse(row.data) || {} : {}; } catch { saved = {}; }
+    const cur = { ...DEFAULTS, ...saved, pages: saved.pages || {}, carried: Array.isArray(saved.carried) ? saved.carried : [] };
+    const next = settingsFrom(cur, typeof patch0 === 'function' ? patch0(cur) : patch0);
+    const at = nowIso();
+    const me = naming ? await namedNow(DB, naming, as) : null;
+    const guard = me ? ` AND EXISTS (SELECT 1 FROM team t WHERE ${stillTheirs('t', { into: false })})` : '';
+    const g = me ? [me.slug, me.data] : [];
+    const r = row
+      ? await DB.prepare(`UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?${guard}`).bind(JSON.stringify(next), at, STATE, row.data, ...g).run()
+      : await DB.prepare(`INSERT OR IGNORE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1${guard}`).bind(STATE, JSON.stringify(next), at, ...g).run();
+    if (Number(r?.meta?.changes) > 0) return next;
+  }
+  throw err('The settings kept changing. Try again in a moment.', 409);
+}
+function settingsFrom(cur, patch) {
   const next = { ...cur };
   if ('lead' in patch) next.lead = clean(patch.lead, 120);
   if ('goal' in patch) {
@@ -159,7 +252,6 @@ export async function saveSettings(DB, patch) {
   if ('library' in patch) next.library = patch.library === true;
   // Which of the board's papers advisors can open, chosen one by one: nothing here means none
   if ('boardDocs' in patch) next.boardDocs = Array.isArray(patch.boardDocs) ? [...new Set(patch.boardDocs.map(String).filter((x) => /^d_[a-z0-9]{4,24}$/.test(x)))] : [];
-  await writeState(DB, STATE, next);
   return next;
 }
 
@@ -176,11 +268,14 @@ export async function whoIs(context) {
   if (data?.advisor) return { kind: 'advisor', ...data.advisor, runs: false, answers: true };
   if (data?.boardMember) {
     const m = data.boardMember;
-    const lead = m.slug === settings.lead;
+    // (theirs at the moment of their own rename too: the lead still at the old address, or the sign-in. A read that fails
+    // is "couldn't check", never "not for you": Board QA round 9)
+    const lead = await sameMember(env.DB, settings.lead, m.slug).catch((e) => { throw readDown(SIGN_IN_DOWN, e); });
     if (lead) return { kind: 'lead', ...m, runs: true, answers: false };
     if ((m.committees || []).includes(ADVISORY_COMMITTEE)) return { kind: 'committee', ...m, runs: false, answers: false };
     return null;
   }
+  // (a founder whose check of who runs Board failed: isBoardAdmin throws its 503, said with Try again, never refused)
   if (await isBoardAdmin(env.DB, data?.userEmail)) return { kind: 'admin', slug: '', name: '', email: data.userEmail, runs: true, answers: false };
   return null;
 }
@@ -250,16 +345,29 @@ export async function currentAsk(DB) {
   const row = await DB.prepare('SELECT * FROM advisory_asks WHERE sent_at IS NOT NULL AND closed_at IS NULL ORDER BY sent_at DESC').first();
   return row ? askOf(row) : null;
 }
-export async function answerAsk(DB, askId, slug, { answer, note = '', via = 'page' }, { now = Date.now() } = {}) {
-  await ensureAdvisory(DB);
-  if (!['yes', 'no'].includes(answer)) throw err('Choose an answer');
+/** An ask that takes answers (out, not closed), else its words */
+export async function askOpen(DB, askId) {
   const ask = await DB.prepare('SELECT id, sent_at, closed_at FROM advisory_asks WHERE id = ?').bind(askId).first();
   if (!ask) throw err('That ask is gone', 404);
   if (!ask.sent_at) throw err('That ask isn’t out yet', 409);
   if (ask.closed_at) throw err('That ask has closed', 409);
-  await DB.prepare('INSERT OR REPLACE INTO advisory_answers (ask_id, slug, answer, note, at, via) VALUES (?, ?, ?, ?, ?, ?)')
-    .bind(askId, slug, answer, cleanText(note, 800), nowIso(now), via).run();
-  return { answer, note: cleanText(note, 800) };
+}
+// (the ask still out and open as the answer is written)
+const OPEN_ASK = 'EXISTS (SELECT 1 FROM advisory_asks a WHERE a.id = ? AND a.sent_at IS NOT NULL AND a.closed_at IS NULL)';
+/**
+ * Their answer to an ask, at the address they have as it's written (./_member-write.js: `who` is the member as their
+ * sign-in found them, { slug, email }, or an address). → { answer, note, slug, name }: whose record it landed on
+ */
+export async function answerAsk(DB, askId, who, { answer, note = '', via = 'page' }, { now = Date.now() } = {}) {
+  await ensureAdvisory(DB);
+  if (!['yes', 'no'].includes(answer)) throw err('Choose an answer');
+  const text = cleanText(note, 800);
+  const { me } = await writeAsMember(DB, who, async (me) => {
+    await askOpen(DB, askId);
+    return DB.prepare(`INSERT OR REPLACE INTO advisory_answers (ask_id, slug, answer, note, at, via) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} AND ${OPEN_ASK}`)
+      .bind(askId, answer, text, nowIso(now), via, me.slug, me.data, askId).run();
+  });
+  return { answer, note: text, slug: me.slug, name: me.person.name };
 }
 export async function answersTo(DB, askId) {
   await ensureAdvisory(DB);
@@ -296,7 +404,15 @@ export async function deleteWish(DB, id) {
 
 const introOf = (r) => ({ id: r.id, slug: r.slug, status: r.status, ...parse(r.data), at: r.at, updatedAt: r.updated_at, updatedBy: r.updated_by || '' });
 
-export async function addIntro(DB, slug, raw, { now = Date.now() } = {}) {
+/**
+ * Whose record a member's write landed on, as that very write found them (writeAsMember's own `me`): the notice to
+ * whoever runs the group names them from this, never from a read by the record's address afterwards, which during a swap
+ * of two people's addresses is the other person (Advisory Board QA round 22)
+ */
+const landedOn = (me) => ({ slug: me.slug, name: me.person.name });
+
+/** "I know someone", at the address they have as it's written (./_member-write.js). `landedOn`: whose it is */
+export async function addIntro(DB, who, raw, { now = Date.now() } = {}) {
   await ensureAdvisory(DB);
   const name = clean(raw.name, 120);
   if (!name) throw err('Who are you introducing?');
@@ -308,8 +424,9 @@ export async function addIntro(DB, slug, raw, { now = Date.now() } = {}) {
     wish: isId(raw.wish) ? raw.wish : '',
   };
   const id = newId('in');
-  await DB.prepare('INSERT INTO advisory_intros (id, slug, status, data, at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, slug, 'thanks', JSON.stringify(data), nowIso(now), nowIso(now)).run();
-  return introOf(await DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id).first());
+  const { me } = await writeAsMember(DB, who, (me) => DB.prepare(`INSERT INTO advisory_intros (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')}`)
+    .bind(id, 'thanks', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data).run());
+  return { ...introOf(await DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id).first()), landedOn: landedOn(me) };
 }
 /** Only their own: what an advisor sees of the introductions */
 export async function introsBy(DB, slug) {
@@ -334,14 +451,16 @@ export async function setIntroStatus(DB, id, { status, note }, { by = '', now = 
 
 const hostedOf = (r) => ({ id: r.id, slug: r.slug, status: r.status, ...parse(r.data), at: r.at, updatedAt: r.updated_at, updatedBy: r.updated_by || '' });
 
-export async function requestHost(DB, slug, raw, { now = Date.now() } = {}) {
+/** A request to host a fundraiser, at the address they have as it's written (./_member-write.js). `landedOn`: whose it is */
+export async function requestHost(DB, who, raw, { now = Date.now() } = {}) {
   await ensureAdvisory(DB);
   const title = clean(raw.title, 140);
   if (!title) throw err('What’s the idea?');
   const data = { title, when: clean(raw.when, 120), where: clean(raw.where, 200), expected: clean(raw.expected, 120), notes: cleanText(raw.notes, 1500) };
   const id = newId('h');
-  await DB.prepare('INSERT INTO advisory_hosted (id, slug, status, data, at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').bind(id, slug, 'new', JSON.stringify(data), nowIso(now), nowIso(now)).run();
-  return hostedOf(await DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id).first());
+  const { me } = await writeAsMember(DB, who, (me) => DB.prepare(`INSERT INTO advisory_hosted (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')}`)
+    .bind(id, 'new', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data).run());
+  return { ...hostedOf(await DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id).first()), landedOn: landedOn(me) };
 }
 export async function listHosted(DB) {
   await ensureAdvisory(DB);
@@ -397,22 +516,40 @@ export const canRenew = (term, today) => {
   const days = Math.round((Date.parse(`${term.ends}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / 86_400_000);
   return days <= RENEW_DAYS;
 };
-export async function renew(DB, slug, settings, { now = Date.now() } = {}) {
-  const term = await termOf(DB, slug, settings);
+/**
+ * Another year, at the address they have as it's written (./_member-write.js: their term read there, each try). → their
+ * term, and `landedOn`: whose it is, as the write found them
+ */
+export async function renew(DB, who, settings, { now = Date.now() } = {}) {
   const today = todayEastern(now);
-  if (!canRenew(term, today)) throw err('Renewing opens closer to the end of your term', 409);
-  const ends = plusYear(term.ends > today ? term.ends : today);
-  await DB.prepare('INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on) VALUES (?, ?, ?, ?) ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, renewed_on = excluded.renewed_on, left_on = NULL')
-    .bind(slug, term.started, ends, today).run();
-  return termOf(DB, slug, settings);
+  const { me } = await writeAsMember(DB, who, async (me) => {
+    // (their term read with their record, in one statement: renamed since, it's read again at their new address, never
+    // taken for no term at all and refused)
+    const row = await DB.prepare('SELECT tm.started_on AS started_on, tm.ends_on AS ends_on, tm.renewed_on AS renewed_on, tm.left_on AS left_on, (SELECT 1 FROM team t WHERE t.slug = ? AND t.data = ?) AS here FROM (SELECT 1) LEFT JOIN advisory_terms tm ON tm.slug = ?')
+      .bind(me.slug, me.data, me.slug).first();
+    if (!row?.here) return { meta: { changes: 0 } };
+    const term = { started: row.started_on || settings.termStart, ends: row.ends_on || settings.termEnd, renewedOn: row.renewed_on || '', left: row.left_on || '' };
+    if (!canRenew(term, today)) throw err('Renewing opens closer to the end of your term', 409);
+    const ends = plusYear(term.ends > today ? term.ends : today);
+    return DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on) SELECT t.slug, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, renewed_on = excluded.renewed_on, left_on = NULL`)
+      .bind(term.started, ends, today, me.slug, me.data).run();
+  });
+  return { ...await termOf(DB, me.slug, settings), landedOn: landedOn(me) };
 }
+/**
+ * Staff set a member's term (Members). Written only while the address is an Advisory Board member's and no rename is
+ * moving records off it (./_member-write.js): never a term left at an address nobody has
+ */
 export async function setTerm(DB, slug, { ends, left }, settings) {
   await ensureAdvisory(DB);
-  const term = await termOf(DB, slug, settings);
   if (ends !== undefined && !isDate(ends)) throw err('Pick a date');
-  await DB.prepare('INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) VALUES (?, ?, ?, ?, ?) ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on')
-    .bind(slug, term.started, ends ?? term.ends, term.renewedOn || null, left === undefined ? term.left || null : left || null).run();
-  return termOf(DB, slug, settings);
+  // (someone who left keeps their term row: a staff change to it still lands, at their address now)
+  const { me } = await writeAsMember(DB, slug, async (me) => {
+    const term = await termOf(DB, me.slug, settings);
+    return DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) SELECT t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on`)
+      .bind(term.started, ends ?? term.ends, term.renewedOn || null, left === undefined ? term.left || null : left || null, me.slug, me.data).run();
+  }, { fits: (p) => p.group === 'advisory', gone: GONE_STAFF, moving: MOVING_STAFF });
+  return termOf(DB, me.slug, settings);
 }
 
 // ─── Papers and words ───────────────────────────────────────────────
@@ -470,6 +607,7 @@ export async function isSharedDoc(DB, id) {
   const row = await DB.prepare('SELECT data FROM advisory_docs WHERE id = ?').bind(id).first();
   return !!row && parse(row.data).shared !== false;
 }
+/** Their signature, with their own name typed, at the address they have as it's written (./_member-write.js) */
 export async function signDoc(DB, docId, who, name, { now = Date.now(), version = null } = {}) {
   await ensureAdvisory(DB);
   const row = await DB.prepare('SELECT * FROM advisory_docs WHERE id = ?').bind(docId).first();
@@ -479,10 +617,14 @@ export async function signDoc(DB, docId, who, name, { now = Date.now(), version 
   // They sign the words they read: a paper changed while it was open goes back to them first
   if (Number(version) !== Number(doc.version || 1)) throw Object.assign(err('These words have changed. Read the new version, then sign.', 409), { changed: true });
   const typed = clean(name, 120);
-  const same = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[.'’-]/g, '').replace(/\s+/g, ' ').trim();
-  if (!typed || same(typed) !== same(who.name)) throw err(`Type your name as ${who.name} to sign`);
+  const same = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[.'’-]/g, '').replace(/\s+/g, ' ').trim();
   const year = Number(todayEastern(now).slice(0, 4));
-  await DB.prepare('INSERT OR REPLACE INTO advisory_signatures (doc_id, slug, year, name, version, at) VALUES (?, ?, ?, ?, ?, ?)').bind(docId, who.slug, year, typed, doc.version || 1, nowIso(now)).run();
+  // (their name as People has it as they sign: renamed meanwhile, the name they have now)
+  await writeAsMember(DB, who, (me) => {
+    if (!typed || same(typed) !== same(me.person.name)) throw err(`Type your name as ${me.person.name} to sign`);
+    return DB.prepare(`INSERT OR REPLACE INTO advisory_signatures (doc_id, slug, year, name, version, at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')}`)
+      .bind(docId, year, typed, doc.version || 1, nowIso(now), me.slug, me.data).run();
+  });
   return { year, name: typed, at: nowIso(now) };
 }
 /** { doc id: { slug: { year, name, at, version } } }, each advisor's latest */
@@ -496,21 +638,89 @@ export async function signatures(DB) {
 
 // ─── A name change or a removal ─────────────────────────────────────
 
-/** Their records follow a renamed advisor (./rename-content.js) */
-export const SLUG_TABLES = ['advisory_answers', 'advisory_intros', 'advisory_hosted', 'advisory_terms', 'advisory_signatures', 'advisory_credits'];
-export async function moveSlug(DB, from, to) {
+/** The tables with a member's address in a row (Board's, People's and the Advisory Board's lists: ADVISORY_PLACES) */
+export const SLUG_TABLES = ['advisory_answers', 'advisory_intros', 'advisory_hosted', 'advisory_terms', 'advisory_signatures', 'advisory_credits', 'advisory_links'];
+const MEETING_WORDS = ['Advisory Board meeting they’re on', 'Advisory Board meetings they’re on'];
+const PAGES_WORDS = ['Zeffy fundraising page matched to them', 'Zeffy fundraising pages matched to them'];
+const LEAD_WORDS = ['setting that names them as who runs the Advisory Board', 'settings that name them as who runs the Advisory Board'];
+/**
+ * Everywhere the Advisory Board keeps a member's address, as one list (./_member-places.js; Advisory Board QA round 20:
+ * the ask email's links and the meetings were moved, a failure silently skipped, but never counted or held, so the next
+ * person given the address answered the first one's ask and had their RSVP). ./_people-address.js holds an address while
+ * any has it, ./_rename-finish.js says what's left in each, and moveSlug moves each. Looked for and not kept by address:
+ * the mail log's list (a name, never an address: its welcome records are ./_advisory-mail.js mailSlugs, the address rule's
+ * 'welcome'), the asks themselves (who sent one is staff), the Zeffy totals (read again from the credits and pages at
+ * each heartbeat), the papers and the wish list (nobody's)
+ *   rows: same is the rest of the table's unique key (an answer to the same ask, a signature on the same paper and year:
+ *   the newer kept); a term keeps the earlier started_on, everything else from the newer row
+ */
+export const ADVISORY_PLACES = [
+  rowsPlace({ owner: 'advisory', table: 'advisory_answers', same: ['ask_id'], newer: 'at', words: ['answer to a monthly ask', 'answers to monthly asks'] }),
+  rowsPlace({ owner: 'advisory', table: 'advisory_intros', words: ['introduction', 'introductions'] }),
+  rowsPlace({ owner: 'advisory', table: 'advisory_hosted', words: ['fundraiser they asked to host', 'fundraisers they asked to host'] }),
+  rowsPlace({ owner: 'advisory', table: 'advisory_terms', same: [], earliest: 'started_on', words: ['term on the Advisory Board', 'terms on the Advisory Board'] }),
+  rowsPlace({ owner: 'advisory', table: 'advisory_signatures', same: ['doc_id', 'year'], newer: 'at', words: ['signature on an Advisory Board paper', 'signatures on Advisory Board papers'] }),
+  rowsPlace({ owner: 'advisory', table: 'advisory_credits', words: ['gift credited to their Advisory Board page', 'gifts credited to their Advisory Board page'] }),
+  rowsPlace({ owner: 'advisory', table: 'advisory_links', words: ['link to answer a monthly ask by email', 'links to answer monthly asks by email'] }),
+  {
+    // Who's on a meeting's list, who answered, who leads an item: wherever its record names them, read as data
+    kind: 'advisory_meetings', owner: 'advisory',
+    tally: async (DB, slug) => [{ kind: 'advisory_meetings', n: await tallyJsonRows(DB, 'advisory_meetings', slug), words: MEETING_WORDS }],
+    async move(DB, from, to, ctx) {
+      const r = await moveJsonRows(DB, { table: 'advisory_meetings', words: MEETING_WORDS }, from, to, ctx);
+      return [{ kind: 'advisory_meetings', words: MEETING_WORDS, ...r }];
+    },
+  },
+  {
+    // The settings: the Zeffy pages matched to them, and who runs the group (one who isn't on People is nobody's to give)
+    kind: 'advisory_settings', kinds: ['advisory_pages', 'advisory_lead'], owner: 'advisory',
+    async tally(DB, slug) {
+      const s = await getSettings(DB);
+      return [{ kind: 'advisory_pages', n: Object.values(s.pages || {}).filter((v) => v === slug).length, words: PAGES_WORDS },
+        { kind: 'advisory_lead', n: s.lead === slug ? 1 : 0, words: LEAD_WORDS }];
+    },
+    move: (DB, from, to) => moveSettings(DB, from, to),
+  },
+];
+
+/**
+ * The settings' addresses moved, written only over the settings as read (a save made meanwhile is never undone, as
+ * Board's template is: ./_board-rename.js). → [{ kind, words, moved, folded }]
+ */
+async function moveSettings(DB, from, to) {
+  await readState(DB, STATE); // (the table)
+  for (let i = 0; i < 5; i++) {
+    const row = await DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(STATE).first();
+    let saved = {};
+    try { saved = row ? JSON.parse(row.data) || {} : {}; } catch { throw new Error('the Advisory Board settings can’t be read'); }
+    const pages = saved.pages && typeof saved.pages === 'object' ? saved.pages : {};
+    const n = Object.values(pages).filter((v) => v === from).length;
+    const lead = ({ ...DEFAULTS, ...saved }).lead === from;
+    if (!n && !lead) return [];
+    const next = JSON.stringify({ ...saved, pages: Object.fromEntries(Object.entries(pages).map(([k, v]) => [k, v === from ? to : v])), ...(lead ? { lead: to } : {}) });
+    const at = new Date().toISOString();
+    const r = row
+      ? await DB.prepare('UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?').bind(next, at, STATE, row.data).run()
+      : await DB.prepare('INSERT OR IGNORE INTO board_state (key, data, updated_at) VALUES (?, ?, ?)').bind(STATE, next, at).run();
+    if (r?.meta?.changes) return [{ kind: 'advisory_pages', words: PAGES_WORDS, moved: n, folded: 0 }, { kind: 'advisory_lead', words: LEAD_WORDS, moved: lead ? 1 : 0, folded: 0 }].filter((e) => e.moved);
+  }
+  throw new Error('the Advisory Board settings kept changing');
+}
+
+/**
+ * Their records follow a renamed member (./_rename-finish.js finishRename), every place in ADVISORY_PLACES. Nothing is
+ * caught: a table not made yet is made first (ensureAdvisory), and any other failure stops the move, so the rename's
+ * finish note stays and the heartbeat finishes it (Advisory Board QA round 20: a failed move of the ask's links or the
+ * meetings had been skipped silently, the note cleared). A record they have at both addresses is folded in (the newer
+ * kept, the older in the audit log). by: who renamed them. → what moved, by kind ([{ kind, owner, words, moved, folded }])
+ */
+export async function moveSlug(DB, from, to, { by = '' } = {}) {
   await ensureAdvisory(DB);
-  for (const t of SLUG_TABLES) await DB.prepare(`UPDATE OR IGNORE ${t} SET slug = ? WHERE slug = ?`).bind(to, from).run();
-  try { await DB.prepare('UPDATE advisory_links SET slug = ? WHERE slug = ?').bind(to, from).run(); } catch { /* no links yet */ }
-  // Who's on a meeting's list and who answered are in its record
-  try {
-    // (instr, not LIKE: D1 refuses a LIKE pattern over 50 bytes, which a long name's slug can make)
-    const rows = (await DB.prepare('SELECT id, data FROM advisory_meetings WHERE instr(data, ?) > 0').bind(`"${from}"`).all()).results || [];
-    for (const r of rows) await DB.prepare('UPDATE advisory_meetings SET data = ? WHERE id = ?').bind(r.data.split(`"${from}"`).join(`"${to}"`), r.id).run();
-  } catch { /* no meetings yet */ }
-  const s = await getSettings(DB);
-  const pages = Object.fromEntries(Object.entries(s.pages).map(([k, v]) => [k, v === from ? to : v]));
-  await saveSettings(DB, { pages, ...(s.lead === from ? { lead: to } : {}) });
+  const report = [];
+  for (const p of ADVISORY_PLACES) {
+    for (const e of await p.move(DB, from, to, { by })) if (e.moved || e.folded) report.push({ ...e, owner: 'advisory' });
+  }
+  return report;
 }
 
 /** Everyone's sign-in for Access (./_board-access.js): every active advisor, shown on the site or not */

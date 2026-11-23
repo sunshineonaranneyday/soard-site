@@ -174,6 +174,10 @@ test('the Advisory Board route gives Site Config only the campaign and approved 
 test('a fundraiser’s Zeffy page by itself: its status, date and note stay; only an approved one has one', async () => {
   const DB = await createD1();
   await ensureAdvisory(DB);
+  /* r21: Dana on People, an active Advisory Board member, as everyone who asks to host one is: a member's own write
+     lands only at an address that's theirs on People (functions/api/_member-write.js, Advisory Board QA round 21) */
+  await DB.exec('CREATE TABLE IF NOT EXISTS team (slug TEXT PRIMARY KEY, name TEXT, "group" TEXT, order_num INTEGER, data TEXT NOT NULL, updated_at TEXT)');
+  await DB.prepare('INSERT INTO team (slug, name, "group", data) VALUES (?, ?, ?, ?)').bind('dana', 'Dana Example', 'advisory', JSON.stringify({ name: 'Dana Example', group: 'advisory', status: 'active' })).run();
   const h = await requestHost(DB, 'dana', { title: 'Wine night' });
   await assert.rejects(() => setHostedLink(DB, h.id, 'https://www.zeffy.com/peer-to-peer/wine'), /Only an approved fundraiser/);
   await setHosted(DB, h.id, { status: 'approved', note: 'Go for it', date: '2026-12-05' });

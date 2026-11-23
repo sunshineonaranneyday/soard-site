@@ -432,3 +432,50 @@ test('a cap reached: a board email is never sorted by the rules’ guess; it wai
   assert.equal(by(await listMeetings(env.DB), past).files.length, 1, 'filed after all');
   assert.equal((await env.DB.prepare('SELECT outcome FROM board_mail WHERE id = ?').bind(`${FOUNDER}:p1`).first()).outcome, 'filed');
 });
+
+test('round 9: approved minutes in Board are never read over by a minutes file that comes later; it’s kept for staff and named for the founders only. Approved with no minutes in Board yet, they still come in', async () => {
+  const { forBoard } = await import('../public/admin/board-shared.js');
+  const fileOn = async (m, name, kind = 'minutes') => putFile(env, { ownerType: 'meeting', ownerId: m.id, file: new File([pdf(name)], name, { type: 'application/pdf' }), kind, by: FOUNDER });
+  // Approved, kept only as a file; approved, read in; approved with no minutes in Board yet (a past meeting added from its agenda)
+  const [onlyFile, readIn, nothingIn] = [day(-80), day(-60), day(-50)];
+  const AGENDA_NOTES = [{ title: 'Committee reports', items: [{ title: 'Financial', notes: '- APPROVED cash is healthy' }] }];
+  const a = await saveMeeting(env.DB, cleanMeeting({ date: onlyFile, shared: true, minutes: 'approved', approvedOn: day(-70), sections: AGENDA_NOTES }), { by: FOUNDER });
+  await fileOn(a, 'Minutes.pdf');
+  const b = await saveMeeting(env.DB, cleanMeeting({ date: readIn, shared: true, minutes: 'approved', approvedOn: day(-55), sections: AGENDA_NOTES, minutesFrom: { name: 'Minutes June.pdf', at: `${day(-59)}T12:00:00.000Z`, ai: true, tries: 0 } }), { by: 'board email' });
+  await fileOn(b, 'Minutes June.pdf');
+  const c = await saveMeeting(env.DB, cleanMeeting({ date: nothingIn, shared: true, minutes: 'approved', approvedOn: day(-45) }), { by: FOUNDER });
+  const before = { a: await getMeeting(env.DB, a.id), b: await getMeeting(env.DB, b.id) };
+  const words = (date) => new Date(`${date}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+  for (const [name, date] of [['Minutes final.pdf', onlyFile], ['Minutes June corrected.pdf', readIn], ['Minutes August.pdf', nothingIn]]) {
+    g.texts[name] = MINUTES(words(date));
+    g.answers[name] = { kind: 'minutes', meetingDate: date, reason: 'minutes' };
+  }
+  g.inboxes[FOUNDER] = [msg('r9a', 'Corrected minutes', `${day(-5)}T12:00:00Z`, [{ name: 'Minutes final.pdf' }]), msg('r9b', 'June minutes again', `${day(-4)}T12:00:00Z`, [{ name: 'Minutes June corrected.pdf' }]),
+    msg('r9c', 'August minutes', `${day(-3)}T12:00:00Z`, [{ name: 'Minutes August.pdf' }])];
+  const r = await readBoardMail(env);
+  assert.equal(r.ok, true, JSON.stringify(r.errors));
+  for (const [key, id, name] of [['a', a.id, 'Minutes final.pdf'], ['b', b.id, 'Minutes June corrected.pdf']]) {
+    const after = await getMeeting(env.DB, id);
+    const was = before[key];
+    // Never read in: the minutes, who was there and where they came from as they were
+    assert.deepEqual([after.sections, after.attendance, after.motions, after.actions, after.minutesFrom, after.minutes], [was.sections, was.attendance, was.motions, was.actions, was.minutesFrom, 'approved'], `${key}: the approved minutes are left as they are`);
+    // Kept with the meeting, for staff only, never as the minutes' own file
+    const kept = after.files.find((f) => f.name === name);
+    assert.deepEqual([kept?.kind, kept?.staffOnly], ['other', true], `${key}: the newer file is kept for staff`);
+    assert.deepEqual(after.files.filter((f) => f.kind === 'minutes').map((f) => f.name), was.files.filter((f) => f.kind === 'minutes').map((f) => f.name), `${key}: their own minutes file is still the one`);
+    // Named for the founders only
+    assert.deepEqual(after.lateMinutesFiles?.map((x) => x.name), [name]);
+    const board = forBoard(after);
+    assert.ok(!('lateMinutesFiles' in JSON.parse(JSON.stringify(board))) && !board.files.some((f) => f.name === name), `${key}: the board page never sees it`);
+  }
+  // Approved with no minutes in Board yet: read in as ever
+  const third = await getMeeting(env.DB, c.id);
+  assert.deepEqual([third.minutesFrom?.name, third.attendance.map((p) => `${p.slug}:${p.status}`).sort()], ['Minutes August.pdf', ['alex-rivera:present', 'jane-doe:present', 'kim-park:absent', 'sam-ortiz:present']]);
+  assert.deepEqual(third.files.map((f) => [f.name, f.kind, f.staffOnly]), [['Minutes August.pdf', 'minutes', false]]);
+  assert.equal(third.lateMinutesFiles, undefined);
+  // The log says why, no alert; the same email read again names it once
+  assert.ok((await mailLog(env.DB)).some((x) => /not read: the approved minutes stand/.test(x.result)));
+  await env.DB.prepare('DELETE FROM board_mail').run();
+  await readBoardMail(env);
+  assert.deepEqual((await getMeeting(env.DB, a.id)).lateMinutesFiles.map((x) => x.name), ['Minutes final.pdf'], 'named once');
+});

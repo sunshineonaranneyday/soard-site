@@ -47,10 +47,10 @@ export function docKind(f) {
   if (t.startsWith('image/') || /\.(jpe?g|png|gif|webp|avif|heic|heif|bmp|svg)$/.test(n)) return 'image';
   return 'other';
 }
-/** "Word 97–2003 file", for a file that can't be shown */
+/** "Word 97-2003 file", for a file that can't be shown */
 function formatName(f) {
   const ext = (String(f?.name || '').toLowerCase().match(/\.([a-z0-9]{2,5})$/) || [])[1] || '';
-  return { doc: 'Word 97–2003 file', xls: 'Excel 97–2003 file', ppt: 'PowerPoint 97–2003 file', heic: 'iPhone photo (HEIC)', heif: 'iPhone photo (HEIF)', pdf: 'PDF', docx: 'Word file', xlsx: 'Excel file', pptx: 'PowerPoint file' }[ext] || (ext ? `${ext.toUpperCase()} file` : 'File');
+  return { doc: 'Word 97-2003 file', xls: 'Excel 97-2003 file', ppt: 'PowerPoint 97-2003 file', heic: 'iPhone photo (HEIC)', heif: 'iPhone photo (HEIF)', pdf: 'PDF', docx: 'Word file', xlsx: 'Excel file', pptx: 'PowerPoint file' }[ext] || (ext ? `${ext.toUpperCase()} file` : 'File');
 }
 
 // ─── XML, read as text ──────────────────────────────────────────────

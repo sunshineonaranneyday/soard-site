@@ -7,26 +7,54 @@
 
 import { h, htm, useState, useEffect, useRef, useMemo } from './vendor.js';
 import { float, floatRef } from './float.js';
-import { LIVE, liveLines, shortDate, todayEastern, isDate, noteBlocks, callName, fileTitle, docTitle, namesText, SHOW_KINDS, LIVE_TITLES } from './board-shared.js';
+import { LIVE, liveLines, shortDate, todayEastern, isDate, noteBlocks, callName, fileTitle, docTitle, namesText, SHOW_KINDS, LIVE_TITLES, meetingName } from './board-shared.js';
 
 export const html = htm.bind(h);
 export const API = '/api/board-admin';
 export const PAGE = '/admin/board/';
 
-/** One call to /api/board-admin: { ok, status, ... } (never throws) */
+/** A 4xx that isn't the site's own answer (call's `page`): what happened (`what`), and `error` with what to do */
+const pageRefused = (status) => {
+  const what = status === 413 ? 'That’s too big to send' : 'The site refused that';
+  return { ok: false, page: true, what, error: status === 413 ? `${what}.` : `${what}. Try again in a moment.` };
+};
+/**
+ * One call to /api/board-admin: { ok, status, ... } (never throws). Its error is always words a person reads, never a
+ * code ("HTTP 502"). `unknown`: no answer came back from the site (the connection dropped, a gateway's error page, an
+ * answer cut off), so whatever was asked may have happened all the same: a send says so, and looks before it's pressed
+ * again (./board-meeting.js act). Offline, nothing left this computer, so nothing happened. `page`: refused by a page
+ * that isn't the site's own answer (a limit's or a block's on the way, too big): `what` says what happened, with no
+ * instruction, for a caller that says what happens next itself (a save goes again by itself: never "Reload the page",
+ * the risky choice with a change not saved. Board QA round 5, Nov 21 2026)
+ */
 export async function call(body, { form = null, query = '' } = {}) {
   let r;
   try {
     r = await fetch(`${API}${query}`, form ? { method: 'POST', body: form } : body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { cache: 'no-store' });
   } catch {
-    return { ok: false, error: 'No connection. Check your internet and try again.' };
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return { ok: false, offline: true, error: 'No connection. Check your internet and try again.' };
+    return { ok: false, unknown: true, error: 'No answer came back from the site. Try again in a moment.' };
   }
   let j = {};
-  try { j = await r.json(); } catch { j = { ok: false, error: /cloudflareaccess/i.test(r.url || '') ? 'Your admin session expired. Reload the page and sign in again.' : `HTTP ${r.status}` }; }
+  try { j = await r.json(); } catch {
+    j = /cloudflareaccess/i.test(r.url || '') ? { ok: false, error: 'Your admin session expired. Reload the page and sign in again.' }
+      // A page that isn't the site's answer: refused on the way (too big, not found), or the site never answered (5xx), or cut off
+      : r.status >= 400 && r.status < 500 ? pageRefused(r.status)
+        : { ok: false, unknown: true, error: r.ok ? 'The site’s answer was cut off. Try again in a moment.' : 'The site didn’t answer. Try again in a moment.' };
+  }
   if (!r.ok && j.ok !== false) j.ok = false;
   j.status = r.status;
   return j;
 }
+/**
+ * A meeting's name, with its day when another meeting has the same one: two in a quarter are both "Q4 2026 Board
+ * Meeting" (meetingName), so where a name stands alone they're told apart: "Q4 2026 Board Meeting (Dec 3)"
+ */
+export const nameIn = (m, meetings = []) => { const n = meetingName(m); return m?.date && meetings.some((x) => x.id !== m.id && meetingName(x) === n) ? `${n} (${shortDate(m.date)})` : n; };
+/** A send whose answer never came: it may have gone (call's `unknown`) */
+export const answerLost = (j) => !!j && !j.ok && !!j.unknown;
+/** Words as one sentence: a full stop at the end, never two ("…try again.." ) */
+export const sentence = (t) => { const s = String(t || '').trim(); return !s ? '' : /[.!?…]$/.test(s) ? s : `${s}.`; };
 /** Upload a file to a meeting or a document */
 export function upload(file, { ownerType, ownerId, kind = 'other', staffOnly = false }) {
   const form = new FormData();
@@ -40,19 +68,33 @@ export const viewerFiles = (files) => files.map((f) => ({ name: f.name, type: f.
 export const driveLink = (id) => `https://drive.google.com/file/d/${encodeURIComponent(id)}/view`;
 // How a signature came (_board.js SIGNED_BY)
 const SIGNED_HOW = { typed: 'Typed their name', drawn: 'Drew their signature', copy: 'Added their signed copy', staff: 'Signed copy added here', drive: 'Their signed copy in Drive' };
-/** A day as Atlanta has it (a time saved after 8pm there is the next day in UTC) */
-export const dayOf = (iso) => (iso ? shortDate(todayEastern(Date.parse(iso))) : '');
+/**
+ * The day a moment fell on, as Atlanta has it: "Nov 19, 2026". Never the first ten characters of a time ("2026-11-20T03:…"
+ * is 10 PM on Nov 19 in Atlanta, so its UTC date is a day ahead every evening). A plain day ("2026-11-19") is that day
+ */
+export const dayOf = (iso) => {
+  if (!iso) return '';
+  if (isDate(iso)) return shortDate(iso);
+  const at = Date.parse(iso);
+  return Number.isNaN(at) ? '' : shortDate(todayEastern(at));
+};
 /** How a signature came, and when: "Typed “Alex Rivera”, Nov 2, 2026" (Documents → Who's signed, a member on Members) */
 export const signedHow = (s) => [s.how === 'typed' && s.name ? `Typed “${s.name}”` : SIGNED_HOW[s.how] || SIGNED_HOW.typed, s.how !== 'drive' ? dayOf(s.at) : ''].filter(Boolean).join(', ');
-export function ago(iso) {
+/**
+ * How long ago a moment was: minutes, then hours within a day, then Atlanta's calendar days ("yesterday" is the day
+ * before today in Atlanta, never any 24 hours back), so it says what the day beside it says (dayOf: "Approved Jane,
+ * Nov 20" is "yesterday" on Nov 21, whatever the hour). Two weeks or more, the day itself
+ */
+export function ago(iso, now = Date.now()) {
   const t = Date.parse(iso || '');
   if (!Number.isFinite(t)) return '';
-  const m = Math.round((Date.now() - t) / 60000);
+  const m = Math.round((now - t) / 60000);
   if (m < 1) return 'just now';
   if (m < 60) return `${m} min ago`;
-  if (m < 60 * 24) return `${Math.round(m / 60)} hr ago`;
-  const d = Math.round(m / 1440);
-  return d === 1 ? 'yesterday' : d < 14 ? `${d} days ago` : new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const d = -daysFrom(todayEastern(t), todayEastern(now));
+  // (the day the clocks go back has 25 hours: a day ago can still be today)
+  if (m < 60 * 24 || d < 1) return `${Math.round(m / 60)} hr ago`;
+  return d === 1 ? 'yesterday' : d < 14 ? `${d} days ago` : dayOf(iso);
 }
 /** "8:42 AM" for a moment today, else ago() */
 export const savedAt = (iso) => { const t = new Date(iso || 0); return Date.now() - t < 12 * 3600e3 ? t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : ago(iso); };
@@ -102,7 +144,7 @@ export function LiveBox({ kind, numbers, meetingId, locked }) {
   const lines = liveLines(kind, numbers, { meetingId });
   const label = LIVE.find((l) => l.id === kind)?.label || '';
   return html`<div class="bd-live">
-    <div class="bd-live__label">${label}${locked ? ` · locked ${shortDate(String(numbers?.at || '').slice(0, 10))}` : ' · today’s'}</div>
+    <div class="bd-live__label">${label}${locked ? ` · locked ${dayOf(numbers?.at)}` : ' · today’s'}</div>
     ${lines.length ? html`<ul>${lines.map((l) => html`<li>${l}</li>`)}</ul>`
       : html`<div class="bd-muted">${kind === 'cash' ? (numbers?.mercury?.empty ? 'SOARD’s money isn’t in Mercury yet, so there’s no balance here. The financial statements have it.' : 'No balance from Mercury.') : 'Nothing to show right now.'}</div>`}
   </div>`;
@@ -114,8 +156,14 @@ export function LiveBox({ kind, numbers, meetingId, locked }) {
  * Shift+Tab move a point in and out. (Stored as "- " lines, two spaces a level.)
  */
 export function NotesBox({ value, onChange, label, placeholder = 'Notes', tone = '' }) {
-  // One line while empty; then as tall as what's in it, and a line to spare
-  const rows = value ? Math.min(30, Math.max(2, String(value).split('\n').length + 1)) : 1;
+  // As tall as its words at the width it has, however they wrap: never cut off (CSS field-sizing, else fitNotes)
+  const box = useRef(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || !fitting) return undefined;
+    fitting.observe(el);
+    return () => fitting.unobserve(el);
+  }, []);
   // Into the box at once (the next render finds it already there), so a key pressed right away lands after the caret, not before it
   const edit = (el, text, caret) => { el.value = text; el.setSelectionRange(caret, caret); onChange(text); };
   const onKeyDown = (e) => {
@@ -139,8 +187,48 @@ export function NotesBox({ value, onChange, label, placeholder = 'Notes', tone =
   // An empty box starts as a point, so nobody needs to know how points are written
   const onFocus = (e) => { if (!e.currentTarget.value) edit(e.currentTarget, '- ', 2); };
   const onBlur = (e) => { if (/^\s*-\s*$/.test(e.currentTarget.value)) onChange(''); };
-  return html`<textarea class=${`form-textarea bd-notes ${tone}`} aria-label=${label} rows=${rows} value=${value} placeholder=${placeholder}
-    onInput=${(e) => onChange(e.target.value)} onKeyDown=${onKeyDown} onFocus=${onFocus} onBlur=${onBlur} />`;
+  return html`<textarea class=${`form-textarea bd-notes ${tone}`} aria-label=${label} rows="1" value=${value} placeholder=${placeholder}
+    ref=${(el) => { box.current = el; fitNotes(el); }}
+    onInput=${(e) => { onChange(e.target.value); fitNotes(e.target); }} onKeyDown=${onKeyDown} onFocus=${onFocus} onBlur=${onBlur} />`;
+}
+/** Whether the browser sizes a box to its words itself (CSS field-sizing: content, .bd-notes) */
+const FITS = typeof CSS !== 'undefined' && !!CSS.supports?.('field-sizing', 'content');
+/**
+ * Where it can't: a notes box made as tall as its words, measured whenever they change, and again whenever its width
+ * changes (a phone turned, the window, a panel beside it), since that changes how they wrap. The page stays where it was
+ */
+export function fitNotes(el) {
+  if (FITS || !el?.isConnected) return;
+  const y = scrollY;
+  el.style.height = 'auto';
+  const cs = getComputedStyle(el);
+  el.style.height = `${el.scrollHeight + (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0)}px`;
+  if (scrollY !== y) scrollTo({ top: y, behavior: 'instant' });
+}
+// (a width that changed is measured on the next frame: never inside the observer's own callback)
+const fitting = !FITS && typeof ResizeObserver !== 'undefined' ? new ResizeObserver((seen) => {
+  for (const { target, contentRect } of seen) {
+    const w = Math.round(contentRect.width);
+    if (target.__fitW === w) continue;
+    target.__fitW = w;
+    requestAnimationFrame(() => fitNotes(target));
+  }
+}) : null;
+
+/**
+ * A plain box as tall as its words at the width it has, as a notes box is (NotesBox, without its points): never a few
+ * fixed rows that hide the rest behind a scroll, on a phone above all (When and where's Notes for the invite)
+ */
+export function FitBox({ class: cls = '', onInput = null, ...rest }) {
+  const box = useRef(null);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || !fitting) return undefined;
+    fitting.observe(el);
+    return () => fitting.unobserve(el);
+  }, []);
+  return html`<textarea ...${rest} class=${`form-textarea bd-fit ${cls}`.trim()} rows="1"
+    ref=${(el) => { box.current = el; fitNotes(el); }} onInput=${(e) => { onInput?.(e); fitNotes(e.target); }} />`;
 }
 
 /** Notes as they read: points (nested) and paragraphs */
@@ -292,8 +380,9 @@ export function Menu({ label, items, text }) {
       const after = [...els.slice(at + 1), ...els.slice(0, at + 1)];
       const here = at < 0 ? after : [...els.slice(at), ...els.slice(0, at)];
       const name = (b) => (b.querySelector('.bd-menu__label')?.textContent || '').trim().toLowerCase();
+      // (an action or nothing: never `false`, which has no focus to call)
       let next = (t.text.length > 1 ? here : after).find((b) => name(b).startsWith(t.text))
-        || (new Set(t.text).size === 1 && after.find((b) => name(b).startsWith(t.text[0])));
+        || (new Set(t.text).size === 1 ? after.find((b) => name(b).startsWith(t.text[0])) : null);
       // Letters that start nothing together: the last one on its own
       if (!next && t.text.length > 1 && e.key !== ' ') { t.text = e.key.toLowerCase(); next = after.find((b) => name(b).startsWith(t.text)); }
       next?.focus();
@@ -934,7 +1023,9 @@ export const STYLES = `
   ::view-transition-group(*) { animation-duration: 0.38s; animation-timing-function: cubic-bezier(0.22,1,0.36,1); }
   @media (max-width: 640px) {
     .agx-sec { padding: 0.7rem 0.6rem 0.5rem; }
-    .agx-tags.ag-tags, .agx-docs.ag-docs, .agx-item > .bd-notes, .agx-item > .bd-private-label, .agx-report { margin-left: 0.4rem; width: auto; }
+    .agx-tags.ag-tags, .agx-docs.ag-docs, .agx-item > .bd-private-label, .agx-report { margin-left: 0.4rem; width: auto; }
+    /* (a textarea's own width is twenty characters: it's given the item's) */
+    .agx-item > .bd-notes { margin-left: 0.4rem; width: calc(100% - 0.4rem); }
     .agx-item__row { flex-wrap: wrap; }
     .agx-item__row > .agx-item__title { flex: 1 1 9rem; }
     .agx-run__part span { display: none; }
@@ -970,6 +1061,9 @@ export const STYLES = `
   .bm-path__t { font-size: var(--fs-sm); font-weight: 650; line-height: 1.3; }
   .bm-path__s { font-size: var(--fs-xs); color: var(--color-text-secondary); line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .bm-path__step.is-todo .bm-path__t { color: var(--color-text-secondary); }
+  /* Held, and left undone because it no longer applies (an invite Board never sent): said, never a chore */
+  .bm-path__step.is-skip .bm-path__dot { border-style: dashed; opacity: 0.6; }
+  .bm-path__step.is-skip .bm-path__t { color: var(--color-text-secondary); font-weight: 500; }
   /* Too narrow for all six names on one line each (a phone, a tablet, a narrow window, or a laptop's larger touch
      text beside the menu): still one row, since it stays at the top, scrolling sideways to the rest */
   @container (max-width: 63.5rem) {
@@ -1130,7 +1224,10 @@ export const STYLES = `
   .bd-item:last-of-type { border-bottom: none; }
   .bd-item__top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 13rem) auto; gap: 0.5rem; align-items: center; }
   .bd-item .form-textarea { min-height: 0; }
-  .bd-notes { margin-top: 0.5rem; font-size: var(--fs-sm); line-height: 1.55; }
+  /* A notes box is as tall as its words (NotesBox: field-sizing, else measured), so nothing in it is cut off or scrolls */
+  .bd-notes { margin-top: 0.5rem; font-size: var(--fs-sm); line-height: 1.55; field-sizing: content; overflow-y: hidden; }
+  .bd-fit { field-sizing: content; overflow-y: hidden; resize: none; }
+  .ag-item .form-textarea.bd-notes { resize: none; }
   .bd-notes.is-private { background: var(--tone-warn-surface); border-color: var(--tone-warn-line); }
   .bd-private-label { margin: 0.5rem 0 -0.25rem; font-size: var(--fs-xs); font-weight: 600; color: var(--tone-warn-fg); }
 
@@ -1445,7 +1542,8 @@ export const STYLES = `
   .bm-task__do .bm-note, .bm-vote .bm-note { flex-basis: 100%; margin: 0.35rem 0 0; }
   .bm-who__no { font-size: var(--fs-xs); color: var(--tone-warn-fg); }
   .bm-coming__wait { margin: 0.75rem 0 0; font-size: var(--fs-sm); }
-  .bm-task__t:focus, .bm-check h3:focus, #bm-where h3:focus { outline: none; }
+  .bm-noroll { margin: 0 0 0.75rem; }
+  .bm-task__t:focus, .bm-check h3:focus, #bm-where h3:focus, .bd [data-page-head]:focus, .bm-coming h3:focus, .bm-coming__wait:focus, #bh-actions-h:focus, .bd-row__title[tabindex]:focus { outline: none; }
   .bd-pick:focus-within { outline: 2px solid var(--color-text); outline-offset: 2px; }
   .bm-task.is-skip .bm-task__mark { border-style: dashed; opacity: 0.6; }
   .bm-task.is-skip .bm-task__t { color: var(--color-text-secondary); font-weight: 500; }
@@ -1468,7 +1566,7 @@ export const STYLES = `
     .bm-run__now { order: 1; } .bm-run__step { order: 2; } .bm-run__deck > .bm-mirror { order: 3; }
     .bm-timer { white-space: normal; height: auto; flex-wrap: wrap; row-gap: 0.1rem; } .bm-timer__s { white-space: normal; } .bm-floor { height: auto; } .bm-floor__t { white-space: normal; }
   }
-  .bm-task__t:focus-visible, .bm-check h3:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 4px; }
+  .bm-task__t:focus-visible, .bm-check h3:focus-visible, .bd [data-page-head]:focus-visible, .bm-coming h3:focus-visible, .bm-coming__wait:focus-visible, #bh-actions-h:focus-visible, .bd-row__title[tabindex]:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 3px; border-radius: 4px; box-shadow: none; }
   .bm-where__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
   .bm-fixed { display: flex; align-items: center; gap: 0.45rem; margin: 0; padding: 0.3rem 0 0; font-size: var(--fs-base); font-weight: 600; color: var(--color-text); }
   .bm-fixed svg { flex: none; color: var(--color-text-muted); }

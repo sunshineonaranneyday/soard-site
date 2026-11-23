@@ -435,7 +435,10 @@ test('the families, to read: the board and its admins only; never how to reach a
   for (const secret of ['parent@example.com', '+15555550100', '12 Elm St', 'Parent Example', 'a private note', 'lin.smith@']) assert.ok(!text.includes(secret), `never ${secret}`);
   assert.equal((await ask(env, 'family=acctOld001', { boardMember: MEMBER })).status, 404);
   assert.equal((await ask(env, 'family=acctTest01', { boardMember: MEMBER })).status, 404);
-  assert.equal((await ask(env, 'family=../x', { boardMember: MEMBER })).status, 400);
+  /* r9: a malformed family link is a family that isn't on the board page, said as one (Board QA round 9, finding 8) */
+  const bad = await ask(env, 'family=../x', { boardMember: MEMBER });
+  assert.equal(bad.status, 404);
+  assert.equal(bad.body.error, 'That family isn’t on the board page');
   assert.equal((await ask(env, 'families', { userEmail: 'jane@soardcharity.com' })).status, 200, 'a Board admin looking');
   const listed = await familiesList(env);
   assert.ok(!JSON.stringify(listed).includes('parent@example.com'));

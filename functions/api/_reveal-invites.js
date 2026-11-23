@@ -67,7 +67,7 @@ import { limit } from './_rate-limit.js';
 import { syncKidStatuses } from './_kid-status.js';
 import { syncKitInvite, holdKitInvite, inviteFacts } from './_reveal-invite-kit.js';
 import { LEVEL_ROLES, TRADE_ROLE } from './_partner-roles.js';
-import { NOT_STAFF } from './_board-roles.js';
+import { NOT_STAFF, readDown, PEOPLE_DOWN } from './_board-roles.js';
 
 export const REVEAL_TASK_TYPE = '22NZSbkR5rZw';
 export const FIELD_STATUS = '22P52qfFub9b';
@@ -341,13 +341,15 @@ export const isEmail = (e) => /^(?!\.)(?!.*\.\.)(?!.*\.@)[^\s@<>()[\],;:"]+@[^\s
  * [{ slug, name, title, email, memorial, active }]. Only active members are
  * invited: alumni and memorial entries are listed but never invited.
  * group 'advisory': the Advisory Board (People → Advisory), kept and invited
- * the same way.
+ * the same way. A read that fails throws readDown(PEOPLE_DOWN) (Board QA round
+ * 10): never a board of nobody, which every reveal's invite would follow, the
+ * board taken off it and emailed by Google. A table not made yet is nobody.
  */
 export async function boardRoster(DB, group = 'board') {
   await ensureSchema(DB);
-  let rows = [];
-  try { rows = (await DB.prepare('SELECT slug, data FROM team').all()).results || []; } catch { return []; }
-  const emails = Object.fromEntries(((await DB.prepare('SELECT slug, email FROM reveal_board_emails').all()).results || []).map((r) => [r.slug, r.email]));
+  const sure = (e) => { if (/no such table/i.test(e?.message || '')) return null; console.error('[reveal-invites] board', e?.message || e); throw readDown(PEOPLE_DOWN, e); };
+  const rows = (await DB.prepare('SELECT slug, data FROM team').all().catch(sure))?.results || [];
+  const emails = Object.fromEntries(((await DB.prepare('SELECT slug, email FROM reveal_board_emails').all().catch(sure))?.results || []).map((r) => [r.slug, r.email]));
   const out = [];
   for (const row of rows) {
     let d = {};
@@ -382,13 +384,16 @@ export async function setBoardEmail(DB, slug, email) {
     await DB.prepare('DELETE FROM reveal_board_emails WHERE lower(email) = ? AND slug != ? AND slug NOT IN (SELECT slug FROM team)').bind(e, slug).run()
       .catch((err) => { if (!/no such table: team/i.test(err?.message || '')) throw err; });
   }
-  const was = await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(slug).first().catch(() => null);
+  // The address it had and whose it is, read for certain before anything is written: either not answering saves nothing
+  // (never a changed address with its old one never told, for want of a read: Board QA round 10)
+  const sure = (err) => { if (/no such table/i.test(err?.message || '')) return null; console.error('[reveal-invites] board email', err?.message || err); throw readDown(PEOPLE_DOWN, err); };
+  const was = await DB.prepare('SELECT email FROM reveal_board_emails WHERE slug = ?').bind(slug).first().catch(sure);
+  const person = (was?.email && normEmail(was.email) !== e) ? await DB.prepare('SELECT data FROM team WHERE slug = ?').bind(slug).first().catch(sure) : null;
   const r = e
     ? await DB.prepare('INSERT OR REPLACE INTO reveal_board_emails (slug, email, updated_at) VALUES (?, ?, ?)').bind(slug, e, new Date().toISOString()).run()
     : await DB.prepare('DELETE FROM reveal_board_emails WHERE slug = ?').bind(slug).run();
   // A changed or cleared address (the one a board member signs in, and signs, with): in the signing record, and the
   // old address is told by the heartbeat, without the new one (./_board-sign.js maybeRunSigning)
-  const person = (was?.email && normEmail(was.email) !== e) ? await DB.prepare('SELECT data FROM team WHERE slug = ?').bind(slug).first().catch(() => null) : null;
   const onBoard = (() => { try { return JSON.parse(person?.data || '{}').group === 'board'; } catch { return false; } })();
   if (was?.email && normEmail(was.email) !== e && onBoard) {
     try {
@@ -403,7 +408,8 @@ export async function setBoardEmail(DB, slug, email) {
 /**
  * The board, for every invite: the website's active board and Advisory Board
  * members with a private reveal email, plus anyone with the Board Member role
- * in JobTread. Alumni and memorial entries never. Never throws.
+ * in JobTread. Alumni and memorial entries never. A read of People that fails
+ * throws (an invite is left as it is until the next look), nothing else does.
  */
 export async function fetchBoard(env, fetchImpl = fetch) {
   const out = [];
@@ -412,7 +418,7 @@ export async function fetchBoard(env, fetchImpl = fetch) {
       for (const m of await boardRoster(env.DB, group)) {
         if (m.active && isEmail(m.email)) out.push({ name: m.name, email: m.email, from: 'website', ...(group === 'advisory' ? { advisory: true } : {}) });
       }
-    } catch { /* no website board */ }
+    } catch (err) { if (err?.unread) throw err; /* no website board */ }
   }
   if (env.JOBTREAD_GRANT_KEY) {
     try {
@@ -1051,7 +1057,8 @@ export async function runOwedWakes(env, { fetchImpl = fetch, now = Date.now() } 
       if (!(mine?.meta?.changes > 0)) continue;
       await syncKidStatuses(env, { jobId: job_id, fetchImpl, now });
       const r = await reconcileJob(env, job_id, { fetchImpl, now, wait: false })
-        .catch((err) => ({ jobId: job_id, action: 'error', error: err.message }));
+        .catch((err) => ({ jobId: job_id, action: err?.unread ? 'busy' : 'error', error: err.message }));
+      // (busy, or People not answering: it's owed again, so the next heartbeat looks at it)
       if (r.action === 'busy') await oweWake(DB, job_id, now);
       out.push(r);
     }

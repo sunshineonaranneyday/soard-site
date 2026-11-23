@@ -456,6 +456,13 @@ try {
   await signedInput.asElement().uploadFile(pdf);
   ok(await waitText(jane, /Signed copy kept/), 'the signed copy uploads');
   await shot(jane, '02b-after');
+  // Its minutes wait for the next meeting's vote: a past agenda comes in as approved minutes, and minutes approved
+  // already aren't put to the board again (board-shared.js templateAgenda), so they go back to draft here
+  await clickText(jane, '.bm-wrap button', /^Mark as draft$/);
+  // (waited for on the server, which is what it checks: "Saved" may still be on screen from the save before the press)
+  let drafted = false;
+  for (let k = 0; k < 40 && !drafted; k++) { drafted = (await meetingNow(jane, pastId))?.minutes === 'draft'; if (!drafted) await sleep(200); }
+  ok(drafted && await saved(jane), 'Mark as draft: its minutes wait for the next meeting’s vote');
 
   // ─── A new meeting ahead: Before ───
   await jane.goto(`${SITE}/admin/#board`, { waitUntil: 'networkidle0' });
@@ -478,11 +485,17 @@ try {
   const chips = await jane.evaluate(() => [...document.querySelectorAll('.bd-showpick .agx-live')].map((x) => x.textContent.trim()));
   ok(chips.includes('The money') && chips.includes('Makeovers in progress'), `the agenda marks the items that show live numbers (${chips.join(', ')})`);
   // An item shows more than one live list: the makeovers and the reveals under one item, in the order picked
-  await jane.evaluate(() => [...document.querySelectorAll('.agx-item')].find((x) => x.querySelector('.bd-showpick .agx-live.is-projects'))?.querySelector('.bd-showpick .bd-pop__btn').scrollIntoView({ block: 'center' }));
-  await sleep(300);
+  // (scrolled to until it stays in view: the agenda's live lists and the presentation beside it can still be filling in
+  // above it, moving it down past the window after one scroll, as a person would wait to see it before pressing)
+  for (let k = 0; k < 15; k++) {
+    const r = await jane.evaluate(() => { const b = [...document.querySelectorAll('.agx-item')].find((x) => x.querySelector('.bd-showpick .agx-live.is-projects'))?.querySelector('.bd-showpick .bd-pop__btn'); b?.scrollIntoView({ block: 'center' }); return b && b.getBoundingClientRect().top; });
+    await sleep(300);
+    const now = await jane.evaluate(() => [...document.querySelectorAll('.agx-item')].find((x) => x.querySelector('.bd-showpick .agx-live.is-projects'))?.querySelector('.bd-showpick .bd-pop__btn')?.getBoundingClientRect().top);
+    if (r != null && Math.abs(now - r) < 2 && now > 0 && now < 900) break;
+  }
   await jane.evaluate(() => [...document.querySelectorAll('.agx-item')].find((x) => x.querySelector('.bd-showpick .agx-live.is-projects'))?.querySelector('.bd-showpick .bd-pop__btn').click());
   await jane.waitForSelector('.bd-pop__panel .bd-picker__opt', { timeout: 3000 }).catch(() => {});
-  { const top = await onTop(jane); ok(top === true, `the Shows list draws over everything (${top})`); }
+  { const top = await onTop(jane); const where = await jane.evaluate(() => { const btn = [...document.querySelectorAll('.agx-item')].find((x) => x.querySelector('.bd-showpick .agx-live.is-projects'))?.querySelector('.bd-showpick .bd-pop__btn'); const r = btn?.getBoundingClientRect(); return { btn: r && [Math.round(r.top), Math.round(r.bottom)], scrollY: Math.round(scrollY), inner: innerHeight, doc: document.documentElement.scrollHeight }; }); ok(top === true, `the Shows list draws over everything (${top}; ${JSON.stringify(where)})`); }
   // From the keyboard: the list has the focus as it opens (on the one shown), ↓ along it, Enter picks, Alt+↑ moves a
   // picked one earlier, and the order under the list has Earlier
   ok(await jane.evaluate(() => document.activeElement?.getAttribute('role') === 'option' && /Makeovers in progress/.test(document.activeElement.textContent)), 'the Shows list has the focus as it opens, on the one shown');
@@ -1101,7 +1114,9 @@ try {
   await jane.goto(`${SITE}/admin/#board`, { waitUntil: 'networkidle0' });
   await jane.reload({ waitUntil: 'networkidle0' }); // a new hash alone doesn't load the page again
   ok(await waitText(jane, /Past meetings’ agendas and minutes also come in from your email by themselves/) && !/Google Drive|Meetings come from/.test(await text(jane)), 'Meetings says where past meetings’ papers come from (email, never Drive), and nothing about meetings coming from a calendar');
-  ok(await waitText(jane, /Ready\. The board was emailed the link/), 'the next meeting: everything done says Ready');
+  // Everything sent, but Sam's report isn't in yet: Home names the reports next, as the meeting's own line does (QA round 2,
+  // Nov 19 2026: one rule, ./board-meeting.js pathOf; Home used to tick the agenda whatever its reports said)
+  ok(await waitText(jane, /Next: the reports, \d+ of \d+ in so far\./) && await jane.evaluate(() => document.querySelector('.bh-prep li.is-next')?.textContent.trim() === 'Agenda' && [...document.querySelectorAll('.bh-prep li')].filter((li) => li.textContent.trim() !== 'Agenda').every((li) => li.classList.contains('is-done'))), `the next meeting: everything sent, its reports still coming, says the reports are next (${await jane.evaluate(() => document.querySelector('.bh-nextline')?.textContent.trim())})`);
 
   // The agenda template: the agenda's own editor, for who presents each committee; a meeting still on it follows
   await clickText(jane, 'button', /^Agenda template$/);
@@ -1115,7 +1130,8 @@ try {
   await jane.keyboard.type('sam');
   await jane.keyboard.press('Enter');
   await jane.keyboard.press('Escape');
-  ok(await waitText(jane, /Saving…|Saved, and on \d+ meeting/, 6000), 'the template saves by itself');
+  // (in a meeting's words: "Saving in a moment", then "Saving…", useAutosave)
+  ok(await waitText(jane, /Saving in a moment|Saving…|Saved, and on \d+ meeting/, 6000), 'the template saves by itself');
   await jane.waitForFunction(async () => ((await (await fetch('/api/board-admin')).json()).settings.template.flatMap((x) => x.items).find((it) => it.title === 'Governance')?.who || []).length > 0, { timeout: 8000, polling: 500 }).catch(() => {});
   const savedTemplate = await jane.evaluate(async () => (await (await fetch('/api/board-admin')).json()));
   const onGov = savedTemplate.settings.template.flatMap((x) => x.items).find((it) => it.title === 'Governance');
@@ -1165,7 +1181,7 @@ try {
   ok(await pat.$('a.nav-item[href="#board"]') === null, 'Board isn’t in the menu for other staff');
   await pat.goto(`${SITE}/admin/#board`, { waitUntil: 'networkidle0' });
   await pat.reload({ waitUntil: 'networkidle0' });
-  ok(await waitText(pat, /open only to the people its Settings list/), 'the Board area refuses other staff');
+  ok(await waitText(pat, /open only to the staff who run Board/), 'the Board area refuses other staff');
   await pat.goto(`${SITE}/admin/board/`, { waitUntil: 'networkidle0' });
   ok(await waitText(pat, /This page is for SOARD’s board/), 'the board page refuses other staff, with a way back to the admin');
 
@@ -1199,9 +1215,10 @@ try {
     const figs = await alex.evaluate(() => Object.fromEntries([...document.querySelectorAll('.bp-fig')].map((f) => [f.querySelector('.bp-fig__label').textContent, f.querySelector('.bp-fig__value').textContent])));
     // No budget sheet and no QuickBooks here: the reveals stand in for the year's revenue, and nothing for its
     // expenses (the kids served are Impact's, just under the figures in the same panel)
-    // The makeovers under way are the board's cards, awaiting funding too: the figure and the board below agree
-    const cards = await alex.$$eval('#makeovers .bk-card', (l) => l.length);
-    ok(Object.keys(figs).length === 3 && figs['Makeovers under way'] === String(cards) && cards > 0 && figs['Cash in the bank'] === '$375K' && 'Reveals ahead' in figs && !/Recently|The money|Children served/.test(home), `Home: three figures without a budget (Mercury's cash, the reveals, the makeovers as many as the board's ${cards} cards), nothing repeated below (${JSON.stringify(figs)})`);
+    // The makeovers underway are the board's cards being built, Design to Build: awaiting funding hasn't started, so it's
+    // said beside them and never counted in them (./stages.js underwayOf, the meaning What makeovers cost has too)
+    const cards = await alex.$$eval('#makeovers .bk-col', (cols) => cols.filter((c) => !/^(Applying|Applied|Approved|Awaiting funding|Revealed)/.test(c.textContent)).reduce((t, c) => t + c.querySelectorAll('.bk-card').length, 0));
+    ok(Object.keys(figs).length === 3 && figs['Makeovers underway'] === String(cards) && cards > 0 && figs['Cash in the bank'] === '$375K' && 'Reveals ahead' in figs && !/Recently|The money|Children served/.test(home), `Home: three figures without a budget (Mercury's cash, the reveals, the makeovers as many as the board's ${cards} cards), nothing repeated below (${JSON.stringify(figs)})`);
     ok(await alex.evaluate(() => !!document.querySelector('.bp-sum .bp-figs') && !!document.querySelector('.bp-sum #impact')), 'Home: the figures and Impact are one panel, SOARD at a glance');
     ok(await alex.$$eval('.bp-next .bp-agpeek li', (l) => l.length) > 0, 'Home: the next meeting’s agenda headings, right there');
     // (Home's Makeovers card: the applications and the builds on one board, ./lifecycle.js; here, the builds alone)
@@ -1815,7 +1832,7 @@ try {
   ok(!spots.small.length, `and no title is set smaller than its lines need (a g's tail isn't a line more)${spots.small.length ? ` (${spots.small.join(' | ')})` : ''}`);
   ok(spots.floorOn >= 3 && spots.floor.size === 1 && !spots.inSlide.length, `who has the floor sits in one place along the top on every slide it shows on, and no slide draws its presenters again (${spots.floorOn} slides, spots ${[...spots.floor].join(' | ')}${spots.inSlide.length ? `; in the slide on ${spots.inSlide.join(', ')}` : ''})`);
   ok(roll && roll.faces === 3 && /3\s*on the board/.test(roll.count), `the roll call shows the board’s faces, everyone on the meeting’s list (${JSON.stringify(roll)})`);
-  ok(await scr.waitForFunction(() => /Financial.*Balance sheet financials.*Pages 1–2 of 2/.test(document.querySelector('.bs-foot__what')?.textContent || ''), { timeout: 8000 }).then(() => true, () => false), '→ steps the screen through the items to the Financial item’s statement, its two pages on one stop');
+  ok(await scr.waitForFunction(() => /Financial.*Balance sheet financials.*Pages 1 and 2 of 2/.test(document.querySelector('.bs-foot__what')?.textContent || ''), { timeout: 8000 }).then(() => true, () => false), '→ steps the screen through the items to the Financial item’s statement, its two pages on one stop');
   ok(await scr.waitForFunction(() => {
     const sheets = [...document.querySelectorAll('.bs-page__sheet .bs-book.is-open > .bs-sheet')].map((e) => e.getBoundingClientRect());
     return sheets.length === 2 && [...document.querySelectorAll('.bs-page__sheet canvas')].every((c) => c.width > 0) && Math.abs(sheets[0].height - sheets[1].height) < 2 && Math.abs(sheets[0].right - sheets[1].left) < 2 && sheets[0].height > innerHeight * 0.6;
@@ -1823,9 +1840,9 @@ try {
   ok(await scr.evaluate(() => /Sam Ortiz has the floor/.test(document.querySelector('.bs-floor')?.innerText || '')), 'with who presents it, along the top');
   await shot(scr, '21-screen-document');
   await scr.keyboard.press('PageDown');
-  ok(await scr.waitForFunction(() => !/Pages 1–2 of 2/.test(document.querySelector('.bs-foot__what')?.textContent || ''), { timeout: 3000 }).then(() => true, () => false), 'a clicker’s Page Down: on past the statement (both its pages were up)');
+  ok(await scr.waitForFunction(() => !/Pages 1 and 2 of 2/.test(document.querySelector('.bs-foot__what')?.textContent || ''), { timeout: 3000 }).then(() => true, () => false), 'a clicker’s Page Down: on past the statement (both its pages were up)');
   await scr.keyboard.press('PageUp');
-  ok(await scr.waitForFunction(() => /Pages 1–2 of 2/.test(document.querySelector('.bs-foot__what')?.textContent || ''), { timeout: 3000 }).then(() => true, () => false), 'Page Up: back to its two pages');
+  ok(await scr.waitForFunction(() => /Pages 1 and 2 of 2/.test(document.querySelector('.bs-foot__what')?.textContent || ''), { timeout: 3000 }).then(() => true, () => false), 'Page Up: back to its two pages');
   await scr.keyboard.press('ArrowLeft');
   // The money fills its own slide, so the treasurer's report is a slide of its own after it (./board-shared.js deckOf)
   const back = await scr.waitForSelector('.bs.bs--report', { timeout: 3000 }).then(() => scr.evaluate(() => ({ title: document.querySelector('.bs-item__title')?.textContent || '', who: document.querySelector('.bs-top > .bs-floor')?.innerText || '', report: !!document.querySelector('.bs-stage .bs-report'), foot: document.querySelector('.bs-foot__what')?.textContent || '' })), () => null);
@@ -2111,8 +2128,10 @@ try {
     await money.goto(`${SITE}/admin/board/#/`, { waitUntil: 'networkidle0' });
     ok(await money.waitForSelector('.bp-sum .bp-sum__mix', { timeout: 6000 }).then(() => true, () => false), `Home at ${width}: where the revenue came from, in the at-a-glance panel`);
     const key = await money.$$eval('.bp-sum__mix .bp-mix__key li', (l) => l.map((x) => x.textContent));
-    // Five categories by name; Golf Classic at 1.6% folds in with rent, interest and the rest
-    ok(JSON.stringify(key) === JSON.stringify(['Donations$700K37%', 'Store sales$415K22%', 'Gala$400K21%', 'In kind$220K12%', 'Grants$90K5%', 'Everything else$51K3%']), `Home at ${width}: donations, store sales, gala, in kind and grants, each with its amount and share; the small ones as Everything else (${JSON.stringify(key)})`);
+    // Four categories by name; Golf Classic at 1.8% folds in with rent, interest and the rest. Its shares are of the revenue
+    // tile's $1.66M: in kind left out, as the tile leaves it out and says (QA round 2). They add up to 100%, Grants' 5.43
+    // the largest remainder so 6% (QA round 8, money.js sharesOf)
+    ok(JSON.stringify(key) === JSON.stringify(['Donations$700K42%', 'Store sales$415K25%', 'Gala$400K24%', 'Grants$90K6%', 'Everything else$51K3%']), `Home at ${width}: donations, store sales, gala and grants, each with its amount and share of the tile’s revenue; the small ones as Everything else (${JSON.stringify(key)})`);
     ok(await overflow(money) <= 0, `Home at ${width}: the categories fit`);
     // The year against QuickBooks' budget (the board's): revenue against the year's, expenses against its spending less the in kind
     const against = await money.evaluate(() => [...document.querySelectorAll('.bp-fig')].map((f) => f.textContent.replace(/\s+/g, ' ')).filter((t) => /revenue|expenses/i.test(t)).join(' | '));
@@ -2126,7 +2145,7 @@ try {
     ok(/\$980K/.test(spent) && /Not counting \$220K in kind$/.test(spent.replace(/\u00a0/g, ' ')), `Home at ${width}: the expenses as the budget counts them, without the in kind, saying so (${spent})`);
     if (width === 1440) {
       await money.hover('.bp-mix__seg:nth-child(2)');
-      ok(await money.waitForFunction(() => /^Store sales\$415,000 · 22%\d{4}, same days: \$830,000 · ▼ 50%$/.test(document.querySelector('.bp-mix__tip')?.textContent || ''), { timeout: 2000 }).then(() => true, () => false), 'Home: over a part, its exact amount beside last year’s same days');
+      ok(await money.waitForFunction(() => /^Store sales\$415,000 · 25%\d{4}, same days: \$830,000 · ▼ 50%$/.test(document.querySelector('.bp-mix__tip')?.textContent || ''), { timeout: 2000 }).then(() => true, () => false), 'Home: over a part, its exact amount beside last year’s same days');
       await money.goto(`${SITE}/admin/board/#/financials`, { waitUntil: 'networkidle0' });
       ok(await money.waitForSelector('.bp-mixtable', { timeout: 6000 }).then(() => true, () => false), 'Financials: the categories as a table');
       const storeRows = await money.$$eval('.bp-storetable tbody tr', (r) => r.map((x) => x.textContent));
@@ -2136,18 +2155,18 @@ try {
       await clickText(money, '.bp-stmts button', /^Financial position$/);
       ok(firstStmt.length === 1 && /^Statement of activities/.test(firstStmt[0]) && await money.waitForFunction(() => { const t = [...document.querySelectorAll('.bp-latest .bp-stmt__title')].map((x) => x.textContent); return t.length === 1 && t[0] === 'Statement of financial position' && /TOTAL ASSETS/.test(document.querySelector('.bp-latest .bp-stmt').textContent); }, { timeout: 2000 }).then(() => true, () => false), `Financials: one statement at a time, activities first, the position a tap away (${JSON.stringify(firstStmt)})`);
       await clickText(money, '.bp-stmts button', /^Budget$/);
-      ok(await money.waitForFunction(() => { const t = document.querySelector('.bp-latest .bp-stmt__title')?.textContent || ''; const st = document.querySelector('.bp-latest .bp-stmt'); return /^Budget against actual, January 1 to /.test(t) && /ActualBudgetOver \(under\)/.test(st?.querySelector('thead')?.textContent || '') && /Total Income\$1,884,217\$1,666,667\+13%/.test(st?.textContent || '') && /Budget_FY26_P&L, through .*: 10 of its 12 months/.test(document.querySelector('.bp-latest .bp-stmts__when')?.textContent || ''); }, { timeout: 2000 }).then(() => true, () => false), 'Financials: QuickBooks’ budget against the actuals, a tap from the statements, saying which budget and through when');
-      ok(/The budget: QuickBooks’ Budget_FY26_P&L\./.test(await money.$eval('#budget', (x) => x.textContent).catch(() => '')), 'Financials: the year against its budget names QuickBooks’ budget');
+      ok(await money.waitForFunction(() => { const t = document.querySelector('.bp-latest .bp-stmt__title')?.textContent || ''; const st = document.querySelector('.bp-latest .bp-stmt'); return /^Budget against actual, January 1 to /.test(t) && /ActualBudgetOver \(under\)/.test(st?.querySelector('thead')?.textContent || '') && /Total Income\$1,884,217\$1,666,667\+13%/.test(st?.textContent || '') && /^QuickBooks’ \d{4} budget, through .*: 10 of its 12 months/.test(document.querySelector('.bp-latest .bp-stmts__when')?.textContent || ''); }, { timeout: 2000 }).then(() => true, () => false), 'Financials: QuickBooks’ budget against the actuals, a tap from the statements, saying which budget (by its year, never its file name) and through when');
+      ok(/The budget: QuickBooks’ \d{4} budget\./.test(await money.$eval('#budget', (x) => x.textContent).catch(() => '')) && !/Budget_FY26|P&L/.test(await money.$eval('main', (x) => x.textContent)), 'Financials: the year against its budget names QuickBooks’ budget in plain words, never its file name');
       await shot(money, '27b-budget-financials');
       // (the year's lines, under its chart: not the chart's month by month)
       const year = await money.evaluate(() => [...document.getElementById('by-h').closest('.bp-card').querySelectorAll('.bp-cmp tbody tr')].map((r) => r.textContent));
-      // Read down it adds up: revenue less the cash spent and the in kind used is the net
-      ok(year[0] === 'Revenue$1,876,045$1,500,000▲ 25%' && year[1] === 'Cash expenses$980,000$1,030,000▼ 5%' && year[2] === 'In kind expenses (not cash)$220,000$70,000▲ 214%' && year[3] === 'Net$676,045$400,000▲ $276,045' && 1876045 - 980000 - 220000 === 676045, `Financials: the year so far splits the in kind from the cash expenses, and adds up to QuickBooks’ net (${JSON.stringify(year)})`);
+      // The year's three as the tiles count them, in kind left out of both sides (said once), and they add up
+      ok(year[0] === 'Revenue$1,656,045$1,430,000▲ 16%' && year[1] === 'Expenses$980,000$1,030,000▼ 5%' && year[2] === 'Net$676,045$400,000▲ $276,045' && year.length === 3 && 1656045 - 980000 === 676045, `Financials: the year so far as the tiles count it, in kind out of both sides, adding up (${JSON.stringify(year)})`);
       // % | $: the changes as percentages (the first time) or in dollars, one pick for the statements and the year so far
       await money.evaluate(() => [...document.querySelectorAll('.bp-chgas button')].find((x) => x.textContent.includes('$'))?.click());
       const inDollars = await money.waitForFunction(() => {
         const rows = [...document.getElementById('by-h').closest('.bp-card').querySelectorAll('.bp-cmp tbody tr')].map((r) => r.textContent);
-        return rows[0] === 'Revenue$1,876,045$1,500,000▲ $376,045' && rows[1] === 'Cash expenses$980,000$1,030,000▼ $50,000' && /Total Income\$1,884,217\$1,666,667\+\$217,550/.test(document.querySelector('.bp-latest .bp-stmt')?.textContent || '');
+        return rows[0] === 'Revenue$1,656,045$1,430,000▲ $226,045' && rows[1] === 'Expenses$980,000$1,030,000▼ $50,000' && /Total Income\$1,884,217\$1,666,667\+\$217,550/.test(document.querySelector('.bp-latest .bp-stmt')?.textContent || '');
       }, { timeout: 3000 }).then(() => true, () => false);
       ok(inDollars && await money.evaluate(() => [...document.querySelectorAll('.bp-chgas')].every((g) => g.querySelector('[aria-pressed="true"]')?.textContent.includes('$'))), 'Financials: $ says the changes in dollars, in the statements and the year so far at once');
       await money.evaluate(() => [...document.querySelectorAll('.bp-chgas button')].find((x) => x.textContent.includes('%'))?.click());
@@ -2167,7 +2186,8 @@ try {
         ok(!off.length, `Financials: % | $ changes the figures in place, nothing on the page moves${off.length ? ` (${off.slice(0, 3).join(' | ')})` : ''}`);
       }
       const rows = await money.$$eval('.bp-mixtable tbody tr', (r) => r.map((x) => x.textContent));
-      ok(rows.length === 6 && rows[1] === 'Store salesStore Income, Store Discounts$415,00022%$830,000▼ 50%' && /^Everything elseGolf Classic, Rent, Interest, Makeover\$51,0453%\$0/.test(rows[5]) && rows[4] === 'GrantsGrant Revenue$90,0005%$0–', `Financials: each category with its accounts, beside last year’s same days (${JSON.stringify(rows)})`);
+      // (shares of the year's revenue as its figures count it, in kind left out: QA round 2)
+      ok(rows.length === 5 && rows[1] === 'Store salesStore Income, Store Discounts$415,00025%$830,000▼ 50%' && /^Everything elseGolf Classic, Rent, Interest, Makeover\$51,0453%\$0/.test(rows[4]) && rows[3] === 'GrantsGrant Revenue$90,0006%$0New', `Financials: each category with its accounts, beside last year’s same days (one new this year says so, never a dash) (${JSON.stringify(rows)})`);
       await money.goto(`${SITE}/admin/board/#/meetings/${meetingId}`, { waitUntil: 'networkidle0' });
       ok(await money.waitForSelector('.bp-agitem .bp-agmix', { timeout: 6000 }).then(() => true, () => false), 'the meeting: its money item says where the revenue came from');
       ok(/^Sales\$415K/.test(await money.$eval('.bp-agitem .bp-agstore .bp-store li', (x) => x.textContent).catch(() => '')), 'the meeting: its money item has the store');
@@ -2180,7 +2200,9 @@ try {
       // its day (two days into a month isn't a flat month)
       const axes = await money.evaluate(() => [...document.querySelectorAll('.bp-agitem .by-chart svg')].map((svg) => ({ ticks: [...svg.querySelectorAll('g text.by-axis')].map((t) => t.textContent).join('|'), w: Math.round(svg.getBoundingClientRect().width), vw: Math.round(svg.viewBox.baseVal.width), now: Number(svg.querySelector('circle.by-dot--now')?.getAttribute('cx')), label: Number(svg.querySelector('text.by-axis.is-now')?.getAttribute('x')), fs: getComputedStyle(svg.querySelector('text.by-axis')).fontSize })));
       ok(axes.length === 2 && axes[0].ticks === axes[1].ticks && axes.every((a) => Math.abs(a.w - a.vw) <= 2 && a.fs === '12px'), `revenue and expenses on one axis, drawn at their own size (${JSON.stringify(axes)})`);
-      if (Number(day(0).slice(8, 10)) <= 20) ok(axes.every((a) => a.now < a.label - 10), `this year's line ends at its day in the month (${JSON.stringify(axes.map((a) => [a.now, a.label]))})`);
+      // (only in a month's first half: a month here is about 27px wide, so from about its 18th day the line's end sits
+      // under 10px from the month's label, however rightly drawn; through the 15th it's at least 12.5px, February too)
+      if (Number(day(0).slice(8, 10)) <= 15) ok(axes.every((a) => a.now < a.label - 10), `this year's line ends at its day in the month (${JSON.stringify(axes.map((a) => [a.now, a.label]))})`);
       ok(/Also as a file: Balance sheet financials/.test(yc.files) && !yc.tiles.some((x) => /Balance sheet/.test(x)), 'a statement QuickBooks draws isn’t a document tile again: a quiet link');
       await money.evaluate(() => document.querySelector('.bp-agitem .by-chart').scrollIntoView({ block: 'center' }));
       await money.hover('.bp-agitem .by-chart svg');
@@ -2217,9 +2239,10 @@ try {
       await clickText(money, 'button', /Print it all/);
       ok(await money.waitForFunction(() => window.__printing, { timeout: 15000 }).then(() => true, () => false), 'Print it all, with QuickBooks connected');
       const paper = await money.evaluate(() => ({ segs: document.querySelectorAll('.bpp-mix__bar span').length, rows: [...document.querySelectorAll('.bpp-mix tbody tr')].map((r) => r.textContent) }));
-      ok(paper.segs === 6 && paper.rows.length === 6 && paper.rows[1] === 'Store sales$415,00022%$830,000▼ 50%', `Print it all: where the revenue came from, beside last year (${JSON.stringify(paper.rows.slice(0, 2))})`);
+      // (shares of the revenue as the figures on paper count it, in kind left out: QA round 2)
+      ok(paper.segs === 5 && paper.rows.length === 5 && paper.rows[1] === 'Store sales$415,00025%$830,000▼ 50%' && !paper.rows.some((r) => /^In kind/.test(r)), `Print it all: where the revenue came from, beside last year (${JSON.stringify(paper.rows.slice(0, 2))})`);
       const storePaper = await money.evaluate(() => [...document.querySelectorAll('.bpp-store tbody tr')].map((r) => r.textContent));
-      ok(await money.evaluate(() => [...document.querySelectorAll('.bpp-stmt caption')].some((c) => /^Budget against actual, January 1 to .*Budget_FY26_P&L/.test(c.textContent))), 'Print it all: QuickBooks’ budget against the actuals after the statements');
+      ok(await money.evaluate(() => [...document.querySelectorAll('.bpp-stmt caption')].some((c) => /^Budget against actual, January 1 to .*QuickBooks’ \d{4} budget/.test(c.textContent) && !/Budget_FY26|P&L/.test(c.textContent))), 'Print it all: QuickBooks’ budget against the actuals after the statements');
       ok(JSON.stringify(storePaper) === JSON.stringify(['Sales$415,000$830,000▼ 50%', 'Cost of goods$250,000$380,000▼ 34%', 'Profit before staff and rent$165,000$450,000▼ $285K', 'Profit as a share of sales40%54%▼ 14 pts']), `Print it all: the store beside last year (${JSON.stringify(storePaper)})`);
       await money.evaluate(() => dispatchEvent(new Event('afterprint')));
       // On the screen: QuickBooks' slides after the money, each a slide of its own in the list beside the agenda
@@ -2255,13 +2278,13 @@ try {
         const pres = await tab(FOUNDER, 1280);
         await pres.setViewport({ width: 1280, height: 720 });
         await pres.goto(`${SITE}/admin/board/?present&at=${encodeURIComponent(`${fin.id}:books:act`)}#/meetings/${meetingId}/screen`, { waitUntil: 'networkidle0' });
-        const chg = () => pres.$$eval('.by-stmt .by-stmt__chg', (l) => l.map((x) => x.textContent.trim()).filter((t) => t && t !== '–'));
+        const chg = () => pres.$$eval('.by-stmt .by-stmt__chg', (l) => l.map((x) => x.textContent.trim()).filter((t) => t && t !== 'Nothing to compare'));
         ok(await pres.waitForFunction(() => /^Statement of activities/.test(document.querySelector('.by-slide__title')?.textContent || ''), { timeout: 10000 }).then(() => true, () => false) && (await chg()).length > 0 && (await chg()).every((t) => /%|Even/.test(t)), `presenting the statement: its changes as percentages (${(await chg()).join(' | ')})`);
         await pres.mouse.move(640, 300);
         await pres.mouse.move(650, 310);
         ok(await pres.$eval('.bs-chg', (g) => g.querySelector('[aria-pressed="true"]')?.textContent.trim().startsWith('%')).catch(() => false), 'the % | $ beside the count, % picked');
         await pres.keyboard.press('c');
-        ok(await pres.waitForFunction(() => { const t = [...document.querySelectorAll('.by-stmt .by-stmt__chg')].map((x) => x.textContent.trim()).filter((x) => x && x !== '–'); return t.length > 0 && t.every((x) => /\$|Even/.test(x)); }, { timeout: 3000 }).then(() => true, () => false), `C: in dollars (${(await chg()).join(' | ')})`);
+        ok(await pres.waitForFunction(() => { const t = [...document.querySelectorAll('.by-stmt .by-stmt__chg')].map((x) => x.textContent.trim()).filter((x) => x && x !== 'Nothing to compare'); return t.length > 0 && t.every((x) => /\$|Even/.test(x)); }, { timeout: 3000 }).then(() => true, () => false), `C: in dollars (${(await chg()).join(' | ')})`);
         await money.goto(`${SITE}/admin/board/#/financials`, { waitUntil: 'networkidle0' });
         await pres.keyboard.press('c');
         await pres.keyboard.press('c');

@@ -4,14 +4,15 @@
  *   { updates: [{ slug, set: { photoCutout: true } }] }
  *   { updates: [{ slug, set: { photoCrop: { x, y, size }, photoSize: [w, h] } }] }
  * Only the allowed photo fields change (false or null clears one); each row
- * is read fresh and written back in one D1 batch, with an audit entry and a
- * saved version per person.
+ * is read fresh and written back in one D1 batch, only over the record as it
+ * was read (one renamed or deleted meanwhile is never brought back: said in
+ * words), with an audit entry and a saved version per person.
  *
  * Admin-only (the middleware requires Access).
  */
 import { EXTRACTORS, generateSha } from './_collections.js';
 import { logAudit, diffJson, getEntityName } from './_audit.js';
-import { recordVersion } from './_content-history.js';
+import { ensureHistory, versionStatements, pruneHistory } from './_content-history.js';
 
 const unit = (n) => typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 1;
 const ALLOWED = {
@@ -29,30 +30,65 @@ export async function batch(env, { updates } = {}, userEmail = 'unknown') {
     for (const [k, v] of Object.entries(u.set)) if (!ALLOWED[k] || !ALLOWED[k](v)) return { status: 400, body: { success: false, error: `“${k}” can’t be changed here` } };
   }
   const { DB } = env;
-  const rows = (await DB.prepare(`SELECT slug, data FROM team WHERE slug IN (${updates.map(() => '?').join(', ')})`).bind(...updates.map((u) => u.slug)).all()).results || [];
-  const bySlug = new Map(rows.map((r) => [r.slug, JSON.parse(r.data)]));
-  const missing = updates.filter((u) => !bySlug.has(u.slug)).map((u) => u.slug);
-  if (missing.length) return { status: 409, body: { success: false, error: `Not found (deleted meanwhile?): ${missing.join(', ')}` } };
-
-  const now = new Date().toISOString();
-  const stmts = [];
-  const changed = [];
-  for (const u of updates) {
-    const before = bySlug.get(u.slug);
-    const after = { ...before };
-    for (const [k, v] of Object.entries(u.set)) { if (v === false || v === null) delete after[k]; else after[k] = v; }
-    if (JSON.stringify(before) === JSON.stringify(after)) continue;
-    const [cols, vals] = EXTRACTORS.team(after);
-    const all = ['"slug"', '"data"', '"updated_at"', ...cols];
-    stmts.push(DB.prepare(`INSERT OR REPLACE INTO team (${all.join(', ')}) VALUES (${all.map(() => '?').join(', ')})`).bind(u.slug, JSON.stringify(after), now, ...vals));
-    changed.push({ slug: u.slug, before, after });
+  await ensureHistory(DB);
+  const read = async (list) => new Map(((await DB.prepare(`SELECT slug, data FROM team WHERE slug IN (${list.map(() => '?').join(', ')})`).bind(...list.map((u) => u.slug)).all()).results || []).map((r) => [r.slug, r.data]));
+  const first = await read(updates);
+  const missing = updates.filter((u) => !first.has(u.slug)).map((u) => u.slug);
+  if (missing.length) return { status: 409, body: { success: false, error: `${missing.join(', ')} ${missing.length === 1 ? 'isn’t' : 'aren’t'} on People any more (renamed or deleted since this list was read), so nothing was saved. Look again.` } };
+  // Someone whose web address is changing right now (a rename holds it), or who's being deleted: nothing is saved over
+  // what the rename has just read, said in words (Board QA round 8: the framing saved during a rename was undone by it)
+  const { whyHeld } = await import('./_advisory-add.js');
+  const held = (await whyHeld(DB, updates.map((u) => u.slug))).filter((h) => h.by === 'people' || h.by === 'deleting');
+  if (held.length) {
+    const deleting = held.every((h) => h.by === 'deleting');
+    const names = held.map((h) => { try { return getEntityName(JSON.parse(first.get(h.slug)), 'team') || h.slug; } catch { return h.slug; } });
+    const who = names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    const what = deleting ? `${who} ${held.length === 1 ? 'is' : 'are'} being deleted on People right now` : held.length === 1 ? `${who}’s web address is changing right now` : `The web addresses of ${who} are changing right now`;
+    return { status: 409, body: { success: false, error: `${what}, so nothing was saved. Try again in a moment.`, notSaved: held.map((h) => h.slug) } };
   }
-  if (stmts.length) await DB.batch(stmts);
+
+  // Each written only over its record as read (one UPDATE … WHERE data = what was read): a record renamed or deleted
+  // meanwhile is never brought back as a second person (Board QA round 7: a photo framing saved during a rename put the
+  // old record back beside the new one), and one saved meanwhile by someone else is read again and changed as it is now
+  const now = new Date().toISOString();
+  const changed = [];
+  const gone = [];
+  let todo = updates;
+  let rows = first;
+  for (let attempt = 0; attempt < 3 && todo.length; attempt++) {
+    if (attempt) rows = await read(todo);
+    const tries = [];
+    for (const u of todo) {
+      const raw = rows.get(u.slug);
+      if (raw == null) { gone.push(u.slug); continue; }
+      const before = JSON.parse(raw);
+      const after = { ...before };
+      for (const [k, v] of Object.entries(u.set)) { if (v === false || v === null) delete after[k]; else after[k] = v; }
+      if (JSON.stringify(before) === JSON.stringify(after)) continue;
+      const [cols, vals] = EXTRACTORS.team(after);
+      const sets = ['"data" = ?', '"updated_at" = ?', ...cols.map((c) => `${c} = ?`)];
+      // (its saved version in the same write, only if the record took it: a rename moving History never leaves it behind)
+      const versions = await versionStatements(DB, { collection: 'team', slug: u.slug, data: after, previous: before, userEmail, now, table: 'team' });
+      tries.push({ u, before, after, stmts: [DB.prepare(`UPDATE team SET ${sets.join(', ')} WHERE slug = ? AND data = ?`).bind(JSON.stringify(after), now, ...vals, u.slug, raw), ...versions] });
+    }
+    const results = tries.length ? await DB.batch(tries.flatMap((t) => t.stmts)) : [];
+    todo = [];
+    let at = 0;
+    tries.forEach((t) => { const r = results[at]; at += t.stmts.length; if ((r?.meta?.changes ?? 0) > 0) changed.push({ slug: t.u.slug, before: t.before, after: t.after }); else todo.push(t.u); });
+  }
+  const unsaved = [...gone, ...todo.map((u) => u.slug)];
   const shas = {};
   for (const c of changed) {
     shas[c.slug] = await generateSha(JSON.stringify(c.after));
     await logAudit(DB, { userEmail, action: 'updated', entityType: 'team', entitySlug: c.slug, entityName: getEntityName(c.after, 'team'), changes: diffJson(c.before, c.after), path: `src/content/team/${c.slug}.json` });
-    try { await recordVersion(DB, { collection: 'team', slug: c.slug, data: c.after, previous: c.before, userEmail, now }); } catch {}
+    await pruneHistory(DB, 'team', c.slug).catch(() => {});
+  }
+  if (unsaved.length) {
+    // (by the names they had as read: their records may be gone)
+    const names = unsaved.map((s) => { try { return getEntityName(JSON.parse(first.get(s)), 'team') || s; } catch { return s; } });
+    const who = names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    const why = gone.length === unsaved.length ? `${unsaved.length === 1 ? 'was' : 'were'} renamed or deleted on People since this list was read` : 'changed on People while this was saving';
+    return { status: 409, body: { success: false, error: `${who} ${why}, so ${unsaved.length === 1 ? 'their photo change wasn’t' : 'their photo changes weren’t'} saved${changed.length ? ' (everyone else’s were)' : ''}. Look again.`, changed: changed.map((c) => c.slug), notSaved: unsaved, shas } };
   }
   return { status: 200, body: { success: true, changed: changed.map((c) => c.slug), shas } };
 }

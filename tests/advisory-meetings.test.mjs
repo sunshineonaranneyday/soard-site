@@ -303,7 +303,7 @@ test('something that wasn’t written for a person never reaches them', async ()
   const realPrepare = env.DB.prepare.bind(env.DB);
   const { meeting: m } = await createAdvisoryMeeting(env, { date: FUTURE }, { now: NOW });
   const w = await lead();
-  env.DB.prepare = (sql) => { if (/^(INSERT OR REPLACE INTO advisory_meetings)/.test(sql)) throw new Error('D1_ERROR: answered 503 SQLITE_BUSY'); return realPrepare(sql); };
+  env.DB.prepare = (sql) => { if (/^(INSERT OR REPLACE INTO advisory_meetings|UPDATE advisory_meetings SET date = \?, data = \?, updated_at = \?, updated_by = \? WHERE id = \? AND updated_at IS \?)/.test(sql)) throw new Error('D1_ERROR: answered 503 SQLITE_BUSY'); return realPrepare(sql); }; /* r21: a save is now written only over the meeting as read (an UPDATE), so the fault is put on that statement too */
   const res = await meetingAction(ctx({}), { action: 'save-meeting', body: { meeting: m }, by: 'x', w });
   env.DB.prepare = realPrepare;
   assert.equal(res.status, 500);

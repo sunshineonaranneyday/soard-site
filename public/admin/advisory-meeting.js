@@ -16,7 +16,7 @@
 
 import { h, htm, useState, useEffect, useRef, useMemo } from './vendor.js';
 import { viewerLink, sizeText } from './file-viewer.js';
-import { longDate, shortDate, timeRange, todayEastern, isDate, uid, mergeMeeting, cleanMeeting } from './board-shared.js';
+import { longDate, shortDate, timeRange, todayEastern, isDate, uid, mergeMeeting, cleanMeeting, followAddresses } from './board-shared.js';
 
 const html = htm.bind(h);
 const fileUrl = (f) => `/api/advisory-file?id=${encodeURIComponent(f.id)}`;
@@ -151,14 +151,16 @@ function Editor({ from, data, call, reload, onBack }) {
         const next = { ...mine, ...merged, recap: mine.recap !== base.current.recap ? mine.recap : j.current.recap };
         j = await call({ action: 'save-meeting', meeting: editable(next), base: j.current.updatedAt });
         if (j.ok) {
-          setM((cur) => ({ ...cur, sections: next.sections, ...serverPart(j.meeting) }));
+          setM((cur) => ({ ...cur, sections: followAddresses({ sections: next.sections }, j.meeting.addressesNow).sections, ...serverPart(j.meeting) }));
           setNote(clashes.length ? `Someone else saved at the same time. Yours was kept for ${clashes.join(', ')}.` : 'Someone else saved at the same time, and both sets of changes are in.');
         }
       }
       saving.current = null;
       if (j.ok) {
         base.current = j.meeting;
-        setM((cur) => ({ ...cur, ...serverPart(j.meeting) }));
+        // (someone renamed on People named here at an address they've left: at their new one, as the site saved it,
+        // functions/api/_board.js addressesNow; typed since is kept)
+        setM((cur) => ({ ...cur, ...serverPart(j.meeting), ...(j.meeting.addressesNow ? { sections: followAddresses({ sections: cur.sections }, j.meeting.addressesNow).sections } : {}) }));
         setSave({ s: 'saved', error: '' });
         if (dirty.current) return flush();
         dropDraft(mine.id);

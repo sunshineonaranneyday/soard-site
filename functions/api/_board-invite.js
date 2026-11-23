@@ -27,9 +27,9 @@
  */
 
 import { accessToken, eventIdFor, parseServiceAccount } from './_google-calendar.js';
-import { boardAdmins, activeBoard, peopleRows, readSettings, readState, writeState, normEmail } from './_board-roles.js';
-import { getMeeting, listMeetings, patchMeeting, inviteNotes, inviteTitle, NOTES_START, OLD_NOTES_STARTS } from './_board.js';
-import { meetingName, timeRange, longDate, todayEastern, isDate } from '../../public/admin/board-shared.js';
+import { boardAdmins, activeBoard, peopleRows, readSettings, readState, writeState, normEmail, asSend, PEOPLE_DOWN, UNREAD_WARN_MS } from './_board-roles.js';
+import { getMeeting, listMeetings, patchMeeting, setOnMeeting, deleteMeeting, inviteNotes, inviteTitle, NOTES_START, OLD_NOTES_STARTS } from './_board.js';
+import { meetingName, timeRange, longDate, todayEastern, isDate, meetingHeld, inviteIsRecord, noInviteFor } from '../../public/admin/board-shared.js';
 import { isEmail, alertAdmins, slackResolved } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
 import { readConfig } from './_broadcast.js';
@@ -151,16 +151,79 @@ export async function meetReady(token, path, ev, fetchImpl) {
   return ev;
 }
 
+/** When an invite went, in words: "a moment ago", "12 minutes ago", "on Nov 12" */
+const sentWords = (iso, now) => {
+  const ms = now - Date.parse(iso || '');
+  if (!Number.isFinite(ms)) return '';
+  const n = Math.floor(ms / 60000);
+  if (n < 1) return 'a moment ago';
+  if (n < 60) return n === 1 ? 'a minute ago' : `${n} minutes ago`;
+  return `on ${longDate(easternParts(iso)?.date || String(iso).slice(0, 10)).replace(/^\w+, /, '').replace(/, \d{4}$/, '')}`;
+};
+
 /**
  * Send the meeting's invite, or bring the one it has (Board's, or the
  * organizer's own from the calendar) up to date: guests, Meet, the place,
  * and for Board's own invite the day and time. → the meeting
+ * Google emails the guests only for a real change: someone new on it, its day, time or place, its Meet link, or one
+ * coming back from cancelled. Its name or notes alone change quietly. `press`: a person pressed Send the invite; with
+ * nothing to change on an invite already out (a second tab that never heard it went), nobody is emailed again and
+ * they're told (409, `already`). Never for a meeting held whose invite is a record, nor a new one for a meeting held,
+ * nor one kept off the board page (noInviteFor), nor one being deleted; one deleted while Google was answering has its
+ * invite taken back off the calendar (404, `gone`). One send of a meeting's invite at a time (claimInvite): another
+ * (two tabs, both founders, a press while the heartbeat sends the same change) is refused before anything is read
+ * (409, `sending`), so Google emails the guests once
  */
-export async function sendInvite(env, id, { fetchImpl = fetch, now = Date.now(), by = '', quiet = false } = {}) {
+export async function sendInvite(env, id, { fetchImpl = fetch, now = Date.now(), by = '', quiet = false, press = false } = {}) {
   if (!env.GOOGLE_CALENDAR_KEY) throw Object.assign(new Error('Google Calendar isn’t set up (GOOGLE_CALENDAR_KEY)'), { status: 503 });
+  const mark = await claimInvite(env.DB, id, { now, by });
+  if (!mark) throw Object.assign(new Error(await busyWords(env.DB, id)), { status: 409, extra: { sending: true } });
+  try {
+    return await sendClaimed(env, id, { fetchImpl, now, quiet, press });
+  } catch (err) {
+    // (People not answering: nothing went to Google, said as nothing sent: Board QA round 10)
+    throw asSend(err);
+  } finally {
+    await letGoOf(env.DB, id, mark);
+  }
+}
+
+/** A send of a meeting's invite that never finished (the page closed, the Worker stopped) lets the next one go after this */
+const INVITE_HOLD_MS = 2 * 60 * 1000;
+const sendingKey = (id) => `board-invite-sending:${id}`;
+/** Sent by itself (the heartbeat, the hourly put-back, the year's invites) rather than by a person's press */
+const byBoard = (by) => !by || by === 'Board';
+/**
+ * The meeting's invite claimed for this send alone, as the board's emails are (./_board.js sendOnce): taken before
+ * anything is read, so a second send waits for the first's answer and reads the meeting as it left it. → the claim's
+ * own mark (only it is let go of), or '' while another send has it. A claim older than two minutes is taken over
+ */
+async function claimInvite(DB, id, { now, by }) {
+  await readState(DB, sendingKey(id)); // (makes the table)
+  const mark = JSON.stringify({ by: byBoard(by) ? 'Board' : String(by), n: crypto.randomUUID() });
+  const r = await DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at WHERE board_state.updated_at < ?')
+    .bind(sendingKey(id), mark, new Date(now).toISOString(), new Date(now - INVITE_HOLD_MS).toISOString()).run();
+  return (r?.meta?.changes ?? r?.changes ?? 0) > 0 ? mark : '';
+}
+/** Let go of this send's claim (never another's that took over a stale one): a claim that won't come off expires */
+async function letGoOf(DB, id, mark) {
+  await DB.prepare('DELETE FROM board_state WHERE key = ? AND data = ?').bind(sendingKey(id), mark).run().catch((err) => console.error('[board-invite] send claim', err.message));
+}
+/** What a press is told while another send of the same invite is under way */
+async function busyWords(DB, id) {
+  const other = (await readState(DB, sendingKey(id)).catch(() => ({}))).by;
+  const from = !other ? 'from another tab or from Board' : byBoard(other) ? 'from Board by itself' : 'from another tab';
+  return `This meeting’s invite is going out ${from} right now. Look again in a moment.`;
+}
+
+async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
   if (!m.date) throw Object.assign(new Error('Give the meeting a date first'), { status: 400 });
+  // (a tab left open on a meeting since held, or a request made by hand: read after the claim, so a send that finished a
+  // moment ago is seen)
+  const why = noInviteFor(m, now);
+  if (why) throw Object.assign(new Error(why), { status: 409 });
   // Board's invite (sent before, or new), from whoever it came from
   const organizer = m.invite?.organizer || await organizerFor(env.DB);
   if (!organizer) throw Object.assign(new Error('No one to send it from: add yourself in Board → Members'), { status: 409 });
@@ -168,7 +231,15 @@ export async function sendInvite(env, id, { fetchImpl = fetch, now = Date.now(),
   const cal = `/calendars/${encodeURIComponent(organizer)}/events`;
   const eventId = m.invite?.eventId || eventIdFor('board', m.id);
   const prior = m.invite;
-  const guests = await guestsFor(env.DB);
+  // A meeting held (moved to a day gone by, its invite on its way there) keeps the board of its day: nobody comes on or
+  // off it (Board QA round 5). One still to be held follows People → Board in the same send, as the heartbeat's follow
+  // would (followOf), or someone who left would stay on it for good, looking like a guest added by hand
+  const held = meetingHeld(m, now);
+  // Who is on the board and who runs Board, read for certain before Google is asked anything: one that didn't answer
+  // throws (./_board-roles.js), so nothing is sent, never an invite to nobody nor its answers wiped (Board QA round 10)
+  const [everyone, guests, admins] = await Promise.all([activeBoard(env.DB), held ? [] : guestsFor(env.DB), boardAdmins(env.DB)]);
+  const board = everyone.map((p) => ({ slug: p.slug, email: normEmail(p.email) })).filter((p) => isEmail(p.email));
+  const runs = new Set(admins.map(normEmail));
   let existing = null;
   try { existing = await gcal(token, 'GET', `${cal}/${encodeURIComponent(eventId)}`, null, fetchImpl); } catch (err) { if (err.status !== 404 && err.status !== 410) throw err; }
   // Google Meet is every board meeting's call (Peter, Nov 2 2026): a Teams or Zoom call on the organizer's event comes
@@ -183,17 +254,46 @@ export async function sendInvite(env, id, { fetchImpl = fetch, now = Date.now(),
   // Board made the event, so its notes are all Board's; on the organizer's own event (taken from their calendar before
   // Nov 2 2026), their words stay above Board's
   const ours = eventId === eventIdFor('board', m.id);
-  const have = new Set((existing?.attendees || []).map((a) => normEmail(a.email)));
+  // Who Board put on and isn't on the board now (left, or a new address): off it, unless that's over half of them at
+  // once (a bad read: nothing comes off, and the follow says so)
+  const plan = prior && !held ? followOf(prior, board) : { add: [], drop: [] };
+  const off = plan.drop.length && plan.drop.length <= Object.keys(prior?.who || {}).length / 2 ? new Set(plan.drop) : new Set();
+  // ...and whoever Board put on as running Board (Settings → Who runs Board) and doesn't now, unless they're on the board
+  // (Board QA round 6: taken off Who runs Board, they kept every invite and its Meet link)
+  if (!held) for (const e of adminsOff(prior, runs, board)) off.add(e);
+  const kept = (existing?.attendees || []).filter((a) => !off.has(normEmail(a.email)));
+  const have = new Set(kept.map((a) => normEmail(a.email)));
   const added = guests.filter((e) => !have.has(e) && e !== organizer);
-  const attendees = [...(existing?.attendees || []), ...added.map((email) => ({ email }))];
-  // Only the agenda changed and nobody's new: the invite's notes change without Google emailing the board
-  const send = quiet && existing && !added.length ? 'none' : 'all';
+  const attendees = [...kept, ...added.map((email) => ({ email }))];
   const notes = ours ? inviteNotes(m) : withNotes(withoutCall(existing?.description), inviteNotes(m));
   const place = placeOf(m);
   // Its name says which meeting and how to come, on the organizer's own event too (Peter, Nov 2 2026)
   const title = inviteTitle(m);
   // A Teams or Zoom link written as the place: Google Meet is the call now, so the place is the place (or nothing)
   const callAsPlace = !existing?.hangoutLink && CALL_LINK.test(String(existing?.location || '').trim());
+  // What the guests would be emailed about, against the event as Google has it now: someone new on it, its day or time,
+  // its place, the Meet link it's getting, or its coming back from cancelled. Its name and notes alone aren't one
+  const want = times(m);
+  const live = existing && existing.status !== 'cancelled';
+  const loud = !live || added.length > 0 || off.size > 0 || !existing.hangoutLink || slotOf(existing.start) !== slotOf(want.start) || slotOf(existing.end) !== slotOf(want.end)
+    || (place ? String(existing.location || '') !== place : callAsPlace);
+  // A person pressing it for an invite that's out with everything as it is now (the event as Google has it, and its name
+  // and notes as Board last put them there): nothing goes, and they're told
+  if (press && prior?.sentAt && !loud && notesKey(m) === prior.notes) {
+    // Everything on it as it is now (made in Google by hand, say): Board's record of the invite says so too, and a change
+    // waiting to go onto it is done, so the heartbeat never tries it again nor tells the staff it can't (Board QA round 7)
+    if (prior.place !== (place || existing?.location || '') || prior.when !== whenOf(m)) {
+      await setOnMeeting(env.DB, id, { invite: { ...prior, place: place || existing?.location || '', location: existing?.location || '', when: whenOf(m), updatedAt: new Date(now).toISOString() } });
+    }
+    await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(pendingKey(id)).run().catch((err) => console.error('[board-invite] pending', err.message));
+    // (a change the staff were told couldn't reach it has, so they hear it did)
+    await sayChangeReached(env, id, `The change to ${inviteTitle(m)} is on its calendar invite now`);
+    const when = sentWords(prior.sentAt, now);
+    throw Object.assign(new Error(`The invite is already out${when ? ` (sent ${when})` : ''}, with everything as it is now, so nobody was emailed again.`), { status: 409, extra: { already: true } });
+  }
+  // Only the name or notes changed and nobody's new: the invite changes without Google emailing the board
+  // (someone coming off hears from Google, as with the follow: only they're told when nothing else changed)
+  const send = existing && (quiet ? !added.length && !off.size : !loud) ? 'none' : 'all';
   // The day, time and place are Board's, on the organizer's own event too (an event's own place stays while Board has none)
   const body = {
     attendees,
@@ -204,6 +304,8 @@ export async function sendInvite(env, id, { fetchImpl = fetch, now = Date.now(),
     ...(notes !== (existing?.description || '') ? { description: notes } : {}),
     guestsCanSeeOtherGuests: true,
   };
+  // A meeting being deleted gets nothing (deleteWithInvite): looked at last thing before Google emails anyone
+  if (await beingDeleted(env.DB, id, now)) throw Object.assign(new Error(BEING_DELETED), { status: 409 });
   // A deleted event keeps its id at Google (as cancelled): it's brought back, never made again
   const ev = await meetReady(token, `${cal}/${encodeURIComponent(eventId)}`, existing
     ? await gcal(token, 'PATCH', `${cal}/${encodeURIComponent(eventId)}?conferenceDataVersion=1&sendUpdates=${send}`, existing.status === 'cancelled' ? { status: 'confirmed', ...times(m), summary: title, ...body } : body, fetchImpl)
@@ -212,29 +314,118 @@ export async function sendInvite(env, id, { fetchImpl = fetch, now = Date.now(),
   const at = new Date(now).toISOString();
   // Who's on it now and how they answered, by board member, as Google has it: someone just added is invited at once,
   // not only once the calendar is next read (up to an hour)
-  const bySlug = Object.fromEntries((await activeBoard(env.DB)).filter((p) => p.email).map((p) => [normEmail(p.email), p.slug]));
+  const bySlug = Object.fromEntries(board.map((p) => [p.email, p.slug]));
   const replies = {};
   for (const a of ev.attendees || attendees) {
     const slug = bySlug[normEmail(a.email)];
     if (slug) replies[slug] = ['accepted', 'declined', 'tentative'].includes(a.responseStatus) ? a.responseStatus : 'invited';
   }
   const on = new Set((ev.attendees || attendees).map((a) => normEmail(a.email)));
-  const who = Object.fromEntries(Object.entries(bySlug).filter(([e]) => on.has(e)).map(([e, slug]) => [slug, e]));
+  // Board's own on it: the board on it now, and anyone Board put on who's still there (one held, a bad read held back,
+  // keeps their place in it, so the follow can take them off once it may)
+  const who = {
+    ...Object.fromEntries(Object.entries(prior?.who || {}).filter(([, e]) => on.has(e))),
+    ...Object.fromEntries(Object.entries(bySlug).filter(([e]) => on.has(e)).map(([e, slug]) => [slug, e])),
+  };
   const invite = {
     eventId: ev.id || eventId, organizer, sentAt: prior?.sentAt || at, updatedAt: at, meet, guests: (ev.attendees || attendees).length,
     emails: (ev.attendees || attendees).map((a) => normEmail(a.email)), place: place || ev.location || '', location: ev.location || '', when: whenOf(m), notes: notesKey(m),
     replies, who,
+    // (who's on it as running Board: only they come off it once they don't, never a guest added by hand)
+    admins: held ? (prior?.admins || []) : [...runs].filter((e) => on.has(e)),
   };
-  // Google Meet is the meeting's video call from now on (onto the meeting as it is now: a save made meanwhile stays)
-  return patchMeeting(env.DB, id, (cur) => ({ ...cur, invite, inviteGone: '', video: meet || cur.video }));
+  // Google Meet is the meeting's video call from now on. Onto the meeting as it is now, in one write (setOnMeeting): a
+  // save made meanwhile stays, and the invite that went is never lost to one
+  const saved = await setOnMeeting(env.DB, id, { invite, inviteGone: '', ...(meet ? { video: meet } : {}) });
+  if (saved) {
+    // (the staff, told a change couldn't reach it: it has now, however it went)
+    await sayChangeReached(env, id, `The change to ${inviteTitle(saved)} is on its calendar invite now`);
+    return saved;
+  }
+  // Deleted while Google was answering (another tab, the other admin): the invite it just sent comes back off the
+  // calendar, and Google tells everyone on it, so nobody keeps a meeting that isn't there
+  await takeBack(env, { ...m, invite }, { fetchImpl, now });
+  throw Object.assign(new Error('This meeting was deleted while its invite was going out, so Board took the invite back off the calendar and Google told everyone on it.'), { status: 404, extra: { gone: true } });
 }
 
 /**
- * A meeting deleted in Board: its invite comes off the calendar, and Google tells everyone on it. Nothing for a
- * meeting already held (its invite is a record) or never invited. → whether an invite was cancelled
+ * Why a meeting gets no calendar invite, and no change to the one it has ('' when it can): a new one for a meeting
+ * already held (./board-shared.js meetingHeld: its day gone by, the chair ended it, or on its day its minutes are in or
+ * its end time has passed); a change to one that's a record (inviteIsRecord: the meeting held, and the invite's own
+ * slot held too); one kept off the board page (notBoard: a coffee, another organization's board), which isn't the
+ * board's to be invited to. An invite still ahead of a meeting held (moved to a day gone by) is live: it goes with the
+ * meeting to its day, and Google emails the guests (Board QA round 4, Nov 21 2026)
+ */
+// (the one rule, in the module Board's editor imports too, so it never offers what the site refuses)
+export { noInviteFor };
+
+const BEING_DELETED = 'This meeting is being deleted, so its invite didn’t go.';
+const deletingKey = (id) => `board-deleting:${id}`;
+/** A delete under way (deleteWithInvite's mark, for as long as Google might take): two minutes at most, should it never finish */
+async function beingDeleted(DB, id, now) {
+  const row = await DB.prepare('SELECT updated_at FROM board_state WHERE key = ?').bind(deletingKey(id)).first().catch(() => null);
+  return !!row && now - Date.parse(row.updated_at) < 2 * 60 * 1000;
+}
+
+/**
+ * An invite whose meeting was deleted, off the calendar. Should Google refuse, the staff hear of it: it can't stay there
+ * unsaid → whether it was cancelled (cancelInvite)
+ */
+async function takeBack(env, m, { fetchImpl, now }) {
+  try {
+    return await cancelInvite(env, m, { fetchImpl, now });
+  } catch (err) {
+    console.error('[board-invite] taking back', m.id, err.message);
+    await sayInviteProblem(env, `orphan:${m.invite.eventId}`, {
+      title: 'A deleted board meeting’s invite is still on the calendar',
+      detail: `The meeting on ${m.date} was deleted while its invite was going out, and Google didn’t take the invite back off: ${String(err.message).replace(/\S+@\S+/g, '…').slice(0, 200)}`,
+      fix: `Delete “${inviteTitle(m)}” from the organizer’s Google Calendar, and say yes to emailing the guests.`,
+    });
+    throw Object.assign(new Error(`This meeting was deleted while its invite was going out, and Google didn’t take the invite back off the calendar. Delete “${inviteTitle(m)}” from the organizer’s Google Calendar, and say yes to emailing the guests.`), { status: 502 });
+  }
+}
+
+/**
+ * A meeting deleted in Board, and its invite off the board's calendars (Google tells everyone on it). Marked as being
+ * deleted first, so an invite pressed meanwhile doesn't go (sendInvite); then its invite cancelled from the meeting as
+ * read (should Google refuse, nothing is deleted), and the meeting deleted in one statement that says what it had as it
+ * went: an invite recorded in between (Send the invite landing a moment before) comes off the calendar too. An invite
+ * whose Google write lands after the meeting has gone takes itself back (sendInvite). Nothing someone writes meanwhile
+ * stops it. → { meeting: the meeting deleted (null: gone already), cancelled }
+ */
+export async function deleteWithInvite(env, id, { fetchImpl = fetch, now = Date.now() } = {}) {
+  await readState(env.DB, deletingKey(id)); // (makes the table)
+  await env.DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at')
+    .bind(deletingKey(id), '{}', new Date(now).toISOString()).run();
+  try {
+    const m = await getMeeting(env.DB, id);
+    if (!m) return { meeting: null, cancelled: false };
+    let cancelled = await cancelInvite(env, m, { fetchImpl, now });
+    const last = await deleteMeeting(env, id);
+    // (written since it was read, with an invite: that one too, whatever it is now; Google answers a second cancel of
+    // the same event as gone)
+    if (last?.invite?.eventId && (last.updatedAt !== m.updatedAt || !cancelled)) {
+      if (await takeBack(env, { ...m, ...last, id }, { fetchImpl, now }).catch(() => false)) cancelled = true;
+    }
+    // (a change still waiting for its invite has nothing to go onto now: it goes, and the staff told it couldn't reach it
+    // hear the meeting was deleted, never asked to press Send the invite on a meeting that isn't there)
+    await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(pendingKey(id)).run().catch((err) => console.error('[board-invite] delete pending', err.message));
+    await sayChangeReached(env, id, `${inviteTitle(last || m)} was deleted, so nothing is left to go onto its invite`);
+    return { meeting: last || m, cancelled };
+  } finally {
+    await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(deletingKey(id)).run().catch((err) => console.error('[board-invite] delete mark', err.message));
+  }
+}
+
+/**
+ * A meeting deleted in Board: its invite comes off the calendar, and Google tells everyone on it. Nothing for one never
+ * invited, or one whose invite is a record (./board-shared.js inviteIsRecord: the meeting held, and the invite's own day
+ * and time held too). A meeting moved to a day gone by whose invite is still ahead has it cancelled: it would stay on
+ * the board's calendars for good. The Advisory Board's meetings (./_advisory-meetings.js) keep their invite the same way
+ * (eventId, organizer, when), and go by the same rule. → whether an invite was cancelled
  */
 export async function cancelInvite(env, m, { fetchImpl = fetch, now = Date.now() } = {}) {
-  if (!m?.invite?.eventId || !m.invite.organizer || m.practice || !m.date || m.date < todayEastern(now)) return false;
+  if (!m?.invite?.eventId || !m.invite.organizer || m.practice || !isDate(m.date) || inviteIsRecord(m, now)) return false;
   if (!env.GOOGLE_CALENDAR_KEY) throw Object.assign(new Error('Google Calendar isn’t set up (GOOGLE_CALENDAR_KEY), so its invite can’t come off the calendar'), { status: 503 });
   const token = await accessToken(env, m.invite.organizer, { fetchImpl, now });
   try {
@@ -246,10 +437,48 @@ export async function cancelInvite(env, m, { fetchImpl = fetch, now = Date.now()
 }
 
 const SETTLE_MS = 2 * 60 * 1000;
+// Each meeting's change waiting to go onto its invite, in a row of its own (`invite-pending:<id>`): two meetings saved
+// at the same moment never write over each other's (Board QA round 5, Nov 21 2026). Before then they were all one row,
+// `invite-pending`, which the heartbeat moves into rows of their own (movePendingOver)
 const PENDING = 'invite-pending';
-/** What changed since the invite went out: its place, its day or time, or its name and notes; '' when nothing (or once it's held) */
-const changeOf = (m) => {
-  if (!m?.invite?.eventId || !m.date || m.date < todayEastern()) return '';
+const pendingKey = (id) => `${PENDING}:${id}`;
+const parseState = (x) => { try { return JSON.parse(x || '{}') || {}; } catch { return {}; } };
+/** Every change waiting to go onto its invite: { meetingId: { key, at, tries?, failedSince?, retryAt? } } */
+export async function pendingInvites(DB) {
+  await readState(DB, PENDING); // (makes the table)
+  const rows = (await DB.prepare("SELECT key, data FROM board_state WHERE key >= 'invite-pending:' AND key < 'invite-pending;'").all()).results || [];
+  return Object.fromEntries(rows.map((r) => [r.key.slice(PENDING.length + 1), parseState(r.data)]));
+}
+/** A waiting change gone (sent, or nothing left to send), only if it's still the one read: one noted meanwhile stays */
+const dropPending = (DB, id, was) => DB.prepare('DELETE FROM board_state WHERE key = ? AND data = ?').bind(pendingKey(id), JSON.stringify(was)).run();
+/** A waiting change's tries written onto it, only if it's still the one read */
+const retryPending = (DB, id, was, next) => DB.prepare('UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?')
+  .bind(JSON.stringify(next), new Date().toISOString(), pendingKey(id), JSON.stringify(was)).run();
+/** One noted, unless one is waiting already */
+const addPending = (DB, id, entry) => DB.prepare('INSERT OR IGNORE INTO board_state (key, data, updated_at) VALUES (?, ?, ?)').bind(pendingKey(id), JSON.stringify(entry), new Date().toISOString()).run();
+/** The one row of before Nov 21 2026, into a row each (one written meanwhile by a page still on the old code: next beat) */
+async function movePendingOver(DB) {
+  const row = await DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(PENDING).first();
+  if (!row) return;
+  for (const [id, p] of Object.entries(parseState(row.data))) if (p?.key) await addPending(DB, id, p);
+  await DB.prepare('DELETE FROM board_state WHERE key = ? AND data = ?').bind(PENDING, row.data).run();
+}
+
+// The staff were told a meeting's change couldn't reach its invite (`invite-told:<id>`): whatever gets it there after
+// (the heartbeat, a press of Send the invite, a later save that goes), or its having nothing left to send, says so in the
+// same post (Board QA round 5)
+const toldKey = (id) => `invite-told:${id}`;
+async function sayChangeReached(env, id, what) {
+  try {
+    const told = await readState(env.DB, toldKey(id));
+    if (!told.at) return;
+    await sayInviteFixed(env, `refresh:${id}`, what);
+    await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(toldKey(id)).run();
+  } catch (err) { console.error('[board-invite] told', err.message); }
+}
+/** What changed since the invite went out: its place, its day or time, or its name and notes; '' when nothing (or once it's a record: noInviteFor) */
+const changeOf = (m, now = Date.now()) => {
+  if (!m?.invite?.eventId || noInviteFor(m, now)) return '';
   const loud = loudChange(m);
   const notes = notesKey(m) !== m.invite.notes ? notesKey(m) : '';
   return loud || notes ? `${loud}|${notes}` : '';
@@ -269,43 +498,92 @@ const loudChange = (m) => {
  */
 export async function noteInviteChange(env, m, { now = Date.now() } = {}) {
   try {
-    const key = changeOf(m);
-    const pending = await readState(env.DB, PENDING);
+    const key = changeOf(m, now);
+    const was = await readState(env.DB, pendingKey(m.id));
     if (!key) {
-      if (pending[m.id]) { delete pending[m.id]; await writeState(env.DB, PENDING, pending); }
+      // (undone, or now a record: nothing left to send, and the staff told it couldn't go hear so: Board QA round 6)
+      if (was.key) {
+        await dropPending(env.DB, m.id, was);
+        await sayChangeReached(env, m.id, `Nothing is left to go onto the invite of ${inviteTitle(m)}`);
+      }
       return;
     }
-    if (pending[m.id]?.key === key) return;
-    await writeState(env.DB, PENDING, { ...pending, [m.id]: { key, at: new Date(now).toISOString() } });
+    if (was.key === key) return;
+    await writeState(env.DB, pendingKey(m.id), { key, at: new Date(now).toISOString() });
   } catch (err) {
     console.error('[board-invite] note', err.message);
   }
 }
 
-/** The heartbeat: each change that has settled, onto its invite. → the meeting ids updated. Never throws. */
+/**
+ * The heartbeat: each change that has settled, onto its invite. One whose invite is being sent right now (a press, from
+ * another tab) is left for the next beat, by when it has gone or is still to go. One Google turned away stays to go
+ * again, a while later each time (5 minutes, half an hour, 2 hours, then every 6), and after a day of it the staff hear,
+ * once: a new place or day never stays off the board's calendars unsaid. → the meeting ids updated. Never throws.
+ */
 export async function maybeRefreshInvites(env, { fetchImpl = fetch, now = Date.now() } = {}) {
   try {
     if (!env.DB || !env.GOOGLE_CALENDAR_KEY) return [];
     const reworded = await rewordInvites(env, { fetchImpl, now });
-    const due = Object.entries(await readState(env.DB, PENDING)).filter(([, p]) => now - Date.parse(p.at) >= SETTLE_MS);
+    await movePendingOver(env.DB);
+    await noteMovedBack(env, now);
+    const due = Object.entries(await pendingInvites(env.DB)).filter(([, p]) => p.key && now - Date.parse(p.at) >= SETTLE_MS && !(p.retryAt && now < Date.parse(p.retryAt)));
     if (!due.length) return reworded;
     const sent = [...reworded];
-    for (const [id] of due) {
+    for (const [id, p] of due) {
+      let m = null;
       try {
-        const m = await getMeeting(env.DB, id);
-        if (changeOf(m)) { await sendInvite(env, id, { fetchImpl, now, quiet: !loudChange(m) }); sent.push(id); }
+        m = await getMeeting(env.DB, id);
+        if (changeOf(m, now)) { await sendInvite(env, id, { fetchImpl, now, quiet: !loudChange(m) }); sent.push(id); }
+        else await sayChangeReached(env, id, `Nothing is left to go onto the invite of ${m ? inviteTitle(m) : 'a board meeting since deleted'}`);
+        await dropPending(env.DB, id, p);
       } catch (err) {
+        // (being sent right now, from a tab or by Board: left as it is for the next beat. People not answering: the
+        // same, never counted as Google turning it away: the follow and the calendar look say so when it lasts)
+        if (err.extra?.sending || err.unread) continue;
         console.error('[board-invite]', id, err.message);
+        // Still something to send: it goes again later. A meeting deleted, kept off the board page, or now a record has nothing
+        const cur = await getMeeting(env.DB, id).catch(() => m);
+        if (!cur || !changeOf(cur, now)) {
+          await dropPending(env.DB, id, p);
+          await sayChangeReached(env, id, `Nothing is left to go onto the invite of ${cur ? inviteTitle(cur) : 'a board meeting since deleted'}`);
+          continue;
+        }
+        const tries = (p.tries || 0) + 1;
+        const since = p.failedSince || new Date(now).toISOString();
+        if (now - Date.parse(since) >= TELL_AFTER_MS && !(await readState(env.DB, toldKey(id))).at) {
+          await sayInviteProblem(env, `refresh:${id}`, {
+            title: 'A board meeting’s change hasn’t reached its calendar invite',
+            detail: `Google has turned it away for a day: ${String(err.message).replace(/\S+@\S+/g, '…').slice(0, 200)}`,
+            fix: `Open “${inviteTitle(cur)}” in Board and press Send the invite. It keeps trying until then.`,
+          });
+          await writeState(env.DB, toldKey(id), { at: new Date(now).toISOString() });
+        }
+        await retryPending(env.DB, id, p, { ...p, tries, failedSince: since, retryAt: new Date(now + RETRY_MS[Math.min(tries, RETRY_MS.length) - 1]).toISOString() });
       }
     }
-    // Only what was looked at goes: a change noted meanwhile waits its turn
-    const latest = await readState(env.DB, PENDING);
-    for (const [id, p] of due) if (latest[id]?.key === p.key) delete latest[id];
-    await writeState(env.DB, PENDING, latest);
     return sent;
   } catch (err) {
     console.error('[board-invite] refresh', err.message);
     return [];
+  }
+}
+const RETRY_MS = [5 * 60 * 1000, 30 * 60 * 1000, 2 * 3600 * 1000, 6 * 3600 * 1000];
+
+const MOVED_LOOK = 'invite-moved-look';
+/**
+ * A meeting held whose invite is still on its way to the day it was held, with nothing waiting to take it there: one
+ * moved to a day gone by before Nov 21 2026, when that went nowhere (Board QA round 4). Its move is noted as if it had
+ * just been saved, so the next beat takes the invite there (rule 3). Looked for every 10 minutes at most
+ */
+async function noteMovedBack(env, now) {
+  const look = await readState(env.DB, MOVED_LOOK);
+  if (look.at && now - Date.parse(look.at) < 10 * 60 * 1000) return;
+  await writeState(env.DB, MOVED_LOOK, { at: new Date(now).toISOString() });
+  for (const m of await listMeetings(env.DB)) {
+    if (!m.invite?.eventId || m.practice || !meetingHeld(m, now) || !loudChange(m)) continue;
+    const key = changeOf(m, now);
+    if (key) await addPending(env.DB, m.id, { key, at: new Date(now - SETTLE_MS).toISOString() });
   }
 }
 
@@ -340,6 +618,16 @@ export function followOf(invite, board) {
     add: board.filter((p) => !on.has(p.email) && had[p.slug] !== p.email && p.email !== normEmail(invite?.organizer)).map((p) => p.email),
     drop: [...new Set(Object.values(had))].filter((e) => !wanted.has(e) && on.has(e)),
   };
+}
+/**
+ * Who an invite has on it as running Board (invite.admins, as Board put them on) who doesn't run it now and isn't on the
+ * board: they come off it. An invite sent before Board kept that (no `admins`) is left as it is: a guest added by hand
+ * is never taken for one Board put on
+ */
+export function adminsOff(invite, runs, board) {
+  const onBoard = new Set(board.map((p) => p.email));
+  const on = new Set((invite?.emails || []).map(normEmail));
+  return (invite?.admins || []).map(normEmail).filter((e) => on.has(e) && !runs.has(e) && !onBoard.has(e) && e !== normEmail(invite?.organizer));
 }
 /** Who of the board an invite has now (slug → email), keeping anyone taken off it by hand so they aren't put back */
 export const whoOf = (invite, board, emails) => {
@@ -380,9 +668,11 @@ export async function changeGuests(env, m, { add, drop }, { fetchImpl, now }) {
 /**
  * The invites ahead follow People → Board (Peter, Nov 5 2026), now that they go out a year early: someone new goes on
  * every one and Google sends it to them, someone who left comes off them, and a new address replaces the old one. The
- * attendance lists follow too, or a new member would be missing from the roll call and the quorum. A meeting under way
- * is left as it is. A list that reads empty, or that would take over half of an invite's board off at once, is taken
- * for a bad read: nothing comes off, and Site → Automations says so. Every 5 minutes at most. Never throws.
+ * attendance lists follow too, or a new member would be missing from the roll call and the quorum. Every invite that's
+ * still to be held follows (./board-shared.js meetingHeld), the same as its roll call (./_board.js maybeKeepRolls): one
+ * held, or moved to a day gone by (it was held then, with the board of that day), keeps who it had, even while its
+ * invite is still on its way to that day. A meeting under way is left as it is. A list that reads empty, or that would take over half of an invite's board off
+ * at once, is taken for a bad read: nothing comes off, and Site → Automations says so. Every 5 minutes at most. Never throws.
  */
 export async function maybeFollowBoard(env, { fetchImpl = fetch, now = Date.now() } = {}) {
   try {
@@ -391,22 +681,39 @@ export async function maybeFollowBoard(env, { fetchImpl = fetch, now = Date.now(
     if (state.at && now - Date.parse(state.at) < FOLLOW_MS) return null;
     const at = new Date(now).toISOString();
     await writeState(env.DB, FOLLOW, { ...state, at });
-    const everyone = await activeBoard(env.DB);
+    // People, read for certain: one that didn't answer is never "nobody on the board" (Board QA round 10: staff alerted at
+    // once that People reads empty). Nothing changes, the status says so (`unread`, since when), and the next look (in 5
+    // minutes) reads it again; only half an hour of it tells the staff, as a failing Google call does after a day
+    let everyone, runs;
+    try {
+      [everyone, runs] = await Promise.all([activeBoard(env.DB), boardAdmins(env.DB).then((l) => new Set(l.map(normEmail)))]);
+    } catch (err) {
+      if (!err?.unread) throw err;
+      const since = state.unreadSince || at;
+      const tell = now - Date.parse(since) >= UNREAD_WARN_MS && state.told !== 'unread';
+      if (tell) await sayInviteProblem(env, 'follow', { title: 'Board invites can’t check People → Board', detail: 'People hasn’t answered for half an hour, so the board’s invites were left exactly as they are.', fix: 'It keeps trying every 5 minutes. If it doesn’t clear, check People → Board.' });
+      await writeState(env.DB, FOLLOW, { ...state, at, error: PEOPLE_DOWN, unread: true, unreadSince: since, told: tell ? 'unread' : state.told || '' });
+      return null;
+    }
+    // (People read, and nobody on it is an active board member: that's said, once, and nothing changes)
     if (!everyone.length) {
       if (state.told !== 'empty') await sayInviteProblem(env, 'follow', { title: 'People → Board reads empty', detail: 'Nobody came back as an active board member, so the board’s invites were left exactly as they are.', fix: 'Check People → Board.' });
-      await writeState(env.DB, FOLLOW, { ...state, at, told: 'empty' });
+      await writeState(env.DB, FOLLOW, { ...state, at, unread: false, unreadSince: '', told: 'empty' });
       return null;
     }
     const board = everyone.filter((p) => isEmail(normEmail(p.email))).map((p) => ({ slug: p.slug, email: normEmail(p.email) }));
-    const today = todayEastern(now);
-    const ahead = (await listMeetings(env.DB)).filter((m) => isDate(m.date) && m.date >= today && !m.notBoard && !m.practice && !m.live?.startedAt && !m.live?.endedAt);
+    const live = (await listMeetings(env.DB)).filter((m) => !noInviteFor(m, now) && !meetingHeld(m, now) && !m.practice && !m.live?.startedAt && !m.live?.endedAt);
     const did = { added: 0, removed: 0, held: 0, failed: 0 };
     let error = '';
-    for (const m of ahead) {
-      if (followRoll(m.attendance, everyone)) await patchMeeting(env.DB, m.id, (cur) => ({ ...cur, attendance: followRoll(cur.attendance, everyone) || cur.attendance }), { by: 'Board' });
+    for (const m of live) {
+      // (its list of who's on the board follows People → Board as it's read, and the heartbeat's maybeKeepRolls writes it
+      // down: here only the calendar invite)
       if (!m.invite?.eventId || !env.GOOGLE_CALENDAR_KEY) continue;
       const plan = followOf(m.invite, board);
       if (plan.drop.length > Object.keys(m.invite.who || {}).length / 2) { did.held += 1; continue; }
+      // (and who no longer runs Board, as a send takes them off)
+      const runsOff = adminsOff(m.invite, runs, board);
+      plan.drop = [...new Set([...plan.drop, ...runsOff])];
       if (!plan.add.length && !plan.drop.length) {
         const who = whoOf(m.invite, board, m.invite.emails || []);
         if (JSON.stringify(who) !== JSON.stringify(m.invite.who || {})) await patchMeeting(env.DB, m.id, (cur) => (cur.invite?.eventId === m.invite.eventId ? { ...cur, invite: { ...cur.invite, who } } : cur), { by: 'Board' });
@@ -420,7 +727,7 @@ export async function maybeFollowBoard(env, { fetchImpl = fetch, now = Date.now(
           if (cur.invite?.eventId !== m.invite.eventId) return cur;
           const replies = Object.fromEntries(Object.entries(cur.invite.replies || {}).filter(([slug]) => bySlug.has(slug)));
           for (const p of board) if (emails.includes(p.email) && !replies[p.slug]) replies[p.slug] = 'invited';
-          return { ...cur, invite: { ...cur.invite, emails, guests: emails.length, replies, who: whoOf(cur.invite, board, emails), updatedAt: at } };
+          return { ...cur, invite: { ...cur.invite, emails, guests: emails.length, replies, who: whoOf(cur.invite, board, emails), admins: (cur.invite.admins || []).filter((e) => emails.includes(e)), updatedAt: at } };
         }, { by: 'Board' });
         did.added += plan.add.length;
         did.removed += plan.drop.length;
@@ -441,7 +748,7 @@ export async function maybeFollowBoard(env, { fetchImpl = fetch, now = Date.now(
         ? { title: 'Board invites didn’t follow the board list', detail: `Over half of the board on ${did.held === 1 ? 'an invite' : `${did.held} invites`} would have come off at once, so nothing changed.`, fix: 'Check People → Board. If the list is right, press Send the invite on each meeting in Board.' }
         : { title: 'Board invites can’t follow the board list', detail: `Google has refused for a day: ${error.replace(/\S+@\S+/g, '…')}`, fix: 'It keeps trying. If it doesn’t clear, use Add on the meeting in Board to see what’s wrong.' });
     } else if (!trouble && latest.told) await sayInviteFixed(env, 'follow', 'Board invites match the board list again');
-    await writeState(env.DB, FOLLOW, { ...latest, at, held: did.held, error, since, told: !trouble ? '' : needsTelling ? trouble : latest.told || '', ...(moved ? { lastChangeAt: at, lastAdded: did.added, lastRemoved: did.removed } : {}) });
+    await writeState(env.DB, FOLLOW, { ...latest, at, held: did.held, error, since, unread: false, unreadSince: '', told: !trouble ? '' : needsTelling ? trouble : latest.told || '', ...(moved ? { lastChangeAt: at, lastAdded: did.added, lastRemoved: did.removed } : {}) });
     return did;
   } catch (err) {
     console.error('[board-invite] follow', err.message);
@@ -455,14 +762,16 @@ export async function maybeFollowBoard(env, { fetchImpl = fetch, now = Date.now(
 // how to come, on the organizer's own event too (Peter, Nov 2 2026). 3: the name without "(in person or Google Meet)"
 const NOTES_VERSION = 3;
 const REWORDED = 'invite-notes';
-/** Each invite still ahead whose only change is Board's words: updated without Google emailing anyone. → the meeting ids */
+/**
+ * Each invite that's live (not a record: changeOf) whose only change is Board's words: updated without Google emailing
+ * anyone. One being sent right now is tried again on the next beat. → the meeting ids
+ */
 async function rewordInvites(env, { fetchImpl, now }) {
   if ((await readState(env.DB, REWORDED)).version === NOTES_VERSION) return [];
-  const today = todayEastern(now);
   const sent = [];
   let failed = 0;
-  for (const m of (await listMeetings(env.DB)).filter((x) => x.date >= today && changeOf(x) && !loudChange(x))) {
-    try { await sendInvite(env, m.id, { fetchImpl, now, quiet: true }); sent.push(m.id); } catch (err) { failed += 1; console.error('[board-invite] reword', m.id, err.message); }
+  for (const m of (await listMeetings(env.DB)).filter((x) => changeOf(x, now) && !loudChange(x))) {
+    try { await sendInvite(env, m.id, { fetchImpl, now, quiet: true }); sent.push(m.id); } catch (err) { failed += 1; if (!err.extra?.sending) console.error('[board-invite] reword', m.id, err.message); }
   }
   // One that Google turned away is tried again on the next heartbeat
   if (!failed) await writeState(env.DB, REWORDED, { version: NOTES_VERSION, at: new Date(now).toISOString() });

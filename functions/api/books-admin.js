@@ -22,7 +22,10 @@ const fromError = (err) => (err.status && err.status < 500 ? fail(err.message, e
 async function gate(context) {
   const me = context.data?.userEmail || '';
   await ensureSchema(context.env.DB);
-  if (!isStaffEmail(me) || !(await isBoardAdmin(context.env.DB, me))) return { me, refused: fail('QuickBooks is open only to the people who run Board (Board → Members)', 403) };
+  // (a check of who runs Board that failed is said as that, 503, never "open only to": Board QA round 9)
+  let admin = false;
+  try { admin = isStaffEmail(me) && await isBoardAdmin(context.env.DB, me); } catch (err) { if (err.status === 503) return { me, refused: fail(err.message, 503) }; throw err; }
+  if (!admin) return { me, refused: fail('QuickBooks is open only to the people who run Board (Board → Members)', 403) };
   return { me };
 }
 

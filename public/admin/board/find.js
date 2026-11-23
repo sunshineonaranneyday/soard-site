@@ -27,12 +27,19 @@ export const norm = (s) => { const t = String(s || '').toLowerCase(); return /[^
 // A number as one word: its thousands joined ("41,605" is 41605, so 605 isn't found in it), a decimal with its point
 // kept ("1.2" is 1d2, never 12 or 2), a time with its colon ("6:05" is 6h05)
 const numbers = (t) => t.replace(/(\d)\.00(?!\d)/g, '$1').replace(/(\d),(?=\d{3}(?!\d))/g, '$1').replace(/(?<![\d.])(\d+)\.(\d+)(?![\d.])/g, '$1d$2').replace(/(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])/g, '$1h$2');
+/**
+ * An amount below zero as written, its sign before it ("−$12,000", "-12,000", "-$20K") or in brackets ("(12,000)"),
+ * once its number is one word (./numbers): it's found as `minus` and the number, as well as by the number alone (QA
+ * round 9: "−$12,000" found the $12,000 prepaid too)
+ */
+const NEGATIVE = /(?<![a-z0-9])(?:[−-]\$?(\d+(?:d\d+)?[kmb]?)(?![a-z0-9])|\(\$?(\d+(?:d\d+)?[kmb]?)\))/g;
 export function prep(text) {
   const raw = String(text || '');
   const t = numbers(norm(raw));
   const plain = t.replace(/[^a-z0-9]+/g, ' ').trim();
   const have = new Set(plain.split(' '));
   const extra = new Set();
+  if (/[−(-]\$?\d/.test(t)) for (const m of t.matchAll(NEGATIVE)) extra.add(`minus${m[1] || m[2]}`);
   for (const w of t.replace(/([a-z0-9])[&.'’\-/()]+(?=[a-z0-9])/g, '$1').replace(/[^a-z0-9]+/g, ' ').split(' ')) if (w && !have.has(w)) extra.add(w);
   // (a number's plural is the number too: "the 990s" has the 990)
   for (const w of have) if (/^\d+s$/.test(w)) extra.add(w.slice(0, -1));
@@ -40,6 +47,29 @@ export function prep(text) {
   for (const run of (/[a-z][A-Z]/.test(raw) ? (/[^\x00-\x7f]/.test(raw) ? raw.normalize('NFKD') : raw).match(/[A-Za-z]*[a-z][A-Z][A-Za-z]*/g) : null) || []) for (const w of run.split(/(?<=[a-z])(?=[A-Z])/)) { const x = norm(w).replace(/[^a-z0-9]/g, ''); if (x && !have.has(x)) extra.add(x); }
   return ` ${plain} ${extra.size ? `${[...extra].join(' ')} ` : ''}`;
 }
+
+/**
+ * A term as a pattern for where it's written, at a word's start, so what's found is shown and marked as it's found
+ * (the search's marks, the line shown from a file, the words a PDF opens at: ./portal.js): a number whole with its
+ * commas ("7500" is "7,500", never the start of 12,401 or the end of 41,605) and its cents when they're none, as prep
+ * reads them ("375000" is "$375,000.00", never 375,000.50: QA round 6 found the file and showed no line from it), a
+ * decimal with its point, its thousands' commas or not ("1d2" is 1.2, "1234d5" 1,234.5), a time with its colon ("6h05"
+ * is 6:05), a fraction with its slash ("1 2" is "1/2"), a date or an abbreviation its parts apart ("2024 04 25" is
+ * 2024.04.25 and 4/25, "p l" is P&L), a word with its hyphens ("twothirds" is "two-thirds")
+ */
+const reEsc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const digitsRe = (d) => [...d].join(',?');
+// (an amount below zero, "minus12000": its sign before it or its bracket, "\u2212$12,000", "-12,000", "(12,000)", then the
+// amount as it's written; never the same amount without one)
+export const termRe = (t) => (/^minus\d/.test(t) ? `(?<![a-z0-9])(?:[\u2212-]\\$?|\\(\\$?)${termRe(t.slice(5)).replace(/^\(\?<![^)]*\)/, '')}\\)?`
+  : /^\d+ \d+$/.test(t) ? `(?<![a-z0-9])${t.replace(' ', '[/\u2044]')}(?![0-9])`
+  : t.includes(' ') ? `(?<![a-z0-9])${t.split(' ').map((x) => (/^\d+[dh]\d+$/.test(x) ? x.replace(/[dh]/, (c) => (c === 'd' ? '\\.' : ':')) : reEsc(x))).join('[^a-z0-9]{1,3}')}(?![a-z0-9])`
+    : /^\d+d\d+$/.test(t) ? `(?<![a-z0-9]|\\d[,.:])${digitsRe(t.split('d')[0])}\\.${t.split('d')[1]}(?![0-9]|[,.:]\\d)`
+      : /^\d+h\d+$/.test(t) ? `(?<![a-z0-9]|\\d[,.:])${t.replace('h', ':')}(?![0-9]|[,.:]\\d)`
+        : /^\d+$/.test(t) ? `(?<![a-z0-9]|\\d[,.:])${digitsRe(t)}(?:\\.00(?![0-9]))?(?![0-9]|[,.:]\\d)`
+          // (an amount in short, "1d66m" or "676k": as a tile writes it, "$1.66M" or "$676K", a space before its letter or not)
+          : /^\d+(?:d\d+)?[kmb]$/.test(t) ? `(?<![a-z0-9]|\\d[,.:])${digitsRe(t.match(/^\d+/)[0])}${t.includes('d') ? `\\.${t.slice(t.indexOf('d') + 1, -1)}` : ''}\\s?${t.slice(-1)}(?![a-z0-9])`
+            : `(?<![a-z0-9])${[...t].map(reEsc).join("[-'’.]?")}`);
 
 const pad = (n) => String(n).padStart(2, '0');
 /**
@@ -62,6 +92,23 @@ function before(t, year = new Date().getFullYear()) {
     .replace(/\b(first|second|third|fourth|1st|2nd|3rd|4th)\s+quarter\b/g, (all, n) => `q${QUARTER[n]}`)
     .replace(/\b([a-z]) and ([a-z])\b/g, '$1&$2')
     .replace(/(\d)(am|pm)\b/g, '$1 $2')
+    // (an amount's sign or brackets apart from it, wherever they sit around it, are against it: "- $12,000", "$-12,000",
+    // "− 12,000" and "( 12,000 )" are "-$12,000", "-12,000" and "(12,000)", below zero only; "minus" and "negative" are
+    // its sign too. A dash between words is a dash: "minutes - 2024" is the minutes of 2024, "$10,000 - $12,000" the
+    // two, unless it's before a dollar sign after a word, "discounts - $12,000". Board QA round 10)
+    .replace(/\b(?:minus|negative)\s+(?=\(?\$?\s*\d|\$?\.\d)/g, '-')
+    .replace(/\$\s+(?=[−-]?\s*\.?\d)/g, '$').replace(/\$\s*[−-]\s*(?=\.?\d)/g, '-$')
+    .replace(/(^|\()\s*[−-]\s+(?=\$?\.?\d)/g, '$1-').replace(/(?<!(?:[\d%)]|\d[kmb])\s*)(\s)[−-]\s+(?=\$\.?\d)/g, '$1-')
+    .replace(/\(\s+(?=[−-]?\$?\.?\d)/g, '(').replace(/(\d[\d,]*(?:\.\d+)?[kmb]?)\s+\)/g, '$1)')
+    // (an amount with no digit before its point is the same with a 0 there: "$.98M" is $0.98M, ".375m" 0.375m)
+    .replace(/(^|[\s$(−-])\.(?=\d)/g, (all, b) => `${b}0.`)
+    // ("MM" is millions, as finance writes it, after a dollar sign or a point: "$1.66MM" is $1.66M; "12mm" stays 12mm)
+    .replace(/(\$\d[\d,]*(?:\.\d+)?|(?<![\w.,])\d+\.\d+)\s*mm\b/g, '$1m')
+    // (an amount said in words is the amount in short: "1.66 million" is 1.66m, "676 thousand" 676k, found and marked
+    // as the short form is: QA round 8; "1.66 mil", "1.66mil" and "2 bn" too, and its letter a space after it, "$676 K",
+    // "1.66 M": QA round 9; and "676 K" with no dollar sign: QA round 10)
+    .replace(/(^|[^\d.,])(\d+(?:\.\d+)?)\s*(thousand|million|billion|mil|bn)\b/g, (all, b, n, u) => `${b}${n}${u === 'thousand' ? 'k' : u === 'bn' ? 'b' : u[0]}`)
+    .replace(/(?<![\w.,])(\$?\d[\d,]*(?:\.\d+)?)\s+([kmb])\b/g, '$1$2')
     .replace(/\blast year'?s?\b/g, String(year - 1)).replace(/\bthis year'?s?\b/g, String(year)).replace(/\bnext year'?s?\b/g, String(year + 1))
     .replace(new RegExp(`\\b${MONTH_RE}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, 'g'), (all, mon, d, y) => (+d >= 1 && +d <= 31 ? (y ? `${y}-${pad(monthOf(mon))}-${pad(d)}` : `${monthOf(mon)}/${+d}`) : all))
     .replace(/\b([a-z]{3,})-([a-z]{3,})\b/g, (all, a, b) => (`${a}${b}` === 'bylaws' ? all : `${a} ${b}`))
@@ -78,6 +125,13 @@ export const termsOf = (q) => before(norm(String(q || '').slice(0, 600))).replac
   if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31 && (+m[1] > 4 || +m[2] > 4)) return `md ${+m[1]} ${+m[2]}`;
   if (/^\d+\/\d+$/.test(w)) return w.replace('/', ' ');
   if (/^[a-z0-9]{1,3}&[a-z0-9]{1,3}$/.test(w)) return w.replace('&', ' ');
+  // An amount typed below zero, its sign before it or in brackets ("−$12,000", "-12,000", "(12,000)", "-$20k"): that
+  // amount below zero only, never the same amount above it (QA round 9). A year in brackets is a year: "(2024)"
+  // ("$(12,000)" and "(-12,000)" too: QA round 10)
+  if (/^[−-]\$?\d/.test(w) || (/^\$?\([−-]?\$?\d[\d,.]*[kmb]?\)$/.test(w) && !/^\((19|20)\d\d\)$/.test(w))) {
+    const n = numbers(w).replace(/[^a-z0-9]+/g, '');
+    if (/^\d+(?:d\d+)?[kmb]?$/.test(n)) return `minus${n}`.slice(0, 40);
+  }
   return numbers(w).replace(/[^a-z0-9]+/g, '').slice(0, 40);
 }).filter(Boolean);
 const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
@@ -93,14 +147,44 @@ const samesOf = (w) => {
     const month = MONTHS[+m[2] - 1];
     return [...new Set([`${+m[2]} ${+m[3]} ${m[1].slice(2)}`, `${m[2]} ${m[3]} ${m[1]}`, `${+m[2]} ${+m[3]} ${m[1]}`, `${m[2]} ${m[3]} ${m[1].slice(2)}`, `${month} ${+m[3]} ${m[1]}`, `${month.slice(0, 3)} ${+m[3]} ${m[1]}`])];
   }
-  if (/^[1-9]\d*000$/.test(w)) return [`${w.slice(0, -3)}k`];
-  if (/^[1-9]\d*k$/.test(w)) return [`${w.slice(0, -1)}000`];
-  // ("990s" is the 990s; "1.2m" and "$1.2M" are 1.2 million)
+  // An amount is every way of writing that same amount: "312500" is $312.5K, "300k" 300,000, "0.98m" $980,000 and $980K,
+  // "1.2m" 1.2 million too; below zero, below zero (QA round 9: "$312.5K", "62.5k", "$0.98M" and "$0.4M" found nothing).
+  // Never a near one: "1.7m" isn't $1,656,045, though that's $1.66M on its tile
+  const amt = w.match(/^(minus)?(\d+)(?:d(\d+))?([kmb])?$/);
+  if (amt && (amt[4] || /^[1-9]\d{2,}$/.test(amt[2]))) {
+    const sign = amt[1] || '';
+    const whole = amt[4] ? wholeOf(amt[2], amt[3], amt[4]) : amt[3] ? '' : amt[2];
+    const out = whole ? [whole, ...shortsOf(whole)].filter((x) => x !== `${amt[2]}${amt[3] ? `d${amt[3]}` : ''}${amt[4] || ''}`) : [];
+    // ("1.2m" is "1.2 million" said in words too)
+    if (amt[4] === 'm') out.push(`${amt[2]}${amt[3] ? `d${amt[3]}` : ''} million`);
+    // (and the number with its letter apart, as words: "5 b" typed is 5b, and still finds "Room 5 B": QA round 10)
+    if (amt[4] && !sign) out.push(`${amt[2]}${amt[3] ? `d${amt[3]}` : ''} ${amt[4]}`);
+    return [...new Set(out)].map((x) => `${sign}${x}`);
+  }
+  // ("990s" is the 990s)
   if (/^\d+s$/.test(w)) return [w.slice(0, -1)];
-  const mil = w.match(/^(\d+(?:d\d+)?)m$/);
-  if (mil) return [`${mil[1]} million`];
   return [...sameWordsOf(w), ...(ABBREV[w] || [])];
 };
+const UNIT = { k: 3, m: 6, b: 9 };
+/** A short amount as its whole dollars ("312d5k" is 312500, "0d98m" 980000), '' when it isn't a whole dollar */
+function wholeOf(int, dec = '', unit = 'k') {
+  if ((dec || '').length > UNIT[unit]) return '';
+  return `${int}${(dec || '').padEnd(UNIT[unit], '0')}`.replace(/^0+(?=\d)/, '');
+}
+/**
+ * The same whole dollars in short, every way that says it exactly: 312500 is 312.5k and 0.3125m, 1800000 1800k and
+ * 1.8m (at most three places after the point, and from a tenth of the unit up)
+ */
+function shortsOf(whole) {
+  const out = [];
+  for (const [u, e] of Object.entries(UNIT)) {
+    if (whole.length < (u === 'k' ? 4 : e)) continue;
+    const int = whole.length > e ? whole.slice(0, -e) : '0';
+    const dec = whole.slice(-e).padStart(e, '0').replace(/0+$/, '');
+    if (dec.length <= 3) out.push(`${int}${dec ? `d${dec}` : ''}${u}`);
+  }
+  return out;
+}
 
 /**
  * A term at the start of a word in prepped text (a number: the whole number, so "1240" is 1,240 and never 12,401);
@@ -109,7 +193,8 @@ const samesOf = (w) => {
  */
 export function termIn(sp, w) {
   if (!w) return false;
-  if (w.includes(' ') || /^\d+([dh]\d+)?$/.test(w)) return sp.includes(` ${w} `);
+  // (an amount whole, in short or below zero too: "676k" is never 676 kids, "minus12000" never −$120,000)
+  if (w.includes(' ') || /^(?:minus)?\d+(?:[dh]\d+)?$/.test(w) || /^(?:minus)?\d+(?:d\d+)?[kmb]$/.test(w)) return sp.includes(` ${w} `);
   if (sp.includes(` ${w}`)) return true;
   if (sp.length > 4000 || w.length < 5) return false;
   // (two words, each of two letters or more: "gala s(ponsors)" isn't "galas")
@@ -125,7 +210,9 @@ const wholeIn = (sp, w) => sp.includes(` ${w} `);
  */
 export const SMALL = new Set(['a', 'an', 'and', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'by', 'vs', 'v', 'with', 'or', 'from', 'is', 'it', 'as', 'be', 'our', 'we', 'that', 'this', 'about',
   'who', 'whom', 'whose', 'what', 'when', 'where', 'why', 'how', 'which', 'did', 'does', 'do', 'done', 'are', 'was', 'were', 'been', 'has', 'have', 'had', 'much', 'many',
-  'say', 'said', 'says', 'tell', 'me', 'show', 'find', 'i', 'my', 'you', 'can', 'could', 'would', 'should', 'will', 'there', 'their', 'they', 'its', 'any', 'all', 'last', 'latest', 'most']);
+  'say', 'said', 'says', 'tell', 'me', 'show', 'find', 'i', 'my', 'you', 'can', 'could', 'would', 'should', 'will', 'there', 'their', 'they', 'its', 'any', 'all', 'last', 'latest', 'most',
+  // (an amount's own word: "1.66 million dollars" is $1.66M, QA round 10)
+  'dollars', 'dollar']);
 /** What a board's short forms stand for: "ED report" is the Executive Director's */
 const ABBREV = { ed: ['executive director'], coi: ['conflict of interest', 'certificate of insurance'], sow: ['scope of work'], ytd: ['year to date'], yoy: ['year over year'], pl: ['profit and loss', 'p l'], eoy: ['end of year'], agm: ['annual meeting'], fy: ['fiscal year'] };
 

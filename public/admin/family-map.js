@@ -123,15 +123,17 @@ export function wheelZoom(map, el) {
 /**
  * The key: a switch for each status with how many are on the map, the area and its ring, and who has no point.
  * `counts`: { [key]: n } with '' for a family with no status; `hidden`: a Set of keys switched off; `rows`: the keys
- * as [{ key, label, color }] when they aren't Applicants' statuses (the board's stages, ./board/lifecycle.js)
+ * as [{ key, label, color }] when they aren't Applicants' statuses (the board's stages, ./board/lifecycle.js);
+ * `noPointBy`: those with no point by status or stage, in the key's words ("1 in review, 1 approved"), so each adds to
+ * its row and the key agrees with the line over it (the board's map, ./board/family-map.js byStageWords)
  */
-export function MapLegend({ counts, hidden, onToggle, outside = 0, nearMiles = 0, noPoint = 0, rows = null }) {
+export function MapLegend({ counts, hidden, onToggle, outside = 0, nearMiles = 0, noPoint = 0, noPointBy = '', rows = null }) {
   const keys = rows || ['Applied', 'In Review', 'Approved', 'Denied', ...(counts[''] ? [''] : [])].map((s) => ({ key: s, label: s || 'No status', color: STATUS_COLOR[s] }));
   return html`<div class="apl-legend">
     ${keys.map((k) => html`<button key=${k.key} aria-pressed=${!hidden.has(k.key)} onClick=${() => onToggle(k.key)}>
       <span class="apl-dot" style=${`background:${k.color}`}></span>${k.label}<b>${counts[k.key] || 0}</b></button>`)}
     <div class="apl-legend-line"><i></i> Service area${outside ? ` · ${outside} outside` : ''}</div>
     ${nearMiles > 0 ? html`<div class="apl-legend-line is-plain"><i class="is-ring"></i> Close: within ${plural(nearMiles, 'mile')}</div>` : null}
-    ${noPoint > 0 ? html`<div class="apl-legend-note">${plural(noPoint, 'family has', 'families have')} no home in JobTread yet</div>` : null}
+    ${noPoint > 0 ? html`<div class="apl-legend-note">${plural(noPoint, 'family has', 'families have')} no home in JobTread yet${noPointBy ? ` (${noPointBy})` : ''}</div>` : null}
   </div>`;
 }

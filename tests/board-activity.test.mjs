@@ -352,7 +352,8 @@ test('votes and action items: one row per answer, however often it’s changed; 
 });
 
 test('the chair’s Approve is theirs only when it approved: never an agenda someone approved first, nor in test mode', async () => {
-  const m = await meeting(5, { shared: false });
+  // (an agenda up for the chair's review: a real one, not the template's draft)
+  const m = await meeting(5, { shared: false, agendaFrom: { kind: 'typed', name: '', at: '' } });
   await page(MEMBER);
   const t = await post(MEMBER, { action: 'chair-approve', meetingId: m.id });
   assert.equal(t.status, 200);

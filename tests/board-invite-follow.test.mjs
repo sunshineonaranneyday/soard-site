@@ -173,7 +173,8 @@ test('every five minutes at most, and it runs without a calendar for the attenda
   await run();
   await person('ryan', 'ryan@example.com', { name: 'Ryan Williams' });
   assert.equal(await run(1), null);
-  assert.equal((await getMeeting(env.DB, m.id)).attendance.some((a) => a.slug === 'ryan'), false);
+  // (a meeting ahead lists the board as People → Board has it now, at once, never only after this has run: _board.js withState)
+  assert.equal((await getMeeting(env.DB, m.id)).attendance.some((a) => a.slug === 'ryan'), true);
   await run(6);
   assert.equal((await getMeeting(env.DB, m.id)).attendance.some((a) => a.slug === 'ryan'), true);
 });

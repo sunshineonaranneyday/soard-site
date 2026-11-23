@@ -128,7 +128,29 @@ export function SecHead({ title, sub = '', count = null, id, children }) {
 /** A fold that this step in the history remembers open (Back to the page finds it as it was) */
 export function More({ k, summary, children }) {
   const [open, setOpen] = useKept(`more-${k}`, false);
-  return html`<details class="bp-more" open=${open} onToggle=${(e) => { if (e.currentTarget.open !== open) setOpen(e.currentTarget.open); }}><summary>${summary}</summary>${children}</details>`;
+  return html`<details class="bp-more" data-kept=${`more-${k}`} open=${open} onToggle=${(e) => { if (e.currentTarget.open !== open) setOpen(e.currentTarget.open); }}><summary>${summary}</summary>${children}</details>`;
+}
+/**
+ * Every shut fold around `el` opened, and kept open at once where the page's next drawing of it reads it (a fold says
+ * where: data-kept, its key; data-kept-item, its entry in a kept list such as the open years). Its own toggle keeps it
+ * too, but only a moment later: a card drawn anew in that moment (moved to another column as the page filled in) came
+ * back shut over the line a search had just landed on, which was then neither in view nor focused (Board QA round 9's
+ * full check: the store's "Line by line"). → whether any was shut
+ */
+export function openFoldsAround(el) {
+  let any = false;
+  for (let p = el?.parentElement; p; p = p.parentElement) {
+    if (p.tagName !== 'DETAILS' || p.open) continue;
+    any = true;
+    p.open = true;
+    const key = p.dataset.kept;
+    if (!key) continue;
+    const ui = kept().ui || {};
+    const item = p.dataset.keptItem;
+    keep({ ui: { ...ui, [key]: item != null ? [...new Set([...(Array.isArray(ui[key]) ? ui[key] : []), item])] : true } });
+    dispatchEvent(new Event('bp-kept'));
+  }
+  return any;
 }
 
 /**

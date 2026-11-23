@@ -32,16 +32,17 @@
  * a meeting ahead not shared yet that they present in (only their own items), so the ask's link opens.
  */
 
-import { getMeeting, listMeetings, patchMeeting, roster, attachToItem, getSettings, sendApprovedAgenda, SITE } from './_board.js';
+import { getMeeting, listMeetings, patchMeeting, setOnMeeting, roster, attachToItem, getSettings, sendApprovedAgenda, presenterGate, snapshotFor, boardCopy, SITE } from './_board.js';
 import { peopleRows, boardAdmins, readState, writeState, readSettings, normEmail, isStaffEmail } from './_board-roles.js';
 import { organizerFor } from './_board-invite.js';
 import { accessToken, GMAIL_READ_SCOPE } from './_google-calendar.js';
 import { header, bytesOf, partsOf } from './_mailbox.js';
+import { sendTrouble } from './_broadcast-notify.js';
 import { booksNow } from './_quickbooks.js';
 import {
-  presentersOf, reportsOn, agendaIsDraft, meetingName, sectionPlan, isFilled, forBoard, todayEastern, isDate, LIMITS, showsOf, timeRange, isNothingNew,
+  presentersOf, reportsOn, agendaIsDraft, meetingName, sectionPlan, isFilled, forBoard, todayEastern, isDate, LIMITS, showsOf, timeRange, isNothingNew, cleanMeeting,
   reportSlides, slidesOfItem, isCopyName,
-  partName,
+  partName, CHAIR_DAYS as CHAIR_REVIEW_DAYS, reviewOver,
 } from '../../public/admin/board-shared.js';
 import { mdToDoc, docToMd, mdPlain } from '../../public/admin/board-md.js';
 import { viaGateway, aiCapped } from './_ai.js';
@@ -55,7 +56,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const HOUR = 60 * 60 * 1000;
 export const ASK_DAYS = 14;
 export const DUE_DAYS = 7;
-export const CHAIR_DAYS = 6;
+export const CHAIR_DAYS = CHAIR_REVIEW_DAYS;
 const REMIND_DAYS = 2;
 const SEND_HOURS = { from: 8, to: 19 };
 const NOTE_MAX = 2000;
@@ -85,6 +86,12 @@ const hourEastern = (t) => new Date(wallOf(t)).getUTCHours();
 /** Emails go out between 8 AM and 7 PM Eastern */
 export const sendingHours = (t) => hourEastern(t) >= SEND_HOURS.from && hourEastern(t) < SEND_HOURS.to;
 const daysUntil = (today, date) => Math.round((Date.parse(`${date}T12:00:00Z`) - Date.parse(`${today}T12:00:00Z`)) / DAY);
+/**
+ * Before it's shared, a meeting opens to who presents in it only in the two weeks the asks go out in, once its agenda
+ * isn't a draft (the board page's `presenting`; ./_board.js presenterGate goes by it too, so nothing else of it answers)
+ */
+export const presentingWindow = (m, today, template) => !!m && !m.shared && !m.notBoard && !m.practice && isDate(m.date) && m.date >= today
+  && daysUntil(today, m.date) <= ASK_DAYS && !agendaIsDraft(m, template);
 
 /** "Wednesday, November 4 at noon" (short: "Wed, Nov 4 at noon") */
 export function dueWords(t, { short = false } = {}) {
@@ -987,8 +994,10 @@ export async function runAsks(env, { fetchImpl = fetch, now = Date.now() } = {})
       await setAsk(env.DB, a.id, { error: String(e.message).slice(0, 300) }).catch(() => {});
     }
   }
-  // The chair's review, once (not on the meeting's day)
-  if (chair && today < fresh.date && !asks.some((a) => a.kind === 'chair')) {
+  // The chair's review, once (not on the meeting's day), and never for a meeting on the board page already: its review
+  // is over (./board-shared.js reviewOver, as the review page and Board say it). QA round 7, Nov 21 2026: the chair was
+  // emailed to review a meeting the board could already see
+  if (chair && today < fresh.date && !asks.some((a) => a.kind === 'chair') && !reviewOver(fresh)) {
     const dues = [...current, ...lists].filter((a) => ['asked', 'late', 'in'].includes(a.status) && a.due).map((a) => Date.parse(a.due));
     if (now >= chairAt(fresh.date, dues)) {
       const all = await asksFor(env.DB, m.id);
@@ -1043,11 +1052,15 @@ export async function sendTests(ctx, m, books) {
   mails.push({ to: [money.person], cc: [...(chair && chair.slug !== money.person.slug ? [chair] : []), ...cc], subject: re, ...lateEmail({ m, it: money.it, person: money.person, due, from, chair: chair && chair.slug !== money.person.slug ? chair : null, now: due }) });
   mails.push({ to: [money.person], subject: re, ...thanksEmail({ m, it: money.it, person: money.person, from }) });
   if (chair) {
+    // The chair's review and its approval only when they'll really go: never for a meeting whose review is over (on the
+    // board page, or approved: ./board-shared.js reviewOver, the rule runAsks sends it by). The chair's question can still
+    // go then, from the review page. QA round 7, Nov 21 2026 (the lead): Test previews what will really happen
+    const over = reviewOver(m, { approved: (await asksFor(ctx.env.DB, m.id)).some((a) => a.kind === 'chair' && a.status === 'approved') });
     const asks = want.map((w) => ({ kind: 'report', itemId: w.it.id, status: 'asked', due: nowIso(due) }));
     const review = chairEmail({ m, chair, from, asks, people: [...people.board, ...people.staff], cc });
-    mails.push({ to: [chair], cc, ...review });
+    if (!over) mails.push({ to: [chair], cc, ...review });
     mails.push({ to: [money.person], cc: [chair, ...cc], subject: re, ...questionEmail({ m, it: money.it, person: money.person, asker: chair, question: `(${firstName(chair.name)}’s question goes here, as typed on the review page.)`, from }) });
-    mails.push({ to: [chair], cc, subject: `Re: ${review.subject}`, ...body([`Thanks, ${firstName(chair.name)}. The agenda for the ${meetingName(m)} on ${longDay(m.date)} is approved.`, `${firstName(from.name) || 'SOARD'}`]) });
+    if (!over) mails.push({ to: [chair], cc, subject: `Re: ${review.subject}`, ...body([`Thanks, ${firstName(chair.name)}. The agenda for the ${meetingName(m)} on ${longDay(m.date)} is approved.`, `${firstName(from.name) || 'SOARD'}`]) });
   }
   for (const mail of mails) await send(ctx, mail);
   return mails.length;
@@ -1236,13 +1249,28 @@ async function mailer(env, { fetchImpl = fetch, now = Date.now() } = {}) {
   return ctx;
 }
 
-/** The chair (their seat on People → Board), or one of Board's admins, on a meeting ahead → { m, asker: { slug, name, email } } */
-async function chairGate(env, meetingId, { member = null, admin = false, adminEmail = '' } = {}) {
+/**
+ * The chair (their seat on People → Board) on the agenda their review page shows them (underReview: approving it shares
+ * it and emails it to the board, so never another meeting's), or one of Board's admins on any meeting ahead
+ * → { m, asker: { slug, name, email } }
+ */
+async function chairGate(env, meetingId, { member = null, admin = false, adminEmail = '' } = {}, { notBoardOk = false } = {}) {
   await ensureAsks(env.DB);
   if (!admin && member?.seat !== 'chair') throw err('Only the board chair reviews the agenda', 403);
+  if (member) {
+    const today = todayEastern();
+    const [meetings, { template }] = await Promise.all([listMeetings(env.DB), getSettings(env.DB)]);
+    const m = underReview(meetings, today, template);
+    // (any other meeting, there or not, answers the same)
+    if (!m || m.id !== String(meetingId || '')) throw err('That agenda isn’t up for your review', 404);
+    return { m, asker: { slug: member.slug, name: member.name, email: normEmail(member.email) } };
+  }
   const m = await getMeeting(env.DB, String(meetingId || ''));
-  if (!m || m.notBoard || !isDate(m.date) || m.date < todayEastern()) throw err('That meeting isn’t ahead', 404);
-  if (member) return { m, asker: { slug: member.slug, name: member.name, email: normEmail(member.email) } };
+  if (!m) throw err('That meeting is gone', 404);
+  if (!isDate(m.date) || m.date < todayEastern()) throw err('That meeting isn’t ahead', 404);
+  // One that isn't a board meeting has no review; approving its agenda in Board is what makes it one (chairApprove).
+  // QA round 6, Nov 21 2026: Board's Approve on one three days ahead was told "That meeting isn't ahead"
+  if (m.notBoard && !notBoardOk) throw err('That meeting isn’t a board meeting, so it has no review. Approving its agenda in Board makes it one.', 409);
   const people = await peopleRows(env.DB);
   const first = String(adminEmail).split('@')[0];
   return { m, asker: { slug: '', name: people.find((p) => p.group !== 'board' && String(p.name || '').toLowerCase().startsWith(first))?.name || first, email: normEmail(adminEmail) } };
@@ -1306,7 +1334,17 @@ export async function askPresenter(env, { meetingId, itemId, question }, w, { fe
 
 /** The chair approves the agenda: kept, and said in the review's conversation so the founders see it → { approvedAt, approvedBy } */
 export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, now = Date.now(), always = false } = {}) {
-  const { m, asker } = await chairGate(env, meetingId, w);
+  // (a "not a board meeting" ahead can be approved in Board: approving it makes it a board meeting, below)
+  const { m, asker } = await chairGate(env, meetingId, w, { notBoardOk: always && !!w?.admin });
+  // On the board page already, its review is over (./board-shared.js reviewOver): the review's Approve never shares it or
+  // emails the board again, and says so (approved by the chair before: who and when, as for any approved agenda).
+  // Approving in Board itself (always) is the founders' own, and goes on as it does. QA round 7, Nov 21 2026 (the lead)
+  if (!always && reviewOver(m)) {
+    await ensureAsks(env.DB);
+    const had = askOf(await env.DB.prepare("SELECT * FROM board_asks WHERE kind = 'chair' AND meeting_id = ? AND status = 'approved'").bind(m.id).first());
+    if (had) return { approvedAt: had.inAt, approvedBy: had.name, already: true };
+    throw Object.assign(err('It’s on the board page already, so there’s nothing left to review.', 409), { extra: { over: true } });
+  }
   // Test or off: the note as it'd go (test), nothing kept, so the real review still goes once it's On. Approving in
   // Board itself (always) is real either way: nothing else lets a meeting's agenda reach the board
   if (!always && asksMode(await readSettings(env.DB)) !== 'on') {
@@ -1318,21 +1356,40 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
     }
     return { approvedAt: nowIso(now), approvedBy: asker.name, test: true };
   }
-  const row = askOf(await env.DB.prepare("SELECT * FROM board_asks WHERE kind = 'chair' AND meeting_id = ?").bind(m.id).first());
-  if (row?.status === 'approved') return { approvedAt: row.inAt, approvedBy: row.name, already: true };
-  if (row) await env.DB.prepare("UPDATE board_asks SET status = 'approved', in_at = ?, name = ?, updated_at = ? WHERE id = ?").bind(nowIso(now), asker.name, nowIso(now), row.id).run();
-  else {
-    await env.DB.prepare(`INSERT INTO board_asks (id, kind, meeting_id, item_id, slug, name, email, title, status, asked_at, in_at, msg_ids, files, updated_at)
-      VALUES (?, 'chair', ?, '', ?, ?, ?, '', 'approved', ?, ?, '[]', '[]', ?)`).bind(uid('ask_'), m.id, asker.slug || 'admin', asker.name, asker.email, nowIso(now), nowIso(now), nowIso(now)).run();
+  // One approval, whoever presses at once (a double press, a second tab, the other admin, the chair): each write goes only
+  // while the meeting has none (one statement, so only one of them writes it), and the others are told it's approved
+  const at = nowIso(now);
+  let row = null;
+  for (let wrote = false, i = 0; !wrote; i++) {
+    if (i === 3) throw err('Someone else was approving this agenda at the same moment. Look again in a moment.', 409);
+    row = askOf(await env.DB.prepare("SELECT * FROM board_asks WHERE kind = 'chair' AND meeting_id = ? ORDER BY status = 'approved' DESC").bind(m.id).first());
+    if (row?.status === 'approved') return { approvedAt: row.inAt, approvedBy: row.name, already: true };
+    const none = "NOT EXISTS (SELECT 1 FROM board_asks WHERE kind = 'chair' AND meeting_id = ? AND status = 'approved')";
+    const r = row
+      ? await env.DB.prepare(`UPDATE board_asks SET status = 'approved', in_at = ?, name = ?, updated_at = ? WHERE id = ? AND ${none}`).bind(at, asker.name, at, row.id, m.id).run()
+      : await env.DB.prepare(`INSERT OR IGNORE INTO board_asks (id, kind, meeting_id, item_id, slug, name, email, title, status, asked_at, in_at, msg_ids, files, updated_at)
+        SELECT ?, 'chair', ?, '', ?, ?, ?, '', 'approved', ?, ?, '[]', '[]', ? WHERE NOT EXISTS (SELECT 1 FROM board_asks WHERE kind = 'chair' AND meeting_id = ?)`)
+        .bind(uid('ask_'), m.id, asker.slug || 'admin', asker.name, asker.email, at, at, at, m.id).run();
+    wrote = (r?.meta?.changes ?? r?.changes ?? 0) > 0;
   }
-  // The approval is what emails the board the agenda (./_board.js sendApprovedAgenda), or once they've had the sign-in email
+  // Approving one that isn't a board meeting makes it one, as sharing it does (./_board.js notBoardAfter): its agenda
+  // then goes to the board the way any approved agenda does (QA round 6, Nov 21 2026)
+  let madeBoard = false;
+  if (m.notBoard) {
+    await setOnMeeting(env.DB, m.id, { notBoard: false }, { by: asker.email || '' });
+    madeBoard = true;
+  }
+  // The approval is what emails the board the agenda (./_board.js sendApprovedAgenda), or once they've had the sign-in
+  // email. One that didn't go is said as that, in words (`agendaError`): never as waiting for the sign-in email
   let agenda = '';
+  let agendaError = '';
   try {
     const r = await sendApprovedAgenda(env, m.id, { now });
-    agenda = r?.sent ? 'sent' : r?.waiting ? 'waiting' : '';
+    agenda = r?.sent || r?.going ? 'sent' : r?.waiting ? 'waiting' : '';
   } catch (e) {
-    agenda = 'waiting';
     console.error('[board-asks] agenda email', e.message);
+    agenda = 'failed';
+    agendaError = agendaTrouble(e);
   }
   const next = agenda === 'sent' ? ' It’s on its way to the board.' : agenda === 'waiting' ? ' It goes to the board as soon as they’ve had the email on how to sign in.' : '';
   try {
@@ -1345,7 +1402,22 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
   } catch (e) {
     console.error('[board-asks] approved', e.message);
   }
-  return { approvedAt: nowIso(now), approvedBy: asker.name, agenda };
+  return { approvedAt: at, approvedBy: asker.name, agenda, ...(agendaError ? { agendaError } : {}), ...(madeBoard ? { madeBoard } : {}) };
+}
+
+/**
+ * Why the approved agenda's email didn't go, in words for whoever approved it (never Resend's code or a program's
+ * error), and what happens next: Board tries again by itself, unless it may have gone already
+ */
+function agendaTrouble(e) {
+  const r = e?.result;
+  if (e?.went) return 'The agenda is approved. Its email to the board may have gone (the site stopped partway through sending it), so Board won’t send it again by itself. Ask a board member whether it came before pressing Email the board.';
+  if (r?.failed) {
+    const t = sendTrouble(r.errors, { sent: r.sent, failed: r.failed });
+    return `The agenda is approved. ${t.words} ${t.unsure ? 'Board asks Resend again by itself in a few minutes, and Resend sends each one only if it hasn’t already.' : 'Board tries again by itself in a few minutes, or press Email the board.'}`;
+  }
+  if (e?.status && e.status < 500) return `The agenda is approved, but its email to the board didn’t go: ${String(e.message).replace(/[.\s]+$/, '')}.`;
+  return 'The agenda is approved, but its email to the board didn’t go. Board tries again by itself in a few minutes, or press Email the board.';
 }
 
 /** The chair's own note on an item (the chair's and the admins' only); empty takes it off → { notes } */
@@ -1419,19 +1491,70 @@ async function readChairReplies(ctx, m, a) {
   return out;
 }
 
+/**
+ * The agenda the chair is asked to review: the next meeting ahead, in the same two weeks the asks go out in (the chair
+ * sees an agenda before the board does, but not long before), once it isn't a draft. The review page shows it, and the
+ * chair's Approve, notes and questions reach it and nothing else (chairGate). One whose review is over (approved, or on
+ * the board page already: ./board-shared.js reviewOver) is still shown, as over (reviewFor), never as one to approve
+ */
+export function underReview(meetings, today, template) {
+  const m = nextUp(meetings, today);
+  return m && !agendaIsDraft(m, template) && daysUntil(today, m.date) <= ASK_DAYS ? m : null;
+}
+
+/**
+ * Why the chair's review of the next meeting `m` isn't open, so a review link says the true reason (../../public/admin/
+ * board/chair.js): its agenda already approved (`approved`: the chair's ask, approved, who and when; or the meeting on
+ * the board page already, where nothing ahead goes before its agenda is approved: ./_board.js holdUntilApproved), more
+ * than two weeks ahead (the day it opens, and whether its agenda is written yet), not written yet, or the review not on
+ * for the chair (`on`: Board → Settings has the asks On; till then only Board's admins review) → { meetingId, why,
+ * opens?, draft?, approvedBy?, approvedAt? } | null (it's open). Whether the review is on is decided before the date
+ * and the agenda's state: while it's off, no day it opens and no "once it's written" is promised (QA round 6)
+ */
+export function reviewShutWhy(m, { today, template, approved = null, on = true }) {
+  if (!m) return null;
+  if (reviewOver(m, { approved })) return { meetingId: m.id, why: 'approved', approvedBy: approved?.name || '', approvedAt: approved?.inAt || '' };
+  if (!on) return { meetingId: m.id, why: 'off' };
+  if (daysUntil(today, m.date) > ASK_DAYS) return { meetingId: m.id, why: 'early', opens: addDays(m.date, -ASK_DAYS), draft: agendaIsDraft(m, template) };
+  if (agendaIsDraft(m, template)) return { meetingId: m.id, why: 'draft' };
+  return null;
+}
+/**
+ * Why the review of the next meeting isn't open (reviewShutWhy), for a review link to say. While the review isn't on
+ * for the chair, that's the reason for every meeting ahead, so the same rule is asked of each of them and the later
+ * ones it's true of go with it, `later` (QA round 7: a link to the meeting after next said it wasn't on the board page;
+ * one already approved is still said to be, as round 5 decided)
+ */
+async function reviewShutFor(env, { meetings, today, on }) {
+  const m = nextUp(meetings, today);
+  if (!m) return null;
+  const { template } = await getSettings(env.DB);
+  const why = async (x) => reviewShutWhy(x, { today, template, approved: (await asksFor(env.DB, x.id)).find((a) => a.kind === 'chair' && a.status === 'approved') || null, on });
+  const shut = await why(m);
+  if (on) return shut;
+  // (ahead as the next one is: nextUp's own rule, asked of each)
+  const later = [];
+  for (const x of meetings) if (x.id !== m.id && nextUp([x], today) === x && (await why(x))?.why === 'off') later.push(x.id);
+  return later.length ? { ...shut, later } : shut;
+}
+
 /** What the chair's review page shows (the chair and Board's admins): the whole agenda ahead, approved or not, the chair's notes, the questions, each report's ask */
 async function reviewFor(env, { meetings, today }) {
   const settings = await getSettings(env.DB);
-  const m = nextUp(meetings, today);
-  // The same two weeks the asks go out in: the chair sees an agenda ahead before the board does, but not long before
-  if (!m || agendaIsDraft(m, settings.template) || daysUntil(today, m.date) > ASK_DAYS) return null;
+  const m = underReview(meetings, today, settings.template);
+  if (!m) return null;
   const [asks, notes, questions] = await Promise.all([asksFor(env.DB, m.id), chairNotesFor(env.DB, m.id), questionsFor(env.DB, m.id)]);
   const chair = asks.find((a) => a.kind === 'chair');
   return {
-    meeting: { ...forBoard({ ...m, shared: true }), shared: !!m.shared },
+    // (its locked numbers' meetings only the board's: _board.js snapshotFor)
+    meeting: { ...forBoard({ ...m, shared: true }), shared: !!m.shared, snapshot: snapshotFor(m.snapshot, meetings) },
     sentAt: chair?.status && chair.status !== 'approved' || chair?.thread ? chair.askedAt : '',
     approvedAt: chair?.status === 'approved' ? chair.inAt : '',
     approvedBy: chair?.status === 'approved' ? chair.name : '',
+    // Its review over (./board-shared.js reviewOver): approved, or on the board page already, which counts as approved.
+    // Shown as an approved agenda is (who and when, when the chair approved it), never with an Approve to press. QA
+    // round 7, Nov 21 2026 (the lead): a meeting on the board page keeps its review page, as over
+    over: reviewOver(m, { approved: chair?.status === 'approved' }),
     notes,
     questions,
     reports: perItem(asks, [m]).filter((a) => a.kind === 'report' && !['dropped', 'sending', 'question', 'failed', 'unknown'].includes(a.status))
@@ -1447,16 +1570,18 @@ const NOTE_KEY = /^(act|pos|bud)\|.{1,400}$/s;
 export async function saveLineNote(env, { meetingId, itemId, key, line = '', text = '' }, { member = null, admin = false, adminEmail = '' } = {}) {
   await ensureAsks(env.DB);
   if (!NOTE_KEY.test(String(key || ''))) throw err('Which line?', 400);
-  const m = await getMeeting(env.DB, String(meetingId || ''));
-  const today = todayEastern();
-  if (!m || (!admin && !forBoard(m) && !(isDate(m.date) && m.date >= today && !m.notBoard))) throw err('That meeting isn’t on the board page', 404);
-  const it = m.sections.flatMap((s) => s.items).find((x) => x.id === itemId);
-  if (!it) throw err('That item isn’t on the agenda any more', 404);
+  // Who may write on the item: the same as for its report (presenterGate), in this note's own words
+  let m;
+  let it;
+  try {
+    ({ m, it } = await presenterGate(env, String(meetingId || ''), String(itemId || ''), { member, admin }));
+  } catch (e) {
+    if (e.status === 403 && member) throw err('Only the person presenting this item can note its lines', 403);
+    if (e.status === 409 && member) throw err('This meeting’s minutes are approved, so its notes stay as they were', 409);
+    throw e;
+  }
   let by = { slug: '', name: '' };
   if (member) {
-    const people = await roster(env.DB);
-    if (!presentersOf(it, [...people.board, ...people.staff]).some((p) => p.slug === member.slug)) throw err('Only the person presenting this item can note its lines', 403);
-    if (m.minutes === 'approved') throw err('This meeting’s minutes are approved, so its notes stay as they were', 409);
     by = { slug: member.slug, name: member.name };
   } else {
     const people = await peopleRows(env.DB);
@@ -1494,18 +1619,22 @@ export async function portalExtras(env, { member = null, admin = false, meetings
     const ahead = meetings.filter((m) => isDate(m.date) && m.date >= today && !m.notBoard);
     const { template } = await getSettings(env.DB);
     // Before it's shared: only the two weeks the asks go out in, and only an agenda that isn't a draft
-    const presenting = member ? ahead.filter((m) => !m.shared && daysUntil(today, m.date) <= ASK_DAYS && !agendaIsDraft(m, template)).map((m) => {
+    const presenting = member ? ahead.filter((m) => presentingWindow(m, today, template)).map((m) => {
       const mine = (it) => presentersOf(it, everyone).some((p) => p.slug === member.slug);
       // Their items keep the numbers the whole agenda gives them (3.2), as the board page will show
       const full = forBoard({ ...m, shared: true });
       const num = new Map(full.sections.flatMap((s, si) => s.items.map((it, ii) => [it.id, { n: `${si + 1}.${ii + 1}`, sectionN: si + 1 }])));
-      const sections = m.sections.map((s) => ({ ...s, items: s.items.filter(mine).map((it) => ({ ...it, ...(num.get(it.id) || {}) })) })).filter((s) => s.items.length);
+      // (a part only by its name and its time, to put their items under: never its own notes, the secretary's)
+      const sections = m.sections.map((s) => ({ id: s.id, title: s.title, minutes: s.minutes, notes: '', items: s.items.filter(mine).map((it) => ({ ...it, ...(num.get(it.id) || {}) })) })).filter((s) => s.items.length);
       if (!sections.length) return null;
       const seen = forBoard({ ...m, shared: true, sections });
       const docs = new Set(seen.sections.flatMap((s) => s.items.flatMap((it) => it.docs || [])));
-      return { ...seen, files: seen.files.filter((f) => docs.has(f.id)), shared: false, presenting: true };
+      // Only what their items need: the meeting's name, day, time and place, their own items and those items' documents.
+      // Nothing else of a meeting the board can't see yet (its other items, motions, action items, who's coming, notes)
+      const bare = cleanMeeting({ id: m.id, date: m.date, start: m.start, end: m.end, location: m.location, address: m.address, minutes: m.minutes });
+      return { ...bare, title: meetingName(m), sections: seen.sections, files: seen.files.filter((f) => docs.has(f.id)), shared: false, presenting: true };
     }).filter(Boolean) : [];
-    const visible = admin ? meetings.map((m) => m.id) : [...meetings.filter((m) => m.shared).map((m) => m.id), ...presenting.map((m) => m.id)];
+    const visible = admin ? meetings.map((m) => m.id) : [...meetings.filter((m) => boardCopy(m)).map((m) => m.id), ...presenting.map((m) => m.id)];
     const notes = await notesFor(env.DB, visible);
     // A meeting not shared yet: only the notes on their own items
     for (const m of presenting) {
@@ -1518,15 +1647,20 @@ export async function portalExtras(env, { member = null, admin = false, meetings
     // The chair's review page: the chair (by seat) and Board's admins
     const on = asksMode(await readSettings(env.DB)) === 'on';
     const review = admin || (member?.seat === 'chair' && on) ? await reviewFor(env, { meetings, today }) : null;
+    // …and when it isn't open, why, so a link to it says the true reason (only to them)
+    const reviewShut = !review && (admin || member?.seat === 'chair') ? await reviewShutFor(env, { meetings, today, on: admin || on }) : null;
     return {
       review,
+      reviewShut,
       lineNotes: notes,
       myAsks: rows.map((a) => ({ meetingId: a.meetingId, itemId: a.itemId, due: a.due, status: a.status === 'asked' && Date.parse(a.due) <= Date.now() ? 'late' : a.status === 'asked' ? 'asked' : a.status, title: a.title, ...(admin ? { name: a.name } : {}) })),
       presenting,
     };
   } catch (e) {
+    // (People not answering: the page says so with Try again, never a page without the member's asks: round 10)
+    if (e?.unread) throw e;
     console.error('[board-asks] portal', e.message);
-    return { review: null, lineNotes: {}, myAsks: [], presenting: [] };
+    return { review: null, reviewShut: null, lineNotes: {}, myAsks: [], presenting: [] };
   }
 }
 

@@ -31,9 +31,9 @@ import { useCover, usePages } from '../board-present.js';
 import { Report } from '../board-report.js';
 import { BooksSlide, booksTitle } from './books.js';
 import { mdWords, mdPoints, mdFigures, mdNumber, mdPlain } from '../board-md.js';
-import { Pipeline, sized, nameFit } from './kanban.js';
+import { Pipeline, sized, nameFit, useFitted } from './kanban.js';
 import { CostsSlide } from './costs.js';
-import { useCashNow, useBudget, moneyTiles, mixOf, RevenueMix, budgetDue, readChangeAs, keepChangeAs, Both } from './money.js';
+import { useCashNow, useBudget, moneyTiles, mixOf, RevenueMix, MixHead, budgetDue, readChangeAs, keepChangeAs, Both } from './money.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -42,7 +42,7 @@ const CHANNEL = 'soard-board-screen';
 // live view to ask for: nothing there is run by a chair, and it never asks the board's routes for anything
 const LOCAL = location.pathname.startsWith('/admin/advisory/');
 // Whose meeting it is, in the words on the slides
-const HOME = LOCAL ? 'the advisors’ page' : 'the board page';
+const HOME = LOCAL ? 'the Advisory Board page' : 'the board page';
 const GROUP = LOCAL ? 'Advisory Board' : 'Board of Directors';
 const NEXT_ONE = LOCAL ? 'Next meeting' : 'Next board meeting';
 // The chair's own copy of the screen, small in Board's During (?mirror): it follows the chair but isn't a screen
@@ -169,14 +169,17 @@ function useFit(deps, { min = 0.6, lines = 0 } = {}) {
   return ref;
 }
 /**
- * A makeover family's name and a reveal's (kanban.js, the dates' line), each clamped to its lines like a title: drawn
- * whole (data-whole) when it fits them, so the clamp's edge never cuts a y's tail ("Maya", "1 family")
+ * A reveal's family name (RevealsSlide), clamped to its lines like a title: drawn whole (data-whole) when it fits them,
+ * so the clamp's edge never cuts a y's tail ("Maya"). Every name read first and written after, in one layout however
+ * many there are (one a name froze a phone: QA round 6); the makeovers' names are fitted the same way (kanban.js fitPipe)
  */
-const wholeIfFits = () => document.querySelectorAll('.bs-stage .bs-pipe__name, .bs-stage .bs-when__name').forEach((el) => {
-  el.removeAttribute('data-whole');
+function wholeNames(root) {
+  const names = [...root.querySelectorAll('.bs-when__name')];
+  for (const el of names) el.removeAttribute('data-whole');
   // (a line more than it shows is a whole line over; the letters' own tails are a few pixels)
-  if (el.scrollHeight < el.clientHeight + parseFloat(getComputedStyle(el).lineHeight) / 2) el.setAttribute('data-whole', '');
-});
+  const whole = names.map((el) => el.scrollHeight < el.clientHeight + parseFloat(getComputedStyle(el).lineHeight) / 2);
+  names.forEach((el, i) => el.toggleAttribute('data-whole', whole[i]));
+}
 /** A slide's title at its role's size (portal.css .bs-fit, --bs-fs), never more than three lines */
 function Title({ text, cls = '' }) {
   const ref = useFit([text], { lines: 3 });
@@ -569,7 +572,9 @@ const asPoints = (look) => look === 'cards' || look === 'numbers';
 /**
  * The presenter's notes beside an item, at a size a room reads: smaller only as far as it must be to fit the slide (to
  * 80%), then as few of its last points off as it takes, and a line says the rest are on the board page. A phone shows
- * them all (its stage scrolls)
+ * them all (its stage scrolls). On a slide of live facts the facts' row is never squeezed under them (it would be drawn
+ * over: QA round 4), and a slide that fits itself in an order of its own (the money's, CashSlide) runs the whole fit,
+ * with the notes last
  */
 function Points({ text }) {
   const ref = useRef(null);
@@ -577,39 +582,82 @@ function Points({ text }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
+    const slide = el.closest('.bs-item') || el.parentElement;
+    const more = () => el.querySelector('.bs-points__more');
+    // Where it can end: after a paragraph's sentence, a list's point or one of its own points under it, the deepest
+    // last (a point's own points go with it); one written as a single point or paragraph gives way too (QA round 5)
+    const units = () => [...el.children].filter((c) => c !== more()).flatMap(function walk(c) {
+      if (c.tagName === 'UL') return [...c.children].flatMap(walk);
+      if (c.tagName === 'LI') return [c, ...[...c.children].filter((x) => x.tagName === 'UL').flatMap(walk)];
+      if (c.tagName === 'P') return [...c.querySelectorAll(':scope > .bs-points__s')];
+      return [c];
+    });
+    const unclamp = () => el.querySelectorAll('.is-clamped').forEach((x) => { x.classList.remove('is-clamped'); x.style.removeProperty('--clamp'); });
+    const show = (k, all = units()) => {
+      all.forEach((u, i) => { u.hidden = i >= k; });
+      // (a list, or a paragraph, with nothing of it left showing goes too)
+      [...el.querySelectorAll('ul')].reverse().forEach((ul) => { ul.hidden = [...ul.children].every((li) => li.hidden); });
+      el.querySelectorAll(':scope > p:not(.bs-points__more)').forEach((p) => { p.hidden = [...p.children].every((x) => x.hidden); });
+      more().hidden = k >= all.length;
+      more().textContent = k >= all.length ? '' : `${all.length - k} more on ${HOME}`;
+    };
+    // All of them, at their full size
+    const reset = () => { unclamp(); show(Infinity); el.style.setProperty('--fit', '1'); };
     const fit = () => {
-      const more = el.querySelector('.bs-points__more');
-      // Where it can end: after a paragraph, or after one of a list's points (its own points go with it)
-      const units = [...el.children].filter((c) => c !== more).flatMap((c) => (c.tagName === 'UL' ? [...c.children] : [c]));
-      const show = (k) => {
-        units.forEach((u, i) => { u.hidden = i >= k; });
-        el.querySelectorAll(':scope > ul').forEach((ul) => { ul.hidden = [...ul.children].every((li) => li.hidden); });
-        more.hidden = k >= units.length;
-        more.textContent = `${units.length - k} more on ${HOME}`;
-      };
-      show(units.length);
+      if (!el.isConnected) return;
+      const all = units();
+      reset();
       let k = 1;
-      el.style.setProperty('--fit', '1');
       const stage = el.closest('.bs-stage');
       if (!stage || getComputedStyle(stage).overflowY === 'auto') return;
-      const slide = el.closest('.bs-item') || el.parentElement;
-      const over = () => slide.scrollHeight > slide.clientHeight + 1 || el.scrollHeight > el.clientHeight + 1;
+      const facts = slide.classList.contains('bs-item--facts') ? slide.querySelector(':scope > .bs-item__facts') : null;
+      const over = () => slide.scrollHeight > slide.clientHeight + 1 || el.scrollHeight > el.clientHeight + 1 || (!!facts && facts.scrollHeight > facts.clientHeight + 1);
       while (k > 0.8 && over()) { k = Math.round((k - 0.05) * 100) / 100; el.style.setProperty('--fit', String(k)); }
-      let n = units.length;
-      while (n > 1 && over()) show(--n);
+      let n = all.length;
+      while (n > 1 && over()) show(--n, all);
+      // Down to its first point or sentence and still too tall for the room there is: as many of its whole lines as fit
+      // (counted before any clamp, so a slide with room for 18 shows 18, never a fixed 3: QA round 6), and the line
+      // under it says the rest is on the board page (never drawn over the slide, never cut off unsaid)
+      if (over() && all.length) {
+        const first = all[0];
+        const text = first.matches('.bs-points__s') ? first : first.querySelector(':scope > .bs-points__t') || first;
+        more().hidden = false;
+        more().textContent = `The rest is on ${HOME}.`;
+        // (a sentence or a point's words run inline: a line box each; anything else by its height)
+        const inline = getComputedStyle(text).display === 'inline';
+        const lines = Math.max(1, inline ? text.getClientRects().length : Math.round(text.getBoundingClientRect().height / (parseFloat(getComputedStyle(text).lineHeight) || 1)));
+        text.classList.add('is-clamped');
+        const clamp = (k) => text.style.setProperty('--clamp', String(k));
+        // The most lines that fit: all but the last of them tried, halving the way (a few layouts, never one a line)
+        let lo = 1;
+        let hi = Math.max(1, lines - 1);
+        while (lo < hi) { const mid = Math.ceil((lo + hi) / 2); clamp(mid); if (over()) hi = mid - 1; else lo = mid; }
+        clamp(lo);
+      }
     };
-    fit();
-    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => fit()) : null;
-    ro?.observe(el.closest('.bs-item') || el);
-    document.fonts?.ready.then(fit);
-    return () => ro?.disconnect();
+    el.bsNotes = { reset, fit };
+    const run = () => (slide.bsFit ? slide.bsFit() : fit());
+    run();
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => run()) : null;
+    // Again whenever the slide's room changes, and whenever the live facts above the notes change size: drawn once their
+    // answer is in, they can take more room than what stood there while it was asked for (the money's "…" tile, then "No
+    // figures yet"), and the notes fitted around the first would run past the slide's bottom (Board QA round 8's full
+    // check: 7 lines shown where 6 fit, by which came first). A row of facts is sized by what's in it, so any change to
+    // what's in it changes its size
+    ro?.observe(slide);
+    const facts = slide.classList.contains('bs-item--facts') ? slide.querySelector(':scope > .bs-item__facts') : null;
+    if (facts) ro?.observe(facts);
+    document.fonts?.ready.then(run);
+    return () => { ro?.disconnect(); delete el.bsNotes; };
   }, [text]);
   if (!blocks.length) return null;
-  const list = (nodes) => html`<ul dir="auto">${nodes.map((n) => html`<li dir="auto">${n.text}${n.children.length ? list(n.children) : null}</li>`)}</ul>`;
+  const list = (nodes) => html`<ul dir="auto">${nodes.map((n) => html`<li dir="auto"><span class="bs-points__t">${n.text}</span>${n.children.length ? list(n.children) : null}</li>`)}</ul>`;
+  // (a paragraph by its sentences, so it can end after one: the fit above)
+  const sentences = (t) => String(t).split(/(?<=[.!?])\s+(?=\S)/).filter(Boolean);
   const out = [];
   let run = [];
   for (const b of blocks) {
-    if (b.para) { if (run.length) { out.push(list(run)); run = []; } out.push(html`<p dir="auto">${b.text}</p>`); } else run.push(b);
+    if (b.para) { if (run.length) { out.push(list(run)); run = []; } out.push(html`<p dir="auto">${sentences(b.text).map((x, i, a) => html`<span class="bs-points__s">${x}${i < a.length - 1 ? ' ' : ''}</span>`)}</p>`); } else run.push(b);
   }
   if (run.length) out.push(list(run));
   return html`<div class="bs-points" ref=${ref}>${out}<p class="bs-points__more" hidden></p></div>`;
@@ -646,19 +694,29 @@ function CashSlide({ n, data, date, as = 'pct' }) {
   const other = new Map(moneyTiles({ cash, budget, n, due: budgetDue(data, upTo), as: as === 'usd' ? 'pct' : 'usd' }).map((t) => [t.k, t.sub]));
   const books = upTo ? n?.books : data.numbers.books;
   // Closer together (their room around the figures, never the words) while the slide runs past the bottom; past that,
-  // the row of documents coming under them goes (they're the next slides, the rail says so)
+  // the row of documents coming under them goes (they're the next slides, the rail says so), then where the revenue
+  // came from (QuickBooks' statement of activities, a slide after this one, has each line), and only then the
+  // presenter's notes, smaller and then fewer with the rest said to be on the board page (Points). Never one drawn over
+  // another: the slide fits in that order as one, whichever part asks (QA round 4: the notes were drawn over the figures)
   const ref = useRef(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return undefined;
+    const slide = el.closest('.bs-item') || el.parentElement;
     const fit = () => {
-      // (a late call, the fonts in after the figures gave way to "No figures yet": nothing to fit)
-      if (!el.isConnected) return;
+      // A late call, the figures gone ("No figures yet" in their place, before this effect is let go): the slide's fit is
+      // the notes' own again (Points), never nothing, or they'd stay fitted around figures no longer there (Board QA round
+      // 8's full check: 7 lines shown where 6 fit)
+      if (!el.isConnected) { if (slide.bsFit === fit) delete slide.bsFit; slide.querySelector('.bs-points')?.bsNotes?.fit(); return; }
       const stage = el.closest('.bs-stage');
-      const slide = el.closest('.bs-item') || el.parentElement;
       const coming = slide.querySelector('.bs-coming');
       const row = coming && coming.parentElement.children.length === 1 ? coming.parentElement : coming;
       if (row) row.hidden = false;
+      const mixEl = el.querySelector('.bs-mix');
+      if (mixEl) mixEl.hidden = false;
+      // The notes as they'd be with the room to themselves: the figures give way first
+      const notes = slide.querySelector('.bs-points')?.bsNotes || null;
+      notes?.reset();
       // Past the slide's bottom, or past its own row (squeezed by the rows under it, it would run over them)
       const cell = el.parentElement;
       const over = () => slide.scrollHeight > slide.clientHeight + 1 || cell.scrollHeight > cell.clientHeight + 1;
@@ -671,15 +729,18 @@ function CashSlide({ n, data, date, as = 'pct' }) {
       if (!stage || getComputedStyle(stage).overflowY === 'auto') return;
       tighten();
       if (row && over()) { row.hidden = true; tighten(); }
+      if (mixEl && over()) { mixEl.hidden = true; tighten(); }
+      if (notes && over()) notes.fit();
     };
+    slide.bsFit = fit;
     fit();
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => fit()) : null;
-    ro?.observe(el.closest('.bs-item') || el);
+    ro?.observe(slide);
     document.fonts?.ready.then(fit);
-    return () => ro?.disconnect();
+    return () => { ro?.disconnect(); if (slide.bsFit === fit) delete slide.bsFit; };
   }, [JSON.stringify(tiles.map((t) => [t.value, t.sub])), !!mixOf(books)]);
   if (!tiles.length) return html`<${Empty} mark="$" title="No figures yet" line="The money shows here once QuickBooks or a bank is connected." />`;
-  const mix = mixOf(books) ? html`<div class="bs-mix"><p class="bs-figs__label">Where ${books.year}’s revenue came from</p><${RevenueMix} books=${books} /></div>` : null;
+  const mix = mixOf(books) ? html`<div class="bs-mix"><${MixHead} books=${books} cls="bs-figs__label" /><${RevenueMix} books=${books} /></div>` : null;
   // (an account below zero is a plain tile, never the yellow one)
   return html`<div class="bs-money" ref=${ref}><ul class="bs-figs" style=${`--n:${tiles.length}`}>${tiles.map((t) => html`<li key=${t.k} class=${t.quiet ? 'is-quiet' : null}><span class="bs-figs__label">${t.label}</span><span class=${`bs-figs__value ${/[a-z]{2,}/i.test(t.value) ? 'is-words' : ''}`}>${t.value}</span>${t.pct != null ? html`<span class="bs-figs__bar" role="img" aria-label=${`${t.pct}% of the budget`}><i style=${`--p:${Math.min(100, t.pct)}%`}></i></span>` : null}${t.sub ? html`<span class="bs-figs__sub"><${Both} as=${as} pct=${as === 'usd' ? other.get(t.k) : t.sub} usd=${as === 'usd' ? t.sub : other.get(t.k)} /></span>` : null}</li>`)}</ul>${mix}</div>`;
 }
@@ -689,13 +750,16 @@ function CashSlide({ n, data, date, as = 'pct' }) {
  * month not set yet over the families due then, photo first. Fits the screen however many there are (the first ten)
  */
 function RevealsSlide({ n }) {
+  const vw = typeof innerWidth === 'number' ? innerWidth : 1600;
+  const vh = typeof innerHeight === 'number' ? innerHeight : 900;
+  // (its names whole where they fit, measured once it's drawn and again only when the reveals or the screen change)
+  const ref = useFitted(wholeNames, [JSON.stringify([n?.reveals, n?.projects]), vw, vh]);
   const set = (r) => !!(r.confirmed && r.date);
   const all = [...(n?.reveals || [])].map((r) => ({ ...r, at: set(r) ? r.date : windowStart(r.window) || '9999' })).sort((a, b) => a.at.localeCompare(b.at));
   if (!all.length) return html`<p class="bs-quiet bs-pipe__none">No reveals on the calendar yet.</p>`;
   // As many as fit across the screen at a readable size (about 8.5 of the screen's units a stop, 135px at 1080p), the
   // rest counted after them
-  const vw = typeof innerWidth === 'number' ? innerWidth : 1600;
-  const unit = Math.min((typeof innerHeight === 'number' ? innerHeight : 900) * 0.0148, vw * 0.0083);
+  const unit = Math.min(vh * 0.0148, vw * 0.0083);
   const room = Math.max(4, Math.floor((vw * 0.8) / (unit * 8.5)));
   let list = all.slice(0, 10);
   const stopsOf = (l) => new Set(l.map((r) => (set(r) ? `d:${r.date}` : `w:${r.window?.month || ''}:${r.window?.part || ''}`))).size;
@@ -732,7 +796,7 @@ function RevealsSlide({ n }) {
   };
   // One column a photo across every stop (each stop spans its own), so every photo is the same width
   const tmpl = [...stops.map((g) => Array(across(g)).fill('minmax(0, 1fr)').join(' ')), ...(more ? ['minmax(0, 1fr)'] : [])].join(' ');
-  return html`<div class="bs-when" data-rows=${rows} data-busy=${units > 4 ? (units > 6 ? 'more' : 'yes') : null} style=${`--tmpl:${tmpl};--rows:${rows};--units:${units}`}>
+  return html`<div class="bs-when" data-rows=${rows} data-busy=${units > 4 ? (units > 6 ? 'more' : 'yes') : null} style=${`--tmpl:${tmpl};--rows:${rows};--units:${units}`} ref=${ref}>
     <ol class="bs-when__line">${stops.map((g) => html`<li class=${g.set ? 'is-set' : ''} style=${`--across:${across(g)}`} key=${g.key}>${head(g)}</li>`)}${more ? html`<li class="is-more"><strong>+${more} more</strong><span>after these</span></li>` : null}</ol>
     <div class="bs-when__kids">${stops.map((g) => html`<div class=${`bs-when__stop ${g.set ? 'is-set' : ''}`} style=${`--across:${across(g)}`} key=${g.key}><p class="bs-when__stophead">${head(g)}</p><ul>${g.list.map((r) => {
       const photo = photoOf(r);
@@ -1007,7 +1071,7 @@ function ItemMotion({ text, mo = null, big = false }) {
   return html`<div class=${`bs-motion bs-motion--item ${big ? 'is-big' : ''}`} ref=${ref}>
     <p class="bs-eyebrow">The board votes on</p>
     <p class="bs-motion__text" dir="auto">${t}</p>
-    ${mo?.tally ? html`<p class=${`bs-motion__result is-${mo.result}`}>${said} ${mo.tally.for}–${mo.tally.against}${mo.tally.abstain ? `, ${mo.tally.abstain} abstaining` : ''}</p>`
+    ${mo?.tally ? html`<p class=${`bs-motion__result is-${mo.result}`}>${said} ${mo.tally.for} to ${mo.tally.against}${mo.tally.abstain ? `, ${mo.tally.abstain} abstaining` : ''}</p>`
       : mo?.by ? html`<p class="bs-quiet">Moved by ${mo.by}${mo.second ? `, seconded by ${mo.second}` : ''}</p>` : null}
   </div>`;
 }
@@ -1158,14 +1222,6 @@ export function Screen({ id, data, d, onBack = null }) {
     const on = (e) => { if (e.key === 'bd-change-as') setChgNow(readChangeAs()); };
     addEventListener('storage', on);
     return () => removeEventListener('storage', on);
-  }, []);
-  // The makeovers' family names and the reveals' whole when they fit their lines (after every render, as the window
-  // changes and once the fonts are in)
-  useEffect(wholeIfFits);
-  useEffect(() => {
-    addEventListener('resize', wholeIfFits);
-    document.fonts?.ready.then(wholeIfFits);
-    return () => removeEventListener('resize', wholeIfFits);
   }, []);
   const [, setTick] = useState(0);
   const ch = useRef(null);
@@ -1462,7 +1518,7 @@ export function Screen({ id, data, d, onBack = null }) {
         ${v.live.endedAt ? html`<p class="bs-cover__when">The meeting ended at ${new Date(v.live.endedAt).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' })}</p>` : null}
         ${next ? html`<p class="bs-end__next"><${Tile} d=${next.date} /><span><small>${NEXT_ONE}</small><strong>${longDate(next.date)}</strong>${next.start ? html`<span>${timeRange(next.start, next.end)}</span>` : null}</span></p>` : null}
       </div>
-      ${decided.length ? html`<div class="bs-end__recap"><p class="bs-eyebrow">What the board decided today</p><ol class="bs-decided">${decided.slice(0, 5).map((x) => html`<li key=${x.id}><span dir="auto">${x.text}</span><b class=${`is-${x.result}`}>${x.tally ? `${{ passed: 'Passed', failed: 'Did not pass', tabled: 'Tabled' }[x.result] || 'Recorded'} ${x.tally.for}–${x.tally.against}` : { passed: 'Passed', failed: 'Did not pass', tabled: 'Tabled' }[x.result] || 'Recorded'}</b></li>`)}</ol>${decided.length > 5 ? html`<p class="bs-decided__more">and ${decided.length - 5} more decided today</p>` : null}</div>` : null}
+      ${decided.length ? html`<div class="bs-end__recap"><p class="bs-eyebrow">What the board decided today</p><ol class="bs-decided">${decided.slice(0, 5).map((x) => html`<li key=${x.id}><span dir="auto">${x.text}</span><b class=${`is-${x.result}`}>${x.tally ? `${{ passed: 'Passed', failed: 'Did not pass', tabled: 'Tabled' }[x.result] || 'Recorded'} ${x.tally.for} to ${x.tally.against}` : { passed: 'Passed', failed: 'Did not pass', tabled: 'Tabled' }[x.result] || 'Recorded'}</b></li>`)}</ol>${decided.length > 5 ? html`<p class="bs-decided__more">and ${decided.length - 5} more decided today</p>` : null}</div>` : null}
     </div>`;
   } else if (stop.kind === 'since') {
     stage = html`<${SinceSlide} v=${v} n=${data.numbers} meeting=${meeting} />`;

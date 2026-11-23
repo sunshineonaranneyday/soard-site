@@ -8,17 +8,23 @@
  * starting on a new sheet with what it is at the top. The browser's print
  * window then prints it, or saves it as one PDF.
  *
+ * A meeting that's been held prints as its record, everything its page shows: where its minutes are, who was there,
+ * each part with the notes under it, the decisions and the action items; then the minutes as a document (the signed
+ * copy once there is one, else the file they were written in; the words of a Word file that can't be drawn), then
+ * the rest of its files.
+ *
  * The pages are the ones the screen shows (./docs.js), so the printed
  * "page 3" is the screen's page 3. Built with the DOM's own text (never a
  * file's HTML), and taken away again once the print window closes.
  */
 
-import { openDoc } from './docs.js';
+import { openDoc, fileUrl } from './docs.js';
 import {
   meetingName, longDate, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, itemFiles, looseFiles, fileTitle, isDate, clock, sectionPlan, MORE,
-  showsOf, booksDraw, isStatement,
+  showsOf, booksDraw, isStatement, attendanceCounts, quorumFor, tallyText, minutesFileOf, docxText, heldEarly, todayEastern, shortDate,
 } from '../board-shared.js';
-import { moneyFor, moneyTiles, mixOf, shareOf, changeOf, storeOf, storeChange, budgetMonthsText, stepText, readChangeAs, changeIn, overIn } from './money.js';
+import { moneyFor, moneyTiles, mixOf, mixLeftOut, mixLessWords, changeOf, ptsOf, storeOf, storeChange, budgetMonthsText, stepText, readChangeAs, changeIn, overIn, budgetName } from './money.js';
+import { minutesState, MINUTES_SAID } from './minutes.js';
 import { reportDom, motionDom } from '../board-report.js';
 import { h, render } from '../vendor.js';
 import { YearCompare } from './books.js';
@@ -83,12 +89,17 @@ function moneyBox(n, money) {
   return box;
 }
 
-/** Where the year's revenue came from on paper (./money.js mixOf): the bar, then each category beside last year's same days */
+/**
+ * Where the year's revenue came from on paper (./money.js mixOf): its heading and what it leaves out beside it, as the
+ * page has them (./money.js MixHead), the bar, then each category beside last year's same days
+ */
 function revenueBox(books) {
   const mix = mixOf(books);
   if (!mix) return null;
   const box = el('div', 'bpp-mix');
-  box.append(el('p', 'bpp-mix__h', `Where ${mix.year}’s revenue came from`));
+  const title = el('p', 'bpp-mix__h', `Where ${mix.year}’s revenue came from`);
+  if (mixLeftOut(mix)) title.append(' ', el('small', '', mixLeftOut(mix)));
+  box.append(title);
   const bar = el('div', 'bpp-mix__bar');
   for (const x of mix.parts) { const seg = el('span', `bp-tone--${x.tone}`); seg.style.setProperty('--p', `${x.w}%`); bar.append(seg); }
   box.append(bar);
@@ -103,18 +114,21 @@ function revenueBox(books) {
     const tr = el('tr');
     const name = el('th', '');
     name.append(el('i', `bpp-mix__key bp-tone--${x.tone}`), document.createTextNode(x.name));
-    tr.append(name, el('td', 'num', signed(x.amount)), el('td', 'num', shareOf(x.amount, mix.total)));
-    if (last) tr.append(el('td', 'num', x.last == null ? '–' : signed(x.last)), el('td', 'num', changeOf(x.amount, x.last) || '–'));
+    tr.append(name, el('td', 'num', signed(x.amount)), el('td', 'num', x.share));
+    if (last) tr.append(el('td', 'num', x.last == null ? '' : signed(x.last)), el('td', 'num', changeOf(x.amount, x.last) || (x.last === 0 && x.amount > 0 ? 'New' : '')));
     tbody.append(tr);
   }
   t.append(thead, tbody);
   box.append(t);
+  // (what's below zero, by its name, so the parts less it are the revenue: ./money.js mixOf)
+  if (mix.less.length) box.append(el('p', 'bpp-mix__less', mixLessWords(mix)));
   return box;
 }
 
 const fullDate = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
 const shortDay = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
-const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).replace('-', '')}` : '–');
+// (nothing to show: a blank cell, never a dash)
+const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).replace('-', '')}` : '');
 /**
  * The statements from QuickBooks on paper, every line (numbers.books.statements), beside the same day a year before,
  * and QuickBooks' budget against them; the presenter's notes (./review.js) each under its line
@@ -132,7 +146,7 @@ function statementsBox(s, budget = null, notes = null) {
   for (const [title, rows, heads, which] of [
     ['Statement of financial position', s.position, null, 'pos'],
     [`Statement of activities, January 1 to ${short}`, s.activity, null, 'act'],
-    ...(bud ? [[`Budget against actual, January 1 to ${short} (QuickBooks’ ${bud.name}, ${budgetMonthsText(bud.months)} of ${bud.of} months${stepText(bud.step)})`, bud.rows.map((r) => ({ ...r, p: r.b })), ['Actual', 'Budget', 'Over (under)'], 'bud']] : []),
+    ...(bud ? [[`Budget against actual, January 1 to ${short} (${budgetName(bud)}, ${budgetMonthsText(bud.months)} of ${bud.of} months${stepText(bud.step)})`, bud.rows.map((r) => ({ ...r, p: r.b })), ['Actual', 'Budget', 'Over (under)'], 'bud']] : []),
   ]) {
     if (!rows?.length) continue;
     const keys = said.size ? lineKeysOf(rows, which) : [];
@@ -150,7 +164,7 @@ function statementsBox(s, budget = null, notes = null) {
       th.style.paddingLeft = `${r.d * 0.8}em`;
       tr.append(th);
       if (r.k === 'head') th.colSpan = prior ? 4 : 2;
-      else { tr.append(el('td', 'num', signed(r.a))); if (prior) tr.append(el('td', 'num', signed(r.p)), el('td', 'num', heads ? overIn(r.a, r.p, as) : changeIn(r.a, r.p, as) || '–')); }
+      else { tr.append(el('td', 'num', signed(r.a))); if (prior) tr.append(el('td', 'num', signed(r.p)), el('td', 'num', heads ? overIn(r.a, r.p, as) : changeIn(r.a, r.p, as))); }
       tbody.append(tr);
       const note = keys.length && r.k !== 'head' ? said.get(keys[i]) : null;
       if (note) {
@@ -198,15 +212,15 @@ function storeBox(books) {
   for (const x of st.lines) {
     const tr = el('tr', x.k === 'profit' ? 'bpp-stmt__sum' : '');
     tr.append(el('th', '', x.name), el('td', 'num', signed(x.amount)));
-    if (st.lastYear) tr.append(el('td', 'num', x.last == null ? '–' : signed(x.last)), el('td', 'num', storeChange(x, readChangeAs()) || '–'));
+    if (st.lastYear) tr.append(el('td', 'num', x.last == null ? '' : signed(x.last)), el('td', 'num', storeChange(x, readChangeAs())));
     tbody.append(tr);
   }
   // Its profit as a share of its sales, beside last year's
   if (st.margin != null) {
-    const pct = (m) => (m == null ? '–' : `${Math.round(m * 100)}%`);
+    const pct = (m) => (m == null ? '' : `${Math.round(m * 100)}%`);
     const tr = el('tr', '');
     tr.append(el('th', '', 'Profit as a share of sales'), el('td', 'num', pct(st.margin)));
-    if (st.lastYear) tr.append(el('td', 'num', pct(st.lastMargin)), el('td', 'num', st.lastMargin == null ? '–' : `${st.margin >= st.lastMargin ? '▲' : '▼'} ${Math.abs(Math.round((st.margin - st.lastMargin) * 100))} pts`));
+    if (st.lastYear) tr.append(el('td', 'num', pct(st.lastMargin)), el('td', 'num', st.lastMargin == null ? '' : ptsOf(st.margin, st.lastMargin)));
     tbody.append(tr);
   }
   t.append(thead, tbody);
@@ -237,8 +251,70 @@ function liveBox(kind, n, m, money, notes = null, books = n?.books) {
   return box;
 }
 
-/** The agenda as the first pages: the meeting, then each part with its time, and each item */
-function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, books = numbers?.books, costsNumbers = numbers }) {
+const RESULT = { passed: 'Passed', failed: 'Did not pass', tabled: 'Tabled' };
+/** A part of the record under its own heading ("Who was there", "Decisions", "Action items") */
+function recordBox(title, cls) {
+  const box = el('section', `bpp-rec ${cls}`);
+  box.append(el('h2', 'bpp-rec__h', title));
+  return box;
+}
+/**
+ * Who was there, as the meeting's page says it: how many of the board and the quorum, then each board member by how
+ * they came; staff and guests who were there after them, never among the board members counted
+ */
+function whoBox(m, quorum = 0) {
+  const board = m.attendance.filter((p) => p.kind === 'board');
+  const by = (st) => board.filter((p) => p.status === st).map((p) => p.name).filter(Boolean);
+  const also = m.attendance.filter((p) => p.kind !== 'board' && (p.status === 'present' || p.status === 'remote') && p.name).map((p) => `${p.name}${p.status === 'remote' ? ' (by video)' : ''}`);
+  const rows = [['Here', by('present')], ['By video', by('remote')], ['Excused', by('excused')], ['Not there', by('absent')], ['Also there', also]].filter(([, l]) => l.length);
+  if (!rows.length) return null;
+  const box = recordBox('Who was there', 'bpp-rec--who');
+  const c = attendanceCounts(m);
+  const need = quorumFor(m, quorum);
+  const onVideo = by('remote').length;
+  if (c.boardHere) box.append(el('p', 'bpp-rec__lead', `${c.boardHere} of ${c.board} board members${need ? (c.boardHere >= need ? ', a quorum' : `, short of a quorum (${need})`) : ''}${onVideo ? `, ${onVideo} by video` : ''}.`));
+  const dl = el('dl', 'bpp-rec__who');
+  for (const [k, names] of rows) { const d = el('div'); d.append(el('dt', '', k), el('dd', '', names.join(', '))); dl.append(d); }
+  box.append(dl);
+  return box;
+}
+/** The decisions: each motion, how it went (its vote when there was one) and who moved and seconded it */
+function decisionsBox(m) {
+  const list = m.motions.filter((x) => x.text);
+  if (!list.length) return null;
+  const box = recordBox('Decisions', 'bpp-rec--dec');
+  const ul = el('ul', 'bpp-rec__list');
+  for (const x of list) {
+    const li = el('li');
+    li.append(el('p', 'bpp-rec__what', x.text), el('p', 'bpp-rec__how', [tallyText(x) || RESULT[x.result] || 'Recorded', x.by ? `moved by ${x.by}` : '', x.second ? `seconded by ${x.second}` : ''].filter(Boolean).join(', ')));
+    ul.append(li);
+  }
+  box.append(ul);
+  return box;
+}
+/** The action items: each with who, by when, and whether it's done */
+function actionsBox(m) {
+  const list = m.actions.filter((a) => a.text);
+  if (!list.length) return null;
+  const box = recordBox('Action items', 'bpp-rec--act');
+  const ul = el('ul', 'bpp-rec__list');
+  for (const a of list) {
+    const li = el('li', a.done ? 'is-done' : '');
+    li.append(el('p', 'bpp-rec__what', `${a.done ? '☑' : '☐'} ${a.text}`), el('p', 'bpp-rec__how', [a.ownerName, a.due ? `due ${shortDate(a.due)}` : '', a.done ? `done${a.doneOn ? ` ${shortDate(a.doneOn)}` : ''}` : ''].filter(Boolean).join(' · ')));
+    ul.append(li);
+  }
+  box.append(ul);
+  return box;
+}
+/** Where a held meeting's minutes are, in a line: "Minutes approved October 20, 2026", "Draft minutes", "No minutes yet" */
+const minutesLine = (m) => (minutesState(m) === 'approved' && isDate(m.approvedOn) ? `Minutes approved ${longDate(m.approvedOn).replace(/^\w+, /, '')}` : MINUTES_SAID[minutesState(m)]);
+
+/**
+ * The agenda as the first pages: the meeting, then each part with its time, and each item. A meeting that's been held
+ * (`held`) as its record: where its minutes are and who was there first, each part with the notes under it (no
+ * planned times: they were the plan), then the decisions; the action items whenever it has any, as its page shows them
+ */
+function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, books = numbers?.books, costsNumbers = numbers, held = false, quorum = 0 }) {
   let booked = false;
   // The statements QuickBooks draws on the money item aren't printed again as files
   const drawsSt = booksDraw(books).some((b) => b === 'act' || b === 'pos');
@@ -250,9 +326,11 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
   if (when) head.append(el('p', 'bpp-when', when));
   const place = [m.location, m.address].filter(Boolean).join(', ');
   if (place) head.append(el('p', 'bpp-muted', place));
+  if (held) head.append(el('p', 'bpp-status', minutesLine(m)));
   sheet.append(head);
+  if (held) { const who = whoBox(m, quorum); if (who) sheet.append(who); }
   const items = agendaItems(m);
-  const plan = sectionPlan(m);
+  const plan = held ? new Map() : sectionPlan(m);
   const ol = el('ol', 'bpp-secs');
   m.sections.filter((s) => s.title || s.items.length).forEach((s, si) => {
     // A part with a report may run on to the next sheet (kept whole, it would leave this one blank)
@@ -262,13 +340,20 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
     h.append(el('span', 'bpp-sec__n', String(si + 1).padStart(2, '0')), el('span', 'bpp-sec__name', s.title || 'Agenda'));
     if (t) h.append(el('span', 'bpp-sec__time', [t.start ? clock(t.start) : '', `${t.minutes} min`].filter(Boolean).join(' · ')));
     li.append(h);
+    // The part's own notes (the minutes under its heading), as its page shows them
+    const partNotes = points(s.notes);
+    if (partNotes) { partNotes.classList.add('bpp-sec__notes'); li.append(partNotes); }
     for (const it of s.items) {
       const row = el('div', 'bpp-item');
+      // Its number in a column of its own, its title wrapping beside it and who presents it following on (never a number
+      // alone on its line, or a line starting with the dot between them)
       const tt = el('h3', 'bpp-item__title');
       const n = items.find((x) => x.id === it.id);
-      tt.append(el('span', 'bpp-num', n?.label || ''), el('span', 'bpp-item__name', it.title || 'Item'));
+      const words = el('span', 'bpp-item__words');
+      words.append(el('span', 'bpp-item__name', it.title || 'Item'));
       const who = presentersOf(it, people).map((p) => p.name);
-      if (who.length) tt.append(el('span', 'bpp-who', who.join(' & ')));
+      if (who.length) words.append(el('span', 'bpp-who', who.join(' & ')));
+      tt.append(el('span', 'bpp-num', n?.label || ''), words);
       row.append(tt);
       if (it.confidential) row.append(el('p', 'bpp-flag', 'Board only · please don’t share'));
       const notes = points(it.notes);
@@ -294,8 +379,38 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
     }
     ol.append(li);
   });
-  sheet.append(ol);
+  if (ol.children.length) sheet.append(ol);
+  for (const box of [held ? decisionsBox(m) : null, actionsBox(m)]) if (box) sheet.append(box);
   return sheet;
+}
+
+/** The minutes as a document: the signed copy once there is one (the minutes as approved, signed), else the file they're kept in */
+function minutesDoc(m) {
+  const onItem = new Set(m.sections.flatMap((s) => s.items.flatMap((it) => it.docs || [])));
+  const signed = m.files.filter((f) => f.kind === 'signed').at(-1);
+  if (signed) return { f: signed, label: 'The minutes, signed' };
+  // (the one the page's "The minutes as written" opens: ../board-shared.js minutesFileOf; never last meeting's on an item)
+  const kept = minutesFileOf({ ...m, files: m.files.filter((f) => !onItem.has(f.id)) });
+  return kept ? { f: kept, label: 'The minutes as written' } : null;
+}
+const isDocx = (f) => /\.docx$/i.test(String(f?.name || '')) || /wordprocessingml/i.test(String(f?.type || ''));
+/** A Word file's words, when its pages can't be drawn: the minutes on paper either way. → a page (section) or null */
+async function wordsPage(f, label) {
+  if (!isDocx(f)) return null;
+  try {
+    const r = await fetch(fileUrl(f), { credentials: 'same-origin' });
+    if (!r.ok) return null;
+    const words = String(await docxText(new Uint8Array(await r.arrayBuffer())) || '').split('\n').map((l) => l.trim()).filter(Boolean);
+    if (!words.length) return null;
+    const page = el('section', 'bpp-page bpp-words');
+    const cap = el('p', 'bpp-cap');
+    cap.append(el('b', '', label), document.createTextNode(` · ${fileTitle(f.name)}`));
+    page.append(cap);
+    for (const line of words) page.append(el('p', '', line));
+    return page;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -304,12 +419,17 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
  */
 export async function printAll(m, { people = [], numbers = null, meetings = [], data = null, onStep = () => {}, signal } = {}) {
   const items = agendaItems(m);
+  // Held, as its page has it (./portal.js MeetingDetail): its record, and its minutes as a document after it
+  const today = data?.today || todayEastern();
+  const held = !(m.date >= today && !heldEarly(m, today) && !m.minutesFrom);
+  const minutes = held ? minutesDoc(m) : null;
   // The books the way the money's figures go (./portal.js CashBlock): today's for a meeting today or ahead, the locked
   // ones for a past meeting
   const books = data && m.date >= data.today ? data.numbers?.books || numbers?.books : numbers?.books;
   const drawsSt = booksDraw(books).some((b) => b === 'act' || b === 'pos');
   const docFiles = (it) => itemFiles(m, it, meetings).filter((f) => !(drawsSt && showsOf(it).includes('cash') && isStatement(f)));
   const groups = [
+    ...(minutes ? [{ it: { title: minutes.label }, label: '', files: [minutes.f], minutes: true }] : []),
     ...m.sections.flatMap((s) => s.items).map((it) => ({ it, label: items.find((x) => x.id === it.id)?.label || '', files: docFiles(it) })),
     { it: MORE, label: '', files: looseFiles(m) },
   ].filter((g) => g.files.length);
@@ -321,18 +441,22 @@ export async function printAll(m, { people = [], numbers = null, meetings = [], 
   // What makeovers cost follows the money's date rule too: today's for a meeting today or ahead (./costs.js useCosts)
   const live = data && m.date >= data.today ? data.numbers : null;
   const costsNumbers = live ? { ...numbers, costs: live.costs ?? numbers?.costs, operating: live.operating ?? numbers?.operating, cash: live.cash ?? numbers?.cash, books: live.books ?? numbers?.books } : numbers;
-  root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, books, costsNumbers }));
+  root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, books, costsNumbers, held, quorum: data?.quorum || 0 }));
   // How many pages, so the progress can say "12 of 40"
   const docs = [];
   for (const g of groups) for (const f of g.files) {
     if (signal?.aborted) return;
     onStep({ done: 0, of: 0, what: fileTitle(f.name) });
     const doc = await openDoc(f).catch(() => null);
-    if (doc) docs.push({ g, f, doc });
+    // The minutes in a Word file that can't be drawn: its words instead, so they're on paper either way
+    const words = g.minutes && (!doc || doc.kind === 'other') ? await wordsPage(f, g.it.title) : null;
+    if (words) docs.push({ g, f, words });
+    else if (doc) docs.push({ g, f, doc });
   }
-  const of = docs.reduce((n, x) => n + x.doc.count, 0);
+  const of = docs.reduce((n, x) => n + (x.words ? 1 : x.doc.count), 0);
   let done = 0;
-  for (const { g, f, doc } of docs) {
+  for (const { g, f, doc, words } of docs) {
+    if (words) { root.append(words); done += 1; continue; }
     for (let i = 0; i < doc.count; i++) {
       if (signal?.aborted) return;
       onStep({ done, of, what: fileTitle(f.name) });

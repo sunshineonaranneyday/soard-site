@@ -49,6 +49,22 @@ async function prune(DB, collection, slug) {
     .bind(collection, slug, collection, slug).run();
 }
 
+/**
+ * The version a save writes (and, the first time, the one it replaced), as statements for the save's own batch: People's
+ * saves write it with the record, so a rename moving History (./rename-content.js) never leaves one behind at an address
+ * the person has left (Board QA round 8: written after the GitHub commit, two versions landed at the old address).
+ * `table`: written only if that table's row holds this very record once the batch has run (a save refused as changed
+ * meanwhile writes none). Call ensureHistory first, and pruneHistory after
+ */
+export async function versionStatements(DB, { collection, slug, data, previous = null, userEmail = null, now = new Date().toISOString(), table = null }) {
+  const has = await DB.prepare('SELECT id FROM content_versions WHERE collection = ? AND slug = ? LIMIT 1').bind(collection, slug).first();
+  const rows = [...(!has && previous ? [{ data: previous, by: null, at: new Date(Date.parse(now) - 1000).toISOString() }] : []), { data, by: userEmail, at: now }];
+  return rows.map((r) => (table
+    ? DB.prepare(`INSERT INTO content_versions (collection, slug, data, action, user_email, created_at) SELECT ?, ?, ?, 'save', ?, ? WHERE EXISTS (SELECT 1 FROM ${table} WHERE slug = ? AND data = ?)`)
+      .bind(collection, slug, JSON.stringify(r.data), r.by, r.at, slug, JSON.stringify(data))
+    : insert(DB, { collection, slug, data: r.data, by: r.by, at: r.at })));
+}
+
 /** Record the version just saved (and, the first time, the one it replaced) */
 export async function recordVersion(DB, { collection, slug, data, previous = null, userEmail = null, now = new Date().toISOString() }) {
   await ensureHistory(DB);
@@ -67,6 +83,15 @@ export async function recordDeletion(DB, { collection, slug, data, userEmail = n
   await DB.batch([insert(DB, { collection, slug, data, action: 'delete', by: userEmail, at: now })]);
   await prune(DB, collection, slug);
 }
+
+/**
+ * The copy a delete keeps, as a statement to run in the same batch as the delete itself (./delete-content.js): the
+ * record is never gone with nothing kept. Call ensureHistory first (a table that can't be made stops the delete), and
+ * pruneHistory after (only the newest are kept; one that doesn't answer loses nothing)
+ */
+export const deletionStatement = (DB, { collection, slug, data, userEmail = null, now = new Date().toISOString() }) =>
+  insert(DB, { collection, slug, data, action: 'delete', by: userEmail, at: now });
+export const pruneHistory = (DB, collection, slug) => prune(DB, collection, slug);
 
 /** Fields that differ between two versions (list positions and derived counts aside) */
 export function changedFields(before, after) {
@@ -118,5 +143,7 @@ export async function listDeleted(DB, collection, limit = 50) {
 /** After a web address change, the history follows the item */
 export async function moveVersions(DB, collection, from, to) {
   await ensureHistory(DB);
-  await DB.prepare('UPDATE content_versions SET slug = ? WHERE collection = ? AND slug = ?').bind(to, collection, from).run();
+  await versionsMove(DB, collection, from, to).run();
 }
+/** The same, as a statement for the change's own batch (./rename-content.js: call ensureHistory first) */
+export const versionsMove = (DB, collection, from, to) => DB.prepare('UPDATE content_versions SET slug = ? WHERE collection = ? AND slug = ?').bind(to, collection, from);

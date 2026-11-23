@@ -374,7 +374,7 @@ try {
   ok(await jane.$eval('.bh-remind select', (s) => s.value === 'off'), 'reminders start off');
   await jane.select('.bh-remind select', 'on');
   ok(await waitText(jane, /Reminders are on/), 'turned on, asked first');
-  ok(asked.some((t) => /Sam Ortiz, Jane Doe get an email a week before/.test(t)), `it says who (${asked.join(' | ')})`);
+  ok(asked.some((t) => /(Sam Ortiz and Jane Doe|Jane Doe and Sam Ortiz) get an email a week before/.test(t)), `it says who, joined with “and” (${asked.join(" | ")})`);
   ok(JSON.parse((await DB.prepare("SELECT data FROM board_state WHERE key = 'settings'").first())?.data || '{}').actionRemind === 'on', 'and it stays on');
   mail.length = 0;
   await clickText(jane, '.bh-remind button', /^Send me the email$/);

@@ -9,7 +9,7 @@
  * its page can send them to the invite. It records nothing.
  */
 
-import { ensureSchema, getMeeting } from './_board.js';
+import { ensureSchema, getMeeting, boardSees } from './_board.js';
 import { activeBoard } from './_board-roles.js';
 import { todayEastern } from '../../public/admin/board-shared.js';
 
@@ -29,7 +29,8 @@ export async function answerLink(env, tok, { now = Date.now() } = {}) {
   if (!row) return null;
   const [meeting, board] = await Promise.all([getMeeting(env.DB, row.meeting_id), activeBoard(env.DB)]);
   const member = board.find((p) => p.slug === row.slug);
-  if (!meeting?.shared || !member) return null;
+  // (a meeting the board can't see, never shared or kept off the board page, answers nothing)
+  if (!meeting?.shared || !boardSees(meeting) || !member) return null;
   // Over by the meeting's own date, which may have moved since the email
   if (meeting.date && meeting.date < todayEastern(now)) return { expired: true };
   return { meeting, member };

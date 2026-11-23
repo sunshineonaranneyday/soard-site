@@ -512,10 +512,10 @@ export async function keepOrdersFeed(env, { fetchImpl = fetch, now = Date.now() 
     return { status: res.status, ok: res.ok, data };
   };
   let subjects = [];
-  try {
-    const dir = JSON.parse((await env.DB.prepare("SELECT data FROM staff_state WHERE key = 'directory'").first())?.data || '{}');
-    subjects = [...new Set([dir.subject, ...founderEmails(await peopleRows(env.DB))].filter(Boolean))];
-  } catch { /* nothing read yet */ }
+  let dir = {};
+  try { dir = JSON.parse((await env.DB.prepare("SELECT data FROM staff_state WHERE key = 'directory'").first())?.data || '{}'); } catch { /* nothing read yet */ }
+  // (People not answering is said as that, never "no Workspace admin": round 10)
+  try { subjects = [...new Set([dir.subject, ...founderEmails(await peopleRows(env.DB))].filter(Boolean))]; } catch (err) { return { ok: false, at, error: err.message }; }
   if (!subjects.length) return { ok: false, at, error: 'No Workspace admin to ask Google as' };
   let last = 'Google didn’t answer';
   for (const subject of subjects) {

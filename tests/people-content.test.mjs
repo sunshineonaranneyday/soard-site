@@ -15,6 +15,7 @@ import { createRequest, findRequest, liveRequests, resolveRequest, hashToken, no
 import * as publicApi from '../functions/api/profile-request.js';
 import * as adminApi from '../functions/api/profile-requests-admin.js';
 import { batch } from '../functions/api/people-batch.js';
+import { generateSha } from '../functions/api/_collections.js';
 import { bioPrompt, tidyBio, bioProblems, revisePrompt, STYLE_RULES, onRequestPost as aiPost } from '../functions/api/people-ai.js';
 import { onRequestPost as savePost } from '../functions/api/save-content.js';
 import { rename } from '../functions/api/rename-content.js';
@@ -60,7 +61,10 @@ test('only the newest 50 versions per person are kept', async () => {
 
 test('save-content records a version for People, and the audit log filters by person', async () => {
   const DB = await db([{ slug: 'scott', name: 'Scott', group: 'board', title: 'Board Chair' }]);
-  const res = await savePost(ctx(DB, new Request('https://x/api/save-content', { method: 'POST', body: JSON.stringify({ path: 'src/content/team/scott.json', content: JSON.stringify({ slug: 'scott', name: 'Scott', group: 'board', title: 'Board Chair', bio: 'Leads.' }), message: 'Update' }) })));
+  // (with the version it was read at, as People's editor sends it: a save with none onto a record that's there is an add,
+  // refused, Board QA round 8)
+  const sha = await generateSha((await DB.prepare('SELECT data FROM team WHERE slug = ?').bind('scott').first()).data);
+  const res = await savePost(ctx(DB, new Request('https://x/api/save-content', { method: 'POST', body: JSON.stringify({ path: 'src/content/team/scott.json', content: JSON.stringify({ slug: 'scott', name: 'Scott', group: 'board', title: 'Board Chair', bio: 'Leads.' }), message: 'Update', sha }) })));
   assert.equal(res.status, 200);
   const v = await listVersions(DB, 'scott');
   assert.equal(v.length, 2);

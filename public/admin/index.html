@@ -3814,6 +3814,16 @@
     .ppl-field > .form-label { display: block; margin-bottom: 0.45rem; }
     .ppl-field > .form-hint { margin-top: 0.4rem; }
     .ppl-years { max-width: 460px; margin-bottom: 0.5rem; }
+    /* People's note at the top: a change of web address that couldn't finish (people-stuck.js) */
+    .ppl-stuck .notice__body { overflow-wrap: anywhere; }
+    .ppl-stuck__k { margin: 0.5rem 0 0.2rem; }
+    .ppl-stuck__left { margin: 0; padding-left: 1.25rem; }
+    .ppl-stuck__left li { margin: 0.1rem 0; }
+    .ppl-stuck .notice__actions .btn { white-space: normal; overflow-wrap: anywhere; text-align: center; max-width: 100%; }
+    @media (max-width: 640px) {
+      .ppl-stuck .notice__actions { width: 100%; }
+      .ppl-stuck .notice__actions .btn { flex: 1 1 100%; justify-content: center; }
+    }
     .ppl-note { margin-bottom: 1rem !important; padding: 0.6rem 0.8rem; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-bg-secondary); font-size: var(--fs-xs); color: var(--color-text-secondary); }
     .ppl-count-hint { text-align: right; font-variant-numeric: tabular-nums; }
     .ppl-inline { display: flex; align-items: center; gap: 0.5rem; }
@@ -4691,6 +4701,8 @@
     const KID_FORMS = ['donation', 'peer'];
     // Every "are you sure?" in the admin: an in-app dialog, never the browser's confirm()
     import { ask, askToLeave } from './ask.js';
+    // People's note at the top: a change of web address that couldn't finish by itself, and a button for each way to settle it
+    import { StuckRenames } from './people-stuck.js';
     import { useDialog as usePplDialog } from './dialog.js';
     const html = htm.bind(h);
 
@@ -8072,7 +8084,8 @@
           const message = isSlugBased
             ? `${slug ? 'Update' : 'Add'} ${prefix}: ${displayName()}`
             : `Update ${label || prefix}`;
-          const res = await api.saveContent(savePath, content, message, sha || undefined);
+          // (a new person is an add: one at that address already, added since this was opened, is never written over)
+          const res = await api.saveContent(savePath, content, message, sha || undefined, { create: type === 'team' && !slug && !sha });
           if (res.success) {
             setSha(res.sha);
             setDirty(false);
@@ -20284,7 +20297,8 @@ ${sections || '<p>No one yet.</p>'}
                 group, order: order++, status: 'active', publishStatus: show ? 'published' : 'draft',
                 ...(group === 'board' ? { seat: '' } : {}), ...(group === 'advisory' ? { since: pplYear() } : {}),
               });
-              const res = await api.saveContent(`src/content/team/${p.slug}.json`, JSON.stringify(rec, null, 2), `Add ${G.noun}: ${p.name}`);
+              // (an add: one at that address already, added since this list was read, is never written over)
+              const res = await api.saveContent(`src/content/team/${p.slug}.json`, JSON.stringify(rec, null, 2), `Add ${G.noun}: ${p.name}`, undefined, { create: true });
               if (!res.success) throw new Error(res.error || 'Couldn’t save');
               added++;
             }
@@ -27334,6 +27348,7 @@ ${sections || '<p>No one yet.</p>'}
             const onSite = (g) => team.filter((t) => t.group === g && normalizePerson(t).status !== 'alumni').length;
             const arrive = dashboardFilter === 'no-invite-email' && pplHasEmail(pTab) ? 'no-email' : dashboardFilter === 'profiles-waiting' ? 'pending' : null;
             return html`
+              <${StuckRenames} addToast=${addToast} onChanged=${loadData} />
               <div class="hub-tabs">
                 <button class="hub-tab ${pTab === 'team' ? 'active' : ''}" onClick=${() => { setSubTab('team'); setEditSlug(null); }}>Team<span class="ppl-tab-count">${onSite('team')}</span></button>
                 <button class="hub-tab ${pTab === 'board' ? 'active' : ''}" onClick=${() => { setSubTab('board'); setEditSlug(null); }}>Board<span class="ppl-tab-count">${onSite('board')}</span></button>
@@ -27618,10 +27633,25 @@ ${sections || '<p>No one yet.</p>'}
     // Tab strips (.hub-tabs, in every area and module) scroll sideways on a
     // phone. Whenever the open tab changes, from a link, a tap or the keyboard,
     // the strip brings it into view; scrolling the strip by hand is left alone.
+    // The tab that has the focus is brought fully into view too, clear of the
+    // strip's faded edges (Advisory Board QA round 21: Tab onto a tab past the
+    // edge left it cut off, under the fade): at once from the keyboard, as the
+    // browser shows anything else it moves the focus to; from a tap, once the
+    // tap is done, so it never moves under the finger; a swipe is never fought.
     {
       const shown = new WeakMap();
       const reduce = matchMedia('(prefers-reduced-motion: reduce)');
       let queued = false;
+      // (clear of the fades: 1rem on the left, 1.5rem on the right, with a little room)
+      const edge = 28;
+      // (to where the tab is clear of the edge: the same place however far a smooth scroll to it has got, so two asks at
+      // once, the focus and the open tab, never add up)
+      const bring = (strip, tab, behavior) => {
+        if (strip.scrollWidth <= strip.clientWidth) return;
+        const s = strip.getBoundingClientRect(), r = tab.getBoundingClientRect();
+        const by = r.left < s.left + edge ? r.left - s.left - edge : r.right > s.right - edge ? r.right - s.right + edge : 0;
+        if (by) strip.scrollTo({ left: strip.scrollLeft + by, behavior });
+      };
       const check = () => {
         queued = false;
         for (const strip of document.querySelectorAll('.hub-tabs')) {
@@ -27629,14 +27659,28 @@ ${sections || '<p>No one yet.</p>'}
           if (!tab || shown.get(strip) === tab) continue;
           const first = !shown.has(strip);
           shown.set(strip, tab);
-          if (strip.scrollWidth <= strip.clientWidth) continue;
-          const s = strip.getBoundingClientRect(), r = tab.getBoundingClientRect(), edge = 28;
-          const by = r.left < s.left + edge ? r.left - s.left - edge : r.right > s.right - edge ? r.right - s.right + edge : 0;
-          if (by) strip.scrollBy({ left: by, behavior: first || reduce.matches ? 'auto' : 'smooth' });
+          bring(strip, tab, first || reduce.matches ? 'auto' : 'smooth');
         }
       };
       new MutationObserver(() => { if (!queued) { queued = true; requestAnimationFrame(check); } })
         .observe(document.getElementById('app'), { subtree: true, childList: true, attributes: true, attributeFilter: ['class', 'aria-selected'] });
+      const tabOf = (el) => { const tab = el?.closest?.('.hub-tab'); const strip = tab?.closest('.hub-tabs'); return strip ? { tab, strip } : null; };
+      // A finger or a pointer on a tab: its focus waits for the tap to finish (a click), and a swipe that begins on a
+      // tab (the browser takes the pointer to scroll: pointercancel) brings nothing back into view
+      let pressing = null;
+      document.addEventListener('pointerdown', (e) => { pressing = tabOf(e.target)?.tab || null; }, true);
+      document.addEventListener('pointercancel', () => { pressing = null; }, true);
+      document.addEventListener('focusin', (e) => {
+        const t = tabOf(e.target);
+        if (!t || t.tab === pressing) return;
+        bring(t.strip, t.tab, 'auto');
+      }, true);
+      document.addEventListener('click', (e) => {
+        const t = tabOf(e.target);
+        const tapped = !!t && t.tab === pressing;
+        pressing = null;
+        if (tapped) requestAnimationFrame(() => { if (document.activeElement === t.tab || t.tab.matches('.active, [aria-selected="true"]')) bring(t.strip, t.tab, reduce.matches ? 'auto' : 'smooth'); });
+      }, true);
     }
   </script>
 </body>

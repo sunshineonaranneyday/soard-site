@@ -18,7 +18,7 @@
  */
 
 import { accessToken, GMAIL_READ_SCOPE } from './_google-calendar.js';
-import { isStaffEmail, normEmail, peopleRows, founderEmails, STAFF_DOMAIN } from './_board-roles.js';
+import { isStaffEmail, normEmail, peopleRows, founderEmails, STAFF_DOMAIN, readDown, SIGN_IN_DOWN } from './_board-roles.js';
 import { logAudit } from './_audit.js';
 
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
@@ -36,7 +36,9 @@ const fail = (status, message) => Object.assign(new Error(message), { status });
 export async function canRead(env, email) {
   const e = normEmail(email);
   if (!isStaffEmail(e) || !env.DB) return false;
-  return founderEmails(await peopleRows(env.DB)).includes(e);
+  // (a read of People that fails is "couldn't check", a 503 with Try again, never "open only to the founders": round 10)
+  const people = await peopleRows(env.DB).catch((err) => { throw readDown(SIGN_IN_DOWN, err); });
+  return founderEmails(people).includes(e);
 }
 
 /** Google's accounts as the staff sign-in check last read them (_staff-access.js), or null before the first read */

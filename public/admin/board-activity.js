@@ -15,13 +15,11 @@ import { useState, useEffect, useRef, qrcode } from './vendor.js';
 import { html, call, ago, Face, viewerFiles, driveLink, dayOf, signedHow } from './board-ui.js';
 import { viewerLink } from './file-viewer.js';
 import { meetingName, todayEastern, fileTitle, docsOf, itemFiles, looseFiles } from './board-shared.js';
-import { welcomeHad, usableEmail } from './board-shared.js';
+import { welcomeHad, usableEmail, VISIT_GAP_MS } from './board-shared.js';
 import { andText } from './board/money.js';
 
 // A held Enter or Space presses a button once, not again with every repeat
 const once = (e) => { if (e.repeat && (e.key === 'Enter' || e.key === ' ')) e.preventDefault(); };
-
-const GAP_MS = 30 * 60_000; // one sitting: no gap longer than this (VISIT_GAP_MS on the server)
 
 /** "12 min", "1 hr 5 min", "under a minute" (0: nothing) */
 export function span(secs) {
@@ -65,7 +63,7 @@ export function namesFrom(data, more = {}) {
   return { meetings, files, items, actions, motions, docs };
 }
 
-const PAGE_NAMES = { home: 'Home', meetings: 'All meetings', financials: 'Financials', gifts: 'Major gifts', people: 'People', documents: 'Documents' };
+const PAGE_NAMES = { home: 'Home', meetings: 'All meetings', financials: 'Financials', gifts: 'Major gifts', people: 'People', documents: 'Documents', families: 'Makeovers' };
 
 /**
  * One thing they did, in words: { icon, text, secs }. L: namesFrom(data). An id no longer here (a meeting or
@@ -138,7 +136,7 @@ export function sittingsOf({ events = [], signIns = [] }) {
   const out = [];
   for (const e of all) {
     const cur = out.at(-1);
-    if (cur && e.t - cur.until <= GAP_MS) { cur.rows.push(e); cur.until = Math.max(cur.until, e.end); if (e.device) cur.device = e.device; } else out.push({ at: e.t, until: e.end, device: e.device || '', rows: [e] });
+    if (cur && e.t - cur.until <= VISIT_GAP_MS) { cur.rows.push(e); cur.until = Math.max(cur.until, e.end); if (e.device) cur.device = e.device; } else out.push({ at: e.t, until: e.end, device: e.device || '', rows: [e] });
   }
   return out.reverse();
 }
@@ -288,11 +286,25 @@ export function mailLink(emails, { subject = '', message = '' } = {}) {
 const seen = (s) => s.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim();
 const howMany = (n, one) => `${n.toLocaleString()} ${one}${n === 1 ? '' : 's'}`;
 
-/** Email all: the note written here and sent from the writer's own Gmail (../../functions/api/_board-email-all.js) */
-function EmailAll({ data, onSay, onClose }) {
+/** The papers each board member signs this year: written in Board, or a file the board can open (Members' one rule) */
+export const signDocsOf = (d) => (d?.docs || []).filter((x) => x.sign && x.shared && (x.body || (x.file && !x.file.staffOnly)));
+/** Who an email can ask to sign: not signed for this year, with an email, and a paper left they haven't declined */
+export const unsignedOf = (d, signDocs = signDocsOf(d)) => (d?.members || []).filter((p) => !signDocs.every((x) => x.signed[p.slug]) && p.email && signDocs.some((x) => !x.signed[p.slug] && !x.declined?.[p.slug]));
+/** Who Email all writes to (everyone on the board's list with an email but the writer) and who it can't, from Board's data */
+const mailListOf = (d) => {
+  const me = String(d?.me || '').toLowerCase();
+  return { to: (d?.group?.everyone || []).filter((p) => p.email !== me).sort((a, b) => a.name.localeCompare(b.name)), left: (d?.group?.missing || []).map((p) => p.name) };
+};
+
+/**
+ * Email all: the note written here and sent from the writer's own Gmail (../../functions/api/_board-email-all.js). Who
+ * it goes to is the site's list as it is at each press (`fresh`, a quick read: opening it, and Send): People → Board
+ * changed since it opened is shown, and it's sent only once the list on screen is the site's (QA round 6, Nov 21 2026:
+ * it named the board as the tab first read it, and sent to someone else)
+ */
+function EmailAll({ data, onSay, onClose, fresh = null }) {
   const me = String(data.me || '').toLowerCase();
-  const to = (data.group?.everyone || []).filter((p) => p.email !== me).sort((a, b) => a.name.localeCompare(b.name));
-  const left = (data.group?.missing || []).map((p) => p.name);
+  const { to, left } = mailListOf(data);
   const emails = to.map((p) => p.email);
   const [d, setD] = useState(draftOf);
   const [busy, setBusy] = useState('');
@@ -312,6 +324,18 @@ function EmailAll({ data, onSay, onClose }) {
     if (busy || !can || (!test && !to.length)) return;
     setBusy(test ? 'test' : 'all');
     setLine(null);
+    // (the site's list now: one that changed since this opened is shown, and sent only once it's been seen)
+    if (!test && fresh) {
+      // (that read failing: nothing goes, and said here, never the list this tab read before. Board QA round 10)
+      const d = await fresh();
+      if (!d) { setBusy(''); say({ bad: true, text: 'We couldn’t check People just now, so nothing was sent. Please try again in a moment.' }); return; }
+      const now = mailListOf(d);
+      if (now.to.map((p) => p.email).join(',') !== to.map((p) => p.email).join(',')) {
+        setBusy('');
+        say({ bad: true, text: now.to.length ? `The board changed since this opened: it goes to ${andText(now.to.map((p) => p.name))} now. Press Send again to send it to them.` : 'The board changed since this opened: nobody else on it has an email on file now, so there’s no one to send it to.' });
+        return;
+      }
+    }
     const j = await call({ action: 'email-all', subject: d.subject, message: d.message, ...(test ? { test: true } : {}) });
     setBusy('');
     if (!j.ok) {
@@ -459,7 +483,7 @@ function askedWords(a) {
  * A row opens their papers year by year
  */
 let styled = false;
-export function BoardActivity({ data, signDocs, ready, working, now = Date.now(), onWelcome, onSay = () => {}, onCopy = null, onAsk = null, onAskAll = null, onAskPreview = null, onRemind = null }) {
+export function BoardActivity({ data, signDocs, ready, working, now = Date.now(), onWelcome, onSay = () => {}, onCopy = null, onAsk = null, onAskAll = null, onAskPreview = null, onRemind = null, fresh = null }) {
   if (!styled && typeof document !== 'undefined') {
     styled = true;
     const el = document.createElement('style');
@@ -469,6 +493,14 @@ export function BoardActivity({ data, signDocs, ready, working, now = Date.now()
   }
   const [open, setOpen] = useState(null);
   const [writing, setWriting] = useState(false);
+  // Email all opens on the site's list as it is now (a quick read at the press), never the one this tab read before
+  const [opening, setOpening] = useState(false);
+  const openMail = async () => {
+    if (opening) return;
+    setOpening(true);
+    try { await fresh?.(); } finally { setOpening(false); }
+    setWriting(true);
+  };
   // Who has had the sign-in email: one rule with Board access and the server's send (board-shared.js welcomeHad)
   const onBoard = data.members.map((x) => x.slug);
   const sent = Object.fromEntries(data.members.map((p) => [p.slug, welcomeHad(data.welcome, p, onBoard)]).filter(([, at]) => at));
@@ -522,12 +554,12 @@ export function BoardActivity({ data, signDocs, ready, working, now = Date.now()
   const done = data.members.filter(current).length;
   // Who an email can ask to sign: not signed, with an email, once the board page's sign-in works (their code has to come)
   const asking = ready && signDocs.length && onAsk;
-  const unsigned = data.members.filter((p) => !current(p) && p.email && signDocs.some((d) => !d.signed[p.slug] && !d.declined?.[p.slug]));
+  const unsigned = unsignedOf(data, signDocs);
   const papersWord = signDocs.length === 1 ? `the ${signDocs[0].title.replace(/^the\s+/i, '')}` : 'the papers to sign';
   const person = open && data.members.find((p) => p.slug === open);
   return html`<div class="card ba-card" style="padding:0" onFocusIn=${onFocusIn} onFocusOut=${onFocusOut}>
     <div class="sec-head ba-head"><div class="ba-title"><h3>The board <span class="count">${data.members.length}</span></h3>
-      ${data.members.length && data.group?.everyone ? html`<button type="button" class="btn btn-ghost btn-sm" onKeyDown=${once} onClick=${() => setWriting(true)}>Email all</button>` : null}</div>
+      ${data.members.length && data.group?.everyone ? html`<button type="button" class="btn btn-ghost btn-sm" aria-busy=${opening ? 'true' : null} onKeyDown=${once} onClick=${openMail}>${opening ? 'Checking…' : 'Email all'}</button>` : null}</div>
       ${signDocs.length && data.members.length ? html`<div class="ba-asks"><span class="sec-head__hint">${done === data.members.length ? `Everyone has signed for ${year}` : `${done} of ${data.members.length} signed for ${year}`}</span>
         ${asking && unsigned.length ? html`<button class="btn btn-ghost btn-sm" disabled=${!!working} onClick=${() => onAskPreview?.()}>${working === 'ask:me' ? 'Sending…' : 'Send it to me'}</button>
           <button class="btn btn-primary btn-sm" disabled=${!!working} onClick=${() => onAskAll?.(unsigned, papersWord)}>${working === 'ask:all' ? 'Emailing…' : unsigned.length === 1 ? `Ask ${unsigned[0].name.split(/\s+/)[0]} to sign` : `Ask the ${unsigned.length} who haven’t signed`}</button>` : null}
@@ -562,7 +594,7 @@ export function BoardActivity({ data, signDocs, ready, working, now = Date.now()
         </tr>`;
       })}</tbody>
     </table>`}
-    ${writing ? html`<${EmailAll} data=${data} onSay=${onSay} onClose=${() => setWriting(false)} />` : null}
+    ${writing ? html`<${EmailAll} data=${data} fresh=${fresh} onSay=${onSay} onClose=${() => setWriting(false)} />` : null}
     ${person ? html`<${MemberSheet} p=${person} sentAt=${sent[person.slug]} going=${going(person)} unconfirmed=${unconfirmed.includes(person.slug)} tooSoon=${tooSoon(person)} held=${held} onWelcome=${ready ? sendTo : null} working=${working} signDocs=${signDocs} onCopy=${onCopy} onAsk=${asking ? onAsk : null} onClose=${() => { const slug = open; setOpen(null); requestAnimationFrame(() => document.querySelector(`.ba-name[data-slug="${CSS.escape(slug)}"]`)?.focus()); }} />` : null}
   </div>`;
 }

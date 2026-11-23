@@ -23,7 +23,7 @@ export async function read(q) {
   try {
     const r = await fetch(`${API}?${q}`, { cache: 'no-store' });
     const j = await r.json().catch(() => ({ ok: false, error: `Something went wrong (${r.status})` }));
-    return r.ok && j.ok !== false ? j : { ok: false, error: j.error || `Something went wrong (${r.status})` };
+    return r.ok && j.ok !== false ? j : { ok: false, error: j.error || `Something went wrong (${r.status})`, status: r.status };
   } catch {
     return { ok: false, error: 'No connection. Check your internet and try again.' };
   }

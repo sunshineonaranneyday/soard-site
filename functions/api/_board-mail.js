@@ -37,10 +37,10 @@
  */
 
 import { accessToken, GMAIL_READ_SCOPE, parseServiceAccount } from './_google-calendar.js';
-import { boardAdmins, readState, writeState, peopleRows, activeBoard, normEmail } from './_board-roles.js';
+import { boardAdmins, readState, writeState, peopleRows, activeBoard, normEmail, unreadStatus } from './_board-roles.js';
 import { ensureSchema, listMeetings, getMeeting, saveMeeting, patchMeeting, putFile, deleteFile, roster } from './_board.js';
 import { readMinutes, applyMinutes, minutesNewer } from './_board-minutes.js';
-import { parseAgendaText, isDate, todayEastern, meetingName, docxText, unzip, cleanMeeting, agendaIsDraft, shortDate, AGENDA_READER } from '../../public/admin/board-shared.js';
+import { parseAgendaText, isDate, todayEastern, meetingName, docxText, unzip, cleanMeeting, agendaIsDraft, shortDate, AGENDA_READER, minutesIn } from '../../public/admin/board-shared.js';
 import { viaGateway, aiCapped, AI_REST_MS, AI_WAIT_NOTE } from './_ai.js';
 import { slackPost } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
@@ -446,12 +446,22 @@ async function bringIn(env, { token, admin, id, fetchImpl, people, boardEmails, 
     }
     // Minutes, read in (./_board-minutes.js): who was there (a past meeting nobody marked), each item's notes, the
     // motions and action items, never over minutes someone read in by hand since; approved once a later meeting exists
+    let heldBack = false;
     if (f.kind === 'minutes' && past) {
       const later = boardOnly(meetings).filter((x) => x.date > m.date).sort((a, b) => a.date.localeCompare(b.date))[0];
       const prev = boardOnly(meetings).filter((x) => x.id !== m.id && x.date && x.date < m.date).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
+      // Approved minutes in Board (read in, or only a file: minutesIn) are the record, as a drop is told
+      // (./_board-minutes.js readMinutesInto): a minutes file that comes by email after they were approved is never read
+      // in, nor filed as theirs. It's kept with the meeting for staff, and named in the founders' view only
+      // (lateMinutesFiles), never their own file again. One approved with no minutes in Board yet takes it as ever. Board
+      // QA round 9, Nov 22 2026
+      const held = (x) => x.minutes === 'approved' && !x.minutesFrom?.typed && minutesIn(x);
+      const theirs = (x) => [x.minutesFrom?.name, ...x.files.filter((g) => g.kind === 'minutes').map((g) => g.name), ...(x.lateMinutesFiles || []).map((g) => g.name)].some((n) => n && titleKey(n) === titleKey(f.name));
       // (typed minutes stand: nothing to read them for)
-      const read = f.text && !m.minutesFrom?.typed ? await readMinutes(env, { name: f.name, text: f.text, meeting: m, people, prev, quick: true }) : null;
+      const read = f.text && !m.minutesFrom?.typed && !held(m) ? await readMinutes(env, { name: f.name, text: f.text, meeting: m, people, prev, quick: true }) : null;
       m = await patchMeeting(env.DB, m.id, (cur) => {
+        heldBack = held(cur);
+        if (heldBack) return theirs(cur) ? cur : { ...cur, lateMinutesFiles: [...(cur.lateMinutesFiles || []), { name: f.name, at: sentAt }] };
         let next = { ...cur };
         if (read && minutesNewer(cur, { name: f.name, at: sentAt })) {
           next = applyMinutes(cur, read, { fileName: f.name, now, keepMarked: true, minSections: 2, agendaFrom: { kind: 'email', name: f.name, at: new Date(now).toISOString(), v: AGENDA_READER } });
@@ -467,11 +477,12 @@ async function bringIn(env, { token, admin, id, fetchImpl, people, boardEmails, 
     const overTyped = f.kind === 'minutes' && !!m.minutesFrom?.typed;
     const fresh = !have.has(`${f.name}|${f.bytes.byteLength}`) && !m.files.some(sameName);
     if (fresh) {
-      await putFile(env, { ownerType: 'meeting', ownerId: m.id, file: new File([f.bytes], f.name, { type: f.type }), kind: overTyped ? 'other' : KIND_FILE[f.kind], staffOnly: !toBoard || overTyped, by: MAIL_BY });
+      // (and minutes after approved ones: kept for staff, never the minutes' own file)
+      await putFile(env, { ownerType: 'meeting', ownerId: m.id, file: new File([f.bytes], f.name, { type: f.type }), kind: overTyped || heldBack ? 'other' : KIND_FILE[f.kind], staffOnly: !toBoard || overTyped || heldBack, by: MAIL_BY });
     }
     // The board had it by email: a past meeting nobody here worked on goes on the board page
     if (toBoard && past && !m.shared && untouched(m)) m = await patchMeeting(env.DB, m.id, (cur) => (untouched(cur) ? { ...cur, shared: true } : cur));
-    filed.set(m.id, [...(filed.get(m.id) || []), `${WORD[f.kind]}${overTyped ? ` (${fresh ? 'kept for staff, ' : ''}not read: the typed minutes stand)` : ''}${agendaFilled ? ' (its agenda filled in)' : ''}`]);
+    filed.set(m.id, [...(filed.get(m.id) || []), `${WORD[f.kind]}${overTyped ? ` (${fresh ? 'kept for staff, ' : ''}not read: the typed minutes stand)` : heldBack ? ` (${fresh ? 'kept for staff, ' : ''}not read: the approved minutes stand)` : ''}${agendaFilled ? ' (its agenda filled in)' : ''}`]);
   }
   const names = Object.fromEntries((await listMeetings(env.DB)).map((x) => [x.id, `${meetingName(x)} (${shortDate(x.date)})`]));
   const parts = [...filed].map(([mid, what]) => `${made.includes(mid) ? 'brought in' : 'filed on'} ${names[mid]}: ${what.join(', ')}`);
@@ -544,13 +555,20 @@ export async function readBoardMail(env, { fetchImpl = fetch, now = Date.now(), 
   const started = Date.now();
   try {
     const tidied = await tidyOnce(env, last);
-    const admins = await boardAdmins(env.DB);
-    const all = await peopleRows(env.DB);
-    const staff = (await roster(env.DB)).staff;
+    // Who runs Board, who's on it and the staff, read for certain before any email is: People not answering reads no
+    // mail (never minutes matched to nobody, nor a board email taken for staff only), says so in the status, and the
+    // next heartbeat reads it again (round 10)
+    let admins, all, staff, board;
+    try {
+      [admins, all, staff, board] = await Promise.all([boardAdmins(env.DB), peopleRows(env.DB), roster(env.DB).then((r) => r.staff), activeBoard(env.DB)]);
+    } catch (err) {
+      if (!err?.unread) throw err;
+      return await writeState(env.DB, KEY, unreadStatus(last, now));
+    }
     // Everyone who has been on the board (past minutes name people who've since rotated off), and the staff
     const people = all.filter((p) => p.group === 'board').map((p) => ({ slug: p.slug, name: p.name, org: p.organization || '', kind: 'board' }))
       .concat(staff.map((p) => ({ slug: p.slug, name: p.name, org: 'SOARD', kind: 'staff' })));
-    const boardEmails = (await activeBoard(env.DB)).map((p) => p.email).filter(Boolean).map(normEmail);
+    const boardEmails = board.map((p) => p.email).filter(Boolean).map(normEmail);
     // An email waiting for its meeting is read again once a meeting has been added since
     const newest = (await env.DB.prepare('SELECT max(json_extract(data, \'$.createdAt\')) AS at FROM board_meetings').first())?.at || '';
     const errors = [];

@@ -40,6 +40,13 @@ const WHY = {
   'converter-unkept': 'This photo couldn’t be opened just now: the part of the page that reads phone photos (HEIC) didn’t load. Check your connection and choose it again, or choose a JPEG or PNG photo instead.',
   unreadable: 'That photo couldn’t be read just now (it may have changed or moved while it was being opened). Please choose it again.',
 };
+const CANT_KEEP = 'This browser can’t keep it if the page closes, so send your application before you leave.';
+/**
+ * Why a photo was turned down, as a page other than the one it happened on says it (the page after a reload, another
+ * tab): the advice to reload was for the page whose reader of phone photos didn't load (a reader that fails to load
+ * stays failed on its page). On any other it's been done, or isn't needed, so it isn't said again: what else to do is
+ */
+export const refusalLater = (why) => (why === WHY.converter ? WHY['converter-unkept'] : why);
 
 /**
  * One IndexedDB request in its own transaction → its result; null when the browser keeps nothing (private mode,
@@ -48,23 +55,27 @@ const WHY = {
  */
 const IDB_WAIT_MS = 4000;
 let idbHung = false;
+// Whether this browser keeps photos at all: null till IndexedDB has been asked, then whether it answered (blocked, or
+// not answering in those few seconds: false)
+let idbOk = null;
 // (once one request has gone unanswered, every other still waiting stops at the same moment, not seconds later)
 let hungNow;
 const hung = new Promise((resolve) => { hungNow = () => resolve(null); });
 function idb(mode, run) {
   if (idbHung) return Promise.resolve(null);
   let timer;
-  const gaveUp = new Promise((resolve) => { timer = setTimeout(() => { idbHung = true; hungNow(); resolve(null); }, IDB_WAIT_MS); });
+  const gaveUp = new Promise((resolve) => { timer = setTimeout(() => { idbHung = true; idbOk = false; hungNow(); resolve(null); }, IDB_WAIT_MS); });
   return Promise.race([idbNow(mode, run), gaveUp, hung]).finally(() => clearTimeout(timer));
 }
 function idbNow(mode, run) {
   return new Promise((resolve) => {
     let open;
-    try { open = indexedDB.open(DB_NAME, 1); } catch { resolve(null); return; }
+    try { open = indexedDB.open(DB_NAME, 1); } catch { idbOk = false; resolve(null); return; }
     open.onupgradeneeded = () => { if (!open.result.objectStoreNames.contains(STORE)) open.result.createObjectStore(STORE); };
-    open.onerror = () => resolve(null);
+    open.onerror = () => { idbOk = false; resolve(null); };
     open.onblocked = () => resolve(null);
     open.onsuccess = () => {
+      if (!idbHung) idbOk = true;
       const db = open.result;
       try {
         const tx = db.transaction(STORE, mode);
@@ -80,6 +91,16 @@ export const photoStore = {
   put: (key, value) => idb('readwrite', (s) => s.put(value, key)),
   del: (key) => idb('readwrite', (s) => s.delete(key)),
 };
+/**
+ * Whether this browser keeps photos (IndexedDB answers here), asked once and then known: a reload is only suggested
+ * where it keeps everything, so one that's blocked, or hangs, is never told to reload (its few seconds, at most, once)
+ */
+let asking = null;
+function keepsPhotos() {
+  if (idbOk !== null) return Promise.resolve(idbOk);
+  asking ||= idb('readonly', (s) => s.count()).then(() => idbOk === true);
+  return asking;
+}
 const ping = () => { try { localStorage.setItem(PHOTO_PING, String(Date.now())); } catch { /* storage off */ } };
 // Each pick on this device numbered one after the last: which photo is newer never depends on the device's clock
 // (one put right since an earlier pick would make the newer one look older)
@@ -114,7 +135,10 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
   let kept = true; // whether this device could keep the photo (IndexedDB)
   let saving = 0; // a picked photo being kept on this device right now
   let refused = 0; // picks turned down so far (a Continue waiting on one sees it was)
-  let refusal = ''; // the words the last one was turned down with (said wherever they'd be seen: the review, the overview)
+  // Why the last one was turned down, while its words are up (said wherever they'd be seen: the review, the overview);
+  // with a photo already in, "Your earlier headshot is still here." after it, said as it is when it's said
+  let why = '';
+  const refusalFor = (reason) => (!reason ? '' : held ? `${reason} Your earlier headshot is still here.${kept ? '' : ` ${CANT_KEEP}`}` : reason);
 
   /** The status line (a live region: heard as it changes) */
   function say(words, { warn = false } = {}) {
@@ -145,7 +169,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     remove.hidden = !held;
     remove.style.visibility = busy ? 'hidden' : ''; // (kept in its place while a new one is got ready: nothing jumps)
   }
-  const addedNote = () => (held ? `${addedWords(held)}${kept ? '' : ' This browser can’t keep it if the page closes, so send your application before you leave.'}` : '');
+  const addedNote = () => (held ? `${addedWords(held)}${kept ? '' : ` ${CANT_KEEP}`}` : '');
   /** The form's own note under the question, for a photo that won't do while there's none */
   function problem(words) {
     el.classList.add('is-invalid');
@@ -186,9 +210,9 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     const hadOne = !!held;
     const wont = (words) => {
       refused++;
-      refusal = hadOne ? `${words} Your earlier headshot is still here.` : words;
+      why = words;
       setBusy(null); // (an earlier pick still being got ready is dropped with this one: never left spinning)
-      if (hadOne) say(`${words} Your earlier headshot is still here.`, { warn: true });
+      if (hadOne) say(refusalFor(words), { warn: true });
       else { say(''); problem(words); announce(words); } // (the note under it isn't a live region: heard here)
       paint();
       onChange({ problem: true });
@@ -197,15 +221,21 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     if (!file.size) { wont('That file is empty, or couldn’t be read. Please choose it again, or another photo.'); return; }
     if (file.size > MAX_PICK) { wont('That photo is too large. Please choose one under 25 MB.'); return; }
     setBusy(photoAsJpeg(file, DRAW));
+    keepsPhotos(); // (asked beside getting it ready, the first time: known by the time it's needed)
     say('Getting your photo ready…');
     paint();
     // An iPhone photo can take a few seconds in a browser that isn't Safari: said, so nobody thinks it's stuck
     const slow = setTimeout(() => { if (my === gen && busy) say('Still getting your photo ready. A large or iPhone photo can take a few seconds.'); }, 3500);
     let got = null;
-    try { got = await busy; } catch { got = { error: 'not-photo' }; } finally { clearTimeout(slow); }
+    try { got = await busy; } catch { got = { error: 'not-photo' }; }
+    // An iPhone photo whose reader didn't load: a reload is suggested only where it keeps everything, so whether this
+    // browser keeps photos at all is known first (still "getting it ready" meanwhile, a Continue still waiting)
+    const keeps = got?.error === 'converter' && my === gen ? await keepsPhotos() : false;
+    clearTimeout(slow);
     if (my !== gen) return; // a newer pick is being got ready
     setBusy(null);
-    if (!got?.photo) { wont(WHY[got?.error === 'converter' && !keepsAnswers() ? 'converter-unkept' : got?.error] || WHY['not-photo']); return; }
+    // (and only with every photo already in kept here: one still being kept isn't yet, and a reload would lose it)
+    if (!got?.photo) { wont(WHY[got?.error === 'converter' && !(keeps && keepsAnswers()) ? 'converter-unkept' : got?.error] || WHY['not-photo']); return; }
     const drawn = got.photo;
     // Judged on what it really is: too small, or (drawn within Cloudflare's limits) too wide and narrow to use
     const real = { width: drawn.sourceWidth || drawn.width, height: drawn.sourceHeight || drawn.height };
@@ -221,6 +251,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     saving++;
     let ok = false;
     try {
+      why = '';
       unproblem();
       say(addedNote());
       announce(''); // (an earlier refusal said there isn't left for a screen reader: this note says it's added)
@@ -234,8 +265,14 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     // This photo still the one held (a pick turned down since changes nothing about it): kept or not, said, and the other
     // tabs told
     kept = ok;
-    if (!kept) { say(addedNote()); onChange({}); reveal(); } // (this browser couldn't keep it: said)
-    else onChange({ kept: true }); // (kept: the overview, if it's showing, says so now)
+    // (this browser couldn't keep it: said, unless a newer pick is being got ready: that says what's so once it's done.
+    // A pick turned down since, its words still up, keeps them: this is said after them, never put over them)
+    if (!kept) {
+      const warned = status.dataset.kind === 'warn' && !!why;
+      if (!busy) say(warned ? refusalFor(why) : addedNote(), { warn: warned });
+      onChange({});
+      reveal();
+    } else onChange({ kept: true }); // (kept: the overview, if it's showing, says so now)
     ping();
   }
 
@@ -250,15 +287,19 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
       const file = blob instanceof File ? blob : new File([blob], stored.name || 'headshot.jpg', { type: blob.type || 'image/jpeg' });
       kept = true;
       setHeld({ file, width: stored.width, height: stored.height, sourceWidth: stored.sourceWidth || stored.width, sourceHeight: stored.sourceHeight || stored.height, pickedAt: Number(stored.at) || 0, seq: Number(stored.seq) || 0 });
+      why = '';
       unproblem();
       say(addedNote());
     } else {
       if (!held) return;
+      why = '';
       setHeld(null);
       say('');
     }
     paint();
-    onChange({ silent: true, fresh: true }); // (another tab's photo, or none: what was said here about one turned down is over)
+    // (another tab's photo, or none: what was said here about one turned down is over. The photo this device kept,
+    // brought back as the page opens, is the one it was said beside: that changes nothing)
+    onChange({ silent: true, fresh: loadedYet });
   }
 
   async function clear({ keep = false } = {}) {
@@ -266,6 +307,7 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     pickedNow();
     setBusy(null);
     setHeld(null);
+    why = '';
     delete err.dataset.pick;
     say('');
     paint();
@@ -328,9 +370,30 @@ export function photoField(el, { id, onChange = () => {}, announce = () => {}, s
     get preparing() { return !!busy; },
     /** A picked photo being got ready or kept on this device right now: not saved yet (whether it can be isn't known) */
     get keeping() { return saving > 0 || !!busy; },
-    /** Picks turned down so far, and the words the last one was turned down with */
+    /** Picks turned down so far, and the words the last one was turned down with (why, then what's still here) */
     get refused() { return refused; },
-    get refusal() { return refusal; },
+    get refusal() { return refusalFor(why); },
+    /** Why the last one was turned down, on its own (kept on this device and told to other tabs: see remind) */
+    get refusalWhy() { return why; },
+    /** The words a photo turned down for `reason` is said with here, now (with a photo in: that it's still here) */
+    refusalFor,
+    /** The note saying a photo was turned down, while it's up (the status line, or the form's own note under it), else null */
+    get warning() {
+      if (!why || busy) return null;
+      if (status.dataset.kind === 'warn' && status.textContent) return status;
+      return !err.hidden && err.dataset.pick && err.textContent === why ? err : null;
+    },
+    /**
+     * A photo turned down before a reload, or in another tab, and not seen yet: its words on the card again, as they'd
+     * be had it been turned down here (heard only where the card can be seen: it's a live region)
+     */
+    remind(reason) {
+      if (busy || !reason) return; // (a pick being got ready says what's so once it's done)
+      why = reason;
+      if (held) say(refusalFor(reason), { warn: true });
+      else { say(''); problem(reason); }
+      paint();
+    },
     /** The status line's words off (the form's own note now says what's needed) */
     quiet() { if (!busy) say(''); },
     /** Leaving the step: a warning about a photo turned down there goes (an added photo's note stays) */

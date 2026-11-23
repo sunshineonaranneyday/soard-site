@@ -9,6 +9,7 @@
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
+import { holdClockAt } from './lib/clock.mjs';
 import { onRequest, MODERN, LEGACY } from '../functions/mcp.js';
 import { TOOLS, callTool } from '../functions/api/_mcp-tools.js';
 import { existsSync, readFileSync } from 'node:fs';
@@ -403,7 +404,10 @@ test('pages: find, read and change a kid’s words as the admin saves them; neve
 
 // ─── Gifts, and what stays with others ───
 
-test('gifts come straight from Zeffy, less tests and refunds; a gift asked to be anonymous says so', async () => {
+test('gifts come straight from Zeffy, less tests and refunds; a gift asked to be anonymous says so', async (t) => {
+  // (the clock at midday Eastern, so the gifts an hour and two hours ago are one day: run between midnight and 2 AM, the
+  // older one was the day before and came second, Nov 22 2026)
+  t.after(holdClockAt('2026-11-12T17:00:00Z'));
   const now = Math.floor(Date.now() / 1000);
   assert.match((await call('recent_gifts', {})).content[0].text, /Zeffy isn’t connected/);
   env.ZEFFY_API_KEY = 'zeffy_test';

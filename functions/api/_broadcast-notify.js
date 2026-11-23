@@ -177,6 +177,40 @@ const replyToOf = (r) => {
  * reply goes (info@ when not given, since the sending address is no one's inbox).
  * @returns {{sent:number, failed:number, errors:string[]}}
  */
+/**
+ * Why emails didn't go, in words for whoever pressed send: never Resend's status code or its raw answer (a gateway's
+ * HTML page, JSON). Read from the `errors` sendEmails, sendEmailOne and sendEmailItems give back:
+ *   - Resend's own no (a 4xx): they didn't go, with its reason when it gave one in plain words
+ *   - a gateway in front of Resend (502, 503, 504): it didn't say, so they may have gone
+ *   - no answer at all (a timeout, a dropped connection): they may have gone
+ *   - email not set up on the site, or no address: nothing went
+ * `sent`/`failed`: how many went and didn't (some of them: "2 of these emails"); `one`: a single email; `again`: what
+ * pressing it again does, said after one that may have gone. → { words, unsure }
+ */
+export function sendTrouble(errors = [], { sent = 0, failed = 0, one = false, again = '' } = {}) {
+  const list = (Array.isArray(errors) ? errors : [errors]).map((e) => String(e ?? '').trim()).filter(Boolean);
+  const said = (e) => /^Resend (\d{3}):\s*([\s\S]*)$/.exec(e);
+  const status = (e) => Number(said(e)?.[1]) || 0;
+  const setup = (e) => /RESEND_API_KEY not set/.test(e);
+  const noAddress = (e) => /^No email address$/.test(e);
+  const some = sent > 0 && failed > 0 ? (failed === 1 ? 'one of these emails' : `${failed} of these emails`) : '';
+  const it = some || (one ? 'this email' : 'these emails');
+  const they = !some && one ? 'it' : failed === 1 && some ? 'it' : 'they';
+  const then = again ? ` ${again}` : '';
+  if (list.some((e) => !status(e) && !setup(e) && !noAddress(e))) return { unsure: true, words: `Resend didn’t answer, so ${it} may have gone.${then}` };
+  if (list.some((e) => [502, 503, 504].includes(status(e)))) return { unsure: true, words: `Resend’s servers had trouble and didn’t say whether ${it} went, so ${they} may have gone.${then}` };
+  const refused = list.find((e) => status(e));
+  if (refused) {
+    // Its reason, when it's words (never a page of HTML or JSON), as a sentence of its own
+    const why = said(refused)[2].replace(/\s+/g, ' ').replace(/\s*[–—]\s*/g, ', ').trim();
+    const plain = why && !/[<>{}]/.test(why) ? why.slice(0, 200).replace(/[.\s]+$/, '') : '';
+    return { unsure: false, words: `Resend said no to ${it}, so ${they} didn’t go.${plain ? ` Its reason: ${plain}.` : ''}` };
+  }
+  if (list.some(setup)) return { unsure: false, words: 'Email isn’t set up on the site yet (it has no Resend key), so nothing went.' };
+  if (list.some(noAddress)) return { unsure: false, words: `There’s no email address to send ${it} to, so nothing went.` };
+  return { unsure: false, words: `${it.charAt(0).toUpperCase()}${it.slice(1)} didn’t go.` };
+}
+
 /** Resend's reason in its own words (its JSON's message), not the JSON itself */
 async function resendWhy(res) {
   const t = await res.text().catch(() => '');
@@ -243,20 +277,26 @@ export async function sendEmailOne(env, { to, subject, html, text, from = EMAIL_
  * Send pre-built messages (each with its own html, e.g. a personal
  * unsubscribe link, and its own `headers`, e.g. List-Unsubscribe), 100 per
  * Resend call.
+ * `idempotencyKey`: this send's own name (the same send asked for again keeps it). Each call of 100 carries it with the
+ * call's number, so Resend sends a call it already has only once (it keeps a key a day): a 409 for it means Resend had
+ * that call already, counted in `already`, never as failed. `refused`: the addresses in a call Resend itself said no to
+ * (nobody in it got the email); a call that got no answer may have gone, so its addresses aren't there.
  * @param {{to:string, subject:string, html:string, text?:string, headers?:Record<string,string>}[]} items
  */
-export async function sendEmailItems(env, items, { from = EMAIL_FROM, tags = [], replyTo = null } = {}) {
+export async function sendEmailItems(env, items, { from = EMAIL_FROM, tags = [], replyTo = null, idempotencyKey = '' } = {}) {
   const reply = replyToOf(replyTo);
-  const out = { sent: 0, failed: 0, errors: [] };
+  // (a send with a key also says what Resend already had, and who it surely didn't reach)
+  const out = idempotencyKey ? { sent: 0, failed: 0, errors: [], already: 0, refused: [] } : { sent: 0, failed: 0, errors: [] };
   const list = (items || []).filter(i => isEmail(i.to));
   if (!list.length) return out;
-  if (!emailConfigured(env)) { out.failed = list.length; out.errors.push('RESEND_API_KEY not set'); return out; }
+  if (!emailConfigured(env)) { out.failed = list.length; out.errors.push('RESEND_API_KEY not set'); out.refused?.push(...list.map((m) => m.to)); return out; }
   for (let i = 0; i < list.length; i += 100) {
     const chunk = list.slice(i, i + 100);
+    const key = idempotencyKey ? `${String(idempotencyKey).slice(0, 240)}:${i / 100}` : '';
     try {
       const res = await fetch(`${RESEND_API}/emails/batch`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json', ...(key ? { 'Idempotency-Key': key } : {}) },
         body: JSON.stringify(chunk.map(m => ({ from, to: [m.to], subject: m.subject, html: m.html, text: m.text, tags, reply_to: reply, ...(m.headers ? { headers: m.headers } : {}) }))),
         signal: AbortSignal.timeout(20000),
       });
@@ -264,7 +304,15 @@ export async function sendEmailItems(env, items, { from = EMAIL_FROM, tags = [],
         out.sent += chunk.length;
         const ids = batchIds(await res.json().catch(() => null));
         await logSent(env, chunk.map((m, j) => ({ id: ids[j], to: m.to, subject: m.subject })), { tags });
-      } else { out.failed += chunk.length; out.errors.push(`Resend ${res.status}: ${await resendWhy(res)}`); }
+      } else if (key && res.status === 409) {
+        // (the same key again: Resend already has this call, sent or on its way)
+        out.already += chunk.length;
+      } else {
+        out.failed += chunk.length;
+        out.errors.push(`Resend ${res.status}: ${await resendWhy(res)}`);
+        // (Resend's own no, not a gateway in front of it that may have passed it on)
+        if (![502, 503, 504].includes(res.status)) out.refused?.push(...chunk.map((m) => m.to));
+      }
     } catch (e) {
       out.failed += chunk.length;
       out.errors.push(e.message);
@@ -1295,7 +1343,7 @@ export function alertEmail({ title, detail, fix, context, links = [] }) {
   };
 }
 
-export async function alertAdmins(env, config, { level = 'warn', icon, title, detail, url, urlLabel, fix, context, facts = [], links = [], issue = null, resolves = null, kind = 'attention', urgent = false, text = false }) {
+export async function alertAdmins(env, config, { level = 'warn', icon, title, detail, url, urlLabel, fix, context, facts = [], links = [], issue = null, resolves = null, kind = 'attention', urgent = false, text = false, stillSo = null }) {
   const headline = /^TEST · /.test(title || '') ? title.replace(/^TEST · /, '') : title;
   const allLinks = [...(url ? [{ label: urlLabel || urlLabelFor(url), url }] : []), ...links].filter((l) => l?.url);
   const cfg = urgent && kind === 'attention' && env.SLACK_BOT_TOKEN ? await readSlackConfig(env.DB) : null;
@@ -1311,7 +1359,10 @@ export async function alertAdmins(env, config, { level = 'warn', icon, title, de
   }
   const results = { slack, email: null };
   const to = alertEmails(env, config);
-  if (to.length && emailConfigured(env)) {
+  // (stillSo: asked again after the Slack post, just before the email: something a person settled meanwhile is never
+  // emailed as still to do, Board QA round 8. A check that fails sends it)
+  if (stillSo && !(await Promise.resolve().then(stillSo).catch(() => true))) results.email = { skipped: 'settled' };
+  else if (to.length && emailConfigured(env)) {
     results.email = await sendEmails(env, {
       to,
       ...alertEmail({ title, detail, fix, context, links: allLinks }),

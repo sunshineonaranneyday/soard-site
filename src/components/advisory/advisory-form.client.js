@@ -19,12 +19,14 @@
 import { trapValue } from '../../../functions/api/_bot-trap.js';
 import { ADVISORY_STEPS, ADVISORY_FIELDS, PHOTO_FIELDS, checkAnswers, isShown, problemsSaid } from '../../../functions/api/_advisory-form.js';
 import { mailFix } from '../apply/mail-fix.js';
-import { photoField, PHOTO_PING } from './advisory-photo.js';
+import { photoField, PHOTO_PING, refusalLater } from './advisory-photo.js';
 
 const STORE = 'soard-advisory-application';
 const SENT = 'soard-advisory-sent'; // when this device sent one (a reload says so, not "Start the application")
 const FOCUS = 'soard-advisory-focus';
 const SENDING = 'soard-advisory-sending'; // Send pressed and no answer yet: a page closed then may have sent it
+const TURNED = 'soard-advisory-turned-down'; // a photo turned down and not seen yet: said over Send after a reload, and in another tab
+const APP_TAB = 'soard-advisory-app'; // (sessionStorage) which application this tab's history entries are of
 const API = '/api/advisory-apply';
 const CHECK = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3L12.5 5" /></svg>';
 const CHEV = '<svg class="adv-review-chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6l4 4 4-4" /></svg>';
@@ -53,6 +55,14 @@ const sendingStore = {
   start(id) { try { if (!this.get()) localStorage.setItem(SENDING, JSON.stringify({ at: Date.now(), id })); } catch { /* private mode */ } },
   done(id) { try { const x = this.get(); if (!x || !x.id || x.id === id) localStorage.removeItem(SENDING); } catch { /* private mode */ } },
   set(on) { try { if (on) localStorage.setItem(SENDING, JSON.stringify({ at: Date.now() })); else localStorage.removeItem(SENDING); } catch { /* private mode */ } },
+};
+// A photo turned down where its warning wasn't seen ({ id, why }): kept with the answers, so a reload still says it over
+// Send and another tab hears of it, until a photo's in, it's been seen, Send's pressed after it, or Start over. Read
+// here only by a page other than the one it happened on (the page after a reload, another tab): said as it is on one
+// (advice to reload the page was for that page alone, and never survives the reload it asked for)
+const turnedStore = {
+  get() { try { const x = JSON.parse(localStorage.getItem(TURNED) || 'null'); return PHOTO_IDS.has(x?.id) && typeof x.why === 'string' && x.why ? { id: x.id, why: refusalLater(x.why) } : null; } catch { return null; } },
+  set(x) { try { if (x) localStorage.setItem(TURNED, JSON.stringify({ id: x.id, why: x.why })); else localStorage.removeItem(TURNED); } catch { /* private mode */ } },
 };
 const MAYBE_ARRIVED = 'We couldn’t tell whether that arrived. Your answers are still here. To be sure, press Send again without changing your answers: if it arrived, it won’t be sent twice.';
 // (the same answers again are the same application; an answer changed first is a new one, so it says so)
@@ -128,25 +138,53 @@ export function initAdvisoryForm() {
   let keyAsk = null; // that request, while it's out
   let posting = false; // the application on its way to our server
   const CHECK_BLOCKED = 'The quick check didn’t load (a content blocker can stop it). Check your connection and press Send again, or email info@soardcharity.com and we’ll help.';
-  /** A note's words, with our email address in it a link (a tap writes to us) */
+  /** A note's words, with our email address in it a link (a tap writes to us); two notes in one, each its own run */
   function putText(el, text) {
-    el.textContent = '';
-    if (!text) return;
-    const words = document.createElement('span'); // one run of words (a note laid out beside its icon keeps them together)
-    for (const [i, part] of String(text).split(/(\b[\w.+-]+@soardcharity\.com\b)/).entries()) {
-      if (!part) continue;
-      if (i % 2) { const a = document.createElement('a'); a.href = `mailto:${part}`; a.textContent = part; words.append(a); } else words.append(part);
+    const runs = [];
+    for (const note of [].concat(text || []).filter(Boolean)) {
+      if (runs.length) runs.push(' ');
+      const words = document.createElement('span'); // one run of words (a note laid out beside its icon keeps them together)
+      for (const [i, part] of String(note).split(/(\b[\w.+-]+@soardcharity\.com\b)/).entries()) {
+        if (!part) continue;
+        if (i % 2) { const a = document.createElement('a'); a.href = `mailto:${part}`; a.textContent = part; words.append(a); } else words.append(part);
+      }
+      runs.push(words);
     }
-    el.append(words);
+    el.replaceChildren(...runs); // (in one change: an alert's words are read once, whole)
   }
   const sayError = (text) => putText(ui.sendError, text);
   let sending = false;
   let clearedThere = false; // Start over pressed in another tab: the overview here says why its answers went
   let awayNote = ''; // a photo turned down while they were on the overview: why, said there until they go back in
   let reviewNote = false; // a photo turned down while they were on the review: its words over Send, until a photo's in
-  // A photo turned down where its note couldn't be seen (another step, the review, the overview): kept until a photo's in,
-  // or they've been on its step and seen it there; said over Send whenever they come to the review meanwhile
-  let turnedDown = null;
+  // A photo turned down where its note couldn't be seen (another step, the review, the overview, a tab behind another,
+  // or its own screen with the note never in view): kept until a photo's in, or they've had it in view on its step; said
+  // over Send whenever they come to the review meanwhile. Kept on this device ({ id, why }): a reload, or another tab of
+  // it, says it too (on its card as well, so being on its screen is seeing it there)
+  let turnedDown = turnedStore.get();
+  const setTurned = (t) => { turnedDown = t; turnedStore.set(t); };
+  const turnedWords = () => (turnedDown ? photos[turnedDown.id]?.refusalFor(turnedDown.why) || turnedDown.why : '');
+  // Photos whose warning (a photo turned down) they've had in view: drawn between the bar across the top and Back /
+  // Continue, on a tab in front, never just drawn behind the bar. A new warning starts unseen
+  const warnSeen = new Set();
+  // (a photo's card on the screen they're on, in a tab that's in front: where a note about it is seen as it's said)
+  const inSight = (id) => !!fieldEl(id)?.getClientRects().length && document.visibilityState !== 'hidden';
+  // (the press waiting on these photos, if any: it says what became of them, once, where it takes them)
+  let pressWaits = null;
+  // This tab's application, for its entries in the history: a new one at Start over and for a new application after
+  // one's sent, so an entry of the answers deleted or sent (the browser's Back or Forward onto one) never brings back
+  // their place, nor "Back to review". In sessionStorage, the tab's own, as its history is, with the application it's
+  // of (the id this device saved it under, '' before it's saved): a tab that comes back to the page after that
+  // application went while it was away (Start over or Send in another tab, then the browser's Back here) knows its
+  // entries are nobody's place now
+  const appTabNow = () => { try { const x = JSON.parse(sessionStorage.getItem(APP_TAB) || 'null'); return typeof x?.id === 'string' && x.id ? x : null; } catch { return null; } };
+  const tabWas = appTabNow();
+  let appTab = tabWas && tabWas.of === (stored?.session || '') ? tabWas.id : newSendSession();
+  let appOf = ''; // (the application it's of, as last kept)
+  const keepAppTab = () => { appOf = read()?.session || ''; try { sessionStorage.setItem(APP_TAB, JSON.stringify({ id: appTab, of: appOf })); } catch { /* storage off */ } };
+  keepAppTab();
+  // (an entry's place, when it's this application's: one from before this was kept is taken as this one's)
+  const ours = (at) => (at && (!at.app || at.app === appTab) ? at : null);
   let clearingElsewhere = false; // that Start over, being done here: the other tab took the photo off this device
   let restored = false;
   let typedHere = false; // something typed or picked on this visit (not the browser filling boxes from its history)
@@ -157,17 +195,58 @@ export function initAdvisoryForm() {
   const fieldEl = (id) => form.querySelector(`[data-field="${id}"]`);
   // The headshot: its own script holds the photo (./advisory-photo.js)
   const announce = (words) => { if (!ui.live) return; ui.live.textContent = ''; setTimeout(() => { ui.live.textContent = words; }, 40); };
-  // (a photo this browser couldn't keep: a reload would lose it, so a reload is never suggested then)
-  const photoUnkept = () => Object.values(photos).some((ph) => ph.file && !ph.kept && !ph.keeping);
+  // (a photo this browser couldn't keep, or hasn't yet (it's still being kept): a reload would lose it, so a reload is
+  // never suggested then)
+  const photoUnkept = () => Object.values(photos).some((ph) => ph.file && (!ph.kept || ph.keeping));
   // (its words heard only where its note can be seen: one turned down out of sight is said by photoChanged, where they
   // are, once)
-  const photos = Object.fromEntries(PHOTO_FIELDS.map((f) => [f.id, photoField(fieldEl(f.id), { id: f.id, signal, keepsAnswers: () => canKeep && !photoUnkept(), announce: (w) => { if (!w || fieldEl(f.id)?.getClientRects().length) announce(w); }, onChange: (o) => photoChanged(f.id, o) })]));
+  const photos = Object.fromEntries(PHOTO_FIELDS.map((f) => [f.id, photoField(fieldEl(f.id), { id: f.id, signal, keepsAnswers: () => canKeep && !photoUnkept(), announce: (w) => { if (!w || inSight(f.id)) announce(w); }, onChange: (o) => photoChanged(f.id, o) })]));
   // (what this device kept, brought back, unless a photo's been picked since, and any photo being got ready: Continue
   // waits for both on the photos it reads, Send on every one)
   const photosSettled = (ids = Object.keys(photos)) => Promise.all(ids.map((id) => Promise.all([photos[id].known, photos[id].settled()])));
-  // Brought back (or found not kept): the review and the overview say what's so now, whether or not it changed anything
-  for (const ph of Object.values(photos)) ph.loaded.then(() => { if (step === REVIEW && !sent) buildReview(); paint(); });
+  // Brought back (or found not kept): the review and the overview say what's so now, whether or not it changed anything.
+  // A photo turned down before a reload (or in another tab), not seen yet: its words on its card again, and over Send
+  for (const [id, ph] of Object.entries(photos)) ph.loaded.then(() => { if (turnedDown?.id === id) remindOf(turnedDown); if (step === REVIEW && !sent) buildReview(); paint(); });
+  /** A photo turned down elsewhere (before a reload, another tab), not seen yet: on its card, and over Send on the review */
+  function remindOf(t) {
+    warnSeen.delete(t.id);
+    photos[t.id]?.remind(t.why);
+    if (focused && step === REVIEW && !sent) sayOverSend(turnedWords());
+    // (its card on the screen they're on, a reload having brought them back to it: its words brought into view, as a
+    // photo turned down there is, never left behind Back / Continue. A screen still coming in brings them in itself)
+    else if (focused && !moving && inSight(t.id)) bringIn(fieldEl(t.id));
+    lookSoon();
+  }
+  // ── What the page itself put in the boxes ──
+  // The answers are only ever what the page put in its boxes (what this device kept, brought back; another tab's) and
+  // what's typed or picked in them here. A browser can put back what its boxes held when the page was left, without a
+  // word (no input, no change): Chrome does, as the page finishes loading for the browser's Back when it had let the
+  // page go (no back-forward cache: a phone short of memory), just after the page's own load. Those were the answers of
+  // then (deleted since by Start over, here or in another tab, or sent): never taken, and put back as the page has them
+  const answerBoxes = [...form.querySelectorAll('[data-field] input:not([type=file]), [data-field] textarea')];
+  const own = new Map(); // box → what the page has in it (its words, or whether it's ticked or chosen)
+  const inBox = (el) => (el.type === 'radio' || el.type === 'checkbox' ? el.checked : el.value);
+  const ownAll = () => { for (const el of answerBoxes) own.set(el, inBox(el)); };
+  /** Anything in a box the page didn't put there: put back as the page has it */
+  function disown() {
+    for (const el of answerBoxes) {
+      if (!own.has(el) || inBox(el) === own.get(el)) continue;
+      if (typeof own.get(el) === 'boolean') el.checked = own.get(el); else el.value = own.get(el);
+    }
+  }
+  // Typed, picked, chosen, or changed by the page's own buttons (each with an input or change): theirs, and so the
+  // page's. Heard first, before anything reads the answers (a choice taken from its neighbour: that neighbour too)
+  const mine = (e) => {
+    const el = e.target;
+    if (!own.has(el)) return;
+    for (const x of el.type === 'radio' ? answerBoxes.filter((r) => r.type === 'radio' && r.name === el.name) : [el]) own.set(x, inBox(x));
+  };
+  form.addEventListener('input', mine, { capture: true, signal });
+  form.addEventListener('change', mine, { capture: true, signal });
+  // (put back the moment the browser's done it, in the same moment as the page shows: never on screen, never typed on)
+  window.addEventListener('pageshow', disown, { signal });
   function collect() {
+    disown(); // (what the browser put back is never read as an answer)
     const a = {};
     for (const f of ADVISORY_FIELDS) {
       if (f.type === 'choice') a[f.id] = form.querySelector(`input[name="${f.id}"]:checked`)?.value || '';
@@ -177,7 +256,9 @@ export function initAdvisoryForm() {
     }
     return a;
   }
+  /** Answers into their boxes, by the page itself (what this device kept, another tab's): what's drawn from them too */
   function fill(a) {
+    disown(); // (only these go in beside what the page has: nothing the browser put back is taken with them)
     for (const f of ADVISORY_FIELDS) {
       if (f.type === 'photo') continue; // the photo comes from where it's kept, never from the saved answers
       const v = a?.[f.id];
@@ -186,6 +267,24 @@ export function initAdvisoryForm() {
       else if (f.type === 'check') { if (form.elements[f.id]) form.elements[f.id].checked = !!v; }
       else if (form.elements[f.id]) form.elements[f.id].value = String(v);
     }
+    ownAll();
+    drawAnswers();
+  }
+  /** Every box empty, by the page itself (Start over; the page as it opens): nothing drawn from what was in them stays */
+  function blank() {
+    form.reset();
+    ownAll();
+    drawAnswers();
+  }
+  /**
+   * What's drawn from the answers, drawn again from what's in the boxes now: an email's "Did you mean …?", a long
+   * answer's count, the follow-ups their answers ask. The page's own changes to the boxes fire no input or change, so
+   * without this the answers that were there (deleted by Start over, here or in another tab) stayed beside them
+   */
+  function drawAnswers() {
+    for (const input of form.querySelectorAll('input[type=email]')) paintMailFix(input);
+    for (const ta of form.querySelectorAll('textarea')) paintCount(ta);
+    follow();
   }
   /** Follow-ups show after the answer that asks for them */
   function follow() {
@@ -437,13 +536,14 @@ export function initAdvisoryForm() {
   /**
    * A question into the room between the bar across the top and Back / Continue: left where it is if it's all in
    * view (the step's line stays in sight), else brought just into view. One taller than the room (the headshot's
-   * card on a phone held sideways): its note, what's wrong, brought into sight, never left behind the bar
+   * card on a phone held sideways): its note, what's wrong (or a photo's warning), brought into sight, never left
+   * behind the bar
    */
   function bringIn(el, input = null) {
     const top = (ui.top?.getBoundingClientRect().bottom || 0) + 4;
     const bottom = (form.querySelector('.adv-nav')?.getBoundingClientRect().top ?? innerHeight) - 4;
     const r = el.getBoundingClientRect();
-    const note = [...el.querySelectorAll('.adv-error')].find((n) => !n.hidden && n.textContent.trim() && n.getClientRects().length);
+    const note = [...el.querySelectorAll('.adv-error, [data-photo-status][data-kind="warn"]')].find((n) => !n.hidden && n.textContent.trim() && n.getClientRects().length);
     let by = 0;
     if (r.height <= bottom - top) by = r.top < top ? r.top - top : r.bottom > bottom ? r.bottom - bottom : 0;
     else if (note) { const n = note.getBoundingClientRect(); by = n.bottom > bottom ? n.bottom - bottom + 8 : n.top < top ? n.top - top - 8 : 0; }
@@ -457,6 +557,7 @@ export function initAdvisoryForm() {
       }
     }
     if (Math.abs(by) >= 1) window.scrollBy({ top: by, behavior: reducedMotion() ? 'auto' : 'smooth' });
+    lookSoon(); // (in view now, or as the scroll comes: a photo's warning there is seen)
   }
   /** Once someone fixes an answer, its message goes as they type */
   function recheck(id) {
@@ -474,18 +575,26 @@ export function initAdvisoryForm() {
    */
   function photoChanged(id, { problem = false, silent = false, kept = false, fresh = false } = {}) {
     // (a new photo in, or none any more, here or from another tab: what was said about one turned down is over)
-    if (fresh) { awayNote = ''; turnedDown = null; forgetReviewNote(); }
+    if (fresh) { awayNote = ''; warnSeen.delete(id); if (turnedDown) setTurned(null); forgetReviewNote(); }
     // (the photo kept on this device: only what says so changes, the bar across the top too)
     if (kept) { paint(); if (ui.saved.textContent && ui.saved.textContent !== savedWords()) ui.saved.textContent = savedWords(); return; }
     // Turned down where its own note can't be seen: said where they are, and heard, once. On the overview, there; on
-    // the review, over Send (they'd otherwise send the earlier photo, or none, without a word); on another step, heard
-    if (problem && photos[id]?.refusal && !fieldEl(id)?.getClientRects().length) {
-      turnedDown = { id, words: photos[id].refusal };
-      if (!focused) {
-        awayNote = photos[id].refusal;
-        if (ui.hubLive) { ui.hubLive.textContent = ''; setTimeout(() => { ui.hubLive.textContent = `Your photo didn’t go in: ${awayNote}`; }, 40); }
-      } else if (step === REVIEW) sayOverSend(photos[id].refusal);
-      else announce(`Your photo didn’t go in: ${photos[id].refusal}`);
+    // the review, over Send (they'd otherwise send the earlier photo, or none, without a word); on another step, heard,
+    // unless a press is waiting on it (that says it, where it takes them). In sight, its note's seen once it's in view
+    if (problem && photos[id]?.refusal) {
+      warnSeen.delete(id);
+      if (!inSight(id)) {
+        setTurned({ id, why: photos[id].refusalWhy });
+        if (!focused) {
+          awayNote = photos[id].refusal;
+          if (ui.hubLive) { ui.hubLive.textContent = ''; setTimeout(() => { ui.hubLive.textContent = `Your photo didn’t go in: ${awayNote}`; }, 40); }
+        } else if (step === REVIEW) sayOverSend(photos[id].refusal);
+        else if (!pressWaits?.has(id)) announce(`Your photo didn’t go in: ${photos[id].refusal}`);
+      } else {
+        if (turnedDown?.id === id) setTurned({ id, why: photos[id].refusalWhy }); // (one still unseen: these words now)
+        lookSoon();
+        setTimeout(lookSoon, 250); // (and again once its note's look has settled)
+      }
     }
     if (!silent) typedHere = true;
     if (problem) { if (step >= 0 && step < total && pages[step]?.contains(fieldEl(id))) paintSummary(stillWrong(), { always: true }); }
@@ -572,11 +681,14 @@ export function initAdvisoryForm() {
       ui.hubLive.textContent = '';
       setTimeout(() => { ui.hubLive.textContent = words; }, 40);
     }
-    ui.hubLead.textContent = awayNote && !was ? `Your photo didn’t go in: ${awayNote}` : was ? `It arrived on ${on}, and we’ll be in touch by email.`
+    const maybe = !was && canKeep && started && doneCount === total && !!sendingStore.get();
+    const lead = was ? `It arrived on ${on}, and we’ll be in touch by email.`
       : !canKeep ? (started ? 'This browser blocks saving, so your answers are only on this page until you send them.' : 'Have a reference in mind and a photo of yourself ready. This browser blocks saving, so plan to finish in one sitting.')
-        : started ? (doneCount === total ? (sendingStore.get() ? MAYBE_SENT : 'Every step is done. Look it over and send it.') : `${doneCount} of ${total + 1} steps done. Pick up where you left off.`)
+        : started ? (doneCount === total ? (maybe ? MAYBE_SENT : 'Every step is done. Look it over and send it.') : `${doneCount} of ${total + 1} steps done. Pick up where you left off.`)
           : clearedThere ? 'Your answers were deleted: Start over was pressed in another tab. Start again whenever you’re ready.'
             : 'Have a reference in mind and a photo of yourself ready. Your answers save on this device as you go.';
+    // (a photo turned down while they're here says so in its place; "may already have been sent" stays beside it, both said)
+    ui.hubLead.textContent = awayNote && !was ? [maybe ? MAYBE_SENT : '', `Your photo didn’t go in: ${awayNote}`].filter(Boolean).join(' ') : lead;
     ui.goLabel.textContent = was ? 'Start a new application' : !started ? 'Start the application' : doneCount === total ? 'Review and send' : 'Continue where you left off';
     const cta = document.querySelector('[data-adv-cta]'); // the hero's button says the same
     if (cta && cta.textContent !== ui.goLabel.textContent) cta.textContent = ui.goLabel.textContent;
@@ -650,12 +762,52 @@ export function initAdvisoryForm() {
     vt.finished.catch(() => {}).finally(() => { if (!moving) html.classList.remove('adv-vt', 'adv-vt-back', 'adv-vt-same'); letGo(held); });
     return vt.updateCallbackDone.catch(() => {}).finally(() => { moving = false; });
   }
+  /**
+   * A photo's warning they've had in view: its note between the bar across the top and Back / Continue (all of it, or
+   * as much as that room holds), on a tab that's in front. Looked at as they scroll, as a screen comes, and as one's said
+   */
+  function lookAt() {
+    if (!focused || document.visibilityState === 'hidden') return;
+    const top = ui.top?.getBoundingClientRect().bottom || 0;
+    const bottom = form.querySelector('.adv-nav')?.getBoundingClientRect().top ?? innerHeight;
+    for (const [id, ph] of Object.entries(photos)) {
+      const note = ph.warning;
+      if (!note || warnSeen.has(id) || !note.getClientRects().length) continue;
+      const r = note.getBoundingClientRect();
+      if (Math.min(r.bottom, bottom) - Math.max(r.top, top) >= Math.min(r.height, bottom - top) - 1) warnSeen.add(id);
+    }
+  }
+  let lookFrame = 0;
+  function lookSoon() { if (!lookFrame) lookFrame = requestAnimationFrame(() => { lookFrame = 0; lookAt(); }); }
+  window.addEventListener('scroll', lookSoon, { passive: true, signal });
+  window.addEventListener('resize', lookSoon, { passive: true, signal });
+  document.addEventListener('visibilitychange', lookSoon, { signal });
+  /**
+   * Leaving the screen these photos were on: a warning seen there goes (it was read); one never in view (behind the
+   * bar, a tab behind another) stays, on the card and over Send, till it has been
+   */
+  function leaveWarnings(ids) {
+    for (const id of ids) {
+      const note = photos[id].warning;
+      // (one turned down elsewhere whose words aren't on its card (still being brought back, or a new pick being got
+      // ready over them): not seen either)
+      if (!note && turnedDown?.id === id) continue;
+      if (note && !warnSeen.has(id)) {
+        if (turnedDown?.id !== id || turnedDown.why !== photos[id].refusalWhy) setTurned({ id, why: photos[id].refusalWhy });
+        continue;
+      }
+      photos[id].leave();
+      if (turnedDown?.id === id) setTurned(null);
+    }
+  }
   /** Put a step on screen, a screen of it (a number, 'last', or the one holding `at`) */
   function go(i, { dir = 0, screen = 0, at = null, field = null, focus = true } = {}) {
     moved();
     const changed = i !== step;
-    // (the photos on screen as they leave it: a warning on one goes once they've seen it there and moved on)
-    const shown = Object.keys(photos).filter((id) => fieldEl(id)?.getClientRects().length);
+    // (the photos on screen as they leave it: a warning on one goes once they've seen it there and moved on. A last look
+    // first, at the screen they're on; none as the application opens again: what's drawn then was never theirs to see)
+    if (step >= 0) lookAt();
+    const shown = step >= 0 ? Object.keys(photos).filter((id) => fieldEl(id)?.getClientRects().length) : [];
     if (dir) calmUntil = performance.now() + 350; // a second press of Continue mid-change (a double tap) counts once
     return swap(() => {
       step = i;
@@ -672,15 +824,12 @@ export function initAdvisoryForm() {
       paintScreen();
       anchor = packs[i]?.[screenNo]?.find((k) => k.getClientRects().length) || null;
       if (changed && ui.live) ui.live.textContent = ''; // (an old message never sits beside the next step's buttons)
-      // (a warning about a photo turned down goes as they leave the screen it was on, having seen it there; one turned
-      // down while they were elsewhere, on another screen or step, stays, there and over Send, till they have)
-      for (const id of shown) {
-        if (fieldEl(id)?.getClientRects().length) continue;
-        photos[id].leave();
-        if (turnedDown?.id === id) turnedDown = null;
-      }
+      // (a warning about a photo turned down goes as they leave the screen it was on, having had it in view there; one
+      // turned down while they were elsewhere, on another screen or step, or never in view, stays, there and over Send,
+      // till they have)
+      leaveWarnings(shown.filter((id) => !fieldEl(id)?.getClientRects().length));
       // (on the review: "may already have been sent" and a photo turned down, both said, never one over the other)
-      if (i === REVIEW && !sent && turnedDown) sayOverSend(turnedDown.words);
+      if (i === REVIEW && !sent && turnedDown) sayOverSend(turnedWords());
       else if (i === REVIEW && !sent && sendingStore.get()) { sayError(MAYBE_SENT); ui.sendError.hidden = false; } // (said on the review too)
       paint();
       if (focused) window.scrollTo({ top: 0, behavior: 'auto' });
@@ -696,6 +845,12 @@ export function initAdvisoryForm() {
           if (changed && ui.live) { ui.live.textContent = ''; setTimeout(() => { ui.live.textContent = `Step ${step + 1} of ${total + 1}: ${titles[step]}`; }, 40); }
         } else ui.title.focus({ preventScroll: true });
       }
+      // (a photo's warning not yet seen, on the screen they've come to: brought into view, as a problem's note is, never
+      // left behind Back / Continue. An answer gone to by its Change keeps the view: the warning's seen once it's in it)
+      const unseen = at ? null : Object.keys(photos).find((id) => !warnSeen.has(id) && photos[id].warning && fieldEl(id)?.getClientRects().length);
+      if (unseen) bringIn(fieldEl(unseen));
+      lookSoon();
+      setTimeout(lookSoon, 300); // (and once the screen's own motion has settled)
     });
   }
 
@@ -711,7 +866,8 @@ export function initAdvisoryForm() {
   // (a step reached from the review says so: a reload or Back and Forward keeps "Back to review")
   // (the screen's last question too: the step can be split again (a photo card that grew), and the question finds
   // the screen it's on now, where its number wouldn't)
-  const whereNow = () => ({ step, screen: step >= total ? 0 : screenNo, ...(step < total && lastIdOn(step, screenNo) ? { field: lastIdOn(step, screenNo) } : {}), ...(fromReview && step < total ? { fromReview } : {}) });
+  // (and which application it is: after Start over, an entry of the deleted one is nobody's place)
+  const whereNow = () => ({ step, screen: step >= total ? 0 : screenNo, ...(step < total && lastIdOn(step, screenNo) ? { field: lastIdOn(step, screenNo) } : {}), ...(fromReview && step < total ? { fromReview } : {}), app: appTab });
   const sameAt = (x, y) => !!x && !!y && x.step === y.step && (x.field && y.field ? x.field === y.field : x.screen === y.screen);
   function pushLoc() {
     if (!focused) return;
@@ -737,7 +893,9 @@ export function initAdvisoryForm() {
       root.classList.add('is-focus');
       document.documentElement.classList.add('adv-focus');
       session.set(true);
-      if (!depth && history.state?.advFocus) { depth = history.state.advDepth || 1; trail[depth] = history.state.advAt; } // a reload on one of its own entries
+      // (on one of its entries: a reload on one of its own; or one of an application that's gone (sent, deleted), whose
+      // place in the history this one takes, Back passing over the gone one's entries behind it)
+      if (!depth && history.state?.advFocus) { depth = history.state.advDepth || 1; trail[depth] = history.state.advAt; }
       window.scrollTo({ top: 0, behavior: 'auto' });
       if (!reducedMotion()) {
         ui.top?.animate?.([{ transform: 'translateY(-100%)' }, { transform: 'none' }], { duration: 220, easing: 'cubic-bezier(.2,.8,.2,1)' });
@@ -756,12 +914,10 @@ export function initAdvisoryForm() {
   function exitFocus({ fromPop = false, keep = true } = {}) {
     if (!focused) return;
     moved();
-    // (a warning on the photo they had on screen: seen there, so it goes as they leave, as it does going on)
-    for (const id of Object.keys(photos)) {
-      if (!fieldEl(id)?.getClientRects().length) continue;
-      photos[id].leave();
-      if (turnedDown?.id === id) turnedDown = null;
-    }
+    // (a warning on the photo they had on screen: seen there, so it goes as they leave, as it does going on; never in
+    // view, it stays)
+    lookAt();
+    leaveWarnings(Object.keys(photos).filter((id) => fieldEl(id)?.getClientRects().length));
     if (keep) saveNow();
     if (step >= 0 && step < total) resumeAt = { step, screen: screenNo, field: lastIdOn(step, screenNo) }; // "Continue where you left off": this screen
     // Left by the browser's Back (a screen at a time, back to the first): the furthest step they'd reached instead
@@ -849,8 +1005,12 @@ export function initAdvisoryForm() {
         else { pageAt = to; history.go(-(to + 1)); }
         return true;
       }
+      // The page on an entry of an application that's gone (deleted while this tab was away), and Back onto another of
+      // them: none is anyone's place, so Back leaves the page past them, as it does after a send
+      if (to < pageAt && !ours(st.advAt)) { pageAt = to; history.go(-(to + 1)); return true; }
       // The screen they left, its entry further on: the browser goes there too, so Back and Forward still line up
-      const at = left && left.depth > to ? left.at : st.advAt;
+      // (an entry of answers Start over deleted: the application from its start)
+      const at = left && left.depth > to ? left.at : ours(st.advAt);
       if (left && left.depth > to) { swallow = true; history.go(left.depth - to); depth = left.depth; } else depth = to;
       left = null;
       if (at) { trail[depth] = at; resumeAt = at.step < total ? at : null; fromReview = (at.step < total && at.fromReview) || false; }
@@ -864,9 +1024,14 @@ export function initAdvisoryForm() {
     depth = to;
     if (st?.advAt) trail[to] = st.advAt;
     if (!to || sent) { exitFocus({ fromPop: true }); return true; } // back to the page itself
-    const at = st.advAt;
+    const at = ours(st.advAt);
     if (at && at.step < total) fromReview = at.fromReview || false; // as the entry was left
     if (at && !sameAt(at, whereNow())) go(at.step, { dir, screen: at.screen, field: at.field || null }).then(save); // a reload comes back here
+    // (an entry of an application that's gone (sent, deleted), behind this one's first: Back passes over every one of
+    // them to the page itself, as Back from any application's first screen goes, never to a place of the one gone.
+    // Forward onto one: it's where they are now)
+    else if (!at && st?.advAt && dir < 0) exitFocus({ fromPop: true });
+    else if (!at && st?.advAt) replaceLoc();
     else if (!at && dir < 0) back(); // an entry from before they said where they were: a screen back
     return true;
   };
@@ -1013,6 +1178,7 @@ export function initAdvisoryForm() {
     furthest = Math.max(furthest, Math.min(REVIEW, Number(there?.furthest) || 0));
     if (there?.session) sendSession = there.session; // (another tab's, saved first: the one id for the application)
     write({ answers, step: Math.min(step, REVIEW), screen: screenNo, field: step < total ? lastIdOn(step, screenNo) : null, furthest, startedAt: Math.min(startedAt, Number(there?.startedAt) || startedAt), session: sendSession, savedAt: Date.now() });
+    if (canKeep && appOf !== sendSession) keepAppTab(); // (this tab's entries are of the application saved now)
     takeTheirs(answers, now);
     const said = savedWords();
     if (ui.saved.textContent !== said) ui.saved.textContent = said; // (heard once, not at every pause in typing)
@@ -1024,17 +1190,27 @@ export function initAdvisoryForm() {
     if (Object.values(photos).some((ph) => ph.file && ph.keeping)) return 'Saving on this device…';
     return Object.values(photos).some((ph) => ph.file && !ph.kept) ? 'Saved, except your photo' : 'Saved on this device';
   }
-  // A photo turned down while they're on the review: its words over Send, heard (role=alert), until a photo's in
+  // A photo turned down while they're on the review: its words over Send, heard (role=alert), until a photo's in. Beside
+  // "may already have been sent" when that's so too: each its own run of words, both said
   function sayOverSend(words) {
     reviewNote = true;
-    const all = [!sent && sendingStore.get() ? MAYBE_SENT : '', words].filter(Boolean).join(' ');
-    if (ui.sendError.hidden || ui.sendError.textContent !== all) { sayError(all); ui.sendError.hidden = false; }
+    const notes = [!sent && sendingStore.get() ? MAYBE_SENT : '', words].filter(Boolean);
+    if (ui.sendError.hidden || ui.sendError.textContent !== notes.join(' ')) { putText(ui.sendError, notes); ui.sendError.hidden = false; }
   }
-  function forgetReviewNote() { if (reviewNote) { reviewNote = false; ui.sendError.hidden = true; } }
+  // The photo's words over Send go (a photo's in now, or none, or seen): "may already have been sent" beside them stays,
+  // as it was (only the photo's run taken out: nothing else changes, so nothing's read out again)
+  function forgetReviewNote() {
+    if (!reviewNote) return;
+    reviewNote = false;
+    const first = ui.sendError.firstElementChild;
+    if (!ui.sendError.hidden && first?.textContent === MAYBE_SENT && ui.sendError.children.length > 1 && step === REVIEW && !sent && sendingStore.get()) {
+      while (ui.sendError.lastChild && ui.sendError.lastChild !== first) ui.sendError.lastChild.remove();
+    } else ui.sendError.hidden = true;
+  }
   const same = (x, y) => JSON.stringify(x ?? '') === JSON.stringify(y ?? '');
   /** Answers another tab saved, shown here where this one hasn't changed them since */
   function takeTheirs(answers, now = collect()) {
-    let took = false;
+    const theirs = {};
     const settled = [];
     for (const f of ADVISORY_FIELDS) {
       if (f.type === 'photo') continue; // another tab's photo comes by its own note (PHOTO_PING)
@@ -1043,14 +1219,13 @@ export function initAdvisoryForm() {
       if (!same(now[f.id], synced[f.id]) && !same(v, now[f.id])) continue;
       settled.push(f.id);
       if (v === undefined || same(v, now[f.id])) continue;
-      fill({ [f.id]: v });
-      took = true;
+      theirs[f.id] = v;
     }
+    const took = Object.keys(theirs).length > 0;
+    if (took) fill(theirs); // (what's drawn from them with them: the follow-ups, a count, "Did you mean …?")
     const after = took ? collect() : now;
     for (const id of settled) synced[id] = after[id];
     if (!took) return;
-    follow();
-    for (const ta of form.querySelectorAll('textarea')) paintCount(ta);
     if (step === REVIEW) buildReview();
     paint();
   }
@@ -1059,14 +1234,34 @@ export function initAdvisoryForm() {
     if (sent || e.storageArea !== localStorage) return;
     if (e.key === SENT && e.newValue) { sentElsewhere(); return; }
     if (e.key === PHOTO_PING) { for (const ph of Object.values(photos)) ph.load(); return; } // a photo changed in another tab
+    if (e.key === TURNED) { turnedElsewhere(); return; }
     if (e.key === STORE && !e.newValue && e.oldValue) { overElsewhere(); return; }
     if (e.key !== STORE || !e.newValue) return;
     const there = read();
     if (!there?.answers) return;
     if (there.session) sendSession = there.session;
+    if (appOf !== (there.session || '')) keepAppTab(); // (this tab's entries are of that application now)
     furthest = Math.max(furthest, Math.min(REVIEW, Number(there.furthest) || 0));
     takeTheirs(there.answers);
   }, { signal });
+  /**
+   * Another tab turned a photo down out of sight (said here too: on its card, and over Send), or that's over there (a
+   * photo's in, it was seen, Send was pressed after it): its words here go too, unless its card is in sight here
+   */
+  function turnedElsewhere() {
+    const t = turnedStore.get();
+    if (t) {
+      if (turnedDown?.id === t.id && turnedDown.why === t.why) return;
+      turnedDown = t;
+      photos[t.id]?.loaded.then(() => { if (turnedDown === t) remindOf(t); });
+      return;
+    }
+    if (!turnedDown) return;
+    const { id } = turnedDown;
+    turnedDown = null;
+    if (!inSight(id)) photos[id]?.leave();
+    forgetReviewNote();
+  }
   function save() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveNow, 400);
@@ -1372,6 +1567,8 @@ export function initAdvisoryForm() {
   const AGAIN = 'soard-advisory-again';
   function again() {
     try { sessionStorage.setItem(AGAIN, '1'); } catch { /* storage off: the page's own Start, after */ }
+    // (a new application, so a new one for the history too: the sent one's entries are nobody's place)
+    try { sessionStorage.removeItem(APP_TAB); } catch { /* storage off */ }
     location.reload();
   }
   ui.hubRows.forEach((b) => b.addEventListener('click', () => {
@@ -1412,6 +1609,7 @@ export function initAdvisoryForm() {
     })();
     if (reads.length) {
       photoWait = true;
+      pressWaits = new Set(reads);
       const at = navSeq;
       // (said as what it is: a photo picked being got ready, or this device being looked through for one it kept)
       const picked = reads.some((id) => photos[id].preparing);
@@ -1421,20 +1619,32 @@ export function initAdvisoryForm() {
       const movedOn = new Promise((resolve) => { wake = resolve; navWaiters.push(resolve); });
       try { await Promise.race([photosSettled(reads), movedOn]); } finally {
         navWaiters = navWaiters.filter((r) => r !== wake);
-        clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false;
+        clearTimeout(slowPhoto); ui.next.removeAttribute('aria-busy'); photoWait = false; pressWaits = null;
       }
-      if (at !== navSeq || !focused) return; // (Back or Save and exit pressed meanwhile: that stands)
-      // (a photo picked meanwhile and turned down: Continue stops there, its words in sight, never on with the earlier one;
-      // at the review, where its card isn't, they're said over Send, and heard)
+      // (Back or Save and exit pressed meanwhile: that stands. A photo turned down after it was, out of sight, was heard
+      // then: this press had given way)
+      if (at !== navSeq || !focused) return;
+      // A photo picked meanwhile and turned down: never on with the earlier one as if nothing was said. On its card on
+      // this screen: Continue stops there, its words in sight (heard as they came). At the review, where its card isn't:
+      // said over Send, and heard
       const turned = reads.find((id, k) => photos[id].refused !== refusedWere[k]);
-      if (turned) {
-        if (!fieldEl(turned)?.getClientRects().length) sayOverSend(photos[turned].refusal);
-        return;
-      }
+      if (turned && step === REVIEW) { sayOverSend(photos[turned].refusal); return; }
+      if (turned && !inSight(turned)) {
+        // On another of the step's screens: "Back to review" goes on, its words over Send there (said once, there, never
+        // over this step as well); else to its screen, its words in view, and heard
+        const toReview = (fromReview === 'answer' || (fromReview && !screenAhead())) && !Object.keys(problemsOn(step)).length;
+        if (!toReview) {
+          const on = screenOf(step, turned) > screenNo;
+          announce(`Your photo didn’t go in: ${photos[turned].refusal}`);
+          focusField(turned);
+          if (on) pushLoc(); else replaceLoc();
+          return;
+        }
+      } else if (turned) return;
     }
     // (a photo turned down before Send was pressed, said over it, stands: pressed again, it goes with the earlier one)
     if (!reviewNote || step !== REVIEW) ui.sendError.hidden = true;
-    if (reviewNote && step === REVIEW) turnedDown = null; // (seen, over Send, and Send pressed after it)
+    if (reviewNote && step === REVIEW && turnedDown) setTurned(null); // (seen, over Send, and Send pressed after it)
     reviewNote = false;
     if (step === REVIEW) { await send(); return; }
     const here = screenIds();
@@ -1611,7 +1821,8 @@ export function initAdvisoryForm() {
   function markSent({ first = '', elsewhere = false } = {}) {
     sent = true;
     clearTimeout(saveTimer);
-    if (!elsewhere) { sentStore.set(Date.now()); write(null); }
+    if (!elsewhere) { sentStore.set(Date.now()); write(null); turnedStore.set(null); }
+    turnedDown = null; // (said over Send before it went, or about a photo that's gone with it)
     for (const ph of Object.values(photos)) ph.clear({ keep: elsewhere }); // (the tab that sent it took it off this device)
     sendingStore.set(false); // (in this order: another tab hears it was sent, not started over)
     ui.saved.textContent = '';
@@ -1691,17 +1902,11 @@ export function initAdvisoryForm() {
 
   // ── Picking up where they left off ──
   // The answers are this device's saved ones, never what the browser put back in the boxes from its history (after
-  // sending, or a tab Safari reloaded): the boxes start empty, then the saved answers go in. The browser can put
-  // them back once the page has loaded, too: emptied again then, when nothing's saved and nothing's been typed
-  form.reset();
+  // sending, or a tab Safari reloaded): the boxes start empty, then the saved answers go in. What the browser puts back
+  // after this (Chrome, once the page has loaded) isn't the page's, so it's never taken (see disown)
+  blank();
   form.addEventListener('input', () => { typedHere = true; }, { signal });
   form.addEventListener('change', () => { typedHere = true; }, { signal });
-  window.addEventListener('load', () => {
-    if (typedHere || focused || read()?.answers) return;
-    form.reset();
-    synced = collect();
-    paint();
-  }, { once: true, signal });
   if (stored?.answers && Object.values(stored.answers).some((v) => v && v !== '')) {
     fill(stored.answers);
     step = Math.min(Math.max(0, Number(stored.step) || 0), REVIEW);
@@ -1733,22 +1938,31 @@ export function initAdvisoryForm() {
     clearTimeout(saveTimer);
     saveTimer = null;
     sendingStore.set(false); // ("may already have been sent" was about the answers going now)
-    form.reset();
+    // (the notes about answers deleted now: each with what tells a screen reader it's wrong, and the summary)
+    for (const el of form.querySelectorAll('.adv-field.is-invalid')) clearProblem(el);
+    for (const el of form.querySelectorAll('.adv-error, [data-summary]')) el.hidden = true;
+    blank(); // (and what was drawn from them: "Did you mean …?", a long answer's count; the screens split as at the start)
     synced = collect();
     step = 0;
     furthest = 0;
     screenNo = 0;
+    // (where the deleted answers were left, and how they were come to: a new application starts at its start, never
+    // "from the review", with Back on its first screen or "Back to review"; its history entries are nobody's place now)
+    fromReview = false;
+    reviewBack = null;
+    resumeAt = null;
+    left = null;
+    appTab = newSendSession();
+    keepAppTab();
     restored = false;
     startedAt = Date.now();
     sendSession = newSendSession(); // a new application from here
-    for (const el of form.querySelectorAll('.adv-field.is-invalid')) el.classList.remove('is-invalid');
-    for (const el of form.querySelectorAll('.adv-error, [data-summary]')) el.hidden = true;
     for (const ph of Object.values(photos)) ph.clear({ keep: clearingElsewhere });
     awayNote = ''; // (about a photo of answers deleted now)
-    turnedDown = null;
+    setTurned(null);
+    warnSeen.clear();
     forgetReviewNote();
     ui.saved.textContent = '';
-    follow();
     paint();
   }
   /** Start over in another tab of this device: here too, never saved back over it (this tab's answers were the same) */
@@ -1770,7 +1984,7 @@ export function initAdvisoryForm() {
   const early = window.__advWant;
   window.__advWant = false;
   // A reload on one of its own history entries: that screen, even when they'd gone back from further on
-  const entry = history.state?.advFocus ? history.state.advAt : null;
+  const entry = history.state?.advFocus ? ours(history.state.advAt) : null;
   if (restored && session.get() && entry && entry.step <= furthest) { step = entry.step; resumeAt = { step, screen: Math.max(0, Number(entry.screen) || 0), field: typeof entry.field === 'string' ? entry.field : null }; if (entry.fromReview && step < total) fromReview = entry.fromReview; }
   let fresh = false;
   try { fresh = sessionStorage.getItem(AGAIN) === '1'; sessionStorage.removeItem(AGAIN); } catch { /* storage off */ }

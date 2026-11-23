@@ -116,6 +116,9 @@ function useDraft(id, onMeeting) {
   const gone = useRef(false);
   const meetingAt = useRef('');
   const lastSeen = useRef({});
+  // People renamed since the roll here was read ({ old: new }, from a save's answer): their boxes are at the new address
+  // at once, and the roll here finds them there until the meeting comes back with it (Board QA round 9)
+  const followed = useRef({});
   const remember = () => seenPut(id, { notes: known.current, ...lastSeen.current });
 
   const later = (ms) => { clearTimeout(timer.current); timer.current = setTimeout(() => flush(), ms); };
@@ -166,6 +169,27 @@ function useDraft(id, onMeeting) {
       throw err;
     }
     saves.current += 1;
+    // Someone renamed on People since the roll here was read: the site kept their mark and to-dos at the new address, so
+    // this page does too, everywhere it holds them (what's waiting, what the site has, what's drawn), before anything else
+    if (j.addressesNow && Object.keys(j.addressesNow).length) {
+      const moved = j.addressesNow;
+      followed.current = { ...followed.current, ...moved };
+      const to = (k) => (k.startsWith('r:') && moved[k.slice(2)] ? `r:${moved[k.slice(2)]}` : k);
+      const own = (v) => (v && typeof v === 'object' && moved[v.owner] ? { ...v, owner: moved[v.owner] } : v);
+      const rekey = (o, each = (x) => x) => { const out = {}; for (const [k, v] of Object.entries(o || {})) { const n = to(k); if (n !== k && n in o) continue; out[n] = each(v); } return out; };
+      dirty.current = rekey(dirty.current, (e) => ({ ...e, v: own(e.v) }));
+      localWrite(id, rekey(localGet(id), (e) => ({ ...e, v: own(e?.v) })));
+      known.current = rekey(known.current, own);
+      for (let i = 0; i < keys.length; i++) {
+        const n = to(keys[i]);
+        if (n !== keys[i]) { sending[n] = { ...sending[keys[i]], v: own(sending[keys[i]].v) }; delete sending[keys[i]]; keys[i] = n; }
+        else if (sending[n]) sending[n] = { ...sending[n], v: own(sending[n].v) };
+      }
+      for (const k of [...held.current]) if (to(k) !== k) { held.current.delete(k); held.current.add(to(k)); }
+      if (!gone.current) setVals((was) => rekey(was, own));
+      // (the meeting with their new address on its roll comes back now, not at the next look)
+      onMeeting?.();
+    }
     const clash = new Map((j.clashes || []).map((c) => [c.key, c]));
     const left = { ...dirty.current };
     for (const k of keys) {
@@ -354,7 +378,7 @@ function useDraft(id, onMeeting) {
     }
   };
 
-  return { unsaved: () => Object.keys(dirty.current).length > 0, vals, setVals, set, setField, flush, state, why, times, setTimes, loaded, base, clashes, settle, retry: pull, clashing: () => held.current.size > 0 };
+  return { unsaved: () => Object.keys(dirty.current).length > 0, vals, setVals, set, setField, flush, state, why, times, setTimes, loaded, base, clashes, settle, retry: pull, clashing: () => held.current.size > 0, followed: followed.current };
 }
 
 /**
@@ -524,11 +548,13 @@ export function NotesPanel({ m, ctx, Icon, onClose, thanks, mine }) {
 
   // Who's marked: what's typed here, over what the meeting already knows (marked on it, or checked in on the board page)
   // (the secretary keeping these was there, until they say otherwise)
-  const keeper = (p) => mine && !times.sent && !!p.slug && p.slug === d.me?.slug;
-  const statusOf = (p) => { const s = vals[`r:${p.key}`] || base.roll[p.key] || (keeper(p) ? 'present' : ''); return s === 'absent' ? '' : s; };
+  const keeper = (p) => mine && !times.sent && !!p.slug && (p.slug === d.me?.slug || draft.followed[p.slug] === d.me?.slug);
+  // (a person renamed since the roll here was read: their box is at the new address, draft.followed)
+  const rk = (p) => draft.followed[p.key] || p.key;
+  const statusOf = (p) => { const s = vals[`r:${rk(p)}`] || base.roll[rk(p)] || base.roll[p.key] || (keeper(p) ? 'present' : ''); return s === 'absent' ? '' : s; };
   const here = roll.filter((p) => p.kind === 'board' && ['present', 'remote'].includes(statusOf(p))).length;
   // Someone really marked (the keeper counted by default isn't: with nobody marked, the meeting's list is left as it is)
-  const marked = roll.some((p) => p.kind === 'board' && (vals[`r:${p.key}`] || base.roll[p.key]) && ['present', 'remote'].includes(statusOf(p)));
+  const marked = roll.some((p) => p.kind === 'board' && (vals[`r:${rk(p)}`] || base.roll[rk(p)] || base.roll[p.key]) && ['present', 'remote'].includes(statusOf(p)));
   const boardCount = roll.filter((p) => p.kind === 'board').length;
 
   const items = o.parts.flatMap((p) => p.items);
@@ -579,7 +605,9 @@ export function NotesPanel({ m, ctx, Icon, onClose, thanks, mine }) {
 
   // Something that can go in, and anything typed at all (a press with only the second says what's missing)
   // A version to choose whose box isn't on the page any more (its item came off, say): drawn at the top, never out of reach
-  const boxed = new Set(['guests', 'adjourned', ...roll.map((p) => `r:${p.key}`), ...items.map((it) => `n:${it.id}`), ...o.parts.filter((p) => !p.items.length || vals[`n:${p.id}`]).map((p) => `n:${p.id}`), ...[...votesDrawn].map((id) => `m:${id}`), ...takenFloor.map(floorKey), ...floor, ...todo, ...left]);
+  // A mark for someone this meeting's list doesn't have (never sent as if they weren't there: Send names them): shown, to take out
+  const strayMarks = Object.keys(vals).filter((k) => k.startsWith('r:') && vals[k] && vals[k] !== 'absent' && !roll.some((p) => `r:${rk(p)}` === k));
+  const boxed = new Set(['guests', 'adjourned', ...roll.map((p) => `r:${rk(p)}`), ...strayMarks, ...items.map((it) => `n:${it.id}`), ...o.parts.filter((p) => !p.items.length || vals[`n:${p.id}`]).map((p) => `n:${p.id}`), ...[...votesDrawn].map((id) => `m:${id}`), ...takenFloor.map(floorKey), ...floor, ...todo, ...left]);
   const stray = Object.keys(clashes).filter((k) => !boxed.has(k));
 
   const typedAny = Object.entries(vals).some(([k, v]) => {
@@ -755,8 +783,13 @@ export function NotesPanel({ m, ctx, Icon, onClose, thanks, mine }) {
         <div class="bn-sec__h"><h3 id="bn-who">Who was there</h3><span class="bn-sec__c">${here} of ${boardCount}${o.quorum ? ` · quorum ${o.quorum}` : ''}</span></div>
         <ul class="bn-roll" id="bn-roll">${roll.map((p) => html`<li key=${p.key}>
           <span class="bn-roll__n">${p.name}${p.kind === 'staff' ? html`<small>Staff</small>` : null}</span>
-          <${Pick} label=${p.name} value=${statusOf(p)} choices=${HERE} ro=${ro} onPick=${(x) => set(`r:${p.key}`, x || (keeper(p) && !vals[`r:${p.key}`] ? 'present' : base.roll[p.key] || keeper(p) ? 'absent' : ''))} />
-          <${Clash} draft=${draft} k=${`r:${p.key}`} label=${p.name} show=${(x) => HOW[x] || 'Not marked'} />
+          <${Pick} label=${p.name} value=${statusOf(p)} choices=${HERE} ro=${ro} onPick=${(x) => set(`r:${rk(p)}`, x || (keeper(p) && !vals[`r:${rk(p)}`] ? 'present' : base.roll[rk(p)] || base.roll[p.key] || keeper(p) ? 'absent' : ''))} />
+          <${Clash} draft=${draft} k=${`r:${rk(p)}`} label=${p.name} show=${(x) => HOW[x] || 'Not marked'} />
+        </li>`)}${strayMarks.map((k) => html`<li key=${k}>
+          <span class="bn-roll__n">${everyone.find((x) => x.slug === k.slice(2))?.name || k.slice(2)}<small>Not on this meeting’s list</small></span>
+          <span>${HOW[vals[k]] || vals[k]}</span>
+          ${ro ? null : html`<button type="button" class="bn-x" aria-label=${`Take out the mark for ${k.slice(2)}`} onClick=${() => set(k, null)}>Take it out</button>`}
+          <${Clash} draft=${draft} k=${k} label=${k.slice(2)} show=${(x) => HOW[x] || 'Not marked'} />
         </li>`)}</ul>
         <div class="bn-f"><span aria-hidden="true">Guests, one to a line</span><${Words} draft=${draft} k="guests" label="Guests, one to a line" placeholder="" rows=${1} max=${MAX_LINE} ro=${ro} /></div>
       </section>

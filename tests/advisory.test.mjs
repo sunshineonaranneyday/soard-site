@@ -773,7 +773,7 @@ test('a mail scanner opening the link answers nothing; a person’s press does, 
   assert.equal((await env.DB.prepare('SELECT note FROM advisory_answers').first()).note, 'My cousin');
   assert.equal((await actionGet({ env, request: new Request('https://x/api/advisory-action?t=nope&do=yes') })).status, 410);
   assert.equal(await linkFrom(env.DB, token, { now: Date.now() + 40 * 86_400_000 }), null, 'older than 30 days');
-  await assert.rejects(answerFromLink(env.DB, 'nope', { answer: 'yes' }), /expired/);
+  await assert.rejects(answerFromLink(env.DB, 'nope', { answer: 'yes' }), /doesn’t work anymore/); /* r21: an unknown link is nobody's, said as that, never "expired" (finding 2) */
 });
 
 test('the ask’s email has the two buttons', () => {
@@ -935,4 +935,24 @@ test('Zeffy has the last word on the group’s campaign: a listed address decide
     globalThis.fetch = real;
     delete env.ZEFFY_API_KEY;
   }
+});
+
+test('the monthly ask greets as the welcome does: by the first name the name says, else "Hello,", never the name as typed (Nov 21 2026)', async () => {
+  const row = await env.DB.prepare('SELECT data FROM team WHERE slug = ?').bind('ada-advisor').first();
+  await env.DB.prepare('UPDATE team SET data = ? WHERE slug = ?').bind(JSON.stringify({ ...JSON.parse(row.data), name: 'GARCIA LOPEZ, MARIA & JOSE' }), 'ada-advisor').run();
+  await saveSettings(env.DB, { emails: true });
+  env.RESEND_API_KEY = 're_x';
+  const realFetch = globalThis.fetch; const sent = [];
+  globalThis.fetch = async (u, o) => { sent.push(...[JSON.parse(o.body)].flat()); return new Response(JSON.stringify({ data: [{ id: 'x' }] }), { status: 200 }); };
+  try {
+    await sendAsk(env, await putAskOut(env.DB, (await saveAsk(env.DB, { title: 'Know a plumber?' })).id, { now: NOW }), { now: NOW });
+    const ada = sent.find((m) => [m.to].flat().includes(EMAILS['ada-advisor']));
+    assert.ok(ada, 'Ada got the ask');
+    assert.match(ada.text, /^Hello,\n/, ada.text.slice(0, 60));
+    assert.doesNotMatch(ada.text + ada.html, /GARCIA|Garcia Lopez/);
+    const ben = sent.find((m) => [m.to].flat().includes(EMAILS['ben-advisor']));
+    // (r20: "Ben Advisor" ends in an office word, "Advisor", so no name: "Hello,", still never the name as typed)
+    assert.match(ben.text, /^Hello,\n/, 'no name from a name ending in an office word');
+    assert.doesNotMatch(ben.text, /Ben Advisor/);
+  } finally { globalThis.fetch = realFetch; }
 });

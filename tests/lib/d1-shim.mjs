@@ -18,9 +18,12 @@ function checkLikePatterns(sql, params) {
   }
 }
 
-export async function createD1({ schemaFiles = [], schemaSql = [] } = {}) {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
+// (one WebAssembly module for every database a run makes: each database is its own)
+let SQLready = null;
+/** `bytes`: a database exported from another (`DB._db.export()`), to start from a copy of it */
+export async function createD1({ schemaFiles = [], schemaSql = [], bytes = null } = {}) {
+  const SQL = await (SQLready ||= initSqlJs());
+  const db = bytes ? new SQL.Database(bytes) : new SQL.Database();
   for (const f of schemaFiles) db.exec(readFileSync(f, 'utf8'));
   for (const s of schemaSql) db.exec(s);
 
@@ -57,7 +60,11 @@ export async function createD1({ schemaFiles = [], schemaSql = [] } = {}) {
       const out = [];
       db.run('BEGIN');
       try {
-        for (const s of stmts) { db.run(s._sql, s._params); out.push({ success: true, meta: { changes: db.getRowsModified() } }); }
+        for (const s of stmts) {
+          // (D1 refuses anything in a batch that isn't one of its statements)
+          if (typeof s?._sql !== 'string') throw new Error('D1_ERROR: batch: not a prepared statement');
+          db.run(s._sql, s._params); out.push({ success: true, meta: { changes: db.getRowsModified() } });
+        }
         db.run('COMMIT');
       } catch (err) {
         db.run('ROLLBACK');

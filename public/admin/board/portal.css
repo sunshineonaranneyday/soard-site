@@ -39,6 +39,9 @@ img { display: block; max-width: 100%; }
 ::selection { background: var(--yellow-soft); }
 .bp-icon { flex-shrink: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+/* A blank cell's words for a screen reader (./money.js Blank), held where the cell is: inside a table that scrolls
+   sideways, never stretching the page */
+.bp-blank { position: relative; }
 .bp-nowrap { white-space: nowrap; }
 .bp-skip { position: absolute; left: 0.75rem; top: -4rem; z-index: 90; background: var(--ink); color: #fff; padding: 0.6rem 1rem; border-radius: 10px; text-decoration: none; font-weight: 600; }
 .bp-skip:focus { top: 0.75rem; }
@@ -98,6 +101,9 @@ img { display: block; max-width: 100%; }
 @media (max-width: 640px) {
   :root { --tabbar: calc(66px + env(safe-area-inset-bottom)); --head: 64px; }
   html { scroll-padding-top: 1rem; }
+  /* …but whatever has the keyboard comes into view clear of the header, which comes back as the page goes up (QA round
+     7: the map's key, reached going up, sat under it): one rule for the whole board page */
+  .bp-main :focus { scroll-margin-top: calc(var(--head) + env(safe-area-inset-top) + 0.75rem); }
   /* Above the page (its view transition makes it a layer of its own), so the tab bar inside it is always on top. It
      steps away while the page is read down and comes back on the way up, the search with it, the way a phone's
      browser does with its own bar */
@@ -470,6 +476,8 @@ a.bk-card:hover .bk-card__photo img { transform: scale(1.04); }
 .bp-fig:focus-visible { outline-offset: -3px; border-radius: 0; }
 .bp-fig__label { font-size: 0.72rem; font-weight: 750; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
 .bp-fig__value { margin: 0.1rem 0 0.15rem; font-family: var(--display); font-size: clamp(1.6rem, 2.6vw, 2.05rem); font-weight: 700; line-height: 1.15; letter-spacing: 0; font-variant-numeric: tabular-nums; color: var(--ink); }
+/* Words in a figure's place ("Not in yet"): the figure's line, at a size words read at */
+.bp-fig__value.is-words { font-size: 1.15rem; line-height: 1.6; color: var(--muted); }
 .bp-fig__sub { color: var(--ink-2); font-size: 0.86rem; line-height: 1.4; }
 .bp-fig__note { color: var(--muted); font-size: 0.8rem; line-height: 1.4; }
 .bp-fig__note.is-up { color: var(--ok); }
@@ -509,7 +517,8 @@ a.bk-card:hover .bk-card__photo img { transform: scale(1.04); }
 .bp-gift { display: grid; grid-template-columns: 5.5rem minmax(0, 1fr) auto; gap: 0 1rem; align-items: baseline; padding: 0.7rem 0; border-top: 1px solid var(--line); }
 .bp-gift__amt { font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 .bp-gift__who { min-width: 0; display: grid; gap: 0.1rem; }
-.bp-gift__who strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* (a name whole on two lines, never cut short: a touch screen has no hover to show the rest) */
+.bp-gift__who strong { font-weight: 600; overflow-wrap: break-word; }
 .bp-gift__who span { color: var(--muted); font-size: 0.84rem; }
 .bp-gift__when { display: inline-flex; align-items: baseline; gap: 0.45rem; color: var(--muted); font-size: 0.84rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .bp-gift__new { padding: 0.05rem 0.45rem; border-radius: 999px; background: var(--yellow); color: #1C1D1A; font-size: 0.72rem; font-weight: 700; }
@@ -521,7 +530,6 @@ a.bk-card:hover .bk-card__photo img { transform: scale(1.04); }
 @media (max-width: 560px) {
   .bp-gift { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'who amt' 'who when'; gap: 0.1rem 1rem; align-items: start; }
   .bp-gift__who { grid-area: who; }
-  .bp-gift__who strong { white-space: normal; }
   .bp-gift__amt { grid-area: amt; }
   .bp-gift__when { grid-area: when; justify-content: flex-end; }
 }
@@ -658,9 +666,12 @@ a.bp-kid:hover .bp-avatar { transform: scale(1.06); }
 .bp-yearfold > summary::-webkit-details-marker { display: none; }
 .bp-yearfold > summary:hover { background: var(--warm); }
 .bp-yearfold__y { flex: none; min-width: 3.4rem; font-family: var(--display); font-size: 1.3rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+/* How many, and its chips: they wrap under it on a narrow phone rather than push the page wider (the chevron stays put) */
+.bp-yearfold__what { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 1rem; }
 .bp-yearfold__n { flex: 1 1 auto; min-width: 0; color: var(--muted); font-size: 0.9rem; white-space: nowrap; }
 .bp-yearfold > summary .bp-chip { flex: none; white-space: nowrap; }
-@media (max-width: 380px) { .bp-yearfold > summary { gap: 0.6rem; padding-inline: 0.6rem; } }
+.bp-yearfold__chev { flex: none; }
+@media (max-width: 380px) { .bp-yearfold > summary { gap: 0.6rem; padding-inline: 0.6rem; } .bp-yearfold__what { column-gap: 0.6rem; } }
 .bp-yearfold__chev { color: var(--quiet); transition: transform 0.3s var(--ease); }
 .bp-yearfold[open] .bp-yearfold__chev { transform: rotate(180deg); }
 .bp-yearfold .bp-mlist { padding: 0 0 0.3rem; border: none; box-shadow: none; background: none; }
@@ -676,7 +687,8 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 /* The words searched for, where a search result lands (marked by the page's search, ./portal.js markFound) */
 ::highlight(bp-found) { background-color: var(--yellow-soft); color: inherit; }
 @media (max-width: 760px) {
-  .bp-year { grid-template-columns: 1fr; gap: 0.5rem; }
+  /* (never wider than the page: what's in a year wraps inside it) */
+  .bp-year { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
   .bp-year__label { position: static; font-size: 1.5rem; margin: 0; }
   .bp-mrow { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; padding: 0.8rem 0.75rem; gap: 0.15rem 0.85rem; }
   .bp-mrow > .bp-date { grid-row: 1 / span 2; }
@@ -695,6 +707,10 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 /* A card found (a decision, a part of the agenda) keeps its own face: a yellow ring that fades */
 .bp-motion.is-found, .bp-agsec.is-found, .bp-card.is-found, .bk-col__cards > li.is-found > .bk-card, .bp-doctiles > li.is-found > .bp-doctile { animation: bp-found-ring 2.2s var(--ease); }
 .bp-file.is-found, .bp-meter.is-found { animation: bp-found 2.2s var(--ease) both; border-radius: 12px; }
+/* A figure found by search, where it's drawn: a tile, the year's three, a chart's caption, a note (./figures.js) */
+.bp-fig.is-found, .bp-yfigs > li.is-found, .by-cap.is-found, .bp-note.is-found, .bp-mix__less.is-found, .bp-agfig.is-found { animation: bp-found 2.2s var(--ease) both; border-radius: 12px; }
+/* …and one in a row of its own (the store's tiles, a table's cell, the forecast's lines: Board QA round 10) */
+.bp-store > li.is-found, td.is-found, .by-table__whole.is-found, .bp-live li.is-found { animation: bp-found 2.2s var(--ease) both; border-radius: 8px; }
 /* A thing found and given the focus to: the yellow mark says where, no outline besides */
 .is-found[tabindex="-1"]:focus { outline: none; }
 @keyframes bp-found-ring { 0%, 35% { box-shadow: 0 0 0 4px var(--yellow); } 100% { box-shadow: 0 0 0 4px transparent; } }
@@ -708,6 +724,8 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 .bp-empty .bp-h2 { justify-content: center; margin-bottom: 0.4rem; }
 .bp-empty .bp-muted { margin: 0 auto; max-width: 30rem; }
 .bp-empty .bp-btns { justify-content: center; }
+/* (a chair's review link that doesn't open: the way on, under why) */
+.bp-empty .cr-shut__go { margin: 1.1rem 0 0; }
 .bp-empty--row { display: flex; align-items: center; gap: 1.1rem; text-align: left; padding: 1.25rem 1.5rem; }
 .bp-empty--row .bp-h2 { justify-content: flex-start; margin-bottom: 0.2rem; font-size: 1.12rem; }
 .bp-empty--row .bp-muted { margin: 0; max-width: none; }
@@ -849,14 +867,14 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 .bp-btn .bp-live-dot::after { border-color: currentColor; }
 
 /* Files */
-.bp-files { display: grid; gap: 1rem; }
+.bp-files { display: grid; grid-template-columns: minmax(0, 1fr); gap: 1rem; }
 .bp-files__label { margin: 0 0 0.4rem; font-size: 0.74rem; font-weight: 750; letter-spacing: 0.11em; text-transform: uppercase; color: var(--faint); }
 .bp-files__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
 .bp-file { display: flex; align-items: center; gap: 0.25rem 0.5rem; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 14px; padding-right: 0.6rem; transition: border-color 0.2s, background 0.2s, box-shadow 0.25s; }
 .bp-file:hover { border-color: var(--line-2); background: #FDFCF9; box-shadow: var(--shadow-1); }
 .bp-file__main { flex: 1 1 12rem; min-width: 0; display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0.4rem 0.6rem 0.65rem; text-decoration: none; border-radius: 14px; }
-.bp-file__text { display: grid; min-width: 0; }
-.bp-file__title { font-weight: 620; line-height: 1.35; }
+.bp-file__text { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
+.bp-file__title { font-weight: 620; line-height: 1.35; overflow-wrap: break-word; }
 .bp-file__meta { color: var(--muted); font-size: 0.84rem; }
 .bp-file__found { display: block; margin: 0.15rem 0; color: var(--ink-2); font-size: 0.86rem; line-height: 1.45; }
 .bp-file__more { display: inline-flex; gap: 0.35rem; padding-left: 3.4rem; }
@@ -921,6 +939,9 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 .bp-tone--0 { background: #C8C4BA; }
 .bp-sum__mix { padding: 0.95rem 1.35rem 1.05rem; border-top: 1px solid var(--line); }
 .bp-sum__mix > .bp-fig__label, .bp-agmix > .bp-fig__label { margin: 0 0 0.55rem; }
+/* The mix's heading and what it leaves out beside it (./money.js MixHead), as the year's charts say what's in theirs */
+.bp-mixhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.1rem 0.5rem; }
+.bp-mixhead small { font-size: 0.8rem; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--muted); }
 .bp-agmix { margin-top: 0.9rem; }
 .bp-mix { position: relative; }
 .bp-mix__bar { position: relative; display: flex; gap: 2px; height: 12px; }
@@ -937,6 +958,8 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 .bp-mix__key i, .bp-mixtable i { flex: none; width: 10px; height: 10px; border-radius: 3px; }
 .bp-mix__key strong { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
 .bp-mix__key span { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* What the revenue is less than its parts (a category below zero), by its name, under the mix (./money.js mixLessWords) */
+.bp-mix__less { margin: 0.5rem 0 0; font-size: 0.85rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .bp-mixtable { margin-top: 0.85rem; }
 /* A phone: a comparison table's row is two lines, the name and this year's amount, then last year's and the change */
 @media (max-width: 640px) {
@@ -1299,6 +1322,9 @@ html[data-vt="back"]::view-transition-new(root) { animation-name: bp-vt-in-left;
 .bp-aghero__big strong { font-family: var(--display); font-size: 2.1rem; line-height: 1; color: var(--ink); margin-right: 0.15rem; }
 .bp-who__q { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.75rem; margin: 0 0 0.75rem; }
 .bp-who__away { margin: 0.75rem 0 0; font-size: 0.88rem; }
+/* Staff and guests who were there, apart from the board members counted above */
+.bp-who__also { margin: 0.75rem 0 0; font-size: 0.88rem; }
+.bp-who__away + .bp-who__also { margin-top: 0.3rem; }
 /* The minutes and the signed copy, in the column under who was there */
 .bp-aghero__links { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; margin: 0.9rem 0 0; padding: 0; }
 .bp-aghero__card > .bp-aghero__links:first-child { margin-top: 0; }
@@ -1459,7 +1485,9 @@ html:has(body .bs) { scrollbar-gutter: auto; }
 @media (max-width: 640px) { .by-legend .by-legend__how { margin-left: 0; flex-basis: 100%; } }
 /* The screen: its own colors for the dark (validated against it), at the size of a room */
 .bs .by, .bs .by-stmt { --by-now: #B08F00; --by-then: #5994DA; --by-grid: var(--bs-line); --by-ink: var(--bs-ink); --by-muted: var(--bs-soft); --by-surface: var(--bs-panel); }
-.by-slide { width: min(100%, calc(var(--bs-u, 1.48vh) * 98)); height: 100%; min-height: 0; display: grid; align-content: start; gap: calc(var(--bs-u, 1.48vh) * 1.1); padding-top: calc(var(--bs-u, 1.48vh) * 0.5); overflow: hidden; }
+/* (its one column the slide's width, never its widest table's: a statement too wide for a phone is fitted to it, books.js
+   FitLines, instead of pushing the slide and its title past the screen's edge) */
+.by-slide { width: min(100%, calc(var(--bs-u, 1.48vh) * 98)); height: 100%; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: calc(var(--bs-u, 1.48vh) * 1.1); padding-top: calc(var(--bs-u, 1.48vh) * 0.5); overflow: hidden; }
 .by-slide__title { font-size: var(--bs-title, calc(var(--bs-u, 1.48vh) * 4.4)); }
 /* The store's slide: its three figures in the room's middle, as big as the screen gives them */
 .by-slide--store { grid-template-rows: auto auto minmax(0, 1fr); }
@@ -1475,14 +1503,18 @@ html:has(body .bs) { scrollbar-gutter: auto; }
 .by-stmt.is-big { font-size: calc(var(--fit, 1) * max(0.95rem, var(--bs-u, 1.48vh) * 2.1)); }
 .by-stmt.is-big th, .by-stmt.is-big td { padding-block: 0.2em; }
 .by-stmt.is-big .by-stmt__h th { padding-top: 0.5em; }
+/* On the screen a column's long header goes onto two lines before its column is any wider than its figures ("Over
+   (under)", a date), and a line's name wraps at its words: the figures are what never break */
+.bs .by-stmt thead th { white-space: normal; text-wrap: balance; }
+.bs .by-stmt tbody th { overflow-wrap: break-word; }
 /* A statement fitted to the slide (books.js FitLines): the rest of the slide's height, and where every line is */
 .by-slide:has(> .by-fit) { grid-template-rows: auto auto minmax(0, 1fr) auto; align-content: stretch; }
 .by-fit { min-height: 0; overflow: hidden; }
 .by-fit__more { margin: 0; color: var(--bs-soft, var(--muted)); font-size: max(0.85rem, var(--bs-u, 1.48vh) * 1.6); }
-/* A tablet or a phone: every line of a statement, the stage scrolling; on a phone the columns closer, so the change
-   column is always there beside the figures */
+/* A tablet or a phone: every line of a statement, the stage scrolling; on a phone the columns closer, and the figures
+   smaller as far as it takes (FitLines), so every column, the change column too, is always there beside the figures */
 @media (max-width: 900px) { .by-slide { height: auto; overflow: visible; } .by-fit { overflow: visible; } }
-@media (max-width: 520px) { .bs .by-stmt.is-big { font-size: 1rem; } .bs .by-stmt th, .bs .by-stmt td { padding-inline: 0.25em; } .bs .by-stmt .num { padding-inline: 0.2em; } .bs .by-stmt thead th { font-size: 0.8em; } }
+@media (max-width: 520px) { .bs .by-stmt.is-big { font-size: calc(var(--fit, 1) * 1rem); } .bs .by-stmt th, .bs .by-stmt td { padding-inline: 0.25em; } .bs .by-stmt .num { padding-inline: 0.2em; } .bs .by-stmt thead th { font-size: 0.8em; } }
 /* On the screen, the chart's note under its name at a size a room reads (the page's is fixed small) */
 .bs .by-cap__t small { font-size: 0.85em; }
 @media print { .by-tip, .by-table summary { display: none; } .by-table[open] { display: none; } }
@@ -1782,6 +1814,8 @@ html:has(body .bs) { scrollbar-gutter: auto; }
 .bs-face--initials::before { content: attr(data-i); }
 .bs-points { font-size: calc(max(1rem, var(--bs-u, 1.48vh) * 2.3) * var(--fit, 1)); line-height: 1.45; min-width: 0; }
 .bs-points [hidden] { display: none; }
+/* A single point or sentence too tall for the room: it ends at a whole line, and the line under it says the rest is on the board page (screen.js Points) */
+.bs-points .is-clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: var(--clamp, 3); line-clamp: var(--clamp, 3); overflow: hidden; }
 .bs-points__more { margin: 0.4em 0 0; color: var(--bs-soft); font-size: max(0.9rem, var(--bs-u, 1.48vh) * 1.8); }
 .bs-points ul { margin: 0; padding-left: 1.2em; }
 .bs-points li { margin: 0.3em 0; }
@@ -2063,19 +2097,21 @@ html:has(body .bs) { scrollbar-gutter: auto; }
 /* The screen's money: the figures, then where the revenue came from. On the dark, the same hues stepped for it
    (checked against the panel the same way as on white); the gold stays */
 /* The money's figures (screen.js CashSlide): closer together (--kfit) while the slide would run past the bottom, then
-   without the row of documents coming */
-.bs-item__body[hidden], .bs-coming[hidden] { display: none; }
+   without the row of documents coming, then without where the revenue came from */
+.bs-item__body[hidden], .bs-coming[hidden], .bs-mix[hidden] { display: none; }
 .bs-money { display: grid; gap: calc(var(--bs-u, 1.48vh) * 2.2 * var(--kfit, 1)); min-width: 0; }
 .bs-money .bs-figs li { padding-block: calc(var(--bs-u, 1.48vh) * 2.4 * var(--kfit, 1)); }
 .bs-money .bs-figs__value:not(.is-words) { font-size: max(1.3rem, min(var(--bs-u, 1.48vh) * 5 * (0.5 + var(--kfit, 1) / 2), 14.5cqi)); }
 .bs-mix { padding: calc(var(--bs-u, 1.48vh) * 1.9 * var(--kfit, 1)) calc(var(--bs-u, 1.48vh) * 2.2); border-radius: calc(var(--bs-u, 1.48vh) * 2.2); background: var(--bs-panel); border: 1px solid var(--bs-line); }
-.bs-mix > .bs-figs__label { display: block; margin: 0 0 calc(var(--bs-u, 1.48vh) * 1.1); }
+.bs-mix > .bs-figs__label { display: flex; margin: 0 0 calc(var(--bs-u, 1.48vh) * 1.1); }
+.bs-mix > .bs-figs__label small { font-size: 0.85em; color: var(--bs-soft); }
 .bs .bp-mix__bar { height: max(14px, var(--bs-u, 1.48vh) * 2.2); }
 .bs .bp-mix__key { gap: 0.5em 1.6em; margin-top: calc(var(--bs-u, 1.48vh) * 1.3); }
 .bs .bp-mix__key li { font-size: max(1rem, var(--bs-u, 1.48vh) * 1.9); color: var(--bs-soft); }
 .bs .bp-mix__key strong { color: var(--bs-ink); }
 .bs .bp-mix__key span { color: var(--bs-faint); }
 .bs .bp-mix__key i { width: 0.75em; height: 0.75em; }
+.bs .bp-mix__less { font-size: max(0.95rem, var(--bs-u, 1.48vh) * 1.7); color: var(--bs-soft); }
 .bs .bp-tone--2 { background: #BB8D00; }
 .bs .bp-tone--3 { background: #6384EC; }
 .bs .bp-tone--4 { background: #0C9474; }
@@ -2119,32 +2155,39 @@ html:has(body .bs) { scrollbar-gutter: auto; }
 .bs-pipe__col, .bs-when__stop { grid-column: span var(--across, 1); min-height: 0; display: grid; grid-template-columns: subgrid; }
 .bs-pipe__colhead, .bs-when__stophead { display: none; }
 .bs-pipe__col ul, .bs-when__stop ul { grid-column: 1 / -1; list-style: none; margin: 0; padding: 0; min-height: 0; display: grid; grid-template-columns: subgrid; grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); row-gap: calc(var(--bs-u) * 1.69); }
-.bs-pipe__card, .bs-when__stop li { container-type: inline-size; min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; align-content: start; gap: 0.35rem; }
+.bs-pipe__card, .bs-when__stop li { min-height: 0; min-width: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto auto; align-content: start; gap: 0.35rem; }
+.bs-when__stop li { container-type: inline-size; }
 /* The rows line up across every stage: a row's photos one height, its names the lines its longest needs (up to
    three), so a long name ("Perfect Harmony Health") reads whole at the size of the others and every photo stays level */
 .bs-pipe__cols { grid-template-rows: repeat(var(--rows), minmax(0, 1fr) auto); margin-top: calc(var(--bs-u) * -1.69); }
 .bs-pipe__col { grid-row: 1 / -1; grid-template-rows: subgrid; }
 .bs-pipe__col ul { grid-row: 1 / -1; grid-template-rows: subgrid; row-gap: 0; }
 .bs-pipe__card { grid-row: span 2; }
-.bs-pipe__card:not(.is-quiet) { container-type: normal; grid-template-rows: subgrid; gap: 0; }
+.bs-pipe__card:not(.is-quiet) { grid-template-rows: subgrid; gap: 0; }
 /* (the room between rows over each card, so the last row's cards end where the stage does) */
 .bs-pipe__card:not(.is-quiet) .bs-pipe__photo { margin: calc(var(--bs-u) * 1.69) 0 calc(var(--bs-u) * 0.7); }
 .bs-pipe__card.is-quiet { margin-top: calc(var(--bs-u) * 1.69); }
-.bs-pipe__namebox { container-type: inline-size; min-width: 0; }
-.bs-pipe__namebox { align-self: start; }
+/* (a box of its own, measured against: never a container, kanban.js fitPipe) */
+.bs-pipe__namebox { min-width: 0; align-self: start; }
 .bs-pipe__photo, .bs-when__photo { position: relative; container-type: size; min-height: 0; display: grid; overflow: hidden; border-radius: 20px; background: var(--bs-panel-2); margin-bottom: 0.35rem; }
 .bs-pipe__photo img, .bs-when__photo img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: 50% 40%; }
 .bs-pipe__initials, .bs-when__initials { display: grid; place-items: center; width: 100%; height: 100%; background: hsl(var(--hue, 42) 22% 30%); color: hsl(var(--hue, 42) 45% 86%); font-family: var(--display); font-weight: 700; font-size: min(calc(var(--bs-u) * 3.6), 52cqh, 42cqw); }
 .bs-pipe__name, .bs-when__name { font-family: var(--display); font-size: min(calc(var(--bs-u) * 2.03), calc(100cqi / (var(--c2, 4) * 0.66))); font-weight: 700; line-height: 1.08; color: var(--bs-ink); overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-/* Whole when it fits its lines (screen.js wholeIfFits): the clamp's edge sits above a y's tail */
+/* Whole when it fits its lines (kanban.js fitPipe, screen.js wholeNames): the clamp's edge sits above a y's tail */
 .bs-pipe__name[data-whole], .bs-when__name[data-whole] { overflow: visible; }
 /* A long name ("Perfect Harmony Health") no bigger than its card holds in its lines, so it reads whole */
 .bs-when[data-rows="2"] .bs-when__name { font-size: min(calc(var(--bs-u) * 1.75), calc(100cqi / (var(--c2, 4) * 0.66))); }
-/* A makeover's name one size for its row count, in as many lines as it takes; only a word wider than its card (a long
-   hyphenated name) sets it smaller, and past three lines it ends in "…" */
-.bs-pipe__name { font-size: min(calc(var(--bs-u) * 2.03), calc(100cqi / (var(--w, 4) * 0.66))); -webkit-line-clamp: 3; text-wrap: balance; }
-.bs-pipe[data-rows="2"] .bs-pipe__name { font-size: min(calc(var(--bs-u) * 1.75), calc(100cqi / (var(--w, 4) * 0.66))); }
-.bs-pipe[data-rows="3"] .bs-pipe__name { font-size: min(calc(var(--bs-u) * 1.7), calc(100cqi / (var(--w, 4) * 0.66))); -webkit-line-clamp: 2; }
+/* A makeover's name one size for its row count, in as many lines as it takes; only a word wider than its card
+   ("Montgomery", a long hyphenated name) sets it smaller, by as much as it's measured to need (--nf, kanban.js
+   fitPipe), and past three lines it ends in "…" */
+.bs-pipe__name { font-size: calc(var(--bs-u) * 2.03 * var(--nf, 1)); -webkit-line-clamp: 3; text-wrap: balance; }
+.bs-pipe[data-rows="2"] .bs-pipe__name { font-size: calc(var(--bs-u) * 1.75 * var(--nf, 1)); }
+.bs-pipe[data-rows="3"] .bs-pipe__name { font-size: calc(var(--bs-u) * 1.7 * var(--nf, 1)); -webkit-line-clamp: 2; }
+/* (measured: each name as wide as its widest word at its full size, each tag's wordings unseen beside it) */
+.bs-pipe[data-measure] .bs-pipe__namebox > .bs-pipe__name { display: block; width: min-content; overflow: visible; -webkit-line-clamp: none; line-clamp: none; }
+.bs-pipe__when.is-probe { visibility: hidden; max-width: none; overflow: visible; text-overflow: clip; pointer-events: none; }
+/* (and the room each has: the tag as wide as its max-width lets it be) */
+.bs-pipe__when.is-room { visibility: hidden; width: 100vw; pointer-events: none; }
 /* The reveal, a tag on the photo's top corner (the face is in its middle) */
 .bs-pipe__when { position: absolute; left: calc(var(--bs-u) * 0.84); top: calc(var(--bs-u) * 0.61); max-width: calc(100% - var(--bs-u) * 1.68); box-sizing: border-box; padding: 0.3em 0.75em; border-radius: 999px; background: rgba(28, 29, 26, 0.86); color: var(--bs-ink); font-size: calc(var(--bs-u) * 1.2); font-weight: 750; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .bs-pipe__when.is-set { background: var(--yellow); color: #1C1D1A; }
@@ -2322,6 +2365,10 @@ html:has(body .bs) { scrollbar-gutter: auto; }
   .bs-pipe__col ul { row-gap: calc(var(--bs-u) * 1.69); } .bs-pipe__card:not(.is-quiet) { grid-template-rows: auto auto; } .bs-pipe__card:not(.is-quiet) .bs-pipe__photo { margin-top: 0; } .bs-pipe__card.is-quiet { margin-top: 0; }
   .bs-pipe[data-rows] .bs-pipe__when { font-size: 0.78rem; }
   .bs-pipe__photo, .bs-when__photo { aspect-ratio: 4 / 5; }
+  /* (no container here: a phone's photos and names sized inside nested containers made each layout take seconds, and
+     the slide froze with six families or more: QA round 6. The photo holds its picture exactly, the initials one size) */
+  .bs-pipe__photo { container-type: normal; grid-template: minmax(0, 1fr) / minmax(0, 1fr); }
+  .bs-pipe__initials, .bs-pipe__photo:has(> .bs-pipe__when) .bs-pipe__initials { font-size: calc(var(--bs-u) * 3.6); }
   .bs-when__more { display: block; margin: 0; font-size: 1rem; font-weight: 650; color: var(--bs-soft); } .bs-shelf__m { font-size: 0.78rem; }
   .bs-rail { grid-template-columns: minmax(0, 1fr); }
   /* A phone following the screen: the meeting's name and the part's time along the top; an item's people or count under its title */
@@ -2402,10 +2449,12 @@ html:has(body .bs) { scrollbar-gutter: auto; }
   .bpp-stmts { display: grid; gap: 0.5rem; margin: 0.4rem 0 0; }
   .bpp-mix, .bpp-store { margin: 0.45rem 0 0; }
   .bpp-mix__h { margin: 0 0 0.2rem; font-size: 7.5pt; font-weight: 750; letter-spacing: 0.08em; text-transform: uppercase; color: #5F615A; }
+  .bpp-mix__h small { font-size: 7.5pt; font-weight: 400; letter-spacing: 0; text-transform: none; }
   .bpp-mix__bar { display: flex; gap: 1.5px; height: 7px; margin: 0 0 0.25rem; }
   .bpp-mix__bar span { flex: 0 0 calc(var(--p) - 1.5px); min-width: 2px; }
   .bpp-mix__bar span, .bpp-mix__key { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .bpp-mix__key { display: inline-block; width: 7px; height: 7px; margin-right: 0.35rem; border-radius: 2px; }
+  .bpp-mix__less { margin: 0.15rem 0 0; font-size: 7.5pt; color: #5F615A; }
   .bpp-stmts__when { margin: 0; font-size: 8.5pt; color: #4E504C; }
   .bpp-stmt { width: 100%; border-collapse: collapse; font-size: 8.5pt; break-inside: auto; }
   .bpp-stmt caption { text-align: left; font-family: var(--display); font-size: 10.5pt; font-weight: 700; padding: 0.3rem 0 0.2rem; }
@@ -2420,10 +2469,13 @@ html:has(body .bs) { scrollbar-gutter: auto; }
   .bpp-dates li { display: flex; gap: 0.6rem; }
   .bpp-dates b { min-width: 8rem; font-weight: 650; }
   .bpp-item { margin: 0 0 0.45rem 0.9rem; break-inside: avoid; }
-  .bpp-item__title { margin: 0; font-size: 10.5pt; font-weight: 650; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  /* Its number in a column of its own, the title wrapping beside it (never under it, never the number alone on a line),
+     who presents it following on, the dot kept with the title's last word so no line starts with it */
+  .bpp-item__title { margin: 0; font-size: 10.5pt; font-weight: 650; display: grid; grid-template-columns: minmax(1.9em, auto) minmax(0, 1fr); column-gap: 0.5rem; align-items: baseline; }
   .bpp-num { color: #5F615A; font-variant-numeric: tabular-nums; }
+  .bpp-item__words { min-width: 0; overflow-wrap: break-word; }
   .bpp-who { color: #5F615A; font-weight: 500; }
-  .bpp-who::before { content: '· '; }
+  .bpp-who::before { content: '\00a0· '; }
   .bpp-flag { margin: 0.1rem 0 0; font-size: 9pt; font-weight: 650; }
   .bpp-notes ul { margin: 0.15rem 0 0; padding-left: 1.1rem; }
   .bpp-notes p { margin: 0.15rem 0 0; }
@@ -2439,10 +2491,29 @@ html:has(body .bs) { scrollbar-gutter: auto; }
   .bpp-docs { margin: 0.15rem 0 0; font-size: 9.5pt; color: #4E504C; font-style: italic; }
   .bpp-page { break-before: page; display: grid; justify-items: center; align-content: start; gap: 0.35rem; }
   .bpp-page.is-wide { page: bp-wide; }
-  .bpp-page > :not(.bpp-cap) { max-width: 100%; height: auto !important; }
+  .bpp-page > :not(.bpp-cap):not(.bdoc-frame) { max-width: 100%; height: auto !important; }
+  /* A Word, Excel or slides page drawn as itself (./docs.js frame): its page sits inside at its own size, so its frame
+     keeps the height it's drawn at (an automatic height would be nothing, and the page would print blank) */
+  .bpp-page > .bdoc-frame { max-width: 100%; }
   .bpp-img { display: block; max-width: 100%; height: auto; }
   .bpp-cap { justify-self: stretch; margin: 0; padding-bottom: 0.25rem; border-bottom: 1px solid #D3D0C7; font-size: 9pt; color: #4E504C; }
   .bpp-cap b { color: #1A1B1F; }
+  /* A held meeting's record: where its minutes are, who was there, the decisions and the action items */
+  .bpp-status { margin: 0.25rem 0 0; font-weight: 650; }
+  .bpp-rec { margin: 0 0 0.85rem; break-inside: avoid-page; }
+  .bpp-rec__h { margin: 0 0 0.35rem; padding-bottom: 0.2rem; border-bottom: 1px solid #D3D0C7; font-family: var(--display); font-size: 12.5pt; }
+  .bpp-rec__lead { margin: 0 0 0.2rem; font-weight: 600; }
+  .bpp-rec__who { margin: 0; display: grid; gap: 0.1rem; }
+  .bpp-rec__who div { display: flex; gap: 0.5rem; }
+  .bpp-rec__who dt { min-width: 5.5rem; font-weight: 650; }
+  .bpp-rec__who dd { margin: 0; }
+  .bpp-rec__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.35rem; }
+  .bpp-rec__list li { break-inside: avoid; }
+  .bpp-rec__what { margin: 0; }
+  .bpp-rec__how { margin: 0; color: #4E504C; font-size: 9.5pt; }
+  .bpp-sec__notes { margin: 0 0 0.35rem 0.9rem; }
+  .bpp-words { justify-items: stretch; }
+  .bpp-words p { margin: 0 0 0.3rem; max-width: 42rem; }
 }
 
 /* The statements from QuickBooks (Statement, Statements in portal.js): each line beside the same day a year before */
@@ -2970,6 +3041,15 @@ a.bc-fam__name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .bf-cards tfoot th, .bf-cards tfoot td { border-top: 1px solid var(--line-2); font-weight: 700; }
 .bf-cards tfoot th { text-align: left; }
 .bf-cards small { color: var(--muted); font-weight: 600; }
+.bf-means { margin-top: 1rem; border-top: 1px solid var(--line); }
+.bf-means__h { margin: 0.85rem 0 0.2rem; font-size: 0.95rem; font-weight: 700; color: var(--ink); }
+.bf-mean { border-bottom: 1px solid var(--line); }
+.bf-mean > summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-weight: 600; color: var(--ink); text-underline-offset: 3px; }
+.bf-mean > summary:hover { text-decoration: underline; }
+.bf-mean__note { margin: 0 0 0.5rem; color: var(--muted); font-size: 0.85rem; }
+.bf-mean__levels { list-style: none; margin: 0 0 0.8rem; padding: 0; display: grid; gap: 0.4rem; font-size: 0.9rem; color: var(--ink-2); }
+.bf-mean__levels li { display: grid; grid-template-columns: 1.6rem minmax(0, 1fr); gap: 0.55rem; align-items: baseline; }
+.bf-mean__levels b { display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: 50%; background: var(--warm); color: var(--ink); font-variant-numeric: tabular-nums; }
 @media (max-width: 900px) { .bf-split { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) {
   .bf-row { grid-template-columns: auto minmax(0, 1fr); } .bf-row__status, .bf-row__score { grid-column: 2; } .bf-row__score { justify-self: start; }
@@ -3094,10 +3174,12 @@ select.bn-in:disabled { background-color: var(--warm); opacity: 1; }
 .lc-phase__head small { font-size: 0.8rem; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--muted); white-space: nowrap; }
 .lc-phase__head small.is-open { color: var(--ok); }
 .lc-phase__head small.is-open::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 0.4rem; border-radius: 50%; background: currentColor; vertical-align: 0.1em; }
-.lc-steps { list-style: none; margin: 0; padding: 0.75rem 0 0; display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 0.6rem; }
-.lc-step { display: grid; align-content: start; gap: 0.2rem; min-width: 0; }
+.lc-steps { list-style: none; margin: 0; padding: 0.75rem 0 0; display: flex; flex-wrap: wrap; gap: 0.6rem; }
+/* A step as wide as its longest word at least ("Mobilization" whole); a stretch too narrow for all of them wraps to a
+   second row rather than break a word that fits on a line of its own */
+.lc-step { flex: 1 1 0; min-width: min-content; display: grid; align-content: start; gap: 0.2rem; }
 .lc-step b { font-family: var(--display); font-size: 1.7rem; line-height: 1.1; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
-.lc-step span { font-size: 0.8rem; font-weight: 600; line-height: 1.25; color: var(--muted); overflow-wrap: anywhere; }
+.lc-step span { font-size: 0.8rem; font-weight: 600; line-height: 1.25; color: var(--muted); overflow-wrap: break-word; }
 .lc-step.is-zero b { color: var(--quiet); font-weight: 400; }
 .lc-step.is-zero span { color: var(--faint); }
 /* The board: Home's Makeovers board, a step's color under its name; the short rows of those applying and revealed */
@@ -3145,9 +3227,11 @@ a.lc-row:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; }
 .lc-j.is-done > span { color: var(--ink-2); }
 .lc-j.is-now > span { color: var(--ink); font-weight: 750; }
 .lc-j small { font-size: 0.76rem; color: var(--muted); }
-.lc-phase__n { display: none; }
+/* (a wide track counts each step itself: a stretch's own count, and who's waiting to start, are a phone's) */
+.lc-phase__n, .lc-phase__also { display: none; }
 @media (max-width: 640px) {
-  /* A phone's track: each stretch of the way and how many are on it (the board's columns count each step) */
+  /* A phone's track: each stretch of the way and how many are on it, as the line above counts them (Building is those
+     being built; approved and awaiting funding said under it), the board's columns counting each step */
   .lc-track { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; gap: 0.75rem; margin-bottom: 1.1rem; }
   .lc-steps { display: none; }
   .lc-phase { display: flex; flex-direction: column; }
@@ -3155,6 +3239,7 @@ a.lc-row:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; }
   .lc-phase__head > span { display: grid; gap: 0.15rem; }
   .lc-phase__n { display: block; order: -1; font-family: var(--display); font-size: 1.7rem; line-height: 1.1; letter-spacing: 0; text-transform: none; color: var(--ink); font-variant-numeric: tabular-nums; }
   .lc-phase__head small { white-space: normal; }
+  .lc-phase__head small.lc-phase__also { display: block; }
   .lc-board { grid-auto-columns: 76%; }
   .lc-bar { align-items: flex-start; }
 }
@@ -3167,6 +3252,13 @@ a.lc-row:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; }
 .fm-map.is-crowded .apl-pin:not(.is-focus) { width: 12px; height: 12px; margin: 3px; border-width: 2px; }
 .fm-opening { position: absolute; inset: 0; z-index: 400; display: grid; place-items: center; margin: 0; color: var(--muted); pointer-events: none; }
 .fm-stage .apl-legend { min-width: 11.5rem; padding: 0.45rem 0.5rem; border-radius: var(--r-sm); line-height: 1.3; }
+/* The key, and beside it the makeovers it has no pin for (board/family-map.js awayLine), as wide as the key */
+.fm-key { position: absolute; z-index: 500; top: 0.75rem; left: 0.75rem; width: max-content; max-width: calc(100% - 1.5rem); }
+.fm-key > .apl-legend { position: static; }
+/* (the families with no home, named by stage, wrap inside the key rather than widen it: a wider key would push the
+   service area into a smaller corner of the map) */
+.fm-stage .apl-legend .apl-legend-note { box-sizing: border-box; width: 0; min-width: 100%; }
+.fm-key__note { box-sizing: border-box; width: 0; min-width: 100%; margin: 0.4rem 0 0; padding: 0.4rem 0.6rem; border: 1px solid rgba(45, 47, 44, 0.1); border-radius: var(--r-sm); background: rgba(255, 255, 255, 0.96); color: var(--muted); font-size: 0.8rem; line-height: 1.35; box-shadow: var(--shadow-2); }
 .fm-stage .apl-legend button { padding: 0.2rem 0.35rem; }
 .fm-under { position: absolute; z-index: 500; left: 0.75rem; bottom: 0.75rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.75rem; }
 .fm-hint { margin: 0; color: var(--muted); font-size: 0.82rem; }
@@ -3194,7 +3286,7 @@ a.lc-row:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; }
 .leaflet-tooltip-top.fm-tip::before { border-top-color: #1E1F1C; }
 .fm-card { flex: 1; min-height: 0; display: grid; align-content: start; gap: 0.7rem; padding: 0 0.15rem 0.25rem 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; animation: fm-in 0.26s var(--ease) both; }
 @keyframes fm-in { from { opacity: 0; transform: translateX(10px); } }
-.fm-back { justify-self: start; display: inline-flex; align-items: center; gap: 0.35rem; min-height: 36px; margin-left: -0.35rem; padding: 0 0.7rem 0 0.4rem; border: none; border-radius: 999px; background: none; color: var(--ink-2); font: inherit; font-size: 0.88rem; font-weight: 650; cursor: pointer; transition: background-color 0.15s; }
+.fm-back { justify-self: start; display: inline-flex; align-items: center; gap: 0.35rem; min-height: 36px; margin-left: 0; padding: 0 0.7rem 0 0.4rem; border: none; border-radius: 999px; background: none; color: var(--ink-2); font: inherit; font-size: 0.88rem; font-weight: 650; cursor: pointer; transition: background-color 0.15s; }
 .fm-back:hover { background: var(--warm); color: var(--ink); }
 .fm-card__head { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.7rem; }
 .fm-card__name { margin: 0; font-family: var(--display); font-size: 1.16rem; font-weight: 700; line-height: 1.28; letter-spacing: -0.01em; overflow-wrap: anywhere; }
@@ -3216,15 +3308,18 @@ a.lc-row:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; }
 @media (pointer: coarse) { .fm-map.leaflet-container .leaflet-bar a { width: 42px; height: 42px; line-height: 42px; } }
 @media (max-width: 899px) {
   .fm, .fm--tall { display: block; height: auto; }
+  /* (the key, then the map, then what's under it: the order they're in, so the keyboard goes the way the eye does) */
   .fm-stage { display: flex; flex-direction: column; overflow: visible; border: none; border-radius: 0; background: none; }
-  .fm-map { position: relative; inset: auto; order: 2; height: min(60vh, 420px); border: 1px solid rgba(45, 47, 44, 0.09); border-radius: var(--r); overflow: hidden; }
+  .fm-map { position: relative; inset: auto; height: min(60vh, 420px); border: 1px solid rgba(45, 47, 44, 0.09); border-radius: var(--r); overflow: hidden; }
   .fm-stage:not(:has(.fm-map)) { min-height: 300px; }
-  .fm-stage .apl-legend { position: static; order: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 0.1rem 0.3rem; min-width: 0; margin: 0 -0.35rem 0.4rem; padding: 0; border: none; border-radius: 0; background: none; box-shadow: none; }
+  .fm-key { display: contents; }
+  .fm-key__note { width: auto; min-width: 0; margin: 0 0 0.5rem; padding: 0; border: none; background: none; box-shadow: none; font-size: 0.82rem; }
+  .fm-stage .apl-legend { position: static; display: flex; flex-wrap: wrap; align-items: center; gap: 0.1rem 0.3rem; min-width: 0; margin: 0 -0.35rem 0.4rem; padding: 0; border: none; border-radius: 0; background: none; box-shadow: none; }
   .fm-stage .apl-legend button { min-height: 38px; font-size: 0.86rem; }
   .fm-stage .apl-legend b { margin-left: 0.15rem; }
-  .fm-under { position: static; order: 3; margin-top: 0.5rem; }
+  .fm-under { position: static; margin-top: 0.5rem; }
   .fm-far { box-shadow: none; }
-  .fm-stage .apl-legend-line, .fm-stage .apl-legend-note { flex: 0 1 auto; margin: 0; padding: 0.2rem 0.35rem; border: none; font-size: 0.82rem; }
+  .fm-stage .apl-legend-line, .fm-stage .apl-legend .apl-legend-note { flex: 0 1 auto; width: auto; min-width: 0; margin: 0; padding: 0.2rem 0.35rem; border: none; font-size: 0.82rem; }
   .fm-side { margin-top: 0.8rem; scroll-margin-top: calc(var(--head) + 0.5rem); }
   .fm-list { overflow: visible; }
   .fm-list:not(.is-all) > li:nth-child(n + 7) { display: none; }
@@ -3347,14 +3442,23 @@ select.mfix-in { min-height: 44px; }
 .bp-fig__spark i { flex: 1 1 0; max-width: 11px; height: var(--h); border-radius: 2px; background: var(--line-2); }
 .bp-fig__spark i.is-now { background: var(--gold); }
 /* The year so far: its three figures over the year drawn against last year */
-.bp-yearcard { scroll-margin-top: calc(var(--head) + 0.75rem); }
+.bp-yearcard { scroll-margin-top: calc(var(--head) + 0.75rem); container-type: inline-size; }
 .bp-yearcard:focus { outline: none; }
 .bp-yfigs { list-style: none; margin: 0 0 1.15rem; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; }
-.bp-yfigs li { display: grid; align-content: start; gap: 0.15rem; padding: 0.85rem 1rem 0.9rem; border: 1px solid var(--line); border-radius: var(--r-sm); }
+.bp-yfigs li { min-width: 0; display: grid; align-content: start; gap: 0.15rem; padding: 0.85rem 1rem 0.9rem; border: 1px solid var(--line); border-radius: var(--r-sm); }
 .bp-yfigs li.is-net { background: var(--yellow-wash); border-color: rgba(118, 92, 0, 0.16); }
 .bp-yfigs__label { font-size: 0.82rem; font-weight: 650; color: var(--muted); }
-.bp-yfigs__value { font-family: var(--display); font-size: 1.55rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--ink); }
+.bp-yfigs__value { font-family: var(--display); font-size: 1.55rem; font-weight: 700; line-height: 1.15; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
 .bp-yfigs__chg { font-size: 0.84rem; color: var(--ink-2); }
+.bp-yfigs + .bp-yfigs__left { margin: -0.55rem 0 1.15rem; }
+/* Where the card is too narrow for three side by side (a phone): a figure a row, its name and amount on one line,
+   the change under them, so a long amount never runs past its box */
+@container (max-width: 40rem) {
+  .bp-yfigs { grid-template-columns: minmax(0, 1fr); gap: 0.5rem; }
+  .bp-yfigs li { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.1rem 0.75rem; padding: 0.7rem 0.9rem 0.75rem; }
+  .bp-yfigs__value { font-size: 1.35rem; }
+  .bp-yfigs__chg { flex: 1 0 100%; }
+}
 .bp-storecard, .bp-mixcard, .bp-cash, #cashtime { scroll-margin-top: calc(var(--head) + 0.75rem); }
 .bp-storecard:focus, .bp-cash:focus { outline: none; }
 .bp-meters--went { margin-top: 1.25rem; padding-top: 1.1rem; border-top: 1px solid var(--line); }
@@ -3366,6 +3470,8 @@ select.mfix-in { min-height: 44px; }
 .bc-figs3 .bc-answer { grid-template-columns: minmax(0, 1fr); align-content: start; gap: 0.55rem; }
 /* (three figures, one size: the figure, then a plain sentence) */
 .bc-figs3 .bc-answer__value, .bc-figs3 .bc-fig__value { font-size: 1.75rem; line-height: 1.15; }
+/* Words in a figure's place ("Not known yet"), at a size words read at */
+.bc:not(.bc--screen) .bc-answer__value.is-words, .bc:not(.bc--screen) .bc-fig__value.is-words { font-size: 1.15rem; line-height: 1.6; letter-spacing: 0; color: var(--muted); }
 .bc-figs3 .bc-answer__says { font-family: var(--body); font-size: 0.95rem; line-height: 1.5; color: var(--ink-2); }
 .bc--fin .bp-more { margin-top: 1.25rem; }
 .bc--fin .bp-more > .bc-under, .bc--fin .bp-more > .bc-wait { margin-top: 1rem; }

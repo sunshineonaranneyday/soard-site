@@ -14,9 +14,9 @@
  */
 
 import {
-  whoIs, getSettings, saveSettings, listAsks, saveAsk, putAskOut, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros, setIntroStatus,
+  whoIs, getSettings, saveSettings, leadNamed, listAsks, saveAsk, putAskOut, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros, setIntroStatus,
   listHosted, setHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES } from './_advisory.js';
-import { activeAdvisors, peopleRows, readState, signInWhy } from './_board-roles.js';
+import { activeAdvisors, peopleRows, readState, signInWhy, asSend, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
 import { putFile, deleteFile, boardFileProblem } from './_board.js';
 import { logAudit } from './_audit.js';
 import { moneyView, goalNow, creditGift, uncreditGift, matchPage, findGifts, campaignFromUrl, campaignExists, sameLink } from './_advisory-money.js';
@@ -116,11 +116,15 @@ export async function onRequestGet(context) {
       mail: log,
       welcomed: await welcomedSlugs(env.DB),
     }, { headers: { 'Cache-Control': 'no-store' } });
-  } catch (e) { return fromError(e); }
+  } catch (e) {
+    // (the page's read of People that didn't answer: the sign-in's words with Try again, never Members of nobody: round 10)
+    return fromError(e?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(e.message) ? Object.assign(e, { message: SIGN_IN_DOWN }) : e);
+  }
 }
 
 export async function onRequestPost(context) {
   const { env, request } = context;
+  let sending = false;
   try {
     const { w, by, refused } = await gate(context);
     if (refused) return refused;
@@ -149,6 +153,8 @@ export async function onRequestPost(context) {
     }
     let body = {};
     try { body = await request.json(); } catch { return fail('Expected JSON'); }
+    // (an email or an invite: People not answering is said as nothing sent)
+    sending = /^(send|email)-/.test(String(body.action || ''));
     const id = String(body.id || '');
     const settings = await getSettings(env.DB);
     switch (body.action) {
@@ -158,9 +164,8 @@ export async function onRequestPost(context) {
         const patch = Object.fromEntries(['goal', 'termStart', 'termEnd', 'emails', 'campaignId', 'campaignUrl'].filter((k) => k in s).map((k) => [k, s[k]]));
         if ('lead' in s && s.lead !== settings.lead) {
           if (w.kind !== 'admin') return fail('Only Peter or Holly can change who runs the group', 403);
-          const person = (await peopleRows(env.DB)).find((p) => p.slug === s.lead && p.group === 'board' && p.status === 'active');
-          if (!person) return fail('Pick an active board member');
-          patch.lead = person.slug;
+          // (an active board member at that address now, else true words for what happened: ./_advisory.js leadNamed)
+          patch.lead = await leadNamed(env.DB, s.lead);
         }
         // The group's campaign, as Zeffy has it. An address Zeffy lists decides the ID, so a new address never keeps an old
         // campaign's ID; an ID sent for an address Zeffy doesn't list is checked with Zeffy; a cleared address unlinks.
@@ -193,7 +198,9 @@ export async function onRequestPost(context) {
             else patch.campaignId = '';
           }
         }
-        const next = await saveSettings(env.DB, patch);
+        // (who runs the group named only while that board member is at that address on People, else the role's own
+        // words: ./_advisory.js saveSettings)
+        const next = await saveSettings(env.DB, patch, patch.lead ? { naming: patch.lead, as: 'lead' } : {});
         await audit(context, by, 'updated', 'Advisory settings');
         return Response.json({ ok: true, settings: next });
       }
@@ -291,5 +298,5 @@ export async function onRequestPost(context) {
       default:
         return await meetingAction(context, { action: body.action, body, by, w });
     }
-  } catch (e) { return fromError(e); }
+  } catch (e) { return fromError(sending ? asSend(e) : e); }
 }
