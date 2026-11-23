@@ -14,7 +14,7 @@
  */
 
 import { getSettings, listMeetings, roster, boardSees, SITE } from './_board.js';
-import { readState, writeState, BOARD_PAGE } from './_board-roles.js';
+import { readState, writeState, unreadStatus, BOARD_PAGE } from './_board-roles.js';
 import { businessHours } from './_board-sign.js';
 import { openActions, todayEastern, shortDate, meetingName } from '../../public/admin/board-shared.js';
 import { sendEmailOne, emailConfigured, EMAIL_FROM } from './_broadcast-notify.js';
@@ -116,14 +116,27 @@ export async function maybeRemindActions(env, { now = Date.now(), limit = 10 } =
   if (!businessHours(now)) return { waiting: 'hours' };
   const state = await readState(DB, 'action-reminds');
   if (state.at && now - Date.parse(state.at) < HOUR) return { waiting: 'hour' };
-  // Who has which address, read before the hour is marked: People not answering throws, nothing is marked or sent, and
-  // the next heartbeat tries again (never an hour of reminders lost, nor "no email" for anyone: round 10)
-  const who = await addresses(DB, settings);
-  await writeState(DB, 'action-reminds', { at: new Date(now).toISOString() });
+  // Everything the hour's reminders go by (who has which address, the meetings' to-dos, which reminders went), read before
+  // the hour is marked: one that fails marks nothing and sends nothing, and the next heartbeat looks again. People not
+  // answering is kept as the look's status, quietly (unreadStatus), never "no email" for anyone (round 10). The hour is
+  // marked with the sends, after them: never an hour of reminders lost (Board QA round 11, Nov 23 2026: the hour was
+  // marked before a read that failed, and that hour's reminders never went)
   const today = todayEastern(now);
-  const all = dueList(await listMeetings(DB), today);
-  if (!all.length) return { sent: 0 };
-  const had = new Set(((await DB.prepare('SELECT action_id, stage FROM board_action_reminders').all()).results || []).map((r) => `${r.action_id}|${r.stage}`));
+  let who;
+  let all;
+  let had;
+  try {
+    [who, all, had] = await Promise.all([
+      addresses(DB, settings),
+      listMeetings(DB).then((ms) => dueList(ms, today)),
+      DB.prepare('SELECT action_id, stage FROM board_action_reminders').all().then((r) => new Set((r.results || []).map((x) => `${x.action_id}|${x.stage}`))),
+    ]);
+  } catch (err) {
+    if (err?.unread) await writeState(DB, 'action-reminds', unreadStatus(state, now)).catch(() => {});
+    throw err;
+  }
+  const mark = () => writeState(DB, 'action-reminds', { at: new Date(now).toISOString() });
+  if (!all.length) { await mark(); return { sent: 0 }; }
   // (by the date too: a to-do given a new date is reminded of that one)
   const firing = all.map((a) => { const stage = stageFor(a.date, today, { soft: a.soft }); return { a, stage: stage ? `${stage}@${a.date}` : '' }; }).filter(({ a, stage }) => stage && !had.has(`${a.id}|${stage}`));
   let sent = 0;
@@ -147,6 +160,8 @@ export async function maybeRemindActions(env, { now = Date.now(), limit = 10 } =
     }
     sent += 1;
   }
+  // (each reminder's own claim keeps it from going twice: a mark that doesn't go makes the next look find nothing new)
+  await mark();
   return { sent };
 }
 

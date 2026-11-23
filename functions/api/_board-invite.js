@@ -283,7 +283,7 @@ async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
     // Everything on it as it is now (made in Google by hand, say): Board's record of the invite says so too, and a change
     // waiting to go onto it is done, so the heartbeat never tries it again nor tells the staff it can't (Board QA round 7)
     if (prior.place !== (place || existing?.location || '') || prior.when !== whenOf(m)) {
-      await setOnMeeting(env.DB, id, { invite: { ...prior, place: place || existing?.location || '', location: existing?.location || '', when: whenOf(m), updatedAt: new Date(now).toISOString() } });
+      await setOnMeeting(env.DB, id, { invite: { ...prior, place: place || existing?.location || '', location: existing?.location || '', when: whenOf(m), updatedAt: new Date(now).toISOString() } }, { was: m });
     }
     await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(pendingKey(id)).run().catch((err) => console.error('[board-invite] pending', err.message));
     // (a change the staff were told couldn't reach it has, so they hear it did)
@@ -336,7 +336,7 @@ async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
   };
   // Google Meet is the meeting's video call from now on. Onto the meeting as it is now, in one write (setOnMeeting): a
   // save made meanwhile stays, and the invite that went is never lost to one
-  const saved = await setOnMeeting(env.DB, id, { invite, inviteGone: '', ...(meet ? { video: meet } : {}) });
+  const saved = await setOnMeeting(env.DB, id, { invite, inviteGone: '', ...(meet ? { video: meet } : {}) }, { was: m });
   if (saved) {
     // (the staff, told a change couldn't reach it: it has now, however it went)
     await sayChangeReached(env, id, `The change to ${inviteTitle(saved)} is on its calendar invite now`);

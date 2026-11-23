@@ -874,6 +874,18 @@ export function followAddresses(m, now, { people = null } = {}) {
   return out;
 }
 
+/**
+ * Who a meeting's reminder to answer the invite went to, by board member: { slug: when }. The site keeps it by email, as it
+ * went (functions/api/_board.js remindedOf: the send's own record, never a read of People), and each is the board member
+ * at that address now, from Board's own list of the board (`members`, read for certain: Board's data loads with it or
+ * not at all). Board QA round 11, Nov 23 2026
+ */
+export function askedOf(m, members = []) {
+  const at = (e) => String(e || '').trim().toLowerCase();
+  const had = Object.fromEntries(Object.entries(m?.reminded || {}).map(([e, when]) => [at(e), when]));
+  return Object.fromEntries((members || []).filter((p) => p.email && had[at(p.email)]).map((p) => [p.slug, had[at(p.email)]]));
+}
+
 export function forBoard(m) {
   if (!m?.shared) return null;
   const seen = new Set(m.files.filter((f) => !f.staffOnly).map((f) => f.id));

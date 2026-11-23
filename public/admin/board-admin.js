@@ -1570,16 +1570,21 @@ function MembersTab({ ctx }) {
     const j = await call({ action: 'ask-to-sign', ...(slugs ? { slugs } : {}), ...(test ? { test: true } : {}) });
     setWorking('');
     if (j.members) ctx.setData((d) => ({ ...d, members: j.members }));
+    // (asked, and Members not read back for the answer: the page looks again by itself. Board QA round 11)
+    if (j.reread) ctx.load({ quick: true });
     if (test) { addToast(j.ok ? `Sent to ${j.to?.[0] || 'you'}` : `Not sent: ${j.error}`, j.ok ? 'info' : 'error'); return j; }
     const one = slugs?.length === 1 ? data.members.find((p) => p.slug === slugs[0])?.name : '';
     const left = [j.recent?.length ? `${listed(j.recent)} ${j.recent.length === 1 ? 'was' : 'were'} asked in the last ten minutes` : '',
       j.noEmail?.length ? `${listed(j.noEmail)} ${j.noEmail.length === 1 ? 'has' : 'have'} no email on People → Board` : ''].filter(Boolean).join('; ');
     if (answerLost(j)) addToast('No answer came back from the site, so it isn’t known whether it went. Reload the page to see who was asked.', 'error');
+    // (going out from another tab or the other founder right now: it goes once. Gone, and its record not kept: said so)
+    else if (j.sending) addToast(sentence(j.error), 'info');
+    else if (j.unrecorded) addToast(sentence(j.error), 'error');
     else if (typeof j.sent !== 'number') addToast(`Not sent: ${sentence(j.error || 'the site didn’t say why')}`, 'error');
     else if (j.unsure) addToast('Resend didn’t confirm it went, so it may have gone. It’s counted as asked; Emails & invites → What went out shows whether it was delivered.', 'error');
     else if (!j.ok) addToast(j.sent ? `Emailed ${j.sent}; ${plural(j.failed, 'email')} didn’t go (${j.error})` : `Not sent: ${j.error}`, 'error');
     else if (!j.sent) addToast(left ? `Nobody was emailed: ${left}.` : one ? `${one} has signed already` : 'Everyone has signed', left ? 'error' : 'info');
-    else addToast(`${one && j.sent === 1 ? `Emailed ${one}` : `Emailed ${plural(j.sent, 'board member')}`}, asking them to sign.${left ? ` ${left.replace(/^./, (c) => c.toUpperCase())}.` : ''}`, 'info');
+    else addToast(`${one && j.sent === 1 ? `Emailed ${one}` : `Emailed ${plural(j.sent, 'board member')}`}, asking them to sign.${left ? ` ${left.replace(/^./, (c) => c.toUpperCase())}.` : ''}${j.later ? ` ${j.later}` : ''}`, 'info');
     return j;
   };
   // Each question here names who the site would email as it is at the press (ctx.fresh: a quick read then), never the

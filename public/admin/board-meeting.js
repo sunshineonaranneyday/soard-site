@@ -38,7 +38,7 @@ import {
   isLive, agendaItems, isFilled, hasSince, reportsOn, showsOf, slidesOf, booksDraw, isStatement, LIVE_TITLES, SHOW_KINDS, tallyText, cleanLive, presentersOf, namesText, itemFiles, guessItem, deckOf, stopIndex, liveOfStop, pagesText, MORE,
   sectionPlan, sectionOf, sectionClock, clockText, facesOf, itemDocs, docTitle, formatOf, docsOf, looseFiles, NOTHING_NEW, isNothingNew, copyOfItem, minutesToRead, packetDocs, minutesFileOf, ownMinutesFile,
   signInKnown, minutesTarget, meetingOver, meetingHeld, inviteIsRecord, shareWaits, cleanTemplate, followAddresses,
-  noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay,
+  noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay, askedOf,
 } from './board-shared.js';
 import { openScreen, mirrorUrl, useScreen, usePages, stepKey, useCover } from './board-present.js';
 import { printMinutesTemplate, downloadMinutesDocx } from './board-minutes-template.js';
@@ -579,6 +579,7 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
       // minutes (functions/api/_board.js sendOnce: 409 { sending | already }), or Resend not answering. It goes on the
       // page (a second tab shows "Email again", not "Email the board"), and a send already going or gone is said as news
       if (j.meeting) take(j.meeting);
+      else if (j.reread) ctx.load({ quick: true });
       const went = !!(j.sending || j.already);
       if (went) settled?.(j);
       addToast(sentence(j.error || 'That didn’t go through. Try again.'), went ? 'info' : 'error');
@@ -586,6 +587,9 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
     }
     if (j.meeting) take(j.meeting);
     settled?.(j);
+    // Done, and a read for the answer didn't answer (functions/api/board-admin.js after): the page looks again by itself,
+    // and shows what the site has a moment later (Board QA round 11)
+    if (j.reread) ctx.load({ quick: true });
     return j;
   };
   const remove = async () => {
@@ -1850,7 +1854,9 @@ function GettingReady({ m, set, ctx, act, save, saved }) {
     setWorking('');
     // (what it says: words, or { text, kind } for one that went but not all the way: an approval whose email didn't go)
     const said = j && ok ? (typeof ok === 'function' ? ok(j) : ok) : '';
-    if (said) addToast(typeof said === 'string' ? said : said.text, typeof said === 'string' ? 'info' : said.kind);
+    // (`later`: what shows here once the page looks again, when the site's read for the answer didn't answer)
+    const text = typeof said === 'string' ? said : said?.text;
+    if (said) addToast(j.later ? `${sentence(text)} ${j.later}` : text, typeof said === 'string' ? 'info' : said.kind);
     if (j && !body.test) { setDoubt((d) => ({ ...d, [name]: null })); focusNext('.bm-ready'); } else focusTask(task, '.bm-ready');
     return j;
   };
@@ -2148,7 +2154,7 @@ function Coming({ m, ctx, act }) {
   // Who the reminder went to and when, as the site keeps it (functions/api/_board.js remindedOf: the send's own record),
   // so every tab says so, after a reload too, as Email the board does. Board QA round 8, Nov 21 2026: "Asked … just now"
   // lived only in the tab that sent it, and another tab asked the whole board again with the first-time question
-  const reminded = m.reminded || {};
+  const reminded = askedOf(m, data.members);
   const lastAsked = Object.values(reminded).sort().at(-1) || '';
   const askedLast = lastAsked ? board.filter((x) => reminded[x.slug] === lastAsked).map((x) => x.name.split(' ')[0]) : [];
   const allAsked = quiet.length > 0 && quiet.every((p) => reminded[p.slug]);
@@ -2169,7 +2175,7 @@ function Coming({ m, ctx, act }) {
       if (!who.length) { addToast('Everyone on the invite has answered it, so there’s no one to ask.', 'info'); requestAnimationFrame(() => head.current?.focus()); return; }
       // Asked already, as the site has it at the press: said with when, as the other sends' "again" questions are, and
       // asked carefully (the focus on Cancel); someone not asked yet is asked plainly
-      const had = sm.reminded || {};
+      const had = askedOf(sm, d.members);
       const again = who.filter((x) => had[x.slug]);
       const when = new Map();
       for (const x of again) when.set(ago(had[x.slug]), [...(when.get(ago(had[x.slug])) || []), x.name]);
@@ -2184,17 +2190,18 @@ function Coming({ m, ctx, act }) {
     // (coordinator, Board QA round 8); with nothing new in it, it may have gone
     const j = await act({ action: 'remind-rsvp', id: m.id, test }, { lost: ({ was, now }) => {
       if (test) return { text: `${LOST}, so this page can’t tell whether the test went. Look in your inbox before sending it again.`, known: false };
-      const last = (x) => Object.values(x?.reminded || {}).sort().at(-1) || '';
+      const members = look?.ok ? look.members || data.members : data.members;
+      const last = (x) => Object.values(askedOf(x, members)).sort().at(-1) || '';
       const at = last(now);
       if (at && at > last(was)) {
-        const names = board.filter((x) => now.reminded[x.slug] === at).map((x) => x.name);
+        const names = board.filter((x) => askedOf(now, members)[x.slug] === at).map((x) => x.name);
         return { text: `${LOST}, but it went: ${andList(names)} ${names.length === 1 ? 'was' : 'were'} asked ${ago(at)}.`, known: true };
       }
       setDoubt(new Date().toISOString());
       return { text: lostOnce('the reminder went'), known: false };
     }, settled: () => { if (!test) setDoubt(''); } });
     setWorking('');
-    if (j) addToast(test ? `Sent to ${j.to?.[0] || 'you'}` : `Asked ${plural(j.sent, 'board member')}${j.notOnInvite?.length ? `. Not on the invite: ${j.notOnInvite.join(', ')}` : ''}`, 'info');
+    if (j) addToast(test ? `Sent to ${j.to?.[0] || 'you'}` : `Asked ${plural(j.sent, 'board member')}${j.notOnInvite?.length ? `. Not on the invite: ${j.notOnInvite.join(', ')}` : ''}${j.later ? `. ${j.later}` : ''}`, 'info');
     if (j && !test) setDoubt('');
     // The focus on what the press did ("Asked … just now"), else the card's name: never on Ask, nor one key from it
     // (Enter on Ask opens its question on "Ask all 4", and a second Enter sends it to the board)

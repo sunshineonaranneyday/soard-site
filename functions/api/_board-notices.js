@@ -45,8 +45,9 @@ export async function noticeReads(DB) {
 export async function oweNotice(env, id, notice, { waitUntil = null, who = '', now = Date.now() } = {}) {
   if (!emailConfigured(env)) return {};
   await readState(env.DB, `${PREFIX}${id}`); // (makes board_state)
+  const due = dueRow(id, notice, now);
   await env.DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
-    .bind(`${PREFIX}${id}`, JSON.stringify({ ...notice, id, queuedAt: iso(now), tries: 0 }), iso(now)).run();
+    .bind(due.key, due.data, due.at).run();
   let reads;
   try { reads = await noticeReads(env.DB); } catch (err) {
     if (!err?.unread) throw err;
@@ -56,6 +57,12 @@ export async function oweNotice(env, id, notice, { waitUntil = null, who = '', n
   if (waitUntil) waitUntil(going); else await going;
   return {};
 }
+
+/**
+ * The row a notice is kept due in, as oweNotice writes it: { key, data, at }. A press that writes it in the same step as
+ * its own work (./_board-corrections.js decideCorrection) uses this, then oweNotice, which finds it there
+ */
+export const dueRow = (id, notice, now = Date.now()) => ({ key: `${PREFIX}${id}`, data: JSON.stringify({ ...notice, id, queuedAt: iso(now), tries: 0 }), at: iso(now) });
 
 /** The notices due, oldest first: [{ id, ...notice }] */
 export async function dueNotices(DB) {
