@@ -141,16 +141,30 @@ export async function onRequestGet(context) {
     // not shared yet that they present in (their items only), so the ask's link opens (_board-asks.js)
     // and SOARD's facts for Documents, as the site has them saved (_org-facts.js)
     // (who Email all reaches, read for certain: a read that fails sends nothing, never a list shrunk to whoever came back)
-    const [data, extras, org, group] = await Promise.all([portalData(context.env, w), listMeetings(context.env.DB).then((meetings) => portalExtras(context.env, { ...w, meetings })), orgFacts(context.env), groupWanted(context.env.DB).catch((e) => { console.error('[board-portal] email all', e?.message || e); return null; })]);
+    // (the meetings read once, for the page and what's beside it; each part that fails is marked, and the rest of the page
+    // opens: Board QA round 13)
+    // (Board's tables first: not set up, the page's 503 in words before anything else is read)
+    await ensureSchema(context.env.DB);
+    const meetingsRead = listMeetings(context.env.DB);
+    meetingsRead.catch(() => {});
+    const unread = {};
+    // (People not answering, or Board's tables not set up, are the page's own words with Try again, never a part)
+    const lost = (part, also) => (e) => { if (e?.unread || e?.setup) throw e; console.error(`[board-portal] ${part}`, e?.message || e); unread[part] = true; return also; };
+    const [data, extras, org, group] = await Promise.all([portalData(context.env, { ...w, meetingsRead }), meetingsRead.then((meetings) => portalExtras(context.env, { ...w, meetings }), (e) => { if (e?.unread || e?.setup) throw e; return { review: null, reviewShut: null, lineNotes: {}, myAsks: [], presenting: [], unread: { lineNotes: true, myAsks: true, presenting: true, review: true } }; }), orgFacts(context.env), groupWanted(context.env.DB).catch((e) => { console.error('[board-portal] email all', e?.message || e); return null; })]);
     // Notes typed that never went on their meeting: only theirs to know, and how they stay reachable once it's approved
-    const typed = w.admin || w.member?.seat === 'secretary' ? await notesState(context.env.DB) : { waiting: [], typedBy: {} };
+    const typed = w.admin || w.member?.seat === 'secretary' ? await notesState(context.env.DB).catch(lost('notesWaiting', { waiting: [], typedBy: {} })) : { waiting: [], typedBy: {} };
     // People's Email all: the same people Board → Members writes to, each by their own address, less whoever's looking
     const viewer = normEmail(context.data?.userEmail);
     const emailAll = group ? { to: group.members.map((p) => p.email).filter((e) => e !== viewer), missing: group.missing.map((p) => p.name) } : { to: [], missing: [], unread: EMAILS_DOWN };
     // Corrections suggested to minutes not approved yet, and who signed the ones that were: for a board member, only
     // meetings on the board page, as everything else here (a founder looking sees what Board admin shows them)
-    const [corrections, minutesSigned] = await Promise.all([correctionsForPage(context.env.DB, w), signedMinutes(context.env.DB, null, { boardOnly: !w.admin })]);
-    return Response.json({ ok: true, ...data, ...extras, org, notesWaiting: typed.waiting, minutesTypedBy: typed.typedBy, emailAll, corrections, minutesSigned }, { headers: { 'Cache-Control': 'private, no-store' } });
+    const meetings = await meetingsRead.catch(() => null);
+    const [corrections, minutesSigned] = meetings ? await Promise.all([correctionsForPage(context.env.DB, w, meetings).catch(lost('corrections', {})), signedMinutes(context.env.DB, meetings, { boardOnly: !w.admin }).catch(lost('minutesSigned', {}))])
+      : (Object.assign(unread, { corrections: true, minutesSigned: true }), [{}, {}]);
+    const { unread: extrasUnread = {}, ...beside } = extras;
+    return Response.json({ ok: true, ...data, ...beside, org, notesWaiting: typed.waiting, minutesTypedBy: typed.typedBy, emailAll, corrections, minutesSigned,
+      // (each part whose read failed: the page's, and what's beside it, ../../public/admin/board/unread.js)
+      unread: { ...(data.unread || {}), ...extrasUnread, ...(org?.unread ? { facts: true } : {}), ...unread } }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (err) {
     return pageError(err);
   }

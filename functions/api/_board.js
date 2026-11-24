@@ -2261,7 +2261,8 @@ export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } =
     projectsNow(env, { fetchImpl, now }).catch(lost('projects')),
     cachedReveals(env, now).then((r) => { if (r?.unread) unread.projects = true; return r; }, lost('projects', { upcoming: [], past: [] })),
     eventsList(env.DB, today).catch(lost('events', { upcoming: [], recent: [] })),
-    listMeetings(env.DB),
+    // (the meetings ahead and the year's, an item's live list: not read, its part says so, Board QA round 13)
+    listMeetings(env.DB).catch((e) => { if (e?.setup) throw e; return lost('meetings', [])(e); }),
     impact(env.DB).catch(lost('kids')),
     boardFinanceNow(env, { now }).catch(lost('money')),
     loadKids(env.DB).catch(() => []),
@@ -2352,6 +2353,8 @@ export async function takeSnapshot(env, id, { by, fetchImpl = fetch, now = Date.
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
   const n = await liveNumbers(env, { fetchImpl, now });
+  // (the meetings not read just now: never a packet locked with none, Board QA round 13)
+  if (n.unread?.meetings) throw Object.assign(new Error('We couldn’t read the board’s meetings just now, so nothing was changed. Please try again in a moment.'), { status: 503 });
   const snapshot = { at: n.at, by: by || '', cash: n.cash, mercury: n.mercury, finance: n.finance, books: n.books, projects: n.projects, reveals: n.reveals, pastReveals: n.pastReveals, events: n.events, recentEvents: n.recentEvents, meetings: n.meetings.filter((x) => x.id !== id), thisYear: n.thisYear || [], impact: n.impact, costs: n.costs, operating: n.operating };
   // (the server's own field, from the numbers, never from the meeting: one write, never lost to an edit saved meanwhile)
   const saved = await setOnMeeting(env.DB, id, { snapshot }, { by, was: m });
@@ -3718,18 +3721,33 @@ export async function keepVisit(DB, who, t = Date.now()) {
       last = MAX(COALESCE(board_seen.last, ''), excluded.last)`)
     .bind(at, at, ...mine, gap, gap).run();
 }
-/** Everything the board page shows, for a member (`member`) or an admin looking (`admin`) */
-export async function portalData(env, { member = null, admin = false, adminEmail = '', now = Date.now() } = {}) {
+/**
+ * Everything the board page shows, for a member (`member`) or an admin looking (`admin`). Every part of its read is its
+ * own part: one that fails is marked in `unread` and the rest of the page opens (Board QA round 13: one failed read of
+ * the month-end balances, the papers' words, the member's own files, the minutes' corrections or the signed minutes
+ * answered the whole page with a 500). The meetings, the papers, the settings, the month-end balances, which files are
+ * the member's own, the papers' words, their adopted mark and their signed copies each say so in their place
+ * (../../public/admin/board/unread.js). `meetingsRead`: the meetings' read when the caller has one under way (./board-
+ * portal.js reads them once for the page and what's beside it)
+ */
+export async function portalData(env, { member = null, admin = false, adminEmail = '', now = Date.now(), meetingsRead = null } = {}) {
   await ensureSchema(env.DB);
   const today = todayEastern(now);
   const unreadHere = {};
-  const lostHere = (part) => (err) => { console.error(`[board] ${part}`, err?.message || err); unreadHere[part] = true; return null; };
-  const [meetings, docs, numbers, history, people, filings, snapshot, settings, gifts] = await Promise.all([
-    listMeetings(env.DB), listDocs(env.DB), liveNumbers(env, { now }), cashHistory(env.DB), roster(env.DB, { withEmails: true }),
+  // (Board's tables not set up is no part: the page's 503 in words, as every route says it, ./SETUP_DOWN)
+  const lostHere = (part, also = null) => (err) => { if (err?.setup) throw err; console.error(`[board] ${part}`, err?.message || err); unreadHere[part] = true; return also; };
+  const [meetingsNow, docsNow, numbers, history, people, filings, snapshot, settingsNow, gifts] = await Promise.all([
+    (meetingsRead || listMeetings(env.DB)).catch(lostHere('meetings')), listDocs(env.DB).catch(lostHere('docs')), liveNumbers(env, { now }), cashHistory(env.DB).catch(lostHere('history')), roster(env.DB, { withEmails: true }),
     // (the tax returns and the tax return's year, and the year's major gifts: a read that failed marks its part, as
     // liveNumbers' do, never an empty list: Board QA round 12)
-    siteDoc(env.DB, 'financials').catch(lostHere('sources')), siteDoc(env.DB, 'financial-snapshot').catch(lostHere('sources')), getSettings(env.DB), giftsNow(env.DB, { now }).catch(lostHere('gifts')),
+    siteDoc(env.DB, 'financials').catch(lostHere('sources')), siteDoc(env.DB, 'financial-snapshot').catch(lostHere('sources')), getSettings(env.DB).catch(lostHere('settings')), giftsNow(env.DB, { now }).catch(lostHere('gifts')),
   ]);
+  const meetings = meetingsNow || [];
+  const docs = docsNow || [];
+  // (the settings not read: no admins named, no quorum, no one the invites come from, never a default said as SOARD's)
+  const settings = settingsNow || { quorum: null, admins: [], invitesFrom: '' };
+  // (the month-end balances only matter without QuickBooks' own months: the cash a year back, Cash over time)
+  if (unreadHere.history && numbers.books?.months?.length > 1) delete unreadHere.history;
   // The visit before this one, for what's new since: the same for the whole visit, every reload, tab and device. This
   // read is a look too (a reload, a tab coming back, the page reading itself again), and so is everything they do on
   // the page while it's open (./keepVisit)
@@ -3740,20 +3758,23 @@ export async function portalData(env, { member = null, admin = false, adminEmail
     await keepVisit(env.DB, member, now).catch((err) => console.error('[board] keeping the visit', err?.message || err));
     lastSeen = (await env.DB.prepare('SELECT prev FROM board_seen WHERE slug = ?').bind(member.slug).first().catch((err) => { console.error('[board] the last visit', err?.message || err); return null; }))?.prev || null;
   }
-  // A member's own documents (put with an item they present) are marked, so they can take them off again
-  const own = member?.email ? new Set(((await env.DB.prepare('SELECT id FROM board_files WHERE lower(by) = ?').bind(String(member.email).toLowerCase()).all()).results || []).map((r) => r.id)) : new Set();
+  // A member's own documents (put with an item they present) are marked, so they can take them off again (not read: none
+  // marked, and the page says which are theirs couldn't load)
+  const own = member?.email ? new Set(((await env.DB.prepare('SELECT id FROM board_files WHERE lower(by) = ?').bind(String(member.email).toLowerCase()).all().catch(lostHere('ownFiles', { results: [] }))).results || []).map((r) => r.id)) : new Set();
   const shared = meetings.map(boardCopy).filter(Boolean).map((m) => (own.size ? { ...m, files: m.files.map((f) => (own.has(f.id) ? { ...f, mine: true } : f)) } : m))
     .map((m) => (m.snapshot ? { ...m, snapshot: snapshotFor(m.snapshot, meetings) } : m));
   // Their adopted signature and initials (from the last time they signed), and whether they've agreed to sign electronically
-  const marked = member?.slug ? await env.DB.prepare('SELECT mark, initials, consent_at FROM board_member_marks WHERE slug = ?').bind(member.slug).first().catch(() => null) : null;
+  // (either not read is marked, never said as no mark adopted or no copy kept)
+  const marked = member?.slug ? await env.DB.prepare('SELECT mark, initials, consent_at FROM board_member_marks WHERE slug = ?').bind(member.slug).first().catch(lostHere('mark')) : null;
   const myMark = marked ? { ...parse(marked.mark, {}), initials: marked.initials || '', consented: !!marked.consent_at } : null;
   // Their signed copies, every year's (this year's and earlier wordings' too): each to open again
-  const myCopies = member?.slug ? ((await env.DB.prepare('SELECT doc_id, year, version, record_id, at FROM board_signatures WHERE slug = ?1 AND record_id IS NOT NULL UNION ALL SELECT doc_id, year, version, record_id, at FROM board_signatures_earlier WHERE slug = ?1 AND record_id IS NOT NULL ORDER BY year DESC, at DESC').bind(member.slug).all().catch(() => ({ results: [] }))).results || []) : [];
+  const myCopies = member?.slug ? ((await env.DB.prepare('SELECT doc_id, year, version, record_id, at FROM board_signatures WHERE slug = ?1 AND record_id IS NOT NULL UNION ALL SELECT doc_id, year, version, record_id, at FROM board_signatures_earlier WHERE slug = ?1 AND record_id IS NOT NULL ORDER BY year DESC, at DESC').bind(member.slug).all().catch(lostHere('copies', { results: [] }))).results || []) : [];
   const mine = member?.slug || null;
   // A paper read as its PDF: its words, as read, to find it by them
   const fileWords = {};
   const pdfIds = docs.filter((d) => d.shared && !d.body && d.file).map((d) => d.file.id);
-  if (pdfIds.length) for (const r of ((await env.DB.prepare(`SELECT id, COALESCE(NULLIF(words, ''), words_part) AS words FROM board_files WHERE id IN (${pdfIds.map(() => '?').join(',')})`).bind(...pdfIds).all()).results || [])) if (r.words) fileWords[r.id] = r.words.slice(0, 60000);
+  // (not read: search finds those papers by their names alone, and says so)
+  if (pdfIds.length) for (const r of ((await env.DB.prepare(`SELECT id, COALESCE(NULLIF(words, ''), words_part) AS words FROM board_files WHERE id IN (${pdfIds.map(() => '?').join(',')})`).bind(...pdfIds).all().catch(lostHere('paperWords', { results: [] }))).results || [])) if (r.words) fileWords[r.id] = r.words.slice(0, 60000);
   // The words a member signed, for each paper they're asked to sign again: what changed, shown beside the new (from the
   // last version their signature counted on: a typo kept since isn't a change to them)
   const signedBodies = {};
@@ -3762,7 +3783,8 @@ export async function portalData(env, { member = null, admin = false, adminEmail
     const last = mine && d.prior?.[mine];
     const v = mine && d.body && !d.signed[mine] && (d.before?.[mine] ? Math.max(d.before[mine].version, d.signFrom - 1) : last && last.version && last.version < d.version ? last.version : 0);
     if (!v) continue;
-    const row = await env.DB.prepare('SELECT body FROM board_doc_versions WHERE doc_id = ? AND version = ?').bind(d.id, v).first();
+    // (not read: the paper says what they signed before couldn't load, never that nothing changed)
+    const row = await env.DB.prepare('SELECT body FROM board_doc_versions WHERE doc_id = ? AND version = ?').bind(d.id, v).first().catch(lostHere('signedBodies'));
     if (row?.body) signedBodies[d.id] = row.body;
   }
   // The Board area's admins by their names on People; who to ask is the one the invites come from
@@ -3776,7 +3798,7 @@ export async function portalData(env, { member = null, admin = false, adminEmail
   const pending = ahead && !(sharedNext && sharedNext.date <= ahead.date) ? ahead : null;
   const pendingInvite = pending && mine ? repliesOf(pending)[mine] || '' : '';
   // An admin looking at the board page: today's practice meeting, if they've started one (members never see it)
-  const practice = admin && !member ? await todayPractice(env.DB, now) : null;
+  const practice = admin && !member ? await todayPractice(env.DB, now).catch(lostHere('practice')) : null;
   const staffSlug = admin && !member ? people.staff.find((p) => String(adminEmail).toLowerCase().startsWith(`${String(p.name).split(/\s+/)[0].toLowerCase()}@`))?.slug || null : null;
   return {
     ...(admin && !member ? {
@@ -3824,13 +3846,16 @@ export async function portalData(env, { member = null, admin = false, adminEmail
       ...(!d.body && d.file && fileWords[d.file.id] ? { fileWords: fileWords[d.file.id] } : {}),
       signedCount: people.board.filter((p) => signed[p.slug]).length,
     })),
-    numbers,
+    // (the month-end balances not read are today's numbers' part too: a meeting's money goes by those flags)
+    numbers: unreadHere.history ? { ...numbers, unread: { ...(numbers.unread || {}), history: true } } : numbers,
     // Each part whose read failed just now (the money, the makeovers, the kids served, the gifts, the tax returns, the
-    // events): the page says so in its place and leaves it out of search (public/admin/board/unread.js)
+    // events, and round 13's: the meetings, the papers, the settings, the month-end balances, which files are theirs,
+    // the papers' words, their mark, their signed copies): the page says so in its place and leaves it out of search
+    // (public/admin/board/unread.js)
     // (the givers' names among them: Keep anonymous not read, every name kept hidden and said so, ./_board-gifts.js)
     unread: { ...(numbers.unread || {}), ...unreadHere, ...(gifts?.namesUnread ? { givers: true } : {}) },
     // Cash at each month's end: QuickBooks' own month-ends once it's connected (13 of them, the books'), else the banks' history
-    cashHistory: numbers.books?.months?.length > 1 ? [...numbers.books.months].reverse().map((r) => ({ month: r.month, total: r.total, at: r.end })) : history,
+    cashHistory: numbers.books?.months?.length > 1 ? [...numbers.books.months].reverse().map((r) => ({ month: r.month, total: r.total, at: r.end })) : history || [],
     // The public copies, through the site's own /files/ route so the page's viewer can open them
     filings: filingsOf(filings),
     snapshot: snapshot || null,

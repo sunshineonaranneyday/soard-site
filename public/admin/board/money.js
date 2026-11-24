@@ -125,20 +125,26 @@ export function throughWords(through, today = todayEastern()) {
 }
 /**
  * A budget sheet's year, from its heading or its name: "FY2026", "FY 2026", "FY26" and "FY'26" (the fiscal year ending
- * in 2026, said "FY2026"), "2025-26", "2025/2026" and "2025–2026" (said "2025-26"), or a calendar year ("2026 Budget").
- * → { year: the year it ends in, label: its fiscal name ('' for a calendar year) }, both '' when none can be read (Board
- * QA round 12: "FY2026 Budget" read as no year, the tiles' year blank and the heading "against its budget")
+ * in 2026, said "FY2026"), a two-year span, "2025-26", "2025/2026", "2025–2026", "FY 2025-26" and "FY25-26" (said
+ * "2025-26"), or a calendar year ("2026 Budget"). A span is read as that span before any single year in it is tried
+ * (Board QA round 13: "FY 2025-26 Budget" and "FY25-26" read as FY2025, the "FY 2025" in them). → { year: the year it
+ * ends in, label: its fiscal name ('' for a calendar year) }, both '' when none can be read (Board QA round 12: "FY2026
+ * Budget" read as no year, the tiles' year blank and the heading "against its budget")
  */
 export function sheetYear(...texts) {
   for (const t of texts) {
     const s = String(t ?? '');
-    const fy = s.match(/\bFY\s?'?(\d{4}|\d{2})(?!\d)/i);
-    if (fy) { const y = fy[1].length === 2 ? `20${fy[1]}` : fy[1]; return { year: y, label: `FY${y}` }; }
-    const span = s.match(/(?<!\d)(20\d{2})\s*[-–/]\s*(20\d{2}|\d{2})(?!\d)/);
-    if (span) {
-      const end = span[2].length === 2 ? `${span[1].slice(0, 2)}${span[2]}` : span[2];
-      if (Number(end) === Number(span[1]) + 1) return { year: end, label: `${span[1]}-${end.slice(2)}` };
+    // (a span: its two years one after the other, the second written in full or by its last two digits; after "FY" the
+    // first can be two digits too, "FY25-26". "FY" as a word of its own, a file's name's underscores apart: "Budget_FY26")
+    for (const re of [/(?<![a-z0-9])FY[\s_]?['‘’]?(\d{4}|\d{2})\s*[-‐‑–—/]\s*['‘’]?(\d{4}|\d{2})(?!\d)/i, /(?<!\d)(20\d{2})\s*[-‐‑–—/]\s*(20\d{2}|\d{2})(?!\d)/]) {
+      const span = s.match(re);
+      if (!span) continue;
+      const start = span[1].length === 2 ? `20${span[1]}` : span[1];
+      const end = span[2].length === 2 ? `${start.slice(0, 2)}${span[2]}` : span[2];
+      if (Number(end) === Number(start) + 1) return { year: end, label: `${start}-${end.slice(2)}` };
     }
+    const fy = s.match(/(?<![a-z0-9])FY[\s_]?['‘’]?(\d{4}|\d{2})(?!\d)/i);
+    if (fy) { const y = fy[1].length === 2 ? `20${fy[1]}` : fy[1]; return { year: y, label: `FY${y}` }; }
     const one = s.match(/(?<!\d)(20\d{2})(?!\d)/);
     if (one) return { year: one[1], label: '' };
   }
@@ -247,25 +253,34 @@ export function booksCash(data, b) {
   };
 }
 /**
+ * Each bank account's figure as the page writes it, to the dollar: decided once, over every account, so they add up to
+ * the cash as it's written (./addingUp). Every place that draws an account takes its figure from here (the cash card's
+ * lines and search, ./cashLines; the meeting's money tile, its slide and Print, ./moneyTiles), so an account is one
+ * amount wherever it's drawn (Board QA round 13: each place rounded its own grouping, and Reserve's $62,500.49 was
+ * "$62,500" on Financials and "$62,501" on the meeting's tile) → [whole dollars, in the accounts' order]
+ */
+export const accountsSaid = (cash) => addingUp((cash?.accounts || []).map((a) => (typeof a.balance === 'number' && Number.isFinite(a.balance) ? a.balance : 0)), { total: cash?.total ?? null });
+/**
  * The cash card's lines, one list for the card (./portal.js CashCard) and the search (./figures.js): with two or more
  * accounts, each one holding at least 1% of the cash by its name (#cash-a<its place among the accounts>), and beside
- * five or more the smaller ones together on one line (#cash-a-rest), every line rounded so they add up to the cash as
- * it's written (./addingUp). One account is the cash itself: no lines. Board QA round 12: one account and four small
- * ones drew no lines at all while search sent "the smaller accounts together" to a line never drawn
- * → [{ id, k, name, names, balance, said, rest }]
+ * five or more the smaller ones together on one line (#cash-a-rest), each account as it's written everywhere
+ * (./accountsSaid) and the smaller ones together the sum of theirs, so the lines add up to the cash as it's written. An
+ * account below zero is never among the smaller ones: it's a line of its own, by its name, its minus said (`over`), as
+ * the meeting's tile says it (Board QA round 13: PayPal's −$700 was netted into "the smaller accounts together"). One
+ * account is the cash itself: no lines. Board QA round 12: one account and four small ones drew no lines at all while
+ * search sent "the smaller accounts together" to a line never drawn → [{ id, k, name, names, balance, said, rest, over }]
  */
 export function cashLines(cash) {
-  const held = (cash?.accounts || []).map((a, i) => ({ a, i })).filter(({ a }) => typeof a.balance === 'number' && Math.abs(a.balance) >= 0.005);
+  const each = accountsSaid(cash);
+  const held = (cash?.accounts || []).map((a, i) => ({ a, i, said: each[i] })).filter(({ a }) => typeof a.balance === 'number' && Math.abs(a.balance) >= 0.005);
   if (held.length < 2) return [];
-  const small = held.length > 4 ? held.filter(({ a }) => a.balance < cash.total * 0.01) : [];
+  const small = held.length > 4 ? held.filter(({ a }) => a.balance > 0 && a.balance < cash.total * 0.01) : [];
   // (a single small one is a line of its own, by its name: "together" takes two)
   const together = small.length > 1 ? small : [];
-  const lines = [
-    ...held.filter((x) => !together.includes(x)).map(({ a, i }) => ({ id: `cash-a${i}`, k: `cash:${a.bank || ''}:${a.name}`, name: a.name || 'Account', names: [a.name || 'Account'], balance: a.balance, rest: false })),
-    ...(together.length ? [{ id: 'cash-a-rest', k: 'cash:small', name: andText(together.map(({ a }) => a.name || 'Account')), names: together.map(({ a }) => a.name || 'Account'), balance: together.reduce((t, { a }) => t + a.balance, 0), rest: true }] : []),
+  return [
+    ...held.filter((x) => !together.includes(x)).map(({ a, i, said }) => ({ id: `cash-a${i}`, k: `cash:${a.bank || ''}:${a.name}`, name: a.name || 'Account', names: [a.name || 'Account'], balance: a.balance, said, rest: false, over: said < 0 })),
+    ...(together.length ? [{ id: 'cash-a-rest', k: 'cash:small', name: andText(together.map(({ a }) => a.name || 'Account')), names: together.map(({ a }) => a.name || 'Account'), balance: together.reduce((t, { a }) => t + a.balance, 0), said: together.reduce((t, x) => t + x.said, 0), rest: true, over: false }] : []),
   ];
-  const said = addingUp(lines.map((l) => l.balance), { total: cash.total });
-  return lines.map((l, j) => ({ ...l, said: said[j] }));
 }
 /** 16.8 → "17", 8.46 → "8.5": months of cash, to a tenth under ten; what rounds to none (or less) "Under a month" */
 export const monthsText = (m) => { const r = m >= 10 ? Math.round(m) : Math.round(m * 10) / 10; return r > 0 ? String(r) : 'Under a month'; };
@@ -584,9 +599,9 @@ export function moneyTiles({ cash, budget, n, due = false, as = '' }) {
       return {
         value: !cash ? '…' : Number.isFinite(cash.total) ? $('cash', cash.total, (v) => amount(Math.abs(v))) : 'Not known',
         sub: !cash ? 'From the balance sheet' : fromBooks(cash) || (cash.live
-          // (each account rounded so they add up to the cash beside them: ./partsAddingUp)
-          // (and each kept for search as it's written to the dollar, the card's own figure: ./cashLines)
-          ? [(cash.accounts || []).length > 1 ? ((each) => partsAddingUp(each, { total: cash.total }).map((w, i) => `${cash.accounts[i].name} ${$(`cash:${cash.accounts[i].bank || ''}:${cash.accounts[i].name}`, each[i], () => w)}`).join(' · '))(addingUp(cash.accounts.map((a) => a.balance), { total: cash.total })) : '', cash.asOf ? `as of ${shortAsOf(cash.asOf)}` : ''].filter(Boolean).join(', ')
+          // (each account as it's written everywhere, the cash card's own figure, ./accountsSaid; said in short from that
+          // figure, rounded so they add up to the cash beside them, ./partsAddingUp: Board QA round 13)
+          ? [(cash.accounts || []).length > 1 ? ((each) => partsAddingUp(each, { total: cash.total }).map((w, i) => `${cash.accounts[i].name} ${$(`cash:${cash.accounts[i].bank || ''}:${cash.accounts[i].name}`, each[i], () => w)}`).join(' · '))(accountsSaid(cash)) : '', cash.asOf ? `as of ${shortAsOf(cash.asOf)}` : ''].filter(Boolean).join(', ')
           : `${cash.asOf ? `As of ${shortAsOf(cash.asOf)}` : 'From the balance sheet'}${cash.prior != null ? ` · ${((c) => (c === 'Even' ? 'Even with a year before' : `${c} on a year`))(year())}` : ''}`),
       };
     });

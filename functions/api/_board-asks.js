@@ -1636,16 +1636,23 @@ export async function notesFor(DB, ids) {
 /**
  * What the board page adds for these: the notes on the meetings the viewer sees; a member's own asks (each with
  * when it's due); and a meeting ahead not shared yet that the member presents in, with only their own items, so
- * the ask's link opens their report. An admin's asks are every ask on a meeting ahead.
+ * the ask's link opens their report. An admin's asks are every ask on a meeting ahead. Each is its own part: one whose
+ * read fails is marked in `unread` (lineNotes, myAsks, presenting, review), never answered as none (Board QA round 13:
+ * a failed read of the notes drew the statements as if nobody had noted them, and the same catch emptied the asks and
+ * the meetings they present in)
  */
 export async function portalExtras(env, { member = null, admin = false, meetings = [], people = null, today = todayEastern() }) {
-  try {
-    await ensureAsks(env.DB);
+  const unread = {};
+  // (People not answering: the page says so with Try again, never a page without the member's asks: round 10)
+  const lost = (part, also) => (e) => { if (e?.unread || e?.setup) throw e; console.error(`[board-asks] portal ${part}`, e?.message || e); unread[part] = true; return also; };
+  const ready = await ensureAsks(env.DB).then(() => true, (e) => { if (e?.unread || e?.setup) throw e; console.error('[board-asks] portal', e?.message || e); return false; });
+  if (!ready) return { review: null, reviewShut: null, lineNotes: {}, myAsks: [], presenting: [], unread: { lineNotes: true, myAsks: true, presenting: true, review: true } };
+  const ahead = meetings.filter((m) => isDate(m.date) && m.date >= today && !m.notBoard);
+  // Before it's shared: only the two weeks the asks go out in, and only an agenda that isn't a draft
+  const presenting = member ? await (async () => {
     const everyone = people ? [...people.board, ...people.staff] : await roster(env.DB).then((r) => [...r.board, ...r.staff]);
-    const ahead = meetings.filter((m) => isDate(m.date) && m.date >= today && !m.notBoard);
     const { template } = await getSettings(env.DB);
-    // Before it's shared: only the two weeks the asks go out in, and only an agenda that isn't a draft
-    const presenting = member ? ahead.filter((m) => presentingWindow(m, today, template)).map((m) => {
+    return ahead.filter((m) => presentingWindow(m, today, template)).map((m) => {
       const mine = (it) => presentersOf(it, everyone).some((p) => p.slug === member.slug);
       // Their items keep the numbers the whole agenda gives them (3.2), as the board page will show
       const full = forBoard({ ...m, shared: true });
@@ -1659,35 +1666,34 @@ export async function portalExtras(env, { member = null, admin = false, meetings
       // Nothing else of a meeting the board can't see yet (its other items, motions, action items, who's coming, notes)
       const bare = cleanMeeting({ id: m.id, date: m.date, start: m.start, end: m.end, location: m.location, address: m.address, minutes: m.minutes });
       return { ...bare, title: meetingName(m), sections: seen.sections, files: seen.files.filter((f) => docs.has(f.id)), shared: false, presenting: true };
-    }).filter(Boolean) : [];
-    const visible = admin ? meetings.map((m) => m.id) : [...meetings.filter((m) => boardCopy(m)).map((m) => m.id), ...presenting.map((m) => m.id)];
-    const notes = await notesFor(env.DB, visible);
-    // A meeting not shared yet: only the notes on their own items
-    for (const m of presenting) {
-      const own = new Set(m.sections.flatMap((s) => s.items.map((it) => it.id)));
-      const kept = Object.fromEntries(Object.entries(notes[m.id] || {}).filter(([itemId]) => own.has(itemId)));
-      if (Object.keys(kept).length) notes[m.id] = kept; else delete notes[m.id];
-    }
-    const rows = perItem(((await env.DB.prepare("SELECT * FROM board_asks WHERE kind IN ('report', 'list') AND status NOT IN ('dropped', 'sending', 'question', 'failed', 'unknown')").all()).results || []).map(askOf)
-      .filter((a) => ahead.some((m) => m.id === a.meetingId) && (admin || a.slug === member?.slug)), ahead);
-    // The chair's review page: the chair (by seat) and Board's admins
-    const on = asksMode(await readSettings(env.DB)) === 'on';
-    const review = admin || (member?.seat === 'chair' && on) ? await reviewFor(env, { meetings, today }) : null;
-    // …and when it isn't open, why, so a link to it says the true reason (only to them)
-    const reviewShut = !review && (admin || member?.seat === 'chair') ? await reviewShutFor(env, { meetings, today, on: admin || on }) : null;
-    return {
-      review,
-      reviewShut,
-      lineNotes: notes,
-      myAsks: rows.map((a) => ({ meetingId: a.meetingId, itemId: a.itemId, due: a.due, status: a.status === 'asked' && Date.parse(a.due) <= Date.now() ? 'late' : a.status === 'asked' ? 'asked' : a.status, title: a.title, ...(admin ? { name: a.name } : {}) })),
-      presenting,
-    };
-  } catch (e) {
-    // (People not answering: the page says so with Try again, never a page without the member's asks: round 10)
-    if (e?.unread) throw e;
-    console.error('[board-asks] portal', e.message);
-    return { review: null, reviewShut: null, lineNotes: {}, myAsks: [], presenting: [] };
+    }).filter(Boolean);
+  })().catch(lost('presenting', [])) : [];
+  const visible = admin ? meetings.map((m) => m.id) : [...meetings.filter((m) => boardCopy(m)).map((m) => m.id), ...presenting.map((m) => m.id)];
+  const notes = await notesFor(env.DB, visible).catch(lost('lineNotes', {}));
+  // A meeting not shared yet: only the notes on their own items
+  for (const m of presenting) {
+    const own = new Set(m.sections.flatMap((s) => s.items.map((it) => it.id)));
+    const kept = Object.fromEntries(Object.entries(notes[m.id] || {}).filter(([itemId]) => own.has(itemId)));
+    if (Object.keys(kept).length) notes[m.id] = kept; else delete notes[m.id];
   }
+  const rows = await env.DB.prepare("SELECT * FROM board_asks WHERE kind IN ('report', 'list') AND status NOT IN ('dropped', 'sending', 'question', 'failed', 'unknown')").all()
+    .then((r) => perItem((r.results || []).map(askOf).filter((a) => ahead.some((m) => m.id === a.meetingId) && (admin || a.slug === member?.slug)), ahead)).catch(lost('myAsks', []));
+  // The chair's review page: the chair (by seat) and Board's admins
+  // (read only for whoever it's for: the chair and Board's admins)
+  const [review, reviewShut] = !(admin || member?.seat === 'chair') ? [null, null] : await (async () => {
+    const on = asksMode(await readSettings(env.DB)) === 'on';
+    const r = admin || (member?.seat === 'chair' && on) ? await reviewFor(env, { meetings, today }) : null;
+    // …and when it isn't open, why, so a link to it says the true reason (only to them)
+    return [r, !r && (admin || member?.seat === 'chair') ? await reviewShutFor(env, { meetings, today, on: admin || on }) : null];
+  })().catch(lost('review', [null, null]));
+  return {
+    review,
+    reviewShut,
+    lineNotes: notes,
+    myAsks: rows.map((a) => ({ meetingId: a.meetingId, itemId: a.itemId, due: a.due, status: a.status === 'asked' && Date.parse(a.due) <= Date.now() ? 'late' : a.status === 'asked' ? 'asked' : a.status, title: a.title, ...(admin ? { name: a.name } : {}) })),
+    presenting,
+    ...(Object.keys(unread).length ? { unread } : {}),
+  };
 }
 
 /** What Board and Automations show: the next meeting's asks, the chair's review, and the last run */

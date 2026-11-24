@@ -688,7 +688,9 @@ try {
     const read = async (who) => { const r = await realFetch(`${SITE}/api/board-portal`, { headers: { 'x-test-user': who }, cache: 'no-store' }); let j = null; try { j = await r.json(); } catch { /* not JSON */ } return { status: r.status, j }; };
     // What each part is in the page's data, to tell a part drawn other than the clean read has it
     const PARTS = {
-      money: (j) => JSON.stringify([j.numbers?.cash?.total, (j.numbers?.cash?.accounts || []).map((a) => a.balance), j.numbers?.books?.revenue, j.numbers?.books?.expenses, j.numbers?.finance?.ytd, j.numbers?.costs?.makeovers?.length, j.numbers?.costs?.waiting?.length, j.numbers?.operating, (j.cashHistory || []).length]),
+      money: (j) => JSON.stringify([j.numbers?.cash?.total, (j.numbers?.cash?.accounts || []).map((a) => a.balance), j.numbers?.books?.revenue, j.numbers?.books?.expenses, j.numbers?.finance?.ytd, j.numbers?.costs?.makeovers?.length, j.numbers?.costs?.waiting?.length, j.numbers?.operating]),
+      /* r13: the month-end balances are a part of their own (`history`), their read failing marks it and the page opens */
+      history: (j) => JSON.stringify((j.cashHistory || []).length),
       projects: (j) => JSON.stringify([j.numbers?.projects?.building?.map((b) => b.name), j.numbers?.projects?.waiting?.length, j.numbers?.reveals?.length]),
       kids: (j) => JSON.stringify(j.numbers?.impact ? [j.numbers.impact.kids, j.numbers.impact.rooms, j.numbers.impact.byYear?.length] : null),
       gifts: (j) => JSON.stringify(j.gifts ? [j.gifts.count, j.gifts.total] : null),
@@ -703,7 +705,7 @@ try {
     await read(ALEX);
     const base = DB._db.export();
     const fresh = async () => { curDB = await createD1({ bytes: base }); };
-    const WORDS = { money: 'The money couldn’t load just now', projects: 'The makeovers couldn’t load just now', kids: 'The kids served couldn’t load just now', gifts: 'The major gifts couldn’t load just now', givers: 'The givers’ names couldn’t load just now', sources: 'The tax returns and audits couldn’t load just now', events: 'The events couldn’t load just now' };
+    const WORDS = { history: 'The month-end balances couldn’t load just now', money: 'The money couldn’t load just now', projects: 'The makeovers couldn’t load just now', kids: 'The kids served couldn’t load just now', gifts: 'The major gifts couldn’t load just now', givers: 'The givers’ names couldn’t load just now', sources: 'The tax returns and audits couldn’t load just now', events: 'The events couldn’t load just now' };
     for (const who of [SAM, ALEX]) {
       await fresh();
       const clean = await read(who);
