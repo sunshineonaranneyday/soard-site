@@ -757,18 +757,20 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
     const end = root.querySelector<HTMLElement>('[data-s="livebar"] .bar__end');
     if (!end) return;
     const railed = root.hasAttribute('data-rail') && !end.closest('[hidden]') && end.clientHeight > 0;
-    const shown = [...end.children].filter((el) => (el.tagName === 'BUTTON' || el.tagName === 'A') && !(el as HTMLElement).hidden && getComputedStyle(el).display !== 'none').length;
-    const sig = railed ? `${end.clientHeight}|${shown}` : '';
+    const shownEls = [...end.children].filter((el) => (el.tagName === 'BUTTON' || el.tagName === 'A') && !(el as HTMLElement).hidden && getComputedStyle(el).display !== 'none') as HTMLElement[];
+    // (which buttons, not how many: Tap for sound giving way to Sound keeps the count and changes the height)
+    const sig = railed ? `${end.clientHeight}|${shownEls.map((el) => el.dataset.s || el.dataset.act || (el.hasAttribute('data-shop') ? 'shop' : el.className)).join(',')}` : '';
     if (sig === liveRailSig) return;
     liveRailSig = sig;
     delete end.dataset.railFit;
     if (!railed) return;
-    // (its last button past the rail's foot: the hearts' column between gives way first, so only a real overflow counts;
-    // the rail's own scroll height counted that column's spare room too, and said a rail of three buttons was full)
-    const shownEls = [...end.children].filter((el) => (el.tagName === 'BUTTON' || el.tagName === 'A') && !(el as HTMLElement).hidden && getComputedStyle(el).display !== 'none');
+    // (its last button past the rail's foot, by layout boxes: the hearts' column between gives way first, so only a real
+    // overflow counts, and the rail's own animations, a button growing in and the rest gliding from where they were,
+    // don't move a layout box)
     const lastEl = shownEls[shownEls.length - 1];
-    if (lastEl && lastEl.getBoundingClientRect().bottom > end.getBoundingClientRect().bottom + 1) end.dataset.railFit = 'short';
+    if (lastEl && lastEl.offsetTop + lastEl.offsetHeight > end.offsetTop + end.clientHeight + 1) end.dataset.railFit = 'short';
   }
+
 
   // The line while the replay is being made (END_LINE_MAX above): drawn every second, the transition between draws
   // makes it glide (every 10 s and no glide for someone who asked for less motion)
@@ -1265,6 +1267,11 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
   if (replayBar) railWatch?.observe(replayBar);
   const liveEnd = root.querySelector<HTMLElement>('[data-s="livebar"] .bar__end');
   if (liveEnd) railWatch?.observe(liveEnd);
+  // (and when a rail button comes or goes without a paint here: Share, Fund the next room and the shop are shown by the
+  // page, LivePage, so neither the rail's size nor this stage's paint tells it; the signature check keeps it to one
+  // measure per real change)
+  const railButtons = 'MutationObserver' in window ? new MutationObserver(() => { fitRail(); fitLiveRail(); }) : null;
+  for (const el of [liveEnd, replayBar]) if (el) railButtons?.observe(el, { attributes: true, attributeFilter: ['hidden'], subtree: true });
 
   // ── Which way round, on a phone held sideways ──
   // LiveStage has more than one way to lay the stage out there (data-fit): in full screen, the controls beside the
@@ -1411,6 +1418,7 @@ export function createStage(root: HTMLElement, opts: Options): Stage {
       fitWatch.disconnect();
       roomWatch?.disconnect();
       railWatch?.disconnect();
+      railButtons?.disconnect();
       roomProbe.remove();
       for (const off of offs) off();
       for (const t of floats) clearTimeout(t);
