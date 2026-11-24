@@ -141,6 +141,7 @@ export function entryFor(type, subject = '') {
   if (/^\[(preview|test|test run|rehearsal)\]\s|^TEST · |^\[SOARD Live\] TEST · |^\[SOARD\] TEST · /i.test(s)) return 'preview';
   if (type === 'reveal-invite-alert') return /still out/i.test(s) ? 'staff-invite-held' : /wasn.t drafted|^\[SOARD\] Check who/i.test(s) ? 'staff-invite-review' : 'staff-invite-problem';
   if (type === 'reveal-invite-review') return 'staff-invite-review';
+  if (type === 'press-release') return 'staff-press-review';
   if (type === 'project-email-review' || type === 'project-email-alert') return 'staff-project-review';
   if (type === 'newsletter-review' || type === 'newsletter-alert') return 'staff-newsletter-review';
   if (type === 'demo-invite-alert') return /still out|is waiting/i.test(s) ? 'staff-demo-heads-up' : 'staff-demo-problem';
