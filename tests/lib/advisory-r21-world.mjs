@@ -65,6 +65,9 @@ export async function world() {
   }
   await adv.saveSettings(DB, { lead: MARY.slug, emails: true });
   await DB.prepare('INSERT INTO advisory_asks (id, data, sent_at, at, by) VALUES (?, ?, ?, ?, ?)').bind(ASK, JSON.stringify({ title: 'Host a dinner', body: 'Can you?' }), '2026-11-20T12:00:00.000Z', '2026-11-20T12:00:00.000Z', BY).run();
+  /* r25: an ask's emails are claimed on the ask itself, in the write that marks it emailed (Advisory Board QA round 25),
+     so the asks these sweeps email are out on the record first, as every ask that's emailed is */
+  for (const [id, title] of [['ask_rtwentyoneb', 'Know a plumber?'], ['ask_left', 'Know a painter?']]) await DB.prepare('INSERT INTO advisory_asks (id, data, sent_at, at, by) VALUES (?, ?, ?, ?, ?)').bind(id, JSON.stringify({ title }), '2026-11-20T12:00:00.000Z', '2026-11-20T12:00:00.000Z', BY).run();
   for (const [t, who] of [[TOKEN, P], [TOKEN_Q, Q]]) await DB.prepare('INSERT INTO advisory_links (hash, ask_id, slug, expires) VALUES (?, ?, ?, ?)').bind(await hashOf(t), ASK, who.slug, '2099-01-01T00:00:00.000Z').run();
   // (her term ends in a month: Renew is open)
   await DB.prepare('INSERT INTO advisory_terms (slug, started_on, ends_on) VALUES (?, ?, ?)').bind(P.slug, '2026-01-02', new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10)).run();

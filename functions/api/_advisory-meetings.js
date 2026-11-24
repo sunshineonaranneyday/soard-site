@@ -164,10 +164,22 @@ export async function getAdvisoryMeeting(DB, id) {
  * 24, as Add's Joined and the Advisory Board's other writes: _advisory.js). null: nothing written
  */
 const asSaved = (row, files = []) => (row ? hydrate(row, { [parse(row.data).id]: files }) : null);
-/** A new meeting (it has no files yet), as written */
+/**
+ * A new meeting (it has no files yet), as written. Its write landing with its answer lost (Advisory Board QA round 25:
+ * "That didn't go through" of a meeting made) is looked for at its id: there as this write made it, it's answered as
+ * made; not, nothing was made, said so; couldn't be looked for, said so
+ */
 async function write(DB, m) {
-  return asSaved(await DB.prepare('INSERT OR REPLACE INTO advisory_meetings (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) RETURNING data')
-    .bind(m.id, m.date || '', stored(m), m.updatedAt, m.updatedBy || '').first());
+  try {
+    return asSaved(await DB.prepare('INSERT OR REPLACE INTO advisory_meetings (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) RETURNING data')
+      .bind(m.id, m.date || '', stored(m), m.updatedAt, m.updatedBy || '').first());
+  } catch (e) {
+    console.error('[advisory-meetings] a new meeting', e?.message || e);
+    const row = await DB.prepare('SELECT data, updated_at FROM advisory_meetings WHERE id = ?').bind(m.id).first().catch(() => undefined);
+    if (row === undefined) throw err('The site’s database didn’t answer just now, so we can’t tell yet whether the meeting was made. This page shows the meetings as they are now.', 503);
+    if (row && row.updated_at === m.updatedAt) return asSaved(row);
+    throw err('The site’s database didn’t answer just now, so the meeting wasn’t made. Please try again in a moment.', 503);
+  }
 }
 /** A change that's the server's own (the invite, sharing), onto the meeting as it is now: a save made meanwhile stays */
 async function patch(DB, id, fn, { by = '' } = {}) {

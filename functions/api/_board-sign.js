@@ -113,6 +113,8 @@ export const EVENT_KINDS = ['asked', 'reminded', 'opened', 'consented', 'signed'
  * `guard` ({ sql, bind }: a condition): the events go only while it holds, put in before the statements (which carry
  * the same condition in their own WHERE), so both go or neither, and `after(results)` says which (a change written only
  * over what was read: Board QA round 12, two founders changing one member's email at once)
+ * `last(hashes)`: statements that go after the events, in the same batch, made from each event's hash (the minutes'
+ * signature keeping its event's hash: ./_board-minutes-sign.js, Board QA round 13)
  */
 export async function appendEvents(DB, build, { tries = 5 } = {}) {
   for (let attempt = 0; ; attempt++) {
@@ -121,6 +123,7 @@ export async function appendEvents(DB, build, { tries = 5 } = {}) {
     const head = await DB.prepare('SELECT hash FROM board_sign_events ORDER BY seq DESC LIMIT 1').first();
     let prev = head?.hash || 'genesis';
     const inserts = [];
+    const hashes = [];
     const guard = plan.guard ? ` WHERE ${plan.guard.sql}` : '';
     for (const e of plan.events || []) {
       if (!EVENT_KINDS.includes(e.kind)) throw new Error(`Unknown event: ${e.kind}`);
@@ -133,15 +136,34 @@ export async function appendEvents(DB, build, { tries = 5 } = {}) {
       inserts.push(DB.prepare(`INSERT INTO board_sign_events (prev, hash, doc_id, slug, year, version, kind, at, by, ip, device, detail) ${guard ? `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${guard}` : 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'}`)
         .bind(prev, hash, row.doc_id, row.slug, row.year, row.version, row.kind, row.at, row.by, row.ip, row.device, row.detail, ...(guard ? plan.guard.bind : [])));
       prev = hash;
+      hashes.push(hash);
     }
+    const last = typeof plan.last === 'function' ? plan.last(hashes) : [];
+    const all = [...(guard ? [...inserts, ...(plan.stmts || [])] : [...(plan.stmts || []), ...inserts]), ...last];
     try {
-      const results = await DB.batch(guard ? [...inserts, ...(plan.stmts || [])] : [...(plan.stmts || []), ...inserts]);
+      const results = await DB.batch(all);
       return typeof plan.after === 'function' ? plan.after(results) : plan.result;
     } catch (err) {
+      // The batch taken and its answer lost (the connection dropped after the database wrote it): its last event is in
+      // the chain, so all of it is (one batch), and it answers as written, never as nothing done. Board QA round 13
+      if (hashes.length && !/UNIQUE/i.test(String(err?.message || err)) && await inChain(DB, hashes.at(-1), err)) {
+        return typeof plan.after === 'function' ? plan.after(all.map(() => ({ meta: { changes: 1 } }))) : plan.result;
+      }
       // Another writer took the same place in the chain: nothing of this batch went in; look again
       if (!/UNIQUE/i.test(String(err?.message || err)) || !/prev|board_sign_events/i.test(String(err?.message || err)) || attempt >= tries - 1) throw err;
       await new Promise((r) => setTimeout(r, 15 + Math.random() * 60 * (attempt + 1)));
     }
+  }
+}
+
+/**
+ * Whether an event is in the chain, after a write whose answer didn't come: true, false (it wasn't written), or (the
+ * look failing too) a 503 in words that it can't be told yet (UNSURE_SAVED), never a guess either way
+ */
+async function inChain(DB, hash, cause) {
+  try { return !!(await DB.prepare('SELECT 1 AS y FROM board_sign_events WHERE hash = ?').bind(hash).first()); } catch {
+    const { UNSURE_SAVED } = await import('./_board.js');
+    throw Object.assign(new Error(UNSURE_SAVED), { status: 503, unread: true, extra: { unsure: true }, cause });
   }
 }
 
@@ -651,8 +673,17 @@ export async function maybeRunSigning(env, opts = {}) {
       }
     }
     const board = new Set(reads.board.map((p) => p.slug));
-    // (the addresses that sign a board member in now, read for certain with the board above)
-    const signsIn = new Set(reads.board.map((p) => normEmail(p.email)).filter(isEmail));
+    // Every address that signs anyone in now, from the list the sign-in itself goes by: everyone the site keeps on
+    // Access's list (the board and the Advisory Board: ./_board-access.js everyoneSignIns) and staff's own sign-in. Read
+    // for certain, as the board above: one that fails sends nothing. Board QA round 13, Nov 24 2026: an old board address
+    // given to an Advisory Board member was told it "no longer signs in", while it signed Ada in
+    let everyone;
+    try { everyone = new Set((await everyoneSignIns(DB)).emails.map(normEmail)); } catch (err) {
+      if (!err?.unread) throw err;
+      await unread();
+      return;
+    }
+    const signsIn = { has: (e) => everyone.has(normEmail(e)) || isStaffEmail(e) };
     // Whose each change is now: its member followed through every rename the chain records after it (by their place in
     // the chain), then through any of People's own moves since that the chain doesn't have yet (a rename still
     // finishing: ./_board-notices.js slugNow). So a member renamed before their old address is told is told as who they
@@ -712,8 +743,9 @@ export function voidEmail({ doc, year, reason = '', replacedByCopy = false }) {
 // ─── Due dates, declining, asking again by itself, the whole board signed ──────────
 
 import { isEmail, emailConfigured } from './_broadcast-notify.js';
-import { activeBoard, readState, writeState, unreadStatus, readDown, normEmail } from './_board-roles.js';
-import { dueNotices, noticeReads, sendDueNotices, slugNow } from './_board-notices.js';
+import { activeBoard, readState, writeState, unreadStatus, readDown, normEmail, isStaffEmail, stateReady } from './_board-roles.js';
+import { dueNotices, noticeReads, sendDueNotices, slugNow, dueStmt, sendNotice } from './_board-notices.js';
+import { everyoneSignIns } from './_board-access.js';
 /** The signing look's own status: a read of People that didn't answer (./unreadStatus), cleared by the next that does */
 const LOOK = 'signing-look';
 import { todayEastern, welcomeHad } from '../../public/admin/board-shared.js';
@@ -817,9 +849,19 @@ export function declineEmail({ doc, name = '', reason = '', year }) {
 
 /**
  * A member says they can't sign a paper as written, and why: kept in the chain, the admins emailed (again when what
- * they said changed; the same words twice within ten minutes aren't). They can still sign it later. → { at, reason, tell }
+ * they said changed; the same words twice within ten minutes aren't). They can still sign it later. → { at, reason,
+ * tell, sent }: `sent`, the admins' email went with the press; else it's owed and goes on the next look
+ * The decline and the email it owes who runs Board are one write (its notice due, ./_board-notices.js), every read
+ * before it: the database failing in it sent and kept nothing, said so. The email then goes with the press, so the
+ * member is told whether it went (Board QA round 13, Nov 24 2026: it went after the answer, a read or Resend failing lost
+ * it for good, and the member had been told "Sent to SOARD")
  */
-export async function declineDoc(DB, docId, member, { reason = '', evidence = {}, year: pageYear = null } = {}) {
+export async function declineDoc(env, docId, member, opts = {}) {
+  const { nothingDone, NOTHING_SENT } = await import('./_board.js');
+  return declining(env, docId, member, opts).catch(nothingDone(NOTHING_SENT));
+}
+async function declining(env, docId, member, { reason = '', evidence = {}, year: pageYear = null, now = Date.now() } = {}) {
+  const { DB } = env;
   const board = await import('./_board.js');
   await board.ensureSchema(DB);
   const year = Number(todayEastern().slice(0, 4));
@@ -829,21 +871,23 @@ export async function declineDoc(DB, docId, member, { reason = '', evidence = {}
   if (doc.signed[member.slug]) throw Object.assign(new Error('You’ve signed it for this year already'), { status: 409 });
   const why = String(reason || '').replace(/\r\n?/g, '\n').trim().slice(0, 1000);
   if (why.length < 3) throw Object.assign(new Error('Say what you can’t agree to, so SOARD can answer'), { status: 400 });
-  const at = new Date().toISOString();
+  const at = new Date(now).toISOString();
   const was = doc.declined?.[member.slug];
-  await appendEvents(DB, async () => ({ events: [{ kind: 'declined', docId, slug: member.slug, year, version: doc.version, at, by: evidence.signerEmail || member.email || '', ip: evidence.ip, device: evidence.device, detail: { reason: why } }] }));
   // (told again when what they said changed; a second press of Send with the same words isn't news)
-  return { at, reason: why, tell: !was || was.reason !== why || Date.now() - Date.parse(was.at) > 10 * 60 * 1000, doc, year };
-}
-
-/** The admins emailed a member's decline (after the answer has gone) */
-export async function tellDeclined(env, { doc, member, reason, year }) {
-  const { getSettings } = await import('./_board.js');
-  const admins = (await getSettings(env.DB)).admins || [];
-  const email = declineEmail({ doc, name: member.name, reason, year });
-  for (const to of admins) {
-    await sendEmailOne(env, { to, from: fromBoard(), replyTo: isEmail(member.email) ? [member.email] : [], tags: [{ name: 'kind', value: 'board-declined' }], ...email });
+  const tell = !was || was.reason !== why || now - Date.parse(was.at) > 10 * 60 * 1000;
+  const owes = tell && emailConfigured(env);
+  const id = `declined:${docId}:${member.slug}:${year}:${at}`;
+  if (owes) await stateReady(DB);
+  await appendEvents(DB, async () => ({
+    stmts: owes ? [dueStmt(DB, id, { kind: 'declined', docId, slug: member.slug, name: member.name, email: member.email || '', reason: why, year, at }, now)] : [],
+    events: [{ kind: 'declined', docId, slug: member.slug, year, version: doc.version, at, by: evidence.signerEmail || member.email || '', ip: evidence.ip, device: evidence.device, detail: { reason: why } }],
+  }));
+  // Kept, its email owed: sent now if it can be (else the signing look sends it, once)
+  let sent = false;
+  if (owes) {
+    try { sent = !!(await sendNotice(env, id, { wait: true, who: 'SOARD', now })).sent; } catch (err) { console.error('[board-sign] the decline’s email', err?.message || err); }
   }
+  return { at, reason: why, tell, sent, doc, year };
 }
 
 /**
@@ -1061,6 +1105,19 @@ export async function exportYear(env, docId, year, { waitUntil = null } = {}) {
     try { d = JSON.parse(e.detail || '{}'); } catch { /* not kept */ }
     return d.row ? { ...d.row, status: e.kind === 'taken-off' ? `Taken off ${whenEt(e.at)}${d.reason ? `: ${d.reason}` : ''}` : `Replaced ${whenEt(e.at)}` } : null;
   }).filter((r) => r && !earlier.some((x) => x.slug === r.slug && x.at === r.at));
+  // Each signer's agreement to sign electronically as the chain has it (given on whichever paper they signed first, under
+  // any address they've had): in events.json beside their signature, and its hash in signatures.csv only when it's there,
+  // so the download never says an agreement the record doesn't show (Board QA round 13, Nov 24 2026)
+  const agreed = new Set();
+  const consents = [];
+  for (const slug of new Set([...now, ...earlier, ...gone].filter((s) => s.consent_hash).map((s) => s.slug))) {
+    const slugs = await sure(() => slugsOf(DB, slug));
+    const where = slugs.map((x) => (x.before ? '(slug = ? AND seq < ?)' : 'slug = ?')).join(' OR ');
+    const had = await sure(() => DB.prepare(`SELECT * FROM board_sign_events WHERE kind = 'consented' AND (${where}) ORDER BY seq`).bind(...slugs.flatMap((x) => (x.before ? [x.slug, x.before] : [x.slug]))).all().then((r) => r.results || []));
+    if (had.length) agreed.add(slug);
+    consents.push(...had);
+  }
+  const recorded = [...new Map([...events, ...consents].map((e) => [e.seq, e])).values()].sort((a, b) => a.seq - b.seq);
   const counts = (s) => (Number(s.version) || 0) >= (Number(doc.signFrom) || 0);
   const rows = [
     ...now.map((s) => ({ ...s, ...(!counts(s) && listed.declined?.[s.slug] ? { reason: listed.declined[s.slug].reason } : {}), status: counts(s) ? 'Signed' : `${listed.declined?.[s.slug] ? 'Declined' : 'Not signed'} (signed wording ${Number(s.version) || 0}, before the board was asked to sign again)` })),
@@ -1072,7 +1129,7 @@ export async function exportYear(env, docId, year, { waitUntil = null } = {}) {
   const head = ['Name', 'Status', 'How', 'Signed (Eastern)', 'Signed (UTC)', 'Wording', 'Words or file SHA-256', 'Signed in as', 'IP', 'Device', 'Sign-in began', 'Agreed to sign electronically (SHA-256 of the words)', 'Initials and answers', 'Signed copy SHA-256', 'Added by', 'Asked', 'Declined because'];
   const csv = [head, ...rows.map((s) => [
     s.name || s.slug, s.status, s.how ? (HOWS[s.how] || s.how) : '', s.at ? whenEt(s.at) : '', s.at || '', s.version ?? '', s.hash || '', s.signer_email || '', s.ip || '', s.device || '',
-    s.signin_at || '', s.consent_hash || '', fieldsOf(s).map((f) => `${f.kind === 'initials' ? 'Initialed' : 'Answered'} ${f.n}: ${f.value}`).join('; '), s.record_hash || '', ['staff', 'drive'].includes(s.how) ? s.added_by || '' : '',
+    s.signin_at || '', agreed.has(s.slug) ? s.consent_hash || '' : '', fieldsOf(s).map((f) => `${f.kind === 'initials' ? 'Initialed' : 'Answered'} ${f.n}: ${f.value}`).join('; '), s.record_hash || '', ['staff', 'drive'].includes(s.how) ? s.added_by || '' : '',
     asks[s.slug] ? `${asks[s.slug].n} (last ${whenEt(asks[s.slug].at)})` : '', s.reason || '',
   ])].map((r) => r.map(csvCell).join(',')).join('\r\n');
   const title = String(doc.title || 'Paper');
@@ -1090,7 +1147,7 @@ body{margin:0;font-family:'Outfit',Helvetica,Arial,sans-serif;font-size:10pt;col
     'signed-copies/      each member’s signed copy: the paper as signed, then its signing record page (the words and the evidence are attached inside each PDF)',
     'copies-on-paper/    copies signed on paper, as they came in (an iPhone photo’s original beside its JPEG), when there are any',
     'wordings/           the exact words of each wording signed, with their SHA-256 in signatures.csv',
-    'events.json         every event about this paper this year, each hashed over the one before (the whole chain checked)',
+    'events.json         every event about this paper this year, and each signer’s agreement to sign electronically, each hashed over the one before (the whole chain checked)',
     '',
     `The chain: ${chain.count} events, ${chain.ok ? 'every hash checks out' : `broken at event ${chain.broken}`}.`,
     '',
@@ -1144,7 +1201,7 @@ body{margin:0;font-family:'Outfit',Helvetica,Arial,sans-serif;font-size:10pt;col
         if (!obj) throw new Error(`${f.name}: not in the bucket any more`);
         await zip.add(`${folder}/${fileSafe(label)} - ${fileSafe(f.name)}`, new Uint8Array(await new Response(obj.body).arrayBuffer()), new Date(f.at || Date.now()));
       }
-      await zip.add('events.json', JSON.stringify({ paper: { id: docId, title }, year: y, chain, events: events.map((e) => ({ ...e, detail: (() => { try { return e.detail ? JSON.parse(e.detail) : null; } catch { return e.detail; } })() })) }, null, 2));
+      await zip.add('events.json', JSON.stringify({ paper: { id: docId, title }, year: y, chain, events: recorded.map((e) => ({ ...e, detail: (() => { try { return e.detail ? JSON.parse(e.detail) : null; } catch { return e.detail; } })() })) }, null, 2));
       await zip.close();
     } catch (err) { console.error('[board-sign] export', err?.message || err); zip.abort(err); }
   })();

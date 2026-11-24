@@ -72,7 +72,7 @@ test('minor 3: a family name written first that\'s a given name elsewhere (Japan
   ['Chao Yu-ting', '', ''], ['Myung Soo-jin', '', ''], ['Sam Rainsy', '', ''], ['Simon Zoltán', '', ''], ['Balázs Péter', '', ''], ['László Gábor', '', ''],
   ['Gáspár Katalin', '', ''], ['Bogdán Eszter', '', ''], ['SIMON ZOLTÁN', '', ''], ['simon zoltán', '', ''], ['Kato Haruki', '', ''], ['Chao Wei Ming', '', ''], ['Joe Min-ji', '', ''],
   // (given name first: theirs. Sam and Joe before a name that isn't their people's own given name are Sam and Joe)
-  ['Yuki Kato', '', 'Yuki'], ['Hiroshi Abe', '', 'Hiroshi'], ['Soo-jin Myung', '', 'Soo-jin'], ['Min-ji Chong', '', 'Min-ji'], ['Zoltán Simon', '', 'Zoltán'], ['Péter Balázs', '', ''], ['Sam Rowe', '', 'Sam'],
+  ['Yuki Kato', '', ''] /* r25: Yuki is a family name some people write first and Kato no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Hiroshi Abe', '', 'Hiroshi'], ['Soo-jin Myung', '', 'Soo-jin'], ['Min-ji Chong', '', 'Min-ji'], ['Zoltán Simon', '', 'Zoltán'], ['Péter Balázs', '', ''], ['Sam Rowe', '', 'Sam'],
   ['Sam Lee', '', 'Sam'], ['Joe Min', '', '' /* r22: the lead's rule for finding 2, a family name written first before a given name of its own people's (Min is Korean's) is no name even when that given name is a family name too, as "Ming Wei" is */], ['Joe Rowe', '', 'Joe'], ['Eva Gabor', '', 'Eva'], ['Maria Gaspar', '', 'Maria'], ['Ana Bogdan', '', 'Ana'], ['Peter Balazs', '', ''],
 ]));
 
@@ -93,7 +93,7 @@ test('minor 4: two given names people go by together, on the pairs list, before 
     ['Jean Paul Ames', '', 'Jean Paul'], ['Jean Pierre Dupont', '', 'Jean Pierre'], ['Marie Claire Dupont', '', 'Marie Claire'], ['Anne Marie Ames', '', 'Anne Marie'],
     ['Mary Ann Smith', '', 'Mary Ann'], ['Peggy Sue Ames', '', 'Peggy Sue'], ['Ella Mae Rowe', '', 'Ella Mae'], ['John Paul Ames', '', 'John Paul'],
     ['Thanh Huong Ames', '', 'Thanh Huong'], ['MARY BETH ROWE', '', 'Mary Beth'], ['mary beth rowe', '', 'Mary Beth'], ['Mary Beth Ames, PhD', '', 'Mary Beth'],
-    ['Dr. Mary Beth Ames', '', 'Mary Beth'], ['Soo Jin Park', '', 'Soo Jin'],
+    ['Dr. Mary Beth Ames', '', 'Mary Beth'], ['Soo Jin Park', '', ''] /* r25: Soo is a family name some people write first (Singapore's and Malaysia's 苏, finding 3) and Park no family name of a people who write it last: no evidence the pair is given names first, no name (finding 1's rule) */,
     // (as the name they go by)
     ['Mary Beth Rowe', 'Mary Beth', 'Mary Beth'], ['Jean Paul Ames', 'Jean Paul', 'Jean Paul'],
     // (two words alone are a given name and a family name; a given name and one that isn't a pair, the first; a family name first, none)

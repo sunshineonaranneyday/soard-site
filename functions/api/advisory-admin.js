@@ -14,14 +14,14 @@
  */
 
 import {
-  whoIs, getSettings, saveSettings, leadNamed, listAsks, saveAsk, putAskOut, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros, setIntroStatus,
-  listHosted, setHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES } from './_advisory.js';
+  whoIs, getSettings, saveSettings, leadNamed, listAsks, saveAsk, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros,
+  listHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES } from './_advisory.js';
 import { activeAdvisors, peopleRows, readState, signInWhy, asSend, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
 import { putFile, deleteFile, boardFileProblem } from './_board.js';
 import { logAudit } from './_audit.js';
 import { moneyView, goalNow, creditGift, uncreditGift, matchPage, findGifts, campaignFromUrl, campaignExists, sameLink } from './_advisory-money.js';
 import { pickableKids, pickKid, clearKid, kidCard } from './_advisory-sponsor.js';
-import { sendAsk, sendIntroUpdate, sendHostUpdate, sendWelcome, sendWelcomeTo, mailLog, welcomedSlugs, welcomeRecords, welcomeOf } from './_advisory-mail.js';
+import { askPress, statusPress, sendWelcome, sendWelcomeTo, mailLog, welcomedSlugs, welcomeRecords, welcomeOf } from './_advisory-mail.js';
 import { adminMeetings, meetingAction } from './_advisory-meetings.js';
 import { advisoryBits, sharableBoardDocs } from './_board.js';
 import { boardPapers } from './_advisory-portal.js';
@@ -91,7 +91,9 @@ export async function onRequestGet(context) {
       adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []), welcomeRecords(env.DB),
     ]);
     const nameOf = (slug) => people.find((p) => p.slug === slug)?.name || '';
-    const withAnswers = await Promise.all(asks.map(async (a) => ({ ...a, mailed: log.some((l) => l.kind === 'ask' && l.id === a.id && l.sent > 0), answers: (await answersTo(env.DB, a.id)).map((r) => ({ ...r, name: nameOf(r.slug) })) })));
+    // (mailed: its emails claimed, by the write that marked it emailed, whether they've all gone yet or not: the card
+    // never offers to email an ask that went or is owed. An ask emailed before that mark was kept: its log line)
+    const withAnswers = await Promise.all(asks.map(async (a) => ({ ...a, mailed: !!a.mailed || log.some((l) => l.kind === 'ask' && l.id === a.id && l.sent > 0), answers: (await answersTo(env.DB, a.id)).map((r) => ({ ...r, name: nameOf(r.slug) })) })));
     return Response.json({
       ok: true,
       me: { kind: w.kind, name: w.name || '' },
@@ -208,31 +210,32 @@ export async function onRequestPost(context) {
       case 'send-ask': {
         // The switch as it stands now, not as this screen last saw it: nobody emails the group by surprise
         if (settings.emails && body.emailsOk !== true) return Response.json({ ok: false, emails: true, error: 'Emails are on, so this will email every Advisory Board member.' }, { status: 409 });
-        const ask = await putAskOut(env.DB, id);
-        const sent = settings.emails ? await sendAsk(env, ask) : { off: true };
-        await audit(context, by, 'updated', `Advisory ask out: ${ask.title}`);
-        return Response.json({ ok: true, ask, sent });
+        // Put out, and with the emails on its email owed to each member, in one write; then they go, each once
+        // (./_advisory-mail.js askPress): a failure after that write is said as what was done, never as a refusal
+        const r = await askPress(env, id, { emails: settings.emails });
+        await audit(context, by, 'updated', `Advisory ask out: ${r.ask.title}`);
+        return Response.json({ ok: true, ask: r.ask, sent: r.sent, said: r.said });
       }
       case 'email-ask': {
-        // One that went out while emails were off, or whose send failed
-        const ask = (await listAsks(env.DB)).find((a) => a.id === id);
-        if (!ask?.sentAt || ask.closedAt) return fail('That ask isn’t out', 409);
-        return Response.json({ ok: true, sent: await sendAsk(env, ask) });
+        // One that went out while emails were off: the same write and sends, the ask left out as it is
+        // (the switch as it stands now: off, nothing goes)
+        const r = await askPress(env, id, { emails: settings.emails, out: false });
+        return Response.json({ ok: true, sent: r.sent, said: r.said });
       }
       case 'close-ask': await closeAsk(env.DB, id); return Response.json({ ok: true });
       case 'delete-ask': await deleteAsk(env.DB, id); await audit(context, by, 'deleted', 'Advisory ask'); return Response.json({ ok: true });
       case 'save-wish': return Response.json({ ok: true, wish: await saveWish(env.DB, body.wish || {}, { by }) });
       case 'delete-wish': await deleteWish(env.DB, id); return Response.json({ ok: true });
       case 'intro-status': {
-        const { intro, changed } = await setIntroStatus(env.DB, id, body, { by });
-        const sent = changed && settings.emails ? await sendIntroUpdate(env, intro) : null;
-        return Response.json({ ok: true, intro, sent });
+        // The status and the member's update email owed with it, in one write, its reads before (./_advisory-mail.js
+        // statusPress): a failure after the write is said as what was done, and the email goes once
+        const r = await statusPress(env, 'intro', id, body, { by, settings });
+        return Response.json({ ok: true, intro: r.record, sent: r.sent, said: r.said });
       }
       case 'hosted-status': {
-        const { hosted, changed } = await setHosted(env.DB, id, body, { by });
-        const sent = changed && settings.emails ? await sendHostUpdate(env, hosted) : null;
-        await audit(context, by, 'updated', `Advisory fundraiser ${hosted.status}: ${hosted.title}`);
-        return Response.json({ ok: true, hosted, sent });
+        const r = await statusPress(env, 'hosted', id, body, { by, settings });
+        await audit(context, by, 'updated', `Advisory fundraiser ${r.record.status}: ${r.record.title}`);
+        return Response.json({ ok: true, hosted: r.record, sent: r.sent, said: r.said });
       }
       case 'hosted-link': {
         // Only its Zeffy page (Site Config → Zeffy): no status change, so no email to the member who hosts it

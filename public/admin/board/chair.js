@@ -19,7 +19,7 @@
  */
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
-import { meetingName, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew } from '../board-shared.js';
+import { meetingName, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew, approvedAlready } from '../board-shared.js';
 import { longDate, dayText } from './parts.js';
 import { Report, Motion } from '../board-report.js';
 import { dueText } from './review.js';
@@ -224,8 +224,9 @@ function Approve({ r, ctx, founders }) {
     if (!j.ok && j.over) { setData((dd) => withReview(dd, { over: true })); say(j.error); return; }
     if (!j.ok) { say(j.error || 'It wasn’t approved. Try again.', 'warn'); return; }
     setData((dd) => withReview(dd, { approvedAt: j.approvedAt, approvedBy: j.approvedBy }));
-    // Someone else approved it first: theirs stands, and nothing goes twice
-    if (j.already) { say(`${first(j.approvedBy) || 'Someone'} already approved it.`); return; }
+    // Approved first, in another tab of theirs or by someone else: that stands, nothing goes twice, and it's said as Board
+    // says it ("You approved it already, maybe in another tab." to themselves: board-shared.js. Board QA round 13)
+    if (j.already) { say(approvedAlready({ by: j.approvedBy, at: j.approvedAt, mine: !!j.mine })); return; }
     // Approved, but the agenda's email to the board didn't go (Resend said no): the server's own words, what happens next
     if (j.agenda === 'failed') { say(j.agendaError || 'The agenda is approved, but its email to the board didn’t go.', 'warn'); return; }
     say(j.agenda === 'sent' ? 'The agenda is approved and on its way to the board.'

@@ -4694,6 +4694,8 @@
     import * as ES from './events-shared.js';
     import { AfterEventPanel, SponsorsList, EventBasics } from './event-recap-admin.js';
     import { EditWordsButton } from './email-words.js';
+    // The press release drafted in Linzi's Gmail when a reveal is confirmed: its card on Reveals → Invites, its step on Now
+    import { PressReleaseCard, pressStep, draftPress } from './reveal-press.js';
     import { AreaTabs, PartnerGiving } from './donor-tabs.js';
     // Every Zeffy link field: SOARD's Zeffy forms to pick from, and what it says is what Save checks (fieldState)
     import { ZeffyLink, fieldState, useZeffyFormList } from './zeffy-forms.js';
@@ -7100,6 +7102,8 @@
             </dl>
           </div>
 
+          <${PressReleaseCard} addToast=${addToast} upcoming=${data.upcoming || []} />
+
           <div class="card">
             <div class="ri-status">
               <div class="ri-status__main">
@@ -7256,7 +7260,7 @@
     }
 
     /** The steps for one reveal: { key, label, state: done|wait|warn|error|off|info, text, action? } */
-    function rtSteps(r, all, live, invites) {
+    function rtSteps(r, all, live, invites, press = null) {
       const b = r.broadcast;
       const current = live.jobId === r.jobId && ['scheduled', 'armed', 'live', 'ending', 'replay'].includes(live.phase);
       const w = live.waiting?.[r.jobId] || null;
@@ -7323,6 +7327,8 @@
       };
       kitStep(r.kitInvite, 'invite');
       kitStep(r.kitWatch, 'watch');
+      // The press release, drafted in Linzi's Gmail beside them (./reveal-press.js)
+      steps.push(pressStep(r, { press, invites }));
 
       // 4. The countdown on the site
       const ahead = live.jobId && live.jobId !== r.jobId && ['scheduled', 'armed', 'live', 'ending'].includes(live.phase) ? all.find((x) => x.jobId === live.jobId) : null;
@@ -7407,6 +7413,13 @@
       // kind 'watch': the whole-list invite
       const draftInvite = async (r, kind = 'invite') => {
         setBusy(`kit-${kind}-${r.jobId}`);
+        if (kind === 'press') {
+          const out = await draftPress(r);
+          addToast(out.message, out.ok ? 'success' : 'error');
+          await load();
+          setBusy(null);
+          return;
+        }
         const what = kind === 'watch' ? 'whole-list invite' : 'invite email';
         try {
           const res = await fetch('/api/reveal-invites-admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kitDraft: r.jobId, kind }) });
@@ -7442,7 +7455,7 @@
         ${!upcoming.length && !data.upcomingError ? html`<p class="ri-meta">No upcoming reveals on open jobs yet. They appear here once a job has a Reveal task with a date.</p>` : html`
           <ul class="rt-list">
             ${upcoming.map((r) => {
-              const steps = rtSteps(r, upcoming, live, icfg);
+              const steps = rtSteps(r, upcoming, live, icfg, data.press);
               const counted = steps.filter((x) => x.state !== 'off' && x.state !== 'info');
               const done = counted.filter((x) => x.state === 'done').length;
               const problem = steps.find((x) => x.state === 'error') || steps.find((x) => x.state === 'warn');

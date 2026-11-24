@@ -145,7 +145,7 @@ export async function onRequestPost(context) {
       const id = idOf(body.note);
       if (!id) return fail('Bad id');
       if (typeof body.note.text !== 'string') return fail('Write the note first');
-      return ok({ application: await withPerson(env.DB, await addAdvisoryNote(env.DB, id, body.note.text, { by })) });
+      return ok({ application: await withPerson(env.DB, await addAdvisoryNote(env.DB, id, body.note.text, { by, key: typeof body.note.key === 'string' ? body.note.key : '' })) });
     }
     if (body.add) {
       const id = idOf(body.add);
