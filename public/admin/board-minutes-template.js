@@ -26,17 +26,26 @@
 import { meetingName, longDate, timeRange, agendaItems, sectionPlan, clock, quorumFor, nextMeeting, isDate, isFilled, presentersOf, namesText } from './board-shared.js';
 
 /**
+ * The meeting after this one, as the template names it: { name, when } ("Q1 2027 Board Meeting", "Thursday, March 4,
+ * 2027, 8:00 AM"), or null. `meetings`: Board's meetings as they are now. Typed minutes keep the one their send named
+ * (../../functions/api/_board-notes.js factsNow), so a meeting moved later never changes what their file says
+ */
+export function nextLine(m, meetings = []) {
+  const next = nextMeeting((meetings || []).filter((x) => x.id !== m.id && !x.practice && !x.notBoard && isDate(x.date) && x.date > (m.date || '')), m.date || undefined);
+  return next ? { name: meetingName(next), when: [longDate(next.date), next.start ? clock(next.start) : ''].filter(Boolean).join(', ') } : null;
+}
+
+/**
  * What the template holds, for both ways of having it: the meeting, the roll (board, then staff), the quorum, each
  * part with its planned time and its items, and the next meeting. `meetings`: Board's meetings (for the next one);
- * `quorum`: Settings' number, when the bylaws set one; `people` [{ slug, name }]: who presents an item picked from
- * People (its `who`), by name.
+ * `next`: the next meeting as the minutes state it ({ name, when } or null: nextLine), in its place; `quorum`: Settings'
+ * number, when the bylaws set one; `people` [{ slug, name }]: who presents an item picked from People (its `who`), by name.
  */
-export function minutesOutline(m, { meetings = [], quorum = 0, people = [] } = {}) {
+export function minutesOutline(m, { meetings = [], next, quorum = 0, people = [] } = {}) {
   // Each item numbered and named the way the board page and the screen do (a live list with no title by what it shows)
   const listed = new Map(agendaItems(m).map((x) => [x.id, x]));
   const plan = sectionPlan(m);
   const roll = [...m.attendance.filter((p) => p.kind === 'board'), ...m.attendance.filter((p) => p.kind === 'staff')].map((p) => ({ key: p.key, slug: p.slug || '', name: p.name, kind: p.kind, status: p.status || '' }));
-  const next = nextMeeting((meetings || []).filter((x) => x.id !== m.id && !x.practice && !x.notBoard && isDate(x.date) && x.date > (m.date || '')), m.date || undefined);
   return {
     name: meetingName(m),
     date: isDate(m.date) ? longDate(m.date) : '',
@@ -63,7 +72,7 @@ export function minutesOutline(m, { meetings = [], quorum = 0, people = [] } = {
         })),
       };
     }),
-    next: next ? { name: meetingName(next), when: [longDate(next.date), next.start ? clock(next.start) : ''].filter(Boolean).join(', ') } : null,
+    next: next === undefined ? nextLine(m, meetings) : next?.name ? { name: String(next.name), when: String(next.when || '') } : null,
   };
 }
 

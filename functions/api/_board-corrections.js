@@ -26,7 +26,7 @@
  */
 
 import { getMeeting, listMeetings, patchTogether, roster, ensureSchema, ID, SITE, nothingDone, landedOr, NOTHING_SAVED } from './_board.js';
-import { claimSending, releaseSending, boxPath, withBox, anythingIn, keptFile, mergePatch, fileInputs, stageMinutesFile, AGAIN } from './_board-notes.js';
+import { claimSending, releaseSending, boxPath, withBox, anythingIn, keptFile, mergePatch, stageMinutesFile, AGAIN } from './_board-notes.js';
 import { minutesIn, meetingName, uid } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
 import { limit } from './_rate-limit.js';
@@ -313,12 +313,15 @@ async function makeIt(env, id, c, w, { now, also = [] }) {
           // (as the step will leave them: the minutes with it on, and what the last send kept with it in)
           const p = correctionPlan(m0, c, ctx);
           from = m0.updatedAt || '';
-          fresh = await stageMinutesFile(env, p.next || m0, mergePatch(ctx.last, p.kept || {}), await fileInputs(env.DB, id), now);
+          // (`was`: approved minutes' file is their record, never made again: ./_board-notes.js fileMayChange)
+          fresh = await stageMinutesFile(env, p.next || m0, { was: m0, last: mergePatch(ctx.last, p.kept || {}), now });
         }
       }
       try {
         await patchTogether(env.DB, [id], ([m]) => {
           if (!m) throw no('That meeting is gone', 404);
+          // (approved since the decision read them: approved minutes change only once the approval is taken back. Board QA round 14)
+          if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409, { reload: true });
           // (changed since its Word file was made from it: made again)
           if (fresh && (m.updatedAt || '') !== from) throw AGAIN;
           const p = correctionPlan(m, c, ctx);

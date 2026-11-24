@@ -1081,15 +1081,16 @@ const SAVE_NOT_MADE = 'We couldn’t save that just now, so nothing was changed.
 const notChanged = (err, approving) => (err?.status ? err : readDown(approving ? MINUTES_NOT_APPROVED : SAVE_NOT_MADE, err));
 /**
  * A save's minutes' Word file (typed minutes with the file a send kept: ./_board-notes.js minutesFileStep), made from
- * the meeting as the save leaves it, staged for the save's own write; null when there's none, or it says that already.
- * Everything it goes by is read here, before the write: a read or the file store failing refuses the save in words
- * (`approving`: the approval's), nothing changed. → { also, drop, done } | null
+ * the meeting as the save leaves it, staged for the save's own write; null when there's none, or it says that already,
+ * or the minutes are approved and stay so (their file is their record: fileMayChange, by `current`, the minutes as the
+ * site has them). Everything it goes by is read here, before the write: a read or the file store failing refuses the
+ * save in words (`approving`: the approval's), nothing changed. → { also, drop, done } | null
  */
 async function minutesFileWith(env, current, next, { approving }) {
   if (!current.minutesFrom?.typed || current.practice) return null;
   try {
     const { minutesFileStep } = await import('./_board-notes.js');
-    return await minutesFileStep(env, asWritten(current, next));
+    return await minutesFileStep(env, asWritten(current, next), { was: current });
   } catch (err) {
     console.error('[board] the minutes’ Word file for a save', current.id, err?.message || err);
     throw notChanged(err, approving);
