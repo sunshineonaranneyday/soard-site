@@ -186,6 +186,7 @@ try {
   const inFrame = await page.$eval('.rp-sheet .mm-frame', (f) => f.contentDocument.body.innerText);
   ok(['PRESS RELEASE', 'FOR IMMEDIATE RELEASE', 'WHAT:', 'WHEN:', 'WHERE:', 'WHY:', 'MEDIA AVAILABILITY:', 'ABOUT SUNSHINE ON A RANNEY DAY:', 'Media Contact:'].every((s) => inFrame.includes(s)), 'the press release, every section');
   ok(inFrame.includes('Please arrive 20 minutes early.'), 'with the words just saved');
+  ok(inFrame.includes('Linzi’s Gmail signature goes here, as Gmail shows it.') && !inFrame.includes('Director of Operations\n'), 'a line stands where her signature goes (its pictures can’t load in the admin)');
   ok(await page.evaluate(() => document.activeElement?.closest('.rp-sheet') !== null), 'focus moves into the sheet');
   await page.screenshot({ path: `${OUT}preview.png` });
   ok(await clickIn(page, '.rp-sheet', 'Draft it in Linzi’s Gmail now'), 'Draft it in Linzi’s Gmail now');

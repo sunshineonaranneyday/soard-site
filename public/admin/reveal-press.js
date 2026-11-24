@@ -266,7 +266,11 @@ function PressPreview({ jobId, kids, dirty, onPick, onClose, addToast }) {
   }, [jobId]);
   const kid = kids.find((k) => k.jobId === jobId) || { jobId, name: p?.name || 'This kid' };
   const first = firstName(p?.from?.name, p?.from?.email);
-  const doc = p ? `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base target="_blank"><style>body{margin:0;padding:20px 22px;background:#fff}img{max-width:100%;height:auto}</style></head><body>${p.html}</body></html>` : '';
+  // Her Gmail signature's pictures live on Google's servers, which the admin doesn't load (its CSP), so here a line
+  // stands where Gmail shows the signature
+  const sigLine = `<p style="margin:18px 0 0;font:13px Arial,Helvetica,sans-serif;color:#80817A;">${first.replace(/[<>&"]/g, '')}’s Gmail signature goes here, as Gmail shows it.</p>`;
+  const body = p ? String(p.html).replace(/<br><div class="gmail_signature">[\s\S]*$/, '') + (p.signature ? sigLine : '') : '';
+  const doc = p ? `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><base target="_blank"><style>body{margin:0;padding:20px 22px;background:#fff}img{max-width:100%;height:auto}</style></head><body>${body}</body></html>` : '';
   const draftNow = async () => {
     setBusy(true);
     const out = await draftPress(kid);
