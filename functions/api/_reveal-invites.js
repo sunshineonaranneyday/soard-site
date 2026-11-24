@@ -66,6 +66,7 @@ import { personStatus, personName } from './_team.js';
 import { limit } from './_rate-limit.js';
 import { syncKidStatuses } from './_kid-status.js';
 import { syncKitInvite, holdKitInvite, inviteFacts } from './_reveal-invite-kit.js';
+import { syncPressRelease, childOf } from './_reveal-press.js';
 import { LEVEL_ROLES, TRADE_ROLE } from './_partner-roles.js';
 import { NOT_STAFF, readDown, PEOPLE_DOWN } from './_board-roles.js';
 
@@ -304,7 +305,8 @@ export async function fetchJob(grantKey, jobId, fetchImpl = fetch) {
       $: { id: jobId },
       id: {}, name: {}, closedOn: {},
       organization: { id: {} },
-      location: { address: {}, account: { contacts: { $: { size: 50 }, nodes: { name: {}, customFieldValues: cf } } } },
+      // (the account's own fields: the child's Birthday and Gender, for the press release's age and "his family")
+      location: { address: {}, account: { customFieldValues: { $: { size: 50 }, ...cf }, contacts: { $: { size: 50 }, nodes: { name: {}, customFieldValues: cf } } } },
       customFieldValues: { $: { size: 50 }, ...cf },
       tasks: {
         $: { size: 100, where: [['taskType', 'id'], '=', REVEAL_TASK_TYPE] },
@@ -851,11 +853,18 @@ async function reconcileLocked(env, jobId, { fetchImpl = fetch, now = Date.now()
       const room = fieldValues(job.customFieldValues?.nodes)[FIELD_MAKEOVER_TYPE] || '';
       const after = await readRow(DB, jobId);
       const calledOff = after?.state === 'cancelled' && after.last_action === BY_HAND;
-      const both = (run) => Promise.all(['invite', 'watch'].map((kind) => run(kind).catch((err) => ({ kit: 'error', error: err.message })))).then(([invite, watch]) => ({ ...invite, watch }));
-      if (plan.action === 'hold' || calledOff) return both((kind) => holdKitInvite(env, { jobId, reason: calledOff ? 'its calendar invite was deleted' : plan.reason, name: who.name, config, sandbox, alertTo: alertList(env, config), kind }));
+      // The press release in Linzi's Gmail goes beside them, its trouble its own (./_reveal-press.js)
+      const both = (run, press) => Promise.all([...['invite', 'watch'].map((kind) => run(kind).catch((err) => ({ kit: 'error', error: err.message }))), press().catch((err) => ({ press: 'error', error: err.message }))])
+        .then(([invite, watch, pressed]) => ({ ...invite, watch, press: pressed }));
+      if (plan.action === 'hold' || calledOff) {
+        const reason = calledOff ? 'its calendar invite was deleted' : plan.reason;
+        return both((kind) => holdKitInvite(env, { jobId, reason, name: who.name, config, sandbox, alertTo: alertList(env, config), kind }),
+          () => syncPressRelease(env, { jobId, hold: reason, who, room, sandbox, alertTo: alertList(env, config) }));
+      }
       // A draft made early follows the date even before construction starts (nothing is drafted here on its own)
       const kitPlan = plan.action === 'upsert' ? plan : planInvite(job, staff, { kids, board, organizer: config.organizer, now, template: config.template, sent: true });
-      return both((kind) => syncKitInvite(env, { jobId, plan: kitPlan, who, room, config, sandbox, alertTo: alertList(env, config), kind }));
+      return both((kind) => syncKitInvite(env, { jobId, plan: kitPlan, who, room, config, sandbox, alertTo: alertList(env, config), kind }),
+        () => syncPressRelease(env, { jobId, plan: kitPlan, who, room, child: childOf(job), sandbox, alertTo: alertList(env, config) }));
     };
   }
   const live = !dryRun && (config.enabled || force || sandbox);
@@ -1007,7 +1016,7 @@ async function reconcileLocked(env, jobId, { fetchImpl = fetch, now = Date.now()
  * address and guests' notes), which kid page it's for, and the room. Asked for by hand, so it needn't
  * wait for construction to start (`sent` lifts that).
  */
-async function inviteFromJob(env, jobId, config, { fetchImpl = fetch, now = Date.now() } = {}) {
+export async function inviteFromJob(env, jobId, config, { fetchImpl = fetch, now = Date.now() } = {}) {
   const [job, staff, kids, board] = await Promise.all([
     fetchJob(env.JOBTREAD_GRANT_KEY, jobId, fetchImpl),
     fetchStaff(env.JOBTREAD_GRANT_KEY, fetchImpl),
@@ -1044,6 +1053,27 @@ export async function draftInviteEmailNow(env, jobId, { fetchImpl = fetch, now =
     if (row?.state === 'cancelled' && row.last_action === BY_HAND) return { jobId, kit: 'skip', reason: 'its calendar invite was deleted, so the reveal looks called off' };
     const { job, plan, who, room } = await inviteFromJob(env, jobId, config, { fetchImpl, now });
     const result = await syncKitInvite(env, { jobId, plan, who, room, config, sandbox: jobId === SANDBOX_JOB_ID || isTestJob(job), alertTo: alertList(env, config), early, rewrite, kind: kind === 'watch' ? 'watch' : 'invite' });
+    return { jobId, name: who?.name || null, date: plan.date || null, ...result };
+  } finally {
+    await unlockJob(DB, jobId);
+  }
+}
+
+/**
+ * The press release in the sender's Gmail now (Reveals → Now: Draft now), ahead of JobTread's confirmation if need
+ * be, or again after it was deleted in Gmail. Under the job's lock, so it can't race JobTread's wake-up into a second draft.
+ */
+export async function draftPressNow(env, jobId, { fetchImpl = fetch, now = Date.now() } = {}) {
+  const { DB } = env;
+  await ensureSchema(DB);
+  if (!(await lockJob(DB, jobId, true))) return { jobId, press: 'skip', reason: 'another update to this reveal is running; try again in a minute' };
+  try {
+    const config = await readConfig(DB);
+    const row = await readRow(DB, jobId);
+    if (row?.state === 'cancelled' && row.last_action === BY_HAND) return { jobId, press: 'skip', reason: 'its calendar invite was deleted, so the reveal looks called off' };
+    const { job, plan, who, room } = await inviteFromJob(env, jobId, config, { fetchImpl, now });
+    if (!job) return { jobId, press: 'skip', reason: 'JobTread has no such job' };
+    const result = await syncPressRelease(env, { jobId, plan, who, room, child: childOf(job), sandbox: jobId === SANDBOX_JOB_ID || isTestJob(job), early: true, alertTo: alertList(env, config), fetchImpl });
     return { jobId, name: who?.name || null, date: plan.date || null, ...result };
   } finally {
     await unlockJob(DB, jobId);

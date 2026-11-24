@@ -37,6 +37,7 @@ import { readScheduleRecord } from './_broadcast-schedule.js';
 import { kitConfigured } from './_kit.js';
 import { kitInviteStatus, kidPageReady } from './_reveal-invite-kit.js';
 import { readProjectRow, refreshProjectDraft } from './_project-emails.js';
+import { pressStatus, readPressSettings, senderOf } from './_reveal-press.js';
 
 const ID = /^[A-Za-z0-9]{6,32}$/;
 const fail = (error, status = 400) => Response.json({ ok: false, error }, { status });
@@ -86,8 +87,12 @@ export async function addTracking(env, upcoming) {
     const n = nudgeBy[r.jobId];
     r.checkComment = n?.posted_at ? { at: new Date(Number(n.posted_at)).toISOString(), message: n.message } : null;
   }
-  // Last, so trouble here can't cost a reveal the rest of its tracking
-  const [invites, watches] = await Promise.all([kitInviteStatus(env, ids).catch(() => ({})), kitInviteStatus(env, ids, 'watch').catch(() => ({}))]);
+  // Last, so trouble here can't cost a reveal the rest of its tracking. The press releases ask Gmail about drafts
+  // still waiting, so one Linzi has sent shows as sent straight away
+  const [invites, watches, presses] = await Promise.all([
+    kitInviteStatus(env, ids).catch(() => ({})), kitInviteStatus(env, ids, 'watch').catch(() => ({})),
+    pressStatus(env, ids, { look: true, names: Object.fromEntries(upcoming.map((r) => [r.jobId, r.name])) }).catch(() => ({})),
+  ]);
   const slugs = upcoming.map((r) => r.slug).filter(Boolean);
   const pages = slugs.length
     ? await DB.prepare(`SELECT slug, data FROM kids WHERE slug IN (${slugs.map(() => '?').join(', ')})`).bind(...slugs).all().catch(() => ({ results: [] }))
@@ -99,6 +104,7 @@ export async function addTracking(env, upcoming) {
   for (const r of upcoming) {
     r.kitInvite = invites[r.jobId] || null;
     r.kitWatch = watches[r.jobId] || null;
+    r.press = presses[r.jobId] || null;
     r.pageReady = !!ready[r.slug];
   }
 }
@@ -202,6 +208,8 @@ export async function onRequestGet(context) {
     }
     await addTracking(env, upcoming).catch(() => {});
     const bcConfig = await readBroadcastConfig(env.DB).catch(() => null);
+    const press = await readPressSettings(env.DB).catch(() => null);
+    const pressFrom = press ? await senderOf(env, press.from).catch(() => null) : null;
     return Response.json({
       ok: true,
       config,
@@ -210,6 +218,8 @@ export async function onRequestGet(context) {
       defaults: DEFAULT_TEMPLATE,
       limits: TEMPLATE_LIMITS,
       setup: { jobtread: Boolean(env.JOBTREAD_GRANT_KEY), google: Boolean(env.GOOGLE_CALENDAR_KEY) },
+      // The press release's switch and sender, for its step on each reveal
+      press: press ? { enabled: press.enabled, from: press.from, name: pressFrom?.name || '', count: press.list.length } : null,
       upcoming,
       ...(upcomingError ? { upcomingError } : {}),
       // Who confirmed invites add from the website's board, and who still needs an email

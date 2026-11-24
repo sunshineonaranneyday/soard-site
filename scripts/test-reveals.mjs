@@ -382,8 +382,8 @@ try {
   ok(invText.includes('Calendar invites are on') && invText.includes('Reveal checks are paused') && invText.includes('Invite wording'), 'the switches and the wording stay');
   ok(invText.includes('Who gets the invites') && invText.includes('adds the vendors, sponsors, photographers and design partners'), 'it explains the two stages');
   ok(invText.includes('1 of 2 board members') && invText.includes('Missing: Mary Atchley'), 'it says which board members still need an email');
-  ok(invText.includes('the board and the Advisory Board') && invText.includes('1 of 2 advisors') && invText.includes('Missing: Al Advisor') && invText.includes('People → Advisory'),
-    'and which advisors, who get the invites too');
+  ok(invText.includes('the board and the Advisory Board') && invText.includes('1 of 2 Advisory Board members') && invText.includes('Missing: Al Advisor') && invText.includes('People → Advisory'),
+    'and which Advisory Board members, who get the invites too');
   // The wording preview matches what the server sends at each stage
   const cards = await inv.page.$$eval('.ri-kind', (els) => els.map((el) => el.querySelector('.ri-invite')?.innerText || ''));
   const [tent, conf] = cards;
