@@ -38,7 +38,7 @@ import { EditWordsButton } from './email-words.js';
 
 const html = htm.bind(h);
 
-const WRITTEN_ON = 'November 6, 2026';
+const WRITTEN_ON = 'November 24, 2026';
 const API = '/api/messages-admin';
 
 // ─── Live check helpers ───────────────────
@@ -317,6 +317,13 @@ const MAP = { t: 'Everything we send', children: [
           touches: ['Kit', 'JobTread', 'D1'], where: 'functions/api/_reveal-invite-kit.js (syncKitInvite, kind watch) · _reveal-invite-email.js (watch)',
           info: 'It never has the family’s address or the guests’ notes, whatever JobTread says. A change to the address or notes doesn’t touch it. Who it goes to is left to staff in Kit. A draft deleted in Kit stays deleted. Rehearsals on TEST jobs leave Kit alone.',
           live: first(needs('kit', NO_KIT), () => ON()) },
+        { t: 'Press release (Gmail draft)', s: 'live', k: 'gmail', by: 'auto', preview: 'press-release', change: CHANGE.invites,
+          who: 'The press list in Reveals → Invites → Press release, in Bcc, once Linzi sends the draft from her Gmail. Nobody before that.',
+          when: 'Reveal Date Confirmed turns Yes in JobTread with a time and the kid’s page is published, or staff press Draft press release on that kid’s reveal in Reveals → Now. A new day, time, address or notes, a new press list or new standing words rewrite the draft while nobody has changed it in Gmail; once she has, she’s emailed what changed instead.',
+          subject: 'Press Release: Sunshine on a Ranney Day Unveiling for {kid}’s {room}',
+          does: 'Laid out like the one Linzi sent for Max: the circle logo, PRESS RELEASE, the headline, WHAT (who, what, when and where with the age from JobTread’s Birthday, a few sentences from the kid’s story, the room’s sponsors), WHEN, WHERE with JobTread’s notes, WHY, MEDIA AVAILABILITY, ABOUT, the media contact, two of the kid’s photos and her Gmail signature. The site never sends it.',
+          touches: ['Gmail', 'Workers AI', 'JobTread', 'D1'], where: 'functions/api/_reveal-press.js (syncPressRelease, pressRelease)',
+          info: 'Drafted in the sender’s own Gmail through the site’s Google delegation. Sent or deleted there, the site never makes another unless someone presses Draft it again. Rehearsals on TEST jobs and community projects are left out.' },
         { t: 'Test invite taken back', s: 'live', k: 'invite', by: 'auto', key: 'invite-cancel',
           who: 'Whoever was on a TEST invite: the office sandbox job, or a Send it to me copy.',
           when: 'The site takes a test invite back. A real reveal’s invite is never cancelled by the site: staff do that in Google Calendar, after the “Invite still out” email.',
@@ -655,6 +662,12 @@ const MAP = { t: 'Everything we send', children: [
           subject: 'Review {kid}’s reveal invite in Kit',
           does: 'The day, the place and who it goes to, with a button straight to the draft in Kit.',
           touches: ['Resend'], where: 'functions/api/_reveal-invite-kit.js (reviewNote)' },
+        { t: 'Your press release is in your drafts', s: 'live', k: 'email', by: 'auto', preview: 'staff-press-review', change: CHANGE.invites,
+          who: 'Whoever it’s drafted for (Linzi), by email only. When it can’t be drafted on two looks in a row: the invite alert list.',
+          when: 'The press release is drafted, JobTread changes what it says (the draft is rewritten, or she edited it, or it already went out), or JobTread says the reveal may be off or back on.',
+          subject: '{kid}’s press release is in your Gmail drafts',
+          does: 'The day, the place and the notes, with a button straight to the draft in her Gmail.',
+          touches: ['Resend'], where: 'functions/api/_reveal-press.js (pressNote)' },
         { t: 'Check who an email in Kit goes to', s: 'live', k: 'email', by: 'auto', preview: 'staff-kit-audience',
           who: 'Linzi and Peter (the reviewers), by email only.',
           when: 'An email written in Kit, not sent yet, is set to go to all subscribers and would reach people who signed up for reveal emails only, or families waiting only for applications to open. One email for each look (every 4 minutes) that finds any, listing them all; each is listed once (again only if what it reaches changes).',
