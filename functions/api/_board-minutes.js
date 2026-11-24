@@ -855,19 +855,21 @@ export async function approvedFileNo(env, fileId, { kind = null } = {}) {
  * → { meeting, approvedPrev: id | null, prevApproved: { id, date, title } | null, filesOff: [file id], replaced: { name, fileId, fileKept, left, prevBack } | null,
  *     read: { attendance: { here, of }, notes, motions, actions, ai } }
  */
-export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now(), dry = false, anyway = false } = {}) {
+export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now(), dry = false, anyway = false, staged = null } = {}) {
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
   // Typed and sent, the minutes change in the notes: a file read over them changes who was there, can take items off the
   // agenda, and a re-send can't put that back
   // (with the meeting as the site has it, for a tab that still shows them as a file's: Board QA round 12)
   if (m.minutesFrom?.typed) throw Object.assign(new Error(TYPED_WORDS), { status: 409, typed: true, extra: { meeting: m } });
-  const f = m.files.find((x) => x.id === fileId);
-  const row = f && await env.DB.prepare('SELECT r2_key FROM board_files WHERE id = ? AND owner_type = ? AND owner_id = ?').bind(fileId, 'meeting', id).first();
+  // (`staged`: a file whose bytes are kept and whose row goes in the meeting's own write below, { file, insert, bytes }:
+  // the secretary's, so minutes that aren't read in leave no file on the meeting. Board QA round 14)
+  const f = staged ? staged.file : m.files.find((x) => x.id === fileId);
+  const row = staged ? { staged: true } : f && await env.DB.prepare('SELECT r2_key FROM board_files WHERE id = ? AND owner_type = ? AND owner_id = ?').bind(fileId, 'meeting', id).first();
   if (!f || !row) throw Object.assign(new Error('That file isn’t on this meeting'), { status: 404 });
-  const obj = await boardFiles(env)?.get(row.r2_key);
-  if (!obj) throw Object.assign(new Error('That file is gone'), { status: 404 });
-  const bytes = new Uint8Array(await new Response(obj.body).arrayBuffer());
+  const obj = staged ? null : await boardFiles(env)?.get(row.r2_key);
+  if (!staged && !obj) throw Object.assign(new Error('That file is gone'), { status: 404 });
+  const bytes = staged ? staged.bytes : new Uint8Array(await new Response(obj.body).arrayBuffer());
   const [people, meetings] = await Promise.all([minutesPeople(env.DB), listMeetings(env.DB)]);
   const prev = meetings.filter((x) => x.id !== m.id && !x.notBoard && !x.practice && isDate(x.date) && x.date < m.date).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
   // Minutes read in here already, whose read Undo can still take off: replaced, read onto the meeting as it was before them
@@ -932,22 +934,25 @@ export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now
     gone = ownMinutesFiles(cur).filter((x) => x.id !== fileId && !(took && x.id === rec.fileId));
     was = took ? took.next : bare ? readOff(cur) : cur;
     return applyMinutes(was, read, { fileName: f.name, now });
-  });
-  if (f.kind !== 'minutes' && f.kind !== 'signed') await updateFile(env.DB, fileId, { kind: 'minutes' });
+  }, { by: '', also: staged ? [staged.insert] : [] });
+  // (read in from here on: what follows is kept as it can be, and a step of it that fails never turns the answer into
+  // "nothing was changed" over minutes that are on the meeting. Board QA round 14)
+  const after2 = (what, p) => p.catch((err) => { console.error('[board-minutes] after the read', what, id, err?.message || err); return null; });
+  if (f.kind !== 'minutes' && f.kind !== 'signed') await after2('its kind', updateFile(env.DB, fileId, { kind: 'minutes' }));
   // The replaced read's own file, the last meeting's approval it made, and its Undo record: off, as Undo takes them off
   const replaced = took ? { name: rec.after.minutesFrom?.name || '', ...(await afterTakenOff(env, rec, m, after, took, { by })) } : null;
   // Which minutes file the meeting keeps is the site's to say, from the meeting as this write found it, never a page's
   // copy: the one these minutes are read from, and nothing of the minutes before them (a signed record stays). Board QA
   // round 9, Nov 22 2026: a page that hadn't seen the email reader's minutes left both files on the board page
   const filesOff = took && !replaced.fileKept ? [{ id: rec.fileId, name: m.files.find((x) => x.id === rec.fileId)?.name || replaced.name }] : [];
-  for (const x of gone) if (!(await fileLocked(env.DB, x.id)) && await deleteFile(env, x.id)) filesOff.push({ id: x.id, name: x.name });
+  for (const x of gone) if (await after2('an earlier file', (async () => !(await fileLocked(env.DB, x.id)) && deleteFile(env, x.id))())) filesOff.push({ id: x.id, name: x.name });
   let approvedPrev = null;
   let approved = null;
   // (the last meeting as it is now: the replaced read may have just put its approval back)
   const last = prev && replaced?.prev?.id === prev.id ? replaced.prev : prev;
   if (read.approvedPrev && last && last.minutes !== 'approved') {
-    approved = await approveMinutes(env, last.id, { on: m.date, by });
-    approvedPrev = last.id;
+    approved = await after2('the last meeting’s approval', approveMinutes(env, last.id, { on: m.date, by }));
+    if (approved) approvedPrev = last.id;
   }
   // The last meeting's minutes as this read found them and as it leaves them (a replaced read's approval off, these
   // minutes' own on), for Undo to put back as found
@@ -955,16 +960,17 @@ export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now
   const foundPrev = touched && (touched.id === prev?.id ? approvalOf(prev) : { minutes: 'approved', approvedOn: rec?.prev?.approvedOn || '' });
   const leftPrev = touched && approvalOf(approved || touched);
   if (was && after) {
-    await writeState(env.DB, UNDO_KEY(id), {
+    await after2('its Undo record', writeState(env.DB, UNDO_KEY(id), {
       fileId, at: new Date(now).toISOString(), by, before: undoShape(was), after: undoShape(after),
       // Undo of a Replace (or of a read over the email reader's minutes) is the meeting as it was before it, the earlier
       // minutes on it again: never left with none. Board QA round 9, Nov 22 2026: Undo right after Replace left no minutes
       ...(found !== was ? { found: undoShape(found) } : {}), filesOff,
       prev: approved ? { id: last.id, approvedOn: approved.approvedOn, before: { minutes: last.minutes, approvedOn: last.approvedOn || '' } } : null,
       prevFound: touched && JSON.stringify(foundPrev) !== JSON.stringify(leftPrev) ? { id: touched.id, before: foundPrev, after: leftPrev } : null,
-    });
+    }));
   }
-  const meeting = await getMeeting(env.DB, id);
+  // (the meeting as it is now, or as the read's own write left it when that read fails)
+  const meeting = (await after2('reading it back', getMeeting(env.DB, id))) || after;
   const board = meeting.attendance.filter((p) => p.kind === 'board');
   return {
     meeting, approvedPrev,
@@ -1243,11 +1249,17 @@ export async function secretarySends(env, id, file, w, { now = Date.now(), anywa
     if (other) throw Object.assign(new Error(otherMeetingWords(m, other)), { status: 409, other });
   }
   const by = w.member?.email || w.adminEmail || '';
-  const f = await putFile(env, { ownerType: 'meeting', ownerId: id, file, kind: 'minutes', by });
+  // The file's bytes kept first, its row written in the meeting's own write (putFile's stage): minutes that aren't read
+  // in leave no file on the meeting, and a database that didn't answer before that write changed nothing, said so (Board
+  // QA round 14, Nov 24 2026: the file's row went in, a read after it failed, and the file stayed on the meeting as its
+  // minutes, not read in, with "Something went wrong")
+  const { insert, drop, ...f } = await putFile(env, { ownerType: 'meeting', ownerId: id, file, kind: 'minutes', by, stage: true });
   let r;
   try {
-    r = await readMinutesInto(env, id, f.id, { by, now, anyway: true });
+    r = await readMinutesInto(env, id, f.id, { by, now, anyway: true, staged: { file: f, insert, bytes: new Uint8Array(await file.arrayBuffer()) } });
   } catch (err) {
+    // (not read in: its bytes go back, nothing names them; one the site can't tell yet keeps them, its row may name them)
+    if (!err?.extra?.unsure) await drop().catch((e) => console.error('[board-minutes] the staged file', e?.message || e));
     // (refused as the minutes on the meeting are: in words for the secretary's page, naming nothing only founders see)
     // (never the meeting as Board keeps it, which a founder's refusal carries: its private notes and staff-only files)
     if (err?.extra?.meeting) { const { meeting: _, ...rest } = err.extra; err.extra = rest; }
@@ -1255,7 +1267,7 @@ export async function secretarySends(env, id, file, w, { now = Date.now(), anywa
     else if (err?.why === 'untold') err.message = SECRETARY_UNTOLD;
     else if (err?.why === 'lost') err.message = SECRETARY_LOST;
     // A clear no (not minutes): it doesn't stay on the meeting as its minutes, for the board or the agenda email to find
-    if (err?.status && await deleteFile(env, f.id).then(() => true, () => false)) err.message = `${err.message.replace(/\.?$/, '.')} It wasn’t kept.`;
+    if (err?.status && err.status < 500) err.message = `${err.message.replace(/\.?$/, '.')} It wasn’t kept.`;
     throw err;
   }
   return { read: r.read, approvedPrev: !!r.approvedPrev };

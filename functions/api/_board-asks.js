@@ -1659,7 +1659,11 @@ async function reviewFor(env, { meetings, today }) {
 const NOTE_KEY = /^(act|pos|bud)\|.{1,400}$/s;
 
 /** A note on one line of the statements (or the budget), by who presents the item → that item's notes */
-export async function saveLineNote(env, { meetingId, itemId, key, line = '', text = '' }, { member = null, admin = false, adminEmail = '' } = {}) {
+export async function saveLineNote(env, note, w = {}) {
+  // (one write, every read before it: the database failing anywhere changed nothing, said so. Board QA round 14)
+  return savingLineNote(env, note, w).catch(nothingDone());
+}
+async function savingLineNote(env, { meetingId, itemId, key, line = '', text = '' }, { member = null, admin = false, adminEmail = '' } = {}) {
   await ensureAsks(env.DB);
   if (!NOTE_KEY.test(String(key || ''))) throw err('Which line?', 400);
   // Who may write on the item: the same as for its report (presenterGate), in this note's own words
@@ -1681,12 +1685,21 @@ export async function saveLineNote(env, { meetingId, itemId, key, line = '', tex
     by = { slug: '', name: people.find((p) => p.group !== 'board' && String(p.name || '').toLowerCase().startsWith(first))?.name || first };
   }
   const words = String(text || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, NOTE_MAX);
-  if (!words) await env.DB.prepare('DELETE FROM board_line_notes WHERE meeting_id = ? AND item_id = ? AND key = ?').bind(m.id, it.id, key).run();
-  else {
-    await env.DB.prepare('INSERT OR REPLACE INTO board_line_notes (meeting_id, item_id, key, line, text, by_slug, by_name, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(m.id, it.id, key, String(line || '').slice(0, 200), words, by.slug, by.name, nowIso()).run();
+  // The item's notes as they are, read before the write: the answer is these with this one written in, never a read after
+  // it (Board QA round 14, Nov 24 2026: the note was kept, a read after it failed, and the presenter was told something
+  // went wrong). The write, its answer lost, is looked at: kept as written, or nothing changed
+  const had = (await notesFor(env.DB, [m.id]))[m.id]?.[it.id] || [];
+  const at = nowIso();
+  const mine = { key, line: String(line || '').slice(0, 200), text: words, by: by.name, at };
+  if (!words) {
+    await landedOr(() => env.DB.prepare('DELETE FROM board_line_notes WHERE meeting_id = ? AND item_id = ? AND key = ?').bind(m.id, it.id, key).run(),
+      async () => !(await env.DB.prepare('SELECT 1 AS y FROM board_line_notes WHERE meeting_id = ? AND item_id = ? AND key = ?').bind(m.id, it.id, key).first()));
+  } else {
+    await landedOr(() => env.DB.prepare('INSERT OR REPLACE INTO board_line_notes (meeting_id, item_id, key, line, text, by_slug, by_name, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(m.id, it.id, key, mine.line, words, by.slug, by.name, at).run(),
+    async () => !!(await env.DB.prepare('SELECT 1 AS y FROM board_line_notes WHERE meeting_id = ? AND item_id = ? AND key = ? AND text = ? AND at = ?').bind(m.id, it.id, key, words, at).first()));
   }
-  return { notes: (await notesFor(env.DB, [m.id]))[m.id]?.[it.id] || [] };
+  return { notes: [...had.filter((x) => x.key !== key), ...(words ? [mine] : [])] };
 }
 
 /** The notes on these meetings: { meetingId: { itemId: [{ key, line, text, by, at }] } } */

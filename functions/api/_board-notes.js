@@ -32,7 +32,7 @@
  * what a founder changed in Board since stays theirs, and is said.
  */
 
-import { getMeeting, patchTogether, listMeetings, getSettings, putFile, stageRewrite, fileRowOf, takeFileOff, bytesOff, roster, ID, addressesNow, boardFiles } from './_board.js';
+import { getMeeting, patchTogether, listMeetings, getSettings, putFile, stageRewrite, fileRowOf, takeFileOff, bytesOff, roster, ID, addressesNow, boardFiles, claimOwn, claimToken, landedOr, nothingDone } from './_board.js';
 import { namesIn } from './_member-places.js';
 import { asSend, readDown } from './_board-roles.js';
 import { mergeAttendance, minutesPeople } from './_board-minutes.js';
@@ -152,7 +152,18 @@ export async function notesFor(env, id, w, { quick = false } = {}) {
  * what each box of words started from; `wasText`: the same for a row's words. Words saved over it since by someone else
  * stay: → { at, clashes: [{ key, theirs, field }] } (`field: 'text'`: a row's words, and the whole row waits for the choice)
  */
-export async function saveNotes(env, id, { changes: sentChanges, was: sentWas = null, wasText = null } = {}, w, { now = Date.now() } = {}) {
+export async function saveNotes(env, id, notes = {}, w, opts = {}) {
+  // (one write, every read before it: the database failing anywhere changed nothing, said so; its answer lost, looked
+  // at. Board QA round 14)
+  return savingNotes(env, id, notes, w, opts).catch(nothingDone());
+}
+/** Whether the notes' row has a patch in it: each box as the patch leaves it (json_patch: null takes a box or a field off) */
+const hasPatch = (data, patch) => Object.entries(patch).every(([k, v]) => {
+  if (v === null) return !(k in data);
+  if (v && typeof v === 'object' && !Array.isArray(v)) return !!data[k] && typeof data[k] === 'object' && Object.entries(v).every(([f, x]) => (x === null ? !(f in data[k]) : JSON.stringify(data[k][f]) === JSON.stringify(x)));
+  return JSON.stringify(data[k]) === JSON.stringify(v);
+});
+async function savingNotes(env, id, { changes: sentChanges, was: sentWas = null, wasText = null } = {}, w, { now = Date.now() } = {}) {
   const m = await meetingFor(env, id, w);
   if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
   if (!sentChanges || typeof sentChanges !== 'object' || Array.isArray(sentChanges)) throw no('What changed?', 400);
@@ -197,9 +208,14 @@ export async function saveNotes(env, id, { changes: sentChanges, was: sentWas = 
   const took = w.member?.seat === 'secretary' ? w.member.name || '' : '';
   // Saying a line isn't a to-do changes nothing the minutes say: sent minutes stay sent
   const quiet = entries.every(([k]) => k === 'skipped') ? 1 : 0;
-  const r = await env.DB.prepare(`INSERT INTO board_minutes_notes (meeting_id, data, updated_at, updated_by, took) VALUES (?1, json_patch('{}', ?2), ?3, ?4, NULLIF(?6, ''))
-    ON CONFLICT(meeting_id) DO UPDATE SET data = json_patch(data, ?2), updated_at = CASE WHEN ?7 = 1 THEN updated_at ELSE ?3 END, updated_by = ?4, took = CASE WHEN json_patch(data, ?2) = '{}' THEN NULL ELSE COALESCE(took, NULLIF(?6, '')) END WHERE length(data) + length(?2) < ?5`).bind(id, json, at, by, MAX_ROW, took, quiet).run();
-  if (!((r?.meta?.changes ?? r?.changes ?? 0) > 0)) throw no('These notes have grown too long to keep here. Send what you have, then keep going in a Word file.', 413);
+  // (its answer lost: kept if the row has this save in it, by this person, at this save's time. Board QA round 14)
+  const r = await landedOr(() => env.DB.prepare(`INSERT INTO board_minutes_notes (meeting_id, data, updated_at, updated_by, took) VALUES (?1, json_patch('{}', ?2), ?3, ?4, NULLIF(?6, ''))
+    ON CONFLICT(meeting_id) DO UPDATE SET data = json_patch(data, ?2), updated_at = CASE WHEN ?7 = 1 THEN updated_at ELSE ?3 END, updated_by = ?4, took = CASE WHEN json_patch(data, ?2) = '{}' THEN NULL ELSE COALESCE(took, NULLIF(?6, '')) END WHERE length(data) + length(?2) < ?5`).bind(id, json, at, by, MAX_ROW, took, quiet).run(),
+  async () => {
+    const row = await rowOf(env.DB, id);
+    return !!row && row.updated_by === by && (quiet || row.updated_at === at) && hasPatch(parse(row.data), patch);
+  });
+  if (!r?.lost && !((r?.meta?.changes ?? r?.changes ?? 0) > 0)) throw no('These notes have grown too long to keep here. Send what you have, then keep going in a Word file.', 413);
   return { at: quiet ? '' : at, clashes, ...told };
 }
 
@@ -489,12 +505,21 @@ export function withBox(notes, key, value) {
 }
 /** The JSON path to a box of the notes, whatever a person's key holds */
 export const boxPath = (key) => `$."${String(key).replace(/(["\\])/g, '\\$1')}"`;
-/** One thing at a time writes a meeting's kept notes: a send, or a correction. → whether this one holds it */
+/**
+ * One thing at a time writes a meeting's kept notes: a send, or a correction. The claim is when it was made and a token
+ * of the press's own (claimOwn): written with its answer lost, the press finds its token and goes on, never "These are
+ * being sent right now" to the press that sent them (Board QA round 14). → the claim (its own, to let go of), or ''
+ * while another has it
+ */
 export async function claimSending(DB, id, now = Date.now()) {
-  const claim = await DB.prepare('UPDATE board_minutes_notes SET sending = ?1 WHERE meeting_id = ?2 AND (sending IS NULL OR sending < ?3)').bind(iso(now), id, iso(now - 60000)).run();
-  return (claim?.meta?.changes ?? claim?.changes ?? 0) > 0;
+  // (when first: a claim older than a minute is taken over, compared as written)
+  const mine = `${iso(now)}#${claimToken()}`;
+  const got = await claimOwn(() => DB.prepare('UPDATE board_minutes_notes SET sending = ?1 WHERE meeting_id = ?2 AND (sending IS NULL OR sending < ?3)').bind(mine, id, iso(now - 60000)).run(),
+    async () => (await DB.prepare('SELECT sending FROM board_minutes_notes WHERE meeting_id = ?').bind(id).first())?.sending === mine);
+  return got ? mine : '';
 }
-export const releaseSending = (DB, id) => DB.prepare('UPDATE board_minutes_notes SET sending = NULL WHERE meeting_id = ?').bind(id).run();
+/** That claim let go of (only this press's own: one that took over a stale one stays) */
+export const releaseSending = (DB, id, mine) => DB.prepare('UPDATE board_minutes_notes SET sending = NULL WHERE meeting_id = ? AND sending = ?').bind(id, String(mine || '')).run();
 
 /** Anything at all typed in a box, whether or not it can go in yet */
 const typedIn = (notes) => Object.entries(notes).some(([k, v]) => k !== 'skipped' && (v && typeof v === 'object' ? Object.values(v).some((x) => x !== null && x !== '') : !!v && v !== 'absent'));
@@ -520,7 +545,7 @@ export const notesWaiting = async (DB) => (await notesState(DB)).waiting;
  * → { read: { attendance, notes, motions, actions, ai }, approvedPrev, sent, kept, cleared }
  */
 export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
-  let claimed = false;
+  let claimed = '';
   let landed = false;
   // Made before the step and taken back should it not land: this send's Word file (its bytes kept, its row going in with
   // the rest), and the Word file of the minutes its vote approves, brought up to what they say
@@ -534,8 +559,8 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
     if (held.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
     const nothing = (x) => !anythingIn(parse(x?.data)) && !parse(x?.sent).at;
     if (nothing(await rowOf(env.DB, id))) throw no('Nothing is typed yet', 400);
-    if (!await claimSending(env.DB, id, now)) throw no('These are being sent right now. Give it a moment.', 409);
-    claimed = true;
+    claimed = await claimSending(env.DB, id, now);
+    if (!claimed) throw no('These are being sent right now. Give it a moment.', 409);
     for (let tries = 1; ; tries++) {
       // (read with the claim held: a send or a correction that finished a moment ago is what this goes from)
       const m = await getMeeting(env.DB, id);
@@ -680,7 +705,7 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
     await drop();
     throw err?.status ? err : readDown(NOTES_NOT_SENT, err);
   } finally {
-    if (claimed) await releaseSending(env.DB, id).catch((err) => console.error('[board-notes] the send claim', id, err?.message || err));
+    if (claimed) await releaseSending(env.DB, id, claimed).catch((err) => console.error('[board-notes] the send claim', id, err?.message || err));
   }
 }
 
