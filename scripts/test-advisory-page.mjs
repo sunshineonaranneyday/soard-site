@@ -190,7 +190,7 @@ function adminPost(w, b, res) {
     a.welcomed = { ...a.welcomed, [x.slug]: at };
     return json(res, 200, { ok: true, sent: 1, again: !!had, at });
   }
-  if (b.action === 'send-welcome') { const fresh = (b.slugs || []).filter((x) => !a.welcomed?.[x]); a.welcomed = { ...a.welcomed, ...Object.fromEntries(fresh.map((x) => [x, new Date().toISOString()])) }; return json(res, 200, { ok: true, sent: fresh.length, failed: 0 }); }
+  if (b.action === 'send-welcome') { const fresh = (b.slugs || []).filter((x) => !a.welcomed?.[x]); a.welcomed = { ...a.welcomed, ...Object.fromEntries(fresh.map((x) => [x, new Date().toISOString()])) }; return json(res, 200, { ok: true, sent: fresh.length, failed: 0, said: fresh.length ? `Sent to ${fresh.length === 1 ? '1 Advisory Board member' : `${fresh.length} Advisory Board members`}.` : 'Nothing went out: they’ve all had it already.' }); } /* r26: the server says what happened (./_advisory-mail.js welcomesSaid), and the page says its words */
   if (b.action === 'set-term') { w.terms = [...(w.terms || []), b]; return json(res, 200, { ok: true }); }
   if (b.action === 'save-settings') { if (b.settings.campaignUrl && !/^https:/.test(b.settings.campaignUrl)) b.settings.campaignUrl = `https://${b.settings.campaignUrl}`; a.settings = { ...a.settings, ...b.settings }; return json(res, 200, { ok: true, settings: a.settings }); }
   if (b.action === 'hosted-status') { a.hosted = a.hosted.map((x) => (x.id === b.id ? { ...x, status: b.status, date: b.date, giveUrl: b.giveUrl } : x)); return json(res, 200, { ok: true, hosted: a.hosted.find((x) => x.id === b.id) }); }
@@ -233,7 +233,7 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream', ...(file.endsWith('.html') ? { 'Content-Security-Policy': CSP } : {}) });
   res.end(servesPage(file, readFileSync(file)));
 });
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
+await new Promise((r) => server.listen(Number(process.env.PORT || 0), '127.0.0.1', r)); /* r26: a port of the runner's own (PORT), else any */
 const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 
 // The top bar holds six tabs, seven for whoever runs the group, at every width between a phone and a wide screen
@@ -808,7 +808,9 @@ for (const width of [390, 1280]) {
       [{ signedIn: true }, 'has signed in already, so they weren’t emailed'],
       [{ notReady: true, why: 'sign-in' }, 'Cloudflare usually takes a new one within a few minutes'],
       [{ notReady: true, why: 'setup' }, 'Peter or Holly can see what’s left on Board → Members'],
-      [{ sent: 1, again: true, unsure: true, at: new Date(Date.now() - 11 * 60 * 1000).toISOString() }, 'may have gone. It’s counted as sent'],
+      /* r26: only the email service's yes is "sent": no answer that says either way is owed (it goes by itself under its key), and its own no is a refusal */
+      [{ owed: 1 }, 'sign-in email goes in a few minutes'],
+      [{ refused: 1 }, 'The email service refused'],
       [{ failed: 1 }, 'the email service didn’t take it'],
       [{ tooSoon: true, at: new Date().toISOString() }, 'It can go again at'],
     ]) {

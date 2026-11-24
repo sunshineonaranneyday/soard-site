@@ -818,7 +818,7 @@ test('the sign-in email the email service didn’t take: the box says it goes ag
   globalThis.fetch = async (input, init) => (new URL(typeof input === 'string' ? input : input.url).host === 'api.resend.com'
     ? Response.json({ message: 'Resend is down' }, { status: 500 }) : withResend(input, init));
   const r = await admin('POST', { person: { id: app.id, slug: 'jordan-avery' } });
-  assert.deepEqual(r.welcome, { waiting: true, why: 'send' });
+  assert.deepEqual(r.welcome, { waiting: true, why: 'owed' }); /* r26: a 5xx says nothing either way, so the welcome stays owed under its key for the heartbeat (said "goes in a few minutes") */
   assert.equal(r.application.status, 'joined');
   globalThis.fetch = withResend;
   sent.emails.length = 0;
@@ -867,7 +867,7 @@ test('a welcome claimed before it goes: two sends at once email once; one that f
   await addedOnPeople('lee-fail', 'Lee Fail', 'lee@example.org');
   const ok = globalThis.fetch;
   globalThis.fetch = async (input, init) => (new URL(typeof input === 'string' ? input : input.url).host === 'api.resend.com' ? Response.json({ message: 'down' }, { status: 500 }) : ok(input, init));
-  assert.deepEqual(await sendWelcome(env, { slugs: ['lee-fail'] }), { sent: 0, failed: 1 });
+  assert.deepEqual(await sendWelcome(env, { slugs: ['lee-fail'] }), { sent: 0, failed: 0, owed: 1, refused: 0, going: 0, had: 0 }); /* r26: Resend's 500 leaves it owed (put back, and written down with its key), never counted as sent or lost */
   globalThis.fetch = ok;
   assert.equal((await welcomedSlugs(env.DB))['lee-fail'], undefined);
   assert.equal((await sendWelcome(env, { slugs: ['lee-fail'] })).sent, 1);

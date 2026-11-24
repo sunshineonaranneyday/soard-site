@@ -234,7 +234,7 @@ for (const width of [1280, 390]) {
     await addIntro(DB, `nan-noemailqa${W}`, { name: `Lou Introqa${W}`, company: 'Testco' });
     const page = await open('/admin/__run.html', width, '.ar-card');
     const line = (t) => page.evaluate((x) => { const r = [...document.querySelectorAll('.ar-row')].find((y) => y.textContent.includes(x)); return r ? [...r.querySelectorAll('.ar-small')].map((p) => p.textContent.trim()).join(' ') : null; }, t);
-    ok((await line(`Lou Introqa${W}`)) === 'Nan has no email on file, so changing this emails nobody.', `${width}: no email on file: never "Changing this emails Nan" (${await line(`Lou Introqa${W}`)})`);
+    ok((await line(`Lou Introqa${W}`)) === 'Nan has no email of their own on file, so changing this emails nobody.', `${width}: no email on file: never "Changing this emails Nan" (${await line(`Lou Introqa${W}`)})`); /* r26: the words from the one rule every member email takes (no email of their own: none, a group inbox or a staff address) */
     ok((await line(`Pat Introqa${W}`)) === 'Changing this emails Nell.', `${width}: with one: "Changing this emails Nell." (${await line(`Pat Introqa${W}`)})`);
     await page.close();
   }

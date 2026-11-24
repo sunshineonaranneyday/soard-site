@@ -610,7 +610,20 @@ export async function countNew(DB) {
 export async function setAdvisoryStatus(DB, id, status, { by = null, now = Date.now() } = {}) {
   if (!STATUS_IDS.has(status)) throw Object.assign(new Error('Unknown status'), { status: 400 });
   await ensureAdvisorySchema(DB);
-  return asWritten(DB.prepare('UPDATE advisory_applications SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE id = ? RETURNING *').bind(status, iso(now), by, iso(now), id));
+  // The answer comes from the write itself (RETURNING). One whose answer was lost is looked at, by what this write alone
+  // wrote (its status, its moment, who pressed): there, it's answered as saved; not, nothing was changed (503); the look
+  // failing too, it can't be told (503). Advisory Board QA round 26: Not now had saved and the toast said it hadn't
+  // (Board's landedOr is the model, as the note's save below)
+  try {
+    return await asWritten(DB.prepare('UPDATE advisory_applications SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE id = ? RETURNING *').bind(status, iso(now), by, iso(now), id));
+  } catch (e) {
+    if (e?.status) throw e;
+    console.error('[advisory] an application’s status', e?.message || e);
+    const now2 = await DB.prepare('SELECT * FROM advisory_applications WHERE id = ?').bind(id).first().catch(() => undefined);
+    if (now2 === undefined) throw Object.assign(new Error('The site’s database didn’t answer just now, so we can’t tell yet whether that saved. This shows the application as it is now.'), { status: 503 });
+    if (now2 && now2.status === status && now2.status_at === iso(now) && (now2.status_by ?? null) === (by ?? null)) return fromRow(now2, { full: true });
+    throw Object.assign(new Error('The site’s database didn’t answer just now, so nothing was changed. Please try again in a moment.'), { status: 503 });
+  }
 }
 
 export const NOTE_MAX = 4000;
@@ -738,6 +751,8 @@ export async function deleteAdvisoryApplication(env, id, { fetchImpl = fetch } =
     const r = await DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(id).run();
     return !!r?.meta?.changes;
   } catch (e) {
+    // (its answer lost: gone is deleted, never said as stopped: Advisory Board QA round 26)
+    if (await DB.prepare('SELECT 1 AS x FROM advisory_applications WHERE id = ?').bind(id).first().then((x) => !x, () => false)) return true;
     if (!gone && await unmark()) throw e;
     console.error('[advisory] delete stopped partway', e?.message || e);
     throw Object.assign(new Error(UNFINISHED), { status: 500 });

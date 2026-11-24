@@ -79,7 +79,7 @@ beforeEach(async () => {
     if (url.host === 'api.resend.com') {
       if (resendSilent === 'throw') { sent.push(...[JSON.parse(init.body)].flat()); throw new Error('The operation was aborted due to timeout'); }
       if (resendSilent) { sent.push(...[JSON.parse(init.body)].flat()); return new Response('Bad gateway', { status: resendSilent }); }
-      if (resendDown) return Response.json({ message: 'down' }, { status: 500 });
+      if (resendDown) return Response.json({ message: 'down' }, { status: 422 }); /* r26: Resend's own no is a 4xx (a 5xx now leaves the welcome owed under its key, Advisory Board QA round 26) */
       const batch = [JSON.parse(init.body)].flat();
       sent.push(...batch);
       return Response.json({ data: batch.map((_, i) => ({ id: `em${i}` })) });
@@ -129,7 +129,7 @@ test('with the Advisory Board’s emails off, a press on their row sends their s
 
 test('the switch still holds what the site sends by itself: Send the sign-in email to everyone stays off', async () => {
   const r = await onRequestPost({ ...as({ boardMember: MARY }), request: new Request('https://x/api/advisory-admin', { method: 'POST', body: JSON.stringify({ action: 'send-welcome', slugs: ['ada-advisor', 'ben-advisor'] }) }) });
-  assert.deepEqual(await r.json(), { ok: true, off: true, sent: 0 });
+  assert.deepEqual(await r.json(), { ok: true, off: true, sent: 0, said: 'Nothing went out: emails are off.' }); /* r26: the group's words come from the server's facts (welcomesSaid) */
   assert.equal(welcomes().length, 0);
 });
 
@@ -193,7 +193,7 @@ test('it waits for the sign-in to know them: Cloudflare not answering, or the si
 test('a send the email service turns down is not counted: the first can be pressed again at once, and Send it again keeps the earlier date', async () => {
   resendDown = true;
   const r = await press('ada-advisor');
-  assert.equal(r.failed, 1);
+  assert.equal(r.refused, 1); /* r26: Resend's own no is said as a refusal */
   assert.equal(await record('ada-advisor'), undefined);
   assert.equal((await rowOf('ada-advisor')).welcome.at, undefined, 'the row still offers Send the sign-in email');
   resendDown = false;
@@ -201,7 +201,7 @@ test('a send the email service turns down is not counted: the first can be press
   assert.equal((await press('ada-advisor')).sent, 1);
   const first = (await record('ada-advisor')).at;
   resendDown = true;
-  assert.equal((await sendWelcomeTo(env, 'ada-advisor', { now: t0 + AGAIN_MS + 1000 })).failed, 1);
+  assert.equal((await sendWelcomeTo(env, 'ada-advisor', { now: t0 + AGAIN_MS + 1000 })).refused, 1); /* r26: said as a refusal */
   assert.equal((await record('ada-advisor')).at, first, 'still had it, on the day it really went');
   assert.equal((await rowOf('ada-advisor')).welcome.at, first);
 });
@@ -245,29 +245,48 @@ test('a hidden member (Add makes them hidden) is sent theirs like anyone on the 
   assert.deepEqual(welcomes().map((e) => [e.to].flat()[0]), ['dee@private.example']);
 });
 
-test('no answer from the email service (a timeout, a gateway’s 503) is counted as sent, unconfirmed: a second press or the switch never sends a second copy', async () => {
+/* r26: no answer that says either way (a timeout, a gateway's 503) is no longer counted as sent: it stays owed, written
+ * down with its key, and the heartbeat (or a second press) asks Resend again under that same key, which never sends a
+ * second (Advisory Board QA round 26). Resend is faked here as it is: the same key again sends nothing new */
+test('no answer from the email service (a timeout, a gateway’s 503) is owed, never counted as sent: the heartbeat sends it with the switch off, and a second press or the switch never sends a second copy', async () => {
+  const keyed = globalThis.fetch;
+  const keys = new Set();
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url);
+    const key = init.headers?.['Idempotency-Key'];
+    if (url.host === 'api.resend.com' && key && keys.has(key)) return Response.json({ data: [{ id: 'again' }] });
+    // (kept as Resend takes it: one whose answer was lost, or a gateway's 503 in front of it, went all the same here)
+    if (url.host === 'api.resend.com' && key && !resendDown) keys.add(key);
+    return keyed(input, init);
+  };
   for (const silent of ['throw', 503]) {
     sent = [];
+    keys.clear();
     await writeState(env.DB, 'advisory-mail', {});
     await saveSettings(env.DB, { emails: false });
     resendSilent = silent;
     const r = await press('ada-advisor');
-    assert.equal(r.sent, 1, String(silent));
-    assert.equal(r.unsure, true, String(silent));
-    assert.equal((await record('ada-advisor')).unconfirmed, true);
-    assert.deepEqual(Object.keys((await rowOf('ada-advisor')).welcome).sort(), ['at', 'unconfirmed']);
+    assert.equal(r.owed, 1, String(silent));
+    assert.equal(r.sent, undefined, String(silent));
+    assert.equal(await record('ada-advisor'), undefined, 'not marked had');
+    assert.deepEqual((await rowOf('ada-advisor')).welcome, { owed: true }, 'the row: goes in a few minutes, never "going out now"');
     resendSilent = null;
+    // (a person's press: the heartbeat sends it with the switch off, as the press would have)
+    await sendWaitingWelcomes(env);
+    assert.equal(welcomes().length, 1, `the one that may have gone, once (${silent})`);
+    assert.ok((await record('ada-advisor')).at, 'marked had');
     assert.equal((await press('ada-advisor')).tooSoon, true, 'pressed again at once: held');
     await saveSettings(env.DB, { emails: true });
     await sendWelcome(env, { slugs: ['ada-advisor'] });
     await sendWaitingWelcomes(env);
-    assert.equal(welcomes().length, 1, `only the one that may have gone (${silent})`);
+    assert.equal(welcomes().length, 1, `still once (${silent})`);
   }
+  globalThis.fetch = keyed;
   // Resend's own refusal is a sure no: not counted
   sent = [];
   await writeState(env.DB, 'advisory-mail', {});
   resendDown = true;
-  assert.equal((await press('ben-advisor')).failed, 1);
+  assert.equal((await press('ben-advisor')).refused, 1); /* r26: said as a refusal */
   assert.equal(await record('ben-advisor'), undefined);
 });
 
@@ -304,7 +323,7 @@ test('Send it again, claimed: the earlier date rides along while it goes, and a 
     return real(input, init);
   };
   resendDown = true;
-  assert.equal((await sendWelcomeTo(env, 'ada-advisor', { now: t0 + AGAIN_MS + 1000 })).failed, 1);
+  assert.equal((await sendWelcomeTo(env, 'ada-advisor', { now: t0 + AGAIN_MS + 1000 })).refused, 1); /* r26: said as a refusal */
   assert.equal(seen.at, first, 'while it went, her record still said when the last one went');
   assert.ok(seen.sending);
   assert.deepEqual(await record('ada-advisor'), { at: first, to: 'ada@private.example' });

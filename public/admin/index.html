@@ -20956,6 +20956,9 @@ ${sections || '<p>No one yet.</p>'}
             if (!r.ok || !d.ok) throw new Error(d.error || `status ${r.status}`);
             setEmail(null);
             reloadEmails();
+            // (an Advisory Board member's email that isn't their own, a SOARD group inbox or staff address: saved, and the
+            // server says their Advisory Board emails won't go there: Advisory Board QA round 26)
+            if (d.note) addToast(d.note, 'info');
           } catch (e) { addToast(`Saved, but the invite email didn’t: ${e.message}`, 'error'); }
         }
         if (wasNew) onSaved?.(rec.slug);
