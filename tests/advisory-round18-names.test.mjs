@@ -239,7 +239,7 @@ test('rule 7: Add keeps the name as typed; its web address changes only where th
     ['Mrs. Quill Ph. D.', 'quill'], ['Mrs. Quill M. Eng', 'quill'], ['Dr. QUILL MD', 'quill'], ['Mr. & Mrs. QUILL MBA', 'quill'], ['Quill, Mr. & Mrs. B.Arch', 'quill'],
     ['Jordan Ames Ph. D.', 'jordan-ames'],
     // (as before: the greeting's reading of marks, pronouns and commas never moves an address)
-    ['Jordan Ames, MS', 'jordan-ames'], ['Dr. Jordan Ames, MS', 'jordan-ames'], ['(Jo) Joanna Ames', 'jo-joanna-ames'], ['Jordan/Amy Rowe', 'jordan-amy-rowe'],
+    ['Jordan Ames, MS', 'jordan-ames'], ['Dr. Jordan Ames, MS', 'jordan-ames'], ['(Jo) Joanna Ames', 'joanna-ames' /* r24: rule 5, the address is the name's own words, never anything in brackets */], ['Jordan/Amy Rowe', 'jordan-rowe' /* r24: rule 5, never what follows a slash; as "Jordan & Amy Rowe" is at jordan-rowe */],
     ['-Jordan Ames', 'jordan-ames'], ['Jordan Rowe and family', 'jordan-rowe'], ['Mrs. Quill M.Eng', 'quill'],
   ]) {
     const app = await applied(typed, `r18.${++k}@example.org`);

@@ -109,7 +109,10 @@ export const EVENT_KINDS = ['asked', 'reminded', 'opened', 'consented', 'signed'
  * Write events (and the statements they go with) in one batch, each event's hash over the one before it.
  * `build()` → { stmts, events, result } is asked again when another writer got to the chain first (a UNIQUE
  * prev), so it decides on what's there then (a second device's signature already in, say); { result } alone
- * writes nothing. → result
+ * writes nothing. → result.
+ * `guard` ({ sql, bind }: a condition): the events go only while it holds, put in before the statements (which carry
+ * the same condition in their own WHERE), so both go or neither, and `after(results)` says which (a change written only
+ * over what was read: Board QA round 12, two founders changing one member's email at once)
  */
 export async function appendEvents(DB, build, { tries = 5 } = {}) {
   for (let attempt = 0; ; attempt++) {
@@ -118,6 +121,7 @@ export async function appendEvents(DB, build, { tries = 5 } = {}) {
     const head = await DB.prepare('SELECT hash FROM board_sign_events ORDER BY seq DESC LIMIT 1').first();
     let prev = head?.hash || 'genesis';
     const inserts = [];
+    const guard = plan.guard ? ` WHERE ${plan.guard.sql}` : '';
     for (const e of plan.events || []) {
       if (!EVENT_KINDS.includes(e.kind)) throw new Error(`Unknown event: ${e.kind}`);
       const row = {
@@ -126,13 +130,13 @@ export async function appendEvents(DB, build, { tries = 5 } = {}) {
         detail: e.detail === undefined ? '' : canonical(e.detail),
       };
       const hash = await sha256Hex(prev + canonical(row));
-      inserts.push(DB.prepare('INSERT INTO board_sign_events (prev, hash, doc_id, slug, year, version, kind, at, by, ip, device, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(prev, hash, row.doc_id, row.slug, row.year, row.version, row.kind, row.at, row.by, row.ip, row.device, row.detail));
+      inserts.push(DB.prepare(`INSERT INTO board_sign_events (prev, hash, doc_id, slug, year, version, kind, at, by, ip, device, detail) ${guard ? `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${guard}` : 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'}`)
+        .bind(prev, hash, row.doc_id, row.slug, row.year, row.version, row.kind, row.at, row.by, row.ip, row.device, row.detail, ...(guard ? plan.guard.bind : [])));
       prev = hash;
     }
     try {
-      await DB.batch([...(plan.stmts || []), ...inserts]);
-      return plan.result;
+      const results = await DB.batch(guard ? [...inserts, ...(plan.stmts || [])] : [...(plan.stmts || []), ...inserts]);
+      return typeof plan.after === 'function' ? plan.after(results) : plan.result;
     } catch (err) {
       // Another writer took the same place in the chain: nothing of this batch went in; look again
       if (!/UNIQUE/i.test(String(err?.message || err)) || !/prev|board_sign_events/i.test(String(err?.message || err)) || attempt >= tries - 1) throw err;
@@ -647,6 +651,8 @@ export async function maybeRunSigning(env, opts = {}) {
       }
     }
     const board = new Set(reads.board.map((p) => p.slug));
+    // (the addresses that sign a board member in now, read for certain with the board above)
+    const signsIn = new Set(reads.board.map((p) => normEmail(p.email)).filter(isEmail));
     // Whose each change is now: its member followed through every rename the chain records after it (by their place in
     // the chain), then through any of People's own moves since that the chain doesn't have yet (a rename still
     // finishing: ./_board-notices.js slugNow). So a member renamed before their old address is told is told as who they
@@ -667,6 +673,10 @@ export async function maybeRunSigning(env, opts = {}) {
       // (a rename of theirs that couldn't finish: a person settles it first, and this waits for that)
       if (now.wait) continue;
       if (!board.has(now.slug)) { await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: now.slug, by: 'SOARD board page', detail: { for: c.seq, skipped: 'not on the board' } }] })); continue; }
+      // Checked against the facts as it goes: an old address that signs a board member in now (changed by mistake and
+      // put straight back, or someone else's since) is never told it no longer does (Board QA round 12, Nov 23 2026:
+      // "no longer signs in with this email" went to the address Maria signs in with)
+      if (signsIn.has(normEmail(d.from))) { await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: now.slug, by: 'SOARD board page', detail: { for: c.seq, skipped: 'signs in with it now' } }] })); continue; }
       const r = await sendEmailOne(env, { to: d.from, from: fromBoard(), replyTo: admins, tags: [{ name: 'kind', value: 'board-email-changed' }], idempotencyKey: `email-changed:${c.seq}`, ...emailChangedEmail(d) });
       if (r.sent || r.already) await appendEvents(DB, async () => ({ events: [{ kind: 'notice-sent', slug: now.slug, by: 'SOARD board page', detail: { for: c.seq, to: d.from } }] }));
       return;
@@ -702,7 +712,7 @@ export function voidEmail({ doc, year, reason = '', replacedByCopy = false }) {
 // ─── Due dates, declining, asking again by itself, the whole board signed ──────────
 
 import { isEmail, emailConfigured } from './_broadcast-notify.js';
-import { activeBoard, readState, writeState, unreadStatus, readDown } from './_board-roles.js';
+import { activeBoard, readState, writeState, unreadStatus, readDown, normEmail } from './_board-roles.js';
 import { dueNotices, noticeReads, sendDueNotices, slugNow } from './_board-notices.js';
 /** The signing look's own status: a read of People that didn't answer (./unreadStatus), cleared by the next that does */
 const LOOK = 'signing-look';

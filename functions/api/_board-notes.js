@@ -32,9 +32,9 @@
  * what a founder changed in Board since stays theirs, and is said.
  */
 
-import { getMeeting, patchTogether, listMeetings, getSettings, putFile, rewriteFile, deleteFile, roster, ID, addressesNow } from './_board.js';
+import { getMeeting, patchTogether, listMeetings, getSettings, putFile, stageRewrite, fileRowOf, fileOff, bytesOff, roster, ID, addressesNow } from './_board.js';
 import { namesIn } from './_member-places.js';
-import { asSend } from './_board-roles.js';
+import { asSend, readDown } from './_board-roles.js';
 import { mergeAttendance, minutesPeople } from './_board-minutes.js';
 import { minutesDocx, minutesFileName, approveWords, noteLines } from '../../public/admin/board-minutes-template.js';
 import { isDate, todayEastern, endedClock, minutesTarget } from '../../public/admin/board-shared.js';
@@ -49,6 +49,12 @@ const RESULTS = ['passed', 'failed', 'tabled'];
 const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 const no = (message, status) => Object.assign(new Error(message), { status });
+// A send or a correction is one step (patchTogether): one that stopped before it landed left nothing done, and says so
+// (round 11's words for a step refused whole). Board QA round 12, Nov 23 2026
+export const NOTES_NOT_SENT = 'We couldn’t send the minutes just now, so nothing was changed. Please try again in a moment.';
+const KEPT_CHANGING = 'The meeting kept changing while this was saved, so nothing was changed. Try again in a moment.';
+/** A step whose Word file was made from a copy of the meeting that changed before it was written: made again */
+export const AGAIN = Symbol('made again');
 // (a vertical tab or a form feed from a paste is a line break, never nothing: words on either side stay apart)
 const words = (v, max) => String(v ?? '').replace(/\r\n?|[\u000B\u000C]/g, '\n').replace(/[\u0000-\u0008\u000E-\u001F]/g, '').slice(0, max);
 const one = (v, max) => words(v, max).replace(/\s+/g, ' ').trim();
@@ -514,117 +520,157 @@ export const notesWaiting = async (DB) => (await notesState(DB)).waiting;
  * → { read: { attendance, notes, motions, actions, ai }, approvedPrev, sent, kept, cleared }
  */
 export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
-  const held = await meetingFor(env, id, w);
-  // (a meeting the chair ended ahead of its date has been held)
-  if (!isDate(held.date) || (held.date > todayEastern(now) && !held.live?.endedAt)) throw no('The minutes come in on the day of the meeting or after', 400);
-  if (held.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
-  const nothing = (x) => !anythingIn(parse(x?.data)) && !parse(x?.sent).at;
-  if (nothing(await rowOf(env.DB, id))) throw no('Nothing is typed yet', 400);
-  if (!await claimSending(env.DB, id, now)) throw no('These are being sent right now. Give it a moment.', 409);
-  let fileId = '';
+  let claimed = false;
+  let landed = false;
+  // Made before the step and taken back should it not land: this send's Word file (its bytes kept, its row going in with
+  // the rest), and the Word file of the minutes its vote approves, brought up to what they say
   let staged = null;
+  let fresh = null;
+  const drop = async () => { await staged?.drop(); await fresh?.drop(); staged = null; fresh = null; };
   try {
-    // (read with the claim held: a send or a correction that finished a moment ago is what this goes from)
-    const m = await getMeeting(env.DB, id);
-    const row = await rowOf(env.DB, id);
-    if (!m) throw no('That meeting is gone', 404);
-    if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
-    if (nothing(row)) throw no('Nothing is typed yet', 400);
-    // Marks and to-dos at the addresses their people have now (a page that saved them before a rename reached it, or a
-    // draft from before saves followed them), kept that way in the draft too, so the old address is nobody's for good
-    const typedNotes = parse(row?.data);
-    const followed = await notesFollow(env.DB, m, typedNotes);
-    const notes = followed.changes;
-    if (followed.gone.length) {
-      await env.DB.prepare('UPDATE board_minutes_notes SET data = ? WHERE meeting_id = ? AND data = ?').bind(JSON.stringify(notes), id, row.data).run().catch((e) => console.error('[board] notes followed', e?.message || e));
-    }
-    const lastSent = parse(row?.sent);
-    const anything = anythingIn(notes);
-    // (People not answering: nothing is sent, said so: never a file or an email naming nobody, round 10)
-    const [people, meetings, settings, seats, checkins] = await Promise.all([minutesPeople(env.DB), listMeetings(env.DB), getSettings(env.DB), roster(env.DB, { withEmails: true }), checkinsOf(env.DB, id)])
-      .catch((e) => { throw asSend(e); });
-    const target = minutesTarget(m, meetings.filter((x) => !x.practice));
-    const by = w.member?.email || w.adminEmail || '';
-    const fileName = minutesFileName(m);
-    // Who took them is settled by the first send: fixing a word later, in whoever's hands, doesn't change it
-    const taker = lastSent.at ? lastSent.taker || '' : row.took || '';
-    const opts = { sent: lastSent, people, target, checkins, taker, fileName, now };
-    let tookBy = '';
-    if (anything) {
-      const seen = applyNotes(m, notes, opts);
-      // A mark for someone not on this meeting's list or on People, after following renames: named, and nothing goes,
-      // never the minutes saying whoever it was for wasn't there
-      if (seen.unplaced.length) throw Object.assign(no(await unplacedWords(env.DB, seen.unplaced), 409), { extra: { unplaced: seen.unplaced.map((x) => `r:${x.key}`) } });
-      // The secretary, once they've typed anything; else whoever kept them, who isn't always who pressed Send (nobody known: nobody named)
-      const typedBy = [...seats.board, ...seats.staff].find((p) => p.email && String(p.email).toLowerCase() === String(row.updated_by || '').toLowerCase());
-      tookBy = 'by' in lastSent ? lastSent.by : row.took || typedBy?.name || staffName(seats.staff, row.updated_by) || '';
-      const bytes = minutesDocx(seen.next, { meetings, quorum: settings.quorum, people, filled: { ...seen.record, by: tookBy } });
-      // (a founder made the last one staff-only: this one stays that way)
-      const staffOnly = !!m.files.find((f) => f.id === lastSent.fileId)?.staffOnly;
-      // (its bytes kept now; its row goes in with the rest, below)
-      staged = await putFile(env, { ownerType: 'meeting', ownerId: id, file: new File([bytes], fileName, { type: DOCX }), kind: 'minutes', by, staffOnly, stage: true });
-      fileId = staged.id;
-    }
+    const held = await meetingFor(env, id, w);
+    // (a meeting the chair ended ahead of its date has been held)
+    if (!isDate(held.date) || (held.date > todayEastern(now) && !held.live?.endedAt)) throw no('The minutes come in on the day of the meeting or after', 400);
+    if (held.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
+    const nothing = (x) => !anythingIn(parse(x?.data)) && !parse(x?.sent).at;
+    if (nothing(await rowOf(env.DB, id))) throw no('Nothing is typed yet', 400);
+    if (!await claimSending(env.DB, id, now)) throw no('These are being sent right now. Give it a moment.', 409);
+    claimed = true;
+    for (let tries = 1; ; tries++) {
+      // (read with the claim held: a send or a correction that finished a moment ago is what this goes from)
+      const m = await getMeeting(env.DB, id);
+      const row = await rowOf(env.DB, id);
+      if (!m) throw no('That meeting is gone', 404);
+      if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
+      if (nothing(row)) throw no('Nothing is typed yet', 400);
+      // Marks and to-dos at the addresses their people have now (a page that saved them before a rename reached it, or a
+      // draft from before saves followed them), kept that way in the draft too, so the old address is nobody's for good
+      const typedNotes = parse(row?.data);
+      const followed = await notesFollow(env.DB, m, typedNotes);
+      const notes = followed.changes;
+      if (followed.gone.length) {
+        await env.DB.prepare('UPDATE board_minutes_notes SET data = ? WHERE meeting_id = ? AND data = ?').bind(JSON.stringify(notes), id, row.data).run().catch((e) => console.error('[board] notes followed', e?.message || e));
+      }
+      const lastSent = parse(row?.sent);
+      const anything = anythingIn(notes);
+      // The Word file the last send kept goes with this send, its row read now and taken off in the same step: never left
+      // naming the minutes as they were, or bytes that are gone (Board QA round 12, Nov 23 2026: its delete came after the
+      // step and failed quietly, and the board page listed the old words, or a file that opened 404, or withdrawn minutes)
+      const old = lastSent.fileId ? await fileRowOf(env.DB, lastSent.fileId) : null;
+      // (People not answering: nothing is sent, said so: never a file or an email naming nobody, round 10)
+      const [people, meetings, settings, seats, checkins] = await Promise.all([minutesPeople(env.DB), listMeetings(env.DB), getSettings(env.DB), roster(env.DB, { withEmails: true }), checkinsOf(env.DB, id)])
+        .catch((e) => { throw asSend(e); });
+      const target = minutesTarget(m, meetings.filter((x) => !x.practice));
+      const by = w.member?.email || w.adminEmail || '';
+      const fileName = minutesFileName(m);
+      // Who took them is settled by the first send: fixing a word later, in whoever's hands, doesn't change it
+      const taker = lastSent.at ? lastSent.taker || '' : row.took || '';
+      const opts = { sent: lastSent, people, target, checkins, taker, fileName, now };
+      let tookBy = '';
+      let approving = null;
+      if (anything) {
+        const seen = applyNotes(m, notes, opts);
+        // A mark for someone not on this meeting's list or on People, after following renames: named, and nothing goes,
+        // never the minutes saying whoever it was for wasn't there
+        if (seen.unplaced.length) throw Object.assign(no(await unplacedWords(env.DB, seen.unplaced), 409), { extra: { unplaced: seen.unplaced.map((x) => `r:${x.key}`) } });
+        // The secretary, once they've typed anything; else whoever kept them, who isn't always who pressed Send (nobody known: nobody named)
+        const typedBy = [...seats.board, ...seats.staff].find((p) => p.email && String(p.email).toLowerCase() === String(row.updated_by || '').toLowerCase());
+        tookBy = 'by' in lastSent ? lastSent.by : row.took || typedBy?.name || staffName(seats.staff, row.updated_by) || '';
+        const bytes = minutesDocx(seen.next, { meetings, quorum: settings.quorum, people, filled: { ...seen.record, by: tookBy } });
+        // (a founder made the last one staff-only: this one stays that way)
+        const staffOnly = !!m.files.find((f) => f.id === lastSent.fileId)?.staffOnly;
+        // (its bytes kept now; its row goes in with the rest, below)
+        staged = await putFile(env, { ownerType: 'meeting', ownerId: id, file: new File([bytes], fileName, { type: DOCX }), kind: 'minutes', by, staffOnly, stage: true });
+        // The minutes this vote approves are approved as a Word file that says what they say: brought up to them first,
+        // in the same step (Board QA round 12, Nov 23 2026: a correction stood while its Word file kept the old words, and
+        // this vote approved that file as the minutes)
+        approving = seen.approves && seen.approves !== lastSent.approved ? meetings.find((x) => x.id === seen.approves && x.minutes !== 'approved') || null : null;
+        if (approving) fresh = await freshMinutesFile(env, approving, { people, meetings, settings, now });
+      }
 
-    // All of it in one step, or none of it (Board QA round 11, Nov 23 2026: the notes went on the meeting, then a read
-    // failed, and the last minutes' approval, the send's record and the Word file the meeting named were lost or deleted):
-    // the notes on the meeting, the approval the vote decides (passed approves the meeting it's about; a vote corrected
-    // takes back the approval the last send made), the Word file and the send's record. Everything it goes by is read
-    // first; each meeting is written only over the copy read for it (./_board.js patchTogether)
-    let done = null;
-    let approved = '';
-    let undone = 0;
-    let withdrawn = false;
-    const others = [...new Set([target?.id, lastSent.approved].filter((x) => x && x !== id))];
-    const r = await patchTogether(env.DB, [id, ...others], ([cur, ...rest]) => {
-      if (!cur) throw no('That meeting is gone', 404);
-      if (cur.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
-      const of = (x) => rest[others.indexOf(x)] || null;
-      done = applyNotes(cur, notes, opts);
-      const writes = [[cur, done.next]];
-      approved = '';
-      undone = 0;
-      withdrawn = false;
-      if (done.approves) {
-        const t = of(done.approves);
-        // Approved by the last send and put back to draft in Board since: Board's word stands, and is said
-        if (lastSent.approved === done.approves) { approved = done.approves; if (t?.minutes !== 'approved') undone = 1; } else if (t && t.minutes !== 'approved') { writes.push([t, { ...t, minutes: 'approved', approvedOn: isDate(m.date) ? m.date : todayEastern(now) }]); approved = t.id; }
+      // All of it in one step, or none of it (Board QA round 11, Nov 23 2026: the notes went on the meeting, then a read
+      // failed, and the last minutes' approval, the send's record and the Word file the meeting named were lost or deleted):
+      // the notes on the meeting, the approval the vote decides (passed approves the meeting it's about; a vote corrected
+      // takes back the approval the last send made), the Word file in place of the last one, the approved minutes' own
+      // Word file brought up, and the send's record. Everything it goes by is read first; each meeting is written only
+      // over the copy read for it (./_board.js patchTogether), and the Word files are made from those very copies
+      let done = null;
+      let approved = '';
+      let undone = 0;
+      let withdrawn = false;
+      let freshIn = false;
+      const others = [...new Set([target?.id, lastSent.approved].filter((x) => x && x !== id))];
+      let r;
+      try {
+        r = await patchTogether(env.DB, [id, ...others], ([cur, ...rest]) => {
+          if (!cur) throw no('That meeting is gone', 404);
+          if (cur.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409);
+          // (changed since its Word file was made from it: made again)
+          if (staged && (cur.updatedAt || '') !== (m.updatedAt || '')) throw AGAIN;
+          const of = (x) => rest[others.indexOf(x)] || null;
+          done = applyNotes(cur, notes, opts);
+          const writes = [[cur, done.next]];
+          approved = '';
+          undone = 0;
+          withdrawn = false;
+          freshIn = false;
+          if (done.approves) {
+            const t = of(done.approves);
+            // Approved by the last send and put back to draft in Board since: Board's word stands, and is said
+            if (lastSent.approved === done.approves) { approved = done.approves; if (t?.minutes !== 'approved') undone = 1; } else if (t && t.minutes !== 'approved') {
+              // (approved only as the copy its Word file was brought up from)
+              if (t.id !== approving?.id || (t.updatedAt || '') !== (approving.updatedAt || '')) throw AGAIN;
+              writes.push([t, { ...t, minutes: 'approved', approvedOn: isDate(m.date) ? m.date : todayEastern(now) }]);
+              approved = t.id;
+              freshIn = !!fresh;
+            }
+          }
+          if (lastSent.approved && lastSent.approved !== approved) {
+            const t = of(lastSent.approved);
+            // (only the approval taken back, on the meeting as it is: never a copy of it read before)
+            if (t?.minutes === 'approved') { writes.push([t, { ...t, minutes: 'draft', approvedOn: '' }]); withdrawn = true; }
+          }
+          // (what was sent, to bring the kept Word file up to a founder's fixes without what's only typed since)
+          const keeps = anything ? JSON.stringify({ ...done.sent, fileId: staged.id, approved, taker, by: tookBy, notes }) : null;
+          // (taken back off, nobody took these minutes: the next to type them does)
+          const record = { sql: `UPDATE board_minutes_notes SET sent = ?${anything ? '' : ', took = NULL'} WHERE meeting_id = ?`, bind: [keeps, id] };
+          return { writes, also: [...(staged ? [staged.insert] : []), ...(old ? fileOff(lastSent.fileId, old) : []), ...(freshIn ? fresh.also : []), record] };
+        }, { by });
+      } catch (err) {
+        await drop();
+        if (err === AGAIN && tries < 3) continue;
+        throw err === AGAIN ? no(KEPT_CHANGING, 409) : err;
       }
-      if (lastSent.approved && lastSent.approved !== approved) {
-        const t = of(lastSent.approved);
-        // (only the approval taken back, on the meeting as it is: never a copy of it read before)
-        if (t?.minutes === 'approved') { writes.push([t, { ...t, minutes: 'draft', approvedOn: '' }]); withdrawn = true; }
-      }
-      // (what was sent, to bring the kept Word file up to a founder's fixes without what's only typed since)
-      const keeps = anything ? JSON.stringify({ ...done.sent, fileId, approved, taker, by: tookBy, notes }) : null;
-      // (taken back off, nobody took these minutes: the next to type them does)
-      const record = { sql: `UPDATE board_minutes_notes SET sent = ?${anything ? '' : ', took = NULL'} WHERE meeting_id = ?`, bind: [keeps, id] };
-      return { writes, also: [...(staged ? [staged.insert] : []), record] };
-    }, { by });
-    const meeting = r.meetings[id];
-    // In: the meeting names its Word file now, so nothing here takes it back off
-    fileId = '';
-    staged = null;
-    // The Word file the last send kept: this one takes its place
-    if (lastSent.fileId) await deleteFile(env, lastSent.fileId).catch(() => {});
-    const board = meeting.attendance.filter((p) => p.kind === 'board');
-    return {
-      sent: anything ? done.sent.at : '',
-      cleared: !anything,
-      approvedPrev: !!approved && approved !== lastSent.approved,
-      withdrawn,
-      kept: done.kept + undone,
-      read: {
-        attendance: { here: board.filter((p) => p.status === 'present' || p.status === 'remote').length, of: board.length },
-        ...done.read, ai: false,
-      },
-    };
+      landed = true;
+      // In: the meeting names its Word file now, so nothing here takes it back off. The last send's file and the approved
+      // minutes' old words: their bytes go, now that no row names them (one that doesn't is the heartbeat's)
+      const brought = freshIn ? fresh : null;
+      if (!freshIn) await fresh?.drop();
+      staged = null;
+      fresh = null;
+      if (old) await bytesOff(env, [old.r2_key]);
+      await brought?.done();
+      const board = r.meetings[id].attendance.filter((p) => p.kind === 'board');
+      return {
+        sent: anything ? done.sent.at : '',
+        cleared: !anything,
+        approvedPrev: !!approved && approved !== lastSent.approved,
+        withdrawn,
+        kept: done.kept + undone,
+        read: {
+          attendance: { here: board.filter((p) => p.status === 'present' || p.status === 'remote').length, of: board.length },
+          ...done.read, ai: false,
+        },
+      };
+    }
   } catch (err) {
-    // Nothing went in: the Word file's bytes made for it go too (its row never went in, so nothing names it)
-    if (fileId) await staged?.drop();
-    throw err;
+    // Nothing went in: the Word files' bytes made for it go too (no row names them), and a database that didn't answer
+    // is said in words, never "something went wrong" over a step that left nothing done
+    if (landed) throw err;
+    await drop();
+    throw err?.status ? err : readDown(NOTES_NOT_SENT, err);
   } finally {
-    await releaseSending(env.DB, id).catch((err) => console.error('[board-notes] the send claim', id, err?.message || err));
+    if (claimed) await releaseSending(env.DB, id).catch((err) => console.error('[board-notes] the send claim', id, err?.message || err));
   }
 }
 
@@ -640,21 +686,74 @@ async function unplacedWords(DB, list) {
   return `${who} ${named.length > 1 ? 'are' : 'is'} marked in your notes but ${named.length > 1 ? 'aren’t' : 'isn’t'} on this meeting’s list, so the minutes weren’t sent. Mark them on the list again, or take that mark out, then send.`;
 }
 
+// ─── The Word file a send kept, saying what the minutes say ─────────
+//
+// Board QA round 12, Nov 23 2026: a correction was made and the founder told "Made. The minutes say that now.", while
+// the Word file the board opens kept the old words (its rewrite came after, and failed quietly), and the next meeting's
+// vote approved that file as the minutes. The file is made before the step that changes what it says, from the very copy
+// that step writes over, and goes in with it: the correction, or the approval, and its file land together or not at all.
+
+/** JSON's merge patch, as SQLite's json_patch writes it (a null takes a field off): a record as a statement will leave it */
+export function mergePatch(target, patch) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch;
+  const out = target && typeof target === 'object' && !Array.isArray(target) ? { ...target } : {};
+  for (const [k, v] of Object.entries(patch)) { if (v === null) delete out[k]; else out[k] = mergePatch(out[k], v); }
+  return out;
+}
+/** Whether a meeting has a Word file a send kept (`last`: its notes' record of that send): typed minutes, with that file still theirs */
+export const keptFile = (m, last) => !!(m?.minutesFrom?.typed && last?.fileId && last.notes && (m.files || []).some((f) => f.id === last.fileId));
+/** What else a kept Word file is made from, read first (a read that fails throws, and nothing is made). `have`: what the caller has read already */
+export async function fileInputs(DB, id, have = {}) {
+  const [people, meetings, settings, checkins] = await Promise.all([have.people || minutesPeople(DB), have.meetings || listMeetings(DB), have.settings || getSettings(DB), checkinsOf(DB, id)]);
+  return { people, meetings, settings, checkins };
+}
+/**
+ * The kept Word file's bytes for the meeting as it is (`m`), by what the last send put there (`last`): only what was sent
+ * counts, never what's typed since, and who was there and the words under each item as the meeting has them, whatever
+ * going over the notes again would make of them (the notes only say which items carry words). Pure
+ */
+export function minutesFileBytes(m, last, { people, meetings, settings, checkins }, now = Date.now()) {
+  const seen = applyNotes(m, last.notes, { sent: last, people, target: minutesTarget(m, meetings.filter((x) => !x.practice)), checkins, taker: last.taker || '', fileName: m.minutesFrom.name, now });
+  const onMeeting = new Map((m.sections || []).flatMap((s) => [[s.id, s.notes || ''], ...s.items.map((it) => [it.id, it.notes || ''])]));
+  const words = Object.fromEntries(Object.keys(seen.record.words).map((k) => [k, onMeeting.get(k) ?? '']));
+  const guests = m.attendance.filter((p) => p.kind === 'guest' && (p.status === 'present' || p.status === 'remote')).map((p) => p.name);
+  return minutesDocx(m, { meetings, quorum: settings.quorum, people, filled: { ...seen.record, words, guests, by: last.by || '' } });
+}
+/** The kept Word file made again for the meeting as a step will leave it, staged for that step (./_board.js stageRewrite) → { also, drop, done } | null */
+export const stageMinutesFile = (env, m, last, inputs, now = Date.now()) => stageRewrite(env, last.fileId, minutesFileBytes(m, last, inputs, now));
+/**
+ * Typed minutes about to be approved (`t`, as read), their kept Word file brought up to what they say first, staged for
+ * the approval's own step: approved minutes' file is their record, so it says what they say as it's approved (never a
+ * file older than their last change). Everything it goes by is read here, before anything is written: a read that fails
+ * throws, and nothing is approved. The step approves only the copy it was made from (`t.updatedAt`).
+ * → { also, drop, done } | null (no kept Word file to bring up)
+ */
+export async function freshMinutesFile(env, t, { now = Date.now(), ...have } = {}) {
+  if (!t?.minutesFrom?.typed || t.minutes === 'approved') return null;
+  const last = parse((await env.DB.prepare('SELECT sent FROM board_minutes_notes WHERE meeting_id = ?').bind(t.id).first())?.sent);
+  if (!keptFile(t, last)) return null;
+  return stageMinutesFile(env, t, last, await fileInputs(env.DB, t.id, have), now);
+}
+
 /**
  * The Word file a send kept, brought up to what the meeting says now: a founder's fix in Board goes in by itself, the same
- * file in the same place, and only what was sent counts (never what's typed since). Called after Board saves.
+ * file, in one step with nothing else (its new bytes made first, the row moved onto them only over the meeting they were
+ * made from: one saved since brings it up itself). Called after Board saves. → whether it was brought up
  */
 export async function refreshMinutesFile(env, id, { now = Date.now() } = {}) {
   const last = parse((await env.DB.prepare('SELECT sent FROM board_minutes_notes WHERE meeting_id = ?').bind(id).first())?.sent);
   if (!last.fileId || !last.notes) return false;
   const m = await getMeeting(env.DB, id);
-  if (!m?.minutesFrom?.typed || !m.files.some((f) => f.id === last.fileId)) return false;
-  const [people, meetings, settings, checkins] = await Promise.all([minutesPeople(env.DB), listMeetings(env.DB), getSettings(env.DB), checkinsOf(env.DB, id)]);
-  const seen = applyNotes(m, last.notes, { sent: last, people, target: minutesTarget(m, meetings.filter((x) => !x.practice)), checkins, taker: last.taker || '', fileName: m.minutesFrom.name, now });
-  // Who was there and the words under each item as the meeting has them, whatever going over the notes again would make of them:
-  // the notes only say which items carry words. It never writes anything but this file
-  const onMeeting = new Map((m.sections || []).flatMap((s) => [[s.id, s.notes || ''], ...s.items.map((it) => [it.id, it.notes || ''])]));
-  const words = Object.fromEntries(Object.keys(seen.record.words).map((k) => [k, onMeeting.get(k) ?? '']));
-  const guests = m.attendance.filter((p) => p.kind === 'guest' && (p.status === 'present' || p.status === 'remote')).map((p) => p.name);
-  return rewriteFile(env, last.fileId, minutesDocx(m, { meetings, quorum: settings.quorum, people, filled: { ...seen.record, words, guests, by: last.by || '' } }));
+  if (!keptFile(m, last)) return false;
+  const staged = await stageMinutesFile(env, m, last, await fileInputs(env.DB, id), now);
+  if (!staged) return false;
+  const guard = " AND (SELECT COUNT(*) FROM board_meetings WHERE id = ? AND COALESCE(updated_at, '') = ?) = 1";
+  let r;
+  try {
+    r = await env.DB.batch(staged.also.map((s) => env.DB.prepare(`${s.sql}${guard}`).bind(...s.bind, id, m.updatedAt || '')));
+  } catch (err) { await staged.drop(); throw err; }
+  const moved = r[staged.also.findIndex((s) => s.sql.startsWith('UPDATE board_files'))];
+  if (!((moved?.meta?.changes ?? moved?.changes ?? 0) > 0)) { await staged.drop(); return false; }
+  await staged.done();
+  return true;
 }

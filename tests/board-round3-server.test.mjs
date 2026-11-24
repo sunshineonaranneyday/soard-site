@@ -71,7 +71,10 @@ function hooked(DB) {
     all: async () => { await hooks.before(st._sql, st._params); return st.all(); },
     run: async () => { await hooks.before(st._sql, st._params); return st.run(); },
   });
-  return { ...DB, prepare: (sql) => wrap(DB.prepare(sql)) };
+  /* r12: a meeting's file and its place on the item go in one batch now (Board QA round 12, _board.js putFileWith), and a
+     send's record and its time on the meeting are one batch too (_board.js sendOnce), so the look comes before each of a
+     batch's statements, as it does before each statement run alone */
+  return { ...DB, prepare: (sql) => wrap(DB.prepare(sql)), batch: async (stmts) => { for (const s of stmts) await hooks.before(s._sql, s._params); return DB.batch(stmts); } };
 }
 /** patchMeeting's write (writeOver): a read of the meeting comes before it */
 const WRITE_OVER = /^UPDATE board_meetings SET date = \?, data = \?/;
@@ -113,11 +116,16 @@ beforeEach(async () => {
     if (url === `${ISS}/cdn-cgi/access/certs`) return Response.json({ keys: [jwk] });
     if (url.startsWith('https://api.resend.com/')) {
       if (resend.mode === '422') return Response.json({ name: 'validation_error', message: 'The from address domain is not verified' }, { status: 422 });
+      /* r12: Resend's own idempotency key, as it behaves: a call it has had is answered as before and sends nothing (a send whose answer wasn't noted is asked for again under it) */
+      const key = init.headers?.['Idempotency-Key'] || '';
+      if (key && resend.keys?.has(key)) return Response.json(resend.keys.get(key));
       const body = JSON.parse(init.body);
       const list = Array.isArray(body) ? body : [body];
       resend.sent.push(...list.map((m) => ({ to: [m.to].flat()[0], subject: m.subject, text: m.text })));
       resend.onSend?.();
-      return Response.json(Array.isArray(body) ? { data: list.map((_, i) => ({ id: `em_${i}` })) } : { id: 'em_1' });
+      const res = Array.isArray(body) ? { data: list.map((_, i) => ({ id: `em_${i}` })) } : { id: 'em_1' };
+      if (key) (resend.keys ||= new Map()).set(key, res);
+      return Response.json(res);
     }
     if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'g-test', expires_in: 3600 });
     if (url.startsWith('https://www.googleapis.com/calendar/v3/')) {
@@ -320,8 +328,9 @@ test('M2: a send that may have gone keeps the approved agenda’s claim: the hea
   const r = await adminApi({ action: 'approve-agenda', id: m.id });
   hooks.before = async () => {};
   assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.agenda, 'failed');
-  assert.match(r.body.agendaError, /may have gone/);
+  /* r12: Resend took them and only the noting failed: said as on its way, and that it won't go again (never "may have gone") */
+  assert.equal(r.body.agenda, 'sent');
+  assert.match(r.body.later, /It won’t go to them again/);
   await sentLongAgo('packet', m.id);
   await maybeSendApprovedAgendas(env, { now: Date.now() + 11 * 60 * 1000 });
   assert.deepEqual(emailsTo(), { [ALEX]: 1, [SAM]: 1 }, 'never twice');
@@ -337,13 +346,18 @@ test('M2: Email the board stopped after its emails went is said as that: they ma
   const r = await adminApi({ action: 'send-packet', id: m.id });
   hooks.before = async () => {};
   assert.equal(resend.sent.length, 2);
-  assert.equal(r.status, 500);
-  assert.equal(r.body.error, 'These emails may have gone: the site stopped partway through sending them. Ask a board member whether theirs came before pressing it again.');
-  assert.doesNotMatch(JSON.stringify(r.body), /D1_ERROR|Nothing was lost|try again/);
-  // Pressed again a moment later: the send's own record says they went
+  /* r12: Resend took them and only the noting failed: said as gone, to how many, and that they won't go again (never "may have gone") */
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.sent, 2);
+  assert.match(r.body.later, /It won’t go to them again/);
+  assert.doesNotMatch(JSON.stringify(r.body), /D1_ERROR|Nothing was lost|try again|may have gone/);
+  // Pressed again a moment later: asked of Resend under the same number, so nobody has it twice, and the page shows it
   const again = await adminApi({ action: 'send-packet', id: m.id });
-  assert.equal(again.status, 409);
-  assert.equal(again.body.already, true);
+  assert.equal(resend.sent.length, 2, 'never a second copy');
+  assert.ok(again.body.meeting?.packetSentAt, JSON.stringify(again.body));
+  const third = await adminApi({ action: 'send-packet', id: m.id });
+  assert.equal(third.status, 409);
+  assert.equal(third.body.already, true);
   assert.equal(resend.sent.length, 2, 'never a second copy');
 });
 

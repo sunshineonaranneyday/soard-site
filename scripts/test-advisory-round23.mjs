@@ -21,6 +21,8 @@ import { createD1 } from '../tests/lib/d1-shim.mjs';
 import * as adminApi from '../functions/api/advisory-applications-admin.js';
 import { submitApplication, readHeadshot } from '../functions/api/_advisory-applications.js';
 import { writeState } from '../functions/api/_board-roles.js';
+// (round 24: every page served without Cloudflare's analytics beacon, so nothing leaves this machine)
+import { servesPage } from '../tests/lib/local-only.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const OUT = join(ROOT, 'test-results/advisory-round23/');
@@ -93,7 +95,7 @@ const server = createServer((req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (path === '/admin/__advisory.html') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(harness); }
   const file = join(ROOT, 'public', path);
-  if (file.startsWith(join(ROOT, 'public')) && existsSync(file) && statSync(file).isFile()) { res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' }); return res.end(readFileSync(file)); }
+  if (file.startsWith(join(ROOT, 'public')) && existsSync(file) && statSync(file).isFile()) { res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' }); return res.end(servesPage(file, readFileSync(file))); }
   res.writeHead(404); res.end('not found');
 });
 await new Promise((r) => server.listen(PORT, '127.0.0.1', r));

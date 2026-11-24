@@ -582,9 +582,7 @@ export async function countNew(DB) {
 export async function setAdvisoryStatus(DB, id, status, { by = null, now = Date.now() } = {}) {
   if (!STATUS_IDS.has(status)) throw Object.assign(new Error('Unknown status'), { status: 400 });
   await ensureAdvisorySchema(DB);
-  const r = await DB.prepare('UPDATE advisory_applications SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE id = ?').bind(status, iso(now), by, iso(now), id).run();
-  if (!r?.meta?.changes) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
-  return stillHere(DB, id);
+  return asWritten(DB.prepare('UPDATE advisory_applications SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE id = ? RETURNING *').bind(status, iso(now), by, iso(now), id));
 }
 
 export const NOTE_MAX = 4000;
@@ -597,17 +595,20 @@ export async function addAdvisoryNote(DB, id, text, { by = null, now = Date.now(
   if (!app) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
   // (added to the list in the one statement, never the list read, added to and written back: two notes saved at the
   // same moment are both kept)
-  const r = await DB.prepare("UPDATE advisory_applications SET notes = json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)), updated_at = ? WHERE id = ?")
-    .bind(JSON.stringify({ at: iso(now), by, text: t }), iso(now), id).run();
   // (deleted elsewhere while the note was saving: said as gone, never "saved" with no application to show)
-  if (!r?.meta?.changes) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
-  return stillHere(DB, id);
+  return asWritten(DB.prepare("UPDATE advisory_applications SET notes = json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)), updated_at = ? WHERE id = ? RETURNING *")
+    .bind(JSON.stringify({ at: iso(now), by, text: t }), iso(now), id));
 }
-/** The application as it is now, after a change to it: deleted in the moment since (another tab) is said as gone */
-async function stillHere(DB, id) {
-  const app = await getAdvisoryApplication(DB, id);
-  if (!app) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
-  return app;
+/**
+ * The application as a change to it wrote it, from that statement itself (RETURNING *), never read again afterwards: a
+ * read after the write that didn't answer said a change that had landed hadn't (Advisory Board QA round 24: Add marked
+ * the application Joined, its read back failed, and the press said "stopped partway … Press Add to Advisory Board again"
+ * beside a box with nothing left to press). No row: deleted in the moment since (another tab), said as gone
+ */
+async function asWritten(stmt) {
+  const row = await stmt.first();
+  if (!row) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
+  return fromRow(row, { full: true });
 }
 
 /** They're on People → Advisory now (Add to Advisory Board, or linked by hand): Joined */
@@ -615,15 +616,15 @@ export async function linkAdvisor(DB, id, slug, { by = null, now = Date.now() } 
   // (any address People takes: ./_content-history.js SLUG_RE)
   if (!SLUG_RE.test(String(slug || ''))) throw Object.assign(new Error('That isn’t an address on People.'), { status: 400 });
   await ensureAdvisorySchema(DB);
-  const r = await DB.prepare("UPDATE advisory_applications SET person_slug = ?, status = 'joined', status_at = ?, status_by = ?, updated_at = ? WHERE id = ?")
-    .bind(slug, iso(now), by, iso(now), id).run();
-  if (!r?.meta?.changes) throw Object.assign(new Error('This application isn’t here any more: it was deleted, maybe in another tab.'), { status: 404 });
-  return stillHere(DB, id);
+  // (Joined as that write saved it: ./asWritten)
+  return asWritten(DB.prepare("UPDATE advisory_applications SET person_slug = ?, status = 'joined', status_at = ?, status_by = ?, updated_at = ? WHERE id = ? RETURNING *")
+    .bind(slug, iso(now), by, iso(now), id));
 }
 
 /**
  * Is this picture someone's photo on People (Add to Advisory Board made it theirs)? A People table that isn't
- * there has nobody on it; a read that fails says so (thrown), so nothing is deleted on a guess either way
+ * there has nobody on it; a read that fails says so (thrown as a read failure, readDown), so nothing is deleted on a
+ * guess either way
  */
 async function photoOnPeople(DB, imageId) {
   let rows;
@@ -632,7 +633,7 @@ async function photoOnPeople(DB, imageId) {
     rows = (await DB.prepare('SELECT data FROM team WHERE instr(data, ?) > 0').bind(imageId).all()).results || [];
   } catch (e) {
     if (/no such table/i.test(e?.message || '')) return false;
-    throw Object.assign(new Error('The site couldn’t check People just now, so nothing was deleted. Please try again in a moment.'), { status: 503 });
+    throw readDown('The site couldn’t check People just now, so nothing was deleted. Please try again in a moment.', e);
   }
   if (rows.some((r) => imageIdOf(parse(r.data, {})?.photo) === imageId)) return true;
   // A version History keeps (Recently deleted, or an earlier one that can be put back): its photo stays too
@@ -641,7 +642,7 @@ async function photoOnPeople(DB, imageId) {
     return kept.some((r) => imageIdOf(parse(r.data, {})?.photo) === imageId);
   } catch (e) {
     if (/no such table/i.test(e?.message || '')) return false;
-    throw Object.assign(new Error('The site couldn’t check People’s history just now, so nothing was deleted. Please try again in a moment.'), { status: 503 });
+    throw readDown('The site couldn’t check People’s history just now, so nothing was deleted. Please try again in a moment.', e);
   }
 }
 

@@ -17,6 +17,8 @@ import puppeteer from 'puppeteer';
 import http from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
+// (round 24: every page served without Cloudflare's analytics beacon, so nothing leaves this machine)
+import { servesPage } from '../tests/lib/local-only.mjs';
 
 const DIST = process.env.DIST;
 if (!DIST) { console.error('DIST=<built site>/ is needed'); process.exit(2); }
@@ -31,7 +33,7 @@ const server = http.createServer((req, res) => {
   if (existsSync(file) && statSync(file).isDirectory()) file = join(file, 'index.html');
   if (!existsSync(file)) { res.writeHead(404); res.end('not here'); return; }
   res.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream' });
-  res.end(readFileSync(file));
+  res.end(servesPage(file, readFileSync(file)));
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const SITE = `http://127.0.0.1:${server.address().port}`;

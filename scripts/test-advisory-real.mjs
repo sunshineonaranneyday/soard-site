@@ -22,6 +22,8 @@ import * as action from '../functions/api/advisory-action.js';
 import * as boardPortal from '../functions/api/board-portal.js';
 import * as boardAdmin from '../functions/api/board-admin.js';
 import * as boardFile from '../functions/api/board-file.js';
+// (round 24: every page served without Cloudflare's analytics beacon, so nothing leaves this machine)
+import { servesPage } from '../tests/lib/local-only.mjs';
 
 const ROOT = join(import.meta.dirname, '..');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.svg': 'image/svg+xml', '.png': 'image/png' };
@@ -113,7 +115,7 @@ const server = http.createServer(async (req, res) => {
     const head = { 'Content-Type': TYPES[extname(f)] || 'application/octet-stream' };
     if (url.pathname.startsWith('/admin/')) head['Content-Security-Policy'] = csp;
     res.writeHead(200, head);
-    res.end(readFileSync(f));
+    res.end(servesPage(f, readFileSync(f)));
   } catch (err) { console.error('server', err); res.writeHead(500); res.end(String(err)); }
 });
 await new Promise((r) => server.listen(Number(process.env.PORT) || 0, '127.0.0.1', r));
@@ -134,7 +136,9 @@ if (!process.env.KEEP) {
   for (const p of ['/api/board-portal', '/api/board-admin', '/api/board-file?id=f_x', '/api/advisory-admin']) ok((await api(SAM, p)).status === 403, `an advisor is refused ${p}`);
   ok((await api(SAM, '/api/board-portal')).body?.advisory === '/admin/advisory/', 'and is pointed at their page');
   ok((await api(SAM, '/api/advisory-portal')).status === 200, 'an advisor opens their page');
-  ok((await api('drew@private.example', '/api/advisory-portal')).status === 403, 'a draft advisor is refused');
+  /* r24: decided Nov 16 2026, f1dd189c: everyone active on People → Advisory, shown on the site or not, signs in and gets
+     the group's emails (Add to Advisory Board adds people hidden until staff show them) */
+  ok((await api('drew@private.example', '/api/advisory-portal')).status === 200, 'a member hidden from the public site opens their page too');
   ok((await api(STRANGER, '/api/advisory-portal')).status === 403, 'a stranger is refused');
   ok((await api(BO, '/api/advisory-portal')).status === 403, 'a board member off the committee is refused');
   ok((await api(CASEY, '/api/advisory-portal')).status === 200, 'a committee member reads it');
@@ -185,10 +189,11 @@ if (!process.env.KEEP) {
   ok((await api(LEAD, '/api/advisory-admin', { action: 'save-settings', settings: { emails: true } })).status === 200, 'emails go on');
   const refused = await api(LEAD, '/api/advisory-admin', { action: 'send-ask', id: fresh.body.ask.id });
   ok(refused.status === 409 && refused.body.emails === true && mail.length === noEmail, 'with emails on, an ask isn’t sent without saying so');
-  ok((await api(LEAD, '/api/advisory-admin', { action: 'send-ask', id: fresh.body.ask.id, emailsOk: true })).status === 200 && mail.length === noEmail + 2, 'said so, it goes to both advisors');
+  /* r24: decided Nov 16 2026, f1dd189c: the hidden member is on the Advisory Board, so the ask goes to all three members */
+  ok((await api(LEAD, '/api/advisory-admin', { action: 'send-ask', id: fresh.body.ask.id, emailsOk: true })).status === 200 && mail.length === noEmail + 3, 'said so, it goes to all three members, the one hidden from the site too');
   const again = await api(LEAD, '/api/advisory-admin', { action: 'email-ask', id: fresh.body.ask.id });
-  ok(again.body.sent?.already === true && mail.length === noEmail + 2, 'and never twice');
-  ok(mail.slice(-2).every((m) => [m.reply_to].flat().join() === 'morgan@private.example'), 'replies go to whoever runs the group');
+  ok(again.body.sent?.already === true && mail.length === noEmail + 3, 'and never twice');
+  ok(mail.slice(-3).every((m) => [m.reply_to].flat().join() === 'morgan@private.example'), 'replies go to whoever runs the group');
   ok((await api(LEAD, '/api/advisory-admin', { action: 'delete-ask', id: fresh.body.ask.id })).status === 409, 'an ask that went out can’t be deleted');
   await api(LEAD, '/api/advisory-admin', { action: 'save-settings', settings: { emails: false } });
 

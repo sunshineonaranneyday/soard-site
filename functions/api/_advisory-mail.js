@@ -245,6 +245,8 @@ export const greetingOf = (a, decided) => (Object.hasOwn(decided || {}, a.slug) 
 export const hasOrGoing = (v, now, email) => hadIt(v, email) || (!!v?.sending && Date.parse(v.sending) > now - SENDING_STALE_MS);
 /** Each address's welcome record as it is ({ slug: { at, to } | { sending } }), for a check against an address it'll have */
 export const welcomeRecords = async (DB) => (await readState(DB, LOG)).welcomed || {};
+/** The same, with the welcomes written down as waiting for the heartbeat ({ slug: { at, by } }), in one read */
+export const welcomeLog = async (DB) => { const log = await readState(DB, LOG); return { welcomed: log.welcomed || {}, waiting: log.waiting || {} }; };
 /**
  * One member's sign-in email as their row on Members shows it: { at } when they had it at the address they have now,
  * { going: true } while one is on its way (a press, Add or the heartbeat), else {}

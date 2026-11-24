@@ -243,7 +243,7 @@ test('F4, F11: the tester’s three, one at a time: the chain’s last-hash read
   // (the clean-up: an address left behind with the new one, by someone no longer on People, goes in the same write)
   await raw.prepare('INSERT INTO reveal_board_emails (slug, email) VALUES (?, ?)').bind('someone-gone', ROSA_NEW).run();
   const base = snap();
-  for (const [what, re] of [['the chain’s last-hash read', /^first SELECT hash FROM board_sign_events/], ['the chain’s insert', /^batch .*INSERT INTO board_sign_events/], ['the clean-up', /^batch DELETE FROM reveal_board_emails WHERE lower/]]) {
+  for (const [what, re] of [['the chain’s last-hash read', /^first SELECT hash FROM board_sign_events/], ['the chain’s insert', /^batch .*INSERT INTO board_sign_events/], ['the clean-up', /^batch .*DELETE FROM reveal_board_emails WHERE lower/]]) { /* r12: the change's event goes first in its batch now, only while the address is the one read (two founders at once), so the clean-up is no longer the batch's first statement */
     await restore(base);
     // (find the statement's number on a clean run, then fail it)
     const names = [];

@@ -23,6 +23,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
+import { agendaApproved } from './lib/agenda-approved.mjs';
 import { onRequest, _resetKeyCacheForTests } from '../functions/api/_middleware.js';
 import * as admin from '../functions/api/board-admin.js';
 import * as portal from '../functions/api/board-portal.js';
@@ -567,9 +568,12 @@ test('also: a member’s page with any read of People failing is the sign-in wor
 test('also: the packet, the minutes notice and the sign-in email with the board’s read failing send nothing and say so, never to fewer', async () => {
   delete env.GOOGLE_CALENDAR_KEY;
   const past = await kept({ date: inDays(-10), start: '08:00', end: '10:00', shared: true, minutesFrom: { name: 'Minutes.docx', at: new Date().toISOString() } });
+  /* r12: the packet never goes for a meeting held, so Email the board's is a meeting ahead, its agenda approved */
+  const next = await kept({ date: inDays(10), start: '08:00', end: '10:00', shared: true });
+  await agendaApproved(env.DB, next.id);
   await roles.readState(env.DB, 'welcome'); // (makes board_state)
   const sends = {
-    'Email the board (the packet)': { action: 'send-packet', id: past.id },
+    'Email the board (the packet)': { action: 'send-packet', id: next.id },
     'the minutes are up': { action: 'send-minutes', id: past.id },
     'the sign-in email': { action: 'send-welcome' },
   };

@@ -860,7 +860,8 @@ export async function readMinutesInto(env, id, fileId, { by = '', now = Date.now
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
   // Typed and sent, the minutes change in the notes: a file read over them changes who was there, can take items off the
   // agenda, and a re-send can't put that back
-  if (m.minutesFrom?.typed) throw Object.assign(new Error(TYPED_WORDS), { status: 409, typed: true });
+  // (with the meeting as the site has it, for a tab that still shows them as a file's: Board QA round 12)
+  if (m.minutesFrom?.typed) throw Object.assign(new Error(TYPED_WORDS), { status: 409, typed: true, extra: { meeting: m } });
   const f = m.files.find((x) => x.id === fileId);
   const row = f && await env.DB.prepare('SELECT r2_key FROM board_files WHERE id = ? AND owner_type = ? AND owner_id = ?').bind(fileId, 'meeting', id).first();
   if (!f || !row) throw Object.assign(new Error('That file isn’t on this meeting'), { status: 404 });
@@ -1248,6 +1249,8 @@ export async function secretarySends(env, id, file, w, { now = Date.now(), anywa
     r = await readMinutesInto(env, id, f.id, { by, now, anyway: true });
   } catch (err) {
     // (refused as the minutes on the meeting are: in words for the secretary's page, naming nothing only founders see)
+    // (never the meeting as Board keeps it, which a founder's refusal carries: its private notes and staff-only files)
+    if (err?.extra?.meeting) { const { meeting: _, ...rest } = err.extra; err.extra = rest; }
     if (err?.why === 'approved') err.message = SECRETARY_APPROVED;
     else if (err?.why === 'untold') err.message = SECRETARY_UNTOLD;
     else if (err?.why === 'lost') err.message = SECRETARY_LOST;

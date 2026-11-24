@@ -301,6 +301,17 @@ export async function leadCard(DB, settings) {
 // ─── The monthly ask ────────────────────────────────────────────────
 
 const askOf = (r) => ({ id: r.id, ...parse(r.data), sentAt: r.sent_at || '', closedAt: r.closed_at || '', at: r.at, by: r.by || '' });
+/**
+ * The row a staff change wrote, from that statement itself (RETURNING *), never read again afterwards: a read after a
+ * change that had landed, not answering, said "That didn't go through", and pressing again saved a second ask, wish or
+ * paper (Advisory Board QA round 24, as Add's Joined and the members' own writes: rowWritten). No row: it was deleted
+ * in the moment since (another tab), said in `gone`'s words
+ */
+const staffWritten = async (stmt, gone) => {
+  const row = await stmt.first();
+  if (!row) throw err(gone, 404);
+  return row;
+};
 
 export async function listAsks(DB) {
   await ensureAdvisory(DB);
@@ -315,9 +326,9 @@ export async function saveAsk(DB, raw, { by = '', now = Date.now() } = {}) {
   const data = { title, body: cleanText(raw.body, 1500), link: webLink(raw.link) };
   const id = isId(raw.id) ? raw.id : newId('ask');
   const had = await DB.prepare('SELECT id FROM advisory_asks WHERE id = ?').bind(id).first();
-  if (had) await DB.prepare('UPDATE advisory_asks SET data = ? WHERE id = ?').bind(JSON.stringify(data), id).run();
-  else await DB.prepare('INSERT INTO advisory_asks (id, data, at, by) VALUES (?, ?, ?, ?)').bind(id, JSON.stringify(data), nowIso(now), by).run();
-  return askOf(await DB.prepare('SELECT * FROM advisory_asks WHERE id = ?').bind(id).first());
+  return askOf(await staffWritten(had
+    ? DB.prepare('UPDATE advisory_asks SET data = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), id)
+    : DB.prepare('INSERT INTO advisory_asks (id, data, at, by) VALUES (?, ?, ?, ?) RETURNING *').bind(id, JSON.stringify(data), nowIso(now), by), 'That ask is gone'));
 }
 /** Only one ask is out at a time: the page has one thing on it, and the last one closes when the next goes out */
 export async function putAskOut(DB, id, { now = Date.now() } = {}) {
@@ -325,8 +336,7 @@ export async function putAskOut(DB, id, { now = Date.now() } = {}) {
   const row = await DB.prepare('SELECT id, sent_at FROM advisory_asks WHERE id = ?').bind(id).first();
   if (!row) throw err('That ask is gone', 404);
   await DB.prepare('UPDATE advisory_asks SET closed_at = ? WHERE sent_at IS NOT NULL AND closed_at IS NULL AND id != ?').bind(nowIso(now), id).run();
-  await DB.prepare('UPDATE advisory_asks SET sent_at = COALESCE(sent_at, ?), closed_at = NULL WHERE id = ?').bind(nowIso(now), id).run();
-  return askOf(await DB.prepare('SELECT * FROM advisory_asks WHERE id = ?').bind(id).first());
+  return askOf(await staffWritten(DB.prepare('UPDATE advisory_asks SET sent_at = COALESCE(sent_at, ?), closed_at = NULL WHERE id = ? RETURNING *').bind(nowIso(now), id), 'That ask is gone'));
 }
 export async function closeAsk(DB, id, { now = Date.now() } = {}) {
   await ensureAdvisory(DB);
@@ -388,12 +398,11 @@ export async function saveWish(DB, raw, { by = '', now = Date.now() } = {}) {
   const data = { title, detail: clean(raw.detail, 400) };
   const id = isId(raw.id) ? raw.id : newId('w');
   const had = await DB.prepare('SELECT id FROM advisory_wishlist WHERE id = ?').bind(id).first();
-  if (had) await DB.prepare('UPDATE advisory_wishlist SET data = ? WHERE id = ?').bind(JSON.stringify(data), id).run();
-  else {
-    const last = await DB.prepare('SELECT MAX(sort) AS n FROM advisory_wishlist').first();
-    await DB.prepare('INSERT INTO advisory_wishlist (id, data, sort, at, by) VALUES (?, ?, ?, ?, ?)').bind(id, JSON.stringify(data), (Number(last?.n) || 0) + 1, nowIso(now), by).run();
-  }
-  return (await listWishes(DB)).find((w) => w.id === id);
+  const last = had ? null : await DB.prepare('SELECT MAX(sort) AS n FROM advisory_wishlist').first();
+  const r = await staffWritten(had
+    ? DB.prepare('UPDATE advisory_wishlist SET data = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), id)
+    : DB.prepare('INSERT INTO advisory_wishlist (id, data, sort, at, by) VALUES (?, ?, ?, ?, ?) RETURNING *').bind(id, JSON.stringify(data), (Number(last?.n) || 0) + 1, nowIso(now), by), 'That one is gone');
+  return { id: r.id, ...parse(r.data), sort: r.sort };
 }
 export async function deleteWish(DB, id) {
   await ensureAdvisory(DB);
@@ -410,6 +419,17 @@ const introOf = (r) => ({ id: r.id, slug: r.slug, status: r.status, ...parse(r.d
  * of two people's addresses is the other person (Advisory Board QA round 22)
  */
 const landedOn = (me) => ({ slug: me.slug, name: me.person.name });
+/**
+ * A member's write by a guarded statement (stillTheirs) and the row it wrote, from that statement itself (RETURNING):
+ * → writeAsMember's result, { meta, saved }, saved null when the guard let nothing through. What the write answers with
+ * is this row, never one read again afterwards: a read after it that didn't answer said "That didn't go through" of an
+ * introduction or a request that had, and pressing again made a second, with a second notice (Advisory Board QA round
+ * 24, as round 23 had a term's: termWritten)
+ */
+const rowWritten = async (stmt) => {
+  const saved = await stmt.first();
+  return { meta: { changes: saved ? 1 : 0 }, saved };
+};
 
 /** "I know someone", at the address they have as it's written (./_member-write.js). `landedOn`: whose it is */
 export async function addIntro(DB, who, raw, { now = Date.now() } = {}) {
@@ -424,9 +444,9 @@ export async function addIntro(DB, who, raw, { now = Date.now() } = {}) {
     wish: isId(raw.wish) ? raw.wish : '',
   };
   const id = newId('in');
-  const { me } = await writeAsMember(DB, who, (me) => DB.prepare(`INSERT INTO advisory_intros (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')}`)
-    .bind(id, 'thanks', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data).run());
-  return { ...introOf(await DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id).first()), landedOn: landedOn(me) };
+  const { me, result } = await writeAsMember(DB, who, (me) => rowWritten(DB.prepare(`INSERT INTO advisory_intros (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} RETURNING *`)
+    .bind(id, 'thanks', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data)));
+  return { ...introOf(result.saved), landedOn: landedOn(me) };
 }
 /** Only their own: what an advisor sees of the introductions */
 export async function introsBy(DB, slug) {
@@ -443,8 +463,8 @@ export async function setIntroStatus(DB, id, { status, note }, { by = '', now = 
   const row = await DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id).first();
   if (!row) throw err('That introduction is gone', 404);
   const data = { ...parse(row.data), ...(note !== undefined ? { note: cleanText(note, 800) } : {}) };
-  await DB.prepare('UPDATE advisory_intros SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ?').bind(status, JSON.stringify(data), nowIso(now), by, id).run();
-  return { intro: introOf(await DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id).first()), changed: row.status !== status };
+  const saved = await staffWritten(DB.prepare('UPDATE advisory_intros SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(status, JSON.stringify(data), nowIso(now), by, id), 'That introduction is gone');
+  return { intro: introOf(saved), changed: row.status !== status };
 }
 
 // ─── Hosting a fundraiser ───────────────────────────────────────────
@@ -458,9 +478,9 @@ export async function requestHost(DB, who, raw, { now = Date.now() } = {}) {
   if (!title) throw err('What’s the idea?');
   const data = { title, when: clean(raw.when, 120), where: clean(raw.where, 200), expected: clean(raw.expected, 120), notes: cleanText(raw.notes, 1500) };
   const id = newId('h');
-  const { me } = await writeAsMember(DB, who, (me) => DB.prepare(`INSERT INTO advisory_hosted (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')}`)
-    .bind(id, 'new', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data).run());
-  return { ...hostedOf(await DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id).first()), landedOn: landedOn(me) };
+  const { me, result } = await writeAsMember(DB, who, (me) => rowWritten(DB.prepare(`INSERT INTO advisory_hosted (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} RETURNING *`)
+    .bind(id, 'new', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data)));
+  return { ...hostedOf(result.saved), landedOn: landedOn(me) };
 }
 export async function listHosted(DB) {
   await ensureAdvisory(DB);
@@ -477,8 +497,8 @@ export async function setHosted(DB, id, { status, note, date, giveUrl }, { by = 
     // Its own Zeffy page, so the money it raises counts toward the goal
     ...(giveUrl !== undefined ? { giveUrl: webLink(giveUrl) } : {}),
   };
-  await DB.prepare('UPDATE advisory_hosted SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ?').bind(status, JSON.stringify(data), nowIso(now), by, id).run();
-  return { hosted: hostedOf(await DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id).first()), changed: row.status !== status };
+  const saved = await staffWritten(DB.prepare('UPDATE advisory_hosted SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(status, JSON.stringify(data), nowIso(now), by, id), 'That request is gone');
+  return { hosted: hostedOf(saved), changed: row.status !== status };
 }
 
 /** An approved fundraiser's Zeffy page, by itself (Admin → Site Config → Zeffy): its status, date and note stay */
@@ -488,8 +508,7 @@ export async function setHostedLink(DB, id, giveUrl, { by = '', now = Date.now()
   if (!row) throw err('That request is gone', 404);
   if (row.status !== 'approved') throw err('Only an approved fundraiser has a Zeffy page here', 409);
   const data = { ...parse(row.data), giveUrl: webLink(giveUrl) };
-  await DB.prepare('UPDATE advisory_hosted SET data = ?, updated_at = ?, updated_by = ? WHERE id = ?').bind(JSON.stringify(data), nowIso(now), by, id).run();
-  return hostedOf(await DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id).first());
+  return hostedOf(await staffWritten(DB.prepare('UPDATE advisory_hosted SET data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), nowIso(now), by, id), 'That request is gone'));
 }
 
 // ─── Terms ──────────────────────────────────────────────────────────
@@ -515,10 +534,7 @@ export async function allTerms(DB, settings) {
  * nobody's, the group's dates (Advisory Board QA round 23)
  */
 const TERM_SAVED = ' RETURNING started_on, ends_on, renewed_on, left_on';
-const termWritten = async (stmt) => {
-  const saved = await stmt.first();
-  return { meta: { changes: saved ? 1 : 0 }, saved };
-};
+const termWritten = (stmt) => rowWritten(stmt);
 /** How many days before a term ends the page offers Renew */
 export const RENEW_DAYS = 60;
 export const canRenew = (term, today) => {
@@ -567,13 +583,18 @@ export async function setTerm(DB, slug, { ends, left }, settings) {
 
 const docOf = (r) => ({ id: r.id, ...parse(r.data), updatedAt: r.updated_at || '', updatedBy: r.updated_by || '' });
 
+/** Said when the papers, or their files, couldn't be read: never a paper shown with no files that has some */
+export const DOCS_DOWN = 'The Advisory Board’s papers couldn’t load just now. Please try again in a moment.';
 export async function listDocs(DB) {
   await ensureAdvisory(DB);
-  const rows = (await DB.prepare('SELECT * FROM advisory_docs').all()).results || [];
+  // (a read that fails is said as that, a 503 in words, as every read the page rests on is: Board QA round 11. Never a
+  // paper with "no files" because its files couldn't be read (Advisory Board QA round 24). A table not made yet is none)
+  const unread = (e) => { if (/no such table/i.test(e?.message || '')) return { results: [] }; console.error('[advisory] papers', e?.message || e); throw readDown(DOCS_DOWN, e); };
+  const rows = (await DB.prepare('SELECT * FROM advisory_docs').all().catch(unread)).results || [];
   const docs = rows.map(docOf);
   if (!docs.length) return docs;
   // Files live with the board's (private R2, ./_board.js putFile), under their own owner type
-  const files = (await DB.prepare("SELECT id, owner_id, name, type, size, at FROM board_files WHERE owner_type = 'advisory-doc'").all().catch(() => ({ results: [] }))).results || [];
+  const files = (await DB.prepare("SELECT id, owner_id, name, type, size, at FROM board_files WHERE owner_type = 'advisory-doc'").all().catch(unread)).results || [];
   return docs.sort((a, b) => (a.sort || 0) - (b.sort || 0)).map((d) => ({ ...d, files: files.filter((f) => f.owner_id === d.id).map(({ owner_id, ...f }) => f) }));
 }
 export async function saveDoc(DB, raw, { by = '', now = Date.now(), base = null } = {}) {
@@ -598,8 +619,11 @@ export async function saveDoc(DB, raw, { by = '', now = Date.now(), base = null 
   if (library && !shelf) throw err('Which shelf does it go on?');
   const note = !library ? '' : 'note' in raw ? clean(raw.note, 200) : cur.note || '';
   const data = { kind: raw.kind, title, body, url, shared: raw.shared !== false, version, sort, ...(library ? { shelf, note } : {}) };
-  await DB.prepare('INSERT OR REPLACE INTO advisory_docs (id, data, updated_at, updated_by) VALUES (?, ?, ?, ?)').bind(id, JSON.stringify(data), nowIso(now), by).run();
-  return (await listDocs(DB)).find((d) => d.id === id);
+  // (its files, which a save doesn't change, read before the save: a read that fails saves nothing and says so)
+  const files = row ? (await DB.prepare("SELECT id, name, type, size, at FROM board_files WHERE owner_type = 'advisory-doc' AND owner_id = ?").bind(id).all()
+    .catch((e) => { if (/no such table/i.test(e?.message || '')) return { results: [] }; throw e; })).results || [] : [];
+  const saved = await staffWritten(DB.prepare('INSERT OR REPLACE INTO advisory_docs (id, data, updated_at, updated_by) VALUES (?, ?, ?, ?) RETURNING *').bind(id, JSON.stringify(data), nowIso(now), by), 'That paper is gone');
+  return { ...docOf(saved), files };
 }
 /** A first-day paper. Only into an empty place: never over one someone has since edited */
 export async function addDocOnce(DB, id, raw, { by = '', now = Date.now() } = {}) {

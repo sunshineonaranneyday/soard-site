@@ -35,6 +35,7 @@ import { mdWords, mdPoints, mdFigures, mdNumber, mdPlain } from '../board-md.js'
 import { Pipeline, sized, nameFit, useFitted } from './kanban.js';
 import { CostsSlide } from './costs.js';
 import { useCashNow, useBudget, moneyTiles, mixOf, RevenueMix, MixHead, budgetDue, readChangeAs, keepChangeAs, Both } from './money.js';
+import { UNREAD_WORDS } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -874,7 +875,7 @@ function FacesGrid({ kind, v, people, started, year }) {
   const all = listed.length ? listed : people.filter((p) => p.group === (LOCAL ? 'advisory' : 'board')).map((p) => ({ ...p, how: '' }));
   const here = all.filter((p) => p.how);
   const shown = kind === 'room' && started && here.length ? here : all;
-  if (!shown.length) return html`<p class="bs-quiet">${LOCAL ? 'No advisors on the list yet.' : 'No board members on the meeting’s list.'}</p>`;
+  if (!shown.length) return html`<p class="bs-quiet">${LOCAL ? 'No Advisory Board members on the list yet.' : 'No board members on the meeting’s list.'}</p>`;
   const rows = shown.length <= 5 ? 1 : shown.length <= 14 ? 2 : shown.length <= 24 ? 3 : 4;
   // Greyed as not here only once someone has checked in: presenting on the day, before anyone has, everyone is as they are
   const checking = started && here.length > 0;
@@ -1080,6 +1081,10 @@ function ItemMotion({ text, mo = null, big = false }) {
 /** An item's live facts on the screen, or null when it has none */
 function liveSlide(kind, n, id, data, date, as = 'pct') {
   if (!n || !kind || kind === 'minutes') return null;
+  // (today's numbers whose read failed just now: the slide says so in plain words, never a zero or an empty list. Board
+  // QA round 12; a past meeting's locked numbers have no such flags: ./unread.js)
+  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events' }[kind];
+  if (part && n.unread?.[part]) return html`<div class="bs-numbers"><p class="bs-quiet" role="status">${UNREAD_WORDS[part]}</p></div>`;
   // (JobTread not answering: the pipeline says so, never a slide with nothing on it)
   if (kind === 'projects') return html`<${Pipeline} projects=${n.projects} reveals=${n.reveals || []} />`;
   if (kind === 'cash') return html`<${CashSlide} n=${n} data=${data} date=${date} as=${as} />`;

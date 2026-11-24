@@ -232,7 +232,7 @@ test('what rounds to nothing reads as nothing: "$0" (never −$0 or +$0), "Under
   assert.equal(tile(NaN).value, 'Not known', 'in words, never a dash a screen reader reads out');
   assert.equal(tile(undefined).value, 'Not known');
   // Mercury's year so far: a sign only on a figure that has one
-  const ytd = (net) => moneyTiles({ cash: { total: 5000, asOf: '', live: true, banks: ['Mercury'], accounts: [] }, budget: null, n: { finance: { ytd: { year: 2026, net, income: 1000, makeovers: 0, store: 0, operating: 1000, through: '2026-10-31' } } } }).find((t) => t.k === 'ytd').value;
+  const ytd = (net) => moneyTiles({ cash: { total: 5000, asOf: '', live: true, banks: ['Mercury'], accounts: [] }, budget: null, n: { finance: { ytd: { year: 2026, net, income: 1000 + net /* r12: the net is money in less money out as written beside it, so the year's figures here agree with it */, makeovers: 0, store: 0, operating: 1000, through: '2026-10-31' } } } }).find((t) => t.k === 'ytd').value;
   assert.deepEqual([ytd(0), ytd(-0.4), ytd(0.4), ytd(1200), ytd(-1200)], ['$0', '$0', '$0', '+$1,200', '−$1,200']);
 });
 

@@ -26,7 +26,7 @@
 import { h, htm, useState, useMemo, useRef, useEffect } from '../vendor.js';
 import { money, plural, initialsOf, todayEastern } from '../board-shared.js';
 import { rowsOf, recentSeasons, typicalLately, planOf, pipelineOf, operatingOf, typeById, statsOf, TYPES } from '../makeover-costs-shared.js';
-import { useCashNow, compact } from './money.js';
+import { useCashNow, compact, asWritten } from './money.js';
 import { sized } from './kanban.js';
 import { More, dayText } from './parts.js';
 
@@ -196,7 +196,7 @@ export function lanesOf(list, top, gap = 1.6) {
  * for the keyboard (← → along, ↑ ↓ between rows, Enter opens the kid's page); hover, focus or a tap says the
  * family, the season, the rooms and the cost
  */
-export function CostChart({ makeovers, seasons = null, big = false, label = 'What each completed makeover cost' }) {
+export function CostChart({ makeovers, seasons = null, big = false, label = 'What each completed makeover cost', spots = false }) {
   // (the seasons by value: the card hands a new list each time it draws)
   const which = seasons ? seasons.join(',') : 'all';
   const rows = useMemo(() => rowsOf(makeovers, seasons), [makeovers, which]);
@@ -240,7 +240,9 @@ export function CostChart({ makeovers, seasons = null, big = false, label = 'Wha
   return html`<div class=${`bc-chart ${big ? 'bc-chart--big' : ''} ${faces ? 'has-faces' : ''}`} role="group" aria-label=${`${label}. Arrow keys move between them`} ref=${ref} onKeyDown=${onKey} onMouseLeave=${() => setTip(-1)}>
     ${placed.map((r, ri) => {
       const s = statsOf(r.list);
-      return html`<div class="bc-row" key=${r.id}>
+      // (on Financials' card each row a place of its own, #bc-r-<room>, where a search for its median or average lands:
+      // ./figures.js, from the same rows. Board QA round 12)
+      return html`<div class="bc-row" key=${r.id} id=${spot(spots, `bc-r-${r.id}`)}>
       <div class="bc-row__label"><strong>${big ? r.short : r.label}</strong><span>${nbw(plural(r.count, 'makeover'))}</span></div>
       <div class="bc-row__track" style=${`--n:${Math.max(1, ...r.dots.map((d) => Math.abs(d.lane) * 2 + 1))}`}>
         ${ticks.map((v) => html`<i class="bc-grid" key=${v} style=${`left:${(v / top) * 100}%`} aria-hidden="true"></i>`)}
@@ -315,7 +317,9 @@ export function useCosts(data, n, m = null) {
   const c = src?.costs || null;
   const operating = operatingOf(src);
   const makeovers = c?.makeovers || [];
-  const plan = useMemo(() => (c ? planOf({ cash: cash?.total, operating, makeovers, waiting: c.waiting || [], underway: c.underway || [] }) : null), [c, cash?.total, operating]);
+  // (from the cash as it's written beside it, so what's over the operating balance is the one less the other as they read:
+  // ./money.js asWritten, Board QA round 12)
+  const plan = useMemo(() => (c ? planOf({ cash: asWritten(cash?.total), operating, makeovers, waiting: c.waiting || [], underway: c.underway || [] }) : null), [c, cash?.total, operating]);
   const typical = typicalLately(makeovers);
   const stats = statsOf(typical?.seasons ? makeovers.filter((x) => typical.seasons.includes(Number(x.season))) : makeovers);
   // How many SOARD can build next season, as of the meeting's day (today's for one today or ahead)
@@ -479,7 +483,7 @@ export function CostsCard({ data, n, m = null, variant = 'home', admin = false, 
         <${Seasons} recent=${recent} first=${first} range=${range} setRange=${setRange} />
       </div>
       ${shownStats ? html`<p class="bc-stats">${nbw(`${plural(shownStats.count, 'completed makeover')}: median ${dollars(shownStats.median)}, average ${dollars(shownStats.average)}, low ${dollars(shownStats.low)} (${shownStats.lowOf.name}, ${shownStats.lowOf.season}), high ${dollars(shownStats.high)} (${shownStats.highOf.name}, ${shownStats.highOf.season})`)}</p>` : null}
-      <${CostChart} makeovers=${makeovers} seasons=${seasons} />
+      <${CostChart} makeovers=${makeovers} seasons=${seasons} spots=${!table} />
       ${shown.length || noBills.length ? html`<p class="bc-note">${nbw(`Each face or dot is one makeover, at what SOARD paid: its bills in JobTread, without donated work. The line marks each room’s median; the shading, its middle half.${noBills.length ? ` Not counted: ${and(noBills.map((x) => x.name))}${seasonsText([...new Set(noBills.map((x) => x.season))]) ? ` (${seasonsText([...new Set(noBills.map((x) => x.season))])})` : ''}, with no bills in JobTread.` : ''}`)}</p>` : null}
       ${table ? html`<${Table} makeovers=${shown} />` : null}
     </div>`;

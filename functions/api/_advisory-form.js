@@ -260,18 +260,26 @@ export function readName(full) {
     const i = core.match(/^((?:\p{L}\.)+)(\p{L}(?:\p{L}|['’-]\p{L})+)$/u);
     return i && !AFTER_NAME.test(bare(core)) && !DOTTED_DEGREE.test(bare(core)) ? `${i[1]} ${i[2]}${end}` : t;
   };
-  const typed = [];
-  let atName = true;
-  let atPart = true;
-  // (an "&" after a name starts another name, "Jordan & T.J.Amy"; one between titles only joins them, and what's after
-  // them is read as it would be after the first title: "Quill, Mr. & Mrs. B.Arch" is letters after a comma, never B. Arch)
-  let named = false;
-  for (const t of String(full || '').replace(/\s+/g, ' ').trim().split(' ')) {
-    const a = apart(t, atName, atPart);
-    typed.push(a);
-    if (/^(&|and)$/i.test(t)) { atName = atName || named; atPart = true; } else if (/,$/.test(t)) { atName = false; atPart = true; named = false; } else if (!a.split(' ').every((y) => isTitle(y))) { atName = false; atPart = false; named = true; }
-  }
-  const s = typed.join(' ');
+  const typedOf = (text) => {
+    const typed = [];
+    let atName = true;
+    let atPart = true;
+    // (an "&" after a name starts another name, "Jordan & T.J.Amy"; one between titles only joins them, and what's after
+    // them is read as it would be after the first title: "Quill, Mr. & Mrs. B.Arch" is letters after a comma, never B. Arch)
+    let named = false;
+    for (const t of String(text || '').replace(/\s+/g, ' ').trim().split(' ')) {
+      const a = apart(t, atName, atPart);
+      typed.push(a);
+      if (/^(&|and)$/i.test(t)) { atName = atName || named; atPart = true; } else if (/,$/.test(t)) { atName = false; atPart = true; named = false; } else if (!a.split(' ').every((y) => isTitle(y))) { atName = false; atPart = false; named = true; }
+    }
+    return typed.join(' ');
+  };
+  // Round 24 (finding 5): the name read from its own words (ownWordsOf: pronouns, brackets, what follows a slash, a job or a
+  // company after a spaced dash, a place or a company after the name set apart); the name as typed kept for People's name
+  // wherever it stays as typed (`typedS`), so it's either as typed or first name first from its own words, never a mix
+  const typedS = typedOf(full);
+  const own = ownWordsOf(full);
+  const s = own === String(full || '') ? typedS : typedOf(own);
   const parts = s.split(',').map((x) => x.trim()).filter(Boolean);
   const shouting = !/\p{Ll}/u.test(s);
   const quietName = !/\p{Lu}/u.test(s);
@@ -430,8 +438,12 @@ export function readName(full) {
   // "Jordan Ames MD & Amy Ames PhD" reads them: whole as typed, else their first name with the first one's family name
   // ("Jordan Ames, MD & Amy" is Amy Ames). Their own letters after it, or after another comma, are never part of it.
   // Nobody with no first name to match them on ("& Mrs. Ames", "& family", "& Associates"), and never past words that
-  // aren't letters ("Jordan Ames, Atlanta & Amy Ames", "Jordan Ames, she/her & Amy"). → { whole, could } or null. Only
-  // the other one: the first one's reading, the name shown and the address stay round 22's (the whole name before the comma)
+  // aren't letters ("Jordan Ames, Atlanta & Amy Ames", "Jordan Ames, she/her & Amy"). → { whole, could, at } or null (at:
+  // the part of `rest` they start in). Only the other one: the first one's reading, the name shown and the address stay
+  // round 22's (the whole name before the comma).
+  //   Round 24 (finding 4): after every reading of the first one, "Family, Given" too: "Ames, Jordan, MD & Amy", "Ames,
+  // Jordan, Jr. & Amy" and "Ames, Jordan, & Amy" are Amy Ames, as "Ames, Jordan & Amy" is (below, at each reading), and
+  // their address never takes the other one's name or the letters: ames-jordan
   const partnerPast = (rest, family) => {
     let at = -1;
     let k = -1;
@@ -448,7 +460,7 @@ export function readName(full) {
     // letters alone, "the", or a word for someone unnamed, "& wife", "& the Ames family", is nobody to match)
     if (!own.length || (theirTitles.length && own.length === 1) || isTitle(own[0]) || /^(?:the|my|our)$/i.test(own[0]) || own.some((x) => NOT_NAMED.test(bare(x))) || letters(own.join(' '))) return null;
     const out = own.length > 1 ? { whole: own, could: could || null } : family.length ? { whole: [own[0], ...family], could: null } : null;
-    return out && { ...out, before: before.join(' ') };
+    return out && { ...out, before: before.join(' '), at };
   };
   // (one first name: after a family name in parts, more words are a company or a place as often as two first names:
   // "Van Jones, Dream Corps", "Del Taylor, Home Depot", never "Dream Corps Van Jones")
@@ -516,6 +528,9 @@ export function readName(full) {
     // (an initial alone is no evidence of the given name: "De La Cruz, M." is at de-la-cruz, as round 22 had it)
     const given = ambiguous && !pair1 && !nonName && (particle ? (oneName && !initials(tailNames[0] || '')) || !!listedGiven(tailNames[0] || '')
       : listedAfter && !initials(family[0]) && family.every((w) => !listedGiven(w)));
+    // (round 24: "Family, Given" and the other one of a couple past the first one's letters after another comma, "De La
+    // Cruz, Maria, MD & Jose": Jose De La Cruz, as partnerPast reads them after a whole name)
+    const pastGiven = given && !pair2 && parts.length > 2 ? partnerPast(parts.slice(2), words) : null;
     //   Else the words before the comma alone are the address, and the name stays as typed. They're a whole name, matched
     // as all of it, when they're a couple ("Jordan & Amy Rowe"), or start with a given name the list has or initials (round
     // 22), or, not starting with a particle, what's after the comma is a place, a company, pronouns or more than one word
@@ -535,9 +550,9 @@ export function readName(full) {
     const familyOnly = parts.length > 1 && withTitles;
     // (a couple after the comma, "Garcia Lopez, Maria & Jose": the other one by their name with the family name too)
     // (round 23: and after a whole name, the other one after its letters: partnerPast, above)
-    const partnerWhole = pair1?.whole || (either && pair2?.length && !pair2.familyOnly ? [...pair2, ...words] : null) || past?.whole || null;
+    const partnerWhole = pair1?.whole || (either && pair2?.length && !pair2.familyOnly ? [...pair2, ...words] : null) || past?.whole || pastGiven?.whole || null;
     // (and their whole name with a last word kept that might be a family name in capitals, as `could` is the first one's)
-    const partnerCould = pair1?.whole ? pair1.could || null : past?.could || null;
+    const partnerCould = pair1?.whole ? pair1.could || null : past?.could || pastGiven?.could || null;
     if (either) {
       // Round 21 (finding 6): such a name is all of it, as typed, and it's matched as all of it ("De La Cruz, Jose" is
       // never asked about "De La Cruz, Maria"). The words before the comma alone (`apart`) are matched only against a name
@@ -553,21 +568,27 @@ export function readName(full) {
       // the comma never gets here (headWhole, above). Round 23: which is "Family, Given" is `given`'s (finding 7), and a
       // place or anything else after a second comma is left out of its address (rule 8: "De La Cruz, Maria, Atlanta" is at
       // de-la-cruz-maria)
-      const address = given ? addressOf([parts[0], parts[1], ...parts.slice(2).filter(nameStays)]) : words;
-      return { words: [...words, ...tailWords], titles: withTitles ? [...t1, ...t2] : t1, shown: s, could: could ? [...could, ...tailWords] : null, also,
+      // (round 24: never the other one of a couple after another comma, nor the letters before them)
+      const address = given ? addressOf([parts[0], parts[1], ...parts.slice(2, pastGiven ? 2 + pastGiven.at : undefined).filter(nameStays)]) : words;
+      return { words: [...words, ...tailWords], titles: withTitles ? [...t1, ...t2] : t1, shown: typedS, could: could ? [...could, ...tailWords] : null, also,
         apart: [words, ...(could ? [could] : [])], partner: pair1, partnerWhole, partnerCould, sure: false, familyOnly, address };
     }
-    return { words, titles: withTitles ? [...t1, ...t2] : t1, shown: s, could, also, partner: pair1, partnerWhole, partnerCould, sure: !ambiguous, familyOnly };
+    return { words, titles: withTitles ? [...t1, ...t2] : t1, shown: typedS, could, also, partner: pair1, partnerWhole, partnerCould, sure: !ambiguous, familyOnly };
   }
   const [first, firstOff, firstCould] = trail(tail, { first: true });
   const [last, lastOff] = trail(head);
   const titles = [...t1, ...t2];
   const rest = parts.slice(2);
+  // Round 24 (finding 4): the other one of a couple past the first one's letters after another comma, "Ames, Jordan, MD &
+  // Amy", "Ames, Jordan, Jr. & Amy", "Ames, Jordan, & Amy": Amy Ames, whole if typed whole, as partnerPast reads them
+  // after a whole name ("Jordan Ames, MD & Amy") and as "Ames, Jordan & Amy" reads them. "Johnson & Johnson" and the like,
+  // past words that aren't letters, are nobody, as there
+  const past2 = !pair2 && rest.length ? partnerPast(rest, last) : null;
   // (a couple with one word for the second and more after another comma, "Quill, Jordan & Lee, Amy" as against "Quill,
   // Jordan & Amy, Atlanta": the second's first name or a place, nothing can say which; kept as written, greeted without
   // a first name)
   if (pair2?.length === 1 && !pair2.titles?.length && rest.length && !letters(rest[0]) && !what(rest[0])) {
-    return { words: [...first, ...last], titles, shown: s, could: null, also: null, partner: pair2, partnerWhole: null, partnerCould: null, sure: false, familyOnly: false };
+    return { words: [...first, ...last], titles, shown: typedS, could: null, also: null, partner: pair2, partnerWhole: null, partnerCould: null, sure: false, familyOnly: false };
   }
   // Rule 8 (round 20, Nov 21 2026): put first name first only when it's clearly one family name and the given names of
   // one person or of a couple who share it ("Ames, Jordan" is Jordan Ames, "Rowe, Amy & Sam" Amy & Sam Rowe, "Ames,
@@ -583,7 +604,7 @@ export function readName(full) {
   // Mrs. De La Cruz" is Jordan Quill & Mrs. De La Cruz)
   const reordered = `${(pair2?.ownFamily ? [...titles, ...first, ...last, ...lastOff, ...firstOff, '&', ...pair2.titles, ...pair2]
     : [...titles, ...(pair2 ? [first[0], '&', ...(pair2.titles || []), ...pair2, ...first.slice(1)] : first), ...last, ...lastOff, ...firstOff]).join(' ')}${rest.length ? `, ${rest.join(', ')}` : ''}`;
-  const shown = asTyped ? s : reordered;
+  const shown = asTyped ? typedS : reordered;
   // (a title alone for the other one, "Quill, Jordan & Mrs.": theirs is the family name before the comma)
   if (pair2?.familyOnly && !pair2.length) pair2.push(...last);
   // (the other one's whole name: with the family name before the comma when they have none of their own after it,
@@ -595,10 +616,133 @@ export function readName(full) {
   //   Round 23 (finding 8, the lead's rule, over Nov 22's "as typed" for the address): the name's words only, in the order
   // typed; a place, a company, pronouns or letters after the second comma never go in it ("Ames, Jordan, Atlanta" is at
   // ames-jordan, "Ames, Jordan, Grace Church" too, never ames-jordan-atlanta). People's name stays as typed
-  const address = asTyped ? addressOf([parts[0], parts[1], ...rest.filter(nameStays)]) : null;
+  // (round 24: never the other one of a couple after another comma, nor the letters before them: "Ames, Jordan, & Amy" is
+  // at ames-jordan, never ames-jordan-amy)
+  const address = asTyped ? addressOf([parts[0], parts[1], ...rest.slice(0, past2 ? past2.at : rest.length).filter(nameStays)]) : null;
   return { words: [...first, ...last], titles, shown, could: firstCould ? [...firstCould, ...last] : null, also: null, partner: pair2,
-    partnerWhole: pair2?.whole?.length ? [...pair2.whole, ...theirFamily] : null, partnerCould: pair2?.whole?.length && pair2.could ? [...pair2.could, ...theirFamily] : null, sure: true, familyOnly: false,
+    partnerWhole: pair2?.whole?.length ? [...pair2.whole, ...theirFamily] : past2?.whole || null,
+    partnerCould: pair2?.whole?.length ? (pair2.could ? [...pair2.could, ...theirFamily] : null) : past2?.could || null, sure: true, familyOnly: false,
     ...(address ? { address } : {}) };
+}
+// Round 24 (finding 5, round 23's rule 8 with no comma too): a name's own words, what's typed around it set apart before
+// readName reads it, so the web address, the words Add matches on and the "same person?" question never take them, and the
+// same person is offered whatever's typed around their name ("Jordan Ames (she/her)" is Jordan Ames). Anything in brackets;
+// pronouns written with a slash ("she/her", "Pronouns: they/them"), unless they're all of what's after a comma, which the
+// comma reading reads (round 23: "Jordan Ames, she/her"); what follows a slash, the rest of that part after a whole name or
+// after a comma ("Jordan Ames / Edward Jones", "Ames, Jordan / Edward Jones"), the one word after it after a single word
+// ("Jordan/Jo Ames"). In the name before any comma, after a whole name only: what follows a spaced dash ("Jordan Ames -
+// Realtor"), "of", "at", "from", "with" or "@" ("Jordan Ames of Atlanta"), and the words after it that are surely a place,
+// a company or a job ("Jordan Ames Atlanta GA", "Jordan Ames Compass", "Jordan Ames Fulton County"); never a word that's
+// a family name as often ("Jordan Lee Church", "Jordan Ames Grace Church" stay as typed: the code can't know)
+const PRONOUN_WORDS = 'she|her|hers|he|him|his|they|them|their|theirs|xe|xem|xyr|ze|zir|hir|ey|em|eir|fae|faer|it|its|any|all';
+// (made when first asked, never as the file loads: the page's bundle imports this file and never reads a name)
+let PRONOUN_RUN = null;
+const pronounRun = () => (PRONOUN_RUN ||= new RegExp(`(?:\\bpronouns?\\s*:?\\s*)?(?<![\\p{L}])(?:${PRONOUN_WORDS})(?:\\s*\\/\\s*(?:${PRONOUN_WORDS}))+(?![\\p{L}])`, 'giu'));
+const SPACED_DASH = /\s[\p{Pd}−⁃]+\s/u;
+const JOINS_A_PLACE = /^(?:of|at|for|from|with|@\S*)$/iu;
+// (an organization word that's a family name as often: never surely one alone)
+const ORG_AS_NAME = /^(?:church|temple|parish|chapel|family|families|household|households)$/u;
+const NAMED_CITY = `austin houston dallas denver washington jackson lincoln madison tucker cleveland durham henderson richmond rochester
+  birmingham montgomery lancaster salem reno irvine stockton fremont toledo mesa orlando dayton raleigh burbank lafayette decatur
+  dunwoody norcross covington conyers calhoun dalton cumming milton macon rome boston`;
+let NAMED_CITIES = null;
+const nameCount = (ts) => ts.filter((t) => /\p{L}/u.test(t) && !TITLE.test(t) && !/^(?:the|&|and)$/iu.test(t)).length;
+// (how many of the name's words come before each place: one look at each word, so a long name reads at once)
+const countsBefore = (ts) => { const out = [0]; for (const t of ts) out.push(out[out.length - 1] + (nameCount([t]) ? 1 : 0)); return out; };
+// (the words from k on surely a place, a company or a job after a whole name: k, or -1 when there are none)
+const placeTail = (ts, least = 2) => {
+  if (!NAMED_CITIES) NAMED_CITIES = new Set(splitWords(NAMED_CITY));
+  const cased = /\p{Lu}/u.test(ts.join(' ')) && /\p{Ll}/u.test(ts.join(' '));
+  let k = ts.length;
+  const before = countsBefore(ts);
+  while (k > 0 && before[k - 1] >= least) {
+    const j = k - 1;
+    const w = plain(ts[j]);
+    const next = k < ts.length ? plain(ts[k]) : '';
+    const sure = !!w && (placeWord(w) || whereWord(w, { named: j === ts.length - 1 }) || stateAt(ts, j, cased)
+      || (NOT_A_FIRST_NAME.test(w) && !/^(?:pastor|coach)$/u.test(w)) || (ORG.test(w) && !ORG_AS_NAME.test(w))
+      || (j > 0 && placeTwo(plain(ts[j - 1]), w) && before[j - 1] >= least)
+      || (!!next && (placeTwo(w, next) || (NAMED_CITIES.has(w) && stateAt(ts, k, cased)) || /^(?:county|city|state|district|township|borough)$/u.test(next)
+        || (/^(?:us|u\.s)$/u.test(w) && /^(?:army|navy|marines|military|air|coast)$/u.test(next)))));
+    if (!sure) break;
+    k = j;
+  }
+  // (and it starts with a word that's a place, a company or a job on its own, or the name of a county, city or place of
+  // two words: never a kind of place a name goes before, "Jordan Ames Holly Springs" being Jordan Ames, but "Jordan Ames
+  // Grace Community" as typed)
+  if (!STANDALONE) STANDALONE = new Set([...keyed(PLACE_WORDS[PLACE_WORDS.length - 1]), ...PLACE_MORE.slice(1).flatMap(keyed), ...keyed(ON_ITS_OWN)]);
+  const own = (j) => {
+    const w = plain(ts[j]);
+    const next = j + 1 < ts.length ? plain(ts[j + 1]) : '';
+    return STANDALONE.has(placeKey(w)) || whereWord(w, { named: j === ts.length - 1 }) || stateAt(ts, j, cased) || NOT_A_FIRST_NAME.test(w)
+      || (!!next && (placeTwo(w, next) || (NAMED_CITIES.has(w) && stateAt(ts, j + 1, cased)) || /^(?:county|city|state|district|township|borough)$/u.test(next)
+        || (/^(?:us|u\.s)$/u.test(w) && STANDALONE.has(placeKey(next)))));
+  };
+  while (k < ts.length && !own(k)) k++;
+  // (never inside a place of two words, "Charlotte North Carolina"; and a word that joins people goes with what's after it,
+  // "Jordan Rowe and Co." being Jordan Rowe)
+  if (k > 0 && k < ts.length && placeTwo(plain(ts[k - 1]), plain(ts[k]))) return -1;
+  while (k > 1 && k < ts.length && /^(?:and|&|y|e|et|und|n)$/iu.test(ts[k - 1]) && before[k - 1] >= least) k--;
+  return k < ts.length ? k : -1;
+};
+// (the military and work words that stand on their own after a name)
+const ON_ITS_OWN = `army navy marines usmc usaf usn uscg military veterans selfemployed freelance freelancer unemployed retired`;
+let STANDALONE = null;
+// (a part of the name with what follows a spaced dash, "of", "at", "from", "with" or "@", and a place, a company or a job at its
+// end set apart, after `least` words of the name)
+const cutAfter = (part, least, tail = true) => {
+  let p = part;
+  const d = p.match(SPACED_DASH);
+  // (what's after the dash a place, a company, a job or more than one word: one word alone may be a family name of two
+  // typed with spaces, "Jordan Ames - Lee")
+  const after = d ? p.slice(d.index + d[0].length).trim() : '';
+  const notName = after.split(/\s+/).length > 1 || placeOrOrg(after) || NOT_A_FIRST_NAME.test(plain(after)) || pronouns(after);
+  if (d && notName && nameCount(p.slice(0, d.index).trim().split(/\s+/)) >= least) p = p.slice(0, d.index);
+  let ts = p.trim().split(/\s+/).filter(Boolean);
+  const counts = countsBefore(ts);
+  const j = ts.findIndex((x, k) => k > 0 && k < ts.length - 1 && JOINS_A_PLACE.test(x) && counts[k] >= least);
+  if (j > 0) ts = ts.slice(0, j);
+  const k = tail ? placeTail(ts, least) : -1;
+  return (k > 0 ? ts.slice(0, k) : ts).join(' ');
+};
+export function ownWordsOf(full) {
+  const typed = String(full ?? '').replace(/\s+/g, ' ').trim();
+  let t = typed;
+  for (let n = 0; n < 4 && /[([{][^()[\]{}]*[)\]}]/u.test(t); n++) t = t.replace(/[([{][^()[\]{}]*[)\]}]/gu, ' ');
+  t = t.replace(/[([{].*$/u, ' ');
+  const lone = nameCount(t.split(',')[0].trim().split(/\s+/)) === 1;
+  const parts = t.split(',').map((part, i) => {
+    // (after the first comma, only right after a lone family name, "Family, Given": what's after a whole name is the comma
+    // reading's, round 22 and 23's, letters and partners among it)
+    if (i > 1 || (i === 1 && !lone)) return part.trim();
+    // (pronouns alone after a comma: the comma reading's, as round 23 had them)
+    if (pronouns(part)) return part.trim();
+    let p = part.replace(pronounRun(), ' ');
+    for (let n = 0; n < 4 && p.includes('/'); n++) {
+      const ts = p.trim().split(/\s+/);
+      const at = ts.findIndex((x) => x.includes('/') && !placeWord(x));
+      if (at < 0) break;
+      const [head, ...rest] = ts[at].split('/');
+      // ("w/" and "c/o" join what's after them, as "with" does: "Jordan Rowe w/ kids" is Jordan Rowe)
+      const before = [...ts.slice(0, at), ...(head && !/^(?:w|c)$/iu.test(head) ? [head] : [])];
+      if (nameCount(before) >= 2 || (i > 0 && nameCount(before) >= 1)) p = before.join(' ');
+      // (after a single word, the one word written after the slash: "Jordan/Jo Ames", "Jordan / Jo Ames")
+      else p = [...before, ...ts.slice(rest.join('') ? at + 1 : at + 2)].join(' ');
+    }
+    // (only after a person's name, starting with a given name the lists have or initials: "Law Offices of Jordan Nguyen"
+    // stays as typed)
+    if (i === 0) { const first = p.trim().split(/\s+/).find((x) => !TITLE.test(x) && !/^the$/iu.test(x)) || ''; if (listedGiven(first) || /^(?:\p{L}\.)+$/u.test(first)) p = cutAfter(p, 2); }
+    // (right after a lone family name and its comma, only when what's left starts with a given name the lists have:
+    // "Ames, Jordan - Realtor" is Jordan Ames; "Ames, Fulton County" is never "Fulton")
+    else if (i === 1) {
+      const cut = cutAfter(p, 1, false);
+      const first = cut.split(' ').find((x) => !TITLE.test(x)) || '';
+      if (cut !== p.replace(/\s+/g, ' ').trim() && listedGiven(first)) p = cut;
+    }
+    return p.replace(/\s+/g, ' ').trim();
+  });
+  const out = parts.join(', ').replace(/(?:,\s*)+$/u, '').trim();
+  return /\p{L}/u.test(out) ? out : typed;
 }
 // The greeting: only on positive evidence (round 20, Nov 21 2026; the lead's rule, replacing round 19's reader).
 // Rounds 15 to 20 each found new names greeted wrongly, because the reader took any word it didn't recognise as a name
@@ -852,32 +996,91 @@ const PLACE_TWO = `north_carolina south_carolina north_dakota south_dakota west_
 // PA, DC), set apart as letters before this is asked
 const STATE_CODES = `al ak az ar ca co ct de fl ga hi id il in ia ks ky la me mi mn mo mt ne nv nh nj nm ny nc nd oh ok or ri sc sd
   tn tx ut vt va wa wv wi wy pr gu vi`;
+// Round 24 (finding 6: "Ames, Fulton County" was read as Fulton County Ames, "Hope Nigeria" and "Jordan Starbucks" were
+// greeted): more kinds, each written whole. Government and the place words STOP holds (county, city, state, district,
+// federal, national), the military, every country, large employers, Spanish business words. Split when first asked, as
+// the rest are; each kind's word that's a given name on the lists counts only last, as Georgia does (buildPlaces)
+const PLACE_MORE = [
+  `county counties city cities state states district districts federal national council congressional police fire township
+  borough municipal government army navy marines usmc usaf usn uscg military veterans selfemployed freelance freelancer
+  unemployed`,
+  // (every country, as people write them, the short forms too; those of two words are PLACE_TWO_MORE's)
+  `afghanistan albania algeria andorra angola antigua argentina armenia australia austria azerbaijan bahamas bahrain bangladesh
+  barbados belarus belgium belize benin bhutan bolivia bosnia herzegovina botswana brazil brunei bulgaria burkina faso burundi
+  cambodia cameroon canada chad chile china colombia comoros congo croatia cuba cyprus czechia denmark djibouti dominica
+  ecuador egypt eritrea estonia eswatini swaziland ethiopia fiji finland france gabon gambia georgia germany ghana greece grenada
+  guatemala guinea guyana haiti honduras hungary iceland india indonesia iran iraq ireland israel italy jamaica japan jordan
+  kazakhstan kenya kiribati korea kosovo kuwait kyrgyzstan laos latvia lebanon lesotho liberia libya liechtenstein lithuania
+  luxembourg madagascar malawi malaysia maldives mali malta mauritania mauritius mexico micronesia moldova monaco mongolia
+  montenegro morocco mozambique myanmar burma namibia nauru nepal netherlands holland nicaragua niger nigeria macedonia norway
+  oman pakistan palau palestine panama papua paraguay peru philippines poland portugal qatar romania russia rwanda samoa
+  senegal serbia seychelles singapore slovakia slovenia somalia spain sudan suriname sweden switzerland syria taiwan tajikistan
+  tanzania thailand timor togo tonga tobago tunisia turkey turkmenistan tuvalu uganda ukraine uruguay uzbekistan vanuatu
+  vatican venezuela vietnam yemen zambia zimbabwe england scotland wales britain uk uae drc prc emirates arabia saudi zealand
+  africa europe asia caribbean trinidad`,
+  // (large employers, national and around Atlanta, written as people write them after their name; those of two words that
+  // are a given name and a family name a person could have, "Edward Jones", "Raymond James", "Georgia Power", are left out)
+  `delta target starbucks regions ameris fidelity vanguard nationwide anthem honeywell gulfstream mohawk orkin westrock
+  pultegroup mailchimp spanx napa uga choa aps cdc cnn ey fed permanente georgia-pacific mercedes-benz arby's zaxby's apple
+  meta waffle at&t spelman oglethorpe lowe's homedepot wellsfargo ups`,
+  // (Spanish business words, and a few French ones, as written with their accents and without)
+  `iglesia ministerio ministerios restaurante taquería panadería tienda tiendas carnicería construcción seguros abogados abogado
+  clínica farmacia escuela fundación asociación compañía empresa empresas servicios inmobiliaria bienes raíces peluquería
+  lavandería joyería florería pupusería supermercado barbería zapatería ferretería mueblería tortillería paletería dulcería
+  cafetería licorería notaría consultorio distribuidora importadora transportes mudanzas limpieza jardinería plomería
+  remodelaciones pinturas estética academia colegio universidad instituto parroquia templo comida mariscos antojitos grupo
+  hermanos pâtisserie boulangerie crêperie atelier`,
+];
+// (a country that's a common family name, never a place: "Grace Jordan", "Amy Israel", "Ann England", "Kate Holland";
+const PLACE_NEVER = `jordan israel england ireland holland wales trinidad montenegro portugal malta mercado iglesias
+  lowe starbuck marine`;
+// (and other numbers that are a family name or a given name: "Lowe" from "Lowe's", "Starbuck", "Marine")
+// (countries that are given names too, as Georgia is: a place only last, after another word; first, or after a comma, a name)
+const PLACE_NAMED = `chad india kenya asia mali egypt china cuba france africa navy`;
+// (places and companies of two words, each a family name or a given name alone, as PLACE_TWO's)
+const PLACE_TWO_MORE = `puerto_rico costa_rica el_salvador hong_kong south_africa new_zealand sri_lanka saudi_arabia dominican_republic
+  united_states united_kingdom united_arab south_korea north_korea ivory_coast burkina_faso cape_verde cabo_verde czech_republic
+  san_marino new_guinea equatorial_guinea south_sudan east_timor sao_tome great_britain viet_nam marshall_islands solomon_islands
+  wells_fargo waffle_house home_depot norfolk_southern genuine_parts southern_company coast_guard air_force national_guard
+  marine_corps state_farm kaiser_permanente`;
 let PLACES = null;
 let WHERES = null;
 let WHERES_NAMED = null;
 let TWOS = null;
 let STATES = null;
 const splitWords = (s) => s.split(/\s+/).filter(Boolean);
+// Round 24 (finding 6: "Jordan Taquería" was greeted while "Jordan Taqueria" wasn't): place and business words, as listed and
+// as typed, compared by the spelling-neutral key, accents, apostrophes, hyphens and capitals aside ("Taquería" is taqueria,
+// "Arby's" arbys, "Coca-Cola" cocacola), as names are (_given-names.js nameKey)
+const placeKey = (w) => nameKey(plain(w)).replace(/[^\p{L}\p{N}]+/gu, '');
+const keyed = (s) => splitWords(s).map(placeKey);
 const buildPlaces = () => {
-  PLACES = new Set(PLACE_WORDS.flatMap(splitWords));
+  PLACES = new Set(PLACE_WORDS.flatMap(keyed));
+  const not = new Set([...keyed(NOT_PLACES), ...keyed(PLACE_NEVER)]);
+  WHERES = new Set(keyed(WHERE));
+  WHERES_NAMED = new Set([...keyed(WHERE_NAMED), ...keyed(PLACE_NAMED)]);
+  // (round 24: government, the military, every country, large employers, Spanish business words: anywhere after a name's
+  // first word, as PLACE_WORDS' are; one that's a given name on the lists, or Georgia's kind, only last, as WHERE_NAMED's
+  // are; one that's a common family name there, never: PLACE_NEVER)
+  for (const w of PLACE_MORE.flatMap(keyed)) {
+    if (not.has(w) || WHERES_NAMED.has(w)) continue;
+    if (onTheLists(w) || familyFirst(w)) WHERES_NAMED.add(w); else PLACES.add(w);
+  }
   // (and each word's other number, the lists' and ORG's, unless it's a given name, a family name that comes first, a
   // family name here, letters after a name, or shorter than three letters)
-  const not = new Set(splitWords(NOT_PLACES));
   for (const w of [...PLACES, ...orgWords()]) {
     const o = w.length >= 4 ? otherNumber(w) : null;
     if (o && o.length >= 3 && !PLACES.has(o) && !ORG.test(o) && !not.has(o) && !onTheLists(o) && !familyFirst(o) && !knownLetters(o)) PLACES.add(o);
   }
-  WHERES = new Set(splitWords(WHERE));
-  WHERES_NAMED = new Set(splitWords(WHERE_NAMED));
-  TWOS = new Set(splitWords(PLACE_TWO).map((p) => p.replace(/_/g, ' ')));
+  TWOS = new Set(splitWords(`${PLACE_TWO} ${PLACE_TWO_MORE}`).map((p) => p.split('_').map(placeKey).join(' ')));
   STATES = new Set(splitWords(STATE_CODES));
 };
 /** A word (as `plain` has it) that marks a place or an organization wherever it is after a name's first word */
-export const placeWord = (w) => { if (!PLACES) buildPlaces(); return PLACES.has(w); };
+export const placeWord = (w) => { if (!PLACES) buildPlaces(); return PLACES.has(placeKey(w)); };
 /** (for the tests: every word the place lists hold, by where it counts, each word's other number among them) */
 export const placeLists = () => { if (!PLACES) buildPlaces(); return { anywhere: [...PLACES], last: splitWords(WHERE), lastNamed: splitWords(WHERE_NAMED), two: [...TWOS] }; };
 /** Two words (as `plain` has them) that are a place together ("ann arbor", "villa rica") */
-const placeTwo = (a, b) => { if (!TWOS) buildPlaces(); return TWOS.has(`${a} ${b}`); };
+const placeTwo = (a, b) => { if (!TWOS) buildPlaces(); return TWOS.has(`${placeKey(a)} ${placeKey(b)}`); };
 // (the word at k a state's two letters after another word: in capitals, in a name typed all in one case, or after a city
 // the lists know, "Atlanta Ga")
 const stateAt = (raw, k, cased) => {
@@ -887,7 +1090,7 @@ const stateAt = (raw, k, cased) => {
   return !cased || raw[k].replace(/[^\p{L}]/gu, '') === w.toUpperCase() || whereWord(plain(raw[k - 1]));
 };
 /** A state or a city: a place when written last after another word; `named`: those that are given names too as well */
-export const whereWord = (w, { named = true } = {}) => { if (!WHERES) buildPlaces(); return WHERES.has(w) || (named && WHERES_NAMED.has(w)); };
+export const whereWord = (w, { named = true } = {}) => { if (!WHERES) buildPlaces(); const k = placeKey(w); return WHERES.has(k) || (named && WHERES_NAMED.has(k)); };
 // (a place or an organization in what's written after a comma, round 22: "Grace Church", "Sandy Springs", "Mercy
 // Hospital", "Atlanta", "Edward Jones LLC"; a family word isn't one there, "Rowe, Jordan & family" being Jordan Rowe and
 // family, nor a state or city that's a given name too, "Ames, Savannah" being Savannah Ames, nor a place of two words

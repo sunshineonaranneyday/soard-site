@@ -42,7 +42,8 @@ const fail = (error, status = 400, extra = {}) => Response.json({ success: false
 // D1 not answering: said in words (never "D1_ERROR: …"), and safe to try again
 const BUSY = 'The site’s database didn’t answer just now. Please try again in a moment.';
 const GONE = 'This application isn’t here any more: it was deleted, maybe in another tab.';
-const failed = (e) => { if (!e?.status) console.error('[advisory-applications]', e?.message || e); return fail(e?.status ? e.message : BUSY, e?.status || 503); };
+// (partway: Add stopped partway, its words naming a press: ./_advisory-add.js)
+const failed = (e) => { if (!e?.status) console.error('[advisory-applications]', e?.message || e); return fail(e?.status ? e.message : BUSY, e?.status || 503, e?.partway ? { partway: true } : {}); };
 
 /**
  * The application with who it's linked to, read from People now (never the admin's own copy of People, which can be

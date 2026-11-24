@@ -90,6 +90,7 @@ const PAD = { 0: 20, 1: 14, 2: 11 };
 const HGT = { 0: 44, 1: 32, 2: 27, 3: 22 };
 const BADGE = 28;
 const READ_K = 0.9; // zoom at which every label reads comfortably
+const OPEN_ALL_K = 0.6; // the least Open all zooms to, to show the whole map: its labels still read
 let ctx2d = null;
 function textW(text, depth) {
   ctx2d ||= document.createElement('canvas').getContext('2d');
@@ -608,17 +609,23 @@ export function MindMap({
     showPanel();
   };
   // Everything open at a zoom where labels read: the map takes the full width
-  // (the panel moves below) and the canvas grows tall enough to hold it all
+  // (the panel moves below) and the canvas grows tall enough to hold it all.
+  // The whole map when it fits at OPEN_ALL_K or more (Peter's rule, Nov 23 2026: it had kept to 0.7, so a map a little
+  // wider than the screen lost its outer labels on both sides). Wider even at OPEN_ALL_K: kept there, starting with the
+  // root and the whole of its left side in view, from the map's left edge, the rest reached by dragging (on a screen
+  // too narrow for even that, the root whole)
   const openAll = () => {
     const all = new Set([...byId.values()].filter((n) => n.children).map((n) => n.id));
     const l = lay(all);
     const el = wrapRef.current;
     const b = bounds(l.nodes);
     const W = el.parentElement.clientWidth;
-    const k = Math.max(0.7, Math.min(READ_K, (W - 48) / (b.x1 - b.x0)));
+    const k = Math.max(OPEN_ALL_K, Math.min(READ_K, (W - 48) / (b.x1 - b.x0)));
     const H = Math.min(2600, Math.max(el.clientHeight, (b.y1 - b.y0) * k + 64));
     const fitsWide = (b.x1 - b.x0) * k <= W - 48;
-    tf.current = { k, x: fitsWide ? W / 2 - (k * (b.x0 + b.x1)) / 2 : W / 2, y: H / 2 - (k * (b.y0 + b.y1)) / 2 };
+    const rootRight = l.nodes[0]._x + l.nodes[0]._w; // (the root, laid out first, about x 0)
+    const x = fitsWide ? W / 2 - (k * (b.x0 + b.x1)) / 2 : Math.min(24 - k * b.x0, W - 24 - k * rootRight);
+    tf.current = { k, x, y: H / 2 - (k * (b.y0 + b.y1)) / 2 };
     setKind(null); setSvc(null); setQ('');
     const input = document.getElementById('am-search');
     if (input) input.value = '';

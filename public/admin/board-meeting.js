@@ -30,7 +30,7 @@ import { ask } from './ask.js';
 import { viewerLink, sizeText } from './file-viewer.js';
 import {
   html, call, upload, ago, savedAt, dayOf, firstOf, youAnd, hashFor, PAGE, viewerFiles, CHECK, NotesBox, Menu, callName, daysFrom, whenWords, Notes,
-  PersonPicker, ItemChooser, DocChip, pickable, Face, ShowsPicker, answerLost, sentence, nameIn, FitBox,
+  PersonPicker, ItemChooser, DocChip, pickable, Face, ShowsPicker, answerLost, sentence, nameIn, FitBox, approvedAlready,
 } from './board-ui.js';
 import {
   RESULTS, FILE_KINDS, LIVE, minutesIn, cleanMeeting, meetingName, longDate, shortDate, timeRange, plural, uid, clock,
@@ -38,7 +38,7 @@ import {
   isLive, agendaItems, isFilled, hasSince, reportsOn, showsOf, slidesOf, booksDraw, isStatement, LIVE_TITLES, SHOW_KINDS, tallyText, cleanLive, presentersOf, namesText, itemFiles, guessItem, deckOf, stopIndex, liveOfStop, pagesText, MORE,
   sectionPlan, sectionOf, sectionClock, clockText, facesOf, itemDocs, docTitle, formatOf, docsOf, looseFiles, NOTHING_NEW, isNothingNew, copyOfItem, minutesToRead, packetDocs, minutesFileOf, ownMinutesFile,
   signInKnown, minutesTarget, meetingOver, meetingHeld, inviteIsRecord, shareWaits, cleanTemplate, followAddresses,
-  noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay, approvedFileOf, FILE_STAYS, askedOf,
+  noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay, approvedFileOf, FILE_STAYS, askedOf, heldNoSend,
 } from './board-shared.js';
 import { openScreen, mirrorUrl, useScreen, usePages, stepKey, useCover } from './board-present.js';
 import { printMinutesTemplate, downloadMinutesDocx } from './board-minutes-template.js';
@@ -572,6 +572,29 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
     take(meeting, { looked: true });
   }, [meeting]);
   /**
+   * A send told it's going out from somewhere else (another tab, the other founder, the agenda's approval: 409
+   * `sending`, `lookAgain`): Board's data looked at again by itself every two seconds until this meeting as the site has
+   * it shows the send gone (what it keeps on the meeting, written once it has: the meeting then comes onto the page, so
+   * it shows it sent with its "again" press), or the send's hold has lapsed (two minutes). Board QA round 12, Nov 23
+   * 2026: that tab said "Board emailed: Not yet" with the first-time button for good
+   */
+  const following = useRef(0);
+  useEffect(() => () => { following.current = -1; }, []);
+  const sentOf = (x) => JSON.stringify([x?.packetSentAt || '', x?.minutesSentAt || '', x?.invite?.updatedAt || '']);
+  const followSend = (was) => {
+    if (following.current < 0) return;
+    const run = ++following.current;
+    const until = Date.now() + 130 * 1000;
+    const tick = async () => {
+      if (following.current !== run || Date.now() > until) return;
+      const look = await ctx.load({ quick: true }).catch(() => null);
+      const now = look?.ok ? (look.meetings || []).find((x) => x.id === m.id) : null;
+      if (now && sentOf(now) !== sentOf(was)) return;
+      setTimeout(tick, 2000);
+    };
+    setTimeout(tick, 2000);
+  };
+  /**
    * An action the server takes on the saved meeting: anything typed is saved first. → the answer, or null when it didn't
    * happen. An answer that never came back (./board-ui.js answerLost) may have happened all the same: the page looks at
    * what the site has now and puts it here, and `lost({ was, now, look })` says what that shows in place of an error
@@ -593,14 +616,17 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
       return null;
     }
     if (!j.ok) {
-      if (keep?.(j)) return j;
       // The site's own no can carry the meeting as it is now: the same email going out right now, or gone in the last ten
-      // minutes (functions/api/_board.js sendOnce: 409 { sending | already }), or Resend not answering. It goes on the
-      // page (a second tab shows "Email again", not "Email the board"), and a send already going or gone is said as news
+      // minutes (functions/api/_board.js sendOnce: 409 { sending | already }), or Resend not answering, or minutes a read
+      // can't go over (approved, typed, read in meanwhile). It goes on the page (a second tab shows "Email again", not
+      // "Email the board"; approved minutes show as approved), whoever says the no, and a send already going or gone is
+      // said as news. Board QA round 12: a no kept for the press's own words left the page as it was
       if (j.meeting) take(j.meeting);
       else if (j.reread) ctx.load({ quick: true });
+      if (keep?.(j)) return j;
       const went = !!(j.sending || j.already);
       if (went) settled?.(j);
+      if (j.sending && j.lookAgain) followSend(j.meeting || mRef.current);
       addToast(sentence(j.error || 'That didn’t go through. Try again.'), went ? 'info' : 'error');
       return null;
     }
@@ -646,7 +672,7 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
   const [focusId, setFocusId] = useState('');
   // The presentation in its own window: shared with the board or not (only Board's admins can open one that isn't)
   const present = () => openScreen(m.id);
-  const p = { m, set, setNow, ctx, act, save, numbers, keepSaved, saved, practice, onFocusItem: setFocusId, openWhere: () => setEditWhere(true), closeWhere: () => { setEditWhere(false); requestAnimationFrame(() => document.getElementById('bm-where-toggle')?.focus()); } };
+  const p = { m, set, setNow, ctx, act, take, save, numbers, keepSaved, saved, practice, onFocusItem: setFocusId, openWhere: () => setEditWhere(true), closeWhere: () => { setEditWhere(false); requestAnimationFrame(() => document.getElementById('bm-where-toggle')?.focus()); } };
 
   const days = daysFrom(m.date);
   // Where it is in its life: ahead (getting it to the board), its day (present it), held (the minutes): a meeting is
@@ -953,7 +979,7 @@ const dragKind = (e) => { const t = [...(e.dataTransfer?.types || [])]; return t
  * parts move by dragging their grip (or ⋯ → Move, or Alt ↑ ↓ in an item's name), and slide to their new places.
  * A file dropped on an item is uploaded and goes with it.
  */
-function AgendaEditor({ m, set, ctx, keepSaved, onFocusItem = () => {}, template = false }) {
+function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () => {}, template = false }) {
   const { data, addToast } = ctx;
   const setSection = (si, patch) => set((x) => ({ sections: x.sections.map((s, i) => (i === si ? { ...s, ...patch } : s)) }));
   const setItem = (si, ii, patch) => set((x) => ({ sections: x.sections.map((s, i) => (i === si ? { ...s, items: s.items.map((it, j) => (j === ii ? { ...it, ...patch } : it)) } : s)) }));
@@ -1296,7 +1322,7 @@ function AgendaEditor({ m, set, ctx, keepSaved, onFocusItem = () => {}, template
       })}
     </ol>
     <button type="button" class="ag-add ag-add--sec agx-addsec" onClick=${() => { const id = uid('s_'); withMotion(() => set((x) => ({ sections: [...x.sections, { id, title: '', minutes: 0, items: [blankItem()] }] }))); setTimeout(() => document.querySelector(`#agx-${id} .agx-sec__title`)?.focus(), 140); }}>+ Add a part</button>
-    ${template ? null : html`<${MoreCard} m=${m} set=${set} ctx=${ctx} keepSaved=${keepSaved} />`}
+    ${template ? null : html`<${MoreCard} m=${m} set=${set} ctx=${ctx} keepSaved=${keepSaved} take=${take} />`}
     </div>
   </div>`;
 }
@@ -1596,7 +1622,7 @@ const PACKET_KINDS = FILE_KINDS.filter((x) => ['financials', 'agenda', 'side', '
  * the board sees it, what it's filed under, and deleting it. `vf`, `i`: the viewer's list and its place there; `n`: its
  * place among the card's rows, where the focus goes after a delete; `cardId`: the card it's in
  */
-function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved }) {
+function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved, take = null }) {
   const { addToast, data } = ctx;
   const [renaming, setRenaming] = useState('');
   const renamed = useRef(''); // a rename saves once: Enter, or the box losing the focus, whichever comes first
@@ -1607,9 +1633,16 @@ function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved }) {
   // (another kind, Delete, an agenda item), as the site refuses them (functions/api/_board-minutes.js approvedFileNo).
   // Filed under Minutes it can be, when it isn't. Board QA round 11
   const stays = f.id === approvedFileOf(m);
+  // A no from the site that knows more than this page does (the minutes approved in another tab, the file signed): the
+  // meeting as the site has it comes onto the page with it, so the card and this menu show what's so and offer only
+  // what's allowed (Board QA round 12: still "Draft", with Delete offered, after "their file stays")
+  const refused = (j) => {
+    if (j.meeting) take?.(j.meeting); else if (j.reread) ctx.load({ quick: true });
+    addToast(j.error, 'error');
+  };
   const update = async (f, patch, said = '', undo = null) => {
     const j = await call({ action: 'update-file', id: f.id, ...patch });
-    if (!j.ok) { addToast(j.error, 'error'); return false; }
+    if (!j.ok) { refused(j); return false; }
     keepSaved((x) => ({ ...x, files: x.files.map((y) => (y.id === f.id ? { ...y, ...j.file } : y)) }));
     if (said) addToast(said, 'info', undo ? { label: 'Undo', fn: () => update({ ...f, ...j.file }, undo) } : undefined);
     return true;
@@ -1617,7 +1650,9 @@ function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved }) {
   const remove = async (f, at) => {
     if (!(await ask({ title: `Delete ${docTitle(f.name)}?`, text: 'It goes for good, from the board page too.', yes: 'Delete', danger: true }))) return;
     const j = await call({ action: 'delete-file', id: f.id });
-    if (!j.ok) { addToast(j.error, 'error'); return; }
+    if (!j.ok) { refused(j); return; }
+    // (off its items on the site in the same write: the meeting as the site has it now, when it came)
+    if (j.meeting && take) take(j.meeting);
     keepSaved((x) => ({ ...x, files: x.files.filter((y) => y.id !== f.id) }));
     set(placeFile(f.id, ''));
     // The focus goes to the file that took its place, else to adding one
@@ -1664,7 +1699,7 @@ function FileRow({ f, i, n, vf, kinds, cardId, goes, m, set, ctx, keepSaved }) {
  * "Also for this meeting" (MORE) is seen and changed here like any item, and a slide of it picked beside the agenda
  * comes here. Only when there are some: no files, no such slides
  */
-function MoreCard({ m, set, ctx, keepSaved }) {
+function MoreCard({ m, set, ctx, keepSaved, take }) {
   const files = looseFiles(m);
   if (!files.length) return null;
   const vf = viewerFiles(files);
@@ -1674,11 +1709,11 @@ function MoreCard({ m, set, ctx, keepSaved }) {
       <h3 class="agx-more__title" id="agx-more-h">${MORE.title}</h3>
       <span class="bd-muted">${plural(files.length, 'document')}, after the agenda</span>
     </div>
-    <ul class="bf-list">${files.map((f, i) => html`<${FileRow} key=${f.id} f=${f} i=${i} n=${i} vf=${vf} kinds=${PACKET_KINDS} cardId="agx-more" goes m=${m} set=${set} ctx=${ctx} keepSaved=${keepSaved} />`)}</ul>
+    <ul class="bf-list">${files.map((f, i) => html`<${FileRow} key=${f.id} f=${f} i=${i} n=${i} vf=${vf} kinds=${PACKET_KINDS} cardId="agx-more" goes m=${m} set=${set} ctx=${ctx} keepSaved=${keepSaved} take=${take} />`)}</ul>
   </section>`;
 }
 
-function FilesCard({ m, set, ctx, keepSaved, title, sub, goes = false }) {
+function FilesCard({ m, set, ctx, keepSaved, take, title, sub, goes = false }) {
   const { addToast } = ctx;
   const [uploading, setUploading] = useState([]); // the names on their way up
   const [over, setOver] = useState(false);
@@ -1694,12 +1729,15 @@ function FilesCard({ m, set, ctx, keepSaved, title, sub, goes = false }) {
     // (sent as the minutes when the minutes are approved: kept as an ordinary file, and said, never "added" alone. The
     // site's to say: functions/api/_board-minutes.js minutesKindNo. Board QA round 10)
     const asFiles = [];
+    // (kept as a file because the minutes are approved, maybe in another tab: the meeting as the site has it comes too)
+    let siteHas = null;
     for (const f of files) {
       const kind = kindOfName(f.name);
       const j = await upload(f, { ownerType: 'meeting', ownerId: m.id, kind: goes && (kind === 'minutes' || kind === 'signed') ? 'other' : kind });
-      if (j.ok) { added.push(j.file); if (j.asFile) asFiles.push([j.file, j.asFile]); } else addToast(`${f.name}: ${j.error}`, 'error');
+      if (j.ok) { added.push(j.file); if (j.asFile) asFiles.push([j.file, j.asFile]); if (j.meeting) siteHas = j.meeting; } else addToast(`${f.name}: ${j.error}`, 'error');
       setUploading((u) => { const i = u.indexOf(f.name); return i < 0 ? u : [...u.slice(0, i), ...u.slice(i + 1)]; });
     }
+    if (siteHas) take?.(siteHas);
     if (added.length) keepSaved((x) => ({ ...x, files: [...x.files, ...added] }));
     // The focus goes to the file that came in
     if (added.length) requestAnimationFrame(() => document.querySelector(`#${cardId} [data-file="${added[0].id}"]`)?.focus());
@@ -1744,7 +1782,7 @@ function FilesCard({ m, set, ctx, keepSaved, title, sub, goes = false }) {
       ${k && groups.length > 1 ? html`<p class="bm-group">${k.label}</p>` : null}
       <ul class="bf-list">${list.map(({ f, i }) => {
         const n = (at += 1);
-        return html`<${FileRow} key=${f.id} f=${f} i=${i} n=${n} vf=${vf} kinds=${kinds} cardId=${cardId} goes=${goes} m=${m} set=${set} ctx=${ctx} keepSaved=${keepSaved} />`;
+        return html`<${FileRow} key=${f.id} f=${f} i=${i} n=${n} vf=${vf} kinds=${kinds} cardId=${cardId} goes=${goes} m=${m} set=${set} ctx=${ctx} keepSaved=${keepSaved} take=${take} />`;
       })}</ul>
     </div>`)}
     ${uploading.length ? html`<ul class="bf-list bf-up" aria-live="polite">${uploading.map((name, i) => html`<li class="bf-file is-up" key=${`${name}-${i}`}><span class="spinner" aria-hidden="true"></span><div class="bf-file__main"><span class="bd-file-name">${docTitle(name)}</span><div class="bd-row__meta">Uploading…</div></div></li>`)}</ul>` : null}
@@ -1979,14 +2017,18 @@ function GettingReady({ m, set, ctx, act, save, saved }) {
     // other tab is "you", never their own name (QA round 6, Nov 21 2026)
     const yes = d.approvals?.[m.id];
     if (yes) {
-      const mine = String(yes.by || '').split(/\s+/)[0].toLowerCase() === String(data.me || '').split('@')[0].toLowerCase();
-      addToast(mine ? `You approved it already ${ago(yes.at)}, maybe in another tab` : `${yes.by || 'Someone'} already approved it ${ago(yes.at)}`, 'info');
+      // (whose approval it is by its address, when the site says: the name's first word only for one kept before it did)
+      const mine = yes.email ? yes.email === String(data.me || '').toLowerCase() : String(yes.by || '').split(/\s+/)[0].toLowerCase() === String(data.me || '').split('@')[0].toLowerCase();
+      addToast(approvedAlready({ by: yes.by, at: yes.at, mine }), 'info');
       focusNext('.bm-ready');
       return;
     }
+    // (held since this page read it: nothing asking the board to read ahead goes, said as the site says it. Round 12)
+    const heldNow = heldNoSend(siteCopy(d, m));
+    if (heldNow) { addToast(heldNow, 'info'); return; }
     const says = approveSays(d, siteCopy(d, m));
     if (!(await ask({ title: 'Approve the agenda?', text: `${doubtWords(doubt.approve, 'the approval and its email')}${says.text}`, yes: says.yes, careful: !!doubt.approve }))) return;
-    const j = await run('approve', { action: 'approve-agenda', id: m.id }, (r) => (r.already ? `${r.approvedBy} already approved it` : r.madeBoard && r.agenda !== 'failed' ? `Approved, and it’s a board meeting now${r.agenda === 'sent' ? ': on the board page, and on its way to the board' : r.agenda === 'waiting' ? '. It goes to the board as soon as they’ve had the email on how to sign in' : ''}`
+    const j = await run('approve', { action: 'approve-agenda', id: m.id }, (r) => (r.already ? approvedAlready({ by: r.approvedBy, at: r.approvedAt, mine: !!r.mine }) : r.madeBoard && r.agenda !== 'failed' ? `Approved, and it’s a board meeting now${r.agenda === 'sent' ? ': on the board page, and on its way to the board' : r.agenda === 'waiting' ? '. It goes to the board as soon as they’ve had the email on how to sign in' : ''}`
       : r.agenda === 'sent' ? 'Approved, and on its way to the board'
       // (approved, its email refused or stopped: what the site says happened, and what happens next)
       : r.agenda === 'failed' ? { text: r.agendaError || 'The agenda is approved, but its email to the board didn’t go. Board tries again by itself in a few minutes, or press Email the board.', kind: 'error' }
@@ -2007,6 +2049,8 @@ function GettingReady({ m, set, ctx, act, save, saved }) {
     if (!d) return;
     // (emailed already, or on the board page, as the site has it at the press: siteCopy)
     const sm = siteCopy(d, m);
+    // (held since this page read it: nothing asking the board to read ahead goes, said as the site says it. Round 12)
+    if (heldNoSend(sm)) { addToast(heldNoSend(sm), 'info'); return; }
     const to = d.members.filter((x) => x.email).map((x) => x.name);
     const none = d.members.filter((x) => !x.email).map((x) => x.name);
     if (!to.length) { addToast('No board member has an email on file (People → Board), so there’s no one to email.', 'error'); return; }
@@ -2014,7 +2058,9 @@ function GettingReady({ m, set, ctx, act, save, saved }) {
     if (!(await ask({ title: `Email ${andList(to)} the link${went ? ' again' : ''}?`, text: `${doubtWords(doubt.send, 'the email', { once: true })}${went}${sm.shared ? 'They get' : 'The meeting goes on the board page, and they get'} the agenda${docs ? `, ${docs}` : ' (no documents yet)'} and the link to the board page${toRead ? `, the ${nameIn(toRead, d.meetings)} minutes to read before the vote` : ''}, and their own list of what’s left to do: reports to write, papers to sign, and the calendar invite if they haven’t answered it. Nothing is attached.${none.length ? ` ${andList(none)} ${none.length === 1 ? 'has' : 'have'} no email, so ${none.length === 1 ? 'gets' : 'get'} nothing.` : ''}`, yes: went || doubt.send ? 'Email them again' : 'Email the board', careful: !!(went || doubt.send) }))) return;
     // (on the board page first, or nothing goes: why it didn't is said)
     if (!sm.shared && !(await putOnPage(pressed, true))) return;
-    run('send', { action: 'send-packet', id: m.id }, (j) => `Emailed ${plural(j.sent, 'board member')}`, ({ was, now }) => (now?.packetSentAt && now.packetSentAt !== was.packetSentAt
+    // (again on purpose: the send this page showed, so only a send it knew of goes again: functions/api/_board.js
+    // sendOnce. A press that never showed it sends it to nobody who has it. Board QA round 12)
+    run('send', { action: 'send-packet', id: m.id, ...(sm.packetSentAt ? { seen: sm.packetSentAt } : {}) }, (j) => `Emailed ${plural(j.sent, 'board member')}`, ({ was, now }) => (now?.packetSentAt && now.packetSentAt !== was.packetSentAt
       ? { text: `${LOST}, but it went: the link was emailed to ${plural(now.packetSentTo || 0, 'board member')} ${ago(now.packetSentAt)}.`, known: true }
       : { text: lostOnce('the board was emailed'), known: false }));
   };
@@ -2193,10 +2239,14 @@ function Coming({ m, ctx, act }) {
   // A reminder names who gets it before it goes: the board as the site has it now (useFresh)
   const remind = async (test) => {
     let who = quiet;
+    // (asked again on purpose: the last ask this page showed them, so only one it knew of goes again. Board QA round 12)
+    let seen = '';
     if (!test) {
       const d = await look('send');
       if (!d) return;
       const sm = siteCopy(d, m);
+      // (held since this page read it: nobody is asked whether they'll come, said as the site says it. Round 12)
+      if (heldNoSend(sm)) { addToast(heldNoSend(sm), 'info'); requestAnimationFrame(() => head.current?.focus()); return; }
       who = toAsk(d, repliesOf(sm));
       if (!who.length) { addToast('Everyone on the invite has answered it, so there’s no one to ask.', 'info'); requestAnimationFrame(() => head.current?.focus()); return; }
       // Asked already, as the site has it at the press: said with when, as the other sends' "again" questions are, and
@@ -2207,6 +2257,7 @@ function Coming({ m, ctx, act }) {
       for (const x of again) when.set(ago(had[x.slug]), [...(when.get(ago(had[x.slug])) || []), x.name]);
       const before = [...when].map(([w, names]) => `${andList(names)} ${names.length === 1 ? 'was' : 'were'} asked ${w}.`).join(' ');
       const all = again.length === who.length;
+      seen = again.map((x) => had[x.slug]).sort().at(-1) || '';
       if (!(await ask({ title: `Ask ${all && who.length > 1 ? 'them' : andList(who.map((x) => x.name))}${all ? ' again' : ''}?`, text: `${doubtWords(doubt, 'the reminder', { once: true })}${before ? `${before} ` : ''}${who.length === 1 ? 'They get' : 'Each gets'} an email asking them to answer the calendar invite. Their answer shows here.`, yes: all ? 'Ask them again' : who.length === 1 ? 'Ask them' : `Ask all ${who.length}`, careful: !!doubt || again.length > 0 }))) return;
     }
     setWorking(test ? 'preview' : 'send');
@@ -2214,7 +2265,7 @@ function Coming({ m, ctx, act }) {
     // question says who the site has as asked)
     // A lost answer: the site's record of who was asked when says what really happened, as Email the board's does
     // (coordinator, Board QA round 8); with nothing new in it, it may have gone
-    const j = await act({ action: 'remind-rsvp', id: m.id, test }, { lost: ({ was, now }) => {
+    const j = await act({ action: 'remind-rsvp', id: m.id, test, ...(seen ? { seen } : {}) }, { lost: ({ was, now }) => {
       if (test) return { text: `${LOST}, so this page can’t tell whether the test went. Look in your inbox before sending it again.`, known: false };
       const members = look?.ok ? look.members || data.members : data.members;
       const last = (x) => Object.values(askedOf(x, members)).sort().at(-1) || '';
@@ -2473,6 +2524,7 @@ function MinutesDrop({ m, set, ctx, act, keepSaved }) {
         const k = there.ok ? await call({ action: 'read-minutes', id: other.id, fileId: there.file.id }) : there;
         setBusy(false);
         if (!k.ok) {
+          if (k.meeting) ctx.putMeeting(k.meeting);
           // A clear no: neither copy stays where the board would see it
           if (there.ok && refused(k)) { await call({ action: 'delete-file', id: there.file.id }); await dropHere(); }
           addToast(k.error || 'Couldn’t read them in there', 'error');
@@ -2605,7 +2657,8 @@ function WrapUp({ m, set, ctx, act, save, saved, keepSaved }) {
     if (!test && !(await ask({ careful: true, title: `Email ${andList(to)} that the minutes are up${told ? ' again' : ''}?`, text: `${doubtWords(doubt, 'the email', { once: true })}${told}Each gets the link to the ${sm.minutes === 'approved' ? 'approved' : 'draft'} minutes on the board page. Nothing is attached.${none.length ? ` ${andList(none)} ${none.length === 1 ? 'has' : 'have'} no email, so ${none.length === 1 ? 'gets' : 'get'} nothing.` : ''}`, yes: told || doubt ? 'Email them again' : 'Email the board' }))) return;
     const task = pressedTask();
     setWorking(test ? 'preview' : 'send');
-    const j = await act({ action: 'send-minutes', id: m.id, test }, { lost: ({ was, now }) => {
+    // (again on purpose: the send this page showed, so only one it knew of goes again. Board QA round 12)
+    const j = await act({ action: 'send-minutes', id: m.id, test, ...(!test && sm.minutesSentAt ? { seen: sm.minutesSentAt } : {}) }, { lost: ({ was, now }) => {
       if (test) return { text: `${LOST}, so this page can’t tell whether the test went. Look in your inbox before sending it again.`, known: false };
       if (now?.minutesSentAt && now.minutesSentAt !== was.minutesSentAt) return { text: `${LOST}, but it went: the board was told ${ago(now.minutesSentAt)}.`, known: true };
       setDoubt(new Date().toISOString());

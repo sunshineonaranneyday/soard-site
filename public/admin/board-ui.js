@@ -97,6 +97,18 @@ export function ago(iso, now = Date.now()) {
   if (m < 60 * 24 || d < 1) return `${Math.round(m / 60)} hr ago`;
   return d === 1 ? 'yesterday' : d < 14 ? `${d} days ago` : dayOf(iso);
 }
+/**
+ * An agenda approved already, said to whoever presses Approve: their own other tab is "you"; someone else by name, with
+ * when ("at 4:12 PM" today, else its day too). Board QA round 12, Nov 23 2026: "Jane Doe already approved it", to Jane
+ */
+export function approvedAlready({ by = '', at = '', mine = false } = {}, now = Date.now()) {
+  if (mine) return 'You approved it already, maybe in another tab.';
+  const t = Date.parse(at || '');
+  if (!Number.isFinite(t)) return `${by || 'Someone'} approved it already.`;
+  const clockAt = new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' }).replace(/\s+/g, ' ');
+  const day = todayEastern(t) === todayEastern(now) ? '' : `on ${new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' })} `;
+  return `${by || 'Someone'} approved it already, ${day}at ${clockAt}.`;
+}
 /** "8:42 AM" for a moment today, else ago() */
 export const savedAt = (iso) => { const t = new Date(iso || 0); return Date.now() - t < 12 * 3600e3 ? t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : ago(iso); };
 /** What a video link is: "Google Meet", "Microsoft Teams", "Zoom" */

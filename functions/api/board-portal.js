@@ -91,7 +91,7 @@ async function who(context) {
 const later = async (context, p) => { if (context.waitUntil) context.waitUntil(p); else await p; };
 // (a 503 is ours and in words: a read that decides something didn't answer, so nothing was done, and the page offers Try
 // again: a founder whose check of who runs Board failed is never told the page is for the board. Board QA round 9)
-const fromError = (err) => (err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? fail(err.message, err.status, err.extra || {}) : Response.json({ ok: false, error: sayable(err) }, { status: 500 }));
+const fromError = (err) => (err?.setup ? fail(err.message, 503) : err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? fail(err.message, err.status, err.extra || {}) : Response.json({ ok: false, error: sayable(err) }, { status: 500 }));
 // The page's read of People that didn't answer: the sign-in's words with Try again, never a board page with an empty
 // directory or members missing their emails (Board QA round 10)
 const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));

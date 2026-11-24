@@ -36,6 +36,8 @@ import sharp from 'sharp';
 import { EMAIL_ALIASES } from '../functions/api/_reveal-invites.js';
 import { execFileSync } from 'node:child_process';
 import { axeScan, axeText } from './lib/axe.mjs';
+// (round 24: every page served without Cloudflare's analytics beacon, so nothing leaves this machine)
+import { servesPage } from '../tests/lib/local-only.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const OUT = join(ROOT, 'test-results/advisory-application/');
@@ -182,7 +184,7 @@ const server = createServer(async (req, res) => {
   const file = join(rootDir, path);
   if (file.startsWith(rootDir) && existsSync(file) && statSync(file).isFile()) {
     res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', ...(applyCsp && path === '/advisory-board/apply/index.html' ? { 'content-security-policy': applyCsp } : {}) });
-    return res.end(readFileSync(file));
+    return res.end(servesPage(file, readFileSync(file)));
   }
   res.writeHead(404); res.end('not found');
 });
@@ -711,7 +713,9 @@ await phone.close();
   DB.prepare = (sql) => {
     if (!/^UPDATE advisory_applications SET notes/.test(sql)) return real(sql);
     DB.prepare = real;
-    return { bind: (...p) => ({ run: async () => { await real('DELETE FROM advisory_applications WHERE id = ?').bind(bn.id).run(); return real(sql).bind(...p).run(); } }) };
+    // (r24: the note's save reads the application back from its own statement, RETURNING *, so the fake answers first() as D1 does)
+    const gone = async () => { await real('DELETE FROM advisory_applications WHERE id = ?').bind(bn.id).run(); };
+    return { bind: (...p) => ({ run: async () => { await gone(); return real(sql).bind(...p).run(); }, first: async () => { await gone(); return real(sql).bind(...p).first(); } }) };
   };
   await clickText(pz, '.ava-drawer button', /^Add note$/);
   const said = await pz.waitForFunction(() => document.querySelector('.ava-drawer h2')?.textContent.trim() === 'Application not found', { timeout: 8000 }).then(() => true, () => false);

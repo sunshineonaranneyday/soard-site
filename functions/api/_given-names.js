@@ -57,7 +57,7 @@ Chunmei Chunyan Chunxia Chunling Chunlan Meili Meilin Meiqi Meiying Yaqi Yating 
 Shanshan Shuhua Shuqin Shuzhen Shuting Shuyi Siqi Sitong Simin Ruolan Ruyi Qianqian Qiong Qiuju Qiuxia Mengyao Mengqi
 Mengting Mengmeng Lingling Lingyun Lanying Juanjuan Huimin Huifang Huiling Huiqin Huizhen Huiying Huijuan Fangfang
 Fengying Feifei Dandan Cuiping Cuihua Chenxi Bingbing Baoyu Aiping Aihua Aiying Zhenzhen Yuanyuan Yunfei Yunhua Yunfeng
-Yunlong Yunpeng Yuntao Tingting Zhaohui Zhonghua Zhongwei Xinyang Xuyang Zhuo Shuo Shuai
+Yunlong Yunpeng Yuntao Tingting Zhaohui Zhonghua Zhongwei Xinyang Xuyang Zhuo Shuo Shuai Bowen
 Mei-ling Chun-hui Ya-ting Chia-hui Shu-hui Hui-ling Chien-hung Tsung-han Kuan-yu Yi-chen Po-han Wen-hsiung Chun-chieh
 Hsiao-mei Yu-chen Yu-hsuan Chih-hao Chia-ling Chia-wei Chih-wei Chun-ming Hsin-hui Hsiu-ying Hsiu-lan Hui-chen Hui-chun
 Hui-wen Kai-wen Li-hua Li-ling Mei-hua Mei-hui Pei-yu Pei-ling Shih-chieh Shu-chen Shu-ling Shu-ping Shu-yi Ting-ting
@@ -99,7 +99,20 @@ Sopheaktra Rotanak Sovannara Veasna Vutha Chanthy Kanha Bunthan Sokhorn Pheap Sr
 Sarun Sokun Vichea Ratha Rattana Sreynich Malis Kunthy Phearom Phearith Visoth Theary Mealea Sokchea Sovanny Sreynuon
 Kanika Vannary Raksmey Dalin Chanthol Chantrea Davuth Kimsour Leakena Monyrath Nimol Phally Samedy Seila Sereyvuth Serey
 Sokleng Somaly Sophanna Sophat Sopheara Sotheara Sovath Thearith Vicheka Vireak Borey Chakriya Channa Kolab Mony Nary
-Pheakdey Phirun Puthy Ratanak Sakada Sokhem Sokny Sopha Sothun Vichet Ponleu Bunly Sreyka Sreymey Kimly Kimleng`;
+Pheakdey Phirun Puthy Ratanak Sakada Sokhem Sokny Sopha Sothun Vichet Ponleu Bunly Sreyka Sreymey Kimly Kimleng
+Panha Vannara Sophearith Lyhour Chivorn Sitha Monirath Moniroth Phearun Theavy Sreynoch Sreyneath Navy Raksa Ravy Sopheakdey
+Lida Chhorvy Kimheng Bona Sokhoeun Davy Rachana Rachna Dalis Dany Davin Kakada Kalyan Kolap Lyna Makara Malai Mealtey Monika
+Monineath Monivong Narin Phanith Phanna Phearum Phoeurn Rasmey Reaksmey Rathanak Rattanak Sambo Samoeun Sarin Savuth
+Sinath Socheat Sochea Sokleap Sokly Somnang Sovan Sovannarith Sovannary Sovathana Sovichea Sreyoun Sreymach Sreypich
+Sreyly Sreyna Sreytouch Tevy Thavy Thavrin Tola Bunthorn Bunleng Bunheng Bunrith Chamnan Chanvatey Dararith Daravuth
+Kanitha Kimchheng Kimsan Kimhong Kimlang Kimsreang Leap Malika Manith Mardy Nita Phirum Phoung Pisal Rotana Sakal Sakhorn
+Samphors Sareth Sarorn Saroeun Sarom Savoeun Sereysothea Sinoun Sithy Sivlin Soben Sokchenda Sokhen Sokhoeurn Sophanith
+Sophoan Sothearith Sotheavy Sovanara Srun Sunly Tharith Thona Vannarith Vathana Vichheka Visna Vongsa Vuthea Chhaya
+Bopharath Borin Botum Chanmony Chanrith Chanthorn Chanvanna Chhunly Darong Ladin Leakhana Kosoma Limhour Lyheng Meyling
+Mengly Monyroth Narong Neary Nimith Oudom Pharith Phanit Phally Pheara Pheaktra Pisith Pisach Ponlok Rany Rathvisal Rithya
+Rotha Sakhoeun Samath Sambath Samrith  Saran Sarath Sareoun Seakly Seila Senghong Sethy Sitheng Sivmey Sokim Sokna
+Sokpheak Sombo Sopheaktra Sophoeun Soriya Sothavy Sotheary Sovanndy Sreyneth Sreynuch Sreypheap Sreysor Sreyvy Sungha
+Thearath Theara Thoeun Thyda Thyrith Udom Vanndy Vannith Veasna Vichika Vimean Vireakboth Visothy Vitou Vouchny`;
 const LAO = `Khamphet Somphone`;
 
 // American and English, women (named: round 21's women's list reads it whole)
@@ -498,17 +511,48 @@ Kato Abe Chong Chao Myung`;
 // anywhere on the lists, and not a family name that always comes first (FAMILY_FIRST_NAMES), is that people's family name
 // before their own given names: the lists build it (build), so a name added to either list is counted without anyone
 // remembering to. A test checks it against family names written out apart from these
+//   Round 24 (finding 1: Wade-Giles Juan and Jan, for Ruan and Ran, were greeted, being Spanish and Dutch given names too,
+// and missing from the Wade-Giles line written by hand): no form picked by hand. Every Chinese family name in pinyin is
+// written once (PINYIN_FAMILY), and its Wade-Giles form is made from it by Wade-Giles's own rules (wadeGiles, below: the
+// initials and finals as the romanization maps them), and its Hong Kong form read off a table of each name's Cantonese
+// reading (CANTONESE_OF, since Cantonese sounds can't be worked out from Mandarin ones): build adds both, so no form of a
+// name on the list is missing. A test fails if one isn't known. The lines written by hand below are kept (Taiwan's usual
+// spellings, "Hsu" for Hsü; Singapore's and Malaysia's Hokkien and Teochew)
+const PINYIN_FAMILY = `Wang Li Zhang Liu Chen Yang Huang Zhao Wu Zhou Xu Sun Ma Zhu Hu Guo He Gao Lin Luo Zheng Liang Xie Song Tang
+Han Feng Deng Cao Peng Zeng Xiao Tian Dong Pan Yuan Cai Jiang Yu Du Ye Cheng Wei Su Lu Ding Ren Shen Yao Cui Zhong Tan Fan
+Jin Shi Liao Jia Xia Fu Fang Bai Zou Meng Xiong Qin Qiu Hou Yin Xue Yan Duan Lei Long Tao Gu Mao Hao Gong Shao Wan Qian
+Dai Mo Kong Xiang Chang Kang Chi Niu Ou Hong Ge Wen Geng Guan Lan Bao An Zuo Zhan Qi Ning Ji Mei Hui Ling Fei Hua Xin Ying
+Jian Zhen Jing Qing Ming Bo Ping Kai Yong Shu Shan Rui Qiang Zhi Lou Jie Hai Kou Min Rong Mu Yue Zhuang Tong Ruan Lian Ai
+Huo Pu Qu Bian Hang Shang Gan Dou Sheng Zhai Ni Cen Ke Yun Tu Jun Bi Ban Chai Che Diao Gui Jiao Ju Kan Kuang Lai Lang
+Leng Lv Man Miao Nie Nong Pang Pei Qiao Sang Sha She Si Sui Tai Teng Tie Weng Xi Xiu Xuan You Zang Zhuo Zong
+Ran Rao Ru Quan Shou Bu Mi Gou Na Nan Chu Xing Mou Ba Bei Huan Lao Le Mai Nian Xian Zha Zu Chao Chong Da Dang Di E Luan Yi
+Situ Ouyang Sima Zhuge Shangguan`;
+// (each pinyin family name's Hong Kong spellings, from its Cantonese reading, every common character it's written with:
+// Li is 李 Lee or Li and 黎 Lai, Wu 吴 Ng and 武 Mo)
+const CANTONESE_OF = `Wang:Wong Li:Lee,Li,Lai Zhang:Cheung Liu:Lau Chen:Chan Yang:Yeung Huang:Wong Zhao:Chiu Wu:Ng,Mo Zhou:Chow,Chau
+Xu:Tsui,Hui Sun:Suen Ma:Ma Zhu:Chu,Chuk Hu:Wu Guo:Kwok He:Ho Gao:Ko Lin:Lam Luo:Law,Lo,Lok Zheng:Cheng Liang:Leung Xie:Tse
+Song:Sung Tang:Tong Han:Hon Feng:Fung Deng:Tang Cao:Cho,Tso Peng:Pang Zeng:Tsang Xiao:Siu Tian:Tin Dong:Tung Pan:Poon
+Yuan:Yuen Cai:Choi Jiang:Kong,Keung,Cheung Yu:Yu,Yue,Yee Du:To Ye:Yip Cheng:Ching Wei:Ngai,Wai Su:So Lu:Lo,Lui,Luk Ding:Ting
+Ren:Yam Shen:Shum,Sham,San Yao:Yiu Cui:Tsui Zhong:Chung Tan:Tam Fan:Fan Jin:Kam Shi:Shek,Sze Liao:Liu Jia:Ka Xia:Ha Fu:Fu
+Fang:Fong Bai:Pak Zou:Chau Meng:Mang Xiong:Hung Qin:Chun Qiu:Yau,Kau Hou:Hau Yin:Wan,Yan Xue:Sit Yan:Yim,Ngan,Yin Duan:Tuen
+Lei:Lui Long:Lung Tao:To Gu:Koo,Ku,Kuk Mao:Mo Hao:Kok Gong:Kung Shao:Shiu Wan:Man Qian:Chin Dai:Tai Mo:Mok Kong:Hung
+Xiang:Heung,Hong Chang:Sheung Kang:Hong Chi:Chi Niu:Ngau Ou:Au Hong:Hung Ge:Kot Wen:Wan,Man Geng:Kang Guan:Kwan Lan:Lam
+Bao:Pau An:On Zuo:Cho Zhan:Chim Qi:Chai,Chik,Kei Ning:Ning Ji:Kei,Kat,Kwai Mei:Mui Hui:Wai Ling:Ling Fei:Fai Hua:Wah
+Xin:San Ying:Ying Jian:Kan Zhen:Yan Jing:King Qing:Hing Ming:Ming Bo:Pok,Pak Ping:Ping Kai:Hoi Yong:Yung Shu:Shu
+Shan:Sin,Shan Rui:Yui Qiang:Keung Zhi:Chi Lou:Lau Jie:Kai,Kit Hai:Hoi Kou:Kau Min:Man Rong:Yung,Wing Mu:Muk,Mo Yue:Ngok,Lok
+Zhuang:Chong Tong:Tung Ruan:Yuen Lian:Lin,Lim Ai:Ngai Huo:Fok Pu:Po,Pok Qu:Wat,Kuk,Kui Bian:Pin Hang:Hong Shang:Sheung
+Gan:Kam,Kon Dou:Tau Sheng:Shing Zhai:Chak Ni:Ngai Cen:Shum,Sum Ke:Or Yun:Wan Tu:To Jun:Kwan Bi:Pat Ban:Pan Chai:Chai Che:Che
+Diao:Tiu Gui:Kwai Jiao:Chiu Ju:Kuk,Kui Kan:Ham Kuang:Kwong,Hong Lai:Lai,Loi Lang:Long Leng:Lang Lv:Lui Man:Moon,Mun
+Miao:Miu,Mau Nie:Nip Nong:Nung Pang:Pong Pei:Pui Qiao:Kiu Sang:Song Sha:Sha She:Shea,Se Si:Sze Sui:Chui Tai:Toi Teng:Tang
+Tie:Tit Weng:Yung Xi:Chik,Hai Xiu:Sau Xuan:Suen You:Yau Zang:Chong Zhuo:Cheuk Zong:Chung Ran:Yim Rao:Yiu Ru:Yu
+Quan:Kuen,Chuen Shou:Sau Bu:Pok Mi:Mai Gou:Kau Na:Na Nan:Nam Chu:Chu,Chor Xing:Ying Mou:Mau Ba:Pa Bei:Pui Huan:Woon Lao:Lo
+Le:Lok Mai:Mak Nian:Nin Xian:Sin Zha:Cha Zu:Cho Chao:Chau Chong:Sung Da:Tat Dang:Tong Di:Tik,Tai E:Ngok Luan:Luen Yi:Yik,Yee
+Situ:Szeto Ouyang:Auyeung,Au-Yeung Sima:Szema Zhuge:Chukot Shangguan:Sheungkoon`;
 const FAMILY_NAMES_OF = [
-  // (Chinese: pinyin; Taiwan's Wade-Giles; Cantonese, as Hong Kong and Macau write them; Hokkien and Teochew, as Singapore,
-  // Malaysia and the Philippines write them)
-  [CHINESE, `Wang Li Zhang Liu Chen Yang Huang Zhao Wu Zhou Xu Sun Ma Zhu Hu Guo He Gao Lin Luo Zheng Liang Xie Song Tang
-  Han Feng Deng Cao Peng Zeng Xiao Tian Dong Pan Yuan Cai Jiang Yu Du Ye Cheng Wei Su Lu Ding Ren Shen Yao Cui Zhong Tan Fan
-  Jin Shi Liao Jia Xia Fu Fang Bai Zou Meng Xiong Qin Qiu Hou Yin Xue Yan Duan Lei Long Tao Gu Mao Hao Gong Shao Wan Qian
-  Dai Mo Kong Xiang Chang Kang Chi Niu Ou Hong Ge Wen Geng Guan Lan Bao An Zuo Zhan Qi Ning Ji Mei Hui Ling Fei Hua Xin Ying
-  Jian Zhen Jing Qing Ming Bo Ping Kai Yong Shu Shan Rui Qiang Zhi Lou Jie Hai Kou Min Rong Mu Yue Zhuang Tong Ruan Lian Ai
-  Huo Pu Qu Bian Hang Shang Gan Dou Sheng Zhai Ni Cen Ke Yun Tu Jun Bi Ban Chai Che Diao Gui Jiao Ju Kan Kuang Lai Lang
-  Leng Lv Man Miao Nie Nong Pang Pei Qiao Sang Sha She Si Sui Tai Teng Tie Weng Xi Xiu Xuan You Zang Zhuo Zong
-  Chang Chen Hsu Tsai Cheng Hsieh Kuo Hung Tseng Chiu Chou Yeh Chuang Chiang Ho Kao Lo Chien Chung Tsao Tien Ting Ku Chu
+  // (Chinese: pinyin, PINYIN_FAMILY above, its Wade-Giles and Hong Kong forms made from it in build; Taiwan's usual
+  // Wade-Giles spellings; Cantonese, as Hong Kong and Macau write them; Hokkien and Teochew, as Singapore, Malaysia and the
+  // Philippines write them)
+  [CHINESE, `Chang Chen Hsu Tsai Cheng Hsieh Kuo Hung Tseng Chiu Chou Yeh Chuang Chiang Ho Kao Lo Chien Chung Tsao Tien Ting Ku Chu
   Teng Jen Shih Chao Sung Kuan Yen Hsiao Pai Chin Kung Tsui Hsueh Lung Chia Tung Tuan Tso Tsou Pi Pao Hsiung Yung Hsing
   Hsia Ching Chuan Kuang Chan Cheung Chow Fong Kwan Kwok Lam Lau Leung Mak Ng Siu Tam Tsang Tse Wong Yeung Yip Choi Fung
   Kwong Law Lui Mok Poon Yau Yuen Yim Yiu Kam Shum Sham Szeto Au Chau Chong Chuk Fok Hau Hon Ip Kei Keung Lok Lum Mui Ngai
@@ -524,7 +568,10 @@ const FAMILY_NAMES_OF = [
   Onishi Sugimoto Arai Hamada Ichikawa Furukawa Mizuno Komatsu Shimada Koyama Takano Yamauchi Nishida Kawano Kawasaki Honda
   Noda Oda Seki Tani Toda Yano Hoshino Kumagai Mochizuki Hino Kono Naka Shima Mita Ohta Nishi Arakawa Kawai Sone Taira
   Shiba Sugi Hata Nara Mine Kaji Asano Imamura Oka Hori Kanda Kubota Hirata Kitamura Matsushita Okubo Morimoto Tsuchiya
-  Ogata Kawaguchi Kishi Doi Jo Mano Kai Yuki Aida Miki Sakura Ken Rin Hiro Ike Mai`],
+  Ogata Kawaguchi Kishi Doi Jo Mano Kai Yuki Aida Miki Sakura Ken Rin Hiro Ike Mai
+  Iida Iwata Kaneda Oshima Amano Ogura Kuroda Hirai Nagai Nishikawa Kitagawa Takayama Yoshikawa Hattori Ishihara Sugita Kuwahara
+  Nagata Hayashida Matsuura Morioka Okabe Okazaki Shimada Takemoto Uchiyama Yamane Yasuda Yokota Aoyama Ichihara Ishizaki Kamata
+  Kanai Kawamura Kawashima Kojima Kumamoto Maruta Mizutani Nakata Nakazawa Nishiyama Ohashi Okuda Sasaki Shibuya Tsuda Wakabayashi`],
   // (Korean, in the spellings Korean Americans use)
   [KOREAN, `Kim Lee Park Choi Jung Kang Cho Yoon Jang Lim Han Oh Seo Shin Kwon Hwang Ahn Song Jeon Hong Yoo Ko Moon Yang Son
   Bae Baek Heo Nam Shim Noh Ha Kwak Sung Cha Joo Woo Koo Min Ryu Na Jin Ji Uhm Chae Won Chun Bang Gong Hyun Ham Byun Yeom
@@ -544,6 +591,143 @@ const FAMILY_NAMES_OF = [
   // (Hmong, as written in the US and in Hmong)
   [HMONG, `Vang Xiong Thao Lee Yang Her Moua Lor Hang Khang Kue Pha Lo Thor Chue Chang Vue Cha Fang Hawj Muas Vaj Xyooj Yaj
   Lis Tsab Thoj Kong Kha Koua`],
+];
+
+// Round 24 (finding 3): the shape of a given name of the peoples who write the family name first, from each romanization's
+// own syllables, so a common given name missing from the lists is still known for one (built in build, never at load).
+// Pinyin: each group of initials with the finals it takes ("" the syllables with no initial, y and w written as pinyin
+// writes them; ü written v, and u after j, q, x and y)
+const PINYIN_TAKES = `b p m:a o ai ei ao an en ang eng i ie iao ian in ing u
+m:e ou iu
+p:ou
+f:a o ei an en ang eng ou u
+d t:a e ai ei ao ou an en ang eng ong i ie iao iu ian ing u uo ui uan un
+d:ia
+n l:a e ai ei ao ou an en ang eng ong i ie iao iu ian in iang ing u uo uan un v ve
+l:ia o
+g k h zh ch sh r:a e ai ei ao ou an en ang eng ong u ua uo uai ui uan un uang
+zh ch sh r z c s:i
+z c s:a e ai ei ao ou an en ang eng ong u uo ui uan un
+j q x:i ia ie iao iu ian in iang ing iong u ue uan un
+:a o e ai ei ao ou an en ang eng er yi ya ye yao you yan yin yang ying yong yu yue yuan yun wu wa wo wai wei wan wen wang weng`;
+// Wade-Giles from a pinyin syllable, by its rules (apostrophes and marks as nameKey drops them: ch'ü is chu, ê is e)
+const WG_INITIAL = { b: 'p', p: 'p', d: 't', t: 't', g: 'k', k: 'k', j: 'ch', q: 'ch', x: 'hs', zh: 'ch', ch: 'ch', r: 'j', z: 'ts', c: 'ts' };
+const WG_ALONE = { yi: 'i', ye: 'yeh', yan: 'yen', yong: 'yung', you: 'yu', yue: 'yueh', e: 'o', er: 'erh' };
+const wgSyllable = (s) => {
+  if (/^[yw]/.test(s) || /^(?:a|o|e|ai|ei|ao|ou|an|en|ang|eng|er)$/.test(s)) return WG_ALONE[s] || s;
+  const ini = (s.match(/^(?:zh|ch|sh|[bpmfdtnlgkhjqxrzcs])/) || [''])[0];
+  let fin = s.slice(ini.length);
+  const to = WG_INITIAL[ini] ?? ini;
+  if (fin === 'i' && 'zcs'.includes(ini)) return ini === 's' ? 'ssu' : 'tzu';
+  if (fin === 'i' && ['zh', 'ch', 'sh', 'r'].includes(ini)) return `${to}ih`;
+  if (fin === 'ong') fin = 'ung'; else if (fin === 'iong') fin = 'iung'; else if (fin === 'ian') fin = 'ien'; else if (fin === 'ie') fin = 'ieh';
+  else if (fin === 'ue' || fin === 've') fin = 'ueh'; else if (fin === 'v') fin = 'u'; else if (fin === 'e' && 'gkh'.includes(ini)) fin = 'o';
+  else if (fin === 'uo' && !['g', 'k', 'h', 'sh'].includes(ini)) fin = 'o'; else if (fin === 'ui' && 'gk'.includes(ini)) fin = 'uei';
+  return to + fin;
+};
+// Hong Kong's Cantonese spellings: its initials, each with the finals of its spelling ("ee", "oo", "eung", "uen" as
+// Hong Kong writes them, "eong" as Macau and Malaysia do), and the syllables written apart (Ng, Tsz, Sze, the y- and w- ones)
+const HK_INITIALS = `ch f h k kw l m n ng p s sh t ts`;
+const HK_FINALS = `a ai au am an ang ap at ak ei e eng ek i ee im in ing ip it ik iu o oi on ong ok oo ou u ui un ung uk ut oon eung euk eui eun
+  ue uen uet or oh ah eong`;
+const HK_ALONE = `a ah ai au am an ang ak o oi on ong ok ou or ng m tsz sze ip yau yan yin ying yip yiu yu yue yuen yuet yuk yung yee yi yik
+  yim yeung ya yat wa wah wai wan wang wat wing wo wong wu wui wun oi`;
+// Round 24 (the lead, after the first pass): Hokkien, Teochew and Hakka as Singapore and Malaysia write them ("Boon Hock",
+// "Kiat", "Siew", "Hwee", "Fook"), each initial with the finals of that spelling, and the older spellings still seen
+// ("Chee-hwa", "Yat-sen", "Ying-jeou")
+const HOKKIEN_INITIALS = `b ch f g h j k kh l m n ng p ph s t th ts y w`;
+const HOKKIEN_FINALS = `a ah ai ak an ang ap at au e eh ek eng ee i ia iah iak iam ian iang iap iat iau iew im in ing ip it iu o oh oi ok om on ong oo
+  ooi oon ou u ua uah uan uang uat uay ue ui un ut ock eck ew eok eong eow wee wa wah ye ay oey oay ook iong ien iun oong`;
+const HOKKIEN_ALONE = `a ah ai an ang au eng ing ong oon oo ooi oh ew ee hwa jeou sen yat`;
+// Korean given names: the syllables they're made of, in the spellings Korean Americans use (Revised Romanization, the older
+// spellings and the usual ones: Seong, Sung and Song; Jun and Joon). Two of them, joined or hyphenated, are a name's shape
+const KOREAN_SYLLABLES = `a ah ae an bae beom bin bit bo bok bom bong byeol byeong byung cha chae chan chang cheol chul chol cheon chun
+  cheong chung chi chil da dae dam dan do dong doo du deok duk eon eun eui ui ga gang geon gun gi gil gwang gyu gyeong gook guk geum ha
+  hae hak han hee hui heon heung ho hong hoon hun hwa hwan hwi hye hyang hyeok hyuk hyeon hyun hyon hyo il in ja jae jang je jeong jung
+  jong ji jin jo joo ju jun joon ka kang keon kun ki kil kwang kyu kyung kyeong kyong kook mi min myeong myung myong mo moon mun na nam
+  nan neul ok pil ra rae ram ran ri rim rin ryeong ryung ryun ryul sa sae sang se seo seok suk sook seon sun sung seong song seul si
+  shi sik shik shin sin so soo su soon seung seop sup tae taek tak u uk wook woong won woo wan ya yang ye yeo yeon yon youn yong yeong young yoo yu
+  yoon yun yul yeol hyung hyeong moo`;
+// Japanese given names: two Hepburn morae or more (each consonant with its vowels as Hepburn writes them, the yōon, the
+// moraic n and a doubled consonant; a long o written "oh")
+const HEPBURN = `a i u e o|k g n b p m r:a i u e o|h:a i e o|s z:a u e o|t d:a e o|sh ch j:a i u o|ts:u|f:u|y:a u o|w:a o|ky gy ny hy by py my ry:a u o`;
+// Round 24 (the lead, after the first pass: "Juan Luna", "Ken Johnson", "Aida Romero" lost their greeting to a shape): a
+// known family name beats a shape. Common family names of every people here, written out (US and English, African
+// American, Hispanic, and others'); one after a family name written first that isn't on that people's own given-name list
+// is the family name, so the first word is the given name, as "Kai Chen" and "Yuki Kato" are. Split when first asked
+const SURNAMES = [
+  `smith johnson williams brown jones miller davis wilson anderson thomas taylor moore jackson martin thompson white harris
+  clark lewis robinson walker young allen king wright scott hill green adams nelson baker hall campbell mitchell carter roberts
+  phillips evans turner parker edwards collins stewart morris murphy cook rogers morgan cooper peterson bailey reed kelly howard
+  cox ward richardson watson brooks wood james bennett gray hughes price sanders myers long ross foster powell jenkins perry
+  russell sullivan bell coleman butler henderson barnes fisher simmons jordan patterson alexander hamilton graham reynolds
+  griffin wallace west cole hayes bryant gibson ellis stevens murray ford marshall owens harrison mcdonald woods washington
+  kennedy wells freeman webb tucker burns crawford olson simpson porter hunter gordon shaw snyder mason dixon hunt hicks holmes
+  palmer wagner black robertson boyd rose stone fox warren mills meyer rice schmidt daniels ferguson nichols stephens weaver
+  ryan gardner payne grant dunn kelley spencer hawkins arnold pierce hansen peters hart bradley knight elliott cunningham
+  duncan armstrong hudson carroll lane riley andrews ray berry perkins hoffman johnston matthews richards willis carpenter
+  lawrence chapman watkins greene wheeler harper burke larson morrison franklin carlson austin carr lawson jacobs obrien
+  lynch bishop montgomery oliver jensen harvey williamson gilbert dean sims howell reid hanson mccoy garrett burton fuller
+  weber welch lucas fields little banks day walsh bowman schultz fowler brewer may holland newman pearson curtis douglas
+  schneider joseph barrett hopkins barnett bates chambers caldwell beck lambert byrd craig lowe frazier powers neal leonard
+  pratt barker mann hale moran dale kane tate pace gage shea bale hanna wade stanley bowen`,
+  // (the next most common in the US, after the first few hundred)
+  `abbott acker adkins aldridge allison ambrose andrade ashby atkins atwood ayers babcock bader bagley baird baldwin ballard
+  banner barber barlow barr barton bass battle baxter beard beasley benson bentley berger bernard best bird blackburn blackwell
+  blair blake blankenship blevins bolton bond booker boone booth bowers boyer boyle bradford bradshaw brady brandt bray bridges
+  briggs brock bryan buchanan buck buckley bullock burch burgess burnett bush cain calderon calhoun callahan cameron cannon
+  cantrell carey carmichael carney carson carver case cash castaneda chandler chaney childers christensen church clay clayton
+  cline cobb cochran coffey cohen collier combs compton conley conner conrad conway copeland corbett cotton cowan crane
+  crosby cross cummings curry dalton daniel darby daugherty davenport david davidson dawson decker dennis dickerson dillard
+  dillon dodson donovan dorsey downs doyle drake dudley duffy dugan duke durham dyer eaton emerson english erickson estes
+  everett farley farmer farrell faulkner finch finley fitch fleming flynn floyd forbes ford foreman frank frederick french
+  frost fry frye gaines galloway gamble garner garrison gates gentry gill glass glenn glover golden goodman goodwin gough gould
+  graves gregory griffith grimes gross hahn hammond hancock haney hardin hardy harmon harrell hatcher hayden haynes hebert
+  hendrix hensley herman hess hester hinton hobbs hodge hodges hogan holder holland holloway holt hooper hoover hopper horn
+  horne horton house houston huber huff huffman humphrey hurley hurst hutchinson hyde ingram irwin jacobson james jarvis
+  jefferson jennings johns kaufman keith keller kemp kent kerr key kidd kirby kirk kline knapp knox koch kramer lamb landry
+  langley lara leach lindsay lindsey little livingston logan love lowery lucero luna lyons mack maddox mahoney malone mann
+  marks marsh massey mathews maxwell mayer maynard mays mcbride mccall mccann mcclain mcconnell mccormick mccullough mcdaniel
+  mcgee mcguire mcintosh mckay mckee mckinney mclaughlin mcmahon mcpherson meadows medina melton mercer merritt meyers middleton
+  miles miller monroe moody moon mooney mora morrow moses moss mueller mullins nash newton noble nolan norman norris norton
+  odom oneal oneill osborne pate patrick patton paul pearce peck pennington pittman pollard poole pope potter preston
+  pruitt quinn rankin ratliff reese reeves rhodes rich riddle roach robbins rocha rollins roman rosario roth rowe rowland
+  rush sampson saunders savage sawyer schroeder sexton sharp shelton shepherd sheppard short skinner slater sloan small
+  solomon sparks stafford stark steele stephenson stokes stout strickland summers sutton swanson sweeney talley tanner
+  terrell terry todd toro townsend tran travis tyler underwood vance vaughan vaughn velazquez vincent walls walter walton
+  ware waters watts weeks whitaker whitehead whitley wiggins wilcox wilder wiley wilkerson wilkins winters wise wolfe wong
+  workman wyatt yates york zimmer zimmerman`,
+  // (Hispanic and Latino, Portuguese and Brazilian, Filipino)
+  `garcia rodriguez martinez hernandez lopez gonzalez perez sanchez ramirez torres flores rivera gomez diaz cruz reyes morales
+  gutierrez ortiz ramos chavez mendoza ruiz alvarez castillo jimenez moreno romero herrera medina aguilar vargas castro
+  guzman mendez salazar soto delgado pena rios estrada ortega contreras sandoval guerrero santiago maldonado dominguez vega
+  espinoza marquez luna padilla mejia juarez figueroa navarro campos avila molina miranda ayala acosta cortez rosales
+  fuentes cabrera escobar pacheco valencia ibarra vasquez vazquez nunez munoz alvarado valdez gonzales sosa velasquez
+  carrillo cervantes rojas franco serrano trujillo salinas montoya bautista santos silva oliveira souza pereira costa
+  ferreira almeida carvalho lima ribeiro barbosa rocha dias nascimento araujo monteiro mendes cardoso teixeira correia
+  pinto moura cavalcanti machado vieira medeiros fonseca villanueva mercado aquino dela delos manalo mendiola tolentino
+  fernandez velez colon acevedo cordero orozco zamora barajas villarreal duran galvan arellano solis gallegos lozano
+  ochoa beltran sierra rubio pineda leon montes cisneros robles bonilla valenzuela prado escamilla zuniga`,
+  // (European: Italian, German, Dutch, Polish, Irish and Scottish, French, Greek, Russian and Ukrainian, Jewish)
+  `rossi russo ferrari esposito bianchi romano colombo ricci marino greco bruno gallo conti deluca costa giordano mancini
+  rizzo lombardi moretti barbieri fontana santoro mariani rinaldi caruso ferrara galli martini leone longo gentile martinelli
+  vitale serra coppola desantis fabbri muller mueller schmitt schneider fischer meyer weber schulz becker hoffmann schafer
+  koch bauer richter klein wolf schroeder neumann schwarz zimmermann braun kruger hartmann lange werner krause lehmann kohler
+  dejong devries vandenberg bakker janssen visser smit meijer mulder bos vos dekker nowak kowalski wisniewski wojcik
+  kowalczyk kaminski lewandowski zielinski szymanski wozniak dabrowski kozlowski jankowski mazur kwiatkowski krawczyk
+  murphy kelly obrien byrne ryan walsh oconnor mccarthy doyle gallagher kennedy lynch quinn moran dunne brennan burke
+  mcdonnell fitzgerald macdonald campbell stewart mackenzie fraser mclean martin bernard dubois durand lefebvre leroy moreau
+  laurent michel garnier faure rousseau blanc guerin muller fournier girard bonnet dupont lambert fontaine chevalier
+  papadopoulos georgiou nikolaou ivanov smirnov kuznetsov popov petrov sokolov volkov kozlov novikov morozov pavlov
+  shevchenko kovalenko bondarenko kravchenko cohen levy levine katz goldberg friedman shapiro rosen stein klein weiss
+  kaplan schwartz feldman greenberg horowitz rubin abrams`,
+  // (South Asian, Arabic and Persian, Turkish, African, Caribbean)
+  `patel shah singh kumar sharma gupta mehta joshi desai reddy rao iyer nair menon pillai chatterjee banerjee mukherjee das
+  bose sen ghosh khan ahmed hussain rahman chowdhury hossain islam siddiqui qureshi malik akhtar sheikh mirza ansari
+  haddad khoury nasser saleh mansour hamdan darwish abboud karimi hosseini mohammadi rahimi ahmadi yilmaz kaya demir
+  sahin celik yildiz aydin ozturk okafor okeke okonkwo eze nwosu adeyemi adebayo ogunleye balogun mensah asante owusu boateng
+  appiah osei acheampong tesfaye bekele girma haile alemu kebede wolde diallo traore ndiaye diop toure kamara jean pierre
+  joseph louis charles baptiste etienne francois laguerre desir saintil campbell brown`,
 ];
 
 // Given names of Hungary, where the family name comes first (round 21): a full name whose last word is one ("Simon
@@ -595,6 +779,9 @@ const HUNGARIAN_SHARED = `Vince Erik Rudolf Arnold Albert Viktor Patrik Roland N
 Valentin Julianna Marianna Melinda Brigitta Henrietta Nikoletta Klaudia Bettina Juli Andi Niki Ervin Viola Andrea Erika
 Anita Gabriella Rita Vera Laura Luca Hanna Lili Bella Mira Maja Liza Petra Barbara Veronika Alexandra Vivien Tamara Regina
 Johanna Zoé Félix Olívia Míra Anna Emma Lara Lia Linda Nina Kiara Simon`;
+//   Round 24 (finding 4b: "Gábor Rita", "Ábrahám Anna", "Jordán Erika" were greeted): Hungary's family names that are
+// given names too written out from what Hungarian family names are (a father's given name became one: Gábor, István,
+// Ferenc, János, Lajos, Tibor and the rest), the last lines below
 // Hungary's common family names (round 23): one that's a given name too, written first before any of Hungary's given names
 // (the shared ones too), is the family name ("Simon Rita", "Albert Ildikó Erika"). With its accents, as Hungarians write
 // it; one whose plain spelling is someone else's given name counts only with them ("Adam Rita" is Adam, "Ádám Rita" no name)
@@ -605,7 +792,10 @@ Budai Vincze Vince Hegedűs Deák Pap Bálint Pál Illés Vörös Szőke Fábiá
 Székely Gáspár Dudás Kozma Pásztor Bakos Sárközi Dénes Virág Major Orbán Barta Benkő Hegyi Albert Ádám Dávid Dániel Péter
 Sámuel Ábel Márk Márton Miklós Mihály Imre Benedek Kristóf Tóbiás Lázár Gergely Tamás Ambrus Elek Sebestyén Vida Erdei
 Erdős Kun Csonka Kardos Csizmadia Vámos Kálmán Mátyás Jenei Bencze Barna Huszár Rigó Szekeres Lőrincz Ferenczi Kerekes
-Bognár Bartos Kozák Ágoston Bárány Márkus Dobos Tamási Gergely Zsigmond Barabás`;
+Bognár Bartos Kozák Ágoston Bárány Márkus Dobos Tamási Gergely Zsigmond Barabás
+Gábor Ábrahám Jordán István Ottó Attila Csaba Iván Ferenc András Béla Bence Bertalan Boldizsár Demeter Dezső Domokos Domonkos
+Ede Endre Ernő Géza Gellért György Gyula János Jenő József Károly Lajos Lénárd Lőrinc Móric Mózes Nándor Pongrác Salamon
+Szilveszter Tibor Tivadar Tódor Vendel Vilmos Zakariás Ignác Kolos Dömötör Gyárfás Rókus Ákos Barnabás Hajnal Rózsa`;
 
 // Women's names, and names women go by as often as men (round 21), for a greeting after a woman's courtesy title ("Mrs.
 // Amy Ames" is Amy; "Mrs. John Ames", a wife written by her husband's name, is no name). Positive evidence: a name not
@@ -712,10 +902,16 @@ Flo Hettie Kitty Lettie Lottie Midge Minnie Netta Nettie Trixie Wendi Pat Sandy 
 // "Mei-Ling", "MeiLing"; "Min-jun", "Minjun"), on the lists and as typed alike. Every look-up here goes through it
 const PLAIN_LETTERS = { ø: 'o', ł: 'l', đ: 'd', ð: 'd', æ: 'ae', œ: 'oe', ß: 'ss', þ: 'th', ı: 'i', ħ: 'h', ŋ: 'n' };
 const ANY_HYPHEN = /[-\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/gu;
-export const nameKey = (w) => String(w).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-  .replace(/[øłđðæœßþıħŋ]/g, (c) => PLAIN_LETTERS[c]).replace(/[\u2019\u02BC]/g, "'").replace(ANY_HYPHEN, '');
-// (the same with its hyphens kept: which of the list's spellings is the one typed, "Jo-Ann" or "Joann")
-const shapeKey = (w) => String(w).normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(ANY_HYPHEN, '-');
+// Round 24 (finding 2: "Tien Ch'un-hui" was greeted "Tien", "Tien Chun-hui" not, the key keeping the apostrophe): and no
+// apostrophes of any kind (' and its look-alikes, the okina and the backtick among them), as it has no hyphens, on the
+// lists and as typed alike: Wade-Giles writes one in "Ch'un-hui" that people leave out; "O'Neil" and "Oneil", "De'Andre"
+// and "DeAndre" are one name each
+const ANY_APOSTROPHE = /['`´ʹʻʼʽʾʿˈ՚׳᾿`‘’‛′‵Ꞌꞌ＇]/gu;
+export const nameKey = (w) => String(w).replace(ANY_APOSTROPHE, '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+  .replace(/[øłđðæœßþıħŋ]/g, (c) => PLAIN_LETTERS[c]).replace(ANY_APOSTROPHE, '').replace(ANY_HYPHEN, '');
+// (the same with its hyphens and apostrophes kept: which of the list's spellings is the one typed, "Jo-Ann" or "Joann",
+// "De'Andre" or "DeAndre")
+const shapeKey = (w) => String(w).replace(ANY_APOSTROPHE, "'").normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(ANY_APOSTROPHE, "'").replace(ANY_HYPHEN, '-');
 
 let GIVEN = null;
 let FIRST = null;
@@ -725,16 +921,102 @@ let CAPS = null;
 let LONG = null;
 let TITLED = null;
 let BEFORE = null;
+let GIVEN_OF = null;
+let FAMILY_ANY = null;
+let SHAPES = null;
+let SURNAME = null;
 let HU = null;
 let HU_ACC = null;
+let HU_ACC_KEY = null;
 let HU_SHARED = null;
 let HU_FAMILY = null;
 let WOMAN = null;
 let ANYWHERE = null;
 const words = (list) => list.split(/\s+/).filter(Boolean);
-// (a word as typed, its accents kept: small letters, composed, a curly apostrophe made straight; no hyphens, round 23)
-const accented = (w) => String(w).normalize('NFC').toLowerCase().replace(/[\u2019\u02BC]/g, "'").replace(ANY_HYPHEN, '');
+// (a word as typed, its accents kept: small letters, composed; no hyphens, round 23, and no apostrophes, round 24)
+const accented = (w) => String(w).normalize('NFC').toLowerCase().replace(ANY_APOSTROPHE, '').replace(ANY_HYPHEN, '');
 const hasAccent = (w) => String(w).normalize('NFKD') !== String(w).normalize('NFC');
+// (Chinese family names in pinyin, each with its Wade-Giles form and its Hong Kong ones: [pinyin, wade-giles, [hong kong]])
+let FORMS = null;
+const chinese = () => {
+  if (FORMS) return FORMS;
+  const hk = new Map(words(CANTONESE_OF).map((e) => e.split(':')).map(([py, f]) => [nameKey(py), f.split(',')]));
+  const syl = syllables();
+  // (a family name of two syllables, "Situ", "Ouyang": each syllable)
+  const wg = (py) => {
+    const k = nameKey(py);
+    if (syl.py.has(k)) return wgSyllable(k);
+    for (let i = 1; i < k.length; i++) if (syl.py.has(k.slice(0, i)) && syl.py.has(k.slice(i))) return wgSyllable(k.slice(0, i)) + wgSyllable(k.slice(i));
+    return '';
+  };
+  FORMS = [...new Set(words(PINYIN_FAMILY))].map((py) => [py, wg(py), hk.get(nameKey(py)) || []]);
+  return FORMS;
+};
+// (a people's family names, as FAMILY_NAMES_OF writes them; the Chinese with pinyin's Wade-Giles and Hong Kong forms)
+const familiesOf = (k) => (k ? words(FAMILY_NAMES_OF[k][1])
+  : [...chinese().flatMap(([py, wg, hk]) => [py, ...(wg ? [wg] : []), ...hk]), ...words(FAMILY_NAMES_OF[0][1])]);
+// The syllables, as nameKey keys them: pinyin's, Wade-Giles's (made from pinyin's), Hong Kong's, Korean names', Hepburn's morae
+let SYL = null;
+const syllables = () => {
+  if (SYL) return SYL;
+  const py = new Set();
+  for (const line of PINYIN_TAKES.split('\n')) {
+    const [inits, fins] = line.split(':');
+    for (const i of inits ? words(inits) : ['']) for (const f of words(fins)) py.add(i + f);
+  }
+  const hk = new Set(words(HK_ALONE));
+  for (const i of words(HK_INITIALS)) for (const f of words(HK_FINALS)) hk.add(i + f);
+  const ja = new Set();
+  for (const group of HEPBURN.split('|')) {
+    const [inits, vowels] = group.includes(':') ? group.split(':') : ['', group];
+    for (const i of inits ? words(inits) : ['']) for (const v of words(vowels)) ja.add(i + v);
+  }
+  const hok = new Set(words(HOKKIEN_ALONE));
+  for (const i of words(HOKKIEN_INITIALS)) for (const f of words(HOKKIEN_FINALS)) hok.add(i + f);
+  SYL = { py, wg: new Set([...py].map(wgSyllable)), hk, hok, ko: new Set(words(KOREAN_SYLLABLES)), ja };
+  return SYL;
+};
+// (two syllables of one set: written apart by a hyphen, or joined, any place the word splits; `joined` false: only apart)
+const twoOf = (set, parts, joined = true) => (parts.length === 2 ? set.has(parts[0]) && set.has(parts[1])
+  : joined && parts.length === 1 && [...parts[0]].some((_, i) => i > 0 && set.has(parts[0].slice(0, i)) && set.has(parts[0].slice(i))));
+// (pinyin joined, as the romanization writes it: a syllable starting with a, e or o after another takes an apostrophe, so
+// one written joined without it never starts there, "Xian" being one syllable, never Xi-an)
+const pinyinJoined = (py, k) => [...k].some((_, i) => i > 0 && py.has(k.slice(0, i)) && py.has(k.slice(i)) && !/^[aeo]/.test(k.slice(i)));
+// (how many Hepburn morae a word is, 0 when it isn't written in them: the moraic n before a consonant or at the end, a
+// doubled consonant before its own, the h of a long "oh")
+const morae = (k) => {
+  const { ja } = syllables();
+  const best = new Array(k.length + 1).fill(-1);
+  best[0] = 0;
+  for (let i = 0; i < k.length; i++) {
+    if (best[i] < 0) continue;
+    const step = (n) => { best[i + n] = Math.max(best[i + n], best[i] + 1); };
+    for (const n of [1, 2, 3]) if (i + n <= k.length && ja.has(k.slice(i, i + n))) step(n);
+    const next = k[i + 1] || '';
+    if (k[i] === 'n' && !/[aeiouy]/.test(next) && k[i - 1] !== 'n') step(1);
+    else if (/[kstp]/.test(k[i]) && i > 0 && /[aeiou]/.test(k[i - 1]) && (next === k[i] || (k[i] === 't' && next === 'c'))) step(1);
+    else if (k[i] === 'h' && k[i - 1] === 'o' && !/[aeiouy]/.test(next)) step(1);
+  }
+  return Math.max(best[k.length], 0);
+};
+// Each people's given-name shape, by their place in FAMILY_NAMES_OF (round 24): Chinese, one or two syllables of pinyin, of
+// Wade-Giles or of Hong Kong's spellings (one romanization in one name); Japanese, two Hepburn morae or more; Korean, two of
+// its names' syllables. Vietnamese, Khmer and Hmong names have no such shape: their lists alone. (Never past a name's length)
+// Taiwan and Hong Kong write a given name of two syllables with a hyphen ("Shu-chuan", "Wai-keung"): joined, two
+// syllables are pinyin's alone. Each shape is asked of a word as `parts`: its syllables as typed apart by hyphens, keyed)
+const shapesOf = () => {
+  const { py, wg, hk, hok, ko } = syllables();
+  // (round 24, the lead: Hokkien, Teochew and Hakka a fourth; written apart by a hyphen, each syllable any of the four, as
+  // names of two spellings are, "Ing-wen", "Yat-sen", "Chee-hwa")
+  const any = new Set([...py, ...wg, ...hk, ...hok]);
+  const chinese = (parts) => (parts.length === 1 ? [py, wg, hk, hok].some((set) => set.has(parts[0])) || pinyinJoined(py, parts[0]) : twoOf(any, parts));
+  return [(parts) => parts.join('').length <= 14 && chinese(parts), (parts) => parts.length === 1 && parts[0].length <= 16 && morae(parts[0]) >= 2,
+    (parts) => parts.join('').length <= 14 && twoOf(ko, parts), null, null, null];
+};
+// (a word's syllables as typed apart by hyphens, each as nameKey keys it)
+const syllablesTyped = (w) => String(w).split(ANY_HYPHEN).map(nameKey).filter(Boolean);
+// (words that start a family name in parts, never a given name by shape: "Jan de Vries", "Juan Dela Cruz")
+const PARTICLE_KEY = /^(?:de|di|da|du|des|del|della|delle|degli|dei|dela|delos|dos|das|do|von|van|vander|der|den|ter|ten|la|le|lo|las|los|al|el|bin|bint|ibn|abu|ben|bat|st|ste|saint|mac|mc|y|e)$/;
 const build = () => {
   // (each key, and every spelling the lists give it, "Joann", "JoAnn", "Jo-Ann": the first is the one shown unless the
   // typed one is written as another is)
@@ -751,22 +1033,24 @@ const build = () => {
   CAPS = new Set(LETTERS_TOO.split(/\s+/).map(nameKey));
   LONG = new Set(words(TITLE_BEFORE_NAMES).map(nameKey));
   TITLED = new Set(words(TITLE_PAIRS).map((p) => p.split('_').map(nameKey).join(' ')));
-  // (each family name, and the given names of every people it's a family name of; round 22: those that are family names
-  // first too count, "Ming Wei", "Joe Min". Round 23: every family name of a people's that's a given name on the lists and
-  // not one that always comes first, found here from FAMILY_NAMES_OF, never picked by hand)
+  // (each family name, and the peoples it's a family name of, by their place in FAMILY_NAMES_OF; round 22: those that are
+  // family names first too count, "Ming Wei", "Joe Min". Round 23: every family name of a people's that's a given name on the
+  // lists and not one that always comes first, found here from FAMILY_NAMES_OF, never picked by hand. Round 24: the Chinese
+  // ones with their Wade-Giles and Hong Kong forms, familiesOf; and every family name of these peoples, FAMILY_ANY)
   BEFORE = new Map();
-  for (const [people, fams] of FAMILY_NAMES_OF) {
-    let theirs = null;
-    for (const f of new Set(words(fams).map(nameKey))) {
+  GIVEN_OF = FAMILY_NAMES_OF.map(([people]) => new Set(words(people).map(nameKey)));
+  FAMILY_ANY = new Set();
+  FAMILY_NAMES_OF.forEach((_, k) => {
+    for (const f of new Set(familiesOf(k).map(nameKey))) {
+      FAMILY_ANY.add(f);
       if (!GIVEN.has(f) || FIRST.has(f)) continue;
-      theirs = theirs || words(people).map(nameKey);
-      const own = BEFORE.get(f) || new Set();
-      for (const g of theirs) own.add(g);
-      BEFORE.set(f, own);
+      BEFORE.set(f, (BEFORE.get(f) || new Set()).add(k));
     }
-  }
+  });
+  SHAPES = shapesOf();
   HU = new Set([...words(HUNGARIAN), ...words(HUNGARIAN_MORE)].map(nameKey));
   HU_ACC = new Set(words(HUNGARIAN_ACCENTED).map(accented));
+  HU_ACC_KEY = new Set(words(HUNGARIAN_ACCENTED).map(nameKey));
   HU_SHARED = new Set(words(HUNGARIAN_SHARED).map(nameKey));
   // (Hungary's family names that are given names on the lists, as typed: with their accents, or without them only when
   // the plain spelling is no other people's given name, Bal\u00E1zs and L\u00E1szl\u00F3 being Hungarian however typed, Simon and
@@ -842,10 +1126,35 @@ export function titlePair(a, b) {
   if (!TITLED) build();
   return TITLED.has(`${nameKey(a)} ${nameKey(b)}`);
 }
-/** A family name that comes first before this given name of its people's own ("Sam" before "Rainsy", "Tien" before "Yu-ting") */
+/**
+ * A family name that comes first before this given name of its people's own ("Sam" before "Rainsy", "Tien" before
+ * "Yu-ting"). Round 24 (finding 3: "Kai Daisuke", "Ann Woo-jin", "Bo Xiaohua", "Tung Wai-keung" were greeted, those given
+ * names missing from the lists): or before a word with their given names' shape (shapesOf), unless it's a family name the
+ * lists know, one that always comes first, one of these peoples' that's no given name on the lists, or a common family name
+ * of any people's ("Yuki Kato", "Kai Chen", "Ken Masuda", "Juan Luna", "Ken Johnson" are given name first), or the first
+ * word of a family name in parts ("Jan de Vries")
+ */
 export function familyFirstBefore(a, b) {
   if (!BEFORE) build();
-  return !!BEFORE.get(nameKey(a))?.has(nameKey(b));
+  const peoples = BEFORE.get(nameKey(a));
+  if (!peoples) return false;
+  const k = nameKey(b);
+  if ([...peoples].some((p) => GIVEN_OF[p].has(k))) return true;
+  // (a known family name beats a shape: one always first, one of these peoples' that's nobody's given name, or a common
+  // family name of any people's, SURNAMES, "Juan Luna", "Ken Johnson", "Aida Romero")
+  if (!SURNAME) SURNAME = new Set(SURNAMES.flatMap(words).map(nameKey));
+  if (PARTICLE_KEY.test(k) || FIRST.has(k) || (FAMILY_ANY.has(k) && !ANYWHERE.has(k)) || SURNAME.has(k)) return false;
+  const parts = syllablesTyped(b);
+  return parts.length <= 2 && [...peoples].some((p) => !!SHAPES[p]?.(parts));
+}
+/** (for the tests: each Chinese family name in pinyin, its Wade-Giles form made from it, its Hong Kong forms) */
+export function chineseForms() { return chinese().map(([py, wg, hk]) => ({ pinyin: py, wadeGiles: wg, hongKong: [...hk] })); }
+/** (for the tests: whether a word has a people's given-name shape, "chinese", "japanese" or "korean") */
+export function givenShape(people, w) {
+  if (!BEFORE) build();
+  const k = ['chinese', 'japanese', 'korean'].indexOf(people);
+  const parts = syllablesTyped(w);
+  return k >= 0 && parts.length <= 2 && !!SHAPES[k](parts);
 }
 /**
  * A given name of Hungary's, where the family name comes first ("Zoltán", "Péter"; round 23: the names Hungarians share
@@ -859,15 +1168,20 @@ export function givenFamilyFirst(w) {
 const hungarianOwn = (w) => HU.has(nameKey(w)) || HU_ACC.has(accented(w));
 /**
  * A married Hungarian woman's name by her husband's (round 23, finding 3): his given name and "-né", "Zoltánné" (Mrs. Zoltán
- * ...), "Péterné", "Lászlóné". Without the accent only after one of Hungary's own given names counted however typed
- * ("Zoltanne"), never "Jeanne", "Joanne" or "Marianne"
+ * ...), "Péterné", "Lászlóné". Without the accent only after one of Hungary's own men's names, by the spelling-neutral
+ * key (round 24: "Zoltanne", "Péterne", "Peterne"), never "Jeanne", "Joanne" or "Marianne"
  */
 export function marriedName(w) {
   if (!HU) build();
   const a = String(w).normalize('NFC').toLowerCase();
   if ([...a].length < 5) return false;
-  if (a.endsWith('n\u00E9')) { const base = a.slice(0, -2); return !!givenName(base) || givenFamilyFirst(base); }
-  return a.endsWith('ne') && HU.has(nameKey(a.slice(0, -2)));
+  if (a.endsWith('n\u00E9')) { const base = a.slice(0, -2); return !!givenName(base) || givenFamilyFirst(base) || HU_ACC_KEY.has(nameKey(base)); }
+  // (round 24, finding 4a: "Simon Péterne" was greeted "Simon", only HUNGARIAN's names counting before an unaccented "-ne";
+  // now any of Hungary's own men's names, accented ones too, by the spelling-neutral key, "Péterne", "Peterne", "Gáborne".
+  // Never a woman's name, a husband's being the name it's made from: "Juliane", "Mariane" are names of their own)
+  if (!a.endsWith('ne')) return false;
+  const base = nameKey(a.slice(0, -2));
+  return (HU.has(base) || HU_ACC_KEY.has(base)) && !WOMAN.has(base);
 }
 /** One of Hungary's family names that's a given name too, as typed ("Simon", "Albert", "Ádám", "Balazs"; never "Adam") */
 export function hungarianFamily(w) {
@@ -893,7 +1207,10 @@ export function listSizes() {
   return { given: GIVEN.size, pairs: PAIRS.size, familyFirst: FIRST.size, titleToo: BOTH.size + CAPS.size, women: WOMAN.size,
     titleBeforeNames: LONG.size, titlePairs: TITLED.size, hungarian: HU.size + HU_ACC.size + HU_SHARED.size, familyFirstBefore: BEFORE.size,
     hungarianOwn: HU.size + HU_ACC.size, hungarianShared: HU_SHARED.size, hungarianFamily: words(HUNGARIAN_FAMILY).length,
-    chinese: keys(CHINESE), japanese: keys(JAPANESE), korean: keys(KOREAN), vietnamese: keys(VIETNAMESE), khmer: keys(KHMER), hmong: keys(HMONG) };
+    chinese: keys(CHINESE), japanese: keys(JAPANESE), korean: keys(KOREAN), vietnamese: keys(VIETNAMESE), khmer: keys(KHMER), hmong: keys(HMONG),
+    // (round 24: the syllables the shapes are made of, and the Chinese family names with their made forms)
+    pinyin: syllables().py.size, wadeGiles: syllables().wg.size, hongKong: syllables().hk.size, koreanSyllables: syllables().ko.size, morae: syllables().ja.size, hokkien: syllables().hok.size,
+    chineseFamily: new Set(familiesOf(0).map(nameKey)).size };
 }
 /** (for the tests: every name rounds 21 to 23's lists mark, as written, so each can be checked to be a given name on the lists) */
 export function markedNames() {
@@ -902,9 +1219,12 @@ export function markedNames() {
   return { women: words(WOMEN), womenNot: words(WOMEN_NOT), titleBeforeNames: words(TITLE_BEFORE_NAMES),
     titlePairs: words(TITLE_PAIRS).map((p) => p.split('_')),
     // (round 23: found from each people's family names, FAMILY_NAMES_OF, not written by hand)
-    familyFirstBefore: [...new Set(FAMILY_NAMES_OF.flatMap(([, fams]) => words(fams)).filter((w) => BEFORE.has(nameKey(w))))],
-    familyNamesOf: Object.fromEntries(FAMILY_NAMES_OF.map(([, fams], k) => [peoples[k], words(fams)])),
+    // (round 24: the Chinese with the Wade-Giles and Hong Kong forms build makes from the pinyin, familiesOf)
+    familyFirstBefore: [...new Set(FAMILY_NAMES_OF.flatMap((_, k) => familiesOf(k)).filter((w) => BEFORE.has(nameKey(w))))],
+    familyNamesOf: Object.fromEntries(FAMILY_NAMES_OF.map((_, k) => [peoples[k], familiesOf(k)])),
     givenNamesOf: Object.fromEntries(FAMILY_NAMES_OF.map(([people], k) => [peoples[k], words(people)])),
     hungarian: [...words(HUNGARIAN), ...words(HUNGARIAN_MORE)], hungarianAccented: words(HUNGARIAN_ACCENTED),
-    hungarianShared: words(HUNGARIAN_SHARED), hungarianFamily: words(HUNGARIAN_FAMILY) };
+    hungarianShared: words(HUNGARIAN_SHARED), hungarianFamily: words(HUNGARIAN_FAMILY),
+    // (round 24: the common family names of every people's, that beat a shape)
+    commonFamilyNames: [...new Set(SURNAMES.flatMap(words))] };
 }

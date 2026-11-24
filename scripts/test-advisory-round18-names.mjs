@@ -19,6 +19,8 @@ import { join, extname } from 'node:path';
 import sharp from 'sharp';
 import { createD1 } from '../tests/lib/d1-shim.mjs';
 import * as publicApi from '../functions/api/advisory-apply.js';
+// (round 24: every page served without Cloudflare's analytics beacon, so nothing leaves this machine)
+import { servesPage } from '../tests/lib/local-only.mjs';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const OUT = join(ROOT, 'test-results/advisory-round18/');
@@ -79,7 +81,7 @@ const server = createServer(async (req, res) => {
   const file = join(DIST, path);
   if (file.startsWith(DIST) && existsSync(file) && statSync(file).isFile()) {
     res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream', ...(path === '/advisory-board/apply/index.html' ? { 'content-security-policy': applyCsp } : {}) });
-    return res.end(readFileSync(file));
+    return res.end(servesPage(file, readFileSync(file)));
   }
   res.writeHead(404); res.end('not found');
 });

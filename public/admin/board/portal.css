@@ -922,6 +922,10 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 /* The accounts too small for a bar, together on one line */
 .bp-accounts__rest .bp-accounts__name { grid-column: 1 / 3; }
 .bp-accounts__rest .bp-accounts__name { color: var(--muted); font-size: 0.9rem; }
+.bp-accounts__rest .bp-accounts__note { display: block; font-size: 0.84rem; }
+/* A part whose read failed just now: its place says so in plain words (./unread.js), never a zero or "none" */
+.bp-unloaded { margin: 0.6rem 0 0; color: var(--ink-2); font-size: 0.95rem; line-height: 1.5; max-width: 42rem; }
+.bp-impact .bp-unloaded { margin-top: 0.5rem; }
 @media (max-width: 640px) {
   .bp-cash__src { text-align: left; }
   .bp-accounts li { grid-template-columns: minmax(0, 1fr) auto; }

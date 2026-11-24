@@ -1916,6 +1916,16 @@ export function inviteIsRecord(m, now = Date.now()) {
   return meetingHeld(m, now) && meetingHeld(isDate(slot.date) ? { ...m, ...slot } : m, now);
 }
 /**
+ * Why nothing that asks the board to come to a meeting or to read ahead for it goes out ('' when it can): it has been
+ * held (meetingHeld). The one check every send whose words look ahead makes, at the press, from the read it made then
+ * (functions/api/_board.js: Remind those who haven't answered, Email the board, the agenda's approval and the heartbeat
+ * sending an approved one; the invite has its own, noInviteFor), and Board's page asks it before offering one, in the
+ * same words. Board QA round 12, Nov 23 2026: a tab left open from before the meeting asked the board "Will you be
+ * at…" and to read the agenda first after it was held
+ */
+export const HELD_NO_SEND = 'This meeting has already been held, so nothing asking the board to come or to read ahead goes out for it.';
+export const heldNoSend = (m, now = Date.now()) => (meetingHeld(m, now) ? HELD_NO_SEND : '');
+/**
  * Why no calendar invite goes out for a meeting, in words, or '' when one can: one kept off the board page as "not a
  * board meeting", or one held (an invite already out is then a record, left as it was: inviteIsRecord). The rule
  * functions/api/_board-invite.js noInviteFor refuses a send by, here so Board offers no invite the site refuses and says

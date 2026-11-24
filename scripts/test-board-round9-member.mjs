@@ -35,6 +35,7 @@ import * as boardAdmin from '../functions/api/board-admin.js';
 import * as boardPortal from '../functions/api/board-portal.js';
 import * as boardFile from '../functions/api/board-file.js';
 import { saveMeeting, patchMeeting, getMeeting, provideBoardFinance, ensureSchema } from '../functions/api/_board.js';
+import { writeState, stateReady } from '../functions/api/_board-roles.js';
 import { ensureApplicantSchema } from '../functions/api/_applicants.js';
 import { maybeReadGifts } from '../functions/api/_board-gifts.js';
 import { FIELD_JOB_STATUS } from '../functions/api/_reveals.js';
@@ -145,11 +146,17 @@ await DB.exec('CREATE TABLE IF NOT EXISTS books_daily (id TEXT PRIMARY KEY, data
  * QuickBooks' read as it's kept: `big` the statements as long as a real one; `sources` (and the revenue they add up to,
  * below-zero ones in it) the year's categories in place of the tester's own (QA_SOURCES)
  */
-async function setBooks({ big = false, sources = SOURCES, revenue = null } = {}) {
+/* r12: `full`, the walk with everything the page can draw (Board QA round 12, decided 4): real money's cents, QuickBooks'
+   bank accounts many (one large, four small: "the smaller accounts together") and two cards owed on, and where the
+   money went by purpose */
+async function setBooks({ big = false, sources = SOURCES, revenue = null, full = false } = {}) {
   const yr = Y0;
-  const rev = revenue ?? sources.reduce((t, x) => t + x.amount, 0);
-  const ytd = { year: String(yr), from: `${yr}-01-01`, through: day(0), revenue: rev, spent: 1200000, net: rev - 1200000, basis: 'Accrual', nonCash: 220000, sources,
-    store: { sales: 415000, cost: 250000, profit: 165000, salesAccounts: ['Store Income', 'Store Discounts'], costAccounts: ['Store COGS'] } };
+  const src = full ? sources.map((x) => ({ ...x, amount: Math.round((x.amount + (x.key === 'inkind' ? 0.3 : x.key === 'account:makeover' ? 0.5 : 0.45)) * 100) / 100 })) : sources;
+  const rev = revenue ?? Math.round(src.reduce((t, x) => t + x.amount, 0) * 100) / 100;
+  const spent = full ? 1200000.6 : 1200000;
+  const ytd = { year: String(yr), from: `${yr}-01-01`, through: day(0), revenue: rev, spent, net: Math.round((rev - spent) * 100) / 100, basis: 'Accrual', nonCash: full ? 220000.3 : 220000, sources: src,
+    store: full ? { sales: 415000.45, cost: 250000.5, profit: 164999.95, salesAccounts: ['Store Income', 'Store Discounts'], costAccounts: ['Store COGS'] } : { sales: 415000, cost: 250000, profit: 165000, salesAccounts: ['Store Income', 'Store Discounts'], costAccounts: ['Store COGS'] },
+    ...(full ? { cash: { total: 373501.45, at: new Date().toISOString(), accounts: [{ name: 'Operating', balance: 370000.45 }, { name: 'Savings', balance: 1500.25 }, { name: 'Petty Cash', balance: 900.25 }, { name: 'PayPal', balance: 700.25 }, { name: 'Square', balance: 400.25 }], owed: [{ name: 'Ramp Card', balance: 18432.1, limit: 50000 }, { name: 'Amex Business', balance: 2210.55 }] } } : {}) };
   const lastBooks = { year: String(yr - 1), through: `${yr - 1}${day(0).slice(4)}`, revenue: 1500000, expenses: 1100000, net: 400000, nonCash: 70000, full: { revenue: 2000000, expenses: 1500000, net: 500000, nonCash: 100000 },
     sources: [cat('donations', 'Donations', 400000), cat('store', 'Store sales', 830000), cat('gala', 'Gala', 200000), cat('inkind', 'In kind', 70000)],
     store: { sales: 830000, cost: 380000, profit: 450000, salesAccounts: ['Store Income'], costAccounts: ['Store COGS'] } };
@@ -162,7 +169,19 @@ async function setBooks({ big = false, sources = SOURCES, revenue = null } = {})
   const lines = big ? BIG : SMALL;
   const statements = { asOf: day(-30), closed: false, priorAsOf: `${yr - 1}${day(-30).slice(4)}`, position: lines.position, activity: lines.activity };
   const budget = { name: `Budget_FY${String(yr).slice(2)}_P&L`, from: `${yr}-01-01`, to: `${yr}-12-31`, asOf: day(-30), step: 1, monthly: true, months: 10, of: 12, totals: { revenue: 2000000, spending: 1500000, nonCash: 200000, nonCashIncome: 200000 }, rows: lines.budget };
-  await DB.prepare('INSERT OR REPLACE INTO books_daily (id, data, day, read_at, tried_at) VALUES (?, ?, ?, ?, ?)').bind('qbo', JSON.stringify({ shape: 3, day: day(0), lastYear: lastBooks, trailing: null, months: [], statements, functions: null, monthly, budget }), day(0), readAt, readAt).run();
+  const functions = full ? { list: [{ name: 'Program Services', amount: 760000.45 }, { name: 'Management and General', amount: 130000.45 }, { name: 'Fundraising', amount: 70000.45 }, { name: 'Store Operations', amount: 15000.45 }, { name: 'Unassigned', amount: 4999.2 }], total: 980001 } : null;
+  await DB.prepare('INSERT OR REPLACE INTO books_daily (id, data, day, read_at, tried_at) VALUES (?, ?, ?, ?, ?)').bind('qbo', JSON.stringify({ shape: 3, day: day(0), lastYear: lastBooks, trailing: null, months: [], statements, functions, monthly, budget }), day(0), readAt, readAt).run();
+  // (What makeovers cost, as the heartbeat keeps it from JobTread: completed makeovers, two dream bedrooms among them,
+  // one underway, a family waiting; made up)
+  await stateReady(DB);
+  await DB.exec("DELETE FROM board_state WHERE key = 'costs'");
+  if (full) {
+    const now = new Date().toISOString();
+    const done = (key, name, season, rooms, cost) => ({ key, name, slug: null, kind: 'kid', season, rooms, roomCount: rooms.length, type: /Bath/.test(rooms[0]) ? 'bathroom' : /Therapy/.test(rooms[0]) ? 'therapy' : 'bedroom', cost, jobs: 1, closed: `${season}-10-01` });
+    await writeState(DB, 'costs', { at: now, value: { at: now, makeovers: [done('k:ava-ex', 'Ava', Y0, ['Bedroom'], 21500), done('k:ben-ex', 'Ben', Y0, ['Bathroom'], 34250), done('k:cal-ex', 'Cal', Y0 - 1, ['Therapy Room'], 18750), done('k:dee-ex', 'Dee', Y0 - 1, ['Bedroom'], 26400), done('k:eli-ex', 'Eli', Y0, ['Bathroom'], 41000), done('k:fin-ex', 'Fin', Y0 - 1, ['Bathroom'], 30100)],
+      noBills: [], reveals: [], skipped: 0, underway: [{ revealOn: null, season: Y0, key: 'u:jEve', name: 'Eve', jobId: null, kind: 'kid', status: 'Build', rooms: ['Bedroom'], type: 'bedroom', paid: 8200, budget: 23000 }],
+      waiting: [{ key: 'k:fay-ex', name: 'Fay', slug: null, kind: 'kid', season: Y0 + 1, rooms: ['Bedroom'], type: 'bedroom', jobId: 'jFay', sponsors: [], since: day(-60) }] } });
+  }
 }
 await setBooks();
 /** No QuickBooks: Mercury's record is the year (QA round 10's walk without it) */
@@ -435,9 +454,9 @@ try {
    // (QA round 10: with QuickBooks, and without it, Mercury's record of the year then; the month-end balances in both.
    // WALKS=books or WALKS=mercury walks one alone)
    await setHistory(true);
-   for (const mode of ['books', 'mercury'].filter((x) => !process.env.WALKS || process.env.WALKS.split(',').includes(x))) {
-    if (mode === 'books') await setBooks(); else await noBooks();
-    console.log(`  (${mode === 'books' ? 'with QuickBooks' : 'without QuickBooks: Mercury’s record'})`);
+   for (const mode of ['books', 'mercury', 'full' /* r12: and with everything the page can draw, cents and all */].filter((x) => !process.env.WALKS || process.env.WALKS.split(',').includes(x))) {
+    if (mode === 'books' || mode === 'full') await setBooks({ full: mode === 'full' }); else await noBooks();
+    console.log(`  (${mode === 'books' ? 'with QuickBooks' : mode === 'full' ? 'with QuickBooks, cents, many accounts, the cards owed, where it went and what makeovers cost' : 'without QuickBooks: Mercury’s record'})`);
     // What's drawn, walked: Home; Financials with every fold and table opened ("Line by line", the store's, what
     // makeovers cost, "The numbers, month by month", "Month by month", "Month-end balances"); the meeting's money item,
     // its folds opened too; and the money slide, as the presenter shows it
@@ -467,7 +486,7 @@ try {
     const forms = [...new Map(drawn.map((x) => [plainAmt(x.said) + (/^[−(-]/.test(x.said) ? '-' : ''), x])).values()];
     // (the month-by-month tables, the month-end balances and Mercury's months are in it: QA round 10)
     const tables = drawn.filter((x) => /^(fy|y[a-z0-9_]+)-m\d+-|^cm-|^io-m-/.test(x.where)).length;
-    ok(mode === 'books' ? drawn.length >= 150 && forms.length >= 100 && tables >= 60 : drawn.length >= 60 && forms.length >= 45 && tables >= 40, `${mode}, walked: ${tables} in the tables of ${drawn.length} figures drawn (Home ${drawn.filter((x) => x.page === 'Home').length}, Financials ${drawn.filter((x) => x.page === 'Financials').length}, the meeting ${drawn.filter((x) => x.page === 'the meeting').length}, the slide ${drawn.filter((x) => x.page === 'the slide').length}), ${forms.length} written ways`);
+    ok(mode !== 'mercury' /* r12: the full walk as the books' */ ? drawn.length >= 150 && forms.length >= 100 && tables >= 60 : drawn.length >= 60 && forms.length >= 45 && tables >= 40, `${mode}, walked: ${tables} in the tables of ${drawn.length} figures drawn (Home ${drawn.filter((x) => x.page === 'Home').length}, Financials ${drawn.filter((x) => x.page === 'Financials').length}, the meeting ${drawn.filter((x) => x.page === 'the meeting').length}, the slide ${drawn.filter((x) => x.page === 'the slide').length}), ${forms.length} written ways`);
     for (const [who, w] of [[SAM, 1280], [MARIA, 390]]) {
       const p = await tab(who, w, 900);
       await open(p, '#/');
@@ -791,8 +810,8 @@ try {
       ['$376K', `${Y0} revenue so far on the year’s chart, against ${LY}’s same days`, `Up $376,045, or $376K, on ${LY}’s same days, in kind included`],
       ['376045', `${Y0} revenue so far on the year’s chart, against ${LY}’s same days`, `Up $376,045, or $376K, on ${LY}’s same days, in kind included`],
       ['$226K', `${Y0} revenue, against ${LY}’s same days`, `Up $226,045, or $226K, on ${LY}’s same days, in kind left out`],
-      ['$50K', `${Y0} expenses, against ${LY}’s same days`, `Down $50,000 on ${LY}’s same days, in kind and depreciation left out`],
-      ['$276K', `${Y0} net, against ${LY}’s same days`, `Up $276,045, or $276K, on ${LY}’s same days, in kind and depreciation left out` /* r11: the short form after a comma, never in brackets */],
+      ['$50K', `${Y0} expenses, against ${LY}’s same days`, `Down $50,000 on ${LY}’s same days, in kind left out` /* r12: what's left out named as the page names it, in kind alone here */],
+      ['$276K', `${Y0} net, against ${LY}’s same days`, `Up $276,045, or $276K, on ${LY}’s same days, in kind left out` /* r11: the short form after a comma, never in brackets; r12: in kind alone here */],
     ]) {
       const found = (await search(p, q)).filter((x) => x.g === 'Money');
       const hit = found.find((x) => x.title === title);

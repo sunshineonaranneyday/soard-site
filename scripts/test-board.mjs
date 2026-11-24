@@ -2217,7 +2217,7 @@ try {
       await money.evaluate(() => document.querySelectorAll('.bp-agitem .by-chart svg')[1].focus());
       const exp = await money.evaluate(() => ({ cap: document.querySelectorAll('.bp-agitem .by-cap')[1]?.textContent || '', tip: document.querySelector('.by-tip')?.innerText || '' }));
       const soFar = Number((exp.tip.match(new RegExp(`${yr} \\$([\\d,]+)`)) || [])[1]?.replace(/,/g, ''));
-      ok(/in kind and depreciation left out/.test(exp.cap) && Math.abs(soFar - (1200000 - 220000)) < 50, `Expenses: the year so far without in kind, as the figures (${JSON.stringify(exp)})`);
+      ok(/in kind left out/ /* r12: what's left out named as the page names it: here both years' non-cash is the in kind they were given, so "in kind" alone */.test(exp.cap) && Math.abs(soFar - (1200000 - 220000)) < 50, `Expenses: the year so far without in kind, as the figures (${JSON.stringify(exp)})`);
       ok(new RegExp(`${yr - 1} by [A-Z][a-z]+ \\d+ \\$1,030,000`).test(exp.tip) && new RegExp(`${yr - 1}, all of [A-Z][a-z]+: \\$`).test(exp.tip), `the month it's in: last year's same days, then its whole month (${JSON.stringify(exp.tip)})`);
       // On a phone, a month's note stays inside the chart (July, in the middle, used to run off its left edge)
       if (thisMonth > 7) {

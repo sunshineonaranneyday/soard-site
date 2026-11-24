@@ -1310,15 +1310,15 @@ const MAP = { t: 'SOARD', children: [
       { t: 'The Advisory Board', children: [
         { t: 'Advisory sign-in and advisory@', s: 'live', k: 'schedule',
           when: 'Every 5 minutes on the board’s heartbeat when People → Advisory changed, and every 6 hours anyway.',
-          does: 'Adds active, published advisors to the same Cloudflare sign-in list as the board, so each can sign in at /admin/advisory/ with an emailed code, and, once emails to advisors are on, keeps advisory@soardcharity.com to them, whoever runs the group, and the Board area’s admins. An advisor reaches only the advisors’ routes.',
+          does: 'Adds everyone active on People → Advisory, shown on the site or not, to the same Cloudflare sign-in list as the board, so each Advisory Board member can sign in at /admin/advisory/ with an emailed code, and, once Advisory Board emails are on, keeps advisory@soardcharity.com to them, whoever runs the group, and the Board area’s admins. An Advisory Board member reaches only the Advisory Board’s routes.',
           touches: ['Cloudflare Access', 'Google Groups', 'D1'], where: 'functions/api/_board-access.js, _board-group.js, _board-roles.js, _middleware.js' },
         { t: 'What the group has raised', s: 'live', k: 'schedule',
           when: 'Every 15 minutes on the heartbeat, once a Zeffy campaign is set on Board → Advisory → Members.',
-          does: 'Reads the group’s Zeffy campaign and each advisor’s page from the term’s first day, takes off refunds and lost disputes, and keeps the total. Zeffy stays the record. When a kid is picked, their pledge follows it. Reaching the goal tells whoever runs the group and the admins what to do next.',
+          does: 'Reads the group’s Zeffy campaign and each Advisory Board member’s page from the term’s first day, takes off refunds and lost disputes, and keeps the total. Zeffy stays the record. When a kid is picked, their pledge follows it. Reaching the goal tells whoever runs the group and the admins what to do next.',
           touches: ['Zeffy', 'D1'], where: 'functions/api/_advisory-money.js, _advisory-sponsor.js, _advisory-heartbeat.js' },
         { t: 'The group’s kid', s: 'live', k: 'manual',
           when: 'Someone running the group presses Pick the kid.',
-          does: 'Puts the SOARD Advisory Board partner on a waiting kid with a public page. advisory@ gets the sponsor’s access on that one job, so no advisor needs a JobTread login. The Demo Day invite reaches the group through it; reveals don’t, because advisors already get every reveal invite by name.',
+          does: 'Puts the SOARD Advisory Board partner on a waiting kid with a public page. advisory@ gets the sponsor’s access on that one job, so no Advisory Board member needs a JobTread login. The Demo Day invite reaches the group through it; reveals don’t, because Advisory Board members already get every reveal invite by name.',
           touches: ['JobTread', 'D1'], where: 'functions/api/_advisory-sponsor.js, _room-credits.js, _reveal-invites.js (NO_REVEAL_INVITE)' },
       ]},
       { t: 'Signing in', children: [

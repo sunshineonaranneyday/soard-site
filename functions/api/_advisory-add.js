@@ -44,7 +44,7 @@
 import { getAdvisoryApplication, linkAdvisor, ensureAdvisorySchema, STATUSES } from './_advisory-applications.js';
 import { onRequestPost as saveContent } from './save-content.js';
 import { setBoardEmail, refreshForBoardChange, isEmail, normEmail } from './_reveal-invites.js';
-import { welcomeOnJoin, welcomeRecords, hasOrGoing } from './_advisory-mail.js';
+import { welcomeOnJoin, welcomeLog, hasOrGoing } from './_advisory-mail.js';
 import { addressTaken } from './_people-address.js';
 import { logAudit } from './_audit.js';
 import { generateSha } from './_collections.js';
@@ -64,8 +64,11 @@ const GONE = 'This application isn’t here any more: it was deleted, maybe in a
 // A People delete under way, as the box (public/admin/advisory-applications.js) and a press both say it
 const beingDeleted = (name, so = '') => `${name} is being deleted on People right now${so}. Look again once that’s done.`;
 const ADDRESS_FREED_PRESS = 'The web address they’d be given is being freed by a delete on People right now, so nobody was added. Look again once that’s done.';
-// A press that wrote something and then couldn't go on, with what stopped it (addToBoard)
+// A press that wrote something and then couldn't go on, with what stopped it (addToBoard). Marked `partway`, so the box
+// can hold it to its rule: these words name a press, so they're never left beside a box with nothing left to press
+// (public/admin/advisory-applications.js doAdd)
 const partway = (why) => `Adding them stopped partway: ${why}. Press Add to Advisory Board again in a moment: it finishes what’s left, and never adds them twice.`;
+const stoppedPartway = (why) => Object.assign(err(partway(why), 503), { partway: true });
 
 /** People and their private emails. A read that fails stops the plan (never "nobody's on People"); no table yet is nobody */
 async function peopleAndEmails(DB) {
@@ -298,7 +301,7 @@ async function planOf(env, id, now = Date.now()) {
   // (a delete that stopped partway, its headshot gone: nobody's added from it until it's finished. One still under way,
   // in another tab, is waited on by the box, never said to have stopped: addBusy says it's being deleted)
   if (app.deleting && !(await deletingNow(DB, app.id, now))) throw err('Deleting this application didn’t finish, so nobody can be added from it. Press Delete application to finish deleting it.');
-  const [{ people, emails }, welcomes, intent, settings] = await Promise.all([peopleAndEmails(DB), welcomeRecords(DB), intentOf(DB, app.id), advisorySettings(DB)]);
+  const [{ people, emails }, { welcomed: welcomes, waiting }, intent, settings] = await Promise.all([peopleAndEmails(DB), welcomeLog(DB), intentOf(DB, app.id), advisorySettings(DB)]);
   const email = normEmail(app.email);
   // An email the sign-in can't use (one an old application came with), or SOARD's own group inbox (everyone in the
   // group would read their sign-in codes), is never saved as theirs
@@ -327,7 +330,9 @@ async function planOf(env, id, now = Date.now()) {
     if (memorial(pointed)) return { kind: 'blocked', why: 'memorial', ...base, person: show(pointed) };
     const onBoard = personStatus(pointed) === 'active';
     const done = app.status === 'joined' && onBoard && (!email || !emailUsable || !!emails[pointed.slug]);
-    return { kind: done ? 'joined' : 'same', why: 'linked', ...base, person: show(pointed) };
+    // (done: whether their sign-in email is written down as waiting for the heartbeat, so the box can say what a press
+    // that finished says of it, never "stopped partway" beside nothing to press: public/admin/advisory-applications.js)
+    return { kind: done ? 'joined' : 'same', why: 'linked', ...base, person: show(pointed), ...(done ? { welcomeWaiting: !!waiting[pointed.slug] } : {}) };
   }
   // Their email: each person signs in with their own (a group inbox is nobody's own)
   // (a SOARD address someone on People has is theirs too: blocked, or the same person)
@@ -526,14 +531,14 @@ export async function addToBoard(env, ctx, { id, as, to = null, seen = null, by 
     // of People keeps its own words, and every refusal in words its own, each with its status
     if (did.wrote && e?.unread) {
       console.error('[advisory-add] People didn’t answer partway', e?.cause?.message || e?.message || e);
-      throw err(partway('we couldn’t check People just now'), 503);
+      throw stoppedPartway('we couldn’t check People just now');
     }
     if (e?.status) throw e;
     // D1 or a save that didn't answer: words for staff (never "D1_ERROR: …"), and the next press finishes it. Nothing
     // written yet (a hold, or a read, that didn't answer): nothing started, said as that
     console.error('[advisory-add]', e?.message || e);
     if (!did.wrote) throw err('The site’s database didn’t answer just now, so nobody was added. Press Add to Advisory Board again in a moment.', 503);
-    throw err(partway('the site’s database didn’t answer just now'), 503);
+    throw stoppedPartway('the site’s database didn’t answer just now');
   } finally {
     await release(DB, keys);
   }
@@ -704,8 +709,11 @@ async function addHeld(env, ctx, { id, as, to, seen, by, now, fetchImpl, holdAls
   if (had) Object.assign(out, { email: had, emailKept: true, emailUnusable: '', ...(signInWhy(had) ? { emailOnFile: { email: had, why: signInWhy(had) } } : {}) });
   else if (email && plan.emailUsable) {
     await setBoardEmail(DB, out.slug, email).catch((e) => {
-      // (setBoardEmail's own words: an address someone else has, one that doesn't look right; anything else is D1)
-      if (e?.unread || /D1_|SQLITE|network|connection/i.test(String(e?.message || ''))) throw e;
+      // (a refusal on the address's own merits, someone else's or not an email, in setBoardEmail's own words beside
+      // their being added. Anything else, a read that failed (`unread`) or the write not going, stopped the press
+      // partway (addToBoard): never told apart by what a message looks like, which took a check that didn't answer for a
+      // refusal, and a database's own words for ours (Advisory Board QA round 24)
+      if (!e?.refused) throw e;
       throw err(`${out.name} is on the Advisory Board, but their email didn’t save: ${e.message}`);
     });
     await logAudit(DB, { userEmail: ctxSave.data.userEmail, action: 'updated', entityType: 'team', entitySlug: out.slug, entityName: `Reveal invite email for ${out.name}`, gitStatus: 'ok' }).catch(() => {});

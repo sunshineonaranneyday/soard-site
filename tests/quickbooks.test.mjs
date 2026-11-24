@@ -549,10 +549,10 @@ test('the board page: QuickBooks’ figures against the packet’s budget for th
   // budget leaves it out); last year's pace the same way once the daily read has it, else none rather than mixed
   const lastYear = { year: '2025', revenue: 700000, expenses: 500000, nonCash: 80000, full: { revenue: 1000000, expenses: 700000, nonCash: 100000 } };
   const k = withBooks(SHEET, { ...BOOKS, nonCash: 100000, lastYear });
-  assert.deepEqual(k.expenses, { actual: 339100.14, budget: 600000, last: 420000, lastFull: 600000, inKind: 100000 });
-  assert.deepEqual(k.revenue.actual, 822221.67);
+  assert.deepEqual(k.expenses, { actual: 339100 /* r12: worked out as written, $439,100 less $100,000 */, budget: 600000, last: 420000, lastFull: 600000, inKind: 100000 });
+  assert.deepEqual(k.revenue.actual, 822222 /* r12: the revenue less its in kind as written */);
   assert.equal(moneyTiles({ cash: null, budget: k, n: {} })[1].sub, '57% of the $600K budget, as of Oct\u00a029 · 70% by now last year · not counting $100K in kind');
-  assert.deepEqual(withBooks(SHEET, { ...BOOKS, nonCash: 100000, lastYear: { ...lastYear, nonCash: undefined } }).expenses, { actual: 339100.14, budget: 600000, last: null, lastFull: null, inKind: 100000 });
+  assert.deepEqual(withBooks(SHEET, { ...BOOKS, nonCash: 100000, lastYear: { ...lastYear, nonCash: undefined } }).expenses, { actual: 339100 /* r12: as written */, budget: 600000, last: null, lastFull: null, inKind: 100000 });
   // January: 2027’s figures before 2027’s budget sheet is in a packet
   const jan = withBooks(SHEET, { ...BOOKS, year: '2027', from: '2027-01-01', through: '2027-01-20', revenue: 5000, expenses: 2000 });
   assert.deepEqual(jan.revenue, { actual: 5000, budget: null, last: null, lastFull: null });
