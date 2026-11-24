@@ -280,7 +280,7 @@ const MAP = { t: 'Everything we send', children: [
     children: [
       { t: 'The invite', children: [
         { t: 'Save-the-date invite', s: 'live', k: 'invite', by: 'auto', preview: 'invite-tentative', change: CHANGE.invites,
-          who: 'The family, staff (JobTread Admins and Designers), and the board and advisors.',
+          who: 'The family, staff (JobTread Admins and Designers), the board and the Advisory Board.',
           when: 'Once construction starts in JobTread, for the date on the Reveal task.',
           subject: '{name}’s Reveal Day (tentative)',
           does: 'An all-day save-the-date, shown as free so it blocks no one’s day, with the full address and a link to watch live. No time yet, and no need to reply.',
@@ -789,8 +789,8 @@ const MAP = { t: 'Everything we send', children: [
       ]},
     ]},
 
-  { t: 'Board & advisors', sub: 'Reveal invites, board meetings, and bio requests', color: 'board', side: 'l',
-    about: 'Board members and advisors are guests on every reveal invite. Board meeting invites, the packet, the “Will you be there?” reminder and the minutes notice come from the site when Peter or Holly sends them. Bio requests and notes to the board go from your own email.',
+  { t: 'Board & Advisory Board', sub: 'Reveal invites, board meetings, and bio requests', color: 'board', side: 'l',
+    about: 'Board members and Advisory Board members are guests on every reveal invite. Board meeting invites, the packet, the “Will you be there?” reminder and the minutes notice come from the site when Peter or Holly sends them. Bio requests and notes to the board go from your own email.',
     children: [
       { t: 'Advisory applications', children: [
         { t: 'We have your application', s: 'live', k: 'email', by: 'visitor', preview: 'advisory-thanks',
@@ -810,7 +810,7 @@ const MAP = { t: 'Everything we send', children: [
       ]},
       { t: 'The Advisory Board’s page', children: [
         { t: 'This month’s ask', s: 'off', k: 'email', by: 'staff', preview: 'advisory-ask',
-          who: 'Each active advisor with an email on People → Advisory, on their own.',
+          who: 'Each active Advisory Board member with an email on People → Advisory, on their own.',
           when: 'Whoever runs the group presses Put it out, with the emails switch on (Board → Advisory → Members).',
           subject: 'This month’s ask: {ask}',
           does: 'The one thing SOARD needs this month, with I can help and Not this time buttons that open a page to confirm. Replies go to info@soardcharity.com.',
@@ -823,8 +823,8 @@ const MAP = { t: 'Everything we send', children: [
           does: 'What the page has, a button to it, and how signing in works.',
           touches: ['Resend', 'D1'], where: 'functions/api/_advisory-mail.js (sendWelcome)',
           live: needs('resend', NO_RESEND) },
-        { t: 'Updates to an advisor', s: 'off', k: 'email', by: 'auto',
-          who: 'The advisor it’s about.',
+        { t: 'Updates to an Advisory Board member', s: 'off', k: 'email', by: 'auto',
+          who: 'The Advisory Board member it’s about.',
           when: 'An introduction or a hosted fundraiser changes status, or a gift lands on their page. With the emails switch on.',
           subject: 'An update on {name} · Your fundraiser: {title} · A gift came through your page',
           does: 'One line and a button to their page. A gift’s note never says how much or who.',
@@ -833,7 +833,7 @@ const MAP = { t: 'Everything we send', children: [
         { t: 'Notices to whoever runs the group', s: 'live', k: 'email', by: 'auto',
           who: 'Whoever runs the Advisory Board (Mary Atchley), at their email on People. At the goal, Peter and Holly too.',
           when: 'A new introduction, a request to host, a yes to the ask, a renewal, the goal reached, and once a week when something has waited a week.',
-          subject: '{advisor} made an introduction · {advisor} wants to host a fundraiser · The Advisory Board reached its goal',
+          subject: '{member} made an introduction · {member} wants to host a fundraiser · The Advisory Board reached its goal',
           does: 'What came in and a button to Run it. Contact details stay on the page.',
           touches: ['Resend', 'D1'], where: 'functions/api/_advisory-mail.js (noticeLead, noticeGoal, maybeNudgeLead)',
           live: needs('resend', NO_RESEND) },
@@ -896,7 +896,7 @@ const MAP = { t: 'Everything we send', children: [
           touches: ['Resend', 'D1'], where: 'functions/api/_board-actions.js (maybeRemindActions, actionReminderEmail)',
           live: needs('resend', NO_RESEND) },
         { t: 'Reveal invites', s: 'live', k: 'invite', by: 'auto', preview: 'board-invites', change: CHANGE.board,
-          who: 'Board members and advisors with an email on file, plus JobTread Board Member users.',
+          who: 'Board members and Advisory Board members with an email on file, plus JobTread Board Member users.',
           when: 'Every reveal, from the save-the-date on, the same invite the family gets.',
           subject: '{name}’s Reveal Day (tentative), then {name}’s Reveal Day',
           does: 'The reveal’s date, time and address. A changed board email updates the invites already out.',
@@ -955,7 +955,7 @@ const MAP = { t: 'Everything we send', children: [
       ]},
       { t: 'From your own email', children: [
         { t: 'Bio request', s: 'live', k: 'mail', by: 'staff', change: CHANGE.board,
-          who: 'One board member or advisor.',
+          who: 'One board member or Advisory Board member.',
           when: 'Staff press “Email {first}” on their page in People. Your own email app opens with the message written.',
           subject: 'Your bio for the Sunshine on a Ranney Day website',
           does: 'A private link to a form where they write their own bio and send a photo. Staff review it before it goes on the site.',

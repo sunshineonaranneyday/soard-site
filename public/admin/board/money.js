@@ -8,8 +8,8 @@
  */
 
 import { h, htm, useState, useEffect } from '../vendor.js';
-import { money, shortDate, todayEastern, unzip } from '../board-shared.js';
-import { nbw } from './parts.js';
+import { money, todayEastern, unzip } from '../board-shared.js';
+import { nbw, shortDate } from './parts.js';
 
 const html = htm.bind(h);
 
@@ -26,7 +26,19 @@ export const compact = (n) => {
   const a = Math.abs(n);
   // (no minus on what rounds to nothing: "$0", never "−$0")
   const s = n <= -0.5 ? '−' : '';
-  return a >= 1e9 ? `${s}$${(a / 1e9).toFixed(a >= 1e10 ? 1 : 2).replace(/\.?0+$/, '')}B` : a >= 1e6 ? `${s}$${(a / 1e6).toFixed(a >= 1e7 ? 1 : 2).replace(/\.?0+$/, '')}M` : a >= 1e4 ? `${s}$${Math.round(a / 1e3)}K` : `${s}${money(a)}`;
+  if (a < 1e4) return `${s}${money(a)}`;
+  // Rounded to the step its unit is said at, which can carry it to the next unit: $999,700 is "$1M", $999,950,000
+  // "$1B", never "$1000K" or "$1000M" (Board QA round 11)
+  const units = [['K', 1e3, () => 0], ['M', 1e6, (x) => (x >= 10 ? 1 : 2)], ['B', 1e9, (x) => (x >= 10 ? 1 : 2)]];
+  let u = a >= 1e9 ? 2 : a >= 1e6 ? 1 : 0;
+  let said = '';
+  for (; u < units.length; u++) {
+    const [, size, places] = units[u];
+    const x = a / size;
+    said = x.toFixed(places(x));
+    if (Number(said) < 1000 || u === units.length - 1) break;
+  }
+  return `${s}$${said.includes('.') ? said.replace(/\.?0+$/, '') : said}${units[u][0]}`;
 };
 /**
  * An amount as a figure (the money's tiles): whole dollars with a true minus, "−$48,210"; from $10M up the short
@@ -46,22 +58,99 @@ function atStep(v, step) {
   return `${s}$${(a / 1e6).toFixed(Math.max(0, 6 - Math.round(Math.log10(step))))}M`;
 }
 /**
+ * An amount as the page writes it, to the dollar: what money() shows ($45.50 is "$46", half a dollar away from zero),
+ * its sign kept. Real money has cents (Mercury's balances, QuickBooks' figures: Board QA round 12), so a figure worked
+ * out from others on the page is worked out from them as written (./lessWritten), never from their cents
+ */
+export const asWritten = (n) => (typeof n === 'number' && Number.isFinite(n) ? (n < 0 ? -1 : 1) * Math.round(Math.round(Math.abs(n) * 100) / 100) || 0 : n);
+/** One figure less another, as both are written (revenue less expenses is the net: $1,656,049 less $980,000 is $676,049) */
+export const lessWritten = (a, b) => (typeof a === 'number' && typeof b === 'number' ? asWritten(a) - asWritten(b) : null);
+/**
+ * Parts rounded to `step` (whole dollars unless said) so they add up to their total written the same way: each rounded
+ * down, then the largest remainders up (a tie to the first) until they make it. The total is `total` as it's written
+ * when the parts can make it so (it's theirs, give or take their cents), else their own sum's. Board QA round 12: with
+ * cents, Operating $312,500.49 and Reserve $62,500.49 read "$312,500" and "$62,500" beside "$375,001" → the parts'
+ * amounts, in order
+ */
+export function addingUp(values, { total = null, step = 1 } = {}) {
+  const vals = (values || []).map((v) => (Number.isFinite(Number(v)) ? Number(v) : 0));
+  if (!vals.length) return [];
+  // (in cents, so no part's float noise moves a remainder)
+  const per = Math.round(step * 100);
+  const cents = vals.map((v) => Math.round(v * 100));
+  const out = cents.map((c) => Math.floor(c / per));
+  // (what's over each one's step, in whole cents: two that are the same tie, the first first)
+  const rest = cents.map((c, i) => c - out[i] * per);
+  const floor = out.reduce((t, f) => t + f, 0);
+  const rounds = (c) => (c < 0 ? -1 : 1) * Math.round(Math.abs(c) / per);
+  const own = rounds(cents.reduce((t, c) => t + c, 0));
+  const want = typeof total === 'number' && Number.isFinite(total) ? rounds(Math.round(total * 100)) : own;
+  let left = (want - floor >= 0 && want - floor <= vals.length ? want : own) - floor;
+  const order = rest.map((r, i) => [r, i]).sort((x, y) => y[0] - x[0] || x[1] - y[1]);
+  for (const [, i] of order) { if (left <= 0) break; out[i] += 1; left -= 1; }
+  return out.map((n) => n * step);
+}
+/**
  * Parts said rounded that add up to their total said the same way (QA round 7: "$375,000 / Operating $313K · Reserve
  * $63K", which reads as $376K): each at the step the smallest of them is said at (./compact), rounded by the largest
- * remainder, so they sum to their total rounded to that step, never a dollar off it → each one's words, in order
+ * remainder (./addingUp), so they sum to their total (`total`, as it's written beside them) rounded to that step,
+ * never a dollar off it → each one's words, in order
  */
-export function partsAddingUp(values) {
+export function partsAddingUp(values, { total = null } = {}) {
   const vals = (values || []).map((v) => (Number.isFinite(Number(v)) ? Number(v) : 0));
   if (!vals.length) return [];
   const step = Math.min(...vals.map(stepOf));
-  const units = vals.map((v) => v / step);
-  const out = units.map((u) => Math.floor(u + 1e-9));
-  let left = Math.round(units.reduce((t, u) => t + u, 0)) - out.reduce((t, f) => t + f, 0);
-  // (the biggest remainders first; a tie to the first of them)
-  const order = units.map((u, i) => [u - out[i], i]).sort((x, y) => y[0] - x[0] || x[1] - y[1]);
-  for (const [, i] of order) { if (left <= 0) break; out[i] += 1; left -= 1; }
-  return out.map((n) => atStep(n * step, step));
+  return addingUp(vals, { total, step }).map((n) => atStep(n, step));
 }
+/**
+ * What a meeting's money, Financials and search say of the year's money that never left the bank, in expenses: "in kind
+ * and depreciation" when more went out that way than came in as gifts in kind (QuickBooks' non-cash expenses, its
+ * NON_CASH accounts: in kind, donated, depreciation, amortization; in kind is taken in and used at the same value), "in
+ * kind" when it's the in kind alone. One name everywhere (Board QA round 12: the tile said $228K "in kind", $8K of it
+ * depreciation, beside "in kind and depreciation" on the same page). `k`: { given, used } (./yearFigures inKind)
+ */
+export const nonCashName = (k) => (k && k.used >= 0.5 && !(k.given >= 0.5 && Math.round(k.used) <= Math.round(k.given)) ? 'in kind and depreciation' : 'in kind');
+/** The same for a year of QuickBooks (numbers.books, or its lastYear): its expenses' non-cash, by what it gave in kind */
+export const nonCashOf = (b) => nonCashName({ given: inKindOf(b?.sources), used: typeof b?.nonCash === 'number' ? b.nonCash : 0 });
+/**
+ * The end of a period that runs to `through` (a day), as the page says it: this month's to its day, so far ("through
+ * November 23"), a month that's over by its name ("through October"). Board QA round 12: Mercury's year on the
+ * meeting's tile said "through November" on November 23, where Financials said the day
+ */
+export function throughWords(through, today = todayEastern()) {
+  const d = String(through || '');
+  if (!/^\d{4}-\d{2}/.test(d)) return '';
+  const month = new Date(`${d.slice(0, 7)}-15T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' });
+  return d.slice(0, 7) === String(today || '').slice(0, 7) && /^\d{4}-\d{2}-\d{2}/.test(d) ? `through ${month} ${Number(d.slice(8, 10))}` : `through ${month}`;
+}
+/**
+ * A budget sheet's year, from its heading or its name: "FY2026", "FY 2026", "FY26" and "FY'26" (the fiscal year ending
+ * in 2026, said "FY2026"), "2025-26", "2025/2026" and "2025–2026" (said "2025-26"), or a calendar year ("2026 Budget").
+ * → { year: the year it ends in, label: its fiscal name ('' for a calendar year) }, both '' when none can be read (Board
+ * QA round 12: "FY2026 Budget" read as no year, the tiles' year blank and the heading "against its budget")
+ */
+export function sheetYear(...texts) {
+  for (const t of texts) {
+    const s = String(t ?? '');
+    const fy = s.match(/\bFY\s?'?(\d{4}|\d{2})(?!\d)/i);
+    if (fy) { const y = fy[1].length === 2 ? `20${fy[1]}` : fy[1]; return { year: y, label: `FY${y}` }; }
+    const span = s.match(/(?<!\d)(20\d{2})\s*[-–/]\s*(20\d{2}|\d{2})(?!\d)/);
+    if (span) {
+      const end = span[2].length === 2 ? `${span[1].slice(0, 2)}${span[2]}` : span[2];
+      if (Number(end) === Number(span[1]) + 1) return { year: end, label: `${span[1]}-${end.slice(2)}` };
+    }
+    const one = s.match(/(?<!\d)(20\d{2})(?!\d)/);
+    if (one) return { year: one[1], label: '' };
+  }
+  return { year: '', label: '' };
+}
+/**
+ * The budget card's heading: "2026 against its budget", "FY2026 against its budget"; with no year the sheet says, a
+ * whole sentence in its own case, never a fragment or a year guessed (Board QA round 12: "against its budget")
+ */
+export const budgetHeading = (year) => (year ? `${year} against its budget` : 'The budget, against what’s come in');
+/** A year's figure as a tile names it: "2026 revenue", "FY2026 expenses", or "Revenue" with no year to say (never a guess) */
+export const yearLabel = (yr, word) => (yr ? `${yr} ${word}` : word.replace(/^./, (c) => c.toUpperCase()));
 function balanceSheet(data, upTo = '') {
   return data.meetings.filter((m) => !upTo || m.date <= upTo).flatMap((m) => m.files.filter((f) => f.kind === 'financials' && isExcel(f) && /financial position|balance sheet/i.test(f.name)).map((f) => ({ f, m })))
     .sort((a, b) => b.m.date.localeCompare(a.m.date) || String(b.f.at || '').localeCompare(String(a.f.at || '')))[0] || null;
@@ -157,6 +246,27 @@ export function booksCash(data, b) {
     months: typeof b.monthsOfCash === 'number' ? b.monthsOfCash : null, perMonth: b.perMonth || null,
   };
 }
+/**
+ * The cash card's lines, one list for the card (./portal.js CashCard) and the search (./figures.js): with two or more
+ * accounts, each one holding at least 1% of the cash by its name (#cash-a<its place among the accounts>), and beside
+ * five or more the smaller ones together on one line (#cash-a-rest), every line rounded so they add up to the cash as
+ * it's written (./addingUp). One account is the cash itself: no lines. Board QA round 12: one account and four small
+ * ones drew no lines at all while search sent "the smaller accounts together" to a line never drawn
+ * → [{ id, k, name, names, balance, said, rest }]
+ */
+export function cashLines(cash) {
+  const held = (cash?.accounts || []).map((a, i) => ({ a, i })).filter(({ a }) => typeof a.balance === 'number' && Math.abs(a.balance) >= 0.005);
+  if (held.length < 2) return [];
+  const small = held.length > 4 ? held.filter(({ a }) => a.balance < cash.total * 0.01) : [];
+  // (a single small one is a line of its own, by its name: "together" takes two)
+  const together = small.length > 1 ? small : [];
+  const lines = [
+    ...held.filter((x) => !together.includes(x)).map(({ a, i }) => ({ id: `cash-a${i}`, k: `cash:${a.bank || ''}:${a.name}`, name: a.name || 'Account', names: [a.name || 'Account'], balance: a.balance, rest: false })),
+    ...(together.length ? [{ id: 'cash-a-rest', k: 'cash:small', name: andText(together.map(({ a }) => a.name || 'Account')), names: together.map(({ a }) => a.name || 'Account'), balance: together.reduce((t, { a }) => t + a.balance, 0), rest: true }] : []),
+  ];
+  const said = addingUp(lines.map((l) => l.balance), { total: cash.total });
+  return lines.map((l, j) => ({ ...l, said: said[j] }));
+}
 /** 16.8 → "17", 8.46 → "8.5": months of cash, to a tenth under ten; what rounds to none (or less) "Under a month" */
 export const monthsText = (m) => { const r = m >= 10 ? Math.round(m) : Math.round(m * 10) / 10; return r > 0 ? String(r) : 'Under a month'; };
 /** The same in a sentence: "Under a month", "1 month", "8.5 months" (the board page's "… of spending") */
@@ -202,6 +312,12 @@ export function cashKnown(data) {
   if (sheet === undefined) readCash(data);
   return cashToShow(liveCash(data), sheet, booksCash(data, data.numbers?.books)) || null;
 }
+/**
+ * Whether a row of month-end cash (data.cashHistory: the heartbeat's, or QuickBooks' months) is this month's, still
+ * under way: its balance is so far this month, never a month's end, wherever it's shown (Board QA round 11: Month-end
+ * balances and search called November's on November 23 "at the month's end")
+ */
+export const monthSoFar = (r, today = todayEastern()) => !!r?.month && String(r.month) === String(today || '').slice(0, 7);
 /** "Nov 2, 2026" → "Nov 2", the month and day never apart on two lines */
 export const shortAsOf = (s) => String(s || '').replace(/, \d{4}$/, '').replace(/^([A-Za-z]{3,9}\.?) (\d)/, '$1\u00a0$2');
 
@@ -230,10 +346,13 @@ function readBudget(data, upTo = '') {
       const r = grid.find((x) => re.test(label(x)));
       return r && typeof r[bCol] === 'number' && typeof r[aCol] === 'number' ? { budget: r[bCol], actual: r[aCol] } : null;
     };
+    // Its year, from the budget's heading, else the sheet's title above it, else the file's name (./sheetYear): the year
+    // it ends in, and its own name for it when that's a fiscal year ("FY2027", "2026-27")
+    const yr = sheetYear(grid[head][bCol], ...grid.slice(0, head).flat().filter((c) => typeof c === 'string'), src.f.name);
     const out = {
-      year: (String(grid[head][bCol]).match(/\b20\d{2}\b/) || [])[0] || '',
-      // The budget's own name for its year when it says one ("FY2027", "2026-27"), else its calendar year
-      label: (String(grid[head][bCol]).match(/\bFY\s?'?\d{2,4}\b|\b20\d{2}\s*[-–/]\s*(?:20)?\d{2}\b/i) || [])[0]?.replace(/\s+/g, '').replace(/–/g, '-') || '',
+      // (as the tiles and the heading say it, its fiscal name when it has one; `calYear` the year it ends in)
+      year: yr.label || yr.year, calYear: yr.year,
+      label: yr.label,
       asOf: String(grid[head][aCol]).replace(/^actual\s*(as of\s*)?/i, '').trim(),
       revenue: line(/^(revenue total|total revenue|total income)\b/i),
       expenses: line(/^(total expenses|expense total|expenses total)\b/i),
@@ -276,9 +395,11 @@ function sameYear(sheet, books) {
     const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     return day >= books.from && day <= books.through;
   }
-  return (sheet.year || String(sheet.meeting?.date || '').slice(0, 4)) === books.year;
+  return (sheet.calYear || sheet.year || String(sheet.meeting?.date || '').slice(0, 4)) === books.year;
 }
-const less = (a, b) => (typeof a === 'number' && typeof b === 'number' ? Math.round((a - b) * 100) / 100 : null);
+// (one figure less another as both are written, to the dollar: what's worked out from figures on the page adds up with
+// them as they read, Board QA round 12)
+const less = lessWritten;
 /**
  * The year's expenses the way SOARD's budget counts them: QuickBooks' less what never left the bank (the in-kind gifts
  * it takes in and uses at the same value, and depreciation: numbers.books.nonCash). A read from before it kept that
@@ -300,8 +421,10 @@ const inKindOf = (sources) => (sources || []).filter((x) => x.key === 'inkind').
  */
 export function yearFigures(books) {
   const ly = books?.lastYear || null;
-  const own = { revenue: books?.revenue ?? null, expenses: books?.expenses ?? null, net: typeof books?.net === 'number' ? books.net : less(books?.revenue, books?.expenses) };
-  const lyNet = (x) => (typeof x?.net === 'number' ? x.net : less(x?.revenue, x?.expenses));
+  // (each net the revenue less the expenses beside it, as written: QuickBooks' own Net Income only without them)
+  const netOf = (x) => (typeof x?.revenue === 'number' && typeof x?.expenses === 'number' ? less(x.revenue, x.expenses) : typeof x?.net === 'number' ? x.net : null);
+  const own = { revenue: books?.revenue ?? null, expenses: books?.expenses ?? null, net: netOf(books) };
+  const lyNet = netOf;
   if (typeof books?.nonCash !== 'number') {
     return { ...own, last: ly ? { revenue: ly.revenue ?? null, expenses: ly.expenses ?? null, net: lyNet(ly) } : null, inKind: null, books: own };
   }
@@ -321,7 +444,7 @@ export function yearFigures(books) {
 export function inKindWords(k) {
   if (!k) return '';
   if (k.given > 0 && Math.round(k.given) === Math.round(k.used)) return `Not counting the ${compact(k.given)} in kind on either side.`;
-  return `Not counting ${andText([k.given > 0 ? `${compact(k.given)} given in kind` : '', k.used > 0 ? `${compact(k.used)} of in kind and depreciation in expenses` : ''].filter(Boolean))}.`;
+  return `Not counting ${andText([k.given > 0 ? `${compact(k.given)} given in kind` : '', k.used > 0 ? `${compact(k.used)} of ${nonCashName(k)} in expenses` : ''].filter(Boolean))}.`;
 }
 /**
  * A QuickBooks budget in words, never its file name ("Budget_FY26_P&L"): "QuickBooks’ 2026 budget"; one that isn't a
@@ -349,15 +472,30 @@ export function withBooks(sheet, books) {
   // Expenses as SOARD's budget counts them, without in kind (last year's the same way, once the daily read has it)
   const lyCash = typeof books.nonCash !== 'number' ? [ly?.expenses, ly?.full?.expenses]
     : typeof ly?.nonCash === 'number' && typeof ly?.full?.nonCash === 'number' ? [less(ly.expenses, ly.nonCash), less(ly.full.expenses, ly.full.nonCash)] : [null, null];
+  // One revenue, counted one way: the year so far's (./yearFigures), its in-kind gifts left out whenever QuickBooks
+  // says what's in kind, whatever the budget is (QuickBooks', a sheet's) or with none, so the tiles, The year so far,
+  // the mix and the search have the same figure and revenue less expenses is the net (Board QA round 11: with no budget
+  // the tile's $1.88M kept the in kind the net beside it left out). Last year's same days the same way, to set it
+  // beside; how far along last year was by now (its pace, a share) is its whole revenue's, as QuickBooks has it, since
+  // its whole year's in kind isn't read
+  const yf = yearFigures(books);
+  const given = yf.inKind?.given || 0;
+  const revenue = typeof books.nonCash === 'number'
+    ? { ...line(yf.revenue, sheet?.revenue, yf.last?.revenue, null), ...(ly?.full?.revenue > 0 && typeof ly.revenue === 'number' ? { share: ly.revenue / ly.full.revenue } : {}), ...(given > 0 ? { inKind: given } : {}) }
+    : line(books.revenue, sheet?.revenue, ly?.revenue, ly?.full?.revenue);
   return {
     year: same && sheet.label ? sheet.label : books.year, asOf: shortDate(books.through), live: true, at: books.at,
-    // Against QuickBooks' own budget (in kind on both sides) revenue leaves the in kind out too, so the two figures are
-    // cash in and cash out (the sheet's budget counts in-kind gifts as revenue). Last year's pace stays its whole revenue's
-    revenue: sheet?.qbo ? { ...line(books.revenue - inKindOf(books.sources), sheet.revenue, ly?.revenue, ly?.full?.revenue), inKind: inKindOf(books.sources) } : line(books.revenue, sheet?.revenue, ly?.revenue, ly?.full?.revenue),
+    revenue,
     expenses: { ...line(spentOf(books), sheet?.expenses, ...lyCash), inKind: books.nonCash > 0 ? books.nonCash : 0 }, programs: null,
     meeting: sheet?.meeting || null, file: sheet?.file || null, qbo: sheet?.qbo || '',
   };
 }
+/**
+ * How far along last year was by this day, as a share of its whole year (0.75), for a figure against its budget: its
+ * same days over its whole year, or the share kept when its whole year isn't counted the same way (./withBooks); null
+ * with neither
+ */
+export const paceOf = (x) => (x?.last != null && x.lastFull > 0 ? x.last / x.lastFull : typeof x?.share === 'number' ? x.share : null);
 export function useBudget(data, upTo = '', n = null) {
   const books = booksFor(data, upTo, n);
   const own = booksBudget(books);
@@ -383,7 +521,7 @@ export function booksBudget(books) {
 }
 export const pctOf = (x) => (x?.budget ? Math.round((x.actual / x.budget) * 100) : null);
 /** "31% by now last year": how much of last year's whole year had come in (or gone out) by this day, beside this year's share of its budget */
-export const paceText = (x) => (x?.budget && x.last != null && x.lastFull > 0 ? `${Math.round((x.last / x.lastFull) * 100)}% by now last year` : '');
+export const paceText = (x) => (x?.budget && paceOf(x) != null ? `${Math.round(paceOf(x) * 100)}% by now last year` : '');
 /** "▲ 12% on last year by now": this year's so far against last year's same days, when there's no budget to measure by */
 export const growthText = (x, as = 'pct') => {
   if (!(x?.last > 0)) return '';
@@ -397,7 +535,7 @@ export const growthText = (x, as = 'pct') => {
  */
 export const writer = (figs) => (k, v, fmt = compact) => { const said = fmt(v); figs.push({ k, v, said }); return said; };
 /** A change in dollars as written ("▲ $45K"), its figure kept by `$`; '' when it rounds to nothing (the caller says Even) */
-const moved = ($, k, a, p) => (Math.round(a) === Math.round(p) ? '' : `${a > p ? '▲' : '▼'} ${$(k, Math.abs(a - p))}`);
+const moved = ($, k, a, p) => (asWritten(a) === asWritten(p) ? '' : `${a > p ? '▲' : '▼'} ${$(k, Math.abs(lessWritten(a, p)))}`);
 /**
  * A meeting's money as figures, for its Financial item and the screen: the cash, the year's revenue and expenses
  * against the budget, and (once Mercury holds SOARD's money, so its record is the books') the year's net and the
@@ -407,6 +545,33 @@ const moved = ($, k, a, p) => (Math.round(a) === Math.round(p) ? '' : `${a > p ?
  */
 /** "August 3, 2026" → ", as of Aug 3" ('' when there's no date) */
 const asOfWords = (s) => { const t = Date.parse(String(s || '')); return Number.isFinite(t) ? `, as of ${new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).replace(' ', '\u00a0')}` : s ? `, ${s}` : ''; };
+/**
+ * Mercury's record of a stretch (finance.ytd, its last year, a month) as Financials' "Money in and out" writes it: money
+ * out is its three parts (makeovers, the store, running SOARD), each rounded so they add up to it as written
+ * (./addingUp), and the net is money in less money out as written (Board QA round 12) → { in, out, makeovers, store,
+ * operating, net }
+ */
+export function ioOf(p) {
+  if (!p) return null;
+  const parts = [p.makeovers || 0, p.store || 0, p.operating || 0];
+  const out = asWritten(parts.reduce((t, x) => t + x, 0));
+  const [makeovers, store, operating] = addingUp(parts, { total: out });
+  return { in: asWritten(p.income || 0), out, makeovers, store, operating, net: lessWritten(p.income || 0, out) };
+}
+/**
+ * Where the year's money went, by purpose (QuickBooks' classes, numbers.books.functions), as Financials draws it and
+ * search finds it: the first three by name, the rest together as Everything else (when it's half a percent or more),
+ * each rounded so they add up to the total as written (./addingUp) → { total, list: [{ name, amount, said, i, tone,
+ * rest }] } | null
+ */
+export function wentParts(f) {
+  if (!(f?.total > 0)) return null;
+  const named = (f.list || []).slice(0, 3);
+  const rest = Math.max(0, f.total - named.reduce((t, p) => t + p.amount, 0));
+  const list = [...named.map((p, i) => ({ ...p, i, tone: ['a', 'b', 'd'][i], rest: false })), ...(rest >= f.total * 0.005 ? [{ name: 'Everything else', amount: rest, tone: 'c', rest: true }] : [])];
+  const said = addingUp(list.map((p) => p.amount), { total: f.total });
+  return { total: asWritten(f.total), list: list.map((p, j) => ({ ...p, said: said[j] })) };
+}
 export function moneyTiles({ cash, budget, n, due = false, as = '' }) {
   const out = [];
   const tile = (t, fill) => { const figs = []; out.push({ ...t, ...fill(writer(figs)), figs }); };
@@ -420,7 +585,8 @@ export function moneyTiles({ cash, budget, n, due = false, as = '' }) {
         value: !cash ? '…' : Number.isFinite(cash.total) ? $('cash', cash.total, (v) => amount(Math.abs(v))) : 'Not known',
         sub: !cash ? 'From the balance sheet' : fromBooks(cash) || (cash.live
           // (each account rounded so they add up to the cash beside them: ./partsAddingUp)
-          ? [(cash.accounts || []).length > 1 ? partsAddingUp(cash.accounts.map((a) => a.balance)).map((w, i) => `${cash.accounts[i].name} ${$(`cash:${cash.accounts[i].bank || ''}:${cash.accounts[i].name}`, cash.accounts[i].balance, () => w)}`).join(' · ') : '', cash.asOf ? `as of ${shortAsOf(cash.asOf)}` : ''].filter(Boolean).join(', ')
+          // (and each kept for search as it's written to the dollar, the card's own figure: ./cashLines)
+          ? [(cash.accounts || []).length > 1 ? ((each) => partsAddingUp(each, { total: cash.total }).map((w, i) => `${cash.accounts[i].name} ${$(`cash:${cash.accounts[i].bank || ''}:${cash.accounts[i].name}`, each[i], () => w)}`).join(' · '))(addingUp(cash.accounts.map((a) => a.balance), { total: cash.total })) : '', cash.asOf ? `as of ${shortAsOf(cash.asOf)}` : ''].filter(Boolean).join(', ')
           : `${cash.asOf ? `As of ${shortAsOf(cash.asOf)}` : 'From the balance sheet'}${cash.prior != null ? ` · ${((c) => (c === 'Even' ? 'Even with a year before' : `${c} on a year`))(year())}` : ''}`),
       };
     });
@@ -431,21 +597,26 @@ export function moneyTiles({ cash, budget, n, due = false, as = '' }) {
   // While a budget sheet is read: its two figures' places, so the tiles never move when they arrive
   // (QuickBooks' figures at once when it's connected, as Home has them; the budget's share follows)
   const books = typeof n?.books?.revenue === 'number' ? n.books : null;
-  if (budget === undefined && (due || books)) for (const [k, word, v] of [['rev', 'revenue', books?.revenue], ['exp', 'expenses', books ? spentOf(books) : null]]) tile({ k, label: `${(books?.year || todayEastern().slice(0, 4))} ${word}`, pct: 0, sub: '\u00a0' }, ($) => ({ value: typeof v === 'number' ? $(k === 'rev' ? 'rev:books' : 'exp', v, amount) : '…' }));
+  // (the revenue counted as it will be once the budget is in, ./yearFigures: the figure never changes when it arrives)
+  // (no year guessed while a sheet is read: QuickBooks' when it's connected, else none till the sheet says its own)
+  if (budget === undefined && (due || books)) for (const [k, word, v] of [['rev', 'revenue', books ? yearFigures(books).revenue : null], ['exp', 'expenses', books ? spentOf(books) : null]]) tile({ k, label: yearLabel(books?.year || '', word), pct: 0, sub: '\u00a0' }, ($) => ({ value: typeof v === 'number' ? $(k, v, amount) : '…' }));
   for (const [k, x, word] of [['rev', budget?.revenue, 'revenue'], ['exp', budget?.expenses, 'expenses']]) {
     if (!x) continue;
     // (against last year's same days in dollars, the pick's way, when there's no budget to measure by)
     const growth = ($) => { if (as !== 'usd') return growthText(x, as || 'pct'); if (!(x.last > 0)) return ''; const c = moved($, `${k}:chgly`, x.actual, x.last); return c ? `${c} on last year by now` : 'Even with last year by now'; };
-    tile({ k, label: `${yr} ${word}`.trim(), pct: pctOf(x) }, ($) => ({
+    tile({ k, label: yearLabel(yr, word), pct: pctOf(x) }, ($) => ({
       value: $(k, x.actual, amount),
-      sub: [x.budget ? [`${pctOf(x)}% of the ${$(`${k}:bud`, x.budget)} budget${asOfWords(budget.asOf)}`, paceText(x)].filter(Boolean).join(' · ') : growth($) || `The year so far${asOfWords(budget.asOf)}`, x.inKind ? `not counting ${$(k === 'rev' ? 'inkind' : 'exp:nc', x.inKind)} in kind` : ''].filter(Boolean).join(' · '),
+      sub: [x.budget ? [`${pctOf(x)}% of the ${$(`${k}:bud`, x.budget)} budget${asOfWords(budget.asOf)}`, paceText(x)].filter(Boolean).join(' · ') : growth($) || `The year so far${asOfWords(budget.asOf)}`, x.inKind ? `not counting ${$(k === 'rev' ? 'inkind' : 'exp:nc', x.inKind)} ${k === 'rev' ? 'in kind' : nonCashOf(books || n?.books)}` : ''].filter(Boolean).join(' · '),
     }));
   }
   const f = n?.finance;
   // Mercury's own record (the year so far, the forecast) only once its banks are the cash shown
   if (cash?.live && cash.banks?.includes('Mercury') && !n?.mercury?.empty && f?.ytd) {
-    const spent = (p) => (p.makeovers || 0) + (p.store || 0) + (p.operating || 0);
-    if (!budget?.revenue) tile({ k: 'ytd', label: `${f.ytd.year} so far`, tone: f.ytd.net >= 0 ? 'up' : 'down' }, ($) => ({ value: $('ytd:net', f.ytd.net, (v) => `${v >= 0.5 ? '+' : ''}${amount(v)}`), sub: `${$('ytd:in', f.ytd.income)} in · ${$('ytd:out', spent(f.ytd))} out, through ${new Date(`${f.ytd.through}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', timeZone: 'UTC' })}` }));
+    // (each figure keyed as Financials' "Money in and out" keys it, io:net, io:in, io:out, so search has it once:
+    // Board QA round 11 found each twice, this tile's and Financials' row; each as that table writes it, ./ioOf, and
+    // this month's end said so far, ./throughWords: Board QA round 12)
+    const io = ioOf(f.ytd);
+    if (!budget?.revenue) tile({ k: 'ytd', label: `${f.ytd.year} so far`, tone: io.net >= 0 ? 'up' : 'down' }, ($) => ({ value: $('io:net', io.net, (v) => `${v >= 0.5 ? '+' : ''}${amount(v)}`), sub: `${$('io:in', io.in)} in · ${$('io:out', io.out)} out, ${throughWords(f.ytd.through)}` }));
     if (f.cash?.lowest) tile({ k: 'low', label: 'Lowest ahead', tone: f.cash.belowFloor ? 'down' : '' }, ($) => ({ value: $('low', f.cash.lowest.dollars, amount), sub: `${f.cash.lowest.week ? `Week of ${shortDate(f.cash.lowest.week).replace(/, \d{4}$/, '')}` : 'In the forecast'} · ${$('in13', f.cash.in13Weeks)} in 13 weeks` }));
   }
   return out;
@@ -472,11 +643,11 @@ export const stepText = (step) => (step === 3 ? ', each quarter’s figure sprea
 // amount. An account outside them takes a color left free; whatever is left over is Everything else, in gray
 const MIX_TONE = { donations: 1, store: 2, gala: 3, inkind: 4, grants: 5 };
 /**
- * Whether the year's revenue is said without its in-kind gifts, as the revenue figure beside it says it (./withBooks):
- * against QuickBooks' own budget (in kind on both sides) it leaves them out and says "Not counting $220K in kind"; a
- * budget sheet counts in-kind gifts as revenue, so with one (or none) the revenue keeps them
+ * Whether the year's revenue is said without its in-kind gifts, as the revenue figure beside it says it (./withBooks,
+ * ./yearFigures): whenever QuickBooks says what's in kind, with a budget or without one ("Not counting $220K in kind").
+ * Board QA round 11: with no budget the mix counted in kind as 12% of a revenue the figures beside it left it out of
  */
-export const inKindLeftOut = (books) => !!booksBudget(books) && inKindOf(books?.sources) > 0;
+export const inKindLeftOut = (books) => (yearFigures(books).inKind?.given || 0) > 0;
 /**
  * The year's revenue as parts, in their colors' order: the categories of 2% or more (five at most), then Everything
  * else; each with the same days last year when the daily read has them. The same revenue as the figure above it, so
@@ -497,7 +668,8 @@ export function mixOf(books) {
   const out = inKindLeftOut(books);
   const inKind = out ? inKindOf(all) : 0;
   const src = out ? all.filter((x) => x.key !== 'inkind') : all;
-  const total = typeof books?.revenue === 'number' ? books.revenue - inKind : null;
+  // (the revenue as the figures beside it write it, in kind left out as written: ./lessWritten)
+  const total = typeof books?.revenue === 'number' ? lessWritten(books.revenue, inKind) : null;
   const sum = (list) => list.reduce((t, x) => t + x.amount, 0);
   const pos = src.filter((x) => x.amount > 0);
   if (!pos.length || !(total > 0)) return null;
@@ -528,8 +700,19 @@ export function mixOf(books) {
   let at = 0;
   const whole = sum(parts);
   const shares = sharesOf(parts.map((x) => x.amount), whole);
-  return { total, came: whole, less, inKind, year: books.year, lastYear: books.lastYear?.year || '', parts: parts.map((x, i) => { const w = (x.amount / whole) * 100; const mid = at + w / 2; at += w; return { ...x, w, mid, share: shares[i] }; }) };
+  // Each part as it's written (`said`, whole dollars), rounded so the parts less what's below zero make the revenue
+  // beside them as it's written, never a dollar off it (./addingUp; Board QA round 12: with cents, $700,000 + $415,000
+  // + $400,000 + $90,000 + $51,047 made $1,656,047 beside a revenue of $1,656,049)
+  const lessSaid = less.map((x) => ({ ...x, said: asWritten(x.amount) }));
+  const said = addingUp(parts.map((x) => x.amount), { total: total + lessSaid.reduce((t, x) => t + x.said, 0) });
+  return { total, came: whole, less: lessSaid, inKind, year: books.year, lastYear: books.lastYear?.year || '', parts: parts.map((x, i) => { const w = (x.amount / whole) * 100; const mid = at + w / 2; at += w; return { ...x, said: said[i], w, mid, share: shares[i] }; }) };
 }
+/**
+ * The mix's parts in short, as Home's key writes them: each its own written amount (`said`) in short, as the table beside
+ * it on Financials writes it in full. (Each in its own unit: "$1M" beside "$3", never one part's unit forced on all,
+ * Board QA round 11's "$1M")
+ */
+export const mixShort = (mix) => (mix ? mix.parts.map((x) => compact(x.said)) : []);
 /**
  * What the revenue is less than its parts, in words under the mix: "Less $20,000 in Refunds." ('' with nothing below
  * zero). `fmt`: how its amounts are written, as the parts beside it are (Home's in short)
@@ -537,7 +720,7 @@ export function mixOf(books) {
 export function mixLessWords(mix, fmt = money) {
   const l = mix?.less || [];
   if (!l.length) return '';
-  return `Less ${andText(l.map((x) => `${fmt(x.amount)} in ${x.name || 'income accounts below zero'}`))}.`;
+  return `Less ${andText(l.map((x) => `${fmt(x.said ?? x.amount)} in ${x.name || 'income accounts below zero'}`))}.`;
 }
 /**
  * Each part's share of their whole, in whole percents that add up to 100, as partsAddingUp does for amounts (QA round
@@ -589,15 +772,16 @@ export function useChangeAs() {
 export function changeIn(a, p, as = 'pct', { short = false } = {}) {
   if (!(typeof a === 'number' && typeof p === 'number')) return '';
   if (as !== 'usd' && p > 0) { const c = Math.round(((a - p) / p) * 100); return c === 0 ? 'Even' : `${c > 0 ? '▲' : '▼'} ${Math.abs(c)}%`; }
-  if (Math.round(a) === Math.round(p)) return 'Even';
-  return `${a > p ? '▲' : '▼'} ${(short ? compact : money)(Math.abs(a - p))}`;
+  // (in dollars, the one less the other as both are written: ./lessWritten)
+  if (asWritten(a) === asWritten(p)) return 'Even';
+  return `${a > p ? '▲' : '▼'} ${(short ? compact : money)(Math.abs(lessWritten(a, p)))}`;
 }
 /** Over (under) a budget: "+$217,340" or "+12%" (of the budget; dollars when it's zero), 'Even', or '' with nothing */
 export function overIn(a, b, as = 'usd', { short = false } = {}) {
   if (!(typeof a === 'number' && typeof b === 'number')) return '';
-  if (Math.round(a) === Math.round(b)) return 'Even';
+  if (asWritten(a) === asWritten(b)) return 'Even';
   if (as === 'pct' && b > 0) { const c = Math.round(((a - b) / b) * 100); return c === 0 ? 'Even' : `${c > 0 ? '+' : '−'}${Math.abs(c)}%`; }
-  return `${a > b ? '+' : '−'}${(short ? compact : money)(Math.abs(a - b))}`;
+  return `${a > b ? '+' : '−'}${(short ? compact : money)(Math.abs(lessWritten(a, b)))}`;
 }
 /**
  * A change both ways, `as` showing its pick and the other kept in its place unseen (portal.css .by-both, drawn from
@@ -648,7 +832,9 @@ export function MixHead({ books, as = 'p', cls = 'bp-fig__label', id = null }) {
 
 /**
  * The revenue as one bar, a part per category, and a key giving each its amount and share; over a part, its exact
- * amount and the same days last year. `table` (Financials): every category beside last year, with its accounts
+ * amount and the same days last year. `table` (Financials): every category beside last year, with its accounts, each
+ * amount and its share apart by a real space (Board QA round 11: on a phone, where the share sits beside it, a screen
+ * reader heard "$700,00042%")
  */
 export function RevenueMix({ books, table = false }) {
   const mix = mixOf(books);
@@ -656,23 +842,24 @@ export function RevenueMix({ books, table = false }) {
   if (!mix) return null;
   const { parts } = mix;
   const tip = parts[on];
-  const said = `${mix.year} revenue by category${mix.inKind ? `, not counting ${money(mix.inKind)} in kind` : ''}: ${parts.map((x) => `${x.name} ${money(x.amount)} (${x.share})`).join(', ')}${mix.less.length ? `. ${mixLessWords(mix)}` : ''}`;
+  const said = `${mix.year} revenue by category${mix.inKind ? `, not counting ${money(mix.inKind)} in kind` : ''}: ${parts.map((x) => `${x.name} ${money(x.said)} (${x.share})`).join(', ')}${mix.less.length ? `. ${mixLessWords(mix)}` : ''}`;
+  const short = mixShort(mix);
   // (what's below zero said under it, by its name, as the parts beside it are written)
   const less = mix.less.length ? html`<p class="bp-mix__less" id=${table ? 'mix-less' : null}>${nbw(mixLessWords(mix, table ? money : compact))}</p>` : null;
   return html`<div class="bp-mix" onMouseLeave=${() => setOn(-1)}>
     <div class="bp-mix__bar" role="img" aria-label=${said}>
       ${parts.map((x, i) => html`<span class=${`bp-mix__seg bp-tone--${x.tone} ${on >= 0 && i !== on ? 'is-dim' : ''}`} style=${`--p:${x.w}%`} key=${x.key} onMouseEnter=${() => setOn(i)}></span>`)}
-      ${tip ? html`<div class="bp-mix__tip" style=${`--x:${tip.mid}%`} aria-hidden="true"><strong>${tip.name}</strong>${money(tip.amount)} · ${tip.share}${tip.last != null ? html`<span>${mix.lastYear}, same days: ${money(tip.last)}${changeOf(tip.amount, tip.last) ? ` · ${changeOf(tip.amount, tip.last)}` : ''}</span>` : null}</div>` : null}
+      ${tip ? html`<div class="bp-mix__tip" style=${`--x:${tip.mid}%`} aria-hidden="true"><strong>${tip.name}</strong>${money(tip.said)} · ${tip.share}${tip.last != null ? html`<span>${mix.lastYear}, same days: ${money(tip.last)}${changeOf(tip.amount, tip.last) ? ` · ${changeOf(tip.amount, tip.last)}` : ''}</span>` : null}</div>` : null}
     </div>
     ${table ? html`<table class="bp-table bp-mixtable bp-cmp">
       <thead><tr><th scope="col">Category</th><th scope="col" class="num">${mix.year} so far</th>${parts.some((x) => x.last != null) ? html`<th scope="col" class="num">${mix.lastYear}, same days</th><th scope="col" class="num">Change</th>` : null}</tr></thead>
       <tbody>${parts.map((x) => html`<tr key=${x.key} id=${`mix-${x.key}`}>
         <th scope="row"><span class="bp-mixtable__name"><i class=${`bp-tone--${x.tone}`} aria-hidden="true"></i>${x.name}</span>${x.accounts?.length && !(x.accounts.length === 1 && x.accounts[0] === x.name) ? html`<small>${x.accounts.join(', ')}</small>` : null}</th>
-        <td class="num">${money(x.amount)}<small>${x.share}</small></td>
+        <td class="num">${`${money(x.said)} `}<small>${x.share}</small></td>
         ${x.last != null ? html`<td class="num bp-cmp__ly" data-label=${`${mix.lastYear}, same days`}>${money(x.last)}</td><td class="num bp-cmp__chg">${changeOf(x.amount, x.last) || (x.last === 0 && x.amount > 0 ? 'New' : html`<${Blank} say="Nothing to compare" />`)}</td>` : null}
       </tr>`)}</tbody>
     </table>`
-    : html`<ul class="bp-mix__key">${parts.map((x, i) => html`<li key=${x.key} class=${i === on ? 'is-on' : ''} onMouseEnter=${() => setOn(i)}><i class=${`bp-tone--${x.tone}`} aria-hidden="true"></i>${x.name}<strong>${compact(x.amount)}</strong><span>${x.share}</span></li>`)}</ul>`}
+    : html`<ul class="bp-mix__key">${parts.map((x, i) => html`<li key=${x.key} class=${i === on ? 'is-on' : ''} onMouseEnter=${() => setOn(i)}><i class=${`bp-tone--${x.tone}`} aria-hidden="true"></i>${x.name}<strong>${short[i]}</strong><span>${x.share}</span></li>`)}</ul>`}
     ${less}
   </div>`;
 }
@@ -689,11 +876,13 @@ export function storeOf(books) {
   const s = books?.store;
   if (!s || !(s.sales || s.cost)) return null;
   const ly = typeof books.lastYear?.store?.sales === 'number' ? books.lastYear.store : null;
+  // (its profit is its sales less its cost of goods as they're written beside it: Board QA round 12)
+  const profitOf = (x) => (typeof x.sales === 'number' && typeof x.cost === 'number' ? lessWritten(x.sales, x.cost) : x.profit);
   return { year: books.year, lastYear: ly ? books.lastYear.year : '', lines: [
-    { k: 'sales', name: 'Sales', amount: s.sales, last: ly ? ly.sales : null, accounts: s.salesAccounts || [] },
-    { k: 'cost', name: 'Cost of goods', amount: s.cost, last: ly ? ly.cost : null, accounts: s.costAccounts || [] },
-    { k: 'profit', name: 'Profit before staff and rent', amount: s.profit, last: ly ? ly.profit : null, accounts: [] },
-  ], margin: s.sales > 0 ? s.profit / s.sales : null, lastMargin: ly?.sales > 0 ? ly.profit / ly.sales : null };
+    { k: 'sales', name: 'Sales', amount: asWritten(s.sales), last: ly ? asWritten(ly.sales) : null, accounts: s.salesAccounts || [] },
+    { k: 'cost', name: 'Cost of goods', amount: asWritten(s.cost), last: ly ? asWritten(ly.cost) : null, accounts: s.costAccounts || [] },
+    { k: 'profit', name: 'Profit before staff and rent', amount: profitOf(s), last: ly ? profitOf(ly) : null, accounts: [] },
+  ], margin: s.sales > 0 ? profitOf(s) / s.sales : null, lastMargin: ly?.sales > 0 ? profitOf(ly) / ly.sales : null };
 }
 /** A store line against last year's same days: a share for its sales and cost, dollars for the profit (which can cross zero) */
 export const storeChange = (x, as = '') => (x.last == null ? '' : x.amount === x.last ? 'Even' : as === 'usd' || x.k === 'profit' ? changeIn(x.amount, x.last, 'usd', { short: true }) : changeOf(x.amount, x.last));

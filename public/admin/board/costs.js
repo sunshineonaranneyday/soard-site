@@ -26,9 +26,9 @@
 import { h, htm, useState, useMemo, useRef, useEffect } from '../vendor.js';
 import { money, plural, initialsOf, todayEastern } from '../board-shared.js';
 import { rowsOf, recentSeasons, typicalLately, planOf, pipelineOf, operatingOf, typeById, statsOf, TYPES } from '../makeover-costs-shared.js';
-import { useCashNow, compact } from './money.js';
+import { useCashNow, compact, asWritten } from './money.js';
 import { sized } from './kanban.js';
-import { More } from './parts.js';
+import { More, dayText } from './parts.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -83,7 +83,8 @@ export function toComeText(plan) {
   const total = plan.paid + plan.committed;
   const toCome = !unknown ? `about ${dollars(plan.committed)} still to come${guessed ? `, ${dollars(guessed)} of it estimated (no budget yet)` : ''}`
     : !known ? 'what’s still to come isn’t known yet'
-    : `about ${dollars(plan.committed)} still to come on ${known}${guessed ? ` (${dollars(guessed)} of it estimated, no budget yet)` : ''}, not known yet on ${unknown}`;
+    // (an amount between commas, never in brackets, which on this page say below zero: Board QA round 11)
+    : `about ${dollars(plan.committed)} still to come on ${known}${guessed ? `, ${dollars(guessed)} of it estimated with no budget yet` : ''}, not known yet on ${unknown}`;
   return [`${dollars(plan.paid)} paid so far`, toCome, !unknown && total ? `about ${dollars(total)} in all` : ''].filter(Boolean).join(' · ');
 }
 
@@ -128,7 +129,7 @@ export function answerText(plan, typical) {
     : `Enough for ${coveredText}, with ${dollars(plan.left)} left.`;
 }
 
-const dayName = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
+const dayName = (d) => dayText(d, 'MD');
 /** Who's already in line for next season, by name: "Ava, Ben and 2 community projects" */
 function carryText(carry, jobs = [], families = []) {
   const kinds = new Map([...jobs, ...families].map((x) => [x.name, x.kind]));
@@ -195,7 +196,7 @@ export function lanesOf(list, top, gap = 1.6) {
  * for the keyboard (← → along, ↑ ↓ between rows, Enter opens the kid's page); hover, focus or a tap says the
  * family, the season, the rooms and the cost
  */
-export function CostChart({ makeovers, seasons = null, big = false, label = 'What each completed makeover cost' }) {
+export function CostChart({ makeovers, seasons = null, big = false, label = 'What each completed makeover cost', spots = false }) {
   // (the seasons by value: the card hands a new list each time it draws)
   const which = seasons ? seasons.join(',') : 'all';
   const rows = useMemo(() => rowsOf(makeovers, seasons), [makeovers, which]);
@@ -239,7 +240,9 @@ export function CostChart({ makeovers, seasons = null, big = false, label = 'Wha
   return html`<div class=${`bc-chart ${big ? 'bc-chart--big' : ''} ${faces ? 'has-faces' : ''}`} role="group" aria-label=${`${label}. Arrow keys move between them`} ref=${ref} onKeyDown=${onKey} onMouseLeave=${() => setTip(-1)}>
     ${placed.map((r, ri) => {
       const s = statsOf(r.list);
-      return html`<div class="bc-row" key=${r.id}>
+      // (on Financials' card each row a place of its own, #bc-r-<room>, where a search for its median or average lands:
+      // ./figures.js, from the same rows. Board QA round 12)
+      return html`<div class="bc-row" key=${r.id} id=${spot(spots, `bc-r-${r.id}`)}>
       <div class="bc-row__label"><strong>${big ? r.short : r.label}</strong><span>${nbw(plural(r.count, 'makeover'))}</span></div>
       <div class="bc-row__track" style=${`--n:${Math.max(1, ...r.dots.map((d) => Math.abs(d.lane) * 2 + 1))}`}>
         ${ticks.map((v) => html`<i class="bc-grid" key=${v} style=${`left:${(v / top) * 100}%`} aria-hidden="true"></i>`)}
@@ -314,7 +317,9 @@ export function useCosts(data, n, m = null) {
   const c = src?.costs || null;
   const operating = operatingOf(src);
   const makeovers = c?.makeovers || [];
-  const plan = useMemo(() => (c ? planOf({ cash: cash?.total, operating, makeovers, waiting: c.waiting || [], underway: c.underway || [] }) : null), [c, cash?.total, operating]);
+  // (from the cash as it's written beside it, so what's over the operating balance is the one less the other as they read:
+  // ./money.js asWritten, Board QA round 12)
+  const plan = useMemo(() => (c ? planOf({ cash: asWritten(cash?.total), operating, makeovers, waiting: c.waiting || [], underway: c.underway || [] }) : null), [c, cash?.total, operating]);
   const typical = typicalLately(makeovers);
   const stats = statsOf(typical?.seasons ? makeovers.filter((x) => typical.seasons.includes(Number(x.season))) : makeovers);
   // How many SOARD can build next season, as of the meeting's day (today's for one today or ahead)
@@ -335,27 +340,41 @@ function Pipeline({ pipe, plan }) {
   </div>`;
 }
 
+/**
+ * What "For makeovers now" rests on, the line under it: "$669,602 in the bank, less $500,000 kept to run SOARD and
+ * $40,000 still to come on the 2 makeovers underway" (the card's, and the search's: ./figures.js)
+ */
+export function answerSub(cash, operating, plan) {
+  const free = plan ? plan.free : null;
+  const unknown = plan?.unknown || 0;
+  const known = plan ? plan.jobs.length - unknown : 0;
+  return free == null ? 'The cash in the bank isn’t in yet' : `${dollars(cash.total)} in the bank, less ${dollars(operating)} kept to run SOARD${plan.committed > 0 ? ` and ${dollars(plan.committed)} still to come on the ${plural(known, 'makeover')} underway${unknown ? ' with a figure' : ''}` : ''}${unknown ? `. ${unknownText(plan)}.` : ''}`;
+}
+/**
+ * Where each of the card's figures is drawn on Financials, where a search for it lands (./figures.js): `spots`, the
+ * ids, only on Financials' card (a meeting's agenda draws its own, never searched)
+ */
+const spot = (spots, id) => (spots ? id : null);
 /** The money: what's over the operating balance and what's underway, large, and what it means in a sentence */
-function Answer({ cash, operating, plan, typical, admin, onBalance }) {
+function Answer({ cash, operating, plan, typical, admin, onBalance, spots = false }) {
   const free = plan ? plan.free : null;
   // (what some underway still need isn't known: the figure is the most there could be, or the least it's short)
   const unknown = plan?.unknown || 0;
-  const known = plan ? plan.jobs.length - unknown : 0;
   return html`<div class=${`bc-answer bc-answer--money ${free != null && free < 0 ? 'is-short' : ''}`}>
-    <div class="bc-answer__money">
+    <div class="bc-answer__money" id=${spot(spots, 'bc-free')}>
       <span class="bc-fig__label">For makeovers now</span>
       <span class=${`bc-answer__value ${free == null ? 'is-words' : ''}`}>${free == null ? 'Not known yet' : free < 0 ? html`${dollars(0)}<small>${nbw(`${unknown ? 'At least ' : ''}${dollars(-free)} short`)}</small>` : unknown ? nbw(`Up to ${dollars(free)}`) : dollars(free)}</span>
-      <span class="bc-fig__sub">${nbw(free == null ? 'The cash in the bank isn’t in yet' : `${dollars(cash.total)} in the bank, less ${dollars(operating)} kept to run SOARD${plan.committed > 0 ? ` and ${dollars(plan.committed)} still to come on the ${plural(known, 'makeover')} underway${unknown ? ' with a figure' : ''}` : ''}${unknown ? `. ${unknownText(plan)}.` : ''}`)}</span>
+      <span class="bc-fig__sub">${nbw(answerSub(cash, operating, plan))}</span>
       ${admin && onBalance ? html`<${BalanceEdit} value=${operating} onSaved=${onBalance} />` : null}
     </div>
-    ${plan ? html`<p class="bc-answer__says">${nbw(answerText(plan, typical))}</p>` : null}
-    ${plan && screenText(plan, typical) !== answerText(plan, typical) ? html`<p class="bc-answer__says bc-answer__says--short">${nbw(screenText(plan, typical))}</p>` : null}
+    ${plan ? html`<p class="bc-answer__says" id=${spot(spots, 'bc-says')}>${nbw(answerText(plan, typical))}</p>` : null}
+    ${plan && screenText(plan, typical) !== answerText(plan, typical) ? html`<p class="bc-answer__says bc-answer__says--short" id=${spot(spots, 'bc-says-short')}>${nbw(screenText(plan, typical))}</p>` : null}
   </div>`;
 }
 
 /** The median makeover lately, with its average, low and high */
-function Median({ typical, stats }) {
-  return html`<div class="bc-median">
+function Median({ typical, stats, spots = false }) {
+  return html`<div class="bc-median" id=${spot(spots, 'bc-median')}>
     <span class="bc-fig__label">${nbw(seasonsTitle('Median makeover', typical?.seasons))}</span>
     <span class=${`bc-fig__value ${typical ? '' : 'is-words'}`}>${typical ? dollars(typical.cost) : 'Not known yet'}</span>
     ${stats ? html`<dl class="bc-mini">
@@ -368,7 +387,7 @@ function Median({ typical, stats }) {
 }
 
 /** Who the money starts, best score first: each family's likely cost, less a pledge, covered or what it still needs */
-function Waiting({ plan, big = false, links = true }) {
+function Waiting({ plan, big = false, links = true, spots = false }) {
   if (!plan) return null;
   const fam = plan.families;
   if (!fam.length) return html`<div class="bc-wait"><h3 class="bc-h3">Waiting on the money</h3><p class="bc-lead">No family approved is waiting.</p></div>`;
@@ -377,7 +396,7 @@ function Waiting({ plan, big = false, links = true }) {
     <h3 class="bc-h3">Waiting on the money${fam.length > 1 ? ', best score first' : ''}</h3>
     <ol class="bc-fams">${fam.map((f, i) => {
       const name = links && f.account ? html`<a class="bc-fam__name" href=${`#/families/${encodeURIComponent(f.account)}`}>${f.name}</a>` : html`<span class="bc-fam__name">${f.name}</span>`;
-      return html`<li class=${`bc-fam ${f.covered ? 'is-covered' : 'is-short'}`} key=${f.key}>
+      return html`<li class=${`bc-fam ${f.covered ? 'is-covered' : 'is-short'}`} key=${f.key} id=${spot(spots, `bc-f-${f.key}`)}>
         <${Face} f=${f} size=${big ? 64 : 44} />
         <div class="bc-fam__who">
           ${name}
@@ -394,16 +413,16 @@ function Waiting({ plan, big = false, links = true }) {
 }
 
 /** The makeovers underway: each one's stage, what's been paid and what's still to come (its budget, or its rooms' median) */
-function Underway({ plan }) {
+function Underway({ plan, spots = false }) {
   if (!plan?.jobs?.length) return null;
   return html`<div class="bc-under">
     <div class="bc-under__head">
       <h3 class="bc-h3">${nbw(`Underway: ${plural(plan.jobs.length, 'makeover')}`)}</h3>
-      <p class="bc-under__sum">${nbw(toComeText(plan))}</p>
+      <p class="bc-under__sum" id=${spot(spots, 'bc-under-sum')}>${nbw(toComeText(plan))}</p>
     </div>
     <div class="bc-under__wrap"><table class="bp-table bc-under__table">
       <thead><tr><th scope="col">Makeover</th><th scope="col">Stage</th><th scope="col" class="num">Paid so far</th><th scope="col" class="num">Still to come</th><th scope="col">From</th></tr></thead>
-      <tbody>${plan.jobs.map((j) => html`<tr key=${j.key}>
+      <tbody>${plan.jobs.map((j) => html`<tr key=${j.key} id=${spot(spots, `bc-j-${j.key}`)}>
         <th scope="row"><span class="bc-under__who"><${Face} f=${j} size=${32} /><span><b>${j.url ? html`<a class="bp-link" href=${j.url} target="_blank" rel="noopener">${j.name}</a>` : j.name}</b><small>${roomsText(j)}</small></span></span></th>
         <td data-label="Stage">${j.status}</td>
         <td class="num" data-label="Paid so far">${dollars(j.paid)}</td>
@@ -415,23 +434,22 @@ function Underway({ plan }) {
 }
 
 /** Every completed makeover in a table: the chart's dots, readable without hovering */
-function Table({ makeovers }) {
+function Table({ makeovers, k = 'costs-table', spots = false }) {
   const [by, setBy] = useState('season');
   const list = useMemo(() => [...makeovers].sort(by === 'cost' ? (a, b) => b.cost - a.cost : (a, b) => b.season - a.season || b.cost - a.cost), [makeovers, by]);
   // (none yet: no empty table to open)
   if (!makeovers.length) return null;
   const sortBtn = (k, label) => html`<button type="button" class="bc-sort" aria-pressed=${by === k} onClick=${() => setBy(k)}>${label}</button>`;
-  return html`<details class="bp-more bc-table">
-    <summary>${nbw(`Every completed makeover (${makeovers.length})`)}</summary>
+  return html`<${More} k=${k} cls="bp-more bc-table" summary=${nbw(`Every completed makeover (${makeovers.length})`)}>
     <p class="bc-sorts">Sort by ${sortBtn('season', 'season')} ${sortBtn('cost', 'cost')}</p>
     <table class="bp-table">
       <thead><tr><th scope="col">Makeover</th><th scope="col">Season</th><th scope="col">What was built</th><th scope="col" class="num">Paid</th></tr></thead>
-      <tbody>${list.map((m) => html`<tr key=${m.key}>
+      <tbody>${list.map((m) => html`<tr key=${m.key} id=${spot(spots, `bc-m-${m.key}`)}>
         <th scope="row">${m.url ? html`<a class="bp-link" href=${m.url} target="_blank" rel="noopener">${m.name}</a>` : m.name}</th>
         <td>${m.season}</td><td>${roomsText(m)}</td><td class="num">${dollars(m.cost)}</td>
       </tr>`)}</tbody>
     </table>
-  </details>`;
+  </${More}>`;
 }
 
 /**
@@ -465,7 +483,7 @@ export function CostsCard({ data, n, m = null, variant = 'home', admin = false, 
         <${Seasons} recent=${recent} first=${first} range=${range} setRange=${setRange} />
       </div>
       ${shownStats ? html`<p class="bc-stats">${nbw(`${plural(shownStats.count, 'completed makeover')}: median ${dollars(shownStats.median)}, average ${dollars(shownStats.average)}, low ${dollars(shownStats.low)} (${shownStats.lowOf.name}, ${shownStats.lowOf.season}), high ${dollars(shownStats.high)} (${shownStats.highOf.name}, ${shownStats.highOf.season})`)}</p>` : null}
-      <${CostChart} makeovers=${makeovers} seasons=${seasons} />
+      <${CostChart} makeovers=${makeovers} seasons=${seasons} spots=${!table} />
       ${shown.length || noBills.length ? html`<p class="bc-note">${nbw(`Each face or dot is one makeover, at what SOARD paid: its bills in JobTread, without donated work. The line marks each room’s median; the shading, its middle half.${noBills.length ? ` Not counted: ${and(noBills.map((x) => x.name))}${seasonsText([...new Set(noBills.map((x) => x.season))]) ? ` (${seasonsText([...new Set(noBills.map((x) => x.season))])})` : ''}, with no bills in JobTread.` : ''}`)}</p>` : null}
       ${table ? html`<${Table} makeovers=${shown} />` : null}
     </div>`;
@@ -474,14 +492,14 @@ export function CostsCard({ data, n, m = null, variant = 'home', admin = false, 
       <div class="bp-cardhead"><h2 class="bp-h2" id="costs-h">What makeovers cost</h2><span class="bp-muted">From JobTread and the bank</span></div>
       <div class=${`bc-figs3 ${pipe ? '' : 'is-two'}`}>
         <${Pipeline} pipe=${pipe} plan=${plan} />
-        <${Answer} cash=${cash} operating=${operating} plan=${plan} typical=${typical} admin=${admin} onBalance=${onBalance} />
-        <${Median} typical=${typical} stats=${stats} />
+        <${Answer} cash=${cash} operating=${operating} plan=${plan} typical=${typical} admin=${admin} onBalance=${onBalance} spots />
+        <${Median} typical=${typical} stats=${stats} spots />
       </div>
       ${chart(false)}
       <${More} k="costs-more" summary=${nbw([plan?.jobs?.length ? `Underway: ${plural(plan.jobs.length, 'makeover')}` : '', plan ? 'who’s waiting on the money' : '', shown.length ? `every completed makeover (${shown.length})` : ''].filter(Boolean).join(', ').replace(/^./, (c) => c.toUpperCase()))}>
-        <${Underway} plan=${plan} />
-        <${Waiting} plan=${plan} />
-        <${Table} makeovers=${shown} />
+        <${Underway} plan=${plan} spots />
+        <${Waiting} plan=${plan} spots />
+        <${Table} makeovers=${shown} spots />
       </${More}>
       <p class="bc-families"><a class="bp-cardhead__go" href="#/families/list">Every family’s application and score <span aria-hidden="true">→</span></a></p>
     </section>`;
@@ -502,7 +520,7 @@ export function CostsCard({ data, n, m = null, variant = 'home', admin = false, 
       ${shownStats ? html`<p class="bc-stats">${nbw(`${plural(shownStats.count, 'completed makeover')}: median ${dollars(shownStats.median)}, average ${dollars(shownStats.average)}, low ${dollars(shownStats.low)} (${shownStats.lowOf.name}, ${shownStats.lowOf.season}), high ${dollars(shownStats.high)} (${shownStats.highOf.name}, ${shownStats.highOf.season})`)}</p>` : null}
       <${CostChart} makeovers=${makeovers} seasons=${seasons} />
       ${shown.length || noBills.length ? html`<p class="bc-note">${nbw(`Each face or dot is one makeover, at what SOARD paid: its bills in JobTread, without donated work. The line marks each room’s median; the shading, its middle half.${noBills.length ? ` Not counted: ${and(noBills.map((x) => x.name))}${seasonsText([...new Set(noBills.map((x) => x.season))]) ? ` (${seasonsText([...new Set(noBills.map((x) => x.season))])})` : ''}, with no bills in JobTread.` : ''}`)}</p>` : null}
-      <${Table} makeovers=${shown} />
+      <${Table} makeovers=${shown} k=${`costs-table-${m?.id || variant}`} />
     </div>
     ${variant === 'home' ? html`<p class="bc-families"><a class="bp-cardhead__go" href="#/families">Every family’s application and score <span aria-hidden="true">→</span></a></p>` : null}`;
   if (variant !== 'home') {

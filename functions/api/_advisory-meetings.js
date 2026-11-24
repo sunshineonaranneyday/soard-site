@@ -28,7 +28,7 @@ import {
   cleanMeeting, newMeeting, isFilled, isDate, todayEastern, FILE_KINDS, addressesIn, followAddresses,
 } from '../../public/admin/board-shared.js';
 import { accessToken, eventIdFor } from './_google-calendar.js';
-import { ensureSchema, filesOf, putFile, updateFile, deleteFile, addressesNow } from './_board.js';
+import { ensureSchema, filesOf, putFileWith, updateFile, deleteFile, addressesNow } from './_board.js';
 import { personOf } from './_member-write.js';
 import {
   organizerFor, gcal, times, whenOf, placeOf, meetReady, driftOf, changeGuests, followOf, whoOf, cancelInvite,
@@ -157,9 +157,17 @@ export async function getAdvisoryMeeting(DB, id) {
   const row = await DB.prepare('SELECT data FROM advisory_meetings WHERE id = ?').bind(id).first();
   return row ? hydrate(row, await filesOf(DB, 'advisory-meeting', [id])) : null;
 }
+/**
+ * A meeting as the write itself saved it (RETURNING data), with its files as read before the write (a meeting's own
+ * write never changes them): never read again after the write. A read there that didn't answer said "That didn't go
+ * through" of a meeting saved, and the editor's next save was refused as someone else's, its own (Advisory Board QA round
+ * 24, as Add's Joined and the Advisory Board's other writes: _advisory.js). null: nothing written
+ */
+const asSaved = (row, files = []) => (row ? hydrate(row, { [parse(row.data).id]: files }) : null);
+/** A new meeting (it has no files yet), as written */
 async function write(DB, m) {
-  await DB.prepare('INSERT OR REPLACE INTO advisory_meetings (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)')
-    .bind(m.id, m.date || '', stored(m), m.updatedAt, m.updatedBy || '').run();
+  return asSaved(await DB.prepare('INSERT OR REPLACE INTO advisory_meetings (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) RETURNING data')
+    .bind(m.id, m.date || '', stored(m), m.updatedAt, m.updatedBy || '').first());
 }
 /** A change that's the server's own (the invite, sharing), onto the meeting as it is now: a save made meanwhile stays */
 async function patch(DB, id, fn, { by = '' } = {}) {
@@ -167,12 +175,35 @@ async function patch(DB, id, fn, { by = '' } = {}) {
     const cur = await getAdvisoryMeeting(DB, id);
     if (!cur) return null;
     const next = { ...fn(cur), id, updatedAt: nowIso(), updatedBy: by || cur.updatedBy || '' };
-    const r = await DB.prepare('UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ?')
-      .bind(next.date || '', stored(next), next.updatedAt, next.updatedBy, id, cur.updatedAt).run();
-    if ((r?.meta?.changes ?? r?.changes ?? 0) > 0) return getAdvisoryMeeting(DB, id);
+    const r = await DB.prepare('UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ? RETURNING data')
+      .bind(next.date || '', stored(next), next.updatedAt, next.updatedBy, id, cur.updatedAt).first();
+    if (r) return asSaved(r, cur.files);
   }
   throw new Error('The meeting kept changing; try again');
 }
+
+/**
+ * A file's row going in or off with the meeting's own change, in one step (Board QA round 12, the shared file code:
+ * ./_board.js putFileWith, deleteFile): the meeting written only over the copy read, and `also` only while it's as that
+ * write left it. All of it or none. `files(cur)`: its files once it lands. → the meeting as written, or null when it's gone
+ */
+async function patchWithFile(DB, id, fn, { by = '', also = [], files = (cur) => cur.files } = {}) {
+  for (let i = 0; i < 5; i++) {
+    const cur = await getAdvisoryMeeting(DB, id);
+    if (!cur) return null;
+    const next = { ...fn(cur), id, updatedAt: nowIso(), updatedBy: by || cur.updatedBy || '' };
+    const guard = ' AND (SELECT COUNT(*) FROM advisory_meetings WHERE id = ? AND updated_at = ?) = 1';
+    const r = await DB.batch([
+      DB.prepare('UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ?').bind(next.date || '', stored(next), next.updatedAt, next.updatedBy, id, cur.updatedAt),
+      ...also.map((x) => DB.prepare(`${x.sql}${guard}`).bind(...x.bind, id, next.updatedAt)),
+    ]);
+    if ((r[0]?.meta?.changes ?? r[0]?.changes ?? 0) > 0) return shape({ ...next, files: files(cur) });
+  }
+  throw new Error('The meeting kept changing; try again');
+}
+/** A file step that didn't land: nothing of it was done (round 11's words) */
+const FILE_NOT_SAVED = 'We couldn’t save that just now, so nothing was changed. Please try again in a moment.';
+const fileUnsaid = (e) => (e?.ours || e?.status ? e : err(FILE_NOT_SAVED, 503));
 
 /**
  * Who an invite names, with the email each signs in with, read in one statement (a People rename moves a record and
@@ -206,9 +237,9 @@ async function patchNaming(DB, id, fn, { by = '' } = {}) {
     if (!cur) return null;
     const { people, pairs } = await peopleNow(DB);
     const next = { ...fn(cur, people), id, updatedAt: nowIso(), updatedBy: by || cur.updatedBy || '' };
-    const r = await DB.prepare(`UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ? AND ${SAME_PEOPLE}`)
-      .bind(next.date || '', stored(next), next.updatedAt, next.updatedBy, id, cur.updatedAt, pairs.length, JSON.stringify(pairs), pairs.length).run();
-    if ((r?.meta?.changes ?? r?.changes ?? 0) > 0) return getAdvisoryMeeting(DB, id);
+    const r = await DB.prepare(`UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at = ? AND ${SAME_PEOPLE} RETURNING data`)
+      .bind(next.date || '', stored(next), next.updatedAt, next.updatedBy, id, cur.updatedAt, pairs.length, JSON.stringify(pairs), pairs.length).first();
+    if (r) return asSaved(r, cur.files);
   }
   throw new Error('The meeting kept changing; try again');
 }
@@ -230,8 +261,7 @@ export async function createAdvisoryMeeting(env, { date, by = '' }, { now = Date
     ...newMeeting({ date, template: TEMPLATE, defaults: { ...DEFAULT_TIME, ...(timed ? { start: timed.start, end: timed.end } : {}), ...(placed ? { location: placed.location, address: placed.address || '' } : {}) } }),
     createdAt: nowIso(now), updatedAt: nowIso(now), updatedBy: by,
   });
-  await write(env.DB, m);
-  return { meeting: await getAdvisoryMeeting(env.DB, m.id), existing: false };
+  return { meeting: await write(env.DB, m), existing: false };
 }
 
 const UNCHECKED = 'We couldn’t check People just now, so nothing was changed. Please try again in a moment.';
@@ -282,11 +312,12 @@ export async function saveAdvisoryMeeting(DB, raw0, { by = '', base = null, now 
     const kept = named.filter((x) => onPeople.has(x));
     const r = await DB.prepare(`UPDATE advisory_meetings SET date = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? AND updated_at IS ?
         AND NOT EXISTS (SELECT 1 FROM board_state WHERE key IN (SELECT 'rename-finish:' || value FROM json_each(?)))
-        AND (SELECT COUNT(*) FROM team WHERE slug IN (SELECT value FROM json_each(?))) = ?`)
-      .bind(m.date || '', stored(m), m.updatedAt, m.updatedBy || '', m.id, cur.updatedAt ?? null, JSON.stringify(named), JSON.stringify(kept), kept.length).run();
-    if (!(Number(r?.meta?.changes) > 0)) continue;
-    const out = await getAdvisoryMeeting(DB, m.id);
-    return out && Object.keys(moved).length ? { ...out, addressesNow: moved } : out;
+        AND (SELECT COUNT(*) FROM team WHERE slug IN (SELECT value FROM json_each(?))) = ? RETURNING data`)
+      .bind(m.date || '', stored(m), m.updatedAt, m.updatedBy || '', m.id, cur.updatedAt ?? null, JSON.stringify(named), JSON.stringify(kept), kept.length).first();
+    if (!r) continue;
+    // (as that write saved it, with its files as read before it: asSaved)
+    const out = asSaved(r, cur.files);
+    return Object.keys(moved).length ? { ...out, addressesNow: moved } : out;
   }
   throw err('This wasn’t saved: someone it names is having their web address changed on People right now. Try again in a few minutes.', 503);
 }
@@ -587,22 +618,44 @@ export async function meetingAction(context, { action, body = {}, form = null, b
       case 'update-meeting-file': {
         const f = await fileOfMeeting(env.DB, body.fileId);
         if (!f) return fail('That file is gone', 404);
+        // (the meeting read before the change, the file as that change saved it: never read again after it, which not
+        // answering said "That didn't go through" of a file renamed: Advisory Board QA round 24)
+        const before = await getAdvisoryMeeting(env.DB, f.owner_id);
         const file = await updateFile(env.DB, f.id, { name: body.name, staffOnly: body.staffOnly, kind: KINDS.has(body.kind) ? body.kind : undefined });
-        return Response.json({ ok: true, file, meeting: await getAdvisoryMeeting(env.DB, f.owner_id) });
+        const meeting = before && shape({ ...before, files: (before.files || []).map((x) => (x.id === file.id ? { ...x, ...file } : x)) });
+        return Response.json({ ok: true, file, meeting });
       }
       case 'delete-meeting-file': {
-        const f = await fileOfMeeting(env.DB, body.fileId);
+        const f = await fileOfMeeting(env.DB, body.fileId).catch((e) => { throw fileUnsaid(e); });
         if (!f) return fail('That file is gone', 404);
-        await deleteFile(env, f.id);
-        return Response.json({ ok: true, meeting: await patch(env.DB, f.owner_id, (cur) => withDoc(cur, f.id, ''), { by }) });
+        // (its row off its meeting's items in one write, its bytes after: ./_board.js deleteFile. Board QA round 12)
+        const meeting = await deleteFile(env, f.id, {
+          withMeeting: async (also) => (await patchWithFile(env.DB, f.owner_id, (cur) => withDoc(cur, f.id, ''), { by, also, files: (cur) => cur.files.filter((x) => x.id !== f.id) }))
+            || (await env.DB.batch(also.map((x) => env.DB.prepare(x.sql).bind(...x.bind))), null),
+        }).catch((e) => { throw fileUnsaid(e); });
+        if (meeting === false) return fail('That file is gone', 404);
+        return Response.json({ ok: true, meeting: meeting || null });
       }
       case 'upload': {
         const meetingId = String(form?.get('meetingId') || '');
-        if (!(await getAdvisoryMeeting(env.DB, meetingId))) return fail('Save the meeting first', 404);
+        const before = await getAdvisoryMeeting(env.DB, meetingId).catch((e) => { throw fileUnsaid(e); });
+        if (!before) return fail('Save the meeting first', 404);
         const kind = String(form.get('kind') || 'other');
-        const file = await putFile(env, { ownerType: 'advisory-meeting', ownerId: meetingId, file: form.get('file'), kind: KINDS.has(kind) ? kind : 'other', staffOnly: form.get('staffOnly') === 'true', by });
         const itemId = String(form.get('itemId') || '');
-        const meeting = itemId ? await patch(env.DB, meetingId, (cur) => withDoc(cur, file.id, itemId), { by }) : await getAdvisoryMeeting(env.DB, meetingId);
+        // The file's row and its place on the item in one write: if it doesn't land, the bytes go back and nothing was
+        // kept, so pressing again never keeps a second copy (./_board.js putFileWith. Board QA round 12)
+        const opts = { ownerType: 'advisory-meeting', ownerId: meetingId, file: form.get('file'), kind: KINDS.has(kind) ? kind : 'other', staffOnly: form.get('staffOnly') === 'true', by };
+        const listed = (f) => ({ id: f.id, name: f.name, type: f.type, size: f.size, kind: f.kind, staffOnly: f.staffOnly, at: f.at });
+        const { file, meeting } = await putFileWith(env, opts, async (also, f) => {
+          // (on no item: its row alone, and the meeting as read with it, never a read after that could fail over a kept file)
+          if (!itemId) {
+            await env.DB.batch(also.map((x) => env.DB.prepare(x.sql).bind(...x.bind)));
+            return { meeting: { ...before, files: [...before.files, listed(f)] } };
+          }
+          const m = await patchWithFile(env.DB, meetingId, (cur) => withDoc(cur, f.id, itemId), { by, also, files: (cur) => [...cur.files, listed(f)] });
+          if (!m) throw err('That meeting is gone', 404);
+          return { meeting: m };
+        }).catch((e) => { throw fileUnsaid(e); });
         return Response.json({ ok: true, file, meeting });
       }
       default:

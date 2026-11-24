@@ -588,6 +588,8 @@ test('asking the board to sign: an email to each who hasn’t, straight to the p
   assert.deepEqual([again.body.sent, again.body.recent, sent.length], [0, ['Sam Ortiz'], 0]);
   // Later: Sam asked again, counted
   await env.DB.prepare("UPDATE board_sign_asks SET at = '2000-01-01T00:00:00.000Z'").run();
+  /* r11: the ask keeps who had it before it goes too (askToSign's own record, Board QA round 11): "later" ages that as well */
+  await env.DB.prepare("DELETE FROM board_state WHERE key = 'board-send:sign-ask'").run();
   await askToSign(env, { slugs: ['sam-ortiz'], by: FOUNDER });
   members = await memberStatus(env.DB);
   assert.deepEqual([of('sam-ortiz').asked.n, sent.length], [2, 1]);
@@ -598,6 +600,8 @@ test('asking the board to sign: an email to each who hasn’t, straight to the p
   // No email on file: said, never sent
   await env.DB.prepare("DELETE FROM reveal_board_emails WHERE slug = 'kim-park'").run();
   await env.DB.prepare("UPDATE board_sign_asks SET at = '2000-01-01T00:00:00.000Z'").run();
+  /* r11: the ask keeps who had it before it goes too (askToSign's own record, Board QA round 11): "later" ages that as well */
+  await env.DB.prepare("DELETE FROM board_state WHERE key = 'board-send:sign-ask'").run();
   const none = await askToSign(env, { by: FOUNDER });
   assert.deepEqual(none.noEmail, ['Kim Park']);
   // A preview: to the admin asking only, recorded for nobody
@@ -610,6 +614,8 @@ test('asking the board to sign: an email to each who hasn’t, straight to the p
   sent = [];
   await saveDoc(env.DB, { title: 'Conflict of Interest Policy', kind: 'policy', sign: true, body: 'Say so.' }, { by: FOUNDER });
   await env.DB.prepare("UPDATE board_sign_asks SET at = '2000-01-01T00:00:00.000Z'").run();
+  /* r11: the ask keeps who had it before it goes too (askToSign's own record, Board QA round 11): "later" ages that as well */
+  await env.DB.prepare("DELETE FROM board_state WHERE key = 'board-send:sign-ask'").run();
   await askToSign(env, { slugs: ['alex-rivera'], by: FOUNDER });
   assert.equal(sent.length, 1);
   assert.equal(sent[0].subject, `Please sign the Conflict of Interest Policy for ${YEAR}`, 'Alex signed the expectations: only the policy is asked for');

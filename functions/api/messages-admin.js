@@ -370,7 +370,7 @@ async function invitePreview(env, stage, now) {
   return {
     channel: 'invite',
     from: `${cfg.organizer}'s Google Calendar`,
-    to: stage === 'confirmed' ? 'The family, staff, the board and advisors, plus vendors, sponsors, photographers and design partners' : 'The family, staff, and the board and advisors',
+    to: stage === 'confirmed' ? 'The family, staff, the board and the Advisory Board, plus vendors, sponsors, photographers and design partners' : 'The family, staff, the board and the Advisory Board',
     subject: `Invitation: ${e.summary}`,
     invite: { title: e.summary, status: e.status, start: e.start, end: e.end, location: e.location || null, description: e.description, organizer: cfg.organizer, busy: e.transparency !== 'transparent' },
     send: 'invite',
@@ -699,7 +699,7 @@ export async function buildPreview(env, id, { lang = 'en', me = '', now = Date.n
     }
     case 'advisory-ask':
       return email(advisoryAsk({ title: 'Do you know a licensed plumber in Cherokee County?', body: 'We have three rooms starting soon and need a plumbing partner. An introduction is all it takes.' }, 'Alex', { yes: '#', no: '#' }), {
-        from: 'SOARD Advisory Board', to: 'Each active advisor, on their own', note: 'Goes out when whoever runs the group presses Put it out, and only with the emails switch on (Board → Advisory → Members). The buttons open a page that asks them to confirm, so a mail scanner can’t answer for them.',
+        from: 'SOARD Advisory Board', to: 'Each active Advisory Board member, on their own', note: 'Goes out when whoever runs the group presses Put it out, and only with the emails switch on (Board → Advisory → Members). The buttons open a page that asks them to confirm, so a mail scanner can’t answer for them.',
       });
     case 'advisory-welcome':
       return email(advisoryWelcome('Alex', 'Jordan Ellis'), { from: 'SOARD Advisory Board', to: 'Each Advisory Board member who hasn’t had it', note: 'Sent when staff press Add to Advisory Board on an application (as soon as the sign-in knows them), or from Board → Advisory → Members; once each, and only with Email the Advisory Board on.' });

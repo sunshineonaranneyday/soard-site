@@ -191,7 +191,8 @@ try {
   ok(await page.$eval('.sidebar .active, [aria-current="page"]', (e) => e.textContent.includes('Emails & invites')).catch(() => true), 'its menu item is the current one');
   ok((await page.$eval('.am-check', (e) => e.textContent)).includes('Statuses checked live'), 'it says the statuses were checked live');
   const branches = await page.$$eval('.am-node.d1 text', (t) => t.map((x) => x.textContent));
-  const WANT = ['Families', 'Reveal guests', 'Demo day guests', 'Reveal watchers', 'Staff', 'Newsletter list', 'Board & advisors'];
+  /* r24: the branch is "Board & Advisory Board", never "advisors" (Advisory Board QA round 24, decided 5) */
+  const WANT = ['Families', 'Reveal guests', 'Demo day guests', 'Reveal watchers', 'Staff', 'Newsletter list', 'Board & Advisory Board'];
   ok(WANT.every((b) => branches.includes(b)) && branches.length === WANT.length, `every audience is a branch (${branches.join(', ')})`);
   const inView = await page.evaluate(() => {
     const c = document.querySelector('.am-canvas').getBoundingClientRect();
@@ -215,7 +216,9 @@ try {
   const home = await page.$eval('.am-panel', (e) => e.innerText);
   ok(home.includes('Nothing needs attention'), 'nothing needs attention in these facts');
   const groups = await page.$$eval('.am-panel .am-mini-group', (g) => g.map((x) => x.querySelectorAll('.am-mini-names button').length));
-  ok(groups.join(',') === '2,7,4,6', `the two demo day invites (paused) read as one line, the seven entries reminders switch off as another, the four waiting on Twilio as a third, and the six Slack-only posts as a fourth (${groups.join(', ')})`);
+  /* r24: decided Nov 9 2026, 60a9390b: "You’re on the list" is a reveal email the reminders switch turns off too (sign-up is
+     refused while it's off), so the switch's line has eight entries */
+  ok(groups.join(',') === '2,8,4,6', `the two demo day invites (paused) read as one line, the eight entries reminders switch off as another, the four waiting on Twilio as a third, and the six Slack-only posts as a fourth (${groups.join(', ')})`);
   ok((home.match(/Reminders are switched off/g) || []).length === 1, 'the reason is written once');
   await page.screenshot({ path: join(OUT, 'desktop.png') });
 
@@ -353,6 +356,32 @@ try {
   ok(overlaps.clipped.length === 0, `no label is cut off with everything open${overlaps.clipped.length ? ': ' + overlaps.clipped.slice(0, 4).join(', ') : ''}`);
   await page.screenshot({ path: join(OUT, 'desktop-all-open.png') });
   await clickButton(page, '.am-tools', 'Reset');
+
+  /* r24: decided Nov 23 2026 (mindmap.js openAll): Open all fits the whole map, zooming to fit down to 0.6 so labels still
+     read; when even 0.6 can't fit, it stays at 0.6 and starts with the root and the whole of its left side in view, the rest
+     reached by dragging. Never a zoom under 0.6, and on any width where it fits, no label cut off */
+  for (const width of [1440, 1366, 1280, 1024, 768]) {
+    const w = await open(browser, base, { width, height: 1000 }, { DB: await seed() });
+    await clickButton(w.page, '.am-tools', 'Open all');
+    await pause(500);
+    const seen = await w.page.evaluate(() => {
+      const c = document.querySelector('.am-canvas').getBoundingClientRect();
+      const out = (t) => { const r = t.getBoundingClientRect(); return r.left < c.left || r.right > c.right; };
+      const root = document.querySelector('.am-node.d0').getBoundingClientRect();
+      const mid = (root.left + root.right) / 2;
+      const nodes = [...document.querySelectorAll('.am-node')];
+      const leftSide = nodes.filter((n) => { const r = n.getBoundingClientRect(); return (r.left + r.right) / 2 <= mid; });
+      const k = Number((document.querySelector('.am-canvas svg > g').getAttribute('transform').match(/scale\(([\d.]+)\)/) || [])[1]);
+      return { k, cut: [...document.querySelectorAll('.am-node text')].filter(out).map((t) => t.textContent), sideCut: leftSide.flatMap((n) => [...n.querySelectorAll('text')]).filter(out).map((t) => t.textContent), rootIn: root.left >= c.left && root.right <= c.right };
+    });
+    ok(seen.k >= 0.6 - 1e-9 && seen.k <= 0.9 + 1e-9, `${width}: Open all zooms no further out than 0.6 (${seen.k.toFixed(3)})`);
+    // (at 1440 the map fits, about 0.64; wherever it fits, above 0.6, nothing is cut off)
+    if (width === 1440) ok(seen.k > 0.6, `1440: the whole map fits above 0.6 (${seen.k.toFixed(3)})`);
+    if (seen.k > 0.6 + 1e-9) ok(seen.cut.length === 0, `${width}: the whole map fits, no label cut off${seen.cut.length ? ': ' + seen.cut.slice(0, 4).join(', ') : ''}`);
+    ok(seen.rootIn && seen.sideCut.length === 0, `${width}: the root and its whole left side are in view${seen.sideCut.length ? ': ' + seen.sideCut.slice(0, 4).join(', ') : ''}`);
+    await w.page.screenshot({ path: join(OUT, `all-open-${width}.png`) });
+    await w.page.close();
+  }
 
   // ── What went out ──
   ok(await page.$eval('.mm-tabs [data-tab="sent"] .mm-tab-n', (e) => e.textContent.trim().startsWith('1')).catch(() => false), 'the tab says one email didn’t arrive');

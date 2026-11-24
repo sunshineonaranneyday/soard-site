@@ -10,6 +10,9 @@
  * application's. Nothing here touches the page, so the tests read it as it is.
  */
 
+import { todayEastern } from '../board-shared.js';
+import { dayIn, dayText } from './parts.js';
+
 export const STAGES = [
   { key: 'applied', label: 'Applied', phase: 'applying' },
   { key: 'review', label: 'In review', phase: 'applying' },
@@ -127,12 +130,13 @@ export function shownStages(counts, application = null) {
 /** The stages a track shows: all but Finalization (it shows when someone's in it) */
 export const trackStages = (counts) => STAGES.filter((s) => s.key !== 'finalization' || (counts[s.key] || 0) > 0);
 
-const DAY = (iso) => new Date(`${String(iso).slice(0, 10)}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+// (a day or a moment, Atlanta's day: ./parts.js dayIn)
+const DAY = (iso) => dayText(iso, 'md');
 /** The application's window in a few words: "Open until Jan 31", "Opens Mar 1", "Closed" */
-export function windowWords(app, today = new Date().toISOString().slice(0, 10)) {
+export function windowWords(app, today = todayEastern()) {
   if (!app) return '';
   if (app.open) return app.closesAt ? `Open until ${DAY(app.closesAt)}` : 'Open now';
-  if (app.opensAt && String(app.opensAt).slice(0, 10) >= today) return `Opens ${DAY(app.opensAt)}`;
+  if (app.opensAt && dayIn(app.opensAt) >= today) return `Opens ${DAY(app.opensAt)}`;
   return 'Closed';
 }
 

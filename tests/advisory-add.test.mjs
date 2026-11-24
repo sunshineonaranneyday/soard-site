@@ -207,7 +207,9 @@ test('a press after one that stopped partway picks up where it stopped', async (
   const first = await add(app.id, 'new');
   env.DB.prepare = real;
   assert.equal(first.success, false);
-  assert.match(first.error, /Morgan Ellis is on the Advisory Board, but their email didn’t save: D1 busy/);
+  /* r24: the write not going is the press stopping partway (503, our words), never "their email didn't save: D1 busy",
+     the database's own words taken for a refusal because they didn't look like D1's (Advisory Board QA round 24, decided 1) */
+  assert.equal(first.error, 'Adding them stopped partway: the site’s database didn’t answer just now. Press Add to Advisory Board again in a moment: it finishes what’s left, and never adds them twice.');
   assert.equal((await rec('morgan-ellis')).group, 'advisory', 'their record was made');
   const p = await plan(app.id);
   assert.equal(p.kind, 'same', 'the application points at them now');

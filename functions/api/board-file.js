@@ -27,7 +27,8 @@ export async function onRequestGet(context) {
   try {
     return await fileGet(context);
   } catch (err) {
-    if (err?.status === 503) return notChecked(err);
+    // (Board's tables not set up on a fresh server, too: said in words, never the platform's error page. Round 12)
+    if (err?.status === 503 || err?.setup) return notChecked(err);
     throw err;
   }
 }

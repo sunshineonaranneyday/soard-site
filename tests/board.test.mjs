@@ -326,7 +326,9 @@ test('the agenda approved is what emails the board: once, put on the board page 
 });
 
 
-test('the documents email is the link: the documents by name, nothing attached, no notes or board-only titles; Send it to me goes only to you', async () => {
+test('the documents email is the link: the documents by name, nothing attached, no notes or board-only titles; Send it to me goes only to you', async (t) => {
+  /* r12: the packet never goes for a meeting held (its sample meeting is Nov 19 2026), so the clock is held before it, as the tests beside it are */
+  t.after(holdClockAt('2026-11-12T15:00:00Z'));
   const { meeting } = await sharedMeetingWithFiles();
   const mail = packetEmail(await getMeeting(env.DB, meeting.id), { files: ['Balance sheet.pdf'] });
   assert.doesNotMatch(mail.html, /Insurance is looking|Ask counsel|Legal update/);
@@ -1605,7 +1607,9 @@ test('nothing of a meeting ahead reaches the board until its agenda is approved;
   const was = JSON.parse(rec.data);
   const earlier = new Date(Date.now() - 11 * 60 * 1000).toISOString();
   await env.DB.prepare('UPDATE board_state SET data = ? WHERE key = ?').bind(JSON.stringify({ ...was, had: Object.fromEntries(Object.keys(was.had).map((e) => [e, earlier])) }), `board-send:packet:${m.id}`).run();
-  assert.equal((await adminApi(FOUNDER, { action: 'send-packet', id: m.id })).status, 200);
+  /* r12: Email again goes only from a page that showed the send (the time it showed); one that didn't is told when it went */
+  assert.equal((await adminApi(FOUNDER, { action: 'send-packet', id: m.id })).status, 409);
+  assert.equal((await adminApi(FOUNDER, { action: 'send-packet', id: m.id, seen: (await getMeeting(env.DB, m.id)).packetSentAt })).status, 200);
   const taken = (await adminApi(FOUNDER, { action: 'save-meeting', meeting: { ...(await getMeeting(env.DB, m.id)), shared: false } })).body.meeting;
   assert.equal(taken.shared, false);
   assert.equal((await adminApi(FOUNDER, { action: 'save-meeting', meeting: { ...taken, shared: true } })).status, 200, 'approved stays approved');

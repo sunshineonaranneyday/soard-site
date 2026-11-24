@@ -567,7 +567,9 @@ function GroupCard({ ctx }) {
     : g.error ? (/HTTP \d|answered \d/.test(g.error) ? 'Google didn’t answer the last time. The site will try again.' : `Google didn’t take the last change: ${g.error}`)
       : g.current === false ? 'A change is on its way to the group.'
         : g.syncedAt ? `Matches People → Advisory, as of ${dayOf(g.syncedAt)}.` : 'The site will fill the group on its next look.';
-  const unsent = data.advisors.filter((a) => !a.lastSeen && a.email && !data.welcomed?.[a.slug]);
+  // (only those it can go to: an email on file that signs them in, never a SOARD address or a group inbox, which the
+  // send skips, so the count and the names are who it goes to: Advisory Board QA round 24)
+  const unsent = data.advisors.filter((a) => !a.lastSeen && a.email && !a.emailWhy && !data.welcomed?.[a.slug]);
   const welcome = async () => {
     const j = await act({ action: 'send-welcome', slugs: unsent.map((a) => a.slug) });
     if (!j) return;

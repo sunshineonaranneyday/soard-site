@@ -207,11 +207,14 @@ export async function giftsNow(DB, { now = Date.now() } = {}) {
   const raw = s.year === year ? s.list : [];
   let hidden = null;
   let loose = null;
+  // (unreadable: said so, `namesUnread`, so the board page says the names couldn't load, never that each giver chose to
+  // stay anonymous. Board QA round 12)
+  let namesUnread = false;
   try {
     const crm = await import('./_donor-crm.js');
     loose = crm.looseKey;
     hidden = await crm.boardHidden(DB, raw, { now });
-  } catch (e) { console.error('[board] keep anonymous', e.message); hidden = null; }
+  } catch (e) { console.error('[board] keep anonymous', e.message); hidden = null; namesUnread = true; }
   // An anonymous gift's campaign is "A gift" when it names the giver or any organization kept anonymous (a
   // sponsorship titled with the company's name), compared with legal endings, case and punctuation set aside. Unable
   // to tell (Keep anonymous couldn't be read): every anonymous gift's campaign is "A gift"
@@ -229,7 +232,7 @@ export async function giftsNow(DB, { now = Date.now() } = {}) {
     if (!hide) return g;
     return { ...g, name: '', company: '', anonymous: true, campaign: says(g.campaign, { ...g, charges }) ? 'A gift' : g.campaign };
   });
-  return { year, at: s.at, stale: now - Date.parse(s.at) > STALE_MS, count: list.length, total: list.reduce((t, g) => t + g.cents, 0), list };
+  return { year, at: s.at, stale: now - Date.parse(s.at) > STALE_MS, count: list.length, total: list.reduce((t, g) => t + g.cents, 0), list, ...(namesUnread ? { namesUnread: true } : {}) };
 }
 
 /** Automations: when the board's gifts were last read and any trouble (never a gift) */

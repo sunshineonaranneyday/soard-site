@@ -7,7 +7,7 @@
  */
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
-import { isDate, initialsOf } from '../board-shared.js';
+import { isDate, initialsOf, todayEastern } from '../board-shared.js';
 
 const html = htm.bind(h);
 
@@ -65,7 +65,35 @@ export function sized(url, transform) {
 }
 export const hueOf = (s) => [42, 28, 96, 152, 200, 18][[...String(s)].reduce((a, c) => a + c.charCodeAt(0), 0) % 6];
 
-export const noon = (d) => Date.parse(`${d}T12:00:00Z`);
+// ─── Days: every day the board page writes is read here, a day or a moment alike ───
+/**
+ * The day a date or a moment is, as Atlanta has it: "2026-11-23" is that day; "2026-11-24T03:00:00Z", 10 PM on Nov 23
+ * there, is "2026-11-23" (never a time's first ten characters, its UTC day). '' for anything else. Board QA round 11:
+ * the heartbeat's "2026-11-23T15:04:00Z" read as no day at all, so the newest cash bar said " (so far this month)"
+ */
+export const dayIn = (s) => {
+  const v = String(s ?? '').trim();
+  if (isDate(v)) return v;
+  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(v)) return '';
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? todayEastern(t) : '';
+};
+// (the ways a day is written: "Nov 23", "Nov 23, 2026", "November 23", "November 23, 2026", "Monday, November 23",
+// "Monday, November 23, 2026", "Mon, Nov 23", "Monday", "Mon", and its month alone, "Nov")
+const DAY_FORMS = {
+  md: { month: 'short', day: 'numeric' }, mdy: { month: 'short', day: 'numeric', year: 'numeric' },
+  MD: { month: 'long', day: 'numeric' }, MDY: { month: 'long', day: 'numeric', year: 'numeric' },
+  wMD: { weekday: 'long', month: 'long', day: 'numeric' }, wMDY: { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' },
+  wmd: { weekday: 'short', month: 'short', day: 'numeric' }, w: { weekday: 'long' }, ws: { weekday: 'short' }, m: { month: 'short' },
+};
+/** A day or a moment (./dayIn) written in one of DAY_FORMS: dayText('2026-11-23T15:04:00Z', 'md') is "Nov 23" ('' for none) */
+export const dayText = (s, form = 'mdy') => { const d = dayIn(s); return d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { ...DAY_FORMS[form], timeZone: 'UTC' }) : ''; };
+/** "Apr 30, 2026", of a day or a moment (board-shared.js shortDate's words, through ./dayIn) */
+export const shortDate = (s) => dayText(s, 'mdy');
+/** "Thursday, April 30, 2026", of a day or a moment (board-shared.js longDate's words, through ./dayIn) */
+export const longDate = (s) => dayText(s, 'wMDY');
+
+export const noon = (d) => Date.parse(`${dayIn(d)}T12:00:00Z`);
 
 export const partsOf = (d) => { const t = new Date(noon(d)); return { mon: t.toLocaleDateString('en-US', { month: 'short', timeZone: 'UTC' }), day: t.getUTCDate(), wk: t.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' }), year: t.getUTCFullYear() }; };
 
@@ -125,10 +153,15 @@ export function SecHead({ title, sub = '', count = null, id, children }) {
     ${children || null}
   </div>`;
 }
-/** A fold that this step in the history remembers open (Back to the page finds it as it was) */
-export function More({ k, summary, children }) {
+/**
+ * A fold that this step in the history remembers open (Back, Forward and a reload find it as it was). Every fold on the
+ * board page is one of these (Board QA round 11: "The numbers, month by month", a plain <details>, came back shut on
+ * Back; tests/board-round11-member.test.mjs fails on any other). `k` is its key, unique on its page; `cls` its own look
+ * (the plain fold's, bp-more, unless it has another)
+ */
+export function More({ k, summary, children, cls = 'bp-more' }) {
   const [open, setOpen] = useKept(`more-${k}`, false);
-  return html`<details class="bp-more" data-kept=${`more-${k}`} open=${open} onToggle=${(e) => { if (e.currentTarget.open !== open) setOpen(e.currentTarget.open); }}><summary>${summary}</summary>${children}</details>`;
+  return html`<details class=${cls} data-kept=${`more-${k}`} open=${open} onToggle=${(e) => { if (e.currentTarget.open !== open) setOpen(e.currentTarget.open); }}><summary>${summary}</summary>${children}</details>`;
 }
 /**
  * Every shut fold around `el` opened, and kept open at once where the page's next drawing of it reads it (a fold says

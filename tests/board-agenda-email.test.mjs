@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { packetEmail, agendaParts, reportsFor, packetDocs, sendPacket, saveMeeting, saveDoc, putFile } from '../functions/api/_board.js';
 import { chairEmail } from '../functions/api/_board-asks.js';
 import { createD1 } from './lib/d1-shim.mjs';
+import { agendaApproved } from './lib/agenda-approved.mjs';
 import { minutesToRead, namesAlike } from '../public/admin/board-shared.js';
 
 const meeting = (more = {}) => ({
@@ -362,7 +363,9 @@ async function sending(fn) {
 }
 
 test('an empty agenda is never emailed to the board, while the preview still shows how it would look', () => sending(async (env, sent) => {
-  await saveMeeting(env.DB, { ...meeting({ id: 'm_empty', date: '2020-01-14', shared: true }), sections: [] }, { by: 'test' });
+  /* r12: a meeting held never gets the packet, so this one is ahead, its agenda approved */
+  await saveMeeting(env.DB, { ...meeting({ id: 'm_empty', date: '2099-01-14', shared: true }), sections: [] }, { by: 'test' });
+  await agendaApproved(env.DB, 'm_empty');
   await assert.rejects(sendPacket(env, 'm_empty', { by: 'test' }), (e) => e.status === 409 && /agenda is empty/.test(e.message));
   assert.equal(sent.length, 0);
   await sendPacket(env, 'm_empty', { by: 'test', to: ['me@example.org'] });
@@ -417,7 +420,9 @@ test('a preview shows the year and the deadlines the real email will, in the mee
 }));
 
 test('an agenda that can be approved can always be sent, even one that is only a motion', () => sending(async (env, sent) => {
-  await saveMeeting(env.DB, { ...meeting({ id: 'm_one', date: '2020-01-14', shared: true }), sections: [{ id: 's_x', title: '', items: [{ id: 'i_x', title: '', motion: 'Move to adjourn.' }] }] }, { by: 'test' });
+  /* r12: a meeting held never gets the packet, so this one is ahead, its agenda approved */
+  await saveMeeting(env.DB, { ...meeting({ id: 'm_one', date: '2099-01-14', shared: true }), sections: [{ id: 's_x', title: '', items: [{ id: 'i_x', title: '', motion: 'Move to adjourn.' }] }] }, { by: 'test' });
+  await agendaApproved(env.DB, 'm_one');
   await sendPacket(env, 'm_one', { by: 'test' });
   assert.equal(sent.length, 1);
   assert.doesNotMatch(sent[0].html + sent[0].text, /adjourn/);

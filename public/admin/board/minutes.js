@@ -9,14 +9,15 @@
  */
 
 import { h, htm, useState, useRef, useEffect } from '../vendor.js';
-import { minutesIn, shortDate, meetingName } from '../board-shared.js';
+import { minutesIn, meetingName } from '../board-shared.js';
+import { More, dayText } from './parts.js';
 import { noteLines } from '../board-minutes-template.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
 const HOW = { present: 'here', remote: 'on video', excused: 'excused', absent: 'not there' };
 const CHOICES = [['present', 'Here'], ['remote', 'On video'], ['excused', 'Excused'], ['absent', 'Not there']];
-const day = (iso) => shortDate(String(iso).slice(0, 10)).replace(/, \d{4}$/, '');
+const day = (iso) => dayText(iso, 'md');
 const andCount = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
 
 async function post(body) {
@@ -185,7 +186,7 @@ function Row({ c, m, ctx, Icon, decider, onBack }) {
   if (c.state === 'made') {
     return html`<div class="mfix-row mfix-row--made" id=${`c-${c.id}`} tabindex="-1">
       <p class="mfix-who"><${Icon} name="check" size=${14} />Corrected ${day(c.decidedAt)}. Suggested by ${c.by}${c.decidedBy && c.decidedBy !== c.by ? `, made by ${c.decidedBy}` : ''}.</p>
-      ${c.kind === 'other' ? html`<${Change} c=${c} m=${m} />` : c.kind === 'roll' ? html`<${Change} c=${c} m=${m} />` : html`<details class="mfix-more"><summary>What it said before</summary><p>${c.was || 'Nothing was written here.'}</p></details>`}
+      ${c.kind === 'other' ? html`<${Change} c=${c} m=${m} />` : c.kind === 'roll' ? html`<${Change} c=${c} m=${m} />` : html`<${More} k=${`was-${c.id}`} cls="mfix-more" summary="What it said before"><p>${c.was || 'Nothing was written here.'}</p></${More}>`}
     </div>`;
   }
   if (c.state === 'declined') {

@@ -15,14 +15,15 @@
  */
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
-import { money, shortDate, mainLines, statementBreaks, linePlaces } from '../board-shared.js';
-import { compact, storeOf, storeChange, budgetMonthsText, marginText, changeIn, overIn, Both, Blank, budgetName, yearFigures, spentOf } from './money.js';
+import { money, mainLines, statementBreaks, linePlaces } from '../board-shared.js';
+import { More, shortDate, dayText } from './parts.js';
+import { compact, storeOf, storeChange, budgetMonthsText, marginText, changeIn, overIn, Both, Blank, budgetName, yearFigures, spentOf, nonCashName, nonCashOf, lessWritten } from './money.js';
 import { lineKeysOf, notesByKey, NoteLine } from './review.js';
 
 const html = htm.bind(h);
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTH = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
-const dayMonth = (d) => (d ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' }) : '');
+const dayMonth = (d) => dayText(d, 'MD');
 
 /** "▲ 25%" against last year ('Even', or '' with nothing to set it beside) */
 export const changeWords = (a, p) => {
@@ -198,21 +199,22 @@ export function yearEnds(books) {
   const ly = books.lastYear;
   const through = books.through || '';
   const sameRev = typeof ly?.revenue !== 'number' ? null : !s.cashIn ? ly.revenue : yearFigures(books).last?.revenue ?? null;
-  const sameExp = typeof ly?.expenses !== 'number' ? null : !s.cash ? ly.expenses : typeof ly.nonCash === 'number' ? ly.expenses - ly.nonCash : null;
+  const sameExp = typeof ly?.expenses !== 'number' ? null : !s.cash ? ly.expenses : typeof ly.nonCash === 'number' ? lessWritten(ly.expenses, ly.nonCash) : null;
   // (this year's end is the year so far, as the figures have it: QuickBooks' month by month adds up to it; last year's
   // whole its full year's, counted the same way, else the months' own)
   const y = yearFigures(books);
   const nowRev = s.cashIn ? y.revenue : books.revenue;
   const nowExp = s.cash ? spentOf(books) : books.expenses;
-  const fullExp = typeof ly?.full?.expenses !== 'number' ? null : !s.cash ? ly.full.expenses : typeof ly.full.nonCash === 'number' ? ly.full.expenses - ly.full.nonCash : null;
+  const fullExp = typeof ly?.full?.expenses !== 'number' ? null : !s.cash ? ly.full.expenses : typeof ly.full.nonCash === 'number' ? lessWritten(ly.full.expenses, ly.full.nonCash) : null;
   const end = (m, same, now, full) => ({ now: typeof now === 'number' ? now : m.now[s.upTo], by: typeof same === 'number' && through ? same : m.then?.[s.upTo] ?? null, all: m.then ? (typeof full === 'number' ? full : m.then[11]) : null });
   return { s, sameRev, sameExp, rev: end(s.revenue, sameRev, nowRev, s.cashIn ? null : ly?.full?.revenue), exp: end(s.spent, sameExp, nowExp, fullExp) };
 }
 
 /**
  * The year so far against last year, month by month: revenue and expenses side by side (two charts on one axis, so
- * the bigger reads bigger), each with its figures in words above it, the numbers as a table under. Null without the
- * months
+ * the bigger reads bigger), each with its figures in words above it, the numbers as a table under, in a fold Back and
+ * a reload keep open (./parts.js More, `${idp}-months`: Board QA round 11 found it the one fold that came back shut).
+ * Null without the months
  */
 export function YearCompare({ books, idp = 'by', tall = false, as = 'pct' }) {
   const ends = yearEnds(books);
@@ -221,6 +223,8 @@ export function YearCompare({ books, idp = 'by', tall = false, as = 'pct' }) {
   const through = books.through || '';
   // What the revenue line has in it, when the figures above it leave in kind out
   const revSays = s.cashIn ? 'in kind left out' : yearFigures(books).inKind?.given > 0 ? 'in kind included, as the books have them' : '';
+  // (what the expenses leave out, named as the page names it, for both years' lines: ./money.js nonCashName)
+  const expSays = [nonCashName(yearFigures(books).inKind), nonCashOf(books.lastYear)].includes('in kind and depreciation') ? 'in kind and depreciation' : 'in kind';
   const ax = axisOf([s.revenue, s.spent].flatMap((m) => [...m.now, ...(m.then || [])]).filter((v) => v !== null));
   const lastAt = (series, same, i) => (i === s.upTo && typeof same === 'number' && through ? same : series?.[i] ?? null);
   const monthEnd = (i) => `${MONTH[i]} ${new Date(Date.UTC(Number(s.lastYear) || 2001, i + 1, 0)).getUTCDate()}`;
@@ -244,19 +248,18 @@ export function YearCompare({ books, idp = 'by', tall = false, as = 'pct' }) {
         <${YearLines} id=${`${idp}-rev`} title="Revenue" now=${s.revenue.now} then=${s.revenue.then} year=${s.year} lastYear=${s.lastYear} upTo=${s.upTo} ax=${ax} sameDays=${sameRev} through=${through} tall=${tall} as=${as} />
       </figure>
       <figure class="by-fig">
-        <figcaption class="by-cap" id=${`${idp}-exp-cap`}><span class="by-cap__t">Expenses<small>${s.cash ? 'in kind and depreciation left out' : 'in kind included, as the books have them'}</small></span>${figs(s.spent, sameExp, ends.exp)}</figcaption>
+        <figcaption class="by-cap" id=${`${idp}-exp-cap`}><span class="by-cap__t">Expenses<small>${s.cash ? `${expSays} left out` : 'in kind included, as the books have them'}</small></span>${figs(s.spent, sameExp, ends.exp)}</figcaption>
         <${YearLines} id=${`${idp}-exp`} title="Expenses" now=${s.spent.now} then=${s.spent.then} year=${s.year} lastYear=${s.lastYear} upTo=${s.upTo} ax=${ax} sameDays=${sameExp} through=${through} tall=${tall} as=${as} />
       </figure>
     </div>
-    <details class="by-table">
-      <summary>The numbers, month by month</summary>
+    <${More} k=${`${idp}-months`} cls="by-table" summary="The numbers, month by month">
       <div class="by-table__scroll"><table>
         <thead><tr><th scope="col">By the end of</th><th scope="col" class="num">Revenue ${s.year}</th>${s.revenue.then ? html`<th scope="col" class="num">${s.lastYear}</th>` : null}<th scope="col" class="num">Expenses ${s.year}</th>${s.spent.then ? html`<th scope="col" class="num">${s.lastYear}</th>` : null}</tr></thead>
         <tbody>${MON.map((mo, i) => html`<tr key=${mo} class=${i === s.upTo ? 'is-now' : ''}><th scope="row">${MONTH[i]}${i === s.upTo && through ? html`<small> through ${dayMonth(through)}</small>` : null}</th>
           <td class="num" id=${`${idp}-m${i}-rn`}>${cellOf(s.revenue.now[i], 'Not yet')}</td>${s.revenue.then ? lastCell(s.revenue.then, sameRev, i, `m${i}-rl`) : null}
           <td class="num" id=${`${idp}-m${i}-en`}>${cellOf(s.spent.now[i], 'Not yet')}</td>${s.spent.then ? lastCell(s.spent.then, sameExp, i, `m${i}-el`) : null}</tr>`)}</tbody>
       </table></div>
-    </details>
+    </${More}>
   </section>`;
 }
 

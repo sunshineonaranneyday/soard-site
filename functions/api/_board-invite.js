@@ -177,7 +177,12 @@ const sentWords = (iso, now) => {
 export async function sendInvite(env, id, { fetchImpl = fetch, now = Date.now(), by = '', quiet = false, press = false } = {}) {
   if (!env.GOOGLE_CALENDAR_KEY) throw Object.assign(new Error('Google Calendar isn’t set up (GOOGLE_CALENDAR_KEY)'), { status: 503 });
   const mark = await claimInvite(env.DB, id, { now, by });
-  if (!mark) throw Object.assign(new Error(await busyWords(env.DB, id)), { status: 409, extra: { sending: true } });
+  if (!mark) {
+    // (a send that finished, whose claim didn't come off: said as gone, never as going out. Board QA round 12)
+    if (await claimFinished(env.DB, id)) throw Object.assign(new Error('The invite went a moment ago, so nobody was emailed again.'), { status: 409, extra: { already: true } });
+    // (`lookAgain`: the invite is written on the meeting once Google has it, so the page looks again by itself. Round 12)
+    throw Object.assign(new Error(await busyWords(env.DB, id)), { status: 409, extra: { sending: true, lookAgain: true } });
+  }
   try {
     return await sendClaimed(env, id, { fetchImpl, now, quiet, press });
   } catch (err) {
@@ -208,6 +213,12 @@ async function claimInvite(DB, id, { now, by }) {
 /** Let go of this send's claim (never another's that took over a stale one): a claim that won't come off expires */
 async function letGoOf(DB, id, mark) {
   await DB.prepare('DELETE FROM board_state WHERE key = ? AND data = ?').bind(sendingKey(id), mark).run().catch((err) => console.error('[board-invite] send claim', err.message));
+}
+/** Whether the send holding a meeting's invite claim has finished: the meeting's invite written at or after the claim */
+async function claimFinished(DB, id) {
+  const r = await DB.prepare("SELECT s.updated_at AS held, json_extract(m.data, '$.invite.updatedAt') AS wrote FROM board_state s JOIN board_meetings m ON m.id = ? WHERE s.key = ?")
+    .bind(id, sendingKey(id)).first().catch(() => null);
+  return !!r?.held && !!r.wrote && String(r.wrote) >= String(r.held);
 }
 /** What a press is told while another send of the same invite is under way */
 async function busyWords(DB, id) {
@@ -283,7 +294,7 @@ async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
     // Everything on it as it is now (made in Google by hand, say): Board's record of the invite says so too, and a change
     // waiting to go onto it is done, so the heartbeat never tries it again nor tells the staff it can't (Board QA round 7)
     if (prior.place !== (place || existing?.location || '') || prior.when !== whenOf(m)) {
-      await setOnMeeting(env.DB, id, { invite: { ...prior, place: place || existing?.location || '', location: existing?.location || '', when: whenOf(m), updatedAt: new Date(now).toISOString() } });
+      await setOnMeeting(env.DB, id, { invite: { ...prior, place: place || existing?.location || '', location: existing?.location || '', when: whenOf(m), updatedAt: new Date(now).toISOString() } }, { was: m });
     }
     await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(pendingKey(id)).run().catch((err) => console.error('[board-invite] pending', err.message));
     // (a change the staff were told couldn't reach it has, so they hear it did)
@@ -307,9 +318,12 @@ async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
   // A meeting being deleted gets nothing (deleteWithInvite): looked at last thing before Google emails anyone
   if (await beingDeleted(env.DB, id, now)) throw Object.assign(new Error(BEING_DELETED), { status: 409 });
   // A deleted event keeps its id at Google (as cancelled): it's brought back, never made again
-  const ev = await meetReady(token, `${cal}/${encodeURIComponent(eventId)}`, existing
+  const written = existing
     ? await gcal(token, 'PATCH', `${cal}/${encodeURIComponent(eventId)}?conferenceDataVersion=1&sendUpdates=${send}`, existing.status === 'cancelled' ? { status: 'confirmed', ...times(m), summary: title, ...body } : body, fetchImpl)
-    : await gcal(token, 'POST', `${cal}?conferenceDataVersion=1&sendUpdates=all`, { id: eventId, ...times(m), summary: title, ...body }, fetchImpl), fetchImpl);
+    : await gcal(token, 'POST', `${cal}?conferenceDataVersion=1&sendUpdates=all`, { id: eventId, ...times(m), summary: title, ...body }, fetchImpl);
+  // From here on Google has it (and has emailed the guests when it says so): nothing after this is said as nothing sent.
+  // Its Meet link looked for a moment, and Google's answer to the write kept when that look doesn't answer
+  const ev = await meetReady(token, `${cal}/${encodeURIComponent(eventId)}`, written, fetchImpl).catch((err) => { console.error('[board-invite] Meet link', id, err?.message || err); return written; });
   const meet = ev.hangoutLink || '';
   const at = new Date(now).toISOString();
   // Who's on it now and how they answered, by board member, as Google has it: someone just added is invited at once,
@@ -335,8 +349,18 @@ async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
     admins: held ? (prior?.admins || []) : [...runs].filter((e) => on.has(e)),
   };
   // Google Meet is the meeting's video call from now on. Onto the meeting as it is now, in one write (setOnMeeting): a
-  // save made meanwhile stays, and the invite that went is never lost to one
-  const saved = await setOnMeeting(env.DB, id, { invite, inviteGone: '', ...(meet ? { video: meet } : {}) });
+  // save made meanwhile stays, and the invite that went is never lost to one. Tried three times (a database that didn't
+  // answer for a moment); when even that can't be written, the invite went and the answer says so, never "something went
+  // wrong … then try again": Google has it as it is now, so a press again finds nothing to email anyone and notes it,
+  // and the heartbeat's look puts it on the meeting without emailing anyone (Board QA round 12, Nov 23 2026)
+  let saved;
+  for (let i = 0; ; i++) {
+    try { saved = await setOnMeeting(env.DB, id, { invite, inviteGone: '', ...(meet ? { video: meet } : {}) }, { was: m }); break; } catch (err) {
+      console.error('[board-invite] noting the invite', id, err?.message || err);
+      if (i >= 2) throw Object.assign(new Error(send === 'all' ? INVITE_WENT_UNNOTED : INVITE_CHANGED_UNNOTED), { went: true });
+      await new Promise((r) => setTimeout(r, 40 * (i + 1)));
+    }
+  }
   if (saved) {
     // (the staff, told a change couldn't reach it: it has now, however it went)
     await sayChangeReached(env, id, `The change to ${inviteTitle(saved)} is on its calendar invite now`);
@@ -360,6 +384,9 @@ async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
 export { noInviteFor };
 
 const BEING_DELETED = 'This meeting is being deleted, so its invite didn’t go.';
+/** Said when Google has the invite (and emailed the guests) and the site couldn't note it on the meeting just now */
+export const INVITE_WENT_UNNOTED = 'Google emailed the guests. The site couldn’t note it on the meeting just now; this page shows it in a moment, and nobody is emailed it again.';
+export const INVITE_CHANGED_UNNOTED = 'It’s on the calendar. The site couldn’t note it on the meeting just now; this page shows it in a moment.';
 const deletingKey = (id) => `board-deleting:${id}`;
 /** A delete under way (deleteWithInvite's mark, for as long as Google might take): two minutes at most, should it never finish */
 async function beingDeleted(DB, id, now) {

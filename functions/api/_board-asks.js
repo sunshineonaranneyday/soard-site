@@ -32,17 +32,17 @@
  * a meeting ahead not shared yet that they present in (only their own items), so the ask's link opens.
  */
 
-import { getMeeting, listMeetings, patchMeeting, setOnMeeting, roster, attachToItem, getSettings, sendApprovedAgenda, presenterGate, snapshotFor, boardCopy, SITE } from './_board.js';
-import { peopleRows, boardAdmins, readState, writeState, readSettings, normEmail, isStaffEmail } from './_board-roles.js';
+import { getMeeting, listMeetings, patchMeeting, setOnMeetingStmt, roster, attachToItem, getSettings, sendApprovedAgenda, agendaReads, agendaGoesNow, agendaClaimKey, AGENDA_CLAIM_MS, presenterGate, snapshotFor, boardCopy, SITE, NOTED_LATER } from './_board.js';
+import { peopleRows, boardAdmins, readState, writeState, readSettings, normEmail, isStaffEmail, readDown, PEOPLE_DOWN, stateReady } from './_board-roles.js';
 import { organizerFor } from './_board-invite.js';
 import { accessToken, GMAIL_READ_SCOPE } from './_google-calendar.js';
 import { header, bytesOf, partsOf } from './_mailbox.js';
-import { sendTrouble } from './_broadcast-notify.js';
+import { sendTrouble, emailConfigured } from './_broadcast-notify.js';
 import { booksNow } from './_quickbooks.js';
 import {
   presentersOf, reportsOn, agendaIsDraft, meetingName, sectionPlan, isFilled, forBoard, todayEastern, isDate, LIMITS, showsOf, timeRange, isNothingNew, cleanMeeting,
   reportSlides, slidesOfItem, isCopyName,
-  partName, CHAIR_DAYS as CHAIR_REVIEW_DAYS, reviewOver,
+  partName, CHAIR_DAYS as CHAIR_REVIEW_DAYS, reviewOver, heldNoSend,
 } from '../../public/admin/board-shared.js';
 import { mdToDoc, docToMd, mdPlain } from '../../public/admin/board-md.js';
 import { viaGateway, aiCapped } from './_ai.js';
@@ -1268,6 +1268,9 @@ async function chairGate(env, meetingId, { member = null, admin = false, adminEm
   const m = await getMeeting(env.DB, String(meetingId || ''));
   if (!m) throw err('That meeting is gone', 404);
   if (!isDate(m.date) || m.date < todayEastern()) throw err('That meeting isn’t ahead', 404);
+  // (held today, its time over or the chair ended it: approving it would email the board its agenda to read first.
+  // board-shared.js heldNoSend, the check every send that looks ahead makes. Board QA round 12)
+  if (heldNoSend(m)) throw err(heldNoSend(m), 409);
   // One that isn't a board meeting has no review; approving its agenda in Board is what makes it one (chairApprove).
   // QA round 6, Nov 21 2026: Board's Approve on one three days ahead was told "That meeting isn't ahead"
   if (m.notBoard && !notBoardOk) throw err('That meeting isn’t a board meeting, so it has no review. Approving its agenda in Board makes it one.', 409);
@@ -1342,7 +1345,7 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
   if (!always && reviewOver(m)) {
     await ensureAsks(env.DB);
     const had = askOf(await env.DB.prepare("SELECT * FROM board_asks WHERE kind = 'chair' AND meeting_id = ? AND status = 'approved'").bind(m.id).first());
-    if (had) return { approvedAt: had.inAt, approvedBy: had.name, already: true };
+    if (had) return { approvedAt: had.inAt, approvedBy: had.name, already: true, ...(had.email && normEmail(had.email) === normEmail(asker.email) ? { mine: true } : {}) };
     throw Object.assign(err('It’s on the board page already, so there’s nothing left to review.', 409), { extra: { over: true } });
   }
   // Test or off: the note as it'd go (test), nothing kept, so the real review still goes once it's On. Approving in
@@ -1356,36 +1359,57 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
     }
     return { approvedAt: nowIso(now), approvedBy: asker.name, test: true };
   }
+  // Everything that decides who gets the agenda's email (whether the board has had the sign-in email, who's on the board
+  // at which address, who it's from), read for certain before the approval is written: People not answering refuses the
+  // approval in round 10's words with nothing saved, never "approved, but its email didn't go … tries again by itself"
+  // (Board QA round 11, Nov 23 2026: the approval was kept, and with the sign-in email not sent nothing tried again)
+  const reads = emailConfigured(env) ? await agendaReads(env).catch((e) => { throw e?.unread ? readDown(PEOPLE_DOWN, e.cause || e) : e; }) : null;
   // One approval, whoever presses at once (a double press, a second tab, the other admin, the chair): each write goes only
   // while the meeting has none (one statement, so only one of them writes it), and the others are told it's approved
   const at = nowIso(now);
   let row = null;
+  let claimed = false;
+  // Approving one that isn't a board meeting makes it one, as sharing it does (./_board.js notBoardAfter): its agenda
+  // then goes to the board the way any approved agenda does (QA round 6, Nov 21 2026). Written with the approval in one
+  // step, only with this approval: both land or neither (Board QA round 12: a press's work all or none)
+  const madeBoard = !!m.notBoard;
+  // The agenda going to the board now (the board knows how to sign in): on the board page, and its email claimed for
+  // this send, with the approval in the same step, so nothing between the approval and its email is left to a write
+  // that may not land (Board QA round 12); its email then goes from what was read before (agendaReads)
+  const goes = !!reads && agendaGoesNow({ ...m, notBoard: false }, reads.told, now);
+  if (goes) await stateReady(env.DB);
   for (let wrote = false, i = 0; !wrote; i++) {
     if (i === 3) throw err('Someone else was approving this agenda at the same moment. Look again in a moment.', 409);
     row = askOf(await env.DB.prepare("SELECT * FROM board_asks WHERE kind = 'chair' AND meeting_id = ? ORDER BY status = 'approved' DESC").bind(m.id).first());
-    if (row?.status === 'approved') return { approvedAt: row.inAt, approvedBy: row.name, already: true };
+    // (`mine`: approved by the one pressing now, in another tab: Board says "You approved it already". Round 12)
+    if (row?.status === 'approved') return { approvedAt: row.inAt, approvedBy: row.name, already: true, ...(row.email && normEmail(row.email) === normEmail(asker.email) ? { mine: true } : {}) };
     const none = "NOT EXISTS (SELECT 1 FROM board_asks WHERE kind = 'chair' AND meeting_id = ? AND status = 'approved')";
-    const r = row
-      ? await env.DB.prepare(`UPDATE board_asks SET status = 'approved', in_at = ?, name = ?, updated_at = ? WHERE id = ? AND ${none}`).bind(at, asker.name, at, row.id, m.id).run()
-      : await env.DB.prepare(`INSERT OR IGNORE INTO board_asks (id, kind, meeting_id, item_id, slug, name, email, title, status, asked_at, in_at, msg_ids, files, updated_at)
+    const approval = row
+      // (who approved it, by name and address: Board says "You approved it already" to them. Round 12)
+      ? env.DB.prepare(`UPDATE board_asks SET status = 'approved', in_at = ?, name = ?, email = ?, updated_at = ? WHERE id = ? AND ${none}`).bind(at, asker.name, asker.email || '', at, row.id, m.id)
+      : env.DB.prepare(`INSERT OR IGNORE INTO board_asks (id, kind, meeting_id, item_id, slug, name, email, title, status, asked_at, in_at, msg_ids, files, updated_at)
         SELECT ?, 'chair', ?, '', ?, ?, ?, '', 'approved', ?, ?, '[]', '[]', ? WHERE NOT EXISTS (SELECT 1 FROM board_asks WHERE kind = 'chair' AND meeting_id = ?)`)
-        .bind(uid('ask_'), m.id, asker.slug || 'admin', asker.name, asker.email, at, at, at, m.id).run();
-    wrote = (r?.meta?.changes ?? r?.changes ?? 0) > 0;
-  }
-  // Approving one that isn't a board meeting makes it one, as sharing it does (./_board.js notBoardAfter): its agenda
-  // then goes to the board the way any approved agenda does (QA round 6, Nov 21 2026)
-  let madeBoard = false;
-  if (m.notBoard) {
-    await setOnMeeting(env.DB, m.id, { notBoard: false }, { by: asker.email || '' });
-    madeBoard = true;
+        .bind(uid('ask_'), m.id, asker.slug || 'admin', asker.name, asker.email, at, at, at, m.id);
+    const ours = { sql: "EXISTS (SELECT 1 FROM board_asks WHERE kind = 'chair' AND meeting_id = ? AND status = 'approved' AND in_at = ? AND name = ?)", bind: [m.id, at, asker.name] };
+    const also = [
+      ...(madeBoard || (goes && !m.shared) ? [await setOnMeetingStmt(env.DB, m.id, { ...(madeBoard ? { notBoard: false } : {}), ...(goes && !m.shared ? { shared: true } : {}) }, { by: asker.email || '', also: ours })] : []),
+      ...(goes ? [env.DB.prepare(`INSERT INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE ${ours.sql} ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at WHERE board_state.updated_at < ?`)
+        .bind(agendaClaimKey(m.id), JSON.stringify({ at }), at, ...ours.bind, new Date(now - AGENDA_CLAIM_MS).toISOString())] : []),
+    ];
+    const res = also.length ? await env.DB.batch([approval, ...also]) : [await approval.run()];
+    wrote = (res[0]?.meta?.changes ?? res[0]?.changes ?? 0) > 0;
+    claimed = goes && wrote && (res.at(-1)?.meta?.changes ?? res.at(-1)?.changes ?? 0) > 0;
   }
   // The approval is what emails the board the agenda (./_board.js sendApprovedAgenda), or once they've had the sign-in
   // email. One that didn't go is said as that, in words (`agendaError`): never as waiting for the sign-in email
   let agenda = '';
   let agendaError = '';
+  // (gone, and its record couldn't be written just now: said as gone, with the page to show it in a moment. Round 12)
+  let unrecorded = false;
   try {
-    const r = await sendApprovedAgenda(env, m.id, { now });
+    const r = goes && !claimed ? null : await sendApprovedAgenda(env, m.id, { now, reads, claimed, meeting: reads ? { ...m, notBoard: false, ...(claimed ? { shared: true } : {}) } : null });
     agenda = r?.sent || r?.going ? 'sent' : r?.waiting ? 'waiting' : '';
+    unrecorded = !!(r?.sent && r.unrecorded);
   } catch (e) {
     console.error('[board-asks] agenda email', e.message);
     agenda = 'failed';
@@ -1402,7 +1426,7 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
   } catch (e) {
     console.error('[board-asks] approved', e.message);
   }
-  return { approvedAt: at, approvedBy: asker.name, agenda, ...(agendaError ? { agendaError } : {}), ...(madeBoard ? { madeBoard } : {}) };
+  return { approvedAt: at, approvedBy: asker.name, agenda, ...(agendaError ? { agendaError } : {}), ...(madeBoard ? { madeBoard } : {}), ...(unrecorded ? { later: NOTED_LATER, reread: true } : {}) };
 }
 
 /**
@@ -1411,7 +1435,9 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
  */
 function agendaTrouble(e) {
   const r = e?.result;
-  if (e?.went) return 'The agenda is approved. Its email to the board may have gone (the site stopped partway through sending it), so Board won’t send it again by itself. Ask a board member whether it came before pressing Email the board.';
+  // (the site truly can't tell whether Resend took it: asked again under the same number, Resend sends each only once.
+  // Board QA round 12)
+  if (e?.went) return 'The agenda is approved. Its email to the board may have gone (the site stopped partway through sending it). Board asks Resend again by itself in a few minutes, and Resend sends each one only if it hasn’t already.';
   if (r?.failed) {
     const t = sendTrouble(r.errors, { sent: r.sent, failed: r.failed });
     return `The agenda is approved. ${t.words} ${t.unsure ? 'Board asks Resend again by itself in a few minutes, and Resend sends each one only if it hasn’t already.' : 'Board tries again by itself in a few minutes, or press Email the board.'}`;

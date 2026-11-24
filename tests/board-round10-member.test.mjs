@@ -195,12 +195,12 @@ test('a change result says which way and what it is of, the way the page says it
   const chart = search('$376K').find((x) => /chart/.test(x.title));
   assert.ok(chart, `the chart’s change names the chart (${JSON.stringify(search('$376K').map((x) => x.title))})`);
   assert.equal(chart.title, `${Y0} revenue so far on the year’s chart, against ${Y0 - 1}’s same days`);
-  assert.equal(chart.said.sub, `Up $376,045 ($376K) on ${Y0 - 1}’s same days, in kind included`);
+  assert.equal(chart.said.sub, `Up $376,045, or $376K, on ${Y0 - 1}’s same days, in kind included` /* r11: never in brackets, which say below zero */);
   assert.equal(search('376045').find((x) => /chart/.test(x.title))?.key, chart.key);
   const three = search('$226K').find((x) => x.title === `${Y0} revenue, against ${Y0 - 1}’s same days`);
-  assert.equal(three.said.sub, `Up $226,045 ($226K) on ${Y0 - 1}’s same days, in kind left out`);
+  assert.equal(three.said.sub, `Up $226,045, or $226K, on ${Y0 - 1}’s same days, in kind left out` /* r11: the short form after a comma, never in brackets */);
   // ("$50K": one figure, counted the same way on the chart and above it, one result saying which way)
-  assert.deepEqual(search('$50K').map((x) => x.said.sub), [`Down $50,000 on ${Y0 - 1}’s same days, in kind and depreciation left out`]);
+  assert.deepEqual(search('$50K').map((x) => x.said.sub), [`Down $50,000 on ${Y0 - 1}’s same days, in kind left out` /* r12: what's left out named as the page names it, in kind alone when the non-cash is the in kind given (both years here) */]);
   for (const figs of [FIGS, moneyFigures(dataOf(null, { history: HISTORY }), { cash: CASH, budget: null })]) {
     const seen = new Map();
     for (const x of figs) {

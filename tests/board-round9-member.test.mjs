@@ -184,17 +184,17 @@ test('a short form finds the figure whose shown short form it is, and its exact 
     assert.ok(hit.href && hit.focus, `${title} lands somewhere`);
   }
   // (the form a tile writes it in, said in its line: the meeting's cash writes Reserve as "$62K", its accounts adding up)
-  assert.match(search('$62K').find((x) => x.title === 'Reserve').said.sub, /^\$62,500 \(\$62K\)/);
+  assert.match(search('$62K').find((x) => x.title === 'Reserve').said.sub, /^\$62,500, or \$62K/ /* r11: never in brackets, which say below zero */);
 });
 
 test('a statement line found by its other column says that column, marked, the short form beside it when it rounds', () => {
   const line = (typed, title) => search(typed).find((x) => x.title === title)?.said;
-  assert.match(line('$1,909,703', 'Total Income').sub, /^\$1,909,703 \(\$1\.91M\), the same days in \d{4}, on the statement of activities/);
+  assert.match(line('$1,909,703', 'Total Income').sub, /^\$1,909,703, or \$1\.91M, the same days in \d{4}, on the statement of activities/ /* r11: the short form after a comma, never in brackets */);
   assert.ok(line('$1,909,703', 'Total Income').marks.includes('1909703'));
   assert.match(line('176000', 'Net Income').sub, /^\$176,000, the same days in/);
-  assert.match(line('1.88M', 'Total Income').sub, /^\$1,884,217 \(\$1\.88M\), on the statement of activities/, 'this year’s, its short form beside it');
-  assert.match(line('$25,486', 'Total Income').sub, /^\$25,486 \(\$25K\) less than the same days/, 'the change, in dollars');
-  assert.match(line('$1,666,667', 'Total Income').sub, /^\$1,666,667 \(\$1\.67M\), its budget, on the budget against actual/, 'the budget’s column');
+  assert.match(line('1.88M', 'Total Income').sub, /^\$1,884,217, or \$1\.88M, on the statement of activities/ /* r11: the short form after a comma, never in brackets */, 'this year’s, its short form beside it');
+  assert.match(line('$25,486', 'Total Income').sub, /^\$25,486, or \$25K, less than the same days/ /* r11: the short form after a comma, never in brackets */, 'the change, in dollars');
+  assert.match(line('$1,666,667', 'Total Income').sub, /^\$1,666,667, or \$1\.67M, its budget, on the budget against actual/ /* r11: the short form after a comma, never in brackets */, 'the budget’s column');
   assert.match(line('total income', 'Total Income').sub, /^\$1,884,217/, 'by its name: this year’s');
   // (an amount typed exactly is that amount: "$25,000" is never the $25,486 change its line writes "$25K", nor "1,884,000"
   // the $1,884,217 written "$1.88M")

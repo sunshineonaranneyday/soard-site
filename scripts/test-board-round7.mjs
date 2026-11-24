@@ -494,7 +494,8 @@ try {
     if (q) await answer(A, 'no');
     ok(!q, `no question (“${q}”)`);
     const said = (await toasts(A)).at(-1) || '';
-    ok(said === 'You approved it already just now, maybe in another tab', `A says so, as hers (“${said}”)`);
+    /* r12: the admin tester's words (round 12, item 5): "You approved it already, maybe in another tab." */
+    ok(said === 'You approved it already, maybe in another tab.', `A says so, as hers (“${said}”)`);
     ok(/^is-done: Approved/.test(await pathStep(A, 'Approved')), `and shows it (“${await pathStep(A, 'Approved')}”)`);
     ok(mail.length === sent, 'nothing more went');
     await A.close();

@@ -54,10 +54,16 @@ const BY_RECORD = `FROM (SELECT ? AS s, ? AS em) AS me WHERE EXISTS (SELECT 1 FR
 const emailsKept = new WeakMap();
 /**
  * → [fromWhere, binds] for a write of a member's own row (above): by their sign-in email where the site keeps them, by
- * their People record in a database that has no table of emails yet. Asked once a database
+ * their People record in a database that has no table of emails yet. Asked once a database: a read of it that fails
+ * throws, as a read of People does (readDown), and is asked again next time, never kept as "no table of emails" (which
+ * would write every row after it by the record alone, the guard a swap of two addresses gets past: Advisory Board QA
+ * round 24)
  */
 export async function ownRow(DB, who) {
-  if (!emailsKept.has(DB)) emailsKept.set(DB, !!(await DB.prepare("SELECT 1 AS y FROM sqlite_master WHERE type = 'table' AND name = 'reveal_board_emails'").first().catch(() => null)));
+  if (!emailsKept.has(DB)) {
+    const row = await DB.prepare("SELECT 1 AS y FROM sqlite_master WHERE type = 'table' AND name = 'reveal_board_emails'").first().catch((e) => { throw readDown(PEOPLE_DOWN, e); });
+    emailsKept.set(DB, !!row);
+  }
   const binds = [String((who && typeof who === 'object' ? who.slug : who) || ''), String((who && typeof who === 'object' && who.email) || '').trim().toLowerCase()];
   return [emailsKept.get(DB) ? BY_EMAIL : BY_RECORD, binds];
 }

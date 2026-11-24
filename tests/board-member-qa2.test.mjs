@@ -127,11 +127,12 @@ test('6. where the revenue came from is of the same revenue as the figure above 
   assert.deepEqual(mix.parts.map((x) => [x.name, x.share]), [['Donations', '42%'], ['Store sales', '25%'], ['Gala', '24%'], ['Grants', '6%'], ['Everything else', '3%']]);
   // Last year's the same way: its Everything else is without its in kind too
   assert.equal(mix.parts.find((x) => x.key === 'rest').last, 0, 'last year: 1,500,000 less 70,000 in kind less its named parts');
-  // With a budget sheet (it counts in-kind gifts as revenue), or none, the revenue keeps them: so does the mix
+  /* r11: one revenue, counted one way: with no budget the revenue leaves the in kind out too, as The year so far and
+     the net beside it do (Board QA round 11 found the tile's $1.88M beside a net of $676K), and so does the mix */
   const sheet = { ...BOOKS, budget: null };
-  assert.equal(money.withBooks(null, sheet).revenue.actual, 1876045);
+  assert.equal(money.withBooks(null, sheet).revenue.actual, 1656045);
   const all = money.mixOf(sheet);
-  assert.equal(all.total, 1876045);
-  assert.ok(all.parts.some((x) => x.key === 'inkind'), 'in kind one of them, as the figure counts it');
-  assert.ok(!all.inKind);
+  assert.equal(all.total, 1656045);
+  assert.ok(!all.parts.some((x) => x.key === 'inkind'), 'in kind isn’t one of them, as the figure leaves it out');
+  assert.equal(all.inKind, 220000);
 });

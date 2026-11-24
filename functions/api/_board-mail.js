@@ -40,7 +40,7 @@ import { accessToken, GMAIL_READ_SCOPE, parseServiceAccount } from './_google-ca
 import { boardAdmins, readState, writeState, peopleRows, activeBoard, normEmail, unreadStatus } from './_board-roles.js';
 import { ensureSchema, listMeetings, getMeeting, saveMeeting, patchMeeting, putFile, deleteFile, roster } from './_board.js';
 import { readMinutes, applyMinutes, minutesNewer } from './_board-minutes.js';
-import { parseAgendaText, isDate, todayEastern, meetingName, docxText, unzip, cleanMeeting, agendaIsDraft, shortDate, AGENDA_READER, minutesIn } from '../../public/admin/board-shared.js';
+import { parseAgendaText, isDate, todayEastern, meetingName, docxText, unzip, cleanMeeting, agendaIsDraft, shortDate, AGENDA_READER, minutesHeld } from '../../public/admin/board-shared.js';
 import { viaGateway, aiCapped, AI_REST_MS, AI_WAIT_NOTE } from './_ai.js';
 import { slackPost } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
@@ -450,12 +450,12 @@ async function bringIn(env, { token, admin, id, fetchImpl, people, boardEmails, 
     if (f.kind === 'minutes' && past) {
       const later = boardOnly(meetings).filter((x) => x.date > m.date).sort((a, b) => a.date.localeCompare(b.date))[0];
       const prev = boardOnly(meetings).filter((x) => x.id !== m.id && x.date && x.date < m.date).sort((a, b) => b.date.localeCompare(a.date))[0] || null;
-      // Approved minutes in Board (read in, or only a file: minutesIn) are the record, as a drop is told
-      // (./_board-minutes.js readMinutesInto): a minutes file that comes by email after they were approved is never read
-      // in, nor filed as theirs. It's kept with the meeting for staff, and named in the founders' view only
-      // (lateMinutesFiles), never their own file again. One approved with no minutes in Board yet takes it as ever. Board
-      // QA round 9, Nov 22 2026
-      const held = (x) => x.minutes === 'approved' && !x.minutesFrom?.typed && minutesIn(x);
+      // Approved minutes in Board (read in, or only a file, by the approval's record: minutesHeld, whatever has happened
+      // to that file since) are the record, as a drop is told (./_board-minutes.js readMinutesInto): a minutes file that
+      // comes by email after they were approved is never read in, nor filed as theirs. It's kept with the meeting for
+      // staff, and named in the founders' view only (lateMinutesFiles), never their own file again. One approved with no
+      // minutes in Board yet takes it as ever. Board QA rounds 9 and 11, Nov 22 and 23 2026
+      const held = (x) => !x.minutesFrom?.typed && minutesHeld(x);
       const theirs = (x) => [x.minutesFrom?.name, ...x.files.filter((g) => g.kind === 'minutes').map((g) => g.name), ...(x.lateMinutesFiles || []).map((g) => g.name)].some((n) => n && titleKey(n) === titleKey(f.name));
       // (typed minutes stand: nothing to read them for)
       const read = f.text && !m.minutesFrom?.typed && !held(m) ? await readMinutes(env, { name: f.name, text: f.text, meeting: m, people, prev, quick: true }) : null;

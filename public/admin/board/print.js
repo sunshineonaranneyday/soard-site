@@ -20,10 +20,12 @@
 
 import { openDoc, fileUrl } from './docs.js';
 import {
-  meetingName, longDate, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, itemFiles, looseFiles, fileTitle, isDate, clock, sectionPlan, MORE,
-  showsOf, booksDraw, isStatement, attendanceCounts, quorumFor, tallyText, minutesFileOf, docxText, heldEarly, todayEastern, shortDate,
+  meetingName, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, itemFiles, looseFiles, fileTitle, isDate, clock, sectionPlan, MORE,
+  showsOf, booksDraw, isStatement, attendanceCounts, quorumFor, tallyText, minutesFileOf, docxText, heldEarly, todayEastern,
 } from '../board-shared.js';
+import { shortDate, longDate, dayText } from './parts.js';
 import { moneyFor, moneyTiles, mixOf, mixLeftOut, mixLessWords, changeOf, ptsOf, storeOf, storeChange, budgetMonthsText, stepText, readChangeAs, changeIn, overIn, budgetName } from './money.js';
+import { UNREAD_WORDS } from './unread.js';
 import { minutesState, MINUTES_SAID } from './minutes.js';
 import { reportDom, motionDom } from '../board-report.js';
 import { h, render } from '../vendor.js';
@@ -46,7 +48,7 @@ function points(text) {
 }
 
 const STAGE_FLOW = ['Awaiting Funding', 'Design', 'Finalization', 'Approval', 'Mobilization', 'Build'];
-const dayWords = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }) : '');
+const dayWords = (d) => dayText(d, 'wmd');
 
 /** The makeovers on paper: a column per stage, each family by name with their reveal */
 function makeoversBox(n) {
@@ -114,7 +116,7 @@ function revenueBox(books) {
     const tr = el('tr');
     const name = el('th', '');
     name.append(el('i', `bpp-mix__key bp-tone--${x.tone}`), document.createTextNode(x.name));
-    tr.append(name, el('td', 'num', signed(x.amount)), el('td', 'num', x.share));
+    tr.append(name, el('td', 'num', signed(x.said ?? x.amount)), el('td', 'num', x.share));
     if (last) tr.append(el('td', 'num', x.last == null ? '' : signed(x.last)), el('td', 'num', changeOf(x.amount, x.last) || (x.last === 0 && x.amount > 0 ? 'New' : '')));
     tbody.append(tr);
   }
@@ -125,8 +127,8 @@ function revenueBox(books) {
   return box;
 }
 
-const fullDate = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
-const shortDay = (d) => (isDate(d) ? new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }) : '');
+const fullDate = (d) => dayText(d, 'MDY');
+const shortDay = (d) => dayText(d, 'mdy');
 // (nothing to show: a blank cell, never a dash)
 const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).replace('-', '')}` : '');
 /**
@@ -231,6 +233,9 @@ function storeBox(books) {
 /** An item's live facts on paper, drawn for what they are */
 function liveBox(kind, n, m, money, notes = null, books = n?.books) {
   if (!n || !kind || kind === 'minutes') return null;
+  // (today's numbers whose read failed just now: said so on paper too, never a zero or an empty list: ./unread.js)
+  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events' }[kind];
+  if (part && n.unread?.[part]) return el('p', 'bpp-live', UNREAD_WORDS[part]);
   if (kind === 'projects') return makeoversBox(n);
   if (kind === 'cash') {
     // The figures, the year against last year, where the revenue came from, the store, then the statements the packet

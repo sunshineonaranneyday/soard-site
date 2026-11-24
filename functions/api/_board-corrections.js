@@ -25,12 +25,14 @@
  *   state    waiting → made | declined | withdrawn (making: claimed, for the moment it's being made)
  */
 
-import { getMeeting, listMeetings, patchMeeting, roster, ensureSchema, ID, SITE } from './_board.js';
-import { refreshMinutesFile, claimSending, releaseSending, boxPath, withBox, anythingIn } from './_board-notes.js';
+import { getMeeting, listMeetings, patchTogether, roster, ensureSchema, ID, SITE } from './_board.js';
+import { claimSending, releaseSending, boxPath, withBox, anythingIn, keptFile, mergePatch, fileInputs, stageMinutesFile, AGAIN } from './_board-notes.js';
 import { minutesIn, meetingName, uid } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
 import { limit } from './_rate-limit.js';
-import { oweNotice, noticeName } from './_board-notices.js';
+import { oweNotice, noticeName, dueRow, laterWords } from './_board-notices.js';
+import { readState, readDown } from './_board-roles.js';
+import { emailConfigured } from './_broadcast-notify.js';
 import { emailShell, button, esc } from './_email-shell.js';
 
 const ROLL = ['present', 'remote', 'excused', 'absent'];
@@ -179,6 +181,8 @@ export async function withdrawCorrection(env, id, w) {
 const boxOf = (notes, key) => { const v = notes?.[key]; return v === undefined || v === null ? '' : String(v); };
 
 const STALE = 'The minutes changed there after this was suggested, so it can’t go over them. Read them, then change them in the notes or keep them as they are.';
+/** A decision that didn't land (one step: nothing of it was done), in round 11's words */
+const NOT_DECIDED = 'We couldn’t save that just now, so nothing was changed. Please try again in a moment.';
 /** Whether the meeting no longer says what the correction was suggested against */
 const changedSince = (m, c) => { const t = targetOf(m, c.target); return !t || (c.kind === 'roll' ? (t.now || '') !== (c.was || '') : !sameNote(t.now, c.was)); };
 
@@ -205,62 +209,100 @@ function keptFor(m, c, last, before, mark) {
 }
 
 /**
+ * What a correction does to the meeting as it is (`m`), pure: the meeting with it on (`next`, null when it says that
+ * already), the patch to what the last send kept (`kept`, null for none) and the notes' statements that write both.
+ * Throws, in words, when it can't go on these minutes as they are (changed since, unsent words in its box, or minutes it
+ * would leave with nothing in them). `ctx`: the notes as read (draft, last), whether they're typed, and `now`
+ */
+function correctionPlan(m, c, { typed, draft, last, now }) {
+  const id = m.id;
+  const box = c.target;
+  const here = boxOf(draft, box);
+  const sent = boxOf(last.notes, box);
+  const left = last.notes ? withBox(last.notes, box, c.words) : null;
+  let next = null;
+  if (!holds(m, c)) {
+    const t = targetOf(m, box);
+    if (!t) throw no('That part of the minutes isn’t on the meeting any more. Keep the minutes as they are, or change them in the notes.', 409, { stale: true });
+    // (a founder's save can land at any moment: looked at again as it's written)
+    if (changedSince(m, c)) throw no(STALE, 409, { stale: true });
+    if (left) {
+      if (here !== sent && here !== c.words) throw no('There are words in the notes there that aren’t sent yet. Send them first, then make this one.', 409, { unsent: true });
+      // (the notes with nothing left in them would take the whole minutes off the meeting at the next send)
+      if (!anythingIn(left) || !anythingIn(withBox(draft, box, c.words))) throw no('That would leave these minutes with nothing in them. Change them in the notes instead.', 409, { empties: true });
+    }
+    next = withCorrection(m, c, now);
+  }
+  const notes = [];
+  let kept = null;
+  if (typed && left && anythingIn(left)) {
+    // A person on the roll: their box says it too, or the next send puts the old mark back. With nobody marked in the notes
+    // the list is the meeting's own and stays so: one mark there would turn everyone unmarked into not there
+    const person = (m.attendance || []).find((p) => p.key === box.slice(2));
+    const named = String(draft.guests || '').toLowerCase().split(/[;\n]+/).map((x) => x.trim()).includes(String(person?.name || '').toLowerCase());
+    const mark = c.kind === 'roll' && (box in draft || named || (last.extra || []).includes(box.slice(2)) || Object.keys(draft).some((k) => k.startsWith('r:')));
+    const k = keptFor(m, c, last, c.was || '', mark);
+    if (Object.keys(k).length) {
+      const carried = here === sent || here === c.words;
+      // (nothing else waiting in the notes: nothing left to send)
+      if (typedOf(carried ? withBox(draft, box, c.words) : draft) === typedOf(left)) k.at = iso(now);
+      kept = k;
+      notes.push(
+        { sql: 'UPDATE board_minutes_notes SET sent = json_patch(sent, ?) WHERE meeting_id = ?', bind: [JSON.stringify(k), id] },
+        { sql: "UPDATE board_minutes_notes SET data = json_patch(data, ?) WHERE meeting_id = ? AND COALESCE(json_extract(data, ?), '') = ?", bind: [JSON.stringify({ [box]: c.words || null }), id, boxPath(box), sent] },
+      );
+    }
+  }
+  return { next, kept, notes };
+}
+
+/**
  * Put a correction on the meeting, safe to press again: words already there are only brought into step. Words that changed
  * since it was suggested, or unsent words in the same box, are never gone over, and it can't empty the minutes. Minutes read
  * from a file: on the meeting; the file stays as it was, and the answer says so.
+ * The meeting, the notes' record of it, the Word file a send kept and `also` (the decision, and the notice it owes) are
+ * one step: all of it lands or none of it (./_board.js patchTogether). The Word file's new bytes are made first, from the
+ * very copy of the meeting the step writes over and every read they go by, so a file that can't be made leaves nothing
+ * made (Board QA round 12, Nov 23 2026: its rewrite came after the step and failed quietly, and the file kept the old words)
  */
-async function makeIt(env, id, c, w, { now }) {
-  if (c.kind === 'other') return {};
+async function makeIt(env, id, c, w, { now, also = [] }) {
   const typed = !!(await getMeeting(env.DB, id))?.minutesFrom?.typed;
   if (typed && !await claimSending(env.DB, id, now)) throw no('These are being sent right now. Give it a moment.', 409);
   try {
-    // (read with the claim held: nothing can have been sent since)
-    const m = await getMeeting(env.DB, id);
-    const row = typed ? await env.DB.prepare('SELECT data, sent FROM board_minutes_notes WHERE meeting_id = ?').bind(id).first() : null;
-    const draft = parse(row?.data);
-    const last = parse(row?.sent);
-    const box = c.target;
-    const here = boxOf(draft, box);
-    const sent = boxOf(last.notes, box);
-    const left = last.notes ? withBox(last.notes, box, c.words) : null;
-    const there = holds(m, c);
-    if (!there) {
-      const t = targetOf(m, box);
-      if (!t) throw no('That part of the minutes isn’t on the meeting any more. Keep the minutes as they are, or change them in the notes.', 409, { stale: true });
-      if (changedSince(m, c)) throw no(STALE, 409, { stale: true });
-      if (left) {
-        if (here !== sent && here !== c.words) throw no('There are words in the notes there that aren’t sent yet. Send them first, then make this one.', 409, { unsent: true });
-        // (the notes with nothing left in them would take the whole minutes off the meeting at the next send)
-        if (!anythingIn(left) || !anythingIn(withBox(draft, box, c.words))) throw no('That would leave these minutes with nothing in them. Change them in the notes instead.', 409, { empties: true });
+    for (let tries = 1; ; tries++) {
+      // (read with the claim held: nothing can have been sent since)
+      const row = typed ? await env.DB.prepare('SELECT data, sent FROM board_minutes_notes WHERE meeting_id = ?').bind(id).first() : null;
+      const ctx = { typed, draft: parse(row?.data), last: parse(row?.sent), now };
+      let fresh = null;
+      let from = '';
+      if (typed && ctx.last.fileId && ctx.last.notes) {
+        const m0 = await getMeeting(env.DB, id);
+        if (keptFile(m0, ctx.last)) {
+          // (as the step will leave them: the minutes with it on, and what the last send kept with it in)
+          const p = correctionPlan(m0, c, ctx);
+          from = m0.updatedAt || '';
+          fresh = await stageMinutesFile(env, p.next || m0, mergePatch(ctx.last, p.kept || {}), await fileInputs(env.DB, id), now);
+        }
       }
-      await patchMeeting(env.DB, id, (cur) => {
-        // (a founder's save can land at any moment: looked at again as it's written)
-        if (changedSince(cur, c)) throw no(STALE, 409, { stale: true });
-        return withCorrection(cur, c, now);
-      }, { by: w?.member?.email || w?.adminEmail || '' });
-    }
-    if (!typed) return { fileKeeps: true };
-    if (left && anythingIn(left)) {
-      // A person on the roll: their box says it too, or the next send puts the old mark back. With nobody marked in the notes
-      // the list is the meeting's own and stays so: one mark there would turn everyone unmarked into not there
-      const person = (m.attendance || []).find((p) => p.key === box.slice(2));
-      const named = String(draft.guests || '').toLowerCase().split(/[;\n]+/).map((x) => x.trim()).includes(String(person?.name || '').toLowerCase());
-      const mark = c.kind === 'roll' && (box in draft || named || (last.extra || []).includes(box.slice(2)) || Object.keys(draft).some((k) => k.startsWith('r:')));
-      const kept = keptFor(m, c, last, c.was || '', mark);
-      if (Object.keys(kept).length) {
-        const carried = here === sent || here === c.words;
-        // (nothing else waiting in the notes: nothing left to send)
-        if (typedOf(carried ? withBox(draft, box, c.words) : draft) === typedOf(left)) kept.at = iso(now);
-        await env.DB.batch([
-          env.DB.prepare('UPDATE board_minutes_notes SET sent = json_patch(sent, ?1) WHERE meeting_id = ?2').bind(JSON.stringify(kept), id),
-          env.DB.prepare("UPDATE board_minutes_notes SET data = json_patch(data, ?1) WHERE meeting_id = ?2 AND COALESCE(json_extract(data, ?3), '') = ?4").bind(JSON.stringify({ [box]: c.words || null }), id, boxPath(box), sent),
-        ]);
+      try {
+        await patchTogether(env.DB, [id], ([m]) => {
+          if (!m) throw no('That meeting is gone', 404);
+          // (changed since its Word file was made from it: made again)
+          if (fresh && (m.updatedAt || '') !== from) throw AGAIN;
+          const p = correctionPlan(m, c, ctx);
+          return { writes: p.next ? [[m, p.next]] : [], also: [...p.notes, ...(fresh?.also || []), ...also] };
+        }, { by: w?.member?.email || w?.adminEmail || '' });
+      } catch (err) {
+        await fresh?.drop();
+        if (err === AGAIN && tries < 3) continue;
+        throw err === AGAIN ? no('The minutes kept changing while this was made, so nothing was changed. Try again in a moment.', 409) : err;
       }
+      // (in: the Word file's old words go, now that nothing names them)
+      await fresh?.done();
+      return typed ? {} : { fileKeeps: true };
     }
-    await refreshMinutesFile(env, id, { now });
-    return {};
   } finally {
-    if (typed) await releaseSending(env.DB, id);
+    if (typed) await releaseSending(env.DB, id).catch((err) => console.error('[board-corrections] the notes claim', id, err?.message || err));
   }
 }
 
@@ -269,23 +311,34 @@ async function makeIt(env, id, c, w, { now }) {
  * correction that's about anything else: they've changed it themselves); not `make`: the minutes stay as they are, with why
  * if they say. Words already on the minutes are made, whichever was pressed: "kept as they are" would be untrue. `saw`: the
  * words on their page: reworded since, they read it first. → { id, state, fileKeeps }
+ * Every read the decision needs (who's deciding, the correction, the meeting) is made before anything changes, and the
+ * minutes, the decision and the notice owed to whoever suggested it are written in one step: decided whole, or not at all
+ * and waiting again. Board QA round 11, Nov 23 2026: who was deciding was read after the minutes changed, and its failure
+ * left them changed, the correction stuck being made, "nothing was changed" said, and Sam never told
  */
 export async function decideCorrection(env, { id, make = false, reason = '', saw = null } = {}, w, { now = Date.now(), waitUntil = null } = {}) {
-  await ensureSchema(env.DB);
   if (!canDecide(w)) throw no('Only the board’s secretary or a founder decides a correction', 403);
+  // (nothing is decided until the one step below lands: a database that didn't answer before it is said in words, never
+  // "something went wrong" over a decision that changed nothing. Board QA round 12)
+  const unsaid = (err) => (err?.status ? err : readDown(NOT_DECIDED, err));
+  await ensureSchema(env.DB).catch((err) => { throw unsaid(err); });
+  const me = await authorOf(env, w).catch((err) => { throw unsaid(err); });
   const cid = String(id || '');
-  const claim = await env.DB.prepare("UPDATE board_minutes_corrections SET state = 'making', decided_at = ?1 WHERE id = ?2 AND (state = 'waiting' OR (state = 'making' AND decided_at < ?3))").bind(iso(now), cid, iso(now - MAKING_MS)).run();
+  const claim = await env.DB.prepare("UPDATE board_minutes_corrections SET state = 'making', decided_at = ?1 WHERE id = ?2 AND (state = 'waiting' OR (state = 'making' AND decided_at < ?3))").bind(iso(now), cid, iso(now - MAKING_MS)).run()
+    .catch((err) => { throw unsaid(err); });
   if (!((claim?.meta?.changes ?? claim?.changes ?? 0) > 0)) {
-    const was = await env.DB.prepare('SELECT state FROM board_minutes_corrections WHERE id = ?').bind(cid).first();
+    const was = await env.DB.prepare('SELECT state FROM board_minutes_corrections WHERE id = ?').bind(cid).first().catch((err) => { throw unsaid(err); });
     throw no(was?.state === 'making' ? 'That one is being made right now. Give it a moment.' : 'That one has already been decided', 409, { reload: was?.state !== 'making' });
   }
-  const c = await env.DB.prepare('SELECT * FROM board_minutes_corrections WHERE id = ?').bind(cid).first();
-  const back = () => env.DB.prepare("UPDATE board_minutes_corrections SET state = 'waiting', decided_at = NULL WHERE id = ?").bind(cid).run();
+  // (only a claim still being made goes back: never one this press decided)
+  const back = () => env.DB.prepare("UPDATE board_minutes_corrections SET state = 'waiting', decided_at = NULL WHERE id = ? AND state = 'making'").bind(cid).run();
+  let c = null;
   let made = {};
-  let m = null;
   let doing = !!make;
+  let owed = null;
   try {
-    m = await getMeeting(env.DB, c.meeting_id);
+    c = await env.DB.prepare('SELECT * FROM board_minutes_corrections WHERE id = ?').bind(cid).first();
+    const m = await getMeeting(env.DB, c.meeting_id);
     if (!m) throw no('That meeting is gone', 404);
     if (!w?.admin && (!m.shared || m.notBoard || m.practice)) throw no('That meeting isn’t on the board page', 404);
     if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409, { reload: true });
@@ -293,19 +346,30 @@ export async function decideCorrection(env, { id, make = false, reason = '', saw
     doing = !!make || (c.kind !== 'other' && holds(m, c));
     // (taken back off the meeting since it was suggested: there are no minutes for it to go on)
     if (doing && !minutesIn(m)) throw no('These minutes aren’t on the meeting any more.', 409, { reload: true });
-    if (doing) made = await makeIt(env, c.meeting_id, c, w, { now });
+    // The decision, and (to whoever suggested it, through the list of notices due: ./_board-notices.js) its notice, in
+    // the same step as the minutes
+    const decided = { sql: 'UPDATE board_minutes_corrections SET state = ?, decided_by = ?, decided_at = ?, reason = ? WHERE id = ?', bind: [doing ? 'made' : 'declined', me.name, iso(now), doing ? '' : cleanWords(reason).slice(0, 1000), cid] };
+    if (c.by_slug !== me.slug && emailConfigured(env)) {
+      owed = { id: `correction-decided:${cid}`, notice: { kind: 'correction-decided', meetingId: m.id, cid, made: doing, byName: me.name, toEmail: c.by_email || '', toSlug: c.by_slug } };
+      await readState(env.DB, `notice-due:${owed.id}`); // (makes board_state)
+    }
+    const due = owed ? dueRow(owed.id, owed.notice, now) : null;
+    const also = [decided, ...(due ? [{ sql: 'INSERT OR IGNORE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1', bind: [due.key, due.data, due.at] }] : [])];
+    if (doing && c.kind !== 'other') made = await makeIt(env, c.meeting_id, c, w, { now, also });
+    else await env.DB.batch(also.map((x) => env.DB.prepare(x.sql).bind(...x.bind)));
   } catch (err) {
-    await back();
-    throw err;
+    await back().catch((e) => console.error('[board-corrections] putting it back', cid, e?.message || e));
+    throw unsaid(err);
   }
-  const me = await authorOf(env, w);
-  const state = doing ? 'made' : 'declined';
-  await env.DB.prepare('UPDATE board_minutes_corrections SET state = ?, decided_by = ?, decided_at = ?, reason = ? WHERE id = ?').bind(state, me.name, iso(now), doing ? '' : cleanWords(reason).slice(0, 1000), cid).run();
-  // (whoever suggested it is told, through the list of notices due: ./_board-notices.js, as a suggestion is)
-  const owed = c.by_slug !== me.slug
-    ? await oweNotice(env, `correction-decided:${cid}`, { kind: 'correction-decided', meetingId: m.id, cid, made: doing, byName: me.name, toEmail: c.by_email || '', toSlug: c.by_slug }, { waitUntil, who: noticeName(c.by_name), now })
-    : {};
-  return { id: cid, state, ...made, ...(owed.later ? { later: owed.later } : {}) };
+  // Decided: its notice is due already, and goes now if People can be read (else the signing look sends it)
+  let later = '';
+  if (owed) {
+    try { later = (await oweNotice(env, owed.id, owed.notice, { waitUntil, who: noticeName(c.by_name), now })).later || ''; } catch (err) {
+      console.error('[board-corrections] the notice', cid, err?.message || err);
+      later = laterWords(noticeName(c.by_name));
+    }
+  }
+  return { id: cid, state: doing ? 'made' : 'declined', ...made, ...(later ? { later } : {}) };
 }
 
 // ─── The two emails: who and where, never the words ─────────────────

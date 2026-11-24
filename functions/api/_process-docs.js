@@ -35,7 +35,7 @@
  */
 
 import { accessToken } from './_google-calendar.js';
-import { boardAdmins, isStaffEmail, activeBoard, peopleRows, founderEmails } from './_board-roles.js';
+import { boardAdmins, isStaffEmail, activeBoard, peopleRows, founderEmails, unreadStatus, readDown, PEOPLE_DOWN } from './_board-roles.js';
 import { sendEmails, emailConfigured, SITE_ORIGIN } from './_broadcast-notify.js';
 import * as mail from './_email-shell.js';
 import { JT_URL, SOARD_ORG_ID, FIELD_JOB_STATUS, loadKids, loadProjects, matchProject, isProject, isRehearsalJob, cfImageId } from './_reveals.js';
@@ -111,6 +111,9 @@ export async function setOverride(DB, track, link, now = Date.now()) {
   return s[track];
 }
 
+// A failure of the site's own database (D1), never shown as a Doc's problem
+const DB_DOWN = /D1_ERROR|SQLITE|no such table/i;
+
 class DriveError extends Error {
   constructor(message, status) { super(message); this.status = status; }
 }
@@ -133,12 +136,20 @@ function problemOf(err) {
   return `Google Drive: ${m.slice(0, 200)}`;
 }
 
-/** A Drive token: as the staff member looking, else as Board's admins, the first Google lets in */
+/**
+ * A Drive token: as the staff member looking, else as Board's admins, the first Google lets in. Who runs Board is read
+ * for certain (only once the staff member looking, if any, didn't get in): a read that fails throws (`unread`), never
+ * "Nobody to read Drive as", which is only for a board read and found to have nobody (Board QA round 11)
+ */
 async function tokenFor(env, user, { fetchImpl, now }) {
-  // not sure: only whose Drive to ask as (the staff member looking comes first), read-only; a failed read asks no one else
-  const people = [...new Set([isStaffEmail(user) ? user : null, ...(await boardAdmins(env.DB).catch(() => []))].filter(Boolean))];
+  const me = isStaffEmail(user) ? String(user).toLowerCase() : '';
   let last = null;
-  for (const who of people) {
+  if (me) {
+    try { return await accessToken(env, me, { fetchImpl, now, scope: DRIVE_SCOPE }); } catch (err) { last = err; }
+  }
+  let admins;
+  try { admins = await boardAdmins(env.DB); } catch (err) { throw err?.unread ? err : readDown(PEOPLE_DOWN, err); }
+  for (const who of admins.filter((x) => x !== me)) {
     try { return await accessToken(env, who, { fetchImpl, now, scope: DRIVE_SCOPE }); } catch (err) { last = err; }
   }
   throw last || new Error('Nobody to read Drive as: no staff sign-in and no Board admin.');
@@ -168,7 +179,16 @@ const view = (d) => ({
  * Each track's Doc, read again when it changed → { makeover: view, community: view }.
  * `fresh` asks Drive now instead of within 2 minutes.
  */
-export async function processDocs(env, { user = '', fetchImpl = fetch, now = Date.now(), fresh = false } = {}) {
+export async function processDocs(env, opts = {}) {
+  return (await readDocs(env, opts)).docs;
+}
+
+/**
+ * processDocs, and whether People couldn't be read to know whose Drive to ask as (`unread`): then nothing is asked of
+ * Drive and every Doc keeps what it said (never "Nobody to read Drive as" on each: Board QA round 11), for the look to
+ * note and try again → { docs, unread }
+ */
+async function readDocs(env, { user = '', fetchImpl = fetch, now = Date.now(), fresh = false } = {}) {
   await ensure(env.DB);
   const overrides = await readOverrides(env.DB);
   const lasts = Object.fromEntries(await Promise.all(DOCS.map(async (t) => [t, await readRow(env.DB, `doc:${t}`)])));
@@ -182,6 +202,10 @@ export async function processDocs(env, { user = '', fetchImpl = fetch, now = Dat
     let token = null;
     let tokenErr = null;
     try { token = await tokenFor(env, user, { fetchImpl, now }); } catch (err) { tokenErr = err; }
+    if (tokenErr?.unread) {
+      console.error('[process] who runs Board', tokenErr.cause?.message || tokenErr.message);
+      return { docs: Object.fromEntries(DOCS.map((t) => [t, view(lasts[t])])), unread: true };
+    }
     await Promise.all(due.map(async (track) => {
       const last = lasts[track];
       const at = new Date(now).toISOString();
@@ -216,11 +240,13 @@ export async function processDocs(env, { user = '', fetchImpl = fetch, now = Dat
         lasts[track] = await writeRow(env.DB, `doc:${track}`, { ...meta, ...read, readAt: at, checkedAt: at, error: null, errorAt: null }, now);
       } catch (err) {
         console.error(`[process] ${track}`, err?.message);
+        // (the site's own database not answering isn't the Doc's problem: it keeps what it said, for the next look)
+        if (DB_DOWN.test(String(err?.message || err))) return;
         lasts[track] = await writeRow(env.DB, `doc:${track}`, failed(err), now);
       }
     }));
   }
-  return Object.fromEntries(DOCS.map((t) => [t, view(lasts[t])]));
+  return { docs: Object.fromEntries(DOCS.map((t) => [t, view(lasts[t])])), unread: false };
 }
 
 /**
@@ -265,6 +291,9 @@ export async function processFacts(DB) {
       const d = await readRow(DB, `doc:${t}`);
       out[t] = { name: d.name || null, modifiedTime: d.modifiedTime || null, reviewedAt: reviews[t]?.at || null, readAt: d.readAt || null, checkedAt: d.checkedAt || null, steps: d.steps?.length || d.sections?.length || 0, error: d.error || null, errorAt: d.errorAt || null };
     }
+    // (the hourly look couldn't read People since then, so it couldn't ask Drive: the Docs as last read stay)
+    const slot = await readRow(DB, 'refresh');
+    out.peopleSince = slot.unread ? slot.failingSince || slot.failedAt || null : null;
     return out;
   } catch (err) {
     return { error: err.message };
@@ -280,11 +309,19 @@ export async function maybeRefreshProcess(env, { fetchImpl = fetch, now = Date.n
     if (!env.DB || !env.GOOGLE_CALENDAR_KEY) return null;
     await ensure(env.DB);
     const slot = await readRow(env.DB, 'refresh');
-    if (slot.at && now - Date.parse(slot.at) < REFRESH_MS) return null;
-    await writeRow(env.DB, 'refresh', { at: new Date(now).toISOString() }, now);
+    // (hourly; a look that couldn't read People looks at the Docs again on the next heartbeat)
+    const hourly = !slot.at || now - Date.parse(slot.at) >= REFRESH_MS;
+    if (!hourly && !slot.unread) return null;
+    const at = hourly ? new Date(now).toISOString() : slot.at;
+    if (hourly) await writeRow(env.DB, 'refresh', { ...slot, at }, now);
     const lasts = await Promise.all(DOCS.map((t) => readRow(env.DB, `doc:${t}`)));
     const fresh = lasts.every((l) => l.checkedAt && !l.error && now - Date.parse(l.checkedAt) < REFRESH_MS);
-    const docs = fresh ? null : await processDocs(env, { fetchImpl, now });
+    const { docs, unread } = fresh ? { docs: null, unread: false } : await readDocs(env, { fetchImpl, now });
+    // People not read: a passing note in the look's own record (./_board-roles.js unreadStatus, shown on Site →
+    // Automations after half an hour), each Doc as it was; read again, the note goes
+    if (unread) await writeRow(env.DB, 'refresh', unreadStatus({ at, ...(slot.unread ? { failingSince: slot.failingSince } : {}) }, now), now);
+    else if (slot.unread || !hourly) await writeRow(env.DB, 'refresh', { at }, now);
+    if (!hourly) return docs;
     // Jobs' status changes noted hourly, so their time at a step is known to the day
     await jobsNow(env, { fetchImpl, now }).catch(() => null);
     await maybeTellReviews(env, { now }).catch((err) => console.error('[process] review email', err?.message));

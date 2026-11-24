@@ -48,7 +48,9 @@ function withNewer(d, j) {
   const kept = new Map((d.meetings || []).map((m) => [m.id, m]));
   const meetings = (j.meetings || []).map((m) => { const k = kept.get(m.id); return k && String(k.updatedAt || '') > String(m.updatedAt || '') ? k : m; });
   const out = { ...j, meetings };
-  return d.welcomeAt > j.welcomeAt ? { ...out, welcome: d.welcome, welcomeSending: d.welcomeSending, welcomeSendingTo: d.welcomeSendingTo, welcomeAt: d.welcomeAt } : out;
+  // (the site couldn't read the sign-in email's record just now, `welcomeUnread`: what this page last knew stays, never
+  // taken for "nobody has had it". Board QA round 12)
+  return d.welcomeAt > j.welcomeAt || (j.welcomeUnread && d.welcome) ? { ...out, welcome: d.welcome, welcomeSending: d.welcomeSending, welcomeSendingTo: d.welcomeSendingTo, welcomeAt: d.welcomeAt } : out;
 }
 
 export function BoardArea({ addToast = () => {}, setGlobalDirty = null }) {
@@ -1544,16 +1546,19 @@ function MembersTab({ ctx }) {
       const have = looked?.welcome && asked.length && asked.every((p) => since(looked.welcome, p) && !(looked.welcome.unconfirmed || []).includes(p.slug));
       if (!ownToast(looked?.welcome)) addToast(have ? `${asked.length === 1 ? `${asked[0].name} has` : 'They have'} it now: another send went out at the same moment.` : j.error, have ? 'info' : 'error');
     }
+    // (a send that finished a moment ago, its claim still on: said as gone, never as not sent. Board QA round 12)
+    else if (j.status === 409 && j.already) addToast(j.error, 'info');
     else if (!j.ok) addToast(`${ended(j.failed ? (j.sent ? `Emailed ${j.sent}; ${plural(j.failed, 'email')} didn’t go (${j.error})` : `Nobody got it, so sending again is safe. ${j.error}`) : `Not sent: ${j.error}`)}${inAlready}${bad}`, 'error');
     else {
       // (nothing sent by this answer: the browser posted the request again, and its first try sent it)
       if (!j.sent && ownToast(j.welcome)) { /* said */ }
       else if (!j.sent && !j.already && inAlready) addToast(`${inAlready.trim()}${bad}`, bad ? 'error' : 'info');
       else if (!j.sent && j.already) addToast(`${body.again ? 'Nobody was emailed again: everyone had it in the last ten minutes' : one && body.slugs && !body.due ? `${one} had it in the last ten minutes; it can go again after that` : one ? `${one} already has it` : 'They already have it'}.${inAlready}${bad}`, bad ? 'error' : 'info');
-      else addToast(`${one && j.sent === 1 ? `Emailed ${one}` : `Emailed ${plural(j.reached || j.sent, 'board member')}`}.${inAlready}${bad}`, bad ? 'error' : 'info');
+      // (`later`: gone, and the site couldn't note it just now, or its look for the answer didn't answer: the page looks again)
+      else addToast(`${one && j.sent === 1 ? `Emailed ${one}` : `Emailed ${plural(j.reached || j.sent, 'board member')}`}.${j.later ? ` ${j.later}` : ''}${inAlready}${bad}`, bad ? 'error' : 'info');
     }
     // The full look follows the answer, without holding the buttons (the answer already said who has it)
-    if (!body.test && j.welcome) { ctx.load(); return { ok: true }; }
+    if (!body.test && (j.welcome || j.reread)) { ctx.load(); return { ok: true }; }
     return looked;
   };
   const rowHad = (slug) => { const p = data.members.find((x) => x.slug === slug); return !!(p && welcomeHad(data.welcome, p, data.members.map((x) => x.slug))); };
@@ -1568,18 +1573,36 @@ function MembersTab({ ctx }) {
   const askSign = async ({ slugs = null, test = false } = {}, label) => {
     setWorking(label);
     const j = await call({ action: 'ask-to-sign', ...(slugs ? { slugs } : {}), ...(test ? { test: true } : {}) });
+    // (going out from another tab or the other founder: Members looked at again by itself every two seconds until it
+    // shows who was asked, or two minutes on, so this tab shows it as the one that sent it does. Board QA round 12)
+    const followAsk = () => {
+      const was = JSON.stringify((data.members || []).map((p) => [p.slug, p.asked?.at || '']));
+      const until = Date.now() + 130 * 1000;
+      const tick = async () => {
+        if (Date.now() > until) return;
+        const look = await ctx.load({ quick: true }).catch(() => null);
+        if (look?.ok && JSON.stringify((look.members || []).map((p) => [p.slug, p.asked?.at || ''])) !== was) return;
+        setTimeout(tick, 2000);
+      };
+      setTimeout(tick, 2000);
+    };
     setWorking('');
     if (j.members) ctx.setData((d) => ({ ...d, members: j.members }));
+    // (asked, and Members not read back for the answer: the page looks again by itself. Board QA round 11)
+    if (j.reread) ctx.load({ quick: true });
     if (test) { addToast(j.ok ? `Sent to ${j.to?.[0] || 'you'}` : `Not sent: ${j.error}`, j.ok ? 'info' : 'error'); return j; }
     const one = slugs?.length === 1 ? data.members.find((p) => p.slug === slugs[0])?.name : '';
     const left = [j.recent?.length ? `${listed(j.recent)} ${j.recent.length === 1 ? 'was' : 'were'} asked in the last ten minutes` : '',
       j.noEmail?.length ? `${listed(j.noEmail)} ${j.noEmail.length === 1 ? 'has' : 'have'} no email on People → Board` : ''].filter(Boolean).join('; ');
     if (answerLost(j)) addToast('No answer came back from the site, so it isn’t known whether it went. Reload the page to see who was asked.', 'error');
+    // (going out from another tab or the other founder right now: it goes once. Gone, and its record not kept: said so)
+    else if (j.sending) { addToast(sentence(j.error), 'info'); if (j.lookAgain) followAsk(); }
+    else if (j.unrecorded) addToast(sentence(j.error), 'error');
     else if (typeof j.sent !== 'number') addToast(`Not sent: ${sentence(j.error || 'the site didn’t say why')}`, 'error');
     else if (j.unsure) addToast('Resend didn’t confirm it went, so it may have gone. It’s counted as asked; Emails & invites → What went out shows whether it was delivered.', 'error');
     else if (!j.ok) addToast(j.sent ? `Emailed ${j.sent}; ${plural(j.failed, 'email')} didn’t go (${j.error})` : `Not sent: ${j.error}`, 'error');
     else if (!j.sent) addToast(left ? `Nobody was emailed: ${left}.` : one ? `${one} has signed already` : 'Everyone has signed', left ? 'error' : 'info');
-    else addToast(`${one && j.sent === 1 ? `Emailed ${one}` : `Emailed ${plural(j.sent, 'board member')}`}, asking them to sign.${left ? ` ${left.replace(/^./, (c) => c.toUpperCase())}.` : ''}`, 'info');
+    else addToast(`${one && j.sent === 1 ? `Emailed ${one}` : `Emailed ${plural(j.sent, 'board member')}`}, asking them to sign.${left ? ` ${left.replace(/^./, (c) => c.toUpperCase())}.` : ''}${j.later ? ` ${j.later}` : ''}`, 'info');
     return j;
   };
   // Each question here names who the site would email as it is at the press (ctx.fresh: a quick read then), never the

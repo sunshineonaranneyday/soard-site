@@ -427,11 +427,13 @@ export const stillAhead = (today) => (r) => (r.confirmed === false ? String(r.wi
  */
 export async function cachedReveals(env, now = Date.now()) {
   const today = todayEastern(now);
-  const cached = env.DB ? await readCache(env.DB).catch(() => null) : null;
+  // (a copy that couldn't be read is said so, `unread`, so the board page never draws it as no reveals ahead)
+  let unread = false;
+  const cached = env.DB ? await readCache(env.DB).catch(() => { unread = true; return null; }) : null;
   const reveals = (cached?.reveals || []).filter(r => r.date >= today);
   // A copy from before tentative reveals were public has no upcoming list: its confirmed reveals are the list
   const upcoming = Array.isArray(cached?.upcoming) ? cached.upcoming.filter(stillAhead(today)) : reveals.map((r) => ({ ...r, confirmed: true, rooms: [] }));
-  return { reveals, upcoming, past: carryPast(cached, today), updatedAt: cached?.updatedAt || null, source: cached ? 'cache' : 'none' };
+  return { reveals, upcoming, past: carryPast(cached, today), updatedAt: cached?.updatedAt || null, source: cached ? 'cache' : 'none', ...(unread ? { unread: true } : {}) };
 }
 
 /**

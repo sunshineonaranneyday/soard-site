@@ -874,9 +874,22 @@ export function followAddresses(m, now, { people = null } = {}) {
   return out;
 }
 
+/**
+ * Who a meeting's reminder to answer the invite went to, by board member: { slug: when }. The site keeps it by email, as it
+ * went (functions/api/_board.js remindedOf: the send's own record, never a read of People), and each is the board member
+ * at that address now, from Board's own list of the board (`members`, read for certain: Board's data loads with it or
+ * not at all). Board QA round 11, Nov 23 2026
+ */
+export function askedOf(m, members = []) {
+  const at = (e) => String(e || '').trim().toLowerCase();
+  const had = Object.fromEntries(Object.entries(m?.reminded || {}).map(([e, when]) => [at(e), when]));
+  return Object.fromEntries((members || []).filter((p) => p.email && had[at(p.email)]).map((p) => [p.slug, had[at(p.email)]]));
+}
+
 export function forBoard(m) {
   if (!m?.shared) return null;
   const seen = new Set(m.files.filter((f) => !f.staffOnly).map((f) => f.id));
+  const approved = approvedFileOf(m);
   return {
     ...m,
     sections: m.sections.map((s) => ({ ...s, items: s.items.filter(isFilled).map(({ staffNote, ...it }) => ({ ...it, title: it.title || LIVE_TITLES[it.live] || '', docs: (it.docs || []).filter((id) => seen.has(id)) })) })),
@@ -894,8 +907,9 @@ export function forBoard(m) {
     reminded: undefined,
     minutesFrom: m.minutesFrom ? (({ late, ...rest }) => rest)(m.minutesFrom) : m.minutesFrom,
     lateMinutesFiles: undefined,
-    // (approved minutes whose file is staff only: none for the board, never another file in its place)
-    approvedFile: m.approvedFile && !seen.has(m.approvedFile) && m.files.some((f) => f.id === m.approvedFile) ? APPROVED_HIDDEN : m.approvedFile,
+    // (approved minutes whose file is staff only: none for the board, never another file in its place; which file they
+    // are by the approval, approvedFileOf, worked out from every file the meeting has. Board QA round 11)
+    approvedFile: approved && !seen.has(approved) && m.files.some((f) => f.id === approved) ? APPROVED_HIDDEN : approved,
   };
 }
 
@@ -940,10 +954,9 @@ export const namesText = (names) => (names.length > 2 ? `${names.slice(0, -1).jo
 
 /** The meeting whose minutes an item asks the board to approve, and its minutes (the PDF before the Word copy) */
 export function minutesFileOf(prev) {
-  const list = (prev?.files || []).filter((f) => f.kind === 'minutes' && !f.staffOnly);
-  const approved = approvedMinutesFile(prev, list);
+  const approved = approvedMinutesFile(prev, { board: true });
   if (approved !== undefined) return approved;
-  return draftPick(prev, list);
+  return draftPick(prev, (prev?.files || []).filter((f) => f.kind === 'minutes' && !f.staffOnly));
 }
 /** Of minutes files (`list`), the one the board reads: the latest of the file they were read from or typed into, else the PDF before the Word copy */
 function draftPick(m, list) {
@@ -952,36 +965,75 @@ function draftPick(m, list) {
   return from || list.find((f) => /pdf/i.test(f.type) || /\.pdf$/i.test(f.name)) || list[0] || null;
 }
 /**
- * Approved minutes' own file, the one their approval kept (approvedFile), wherever they're opened: the board page's "The
- * minutes as written", the editor's "Written up in", the secretary's signing, the next meeting's approve-the-minutes
+ * Approved minutes' own file, the one their approval says (approvedFileOf), wherever they're opened: the board page's
+ * "The minutes as written", the editor's "Written up in", the secretary's signing, the next meeting's approve-the-minutes
  * item. Never a newer file, nor any PDF: so the founders and the board always open the same file, and it's the one the
- * board approved. Approved before approval kept one (or with no file of theirs yet), they're the file the board was shown
- * by the day they were approved (as the board page then chose it); none there by then, the one they were read from, else
- * the first that came. Board QA round 10, Nov 22 2026: a newer file put on approved minutes became the minutes as written
- * `list`: the minutes files to choose from (the board's, or the meeting's own). → the file, null, or undefined (a draft)
+ * board approved, whatever it's filed under or wherever it sits (`board`: the board's, so never a staff-only one, and
+ * none in its place). Board QA round 10, Nov 22 2026: a newer file put on approved minutes became the minutes as written;
+ * round 11, Nov 23 2026: once the approved file was filed under Other, put on an item or deleted, a newer one was.
+ * → the file, null, or undefined (a draft)
  */
-function approvedMinutesFile(m, list) {
+function approvedMinutesFile(m, { board = false } = {}) {
   if (m?.minutes !== 'approved') return undefined;
-  if (m.approvedFile === APPROVED_HIDDEN) return null;
-  const kept = m.approvedFile ? (m.files || []).find((f) => f.id === m.approvedFile && f.kind === 'minutes') : null;
-  if (kept) return list.includes(kept) ? kept : null;
-  // (never the last meeting's minutes on one of this meeting's items)
+  const id = approvedFileOf(m);
+  if (!id || id === APPROVED_HIDDEN) return null;
+  return (m.files || []).find((f) => f.id === id && !(board && f.staffOnly)) || null;
+}
+/**
+ * Approved minutes whose approval didn't keep which file they are (approved before approvedFile was kept, or with no
+ * file of theirs in Board yet): the meeting's own minutes file it had then, the one the board was shown by the day they
+ * were approved (as the board page then chose it); none there by then, the one they were read from, else the first that
+ * came (minutes approved with none in Board take the first that comes as theirs). Never one on an agenda item (the last
+ * meeting's). The site fixes it as approvedFile the first time it finds one (functions/api/_board.js withState), so
+ * nothing done to the files after makes another one theirs. → the file, or null
+ */
+function approvedBefore(m) {
   const onItem = new Set((m.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
-  const own = list.filter((f) => !onItem.has(f.id));
+  const own = (m.files || []).filter((f) => f.kind === 'minutes' && !onItem.has(f.id));
   const by = own.filter((f) => Number.isFinite(Date.parse(f.at || '')) && todayEastern(Date.parse(f.at)) <= String(m.approvedOn || ''));
   if (by.length) return draftPick(m, by);
   return own.filter((f) => f.name === m.minutesFrom?.name).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))[0]
     || [...own].sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')))[0] || null;
 }
 /**
+ * Which file approved minutes are, by their approval: the one it kept (approvedFile: the server's to set, as they're
+ * approved), else for an approval that kept none the meeting's own minutes file it had then (approvedBefore). Never
+ * judged by which files still carry Minutes or sit on an item: the one rule every route goes by (Add files, a drop,
+ * Replace, the email reader, an item's upload, File it under, Delete, Add a document on an item) and every page opens
+ * by. Board QA round 11, Nov 23 2026: the approved file filed under Other, deleted or put on an item, and a new file
+ * then went in as the minutes with no question. → a file id, APPROVED_HIDDEN (the board's copy: theirs is staff only),
+ * or '' (a draft, or approved with no file of theirs in Board)
+ */
+export function approvedFileOf(m) {
+  if (m?.minutes !== 'approved') return '';
+  if (m.approvedFile) return m.approvedFile;
+  return approvedBefore(m)?.id || '';
+}
+/** What's said when approved minutes' own file would come off them (filed under another kind, deleted, put on an item) */
+export const FILE_STAYS = 'These minutes are approved, so their file stays. Mark them as draft first to change it.';
+/**
+ * Whether a meeting's minutes are approved and in Board, by the approval (the rule round 10 made, judged by the record:
+ * approvedFileOf): read in or typed (minutesFrom), or a file of theirs on the approval's record, whatever has happened to
+ * that file since. Then no file becomes their minutes, by any route. `fileId`: the file asked about, left out (the
+ * approved minutes' own file is still theirs to file as the minutes, or to read in). One approved with no minutes in
+ * Board yet still takes them, as minutesNotReady asks
+ */
+export function minutesHeld(m, fileId = '') {
+  if (m?.minutes !== 'approved') return false;
+  if (m.minutesFrom) return true;
+  const id = approvedFileOf(m);
+  return !!id && id !== fileId;
+}
+/**
  * Which file minutes are approved as, set by the server on every write (functions/api/_board.js saveMeeting and
  * patchMeeting): as they're approved, the file the board was shown (minutesFileOf, this meeting's own files), else its
- * own minutes file (a staff-only one); once approved, the one they were approved as, as it is (never a newer one);
- * a draft has none. `cur`: the meeting as it is, `next`: as it's written. → a file id, or ''
+ * own minutes file (a staff-only one); once approved, the one their approval says (approvedFileOf: never a newer one,
+ * whatever's done to its kind or place); a draft has none. `cur`: the meeting as it is, `next`: as it's written. → a
+ * file id, or ''
  */
 export function approvedFileAfter(cur, next) {
   if (next?.minutes !== 'approved') return '';
-  if (cur?.minutes === 'approved') return ownMinutesFile(cur)?.id || '';
+  if (cur?.minutes === 'approved') { const id = approvedFileOf(cur); return id === APPROVED_HIDDEN ? '' : id; }
   const onItem = new Set((cur?.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
   return (minutesFileOf({ ...cur, files: (cur?.files || []).filter((f) => !onItem.has(f.id)) }) || ownMinutesFile(cur || {}))?.id || '';
 }
@@ -999,15 +1051,18 @@ export function copyOfItem(it, id) {
 }
 /** This meeting's own minutes file, if any: a minutes file on an agenda item is the last meeting's, up for approval */
 export const ownMinutesFile = (m) => {
+  // (approved: the file their approval says, as minutesFileOf has it, wherever it is. Board QA rounds 10 and 11)
+  const approved = approvedMinutesFile(m);
+  if (approved !== undefined) return approved;
   const onItem = new Set((m.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
-  const own = (m.files || []).filter((f) => f.kind === 'minutes' && !onItem.has(f.id));
-  // (approved: the file they were approved as, as minutesFileOf has it. Board QA round 10)
-  const approved = approvedMinutesFile(m, own);
-  return approved !== undefined ? approved : own.at(-1) || null;
+  return (m.files || []).filter((f) => f.kind === 'minutes' && !onItem.has(f.id)).at(-1) || null;
 };
 /** The meeting an agenda's "approve the minutes" item is about: the one it names, else the last one the board had */
-/** Whether a meeting has its minutes: typed or read from a file, or a file of them kept with it */
-export const minutesIn = (m) => !!m?.minutesFrom || !!ownMinutesFile(m);
+/**
+ * Whether a meeting has its minutes: typed or read from a file, or a file of them kept with it. Approved, by the
+ * approval (minutesHeld), never by which files still carry Minutes
+ */
+export const minutesIn = (m) => (m?.minutes === 'approved' ? minutesHeld(m) : !!m?.minutesFrom || !!ownMinutesFile(m));
 /** Signing on the board page starts with the minutes approved from here on: the secretary is never asked for years gone by */
 export const MINUTES_SIGN_FROM = '2026-11-01';
 /**
@@ -1860,6 +1915,16 @@ export function inviteIsRecord(m, now = Date.now()) {
   const slot = inviteSlot(m.invite);
   return meetingHeld(m, now) && meetingHeld(isDate(slot.date) ? { ...m, ...slot } : m, now);
 }
+/**
+ * Why nothing that asks the board to come to a meeting or to read ahead for it goes out ('' when it can): it has been
+ * held (meetingHeld). The one check every send whose words look ahead makes, at the press, from the read it made then
+ * (functions/api/_board.js: Remind those who haven't answered, Email the board, the agenda's approval and the heartbeat
+ * sending an approved one; the invite has its own, noInviteFor), and Board's page asks it before offering one, in the
+ * same words. Board QA round 12, Nov 23 2026: a tab left open from before the meeting asked the board "Will you be
+ * at…" and to read the agenda first after it was held
+ */
+export const HELD_NO_SEND = 'This meeting has already been held, so nothing asking the board to come or to read ahead goes out for it.';
+export const heldNoSend = (m, now = Date.now()) => (meetingHeld(m, now) ? HELD_NO_SEND : '');
 /**
  * Why no calendar invite goes out for a meeting, in words, or '' when one can: one kept off the board page as "not a
  * board meeting", or one held (an invite already out is then a record, left as it was: inviteIsRecord). The rule

@@ -225,6 +225,15 @@ export async function findGifts(env, settings, { email }, { fetchImpl = fetch } 
   return out.sort((a, b) => b.at - a.at);
 }
 
+/**
+ * The money as it is after a staff change to it (a gift credited or taken off, a page matched): Zeffy read again and the
+ * totals worked out. Only a refresh: the change is done once its write is, so a refresh that can't be made (Zeffy, or the
+ * database read after the write, not answering) answers null, never "That didn't go through" of a change that landed
+ * (Advisory Board QA round 24, the rule every Advisory Board write answers by). The page reads the money again after any
+ * change, so it shows the totals as soon as they can be read
+ */
+const moneyAfter = (env, settings, opts) => readMoney(env, settings, opts).then(() => moneyView(env, settings))
+  .catch((e) => { console.error('[advisory-money] the money after a change', e?.message || e); return null; });
 export async function creditGift(env, settings, { paymentId, slug = '', note = '' }, { by = '', now = Date.now(), fetchImpl = fetch } = {}) {
   await ensureAdvisory(env.DB);
   const id = String(paymentId || '').trim();
@@ -236,14 +245,12 @@ export async function creditGift(env, settings, { paymentId, slug = '', note = '
   // rename is moving records off it (./_member-write.js; Advisory Board QA round 21). To the group: nobody's
   if (who) await writeAsMember(env.DB, who, (me) => write(me.slug, ` FROM team t WHERE ${stillTheirs('t')}`, [me.slug, me.data]), { fits: (p) => p.group === 'advisory', gone: GONE_STAFF, moving: MOVING_STAFF });
   else await write(null);
-  await readMoney(env, settings, { fetchImpl, now });
-  return moneyView(env, settings);
+  return moneyAfter(env, settings, { fetchImpl, now });
 }
 export async function uncreditGift(env, settings, { paymentId }, { fetchImpl = fetch, now = Date.now() } = {}) {
   await ensureAdvisory(env.DB);
   await env.DB.prepare('DELETE FROM advisory_credits WHERE payment_id = ?').bind(String(paymentId || '')).run();
-  await readMoney(env, settings, { fetchImpl, now });
-  return moneyView(env, settings);
+  return moneyAfter(env, settings, { fetchImpl, now });
 }
 /** A Zeffy page matched to its advisor by a person, when its title didn't name one */
 export async function matchPage(env, settings, { campaignId, slug }, { fetchImpl = fetch, now = Date.now() } = {}) {
@@ -256,8 +263,7 @@ export async function matchPage(env, settings, { campaignId, slug }, { fetchImpl
     if (slug) pages[id] = String(slug); else delete pages[id];
     return { pages };
   }, slug ? { naming: String(slug) } : {});
-  await readMoney(env, next, { fetchImpl, now });
-  return moneyView(env, next);
+  return moneyAfter(env, next, { fetchImpl, now });
 }
 
 /** Heartbeat. → { fresh: { slug: gifts new on their page }, reachedGoal } when it read, else null. Never throws */
