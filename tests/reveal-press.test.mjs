@@ -11,7 +11,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
 import { clearTokenCache } from '../functions/api/_google-calendar.js';
 import {
-  pressRelease, syncPressRelease, parseList, cleanSettings, writePressSettings, readPressRow, keepStory, roomPhrase,
+  pressRelease, syncPressRelease, parseList, cleanSettings, writePressSettings, readPressSettings, readPressRow, keepStory, roomPhrase,
   whatOpening, whatClosing, cityOf, pressTime, familyWord, pressStatus, PRESS_DEFAULTS, storySentences, gmailLink, childOf, ageOn,
 } from '../functions/api/_reveal-press.js';
 import { parseAddresses, pressStep } from '../public/admin/reveal-press.js';
@@ -226,6 +226,18 @@ test('the AI’s sentences are kept only when they keep to the story', async () 
   assert.deepEqual(await storySentences(ai(good), KID), { story: good, by: 'ai' });
   assert.deepEqual(await storySentences(ai('Rowan, 14, loves Disney World.'), KID), { story: KID.heroSummary, by: 'page' }, 'an invented fact falls back to the page’s summary');
   assert.deepEqual(await storySentences({}, KID), { story: KID.heroSummary, by: 'page' }, 'no AI: the page’s summary');
+});
+
+test('settings that can’t be read are an error, never an empty press list', async () => {
+  await assert.rejects(readPressSettings({ prepare: () => ({ bind: () => ({ first: async () => { throw new Error('D1 is down'); } }) }) }), /D1 is down/);
+  await sync();
+  const before = only().message.id;
+  const realPrepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql) => (/FROM site_config WHERE key = \?/.test(sql) ? { bind: () => ({ first: async () => { throw new Error('D1 is down'); } }) } : realPrepare(sql));
+  await assert.rejects(sync(), /D1 is down/);
+  env.DB.prepare = realPrepare;
+  assert.equal(only().message.id, before, 'the draft and its Bcc are untouched');
+  assert.equal((draftMail().bcc.match(/@/g) || []).length, 3, 'all three still in Bcc');
 });
 
 test('the press list takes addresses as people paste them, page and server alike', () => {

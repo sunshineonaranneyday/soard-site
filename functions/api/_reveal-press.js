@@ -93,12 +93,15 @@ export function cleanSettings(input = {}, base = PRESS_DEFAULTS) {
   return out;
 }
 
+/**
+ * The saved settings over the site's own. A read that fails throws: taken for "nothing saved", it would have no
+ * press list, and an untouched draft in Gmail would be rewritten without its Bcc (seen once live, Nov 24 2026: a
+ * preview right after a save showed nobody in Bcc).
+ */
 export async function readPressSettings(DB) {
+  const row = await DB.prepare('SELECT data FROM site_config WHERE key = ?').bind(PRESS_KEY).first();
   let saved = {};
-  try {
-    const row = await DB.prepare('SELECT data FROM site_config WHERE key = ?').bind(PRESS_KEY).first();
-    saved = row ? JSON.parse(row.data) : {};
-  } catch { /* defaults */ }
+  try { saved = row ? JSON.parse(row.data) : {}; } catch { /* unreadable: the site's own */ }
   return { ...PRESS_DEFAULTS, ...saved, list: parseList(saved.list || []) };
 }
 
