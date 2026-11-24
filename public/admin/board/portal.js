@@ -4127,7 +4127,9 @@ function SignForm({ d: doc, ctx, vals = {}, mark = null, setMark = () => {}, nee
     setData((x) => ({ ...x, docs: x.docs.map((y) => (y.id === doc.id ? { ...y, declinedByMe: j.declined } : y)) }));
     setDeclining(false);
     setWhy('');
-    say(j.told === false ? 'Kept. SOARD has these words already.' : 'Sent to SOARD. They’ll answer you by email.');
+    // (what's true of the email to SOARD: it went with the press, or it's owed and goes by itself in a few minutes.
+    // Board QA round 13: "Sent to SOARD" was said of an email that never went)
+    say(j.told === false ? 'Kept. SOARD has these words already.' : j.sent === false ? 'SOARD gets it in a few minutes. They’ll answer you by email.' : 'Sent to SOARD. They’ll answer you by email.');
     requestAnimationFrame(() => document.getElementById(`${id}-declined`)?.focus({ preventScroll: true }));
   };
   // The copy they signed on paper (a PDF or a photo of it): that's their signature for the year

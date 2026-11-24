@@ -32,7 +32,7 @@
  * a meeting ahead not shared yet that they present in (only their own items), so the ask's link opens.
  */
 
-import { getMeeting, listMeetings, patchMeeting, setOnMeetingStmt, roster, attachToItem, getSettings, sendApprovedAgenda, agendaReads, agendaGoesNow, agendaClaimKey, AGENDA_CLAIM_MS, presenterGate, snapshotFor, boardCopy, SITE, NOTED_LATER } from './_board.js';
+import { getMeeting, listMeetings, patchMeeting, setOnMeetingStmt, roster, attachToItem, getSettings, sendApprovedAgenda, agendaReads, agendaGoesNow, agendaClaimKey, AGENDA_CLAIM_MS, presenterGate, snapshotFor, boardCopy, SITE, NOTED_LATER, nothingDone, landedOr, NOTHING_SENT } from './_board.js';
 import { peopleRows, boardAdmins, readState, writeState, readSettings, normEmail, isStaffEmail, readDown, PEOPLE_DOWN, stateReady } from './_board-roles.js';
 import { organizerFor } from './_board-invite.js';
 import { accessToken, GMAIL_READ_SCOPE } from './_google-calendar.js';
@@ -1123,10 +1123,11 @@ async function sendList(ctx, m, person, items) {
 /** Gmail said no (a 4xx): the email didn't go */
 const gmailRefused = (e) => /Gmail answered 4\d\d/.test(String(e?.message || ''));
 
+/** An email as a reply in an ask's conversation, after its newest message */
+const threaded = (a, mail) => ({ ...mail, subject: /^re:/i.test(a.subject) ? a.subject : `Re: ${a.subject}`, threadId: a.thread, inReplyTo: a.msgIds.at(-1) || '', references: a.msgIds.slice(0, -1).join(' ') });
 /** An email in an ask's conversation, after its newest message, as a reply to it */
 async function replyInThread(ctx, a, mail) {
-  const last = a.msgIds.at(-1) || '';
-  const sent = await send(ctx, { ...mail, subject: /^re:/i.test(a.subject) ? a.subject : `Re: ${a.subject}`, threadId: a.thread, inReplyTo: last, references: a.msgIds.slice(0, -1).join(' ') });
+  const sent = await send(ctx, threaded(a, mail));
   await setAsk(ctx.env.DB, a.id, { msgIds: [...a.msgIds, sent.messageId].filter(Boolean) });
   return sent;
 }
@@ -1291,8 +1292,17 @@ export function questionEmail({ m, it, person, asker, question, from }) {
   ]);
 }
 
-/** The chair's question on an item's report, to who presents it (board members with an email) → { questions } */
-export async function askPresenter(env, { meetingId, itemId, question }, w, { fetchImpl = fetch, now = Date.now() } = {}) {
+/**
+ * The chair's question on an item's report, to who presents it (board members with an email) → { questions }
+ * Everything it goes by is read before anything is sent or written, so the database failing there sent nothing, said so
+ * (NOTHING_SENT). Each email goes before its record (a conversation's id is Gmail's answer), and what went is written in
+ * one step after: one that couldn't be written, or a second presenter's email that didn't go, answers with who it went
+ * to (`sent`, `later`, `reread`), never "nothing was sent" over an email someone has (Board QA round 13, Nov 24 2026)
+ */
+export async function askPresenter(env, args, w, opts = {}) {
+  return asking(env, args, w, opts).catch(nothingDone(NOTHING_SENT));
+}
+async function asking(env, { meetingId, itemId, question }, w, { fetchImpl = fetch, now = Date.now() } = {}) {
   const { m, asker } = await chairGate(env, meetingId, w);
   const text = String(question || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, NOTE_MAX);
   if (!text) throw err('What’s the question?', 400);
@@ -1310,33 +1320,70 @@ export async function askPresenter(env, { meetingId, itemId, question }, w, { fe
     }
     return { questions: await questionsFor(env.DB, m.id), test: true };
   }
-  const id = uid('q_');
-  await env.DB.prepare('INSERT INTO board_ask_questions (id, meeting_id, item_id, by_slug, by_name, text, at, to_names) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(id, m.id, it.id, asker.slug, asker.name, text, nowIso(now), to.map((p) => p.name).join(' & ')).run();
-  try {
-    const asks = await asksFor(env.DB, m.id);
-    for (const person of to) {
-      const mail = questionEmail({ m, it, person, asker, question: text, from: ctx.senders.from });
-      const copy = [...(asker.email && asker.email !== ctx.senders.from.email ? [asker] : []), ...ctx.senders.cc].filter((c, i, all) => c.email !== person.email && all.findIndex((x) => x.email === c.email) === i);
-      const a = asks.find((x) => ['report', 'question'].includes(x.kind) && x.itemId === it.id && x.slug === person.slug && x.thread && !['failed', 'unknown'].includes(x.status));
-      if (a) { await replyInThread(ctx, a, { to: [person], cc: copy, ...mail }); continue; }
+  // (the conversations out to them, and the questions the meeting has: read before anything goes)
+  const [asks, had] = await Promise.all([asksFor(env.DB, m.id), questionsFor(env.DB, m.id)]);
+  const at = nowIso(now);
+  const went = [];
+  const writes = [];
+  let trouble = null;
+  for (const person of to) {
+    const mail = questionEmail({ m, it, person, asker, question: text, from: ctx.senders.from });
+    const copy = [...(asker.email && asker.email !== ctx.senders.from.email ? [asker] : []), ...ctx.senders.cc].filter((c, i, all) => c.email !== person.email && all.findIndex((x) => x.email === c.email) === i);
+    const a = asks.find((x) => ['report', 'question'].includes(x.kind) && x.itemId === it.id && x.slug === person.slug && x.thread && !['failed', 'unknown'].includes(x.status));
+    try {
+      if (a) {
+        const sent = await send(ctx, threaded(a, { to: [person], cc: copy, ...mail }));
+        went.push(person);
+        writes.push(env.DB.prepare('UPDATE board_asks SET msg_ids = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify([...a.msgIds, sent.messageId].filter(Boolean)), at, a.id));
+        continue;
+      }
       // No ask out to them (their report came another way): a conversation of its own, read the way an ask's is
       const subject = `${meetingName(m)}: a question about ${yourReport(it)}`;
       const sent = await send(ctx, { to: [person], cc: copy, subject, ...mail });
+      went.push(person);
       // Its own kind: never counted as a report asked for, and never in the way of the ask itself
-      await env.DB.prepare(`INSERT OR REPLACE INTO board_asks (id, kind, meeting_id, item_id, slug, name, email, title, subject, due, status, asked_at, thread, msg_ids, files, updated_at)
+      writes.push(env.DB.prepare(`INSERT OR REPLACE INTO board_asks (id, kind, meeting_id, item_id, slug, name, email, title, subject, due, status, asked_at, thread, msg_ids, files, updated_at)
         VALUES (?, 'question', ?, ?, ?, ?, ?, ?, ?, '', 'question', ?, ?, ?, '[]', ?)`)
-        .bind(uid('ask_'), m.id, it.id, person.slug, person.name, person.email, it.title, subject, nowIso(now), sent.threadId, JSON.stringify([sent.messageId].filter(Boolean)), nowIso(now)).run();
+        .bind(uid('ask_'), m.id, it.id, person.slug, person.name, person.email, it.title, subject, at, sent.threadId, JSON.stringify([sent.messageId].filter(Boolean)), at));
+    } catch (e) {
+      // (nobody has it yet: refused as it was, nothing kept; someone has it: kept and said below)
+      if (!went.length) throw e;
+      console.error('[board-asks] a question', e?.message || e);
+      trouble = person;
+      break;
     }
-  } catch (e) {
-    await env.DB.prepare('DELETE FROM board_ask_questions WHERE id = ?').bind(id).run();
-    throw e;
   }
-  return { questions: await questionsFor(env.DB, m.id) };
+  // What went, in one step: the question (to whom it went) with each conversation's record
+  const id = uid('q_');
+  const toNames = went.map((p) => p.name).join(' & ');
+  const q = { id, itemId: it.id, text, by: asker.name, to: toNames, at, answeredAt: '' };
+  const questions = [...had, q];
+  const missed = trouble ? ` It didn’t go to ${firstName(trouble.name)}: ask again in a moment.` : '';
+  try {
+    // (its answer lost: noted if the question is there, the conversations with it in the same batch)
+    await landedOr(() => env.DB.batch([env.DB.prepare('INSERT INTO board_ask_questions (id, meeting_id, item_id, by_slug, by_name, text, at, to_names) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, m.id, it.id, asker.slug, asker.name, text, at, toNames), ...writes]), async () => !!(await env.DB.prepare('SELECT 1 AS y FROM board_ask_questions WHERE id = ?').bind(id).first()));
+  } catch (e) {
+    console.error('[board-asks] noting a question', e?.message || e);
+    // (the note's answer lost and the look failing too: whether it's on the agenda can't be told yet, said so)
+    if (e?.extra?.unsure) return { questions: had, sent: toNames, reread: true, later: `Sent to ${toNames}. The site can’t tell yet whether it’s on the agenda: reload the page in a moment to see.${missed}` };
+    return { questions: had, sent: toNames, reread: true, later: `Sent to ${toNames}. The site couldn’t note it on the agenda just now, so their answer may not show under the report: read it in your email.${missed}` };
+  }
+  return { questions, ...(trouble ? { sent: toNames, reread: true, later: `Sent to ${toNames}.${missed}` } : {}) };
 }
 
-/** The chair approves the agenda: kept, and said in the review's conversation so the founders see it → { approvedAt, approvedBy } */
-export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, now = Date.now(), always = false } = {}) {
+/** Approve the agenda refused before its one write landed, or at it: nothing of it was done (Board's own words, round 12) */
+export const APPROVE_DOWN = 'The site couldn’t approve the agenda just now, so nothing was changed. Please try again in a moment.';
+/**
+ * The chair approves the agenda: kept, and said in the review's conversation so the founders see it → { approvedAt, approvedBy }
+ * Every read before the approval's one write; after it, nothing it does can turn the answer into a refusal (its email,
+ * its note: each said in words beside the approval). So the database failing before or at that write is APPROVE_DOWN,
+ * on the chair's review as in Board (Board QA round 13, Nov 24 2026: the review said "Something went wrong")
+ */
+export async function chairApprove(env, args, w, opts = {}) {
+  return approving(env, args, w, opts).catch(nothingDone(APPROVE_DOWN));
+}
+async function approving(env, { meetingId }, w, { fetchImpl = fetch, now = Date.now(), always = false } = {}) {
   // (a "not a board meeting" ahead can be approved in Board: approving it makes it a board meeting, below)
   const { m, asker } = await chairGate(env, meetingId, w, { notBoardOk: always && !!w?.admin });
   // On the board page already, its review is over (./board-shared.js reviewOver): the review's Approve never shares it or
@@ -1396,9 +1443,11 @@ export async function chairApprove(env, { meetingId }, w, { fetchImpl = fetch, n
       ...(goes ? [env.DB.prepare(`INSERT INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE ${ours.sql} ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at WHERE board_state.updated_at < ?`)
         .bind(agendaClaimKey(m.id), JSON.stringify({ at }), at, ...ours.bind, new Date(now - AGENDA_CLAIM_MS).toISOString())] : []),
     ];
-    const res = also.length ? await env.DB.batch([approval, ...also]) : [await approval.run()];
-    wrote = (res[0]?.meta?.changes ?? res[0]?.changes ?? 0) > 0;
-    claimed = goes && wrote && (res.at(-1)?.meta?.changes ?? res.at(-1)?.changes ?? 0) > 0;
+    // (its answer lost: written if the approval there is this one, at its time by its name; its email's claim with it)
+    const res = await landedOr(() => (also.length ? env.DB.batch([approval, ...also]) : approval.run().then((x) => [x])), async () => !!(await env.DB.prepare(`SELECT 1 AS y WHERE ${ours.sql}`).bind(...ours.bind).first()));
+    const lost = !!res?.lost;
+    wrote = lost || (res[0]?.meta?.changes ?? res[0]?.changes ?? 0) > 0;
+    claimed = goes && wrote && (lost ? !!(await env.DB.prepare('SELECT 1 AS y FROM board_state WHERE key = ? AND updated_at = ?').bind(agendaClaimKey(m.id), at).first().catch(() => null)) : (res.at(-1)?.meta?.changes ?? res.at(-1)?.changes ?? 0) > 0);
   }
   // The approval is what emails the board the agenda (./_board.js sendApprovedAgenda), or once they've had the sign-in
   // email. One that didn't go is said as that, in words (`agendaError`): never as waiting for the sign-in email
@@ -1446,14 +1495,31 @@ function agendaTrouble(e) {
   return 'The agenda is approved, but its email to the board didn’t go. Board tries again by itself in a few minutes, or press Email the board.';
 }
 
-/** The chair's own note on an item (the chair's and the admins' only); empty takes it off → { notes } */
-export async function chairNote(env, { meetingId, itemId, text }, w) {
+/**
+ * The chair's own note on an item (the chair's and the admins' only); empty takes it off → { notes }
+ * Read first (the meeting's notes too), one write, the answer from what it wrote: never a read after it, which failing
+ * would say a kept note wasn't (Board QA round 13)
+ */
+export async function chairNote(env, args, w) {
+  return noting(env, args, w).catch(nothingDone());
+}
+async function noting(env, { meetingId, itemId, text }, w) {
   const { m, asker } = await chairGate(env, meetingId, w);
   if (!m.sections.some((s) => s.items.some((x) => x.id === itemId))) throw err('That item isn’t on the agenda any more', 404);
   const words = String(text || '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, NOTE_MAX);
-  if (!words) await env.DB.prepare('DELETE FROM board_chair_notes WHERE meeting_id = ? AND item_id = ?').bind(m.id, itemId).run();
-  else await env.DB.prepare('INSERT OR REPLACE INTO board_chair_notes (meeting_id, item_id, text, by_name, at) VALUES (?, ?, ?, ?, ?)').bind(m.id, itemId, words, asker.name, nowIso()).run();
-  return { notes: await chairNotesFor(env.DB, m.id) };
+  const notes = await chairNotesFor(env.DB, m.id);
+  const at = nowIso();
+  // (its answer lost: written if the site has it so)
+  const now = () => env.DB.prepare('SELECT text, by_name, at FROM board_chair_notes WHERE meeting_id = ? AND item_id = ?').bind(m.id, itemId).first();
+  if (!words) {
+    await landedOr(() => env.DB.prepare('DELETE FROM board_chair_notes WHERE meeting_id = ? AND item_id = ?').bind(m.id, itemId).run(), async () => !(await now()));
+    delete notes[itemId];
+  } else {
+    await landedOr(() => env.DB.prepare('INSERT OR REPLACE INTO board_chair_notes (meeting_id, item_id, text, by_name, at) VALUES (?, ?, ?, ?, ?)').bind(m.id, itemId, words, asker.name, at).run(),
+      async () => { const r = await now(); return !!r && r.text === words && r.at === at; });
+    notes[itemId] = { text: words, by: asker.name || '', at };
+  }
+  return { notes };
 }
 
 async function chairNotesFor(DB, meetingId) {

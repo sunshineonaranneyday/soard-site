@@ -54,6 +54,13 @@ const when = (iso) => new Date(iso).toLocaleString('en-US', { weekday: 'long', h
   .replace(/\u202f/g, ' ').replace(/^(\w+),? (?:at )?/, 'on $1 at ');
 
 const err = (message, status) => Object.assign(new Error(message), { status });
+/**
+ * The site's own record not answering before anything went (the claim, its read, the writer's other notes): nothing was
+ * sent, said so in words (a 503), never "the connection dropped, so this page can't tell whether it went", which is only
+ * for Gmail's own answer (Board QA round 13, Nov 24 2026)
+ */
+export const NOT_READY = 'We couldn’t get your note ready just now, so nothing was sent. Please try again in a moment.';
+const notReady = (e) => { throw (e?.status ? e : Object.assign(new Error(NOT_READY), { status: 503, unread: true, cause: e })); };
 
 /**
  * Text as HTML, its web addresses as links. A sentence's last mark stays outside a link, and so does a closing bracket,
@@ -193,20 +200,23 @@ export async function emailAll(env, { me, subject, message, test = false, fetchI
 
   const key = test ? '' : await keyOf(note);
   if (!test) {
-    const c = await claim(env, key, { by: who, n: others.length, subject: note.subject, fetchImpl, now });
+    const c = await claim(env, key, { by: who, n: others.length, subject: note.subject, fetchImpl, now }).catch(notReady);
     if (c.had) return { sent: c.had.sent, already: true, at: c.had.sentAt };
     if (c.unsure) throw err(cantCheck(c.by, who), 409);
     if (!c.mine) throw err(c.by && c.by !== who ? `${c.by} is sending these same words now.` : STILL_GOING, 409);
-    const before = await earlierNote(env, key, { who, n: others.length, fetchImpl, now }).catch(async (e) => { await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run(); throw e; });
+    // (its claim let go of when this stops it: one that can't be let go of is taken over by the next press, as a claim
+    // older than two minutes is, after the Sent folder says it never went)
+    const letGo = () => env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run().catch((e) => console.error('email-all claim', e?.message || e));
+    const before = await earlierNote(env, key, { who, n: others.length, fetchImpl, now }).catch(async (e) => { await letGo(); notReady(e); });
     if (before) {
-      await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run();
+      await letGo();
       if (before.went) throw err(`Your earlier note, “${before.went}”, reached the board ${when(before.at)}. Press Send again only if this one should go too.`, 409);
       if (before.unsure) throw err('The site can’t check whether your last note went. Look in your Sent folder. If it isn’t there, press Send again.', 409);
       throw err(`Your last note, “${before.held}”, may still be going out, so this one hasn’t been sent. Give it two minutes, then press Send again.`, 409);
     }
   }
 
-  const giveBack = async () => { if (!test) await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run(); };
+  const giveBack = async () => { if (!test) await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(key).run().catch((e) => console.error('email-all claim', e?.message || e)); };
   let token;
   try {
     token = await accessToken(env, who, { fetchImpl, now, scope: GMAIL_SEND_SCOPE });

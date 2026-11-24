@@ -59,7 +59,7 @@
  * (theirs alone, simulated members) they check in and vote as themselves.
  */
 
-import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings, sayable } from './_board.js';
+import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings, errorAnswer } from './_board.js';
 import { readBoardWords } from './_board-file-words.js';
 import { isBoardAdmin } from './_board-roles.js';
 import { secretarySends } from './_board-minutes.js';
@@ -67,7 +67,7 @@ import { notesFor, saveNotes, sendNotes, notesState } from './_board-notes.js';
 import { correctionsForPage, suggestCorrection, withdrawCorrection, decideCorrection } from './_board-corrections.js';
 import { signMinutes, buildMinutesRecord, signedMinutes } from './_board-minutes-sign.js';
 import { noteGet, noteLook, noteAnswer, noteEvents, answerOf, deviceOf, accessIat } from './_board-activity.js';
-import { evidenceOf, afterSigning, buildRecord, declineDoc, tellDeclined } from './_board-sign.js';
+import { evidenceOf, afterSigning, buildRecord, declineDoc } from './_board-sign.js';
 // Where a signing request came from (its IP, device, this sign-in's start, the address Access checked): its evidence
 const evidence = (context) => evidenceOf(context, { deviceOf, accessIat });
 import { portalExtras, saveLineNote, chairApprove, chairNote, askPresenter } from './_board-asks.js';
@@ -90,8 +90,10 @@ async function who(context) {
 // After the answer when the platform allows (waitUntil), else before it (tests)
 const later = async (context, p) => { if (context.waitUntil) context.waitUntil(p); else await p; };
 // (a 503 is ours and in words: a read that decides something didn't answer, so nothing was done, and the page offers Try
-// again: a founder whose check of who runs Board failed is never told the page is for the board. Board QA round 9)
-const fromError = (err) => (err?.setup ? fail(err.message, 503) : err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? fail(err.message, err.status, err.extra || {}) : Response.json({ ok: false, error: sayable(err) }, { status: 500 }));
+// again: a founder whose check of who runs Board failed is never told the page is for the board. Board QA round 9. Each
+// press says the database not answering in its own words, a program's own error is "Something went wrong": the same
+// answer as Board's, from one place, ./_board.js errorAnswer. Board QA round 13)
+const fromError = (err) => errorAnswer(err);
 // The page's read of People that didn't answer: the sign-in's words with Try again, never a board page with an empty
 // directory or members missing their emails (Board QA round 10)
 const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));
@@ -327,13 +329,14 @@ async function post(context) {
           context.waitUntil?.(afterSigning(env, { docId: body.docId, slug: member.slug, year: signed.year }));
           return Response.json({ ok: true, ...signed });
         }
-      // Can't sign it as written: why, kept, and the admins told (they can still sign it later)
+      // Can't sign it as written: why, kept, and the admins told (they can still sign it later). Kept with the email it
+      // owes them in one write, that email sent with the press: `sent` says whether it went, or goes on the next look
+      // (./_board-sign.js declineDoc. Board QA round 13)
       case 'decline': {
         if (!ID.test(String(body.docId || ''))) return fail('Which document?');
         if (await notMe(env, body.as, member)) return fail(`This browser is signed in as ${member.name} now. Reload the page.`, 409, { who: true });
-        const d = await declineDoc(env.DB, body.docId, member, { reason: body.reason, evidence: evidence(context), year: Number.isInteger(body.year) ? body.year : null });
-        if (d.tell) context.waitUntil?.(tellDeclined(env, { doc: d.doc, member, reason: d.reason, year: d.year }).catch(() => {}));
-        return Response.json({ ok: true, declined: { at: d.at, reason: d.reason }, told: d.tell });
+        const d = await declineDoc(env, body.docId, member, { reason: body.reason, evidence: evidence(context), year: Number.isInteger(body.year) ? body.year : null });
+        return Response.json({ ok: true, declined: { at: d.at, reason: d.reason }, told: d.tell, sent: d.sent });
       }
       // A paper they sign, opened (once a year: evidence they had it in front of them)
       case 'opened':

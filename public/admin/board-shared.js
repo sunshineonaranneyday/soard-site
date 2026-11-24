@@ -408,6 +408,19 @@ export const usableEmail = (e) => /^(?!\.)(?!.*\.\.)(?!.*\.@)[^\s@<>()[\],;:"]+@
 export const VISIT_GAP_MS = 30 * 60_000;
 /** Today in Atlanta (YYYY-MM-DD) */
 export const todayEastern = (now = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now));
+/**
+ * An agenda approved already, said to whoever presses Approve, in Board and on the chair's review alike: their own other
+ * tab is "you"; someone else by name, with when ("at 4:12 PM" today, else its day too). Board QA round 12, Nov 23 2026:
+ * "Jane Doe already approved it", to Jane; round 13, Nov 24: the chair's review said "Alex already approved it." to Alex
+ */
+export function approvedAlready({ by = '', at = '', mine = false } = {}, now = Date.now()) {
+  if (mine) return 'You approved it already, maybe in another tab.';
+  const t = Date.parse(at || '');
+  if (!Number.isFinite(t)) return `${by || 'Someone'} approved it already.`;
+  const clockAt = new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' }).replace(/\s+/g, ' ');
+  const day = todayEastern(t) === todayEastern(now) ? '' : `on ${new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' })} `;
+  return `${by || 'Someone'} approved it already, ${day}at ${clockAt}.`;
+}
 
 // ─── A clean meeting ────────────────────────────────────────────────
 

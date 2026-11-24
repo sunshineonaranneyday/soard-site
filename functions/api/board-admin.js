@@ -59,11 +59,11 @@ import {
   ensureSchema, getSettings, saveSettings, listMeetings, getMeeting, saveMeeting, createMeeting, importMeeting,
   setActionDone, listDocs, saveDoc, deleteDoc, boardFileProblem, fillDocWords, docVersions, signWithCopy, unsignDoc, putFile, updateFile, deleteFile, fileRowOf, fileLocked, liveNumbers, takeSnapshot, sendPacket,
   memberStatus, roster, packetList, ID, readFileAsAgenda, sendWelcome, askToSign, approveMinutes, remindRsvp, sendMinutesNotice, patchMeeting,
-  chairLive, createPractice, getPractice, resetPractice, agendaApprovals, maybeTemplateAgendas, UNSURE_SEND, NOTED_LATER, sentWhen, sayable,
+  chairLive, createPractice, getPractice, resetPractice, agendaApprovals, maybeTemplateAgendas, UNSURE_SEND, NOTED_LATER, sentWhen, errorAnswer, nothingDone, NOTHING_SAVED,
 } from './_board.js';
-import { chairApprove } from './_board-asks.js';
+import { chairApprove, APPROVE_DOWN } from './_board-asks.js';
 import { isBoardAdmin, isStaffEmail, readState, asSend, readDown, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
-import { oweNotice, noticeName } from './_board-notices.js';
+import { sendNotice, noticeName } from './_board-notices.js';
 import { accessStatus, syncBoardAccess, accessConfigured } from './_board-access.js';
 import { groupStatus, syncBoardGroup } from './_board-group.js';
 import { emailAll } from './_board-email-all.js';
@@ -109,8 +109,9 @@ const docOptions = (body, me) => ({
   fromFile: body.fromFile === true, wordsFrom: String(body.wordsFrom || '').slice(0, 200),
 });
 const fail = (error, status = 400, extra = {}) => Response.json({ ok: false, error, ...extra }, { status });
-// (a 503 is ours and in words: a read that decides something didn't answer, so nothing was done. Board QA round 9)
-const fromError = (err) => (err?.setup ? fail(err.message, 503) : err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? fail(err.message, err.status, { ...(err.current ? { current: err.current } : {}), ...(err.extra || {}) }) : Response.json({ ok: false, error: sayable(err) }, { status: 500 }));
+// (a 503 is ours and in words: a read that decides something didn't answer, so nothing was done. Board QA round 9. The
+// same answer as the board page's, from one place: ./_board.js errorAnswer. Board QA round 13)
+const fromError = (err) => errorAnswer(err, { current: true });
 // A page's read of People that didn't answer: the sign-in's words with Try again on the page, never Board with nobody on it
 // (Board QA round 10: Members empty, "has no email" on every to-do)
 const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));
@@ -127,7 +128,7 @@ const readAfter = (read, later) => read.then((v) => ({ v }), (err) => {
 });
 const SHOWS_SOON = 'This page shows it in a moment.';
 /** A step on a meeting's files that didn't land: nothing of it was done (round 11's words) */
-const NOTHING_CHANGED = 'We couldn’t save that just now, so nothing was changed. Please try again in a moment.';
+const NOTHING_CHANGED = NOTHING_SAVED;
 /**
  * A refusal on one of a meeting's files, with the meeting as the site has it (its approval, its files) for the page to
  * take, so what it offers then is only what's allowed; a read of it that fails leaves it to the page's next look
@@ -203,7 +204,6 @@ async function once(context, id, send) {
  */
 const WELCOME_UNREAD = 'We couldn’t check who has had the sign-in email just now. Please try again in a moment.';
 const SEND_DOWN = 'The site couldn’t get this email ready just now, so nothing was sent. Please try again in a moment.';
-const APPROVE_DOWN = 'The site couldn’t approve the agenda just now, so nothing was changed. Please try again in a moment.';
 const INVITE_DOWN = 'The site couldn’t get the invite ready just now, so nothing was sent. Please try again in a moment.';
 const sendRefusal = (err) => {
   const e = asSend(err);
@@ -343,13 +343,12 @@ export async function onRequestPost(context) {
         const docId = String(form.get('signFor'));
         if (!ID.test(docId)) return fail('Which document?');
         const original = form.get('original');
-        const signed = await signWithCopy(env, docId, form.get('file'), { slug: String(form.get('slug') || ''), by: me, replace: form.get('replace') === '1', evidence: evidence(context), original: original && typeof original.arrayBuffer === 'function' ? original : null });
+        // (one they gave themselves, replaced by a copy SOARD added: they're told, as a signature taken off is. Its notice
+        // written down as due in the copy's own write, so a send that doesn't go is sent by the signing look, and the
+        // signature is never kept without it: ./_board-notices.js, Board QA round 13)
+        const signed = await signWithCopy(env, docId, form.get('file'), { slug: String(form.get('slug') || ''), by: me, replace: form.get('replace') === '1', evidence: evidence(context), original: original && typeof original.arrayBuffer === 'function' ? original : null, tell: true });
         await audit(env, me, 'updated', `Board signature added for ${signed.name}`);
-        // (one they gave themselves, replaced by a copy SOARD added: they're told, as a signature taken off is. Written
-        // down as due first, so a send that doesn't go is sent by the signing look: ./_board-notices.js)
-        const owed = signed.replaced?.email
-          ? await oweNotice(env, `void:${docId}:${signed.replaced.slug}:${signed.year}:${signed.replaced.at}`, { kind: 'void', docId, slug: signed.replaced.slug, year: signed.year, at: signed.replaced.at, to: signed.replaced.email, replacedByCopy: true, reason: 'SOARD put a signed copy it was given in its place', by: me }, { waitUntil: (p) => context.waitUntil?.(p), who: noticeName(signed.name) })
-          : {};
+        const owed = signed.owed ? await sendNotice(env, signed.owed, { waitUntil: (p) => context.waitUntil?.(p), who: noticeName(signed.name) }).catch((e) => { console.error('[board-admin] the notice', e?.message || e); return { later: 'The email to them goes by itself in a few minutes.' }; }) : {};
         return Response.json({ ok: true, signed, doc: (await listDocs(env.DB)).find((d) => d.id === docId), ...(owed.later ? { later: owed.later } : {}) });
       }
       // A paper saved with its new file, in one: the file checked first, so nothing changes (no new version, nobody
@@ -414,7 +413,9 @@ export async function onRequestPost(context) {
         // (a person's save, with its base or without one: the same rules either way, never a new meeting. A copy saved
         // meanwhile is told to merge first; then what it changes is judged: only an approved agenda goes on the board
         // page, and minutes are marked approved only when there are some, each refused by name: _board.js saveMeeting)
-        const m = await saveMeeting(env.DB, mine, { by: me, base, edit: true });
+        // (read first, then one write over the meeting as read: the database failing changed nothing, said so in words, a
+        // 503 the page goes on trying after, never "Reload the page" with a change not saved. Board QA round 13)
+        const m = await saveMeeting(env.DB, mine, { by: me, base, edit: true }).catch(nothingDone());
         // Typed minutes corrected here: the Word file kept with them says the same, in a step of its own (never in the way
         // of the save). One that doesn't go leaves the file as it was, whole, and the next send, correction or approval
         // brings it up (approving never takes a file behind the minutes: ./_board-notes.js freshMinutesFile)
@@ -494,16 +495,14 @@ export async function onRequestPost(context) {
         const docId = String(body.docId || '');
         if (!ID.test(docId)) return fail('Which document?');
         const reason = String(body.reason || '').slice(0, 500);
-        const off = await unsignDoc(env, docId, String(body.slug || ''), undefined, { by: me, evidence: evidence(context), reason });
+        // A signature they gave themselves (typed, drawn, their own copy) taken off: they're told (a copy filed under
+        // the wrong member isn't theirs to hear about). Its notice written down as due in the same write as taking it
+        // off (./_board.js unsignDoc), so a read that fails or a send that doesn't go is sent by the signing look, and
+        // they're said to be told later, never told now (Board QA rounds 10 and 13: ./_board-notices.js)
+        const off = await unsignDoc(env, docId, String(body.slug || ''), undefined, { by: me, evidence: evidence(context), reason, tell: true });
         if (!off) return fail('That signature is gone', 404);
         await audit(env, me, 'deleted', 'Board signature taken off');
-        // A signature they gave themselves (typed, drawn, their own copy) taken off: they're told (a copy filed under
-        // the wrong member isn't theirs to hear about). Written down as due before People is read, so a read that fails
-        // or a send that doesn't go is sent by the signing look, and they're said to be told later, never told now
-        // (Board QA round 10: ./_board-notices.js)
-        const owed = ['typed', 'drawn', 'copy'].includes(off.row.how)
-          ? await oweNotice(env, `void:${docId}:${off.row.slug}:${off.row.year}:${off.row.at}`, { kind: 'void', docId, slug: off.row.slug, year: off.row.year, at: off.row.at, reason, by: me }, { waitUntil: (p) => context.waitUntil?.(p), who: noticeName(off.row.name) })
-          : {};
+        const owed = off.owed ? await sendNotice(env, off.owed, { waitUntil: (p) => context.waitUntil?.(p), who: noticeName(off.row.name) }).catch((e) => { console.error('[board-admin] the notice', e?.message || e); return { later: 'The email to them goes by itself in a few minutes.' }; }) : {};
         return Response.json({ ok: true, doc: (await listDocs(env.DB)).find((d) => d.id === docId), ...(owed.later ? { later: owed.later } : {}) });
       }
       case 'update-file': {
@@ -648,9 +647,12 @@ export async function onRequestPost(context) {
           context.waitUntil?.(going.catch(() => {}));
           r = await going;
         } catch (err) {
+          // (said in words: Gmail's own answer that can't be told is ./_board-email-all.js's 503, "may have gone"; the
+          // database failing before anything went is "so nothing was sent"; a program's own error, Something went wrong.
+          // Never "the connection dropped" for a send that never began. Board QA round 13)
           if (err.status) return Response.json({ ok: false, error: err.message }, { status: err.status });
           console.error('email-all', err);
-          return Response.json({ ok: false, unknown: true }, { status: 500 });
+          return fromError(err);
         }
         if (!r.test && !r.already) await audit(env, me, 'updated', `Board emailed (${r.sent}): ${String(body.subject).replace(/\s+/g, ' ').trim().slice(0, 120)}`);
         return Response.json({ ok: true, ...r });

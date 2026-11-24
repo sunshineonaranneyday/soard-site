@@ -307,7 +307,10 @@ function useAutosave({ pending, contents = null, check = null, send, took, where
           // went. Each new kind of failure is said, not only the first (QA round 5, Nov 21 2026: a refusal, then no
           // connection, said only the refusal)
           const lost = !!(j.offline || j.unknown || j.status >= 500);
-          const said = notSavedWhy(j);
+          // (the site failing, whatever its words, is said as that: never "Reload the page" while a change isn't saved,
+          // round 5's rule, since Board goes on trying by itself. Board QA round 13: "Not saved: Something went wrong …
+          // Reload the page to see what was saved … Board keeps trying.")
+          const said = lost && !j.offline && !j.unknown ? 'we couldn’t save that just now' : notSavedWhy(j);
           const told = ownSays(j);
           const kind = failKind(j);
           if (!lost) { k.held = sent; k.why = whyOf(said); }
