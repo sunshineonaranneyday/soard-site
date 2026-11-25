@@ -406,7 +406,7 @@ test('the first job’s check: the job and its customer as JobTread has them, an
     ] } },
   });
   const c = await readFirstCheck('g', { jobId: 'J1', at: '2026-11-25T18:00:00Z' }, fetchImpl);
-  assert.deepEqual(c.job, { id: 'J1', name: 'Mathew (2012)', number: '1201', closedOn: '2012-07-14', status: 'Closed Done', address: null });
+  assert.deepEqual(c.job, { id: 'J1', name: 'Mathew (2012)', number: '1201', closedOn: '2012-07-14', status: 'Closed Done', address: null, newestFiles: [] });
   assert.deepEqual(c.customer, { id: 'A1', name: 'Mathew (2012)', contacts: 0 });
   assert.deepEqual(c.runs.map((r) => r.workflow), ['t.customerCreated {Create Comment}']);
   assert.match((await readFirstCheck('g', { jobId: 'J1', at: '2026-11-25T18:00:00Z' }, async () => new Response('no', { status: 400 }))).error, /400/);
