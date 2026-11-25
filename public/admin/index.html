@@ -11604,7 +11604,7 @@
       return r;
     };
     const PJ_GROUPS = [
-      ['ask', 'Needs a person', 'More than one JobTread customer fits, or the job’s name would fit another page too. Pick the customer, or a new one.'],
+      ['ask', 'Needs a person', 'JobTread may already have its job under another name or year, or more than one customer fits. Say which.'],
       ['failed', 'Couldn’t be made', 'JobTread refused three times. The reason is on each row.'],
       ['queued', 'Being made', 'The site makes a few every two minutes.'],
       ['ready', 'Ready to make', 'Each gets a closed job, Status Closed Done, closed on its reveal date.'],
@@ -11629,11 +11629,14 @@
         </div>
         ${r.close_on && r.close_how && r.close_on !== r.draft_date ? html`<div class="kd-fold__hint">${r.close_how}.</div>` : null}`}
         ${r.state === 'ask' ? html`<div class="kd-fold__hint">${r.plan_note}</div>
-          <div class="kd-fold__form">
+          ${(r.candidates || []).some((c) => c.kind === 'job') ? html`<div class="kd-fold__form">
+            ${r.candidates.filter((c) => c.kind === 'job').map((c) => html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, jobId: c.id })}>Its job is ${c.name}</button>`)}
+            <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, job: 'none' })}>It has no job: make one</button>
+          </div>` : html`<div class="kd-fold__form">
             ${(r.candidates || []).map((c) => html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, accountId: c.id })}>${c.name}</button>`)}
             <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, account: 'new' })}>A new customer</button>
-          </div>` : null}
-        ${r.answer && r.state !== 'made' ? html`<div class="kd-fold__done"><span>${r.answered_by ? kdFoldWho(r.answered_by) : 'Someone'} picked ${r.answer.account === 'new' ? 'a new customer' : 'this customer'}.</span>
+          </div>`}` : null}
+        ${r.answer && r.state !== 'made' ? html`<div class="kd-fold__done"><span>${r.answered_by ? kdFoldWho(r.answered_by) : 'Someone'} ${r.answer.jobId ? 'said JobTread already has its job' : r.answer.job === 'none' ? 'said it has no job yet' : `picked ${r.answer.account === 'new' ? 'a new customer' : 'this customer'}`}.</span>
           <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, clear: true })}>Change</button></div>` : null}
         ${r.error && r.state !== 'made' ? html`<div class="kd-fold__err">${r.error}</div>` : null}
       </li>`;

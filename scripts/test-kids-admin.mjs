@@ -119,9 +119,10 @@ function makeApi() {
       if (b.action === 'plan') { pj.planned = { at: new Date().toISOString() }; return json({ success: true, rows: pj.rows }); }
       if (b.action === 'answer') {
         const r = pj.rows.find((x) => x.key === b.key);
-        r.answer = b.clear ? null : b.account === 'new' ? { account: 'new' } : { accountId: b.accountId };
+        r.answer = b.clear ? null : b.account === 'new' ? { account: 'new' } : b.jobId ? { jobId: b.jobId } : b.job === 'none' ? { job: 'none' } : { accountId: b.accountId };
         r.answered_by = 'peter@soardcharity.com';
-        if (!b.clear) Object.assign(r, { state: 'ready', plan: 'make', plan_account_name: b.account === 'new' ? `${r.name} (${r.year})` : r.candidates.find((c) => c.id === b.accountId).name, plan_account_id: b.accountId || null });
+        if (b.jobId) Object.assign(r, { state: 'has-job', plan: 'has-job', plan_note: 'a person said JobTread already has its job' });
+        else if (!b.clear) Object.assign(r, { state: 'ready', plan: 'make', plan_account_name: b.account === 'new' || b.job === 'none' ? `${r.name} (${r.year})` : r.candidates.find((c) => c.id === b.accountId).name, plan_account_id: b.accountId || null });
         return json({ success: true });
       }
       if (b.action === 'first') {
@@ -568,17 +569,24 @@ try {
     { key: 'max', kind: 'kid', slug: 'max', name: 'Max', year: 2019, state: 'ask', plan: 'ask', job_name: 'Max (2019)', close_on: '2019-06-01', plan_note: '2 customers fit: Max Hill, Max Ray', candidates: [{ id: '22PMAXHILL01', name: 'Max Hill' }, { id: '22PMAXRAY001', name: 'Max Ray' }] },
     { key: 'community/camp-twin-lakes', kind: 'community', slug: 'camp-twin-lakes', name: 'Camp Twin Lakes', year: 2018, state: 'ready', plan: 'make', job_name: 'Camp Twin Lakes (2018)', close_on: '2018-05-19', draft_date: '2018-05-19', plan_account_name: 'Camp Twin Lakes', plan_account_id: '22PCAMPTL001' },
     { key: 'ava', kind: 'kid', slug: 'ava', name: 'Ava', year: 2026, state: 'has-job', plan: 'has-job', plan_note: 'already has “Ava Lee (2026)”' },
+    { key: 'emery', kind: 'kid', slug: 'emery', name: 'Emery', year: 2025, state: 'ask', plan: 'ask', job_name: 'Emery (2025)', close_on: '2025-02-06', plan_note: 'JobTread may already have its job: “Emery Smith (2024)”', candidates: [{ id: '22PEMERYJOB1', name: 'Emery Smith (2024)', kind: 'job' }] },
   ];
   for (const [label, width, height, mobile] of [['Desktop 1440', 1440, 1000, false], ['Phone 390', 390, 844, true]]) {
     console.log(`${label}: Past makeovers in JobTread`);
     const { page, api, errors } = await open(browser, { width, height, mobile, prep: (s) => { s.pastJobs = { rows: pastRows(), planned: { at: new Date().toISOString() }, first: null }; } });
     await goKids(page, mobile);
     const banner = await page.$eval('.pj-banner', (e) => e.textContent.replace(/\s+/g, ' ')).catch(() => '');
-    ok(/Past makeovers in JobTread/.test(banner) && /4 past projects have no JobTread job yet/.test(banner), `${label}: the banner counts what has no job yet (${banner.slice(0, 90)})`);
+    ok(/Past makeovers in JobTread/.test(banner) && /5 past projects have no JobTread job yet/.test(banner), `${label}: the banner counts what has no job yet (${banner.slice(0, 90)})`);
     await clickText(page, '.pj-banner button', 'Open');
     await page.waitForSelector('.pj-group', { timeout: 5000 });
     const groups = await page.$$eval('.pj-group h3', (hs) => hs.map((h) => h.textContent.replace(/\s+/g, ' ').trim()));
-    ok(JSON.stringify(groups) === JSON.stringify(['Needs a person 1', 'Ready to make 3', 'Already in JobTread 1']), `${label}: questions first, then ready, then already in JobTread (${groups.join(' | ')})`);
+    ok(JSON.stringify(groups) === JSON.stringify(['Needs a person 2', 'Ready to make 3', 'Already in JobTread 1']), `${label}: questions first, then ready, then already in JobTread (${groups.join(' | ')})`);
+    // A job JobTread may already have: say it's its job, and it joins Already in JobTread
+    ok(await clickText(page, '.pj-row .btn', 'Its job is Emery Smith (2024)'), `${label}: a likely job is offered as its job`);
+    await sleep(400);
+    const said = api.st.calls.filter((c) => c.path === '/api/past-jobs-admin' && c.body?.action === 'answer').at(-1)?.body;
+    ok(said?.key === 'emery' && said?.jobId === '22PEMERYJOB1', `${label}: saying it's its job sends that job`);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.pj-group h3')].map((h) => h.textContent).join('|').includes('Already in JobTread 2')), `${label}: then it's already in JobTread`);
     ok(await page.evaluate(() => [...document.querySelectorAll('.pj-row')].some((l) => /closed Dec 31, 2021/.test(l.textContent) && /the reviewed date, 2016-06-04, isn’t in 2021/.test(l.textContent))), `${label}: a date moved to Dec 31 says why`);
     ok(await page.evaluate(() => /Comms Thread on new families/.test(document.querySelector('.pj-checks').textContent)), `${label}: JobTread’s workflows that are on are listed before anything is made`);
     const makeRest = () => page.evaluate(() => [...document.querySelectorAll('.kd-dialog__foot .btn')].map((b) => b.textContent.trim()));
@@ -599,7 +607,7 @@ try {
     await sleep(500);
     ok(await page.evaluate(() => [...document.querySelectorAll('.pj-group h3')].some((h) => /^Being made 3/.test(h.textContent.trim()))), `${label}: the rest are being made`);
     ok(!(await makeRest()).some((t) => /^Make the rest/.test(t)), `${label}: with nothing left ready, no Make the rest button`);
-    ok(await page.evaluate(() => /3 being made, 1 made, 1 already in JobTread\.$/.test(document.querySelector('.kd-dialog__sub').textContent.trim())), `${label}: the counts under the title say what’s happening`);
+    ok(await page.evaluate(() => /3 being made, 1 made, 2 already in JobTread\.$/.test(document.querySelector('.kd-dialog__sub').textContent.trim())), `${label}: the counts under the title say what’s happening`);
     const wide = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
     ok(wide <= 0, `${label}: nothing wider than the screen (${wide}px over)`);
     await shot(page, `${mobile ? 'phone' : 'desktop'}-past-jobs`, { grow: false });

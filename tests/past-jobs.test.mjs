@@ -333,3 +333,34 @@ test('a long organization name cut to 30 characters: its page is linked to the n
   // Ruby's name names her page alone: no link written
   assert.equal(JSON.parse((await env.DB.prepare("SELECT data FROM kids WHERE slug = 'ruby'").first()).data).jobtreadJobId, undefined);
 });
+
+test('a job no page claims that may be this page’s (another year, another name) makes it a question first', async () => {
+  const { looseJobs } = await import('../functions/api/_past-jobs.js');
+  const records = [kid('emery', 'Emery', 2025), kid('marie-and-alondra', 'Marie & Alondra', 2024), kid('adam', 'Adam', 2024), kid('max', 'Max', 2026)];
+  const jobs = [
+    { id: 'jEmery', name: 'Emery Smith (2024)', createdAt: '2024-09-01T12:00:00Z', closedOn: '2025-02-10', location: { account: { name: 'Emery Smith' } } },
+    { id: 'jMarie', name: 'Marie Surprenant (2024)', createdAt: '2024-05-01T12:00:00Z', closedOn: '2024-12-01', location: { account: { name: 'Marie Surprenant' } } },
+    { id: 'jMax', name: 'Max Daniel (2026)', createdAt: '2026-02-01T12:00:00Z', closedOn: null, location: { account: { name: 'Max Daniel' } } },
+    { id: 'jTest', name: 'TEST Adam (2024)', createdAt: '2024-02-01T12:00:00Z', closedOn: null, location: { account: { name: 'TEST Adam' } } },
+  ];
+  const links = linkJobs(jobs, records);
+  assert.equal(links.get('max')?.id, 'jMax');
+  const loose = looseJobs(jobs, links, records);
+  assert.deepEqual(loose.get('emery')?.map((j) => j.id), ['jEmery'], 'named for the year before the page’s');
+  assert.deepEqual(loose.get('marie-and-alondra')?.map((j) => j.id), ['jMarie'], 'named for one of the two children');
+  assert.equal(loose.has('adam'), false, 'an office test job never counts');
+  assert.equal(loose.has('max'), false, 'a job already linked by name is not loose');
+  const row = { key: 'emery', kind: 'kid', slug: 'emery', name: 'Emery', year: 2025, draft_date: '2025-02-06' };
+  const w = { accounts: [], links, records, loose };
+  const ask = planRow(row, w);
+  assert.deepEqual([ask.plan, ask.candidates.map((c) => [c.id, c.kind])], ['ask', [['jEmery', 'job']]]);
+  assert.match(ask.note, /may already have its job: “Emery Smith \(2024\)”/);
+  assert.deepEqual([planRow(row, { ...w, answer: { jobId: 'jEmery' } }).plan], ['has-job'], 'a person says it is its job');
+  const make = planRow(row, { ...w, answer: { job: 'none' } });
+  assert.deepEqual([make.plan, make.accountName], ['make', 'Emery (2025)'], 'or that it has none: made as usual');
+  const env = await siteWith({ kids: [kid('emery', 'Emery', 2025)] });
+  await importRows(env.DB, checkImport({ rows: [{ kind: 'kid', slug: 'emery', name: 'Emery', year: 2025, date: '2025-02-06' }] }).rows);
+  assert.equal((await answerRow(env.DB, { key: 'emery', jobId: 'jEmery00' })).ok, true);
+  assert.equal((await answerRow(env.DB, { key: 'emery', job: 'none' })).ok, true);
+  assert.equal((await answerRow(env.DB, { key: 'emery', job: 'maybe' })).ok, false);
+});
