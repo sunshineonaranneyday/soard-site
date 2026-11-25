@@ -21,6 +21,7 @@ src/content/community_partners/
 # Upcoming reveals for build-time pages, written by prebuild from D1 (scripts/d1-helpers.js)
 src/data/upcoming-reveals.json
 src/data/theater-kids.json
+src/data/kid-reveal-days.json
 
 # Financial PDFs are stored in R2
 public/financials/*.pdf

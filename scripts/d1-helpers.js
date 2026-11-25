@@ -10,8 +10,8 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { COLLECTION_MAP, isSiteDocKey, withoutScriptLinks } from '../functions/api/_collections.js';
 import { SETTINGS_DEFAULTS } from './settings-defaults.js';
-import { stillAhead, todayEastern, carryPast } from '../functions/api/_reveals.js';
-import { pastRevealKids } from '../functions/live/_past-reveal-rule.js';
+import { stillAhead, todayEastern, carryPast, easternParts } from '../functions/api/_reveals.js';
+import { pastRevealKids, isPastReveal } from '../functions/live/_past-reveal-rule.js';
 
 export const __dirname = fileURLToPath(new URL('.', import.meta.url));
 export const ROOT = join(__dirname, '..');
@@ -266,6 +266,46 @@ export function writeTheaterKids(rows) {
   if (existsSync(THEATER_FILE) && readFileSync(THEATER_FILE, 'utf8') === json) return;
   ensureDir(join(ROOT, 'src', 'data'));
   writeFileSync(THEATER_FILE, json);
+}
+
+// ── The day each finished room was revealed ────────────────────────
+// Meet the Kids lists every kid in reveal order, the newest first in each year (src/utils/kid-order.ts; Peter,
+// Nov 25 2026: "all kids by reveal date"). Kid pages carry only a year, so the build gathers the days, the surest
+// word winning: the day our own stream showed the reveal live (a past reveal by the live page's rule), else
+// JobTread's confirmed Reveal Date (the reveals copy, the last few months), else the reviewed date on the past-jobs
+// list (functions/api/_past-jobs.js: the day most of the reveal photos were taken), else the day on the job's
+// Reveal task (the kid status sweep keeps those, functions/api/_kid-status.js: a plan, not always moved when the
+// day did; Amari's says Feb 16 2026, the photos Dec 22 2025).
+export const REVEAL_DAYS_FILE = join(ROOT, 'src', 'data', 'kid-reveal-days.json');
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * { slug: 'YYYY-MM-DD' } from the Reveal task days ({ slug: day }), the past-jobs rows ({ slug, draft_date }),
+ * site_config rows (the reveals copy) and broadcasts rows
+ */
+export function revealDays({ pastJobs = [], taskDays = {}, siteRows = [], broadcasts = [], now = Date.now() } = {}) {
+  const days = new Map();
+  const put = (slug, day) => { if (typeof slug === 'string' && slug && DAY.test(String(day || ''))) days.set(slug, day); };
+  for (const [slug, day] of Object.entries(taskDays && typeof taskDays === 'object' ? taskDays : {})) put(slug, day);
+  for (const r of pastJobs || []) put(r?.slug, r?.draft_date);
+  const row = (siteRows || []).find((r) => r.key === 'reveals');
+  const copy = row ? safeParse(row.data) : null;
+  // Newest first in the copy: oldest put first, so a kid's latest reveal is the one kept
+  if (copy) for (const r of [...carryPast(copy, todayEastern(now))].reverse()) put(r.slug, r.date);
+  const shown = (broadcasts || []).filter(isPastReveal).sort((a, b) => String(a.ended_at).localeCompare(String(b.ended_at)));
+  for (const r of shown) put(r.kid_slug, easternParts(r.live_at || r.scheduled_at || r.ended_at)?.date);
+  return Object.fromEntries([...days].sort(([a], [b]) => a.localeCompare(b)));
+}
+
+/** Writes src/data/kid-reveal-days.json (left alone when unchanged) → how many kids have a day */
+export function writeRevealDays(input) {
+  const days = revealDays(input);
+  const json = JSON.stringify({ days }, null, 2) + '\n';
+  // Unchanged: leave the file alone (no rebuild in dev)
+  if (existsSync(REVEAL_DAYS_FILE) && readFileSync(REVEAL_DAYS_FILE, 'utf8') === json) return Object.keys(days).length;
+  ensureDir(join(ROOT, 'src', 'data'));
+  writeFileSync(REVEAL_DAYS_FILE, json);
+  return Object.keys(days).length;
 }
 
 // ── Upcoming reveals for build-time pages ──────────────────────────

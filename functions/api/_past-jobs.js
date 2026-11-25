@@ -316,6 +316,8 @@ export async function readFirstCheck(grant, first, fetchImpl = fetch) {
     const body = await pave(grant, {
       job: { $: { id: first.jobId }, id: {}, name: {}, number: {}, closedOn: {}, createdAt: {},
         customFieldValues: { $: { size: 1, where: [['customField', 'id'], '=', JOB_FIELD_STATUS] }, nodes: { value: {} } },
+        // Its newest files: the past photos as JobTread holds them (name, size, type, tag)
+        files: { $: { size: 6, sortBy: [{ field: 'createdAt', order: 'desc' }] }, nodes: { name: {}, size: {}, type: {}, fileTags: { $: { size: 3 }, nodes: { name: {} } } } },
         location: { id: {}, address: {}, account: { id: {}, name: {}, contacts: { $: { size: 5 }, nodes: { id: {} } } } } },
       organization: { $: { id: SOARD_ORG_ID }, workflowRuns: { $: { size: 50, sortBy: [{ field: 'createdAt', order: 'desc' }] },
         nodes: { createdAt: {}, status: {}, workflow: { id: {}, name: {} } } } },
@@ -325,7 +327,8 @@ export async function readFirstCheck(grant, first, fetchImpl = fetch) {
     const runs = (body?.organization?.workflowRuns?.nodes || []).filter((r) => Date.parse(r.createdAt) >= since)
       .map((r) => ({ at: r.createdAt, status: r.status, workflow: r.workflow?.name || '' }));
     return {
-      job: j ? { id: j.id, name: j.name, number: j.number || null, closedOn: j.closedOn, status: j.customFieldValues?.nodes?.[0]?.value || null, address: j.location?.address || null } : null,
+      job: j ? { id: j.id, name: j.name, number: j.number || null, closedOn: j.closedOn, status: j.customFieldValues?.nodes?.[0]?.value || null, address: j.location?.address || null,
+        newestFiles: (j.files?.nodes || []).map((f) => ({ name: f.name, size: f.size ?? null, type: f.type || null, tags: (f.fileTags?.nodes || []).map((t) => t.name) })) } : null,
       customer: j?.location?.account ? { id: j.location.account.id, name: j.location.account.name, contacts: (j.location.account.contacts?.nodes || []).length } : null,
       runs,
     };

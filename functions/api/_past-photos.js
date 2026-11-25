@@ -48,6 +48,8 @@ const MAX_BYTES = 100 * 1024 * 1024;                           // JobTread's lim
 const LINK_TTL_MS = 6 * 60 * 60 * 1000;
 const TURN_MS = 60 * 1000;
 const COPY_MS = 18 * 1000;                                     // inside the heartbeat's 28 seconds
+const AT_ONCE = 3;                                             // photos copied side by side
+const KEEP_AHEAD = 60;                                         // photos waiting before the next folder is read
 const SITE = 'https://sunshineonaranneyday.com';
 const iso = (t = Date.now()) => new Date(t).toISOString();
 const enc = new TextEncoder();
@@ -248,11 +250,10 @@ export async function copySome(env, { scope, fetchImpl = fetch, now = Date.now()
       AND (p.claimed_at IS NULL OR p.claimed_at < ?) ORDER BY j.close_on, p.key, p.path, p.name LIMIT 40`)
     .bind(...(scope?.key ? [scope.key] : []), iso(now - 10 * 60 * 1000)).all();
   const out = { copied: 0, failed: 0 };
-  for (const p of results || []) {
-    if (Date.now() > until) break;
+  const one = async (p) => {
     const claim = await DB.prepare("UPDATE past_photos SET claimed_at = ? WHERE drive_id = ? AND state = 'listed' AND (claimed_at IS NULL OR claimed_at < ?)")
       .bind(iso(now), p.drive_id, iso(now - 10 * 60 * 1000)).run();
-    if (!claim?.meta?.changes) continue;
+    if (!claim?.meta?.changes) return;
     try {
       const id = await copyOne(env, p, { tags, fetchImpl, now });
       await DB.prepare("UPDATE past_photos SET state = 'copied', jt_file_id = ?, copied_at = ?, error = NULL, claimed_at = NULL WHERE drive_id = ?").bind(id, iso(Date.now()), p.drive_id).run();
@@ -263,7 +264,10 @@ export async function copySome(env, { scope, fetchImpl = fetch, now = Date.now()
         .bind(attempts, String(e.message || e).slice(0, 300), attempts >= 3 ? 'failed' : 'listed', p.drive_id).run();
       out.failed++;
     }
-  }
+  };
+  // A few at once (JobTread fetches each from the link while its call waits, about 2 seconds a photo), never past the time
+  const list = results || [];
+  for (let i = 0; i < list.length && Date.now() <= until; i += AT_ONCE) await Promise.all(list.slice(i, i + AT_ONCE).map(one));
   return out;
 }
 
@@ -286,8 +290,10 @@ export async function maybeRunPastPhotos(env, { fetchImpl = fetch, now = Date.no
       if (!upd?.meta?.changes) return null;
     }
     const scope = on.scope === 'first' ? { key: on.key } : null;
-    const listed = await listNext(env, { scope, fetchImpl, now });
-    const copied = listed ? { copied: 0, failed: 0 } : await copySome(env, { scope, fetchImpl, now, until: Math.min(deadline - 2000, Date.now() + COPY_MS) });
+    // The next folder is read while few photos wait, so copying never stops for reading and reading keeps ahead
+    const waiting = await DB.prepare(`SELECT count(*) AS n FROM past_photos WHERE state = 'listed'${scope ? ' AND key = ?' : ''}`).bind(...(scope ? [scope.key] : [])).first();
+    const listed = (waiting?.n || 0) < KEEP_AHEAD ? await listNext(env, { scope, fetchImpl, now }) : null;
+    const copied = await copySome(env, { scope, fetchImpl, now, until: Math.min(deadline - 2000, Date.now() + COPY_MS) });
     const run = { at: iso(now), listed: listed ? `${listed.key}: ${listed.photos}` : null, ...copied };
     await setState(DB, 'lastRun', run);
     return run;
@@ -326,8 +332,10 @@ export async function photosStatus(DB) {
   const listed = await DB.prepare("SELECT count(*) AS n FROM past_jobs WHERE photos_listed_at IS NOT NULL").first();
   const toList = await DB.prepare("SELECT count(*) AS n FROM past_jobs WHERE state = 'made' AND folder IS NOT NULL AND folder <> '' AND photos_listed_at IS NULL").first();
   const failed = (await DB.prepare("SELECT key, name, error FROM past_photos WHERE state = 'failed' ORDER BY key LIMIT 5").all()).results || [];
+  // The newest copied, with the stage each was given (to set beside JobTread's own view of the same files)
+  const newest = (await DB.prepare("SELECT key, name, stage, stage_how, copied_at FROM past_photos WHERE state = 'copied' ORDER BY copied_at DESC LIMIT 6").all()).results || [];
   const [on, lastRun, lastError] = await Promise.all([getState(DB, 'on'), getState(DB, 'lastRun'), getState(DB, 'lastError')]);
-  return { by, stages, jobsListed: listed?.n || 0, jobsToList: toList?.n || 0, failed, on, lastRun, lastError, today: todayEastern() };
+  return { by, stages, jobsListed: listed?.n || 0, jobsToList: toList?.n || 0, failed, newest, on, lastRun, lastError, today: todayEastern() };
 }
 
 /**
