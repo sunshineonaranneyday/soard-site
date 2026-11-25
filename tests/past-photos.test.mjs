@@ -127,32 +127,33 @@ test('off until a founder turns it on; the first job’s photos alone first, eac
   assert.equal(await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now }), null, 'off');
   assert.equal((await setPhotosScope(env.DB, 'all')).ok, false, 'not every job before the first job’s photos');
   assert.equal((await setPhotosScope(env.DB, 'first', { by: 'peter@soardcharity.com' })).ok, true);
-  // A minute a turn: listing first, then copying
-  const listed = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now });
-  assert.equal(listed.listed, 'mathew: 4');
+  // Each turn reads a folder while few photos wait, then copies
+  const first = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now });
+  assert.equal(first.listed, 'mathew: 4');
+  assert.deepEqual([first.copied, first.failed], [3, 0], 'read and copied in the same turn');
   const rows = (await env.DB.prepare('SELECT drive_id, stage, state FROM past_photos ORDER BY drive_id').all()).results;
-  assert.deepEqual(rows.map((r) => [r.drive_id, r.stage, r.state]), [['PHOTOID0001', 'Before', 'listed'], ['PHOTOID0003', 'After', 'listed'], ['PHOTOID0004', null, 'listed'], ['PHOTOIDBIG1', null, 'skipped']]);
+  assert.deepEqual(rows.map((r) => [r.drive_id, r.stage, r.state]), [['PHOTOID0001', 'Before', 'copied'], ['PHOTOID0003', 'After', 'copied'], ['PHOTOID0004', null, 'copied'], ['PHOTOIDBIG1', null, 'skipped']]);
   const note = (await env.DB.prepare("SELECT photos_note FROM past_jobs WHERE key = 'mathew'").first()).photos_note;
   assert.match(note, /4 photos; 1 other files/);
   assert.equal(await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 30e3 }), null, 'one turn a minute');
-  const copied = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 61e3 });
-  assert.deepEqual([copied.copied, copied.failed], [3, 0]);
   const files = w.made('createFile').map((c) => [c.input.name, c.input.targetId, c.input.fileTagIds || null]);
   assert.deepEqual(files, [['IMG_0003.jpg', 'JMATHEW', ['TA']], ['IMG_0004.HEIC', 'JMATHEW', null], ['IMG_0001.jpg', 'JMATHEW', ['TB']]]);
   const link = new URL(w.made('createUploadRequest')[0].input.url);
   assert.equal(link.pathname, '/api/drive-file');
-  assert.equal(await checkDriveLink(env, Object.fromEntries(link.searchParams), now + 61e3), true, 'JobTread gets a signed link');
+  assert.equal(await checkDriveLink(env, Object.fromEntries(link.searchParams), now), true, 'JobTread gets a signed link');
   // Glass Family waits: only the first job while the scope is 'first'
-  assert.equal(await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 122e3 }).then((r) => r.listed), null);
+  assert.equal(await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 61e3 }).then((r) => r.listed), null);
   assert.equal(w.made('createFile').length, 3);
   // Then every job
   assert.equal((await setPhotosScope(env.DB, 'all')).ok, true);
-  await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 183e3 });
-  await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 244e3 });
-  assert.deepEqual(w.made('createFile').at(-1).input, { name: 'g1.jpg', targetType: 'job', targetId: 'JGLASS', uploadRequestId: w.made('createUploadRequest').at(-1).input && 'U' + (w.st.n - 1), fileTagIds: ['TA'] });
+  const all = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 122e3 });
+  assert.deepEqual([all.listed, all.copied], ['glass-family: 1', 1]);
+  assert.deepEqual(w.made('createFile').at(-1).input.name, 'g1.jpg');
+  assert.deepEqual(w.made('createFile').at(-1).input.fileTagIds, ['TA']);
   const st = await photosStatus(env.DB);
   assert.deepEqual(st.by, { copied: 4, skipped: 1 });
   assert.equal(st.jobsToList, 0);
+  assert.equal(st.newest.length, 4);
 });
 
 test('a lost answer: the next try finds the photo JobTread made and never copies it twice', async () => {
@@ -160,10 +161,9 @@ test('a lost answer: the next try finds the photo JobTread made and never copies
   const w = world({ files: { ...tree, FMATHEW: [tree.FMATHEW[1]] }, failCreateOnce: true });
   const now = Date.parse('2026-11-25T21:00:00Z');
   await setPhotosScope(env.DB, 'first');
-  await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now });
-  const r1 = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 61e3 });
+  const r1 = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now });
   assert.equal(r1.failed, 1);
-  const r2 = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 122e3 });
+  const r2 = await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 61e3 });
   assert.equal(r2.copied, 1);
   assert.equal(w.made('createFile').length, 1, 'found by its name on the job, not made again');
 });
