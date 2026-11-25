@@ -19,7 +19,11 @@
  *     three months after (a December build revealed in January); anything
  *     else, or none, closes the job on Dec 31 of its year.
  *   - Already in JobTread: a page the kid status sync already links to a job
- *     (by name and year, or the job a profile is pinned to) is left alone.
+ *     (by name and year, or the job a profile is pinned to) is left alone. A
+ *     job no page is linked to that makeover costs' loose matcher gives to a
+ *     page (a job named for another year, "Emery Smith (2024)" for a 2025
+ *     page, or with another name, "Marie Surprenant (2024)" for Marie &
+ *     Alondra) makes that page a question for a person: its job, or a new one.
  *   - The customer: the family's or organization's JobTread customer when
  *     exactly one fits (every word of the page's name in the customer's name,
  *     and the page's year in the customer's Makeover Year or a job's name);
@@ -48,6 +52,7 @@
 import { pave, SOARD_ORG_ID, parseJobName, matchProject, todayEastern } from './_reveals.js';
 import { fetchJobs, linkJobs, keyOf, loadAllKids, loadAllProjects, saveRecord, FIELD_STATUS as JOB_FIELD_STATUS } from './_kid-status.js';
 import { jobNameFor } from './_applicant-approved.js';
+import { looseMatch } from './_makeover-costs.js';
 
 const FIELD_YEAR = '22P52xmCz3cx'; // customer: *Makeover Year
 export const DONE_STATUS = 'Closed Done';
@@ -136,7 +141,7 @@ export function customersFor(row, accounts) {
  * links: linkJobs' map (page key → job) over every page; records: every kid and project (for the name check);
  * answer: a person's pick for a row that had more than one customer ({ accountId } or { account: 'new' })
  */
-export function planRow(row, { accounts, links, records, answer = null }) {
+export function planRow(row, { accounts, links, records, loose = new Map(), answer = null }) {
   const { closeOn, how: closeHow } = closeDateFor(row.year, row.draft_date, row.draft_how);
   const jobName = jobNameForRow(row);
   const base = { jobName, closeOn, closeHow, accountId: null, accountName: null, accountHow: null };
@@ -147,6 +152,13 @@ export function planRow(row, { accounts, links, records, answer = null }) {
   const key = row.kind === 'community' ? `community/${row.slug}` : row.slug;
   const linked = links.get(key);
   if (linked) return { ...base, plan: 'has-job', note: `already has “${linked.name}”`, jobId: linked.id };
+  if (answer?.jobId) return { ...base, plan: 'has-job', note: 'a person said JobTread already has its job', jobId: answer.jobId };
+  // A job no page claims that may well be this one (named for another year, or another name): a person says
+  const maybe = loose.get(key) || [];
+  if (maybe.length && !answer) {
+    return { ...base, plan: 'ask', note: `JobTread may already have its job: ${maybe.slice(0, 3).map((j) => `“${j.name}”`).join(', ')}`,
+      candidates: maybe.slice(0, 4).map((j) => ({ id: j.id, name: j.name, kind: 'job' })) };
+  }
   const record = records.find((r) => keyOf(r) === key);
   if (!record) return { ...base, plan: 'ask', note: 'no page with this name any more' };
   // The kid status sync links a job to its page by name and year. When the job's name can't carry the page alone (an
@@ -163,7 +175,7 @@ export function planRow(row, { accounts, links, records, answer = null }) {
     return make({ accountId: a.id, accountName: a.name, accountHow: 'picked by a person' });
   }
   const hits = customersFor(row, accounts);
-  if (hits.length > 1) return { ...base, plan: 'ask', pin, note: `${hits.length} customers fit: ${hits.slice(0, 4).map((a) => a.name).join(', ')}`, candidates: hits.slice(0, 6).map((a) => ({ id: a.id, name: a.name })) };
+  if (hits.length > 1) return { ...base, plan: 'ask', pin, note: `${hits.length} customers fit: ${hits.slice(0, 4).map((a) => a.name).join(', ')}`, candidates: hits.slice(0, 6).map((a) => ({ id: a.id, name: a.name, kind: 'customer' })) };
   if (hits.length === 1) return make({ accountId: hits[0].id, accountName: hits[0].name, accountHow: 'name and year match' });
   return make({ accountName: accountNameFor(row), accountHow: 'new customer' });
 }
@@ -248,6 +260,42 @@ export async function readWorkflows(grant, fetchImpl = fetch) {
   }
 }
 
+/** Every SOARD job with when it was made and closed and its customer's name (what the loose matcher reads) */
+export async function readJobsWithCustomers(grant, fetchImpl = fetch) {
+  const out = [];
+  let page = null;
+  for (let i = 0; i < 20; i++) {
+    const body = await pave(grant, {
+      organization: { $: { id: SOARD_ORG_ID }, jobs: { $: { size: 100, ...(page ? { page } : {}) }, nextPage: {},
+        nodes: { id: {}, name: {}, createdAt: {}, closedOn: {}, location: { account: { id: {}, name: {} } } } } },
+    }, fetchImpl);
+    const conn = body?.organization?.jobs;
+    if (!conn) throw new Error('JobTread’s answer had no jobs');
+    out.push(...(conn.nodes || []));
+    page = conn.nextPage || null;
+    if (!page) return out;
+  }
+  throw new Error('more than 2,000 jobs: read stopped');
+}
+
+/**
+ * Page key → the jobs no page is linked to that makeover costs' loose matcher gives to that page (the customer's name
+ * and the job's own words, against pages filed in the years the job ran). Office test jobs never count.
+ */
+export function looseJobs(jobs, links, records) {
+  const claimed = new Set([...links.values()].map((j) => j.id));
+  const pages = records.map((r) => ({ ...r, jobtreadJobId: r.jobtreadJobId || r.data?.jobtreadJobId || null }));
+  const out = new Map();
+  for (const job of jobs) {
+    if (claimed.has(job.id) || /^\s*test\b/i.test(job.name || '') || /^\s*test\b/i.test(job.location?.account?.name || '')) continue;
+    const page = looseMatch(job, pages);
+    if (!page) continue;
+    const key = keyOf(page);
+    out.set(key, [...(out.get(key) || []), { id: job.id, name: job.name || '' }]);
+  }
+  return out;
+}
+
 // ── D1 ────────────────────────────────────────────────────────────────
 
 export async function listRows(DB) {
@@ -289,7 +337,8 @@ async function readWorld(env, fetchImpl) {
   const records = [...kids, ...projects];
   const jobs = await fetchJobs(grant, { fetchImpl });
   const accounts = await readCustomers(grant, fetchImpl);
-  return { grant, records, jobs, links: linkJobs(jobs, records), accounts };
+  const links = linkJobs(jobs, records);
+  return { grant, records, jobs, links, accounts, loose: looseJobs(await readJobsWithCustomers(grant, fetchImpl), links, records) };
 }
 
 const parse = (s) => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
@@ -329,15 +378,21 @@ export function summarize(rows) {
   return { total: rows.length, by, newCustomers, existingCustomers: rows.filter((r) => r.plan === 'make' && r.plan_account_id).length, differs };
 }
 
-/** A person's answer for a row with more than one customer: { key, accountId } or { key, account: 'new' } or { key, clear: true } */
+/**
+ * A person's answer for a question row: { key, jobId } (JobTread already has its job), { key, job: 'none' } (it has
+ * none: make one, the customer found as usual), { key, accountId } (this customer), { key, account: 'new' } (a new
+ * customer) or { key, clear: true }
+ */
 export async function answerRow(DB, body, { by = null, now = Date.now() } = {}) {
   await ensurePastJobs(DB);
   const key = String(body?.key || '');
   const row = await DB.prepare('SELECT * FROM past_jobs WHERE key = ?').bind(key).first();
   if (!row) return { ok: false, error: 'That row isn’t on the list. Reload.' };
   if (row.job_id) return { ok: false, error: 'Its job is already made.' };
-  const answer = body?.clear ? null : body?.account === 'new' ? { account: 'new' } : /^[A-Za-z0-9]{6,32}$/.test(String(body?.accountId || '')) ? { accountId: String(body.accountId) } : undefined;
-  if (answer === undefined) return { ok: false, error: 'Pick one of the customers, or a new customer.' };
+  const id = (v) => /^[A-Za-z0-9]{6,32}$/.test(String(v || ''));
+  const answer = body?.clear ? null : body?.account === 'new' ? { account: 'new' } : body?.job === 'none' ? { job: 'none' }
+    : id(body?.jobId) ? { jobId: String(body.jobId) } : id(body?.accountId) ? { accountId: String(body.accountId) } : undefined;
+  if (answer === undefined) return { ok: false, error: 'Pick its job, one of the customers, or a new one.' };
   await DB.prepare('UPDATE past_jobs SET answer = ?, answered_by = ?, updated_at = ? WHERE key = ?').bind(answer ? JSON.stringify(answer) : null, by, iso(now), key).run();
   return { ok: true };
 }

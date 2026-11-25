@@ -5,7 +5,7 @@
  * POST { action: 'import', rows }       → loads the reviewed list (new rows added; rows not made yet take its dates)
  * POST { action: 'plan' }               → reads JobTread and the site again and saves each row's plan (JobTread is only read)
  * POST { action: 'checks' }             → QuickBooks' project setting and JobTread's active workflows (read only)
- * POST { action: 'answer', key, accountId | account: 'new' | clear } → a person's pick for a row with several customers
+ * POST { action: 'answer', key, jobId | accountId | account: 'new' | clear } → a person's answer for a question row
  * POST { action: 'first' }              → makes the first job alone, to check JobTread's workflows, QuickBooks and DataX
  * POST { action: 'rest' }               → queues every ready row; the application sweep makes a few each run
  *
