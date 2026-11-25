@@ -329,8 +329,10 @@ export async function photosStatus(DB) {
   const listed = await DB.prepare("SELECT count(*) AS n FROM past_jobs WHERE photos_listed_at IS NOT NULL").first();
   const toList = await DB.prepare("SELECT count(*) AS n FROM past_jobs WHERE state = 'made' AND folder IS NOT NULL AND folder <> '' AND photos_listed_at IS NULL").first();
   const failed = (await DB.prepare("SELECT key, name, error FROM past_photos WHERE state = 'failed' ORDER BY key LIMIT 5").all()).results || [];
+  // The newest copied, with the stage each was given (to set beside JobTread's own view of the same files)
+  const newest = (await DB.prepare("SELECT key, name, stage, stage_how, copied_at FROM past_photos WHERE state = 'copied' ORDER BY copied_at DESC LIMIT 6").all()).results || [];
   const [on, lastRun, lastError] = await Promise.all([getState(DB, 'on'), getState(DB, 'lastRun'), getState(DB, 'lastError')]);
-  return { by, stages, jobsListed: listed?.n || 0, jobsToList: toList?.n || 0, failed, on, lastRun, lastError, today: todayEastern() };
+  return { by, stages, jobsListed: listed?.n || 0, jobsToList: toList?.n || 0, failed, newest, on, lastRun, lastError, today: todayEastern() };
 }
 
 /**
