@@ -120,7 +120,7 @@ try {
   console.log('Desktop 1440×900');
   let page = await open(1440, 900);
   const groups = await page.$$eval('.side-nav .nav-group', (gs) => gs.map((g) => `${g.querySelector('.nav-section')?.textContent || '·'}: ${[...g.querySelectorAll('.nav-label')].map((l) => l.textContent).join(', ')}`));
-  ok(groups.join(' | ') === '·: Dashboard, Applications, Kids, Demo Day, Reveals, Photos & Videos, Job Costs, Donors & Partners | Website: People, Press, Events, Site Config | System: Emails & invites, Automations, History', `groups and order (${groups.join(' | ')})`);
+  ok(groups.join(' | ') === '·: Dashboard, Applications, Kids, Families, Demo Day, Reveals, Photos & Videos, Job Costs, Donors & Partners | Website: People, Press, Events, Site Config | System: Emails & invites, Automations, History', `groups and order (${groups.join(' | ')})`);
   ok(await active(page) === 'Dashboard', 'Dashboard is current on load');
   const badges = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.side-nav .nav-item')].map((a) => [a.querySelector('.nav-label').textContent, (a.querySelector('.nav-count')?.textContent || '') + (a.querySelector('.nav-live') ? 'LIVE' : '')]).filter(([, v]) => v)));
   ok(JSON.stringify(badges) === JSON.stringify({ Applications: '4', Reveals: 'LIVE', People: '2', Press: '3' }), `counts and LIVE (${JSON.stringify(badges)})`);
@@ -213,7 +213,7 @@ try {
   page = await open(1440, 900);
   await page.keyboard.down(MOD); await page.keyboard.press('k'); await page.keyboard.up(MOD); await pause(300);
   const first = await page.$$eval('.cmd-palette-item', (b) => b.slice(0, 5).map((x) => x.textContent.replace(/\s+/g, ' ').trim()));
-  ok(/^Dashboard/.test(first[0]) && /^Applications/.test(first[1]) && /^Kids/.test(first[2]) && /^Demo Day/.test(first[3]) && /^Reveals/.test(first[4]), '⌘K lists the areas in the sidebar order');
+  ok(/^Dashboard/.test(first[0]) && /^Applications/.test(first[1]) && /^Kids/.test(first[2]) && /^Families/.test(first[3]) && /^Demo Day/.test(first[4]), '⌘K lists the areas in the sidebar order');
   await page.type('.cmd-palette-input', 'outlets'); await pause(200);
   ok(/^Outlets/.test(await page.$eval('.cmd-palette-item', (b) => b.textContent.trim())), 'a name match beats a hint match (Outlets before Press)');
   await page.click('.cmd-palette-input', { clickCount: 3 }); await page.type('.cmd-palette-input', 'github'); await pause(200);

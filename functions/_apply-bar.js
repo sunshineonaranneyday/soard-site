@@ -40,7 +40,7 @@ export const PAGE_REUSE = 'private, max-age=30';
 const ZONE = 'America/New_York';
 
 // Doing something, not reading about SOARD: never a bar here
-const SKIP = [/^\/apply(\/|$)/, /^\/donate(\/|$)/, /^\/trade-partners(\/|$)/, /^\/advisory-board\/apply(\/|$)/, /^\/profile-update(\/|$)/, /^\/admin(\/|$)/, /^\/api(\/|$)/];
+const SKIP = [/^\/apply(\/|$)/, /^\/donate(\/|$)/, /^\/trade-partners(\/|$)/, /^\/advisory-board\/apply(\/|$)/, /^\/profile-update(\/|$)/, /^\/family-update(\/|$)/, /^\/admin(\/|$)/, /^\/api(\/|$)/];
 export const barSkips = (path) => SKIP.some((re) => re.test(String(path || '/')));
 
 /** The close day as people read it, in Atlanta's time: a midnight close is the day before. null without one. */

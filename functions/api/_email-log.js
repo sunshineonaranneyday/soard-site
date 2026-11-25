@@ -112,6 +112,7 @@ const BY_TAG = {
   'reveal-live': 'rem-live',
   'reveal-replay': 'rem-replay',
   'advisory-application': 'advisory-thanks',
+  'family-update': 'family-update',
   'advisory-application-staff': 'advisory-staff',
   'advisory-ask': 'advisory-ask',
   'advisory-update': 'advisory-update',
@@ -191,7 +192,7 @@ export function alertEntry(title = '') {
 }
 
 // Messages whose reader is a family (their address may be mistyped) or staff (a list address may be wrong)
-const FAMILY = new Set(['app-resume', 'app-reminder', 'waitlist-confirm', 'waitlist-open', 'advisory-thanks']);
+const FAMILY = new Set(['app-resume', 'app-reminder', 'waitlist-confirm', 'waitlist-open', 'advisory-thanks', 'family-update']);
 const WATCHERS = new Set(['rem-welcome', 'rem-confirm', 'rem-scheduled', 'rem-moved', 'rem-day', 'rem-hour', 'rem-live', 'rem-replay']);
 export const audienceOf = (entry) => (FAMILY.has(entry) ? 'family' : WATCHERS.has(entry) ? 'watcher' : entry === 'preview' ? 'you' : entry ? 'staff' : null);
 
@@ -328,6 +329,7 @@ const FAMILY_FIX = {
   'waitlist-confirm': 'They typed this address to hear when applications open. If you know the family, ask for a working one.',
   'waitlist-open': 'They typed this address to hear when applications open. If you know the family, ask for a working one.',
   'advisory-thanks': 'They typed this address on the advisory application. Reach them another way for a working one.',
+  'family-update': 'It’s the address in JobTread. Fix it in Families (or JobTread), or copy their link and text it to them.',
 };
 
 /** What staff can do about an email that didn't arrive (the alert and the admin say the same) */
