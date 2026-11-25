@@ -4,7 +4,8 @@
  * GET                                   → { success, rows, summary, imported, planned, first, queued, lastRun }  (D1 only)
  * POST { action: 'import', rows }       → loads the reviewed list (new rows added; rows not made yet take its dates)
  * POST { action: 'plan' }               → reads JobTread and the site again and saves each row's plan (JobTread is only read)
- * POST { action: 'checks' }             → QuickBooks' project setting and JobTread's active workflows (read only)
+ * POST { action: 'checks' }             → QuickBooks' project setting, JobTread's active workflows and, once made, the first
+ *                                         job as JobTread has it with every workflow run since (read only)
  * POST { action: 'answer', key, jobId | accountId | account: 'new' | clear } → a person's answer for a question row
  * POST { action: 'first' }              → makes the first job alone, to check JobTread's workflows, QuickBooks and DataX
  * POST { action: 'rest' }               → queues every ready row; the application sweep makes a few each run
@@ -13,7 +14,7 @@
  */
 
 import { canRead } from './_mailbox.js';
-import { checkImport, importRows, planAll, answerRow, makeFirst, queueRest, pastJobsStatus, readQuickBooks, readWorkflows } from './_past-jobs.js';
+import { checkImport, importRows, planAll, answerRow, makeFirst, queueRest, pastJobsStatus, readQuickBooks, readWorkflows, readFirstCheck } from './_past-jobs.js';
 
 const headers = { 'Cache-Control': 'private, no-store' };
 const reply = (body, status = 200) => Response.json(body, { status, headers });
@@ -45,8 +46,9 @@ export async function onRequestPost(context) {
       case 'plan':
         return reply({ success: true, ...(await planAll(env)) });
       case 'checks': {
-        const [quickbooks, workflows] = await Promise.all([readQuickBooks(env.JOBTREAD_GRANT_KEY), readWorkflows(env.JOBTREAD_GRANT_KEY)]);
-        return reply({ success: true, quickbooks, workflows });
+        const { first } = await pastJobsStatus(env.DB);
+        const [quickbooks, workflows, firstJob] = await Promise.all([readQuickBooks(env.JOBTREAD_GRANT_KEY), readWorkflows(env.JOBTREAD_GRANT_KEY), readFirstCheck(env.JOBTREAD_GRANT_KEY, first)]);
+        return reply({ success: true, quickbooks, workflows, firstJob });
       }
       case 'answer': {
         const r = await answerRow(env.DB, body, { by });

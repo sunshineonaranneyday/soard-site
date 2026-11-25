@@ -364,3 +364,34 @@ test('a job no page claims that may be this page’s (another year, another name
   assert.equal((await answerRow(env.DB, { key: 'emery', job: 'none' })).ok, true);
   assert.equal((await answerRow(env.DB, { key: 'emery', job: 'maybe' })).ok, false);
 });
+
+test('the first job is the earliest makeover with a new customer, and the rest follow in reveal order', async () => {
+  const env = await siteWith({ kids: [kid('demetri', 'Demetri', 2012), kid('glass-family', 'Glass Family', 2012), kid('mathew', 'Mathew', 2012)] });
+  await importRows(env.DB, checkImport({ rows: [{ kind: 'kid', slug: 'demetri', name: 'Demetri', year: 2012, date: '2012-11-15' },
+    { kind: 'kid', slug: 'glass-family', name: 'Glass Family', year: 2012, date: '2012-10-20' },
+    { kind: 'kid', slug: 'mathew', name: 'Mathew', year: 2012, date: '2012-07-14' }] }).rows);
+  const jt = fakeJobTread();
+  const first = await makeFirst(env, { fetchImpl: jt.fetchImpl });
+  assert.equal(first.made.key, 'mathew', 'Mathew (Jul 2012), SOARD’s first, not Demetri by name');
+  await queueRest(env, { fetchImpl: jt.fetchImpl });
+  await runPastJobs(env, { fetchImpl: jt.fetchImpl });
+  assert.deepEqual(jt.made('createJob').map((c) => c.input.name), ['Mathew (2012)', 'Glass Family (2012)', 'Demetri (2012)']);
+});
+
+test('the first job’s check: the job and its customer as JobTread has them, and the workflow runs since', async () => {
+  const { readFirstCheck } = await import('../functions/api/_past-jobs.js');
+  assert.equal(await readFirstCheck('g', null), null);
+  const fetchImpl = async () => Response.json({
+    job: { id: 'J1', name: 'Mathew (2012)', number: '1201', closedOn: '2012-07-14', customFieldValues: { nodes: [{ value: 'Closed Done' }] },
+      location: { address: null, account: { id: 'A1', name: 'Mathew (2012)', contacts: { nodes: [] } } } },
+    organization: { workflowRuns: { nodes: [
+      { createdAt: '2026-11-25T18:00:05Z', status: 'succeeded', workflow: { name: 't.customerCreated {Create Comment}' } },
+      { createdAt: '2026-11-25T10:00:00Z', status: 'succeeded', workflow: { name: 'older' } },
+    ] } },
+  });
+  const c = await readFirstCheck('g', { jobId: 'J1', at: '2026-11-25T18:00:00Z' }, fetchImpl);
+  assert.deepEqual(c.job, { id: 'J1', name: 'Mathew (2012)', number: '1201', closedOn: '2012-07-14', status: 'Closed Done', address: null });
+  assert.deepEqual(c.customer, { id: 'A1', name: 'Mathew (2012)', contacts: 0 });
+  assert.deepEqual(c.runs.map((r) => r.workflow), ['t.customerCreated {Create Comment}']);
+  assert.match((await readFirstCheck('g', { jobId: 'J1', at: '2026-11-25T18:00:00Z' }, async () => new Response('no', { status: 400 }))).error, /400/);
+});

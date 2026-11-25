@@ -296,6 +296,34 @@ export function looseJobs(jobs, links, records) {
   return out;
 }
 
+/**
+ * The first job as JobTread has it now, and every workflow run since it was made (what ran because of it, and how each
+ * ended), for checking before the rest: { job, customer, runs } or { error }
+ */
+export async function readFirstCheck(grant, first, fetchImpl = fetch) {
+  if (!first?.jobId) return null;
+  try {
+    const body = await pave(grant, {
+      job: { $: { id: first.jobId }, id: {}, name: {}, number: {}, closedOn: {}, createdAt: {},
+        customFieldValues: { $: { size: 1, where: [['customField', 'id'], '=', JOB_FIELD_STATUS] }, nodes: { value: {} } },
+        location: { id: {}, address: {}, account: { id: {}, name: {}, contacts: { $: { size: 5 }, nodes: { id: {} } } } } },
+      organization: { $: { id: SOARD_ORG_ID }, workflowRuns: { $: { size: 50, sortBy: [{ field: 'createdAt', order: 'desc' }] },
+        nodes: { createdAt: {}, status: {}, workflow: { id: {}, name: {} } } } },
+    }, fetchImpl);
+    const j = body?.job;
+    const since = Date.parse(first.at || 0) - 60 * 1000;
+    const runs = (body?.organization?.workflowRuns?.nodes || []).filter((r) => Date.parse(r.createdAt) >= since)
+      .map((r) => ({ at: r.createdAt, status: r.status, workflow: r.workflow?.name || '' }));
+    return {
+      job: j ? { id: j.id, name: j.name, number: j.number || null, closedOn: j.closedOn, status: j.customFieldValues?.nodes?.[0]?.value || null, address: j.location?.address || null } : null,
+      customer: j?.location?.account ? { id: j.location.account.id, name: j.location.account.name, contacts: (j.location.account.contacts?.nodes || []).length } : null,
+      runs,
+    };
+  } catch (e) {
+    return { error: String(e.message || e).slice(0, 200) };
+  }
+}
+
 // ── D1 ────────────────────────────────────────────────────────────────
 
 export async function listRows(DB) {
@@ -342,6 +370,8 @@ async function readWorld(env, fetchImpl) {
 }
 
 const parse = (s) => { try { return s ? JSON.parse(s) : null; } catch { return null; } };
+/** Earliest close date first, then year and name (rows without one last) */
+const byCloseDate = (a, b) => String(a.close_on || '9999').localeCompare(String(b.close_on || '9999')) || Number(a.year) - Number(b.year) || String(a.name).localeCompare(String(b.name));
 
 /**
  * Reads JobTread and the site again and saves every row's plan (JobTread is only read). A queued row stays queued
@@ -526,8 +556,11 @@ export async function makeFirst(env, { fetchImpl = fetch, now = Date.now(), by =
   const { DB } = env;
   if (await getState(DB, 'first')) return { ok: false, error: 'The first job is already made.' };
   const { rows } = await planAll(env, { fetchImpl, now });
-  // A row an earlier try started comes first (its customer may be made already); else a kid with a new customer
-  const row = rows.find((r) => r.state === 'ready' && r.attempts > 0) || rows.find((r) => r.state === 'ready' && !r.plan_account_id && r.kind === 'kid');
+  // A row an earlier try started comes first (its customer may be made already); else the earliest kid makeover with a
+  // new customer, by the day it closes: Mathew (2012), SOARD's first, before Demetri (Peter, Nov 25 2026: "mathew was
+  // the first job!"), so JobTread's job numbers follow the order the rooms were revealed
+  const row = rows.find((r) => r.state === 'ready' && r.attempts > 0)
+    || rows.filter((r) => r.state === 'ready' && !r.plan_account_id && r.kind === 'kid').sort(byCloseDate)[0];
   if (!row) return { ok: false, error: 'No row is ready to make.' };
   const fresh = await DB.prepare('SELECT * FROM past_jobs WHERE key = ?').bind(row.key).first();
   const made = await makeClaimed(env, fresh, { fetchImpl, now, by: by || 'site' });
@@ -548,7 +581,7 @@ export async function queueRest(env, { fetchImpl = fetch, now = Date.now(), by =
   return { ok: true, queued: ready.length, summary };
 }
 
-/** On the application sweep: a few queued rows a run, oldest year first → { made, errors } or null when none wait */
+/** On the application sweep: a few queued rows a run, earliest close date first → { made, errors } or null when none wait */
 export async function runPastJobs(env, { fetchImpl = fetch, now = Date.now(), limit = PER_RUN } = {}) {
   const { DB } = env;
   if (!DB || !env.JOBTREAD_GRANT_KEY) return null;
@@ -556,7 +589,8 @@ export async function runPastJobs(env, { fetchImpl = fetch, now = Date.now(), li
   // Made jobs whose page still waits to be linked to them (a save someone else beat) come round first
   const { results: unpinned } = await DB.prepare("SELECT * FROM past_jobs WHERE job_id IS NOT NULL AND plan_pin = 1 AND pinned_at IS NULL LIMIT 5").all();
   for (const row of unpinned || []) await pinPage(env, row, now).catch(() => null);
-  const { results } = await DB.prepare("SELECT * FROM past_jobs WHERE state = 'queued' AND job_id IS NULL ORDER BY year, name LIMIT ?").bind(limit).all();
+  // In the order the rooms were revealed, so JobTread's job numbers follow SOARD's history
+  const { results } = await DB.prepare("SELECT * FROM past_jobs WHERE state = 'queued' AND job_id IS NULL ORDER BY close_on, year, name LIMIT ?").bind(limit).all();
   if (!results?.length) return null;
   const out = { made: [], errors: [] };
   for (const row of results) {
