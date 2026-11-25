@@ -30,8 +30,13 @@
  * Woken by JobTread's workflows (POST /api/reveal-invites: a status change,
  * a task finished) for one job at a time, and swept every hour from the
  * live hub heartbeat and /api/reveals as a safety net.
+ *
+ * Each kid's reveal day, the day on their job's Reveal task once it has come,
+ * is kept too (kid_status_state 'reveal_days', { slug: 'YYYY-MM-DD' }): the
+ * build reads it to list Meet the Kids in reveal order (scripts/d1-helpers.js
+ * revealDays), and a day learned or moved publishes the site like a status.
  */
-import { JT_URL, SOARD_ORG_ID, matchProject, isProject, BUILDING_STATUSES as BUILDING } from './_reveals.js';
+import { JT_URL, SOARD_ORG_ID, matchProject, isProject, todayEastern, BUILDING_STATUSES as BUILDING } from './_reveals.js';
 import { EXTRACTORS, generateSha } from './_collections.js';
 import { commitFile } from './_github.js';
 import { logAudit, diffJson } from './_audit.js';
@@ -127,8 +132,34 @@ export function planProject(project, facts) {
 const JOB_FIELDS = {
   id: {}, name: {}, closedOn: {},
   customFieldValues: { $: { size: 1, where: [['customField', 'id'], '=', FIELD_STATUS] }, nodes: { value: {}, customField: { id: {} } } },
-  tasks: { $: { size: 5, where: [['taskType', 'id'], '=', REVEAL_TASK_TYPE] }, nodes: { progress: {} } },
+  tasks: { $: { size: 5, where: [['taskType', 'id'], '=', REVEAL_TASK_TYPE] }, nodes: { progress: {}, startDate: {} } },
 };
+
+/** The day a job's room was revealed: its Reveal task's day once that day has come (`today`, Eastern), else null */
+export function revealDayOf(job, today) {
+  const days = (job?.tasks?.nodes || []).map((t) => String(t?.startDate || '').slice(0, 10))
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d) && d <= today).sort();
+  return days.length ? days[days.length - 1] : null;
+}
+
+/** The kids' reveal days the sweep keeps, { slug: 'YYYY-MM-DD' } (the build reads the same row) */
+export const REVEAL_DAYS_KEY = 'reveal_days';
+
+/** Each linked kid's reveal day, kept with the ones known before: true when one is new or moved */
+async function keepRevealDays(DB, links, records, now) {
+  const today = todayEastern(now);
+  const found = {};
+  for (const [key, job] of links) {
+    const rec = records.find((r) => keyOf(r) === key);
+    const day = rec && !isProject(rec) ? revealDayOf(job, today) : null;
+    if (day) found[rec.slug] = day;
+  }
+  let had = {};
+  try { had = JSON.parse((await DB.prepare('SELECT value FROM kid_status_state WHERE key = ?').bind(REVEAL_DAYS_KEY).first())?.value || '{}') || {}; } catch { had = {}; }
+  if (!Object.keys(found).some((slug) => had[slug] !== found[slug])) return false;
+  await DB.prepare('INSERT OR REPLACE INTO kid_status_state (key, value) VALUES (?, ?)').bind(REVEAL_DAYS_KEY, JSON.stringify({ ...had, ...found })).run();
+  return true;
+}
 
 async function pave(grantKey, query, fetchImpl) {
   const res = await fetchImpl(JT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query: { $: { grantKey }, ...query } }) });
@@ -358,10 +389,12 @@ export async function syncKidStatuses(env, { jobId = null, fetchImpl = fetch, no
     }
     // Each job's cover shows the kid's (or project's) Main photo (./_job-covers.js)
     const covers = await syncJobCovers(env, links, records.map((r) => ({ ...r, slug: keyOf(r) })), { fetchImpl, now });
-    const patch = { alerted, lastRun: { at: iso, scope: jobId ? 'job' : 'all', changed: out.length, covers: covers.length } };
+    // Meet the Kids' order follows a reveal day learned or moved (a failed write waits for the next run)
+    const daysMoved = await keepRevealDays(env.DB, links, records, now).catch(() => false);
+    const patch = { alerted, lastRun: { at: iso, scope: jobId ? 'job' : 'all', changed: out.length, covers: covers.length, ...(daysMoved ? { revealDays: true } : {}) } };
     if (!jobId) patch.lastSweepAt = iso;
-    if (out.length || state.deployPending) {
-      const d = await deploy(env, state, now);
+    if (out.length || daysMoved || state.deployPending) {
+      const d = await deploy(env, state, now, out.length ? undefined : 'Reveal days from JobTread (Meet the Kids order)');
       if (d.deployed) patch.lastAutoDeployAt = iso;
       patch.deployPending = d.pending;
     }

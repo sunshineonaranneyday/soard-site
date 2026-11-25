@@ -16,7 +16,7 @@
  *                 every bedroom, bathroom and therapy room, plus a ramp or
  *                 lift when one was built
  *   bedroomCount, bathroomCount, therapyRoomCount   how many of each room
- *   sortOrder     place among the active kids at the top of Meet the Kids
+ *   sortOrder     place among the active kids at the top of Meet the Kids, for those with no reveal date on JobTread's schedule
  *   publishStatus 'draft' keeps the profile off the site
  */
 
@@ -212,10 +212,10 @@ export function metaDescriptionOf(kid) {
 /** Thin pages are kept out of search results (no story, ≤1 photo, no video) */
 export const isThinPage = (kid, hasVideo) => !kid?.bio && (kid?.photos || []).length <= 1 && !hasVideo;
 
-// ── Order (mirrors src/pages/kids/index.astro and the home page) ─────
+// ── Order (the admin's grouping; Meet the Kids itself goes in reveal order, src/utils/kid-order.ts) ─────
 const NO_ORDER = Number.MAX_SAFE_INTEGER;
 const statusRank = (s) => (s === 'needs-funding' ? 0 : s === 'in-progress' ? 1 : 2);
-/** Meet the Kids order: awaiting funding, in build (by sortOrder), then by year */
+/** Awaiting funding, in build (by sortOrder), then by year */
 export function gridOrder(kids) {
   return [...kids].filter(isListed).sort((a, b) => {
     const sA = statusRank(a.status);
