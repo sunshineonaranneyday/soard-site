@@ -130,6 +130,16 @@ function fakeJobTread({ accounts = [], jobs = [], loseAnswerOf = null } = {}) {
       if (lost) return new Response('timeout', { status: 504 });
       return Response.json({ createJob: { createdJob: { id: j.id, name: j.name } } });
     }
+    if (op === 'location') {
+      const a = st.accounts.find((x) => x.locations.some((l) => l.id === q.location.$.id));
+      const loc = a?.locations.find((l) => l.id === q.location.$.id);
+      return Response.json({ location: loc ? { id: loc.id, address: loc.address, account: { organization: { id: SOARD } } } : null });
+    }
+    if (op === 'updateLocation') {
+      const loc = st.accounts.flatMap((x) => x.locations).find((l) => l.id === q.updateLocation.$.id);
+      loc.address = q.updateLocation.$.address;
+      return Response.json({ updateLocation: {} });
+    }
     if (op === 'account') {
       const a = st.accounts.find((x) => x.id === q.account.$.id);
       return Response.json({ account: a ? { ...a, organization: { id: SOARD }, locations: { nodes: a.locations } } : null });
@@ -297,6 +307,12 @@ test('the Zillow check looks only at locations with an address (a past record ha
   let asked = null;
   await zillowFacts('g', async (url, init) => { asked = JSON.parse(init.body).query.organization.locations.$; return Response.json({ organization: { locations: { nodes: [] } } }); });
   assert.deepEqual(asked.where, ['address', '!=', null]);
+  const old = '2026-11-01T12:00:00Z';
+  const facts = await zillowFacts('g', async () => Response.json({ organization: { locations: { nodes: [
+    { createdAt: old, address: 'null', account: { name: 'Mathew (2012)', type: 'customer' }, customFieldValues: { nodes: [] } },
+    { createdAt: old, address: '1 Main St', account: { name: 'Ava Lee', type: 'customer' }, customFieldValues: { nodes: [{ value: 'https://zillow.com/x', customField: { id: '22P3cqMfrQEp' } }] } },
+  ] } } }), Date.parse('2026-11-25T12:00:00Z'));
+  assert.deepEqual([facts.checked, facts.filled, facts.streak], [1, 1, 0], 'a location reading “null” is no home');
 });
 
 test('the board’s cost note: a handful by name, past that the newest few and the rest counted', async () => {
@@ -394,4 +410,26 @@ test('the first job’s check: the job and its customer as JobTread has them, an
   assert.deepEqual(c.customer, { id: 'A1', name: 'Mathew (2012)', contacts: 0 });
   assert.deepEqual(c.runs.map((r) => r.workflow), ['t.customerCreated {Create Comment}']);
   assert.match((await readFirstCheck('g', { jobId: 'J1', at: '2026-11-25T18:00:00Z' }, async () => new Response('no', { status: 400 }))).error, /400/);
+});
+
+test('a new customer’s location: the “null” JobTread’s address workflow writes is cleared once it has run', async () => {
+  const env = await siteWith({ kids: [kid('mathew', 'Mathew', 2012), kid('briana', 'Briana', 2013)] });
+  await importRows(env.DB, checkImport({ rows: [{ kind: 'kid', slug: 'mathew', name: 'Mathew', year: 2012, date: '2012-07-14' },
+    { kind: 'kid', slug: 'briana', name: 'Briana', year: 2013, date: '2013-05-01' }] }).rows);
+  const jt = fakeJobTread({ accounts: [acct('bAAAAA1', 'Briana Cole', { year: 2013, primaryLocation: { id: 'Lhome' } })] });
+  jt.st.accounts[0].locations.push({ id: 'Lhome', address: '1 Main St, Marietta, GA' });
+  const t0 = Date.parse('2026-11-25T19:43:00Z');
+  await makeFirst(env, { fetchImpl: jt.fetchImpl, now: t0 });
+  // JobTread's "Location Formatted Address" workflow, on the new location
+  const loc = jt.st.accounts.find((a) => a.name === 'Mathew (2012)').locations[0];
+  loc.address = 'null';
+  await queueRest(env, { fetchImpl: jt.fetchImpl, now: t0 + 30e3 });
+  await runPastJobs(env, { fetchImpl: jt.fetchImpl, now: t0 + 60e3 });
+  assert.equal(loc.address, 'null', 'not before the workflow has had its two minutes');
+  await runPastJobs(env, { fetchImpl: jt.fetchImpl, now: t0 + 3 * 60e3 });
+  assert.equal(loc.address, null, 'then set back to no address');
+  assert.equal(jt.st.accounts[0].locations[0].address, '1 Main St, Marietta, GA', 'a family’s own home is never touched');
+  const n = jt.made('updateLocation').length;
+  await runPastJobs(env, { fetchImpl: jt.fetchImpl, now: t0 + 10 * 60e3 });
+  assert.equal(jt.made('updateLocation').length, n, 'each location once');
 });

@@ -421,14 +421,16 @@ export async function zillowFacts(grantKey, fetchImpl = fetch, now = Date.now())
     body: JSON.stringify({ query: { $: { grantKey }, organization: { $: { id: SOARD_ORG_ID }, locations: {
       // Only locations with an address: a past makeover's record has none (./_past-jobs.js), and there's no home to look up
       $: { size: 25, where: ['address', '!=', null], sortBy: [{ field: 'createdAt', order: 'desc' }] },
-      nodes: { createdAt: {}, account: { name: {}, type: {} }, customFieldValues: { $: { size: 25 }, nodes: { value: {}, customField: { id: {} } } } },
+      nodes: { createdAt: {}, address: {}, account: { name: {}, type: {} }, customFieldValues: { $: { size: 25 }, nodes: { value: {}, customField: { id: {} } } } },
     } } } }),
   });
   if (!res.ok) throw new Error(`JobTread returned ${res.status}`);
   const nodes = (await res.json().catch(() => null))?.organization?.locations?.nodes;
   if (!Array.isArray(nodes)) throw new Error('JobTread did not answer');
   const homes = nodes
-    .filter((l) => l.account?.type === 'customer' && !/^TEST\b/.test(l.account?.name || '') && Date.parse(l.createdAt) <= now - ZILLOW_WAIT_MS)
+    // JobTread's address workflow writes the text "null" on a location made with no address: no home there either
+    .filter((l) => l.account?.type === 'customer' && !/^TEST\b/.test(l.account?.name || '') && Date.parse(l.createdAt) <= now - ZILLOW_WAIT_MS
+      && String(l.address ?? '').trim().toLowerCase() !== 'null')
     .slice(0, 10)
     .map((l) => ({ at: l.createdAt, filled: (l.customFieldValues?.nodes || []).some((v) => v.customField?.id === ZILLOW_URL_FIELD && v.value) }));
   const streak = homes.findIndex((h) => h.filled);

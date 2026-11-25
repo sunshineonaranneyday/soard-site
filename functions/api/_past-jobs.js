@@ -74,11 +74,19 @@ export const SCHEMA = `CREATE TABLE IF NOT EXISTS past_jobs (
   claimed_at TEXT, made_at TEXT, made_by TEXT, updated_at TEXT NOT NULL)`;
 export const STATE_SCHEMA = 'CREATE TABLE IF NOT EXISTS past_jobs_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)';
 
+// Columns added after the table was first made (Nov 25 2026): added to a table that doesn't have them yet
+const LATER_COLUMNS = { address_cleared_at: 'TEXT' };
 const _ready = new WeakSet();
 export async function ensurePastJobs(DB) {
   if (_ready.has(DB)) return;
   await DB.prepare(SCHEMA).run();
   await DB.prepare(STATE_SCHEMA).run();
+  const { results } = await DB.prepare('PRAGMA table_info(past_jobs)').all();
+  const have = new Set((results || []).map((c) => c.name));
+  for (const [col, type] of Object.entries(LATER_COLUMNS)) {
+    if (have.has(col)) continue;
+    try { await DB.prepare(`ALTER TABLE past_jobs ADD COLUMN ${col} ${type}`).run(); } catch (e) { if (!/duplicate column/i.test(String(e?.message || e))) throw e; }
+  }
   _ready.add(DB);
 }
 
@@ -533,6 +541,31 @@ export async function pinPage(env, row, now = Date.now()) {
   return true;
 }
 
+/**
+ * The locations made for new customers have no address, but JobTread's "Location Formatted Address" workflow (on every
+ * new location) writes the text "null" into it (seen on Mathew's, Nov 25 2026), which JobTread then shows as the
+ * address and the Zillow check would read as a home. Once a made row's location is two minutes old (the workflow
+ * has run), its address is set back to none; a location of a customer that existed before is never touched.
+ */
+export async function clearMadeAddresses(env, { fetchImpl = fetch, now = Date.now(), limit = 10 } = {}) {
+  const { DB } = env;
+  await ensurePastJobs(DB);
+  const { results } = await DB.prepare(`SELECT key, location_id FROM past_jobs WHERE job_id IS NOT NULL AND location_id IS NOT NULL
+      AND plan_account_id IS NULL AND address_cleared_at IS NULL AND made_at <= ? ORDER BY made_at LIMIT ?`).bind(iso(now - 2 * 60 * 1000), limit).all();
+  const out = [];
+  for (const row of results || []) {
+    const body = await pave(env.JOBTREAD_GRANT_KEY, { location: { $: { id: row.location_id }, id: {}, address: {}, account: { organization: { id: {} } } } }, fetchImpl);
+    const loc = body?.location;
+    if (!loc || loc.account?.organization?.id !== SOARD_ORG_ID) { await saveMade(DB, row.key, { address_cleared_at: iso(now) }, now); continue; }
+    if (loc.address != null && loc.address !== '') {
+      await pave(env.JOBTREAD_GRANT_KEY, { updateLocation: { $: { id: row.location_id, address: null } } }, fetchImpl);
+      out.push({ key: row.key, was: loc.address });
+    }
+    await saveMade(DB, row.key, { address_cleared_at: iso(now) }, now);
+  }
+  return out;
+}
+
 /** One row, claimed, made, its failure recorded → the result, or { key, error } */
 async function makeClaimed(env, row, { fetchImpl, now, by }) {
   const { DB } = env;
@@ -589,6 +622,7 @@ export async function runPastJobs(env, { fetchImpl = fetch, now = Date.now(), li
   // Made jobs whose page still waits to be linked to them (a save someone else beat) come round first
   const { results: unpinned } = await DB.prepare("SELECT * FROM past_jobs WHERE job_id IS NOT NULL AND plan_pin = 1 AND pinned_at IS NULL LIMIT 5").all();
   for (const row of unpinned || []) await pinPage(env, row, now).catch(() => null);
+  await clearMadeAddresses(env, { fetchImpl, now }).catch(() => null);
   // In the order the rooms were revealed, so JobTread's job numbers follow SOARD's history
   const { results } = await DB.prepare("SELECT * FROM past_jobs WHERE state = 'queued' AND job_id IS NULL ORDER BY close_on, year, name LIMIT ?").bind(limit).all();
   if (!results?.length) return null;
