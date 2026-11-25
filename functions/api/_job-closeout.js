@@ -28,6 +28,7 @@ import { writeCloseoutField } from './_job-costs-sync.js';
 import { loadAllKids } from './_kid-status.js';
 import { buildsOf, roomTotal, buildSummary, BUILDS } from '../../public/admin/kids-shared.js';
 import { RAMP_CODE_ID } from './_jobtread-bills.js';
+import { madeClosed } from './_jt-jobs.js';
 
 export const HISTORY_FROM = '2025-01-01';
 const NEW_CLOSE_DAYS = 14;          // a job closed within this many days is news; older ones are history
@@ -192,7 +193,7 @@ export async function closedJobs(env, since, { fetchImpl = fetch } = {}) {
           $: { size: 25, where: ['closedOn', '>=', since], sortBy: [{ field: 'closedOn', order: 'desc' }], ...(page ? { page } : {}) },
           nextPage: {},
           nodes: {
-            id: {}, name: {}, number: {}, closedOn: {},
+            id: {}, name: {}, number: {}, closedOn: {}, createdAt: {},
             customFieldValues: { $: { size: 5, where: [['customField', 'id'], '=', FIELD_JOB_STATUS] }, nodes: { value: {} } },
           },
         },
@@ -201,6 +202,8 @@ export async function closedJobs(env, since, { fetchImpl = fetch } = {}) {
     const conn = data?.organization?.jobs;
     for (const j of conn?.nodes || []) {
       if (isRehearsalJob(j)) continue;
+      // A past makeover's record (made already closed, ./_past-jobs.js): no work or money went through it, so no close-out
+      if (madeClosed(j)) continue;
       out.push({ id: j.id, name: j.name, number: j.number || null, closedOn: j.closedOn, status: j.customFieldValues?.nodes?.[0]?.value || null });
     }
     page = conn?.nextPage;

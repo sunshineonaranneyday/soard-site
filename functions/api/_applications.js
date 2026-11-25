@@ -54,6 +54,7 @@ import { maybeSyncApplicants, familiesWithHomes } from './_applicants.js';
 import { runJotformBackfill, jotformSecondLook } from './_jotform-backfill.js';
 import { runNotifications } from './_applicant-notify.js';
 import { runApprovals } from './_applicant-approved.js';
+import { runPastJobs } from './_past-jobs.js';
 import { logAudit } from './_audit.js';
 import { seasonSummary } from './_application-season.js';
 import { capOf, capFacts, countReceived, claimWarning, tellCap, fullMessageOf, wholeNumber, CAP_USER, MAX_LIMIT } from './_application-cap.js';
@@ -1671,7 +1672,10 @@ export async function maybeSweepApplications(env, { fetchImpl = fetch, now = Dat
     const jotform = await runJotformBackfill(env, { fetchImpl, now });
     // Then, once: the families it couldn't place, and JobTread's Application URLs off Jotform
     const jotformLook = await jotformSecondLook(env, { fetchImpl, now });
-    return { processed, reminded, expired, notified, approved, applicants, capped, spanish, jotform, jotformLook };
+    // Past makeovers as closed JobTread jobs, a few a run once a founder pressed Make the rest (./_past-jobs.js);
+    // after the applicants' own work, so families come first
+    const pastJobs = await runPastJobs(env, { fetchImpl, now }).catch((e) => ({ error: e.message }));
+    return { processed, reminded, expired, notified, approved, applicants, capped, spanish, jotform, jotformLook, pastJobs };
   } catch {
     return null;
   }

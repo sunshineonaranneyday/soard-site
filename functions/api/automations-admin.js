@@ -58,6 +58,7 @@ import { hubStatus } from './_broadcast.js';
 import { slackStatus, readAlertTexts, alertPhones } from './_broadcast-notify.js';
 import { JT_URL, SOARD_ORG_ID } from './_reveals.js';
 import { approvalsStatus } from './_applicant-approved.js';
+import { pastJobsFacts } from './_past-jobs.js';
 import { replyAlertFacts } from './_applicant-replies.js';
 import { coverFacts } from './_job-covers.js';
 import { backfillFacts } from './_jotform-backfill.js';
@@ -409,8 +410,8 @@ export async function jobtreadFacts(grantKey, fetchImpl = fetch) {
 const ZILLOW_URL_FIELD = '22P3cqMfrQEp';
 const ZILLOW_WAIT_MS = 30 * 60 * 1000; // DataX answers in seconds; a fresh home isn't judged yet
 
-/** Whether DataX's Zillow lookup is reaching new homes: the newest customer locations at least 30 minutes old
- *  (TEST accounts left out), whether each has its Zillow link, and how many of the newest in a row have none.
+/** Whether DataX's Zillow lookup is reaching new homes: the newest customer locations with an address, at least 30
+ *  minutes old (TEST accounts left out), whether each has its Zillow link, and how many of the newest in a row have none.
  *  Counts and times only, never an address or a name */
 export async function zillowFacts(grantKey, fetchImpl = fetch, now = Date.now()) {
   if (!grantKey) return { error: 'JOBTREAD_GRANT_KEY is not set' };
@@ -418,7 +419,8 @@ export async function zillowFacts(grantKey, fetchImpl = fetch, now = Date.now())
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query: { $: { grantKey }, organization: { $: { id: SOARD_ORG_ID }, locations: {
-      $: { size: 25, sortBy: [{ field: 'createdAt', order: 'desc' }] },
+      // Only locations with an address: a past makeover's record has none (./_past-jobs.js), and there's no home to look up
+      $: { size: 25, where: ['address', '!=', null], sortBy: [{ field: 'createdAt', order: 'desc' }] },
       nodes: { createdAt: {}, account: { name: {}, type: {} }, customFieldValues: { $: { size: 25 }, nodes: { value: {}, customField: { id: {} } } } },
     } } } }),
   });
@@ -527,6 +529,7 @@ export async function gatherFacts(env, { fetchImpl = fetch, now = Date.now() } =
     kitQuiet: await settle(() => kitQuietFacts(DB)),
     applicationLimit: await settle(() => applicationLimitFacts(DB, now)),
     approvals: approvalFacts(await settle(() => approvalsStatus(DB))),
+    pastJobs: await settle(() => pastJobsFacts(DB)).then((r) => (r && !r.error ? r : null)),
     replyAlerts: await settle(() => replyAlertFacts(DB)).then((r) => (r && !r.error ? r : null)),
     covers: await settle(() => coverFacts(DB)).then((c) => (c && !c.error ? c : null)),
     press: await settle(() => pressFacts(DB)),

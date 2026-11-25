@@ -2812,6 +2812,12 @@
     .kd-fold__done strong { color: var(--color-text); }
     .kd-fold__err { font-size: var(--fs-sm); color: var(--tone-warn-text, var(--color-text)); }
     @media (max-width: 640px) { .kd-fold__open { margin-left: 0; } .kd-fold__form .btn, .kd-fold__form .form-select, .kd-fold__form .form-input, .kd-fold__done .btn { min-height: 44px; } }
+    /* Kids → Past makeovers in JobTread */
+    .pj-checks { display: grid; gap: 0.35rem; margin-bottom: 1rem; font-size: var(--fs-sm); color: var(--color-text-secondary); }
+    .pj-checks p { margin: 0; }
+    .pj-group { margin-bottom: 1.25rem; }
+    .pj-group h3 { margin: 0 0 0.15rem; font-size: var(--fs-base); }
+    .pj-group > .kd-fold__hint { margin: 0 0 0.6rem; }
     .kd-toolbar { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 0 -0.5rem 0.75rem; padding: 0.5rem; background: var(--color-bg); }
     .kd-toolbar.is-stuck { box-shadow: 0 1px 0 var(--color-border), 0 8px 16px -12px rgba(26,27,31,0.25); }
     .kd-search { position: relative; }
@@ -11584,6 +11590,91 @@
       </${KdDialog}>`;
     }
 
+    // ═══════════════════════════════════════════
+    // KIDS: PAST MAKEOVERS IN JOBTREAD
+    // Every finished kid page and community project with no JobTread job gets a
+    // closed one (functions/api/_past-jobs.js). Founders only: read JobTread
+    // again, answer a row with several customers, make the first job alone,
+    // then queue the rest for the application sweep.
+    // ═══════════════════════════════════════════
+    const pjApi = async (body) => {
+      const res = await fetch('/api/past-jobs-admin', body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+      const r = await res.json().catch(() => ({ success: false, error: `Couldn’t reach the site (${res.status})` }));
+      if (!r.success) { const e = new Error(r.error || 'Something went wrong'); e.status = res.status; throw e; }
+      return r;
+    };
+    const PJ_GROUPS = [
+      ['ask', 'Needs a person', 'More than one JobTread customer fits, or the job’s name would fit another page too. Pick the customer, or a new one.'],
+      ['failed', 'Couldn’t be made', 'JobTread refused three times. The reason is on each row.'],
+      ['queued', 'Being made', 'The site makes a few every two minutes.'],
+      ['ready', 'Ready to make', 'Each gets a closed job, Status Closed Done, closed on its reveal date.'],
+      ['made', 'Made', 'Closed jobs in JobTread now.'],
+      ['has-job', 'Already in JobTread', 'The kid status sync already links these pages to a job, so nothing is made.'],
+      ['listed', 'Not read yet', 'Read JobTread again to plan these.'],
+    ];
+    const pjDate = (d) => { if (!d) return ''; const [y, m, day] = String(d).split('-').map(Number); try { return new Date(y, m - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return d; } };
+
+    function PastJobRow({ r, onAnswer, busy }) {
+      const customer = r.state === 'made' ? r.account_name : r.plan_account_name;
+      return html`<li class="kd-fold pj-row">
+        <div class="kd-fold__top">
+          <span class="kd-fold__name">${r.name} · ${r.year}</span>
+          <span class="kd-fold__meta">${r.kind === 'community' ? 'Community project' : 'Kid makeover'}</span>
+          ${r.job_id ? html`<a class="kd-fold__open" href=${`https://app.jobtread.com/jobs/${r.job_id}`} target="_blank" rel="noopener">Open the job ${kdIcon.external}</a>` : null}
+        </div>
+        ${r.state === 'has-job' ? html`<div class="kd-fold__hint">${r.plan_note}</div>` : html`<div class="kd-fold__done">
+          <span>Job <strong>${r.made_job_name || r.job_name || ''}</strong></span>
+          ${r.close_on ? html`<span>closed ${pjDate(r.close_on)}</span>` : null}
+          ${customer ? html`<span>${r.state !== 'made' && !r.plan_account_id ? 'new customer' : 'customer'} ${customer}</span>` : null}
+        </div>
+        ${r.close_on && r.close_how && r.close_on !== r.draft_date ? html`<div class="kd-fold__hint">${r.close_how}.</div>` : null}`}
+        ${r.state === 'ask' ? html`<div class="kd-fold__hint">${r.plan_note}</div>
+          <div class="kd-fold__form">
+            ${(r.candidates || []).map((c) => html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, accountId: c.id })}>${c.name}</button>`)}
+            <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, account: 'new' })}>A new customer</button>
+          </div>` : null}
+        ${r.answer && r.state !== 'made' ? html`<div class="kd-fold__done"><span>${r.answered_by ? kdFoldWho(r.answered_by) : 'Someone'} picked ${r.answer.account === 'new' ? 'a new customer' : 'this customer'}.</span>
+          <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, clear: true })}>Change</button></div>` : null}
+        ${r.error && r.state !== 'made' ? html`<div class="kd-fold__err">${r.error}</div>` : null}
+      </li>`;
+    }
+
+    function PastJobsDialog({ data, onChange, onClose, addToast }) {
+      const [busy, setBusy] = useState('');
+      const [err, setErr] = useState('');
+      const [checks, setChecks] = useState(null);
+      const rows = data.rows || [];
+      const by = (k) => rows.filter((r) => r.state === k);
+      const run = async (label, body, after) => {
+        setBusy(label); setErr('');
+        try { const r = await pjApi(body); await onChange(); after?.(r); } catch (e) { setErr(e.message); } finally { setBusy(''); }
+      };
+      useEffect(() => { pjApi({ action: 'checks' }).then(setChecks).catch(() => {}); }, []);
+      const ready = by('ready').length;
+      const counts = [[ready, 'ready to make'], [by('ask').length, 'waiting on a person'], [by('queued').length, 'being made'], [by('failed').length, 'couldn’t be made'],
+        [by('made').length, 'made'], [by('has-job').length, 'already in JobTread']].filter(([n]) => n).map(([n, w]) => `${n.toLocaleString()} ${w}`);
+      const sub = data.planned ? `Read from JobTread ${kdFoldWhen(data.planned.at)}: ${counts.join(', ') || 'nothing on the list'}.` : 'Not read from JobTread yet.';
+      const qb = checks?.quickbooks;
+      return html`<${KdDialog} title="Past makeovers in JobTread" size="lg" onClose=${onClose} busy=${!!busy} sub=${sub}
+        footer=${html`
+          <button type="button" class="btn btn-ghost" disabled=${!!busy} onClick=${() => run('plan', { action: 'plan' })}>${busy === 'plan' ? 'Reading JobTread…' : 'Read JobTread again'}</button>
+          ${!data.first ? html`<button type="button" class="btn btn-primary" disabled=${!!busy || !ready} onClick=${() => run('first', { action: 'first' }, (r) => addToast?.(`Made ${r.made?.jobName || 'the first job'} in JobTread`, 'success'))}>${busy === 'first' ? 'Making it…' : 'Make the first job'}</button>`
+            : ready ? html`<button type="button" class="btn btn-primary" disabled=${!!busy} onClick=${() => run('rest', { action: 'rest' }, (r) => addToast?.(`${kdPlural(r.queued || 0, 'job')} on the way to JobTread`, 'success'))}>${busy === 'rest' ? 'Queuing…' : `Make the rest (${ready})`}</button>` : null}`}>
+        <div class="pj-checks">
+          <p>The first job is made alone, so JobTread’s workflows, QuickBooks and DataX can be checked before the rest.${data.first ? ` The first, ${data.first.jobName || 'one job'}, was made ${kdFoldWhen(data.first.at)}.` : ''}</p>
+          ${qb ? html`<p>QuickBooks: ${qb.known ? (qb.connected ? (qb.creatingProjects ? 'JobTread makes a QuickBooks project for every new job, so these would get closed, empty projects.' : 'connected, and new jobs don’t make projects.') : 'not connected to JobTread.') : 'JobTread doesn’t say whether new jobs make QuickBooks projects, so QuickBooks itself is checked after the first job.'}</p>` : null}
+          ${checks?.workflows?.list?.length ? html`<p>JobTread workflows that are on: ${checks.workflows.list.map((w) => w.name).join(', ')}.</p>` : null}
+          ${data.summary?.differs?.length ? html`<p>${kdPlural(data.summary.differs.length, 'date')} differ from the reviewed list (a date outside the page’s year closes on Dec 31).</p>` : null}
+        </div>
+        ${err ? html`<p class="kd-fold__err" role="alert">${err}</p>` : null}
+        ${PJ_GROUPS.map(([k, label, hint]) => {
+          const list = by(k);
+          return list.length ? html`<section class="pj-group"><h3>${label} <span class="text-muted">${list.length}</span></h3><p class="kd-fold__hint">${hint}</p>
+            <ul class="kd-fold-list">${list.map((r) => html`<${PastJobRow} key=${r.key} r=${r} busy=${!!busy} onAnswer=${(body) => run('answer', { action: 'answer', ...body })} />`)}</ul></section>` : null;
+        })}
+      </${KdDialog}>`;
+    }
+
     function KidsList({ kids, partners = [], dashboardFilter, onClearFilter, onEdit, onDelete, addToast, onReload, onDeploy }) {
       const [search, setSearch] = useState('');
       // Upload photos and videos (profiles themselves are made when a family is approved)
@@ -11609,6 +11700,12 @@
         return () => { on = false; };
       }, []);
       const foldersLeft = folders.folders.filter((f) => !f.decision).length;
+      // Past makeovers in JobTread (founders only: anyone else's read is refused, and the card stays away)
+      const [pastJobs, setPastJobs] = useState(null);
+      const [pastOpen, setPastOpen] = useState(false);
+      const loadPastJobs = () => pjApi().then((r) => setPastJobs(r)).catch(() => setPastJobs(null));
+      useEffect(() => { loadPastJobs(); }, []);
+      const pastLeft = (pastJobs?.rows || []).filter((r) => !['made', 'has-job'].includes(r.state)).length;
       const folderSaved = (row) => setFolders((x) => ({ ...x, folders: x.folders.map((f) => (f.folder === row.folder ? row : f)) }));
       const [deleted, setDeleted] = useState([]);
       const [showDeleted, setShowDeleted] = useState(false);
@@ -11843,6 +11940,7 @@
         ${uploading ? html`<${KidMediaUpload} kids=${kids} addToast=${addToast} onClose=${() => setUploading(false)} onReload=${onReload} onDeploy=${onDeploy}
           onOpen=${(slug) => { setUploading(false); onEdit(slug); }} />` : null}
         ${naming ? html`<${KidFoldersDialog} folders=${folders.folders} kids=${folders.kids} onSaved=${folderSaved} onClose=${() => setNaming(false)} />` : null}
+        ${pastOpen && pastJobs ? html`<${PastJobsDialog} data=${pastJobs} onChange=${loadPastJobs} addToast=${addToast} onClose=${() => setPastOpen(false)} />` : null}
         ${showDeleted ? html`<${KidsDeletedDialog} kids=${kids} deleted=${deleted} addToast=${addToast} onClose=${() => setShowDeleted(false)}
           onRestored=${(slug) => { setShowDeleted(false); setDeleted((d) => d.filter((x) => x.slug !== slug)); onReload?.(); }} />` : null}
         <div class="page-header kd-head">
@@ -11870,6 +11968,14 @@
             <span>${kdPlural(foldersLeft, 'folder')} of makeover photos in Dropbox ${foldersLeft === 1 ? 'matches' : 'match'} no kid page. Say whose each one is before the photos move to JobTread.</span>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setNaming(true)}>${kdIcon.check} Name them…</button>
+        </div>` : null}
+
+        ${pastJobs && pastLeft ? html`<div class="kd-tidy-banner pj-banner" role="note">
+          <div class="kd-tidy-banner__text">
+            <strong>Past makeovers in JobTread</strong>
+            <span>${kdPlural(pastLeft, 'past project')} ${pastLeft === 1 ? 'has' : 'have'} no JobTread job yet. Each gets a closed one, so JobTread holds every project and its old photos have a place to go.</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setPastOpen(true)}>${kdIcon.check} Open…</button>
         </div>` : null}
 
         ${!kids.length ? html`<div class="card kd-empty-all">
