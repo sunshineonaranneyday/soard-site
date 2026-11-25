@@ -48,6 +48,7 @@ const MAX_BYTES = 100 * 1024 * 1024;                           // JobTread's lim
 const LINK_TTL_MS = 6 * 60 * 60 * 1000;
 const TURN_MS = 60 * 1000;
 const COPY_MS = 18 * 1000;                                     // inside the heartbeat's 28 seconds
+const AT_ONCE = 3;                                             // photos copied side by side
 const SITE = 'https://sunshineonaranneyday.com';
 const iso = (t = Date.now()) => new Date(t).toISOString();
 const enc = new TextEncoder();
@@ -248,11 +249,10 @@ export async function copySome(env, { scope, fetchImpl = fetch, now = Date.now()
       AND (p.claimed_at IS NULL OR p.claimed_at < ?) ORDER BY j.close_on, p.key, p.path, p.name LIMIT 40`)
     .bind(...(scope?.key ? [scope.key] : []), iso(now - 10 * 60 * 1000)).all();
   const out = { copied: 0, failed: 0 };
-  for (const p of results || []) {
-    if (Date.now() > until) break;
+  const one = async (p) => {
     const claim = await DB.prepare("UPDATE past_photos SET claimed_at = ? WHERE drive_id = ? AND state = 'listed' AND (claimed_at IS NULL OR claimed_at < ?)")
       .bind(iso(now), p.drive_id, iso(now - 10 * 60 * 1000)).run();
-    if (!claim?.meta?.changes) continue;
+    if (!claim?.meta?.changes) return;
     try {
       const id = await copyOne(env, p, { tags, fetchImpl, now });
       await DB.prepare("UPDATE past_photos SET state = 'copied', jt_file_id = ?, copied_at = ?, error = NULL, claimed_at = NULL WHERE drive_id = ?").bind(id, iso(Date.now()), p.drive_id).run();
@@ -263,7 +263,10 @@ export async function copySome(env, { scope, fetchImpl = fetch, now = Date.now()
         .bind(attempts, String(e.message || e).slice(0, 300), attempts >= 3 ? 'failed' : 'listed', p.drive_id).run();
       out.failed++;
     }
-  }
+  };
+  // A few at once (JobTread fetches each from the link while its call waits, about 2 seconds a photo), never past the time
+  const list = results || [];
+  for (let i = 0; i < list.length && Date.now() <= until; i += AT_ONCE) await Promise.all(list.slice(i, i + AT_ONCE).map(one));
   return out;
 }
 
