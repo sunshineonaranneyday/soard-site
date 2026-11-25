@@ -121,13 +121,30 @@ export function refreshAccess({ clientId, clientSecret, refreshToken, fetchImpl 
  * A client for the Data API. call('GET', 'channels', { part, mine }) → data.
  * A 401 refreshes the token once and retries.
  */
-export function client({ clientId, clientSecret, refreshToken, fetchImpl = fetch }) {
+export function client({ clientId, clientSecret, refreshToken, fetchImpl = fetch, wait = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   let token = null;
   const fresh = async () => (token = (await refreshAccess({ clientId, clientSecret, refreshToken, fetchImpl })).access_token);
 
+  // A dropped connection or a YouTube 5xx (it answers INTERNAL_ERROR now and then) is tried twice more
+  async function send(url, init, attempt = 0) {
+    let res;
+    try {
+      res = await fetchImpl(url, init);
+    } catch (e) {
+      if (attempt >= 2) throw e;
+      await wait(1000 * (attempt + 1));
+      return send(url, init, attempt + 1);
+    }
+    if (res.status >= 500 && attempt < 2) {
+      await wait(1000 * (attempt + 1));
+      return send(url, init, attempt + 1);
+    }
+    return res;
+  }
+
   async function request(method, url, { body, headers = {} } = {}, retried = false) {
     if (!token) await fresh();
-    const res = await fetchImpl(url, { method, headers: { authorization: `Bearer ${token}`, ...headers }, body });
+    const res = await send(url, { method, headers: { authorization: `Bearer ${token}`, ...headers }, body });
     if (res.status === 401 && !retried) {
       await fresh();
       return request(method, url, { body, headers }, true);
