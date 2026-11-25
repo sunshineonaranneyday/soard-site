@@ -5463,6 +5463,20 @@
       if (err) return html`<${LoadErrorCard} error=${`Could not load demo day invites: ${err}`} onRetry=${() => { setErr(null); load(); }} />`;
       return mod ? html`<${mod.DemoInvitesPanel} ...${props} ConfirmModal=${ConfirmModal} />` : html`<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
     }
+    // Families: every makeover family's contacts and their update links (#families,
+    // #families/<JobTread account>), kept in ./families.js and loaded on first visit
+    let familiesModule = null;
+    function FamiliesLazy(props) {
+      const [mod, setMod] = useState(() => lazyNow(familiesModule));
+      const [err, setErr] = useState(null);
+      const load = () => {
+        familiesModule ||= lazyKeep(import('./families.js'));
+        familiesModule.then((m) => setMod(m)).catch((e) => { familiesModule = null; setErr(e.message); });
+      };
+      useEffect(load, []);
+      if (err) return html`<${LoadErrorCard} error=${`Could not load Families: ${err}`} onRetry=${() => { setErr(null); load(); }} />`;
+      return mod ? html`<${mod.FamiliesArea} ...${props} />` : html`<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
+    }
     function DemoDayPage(props) {
       return html`
         <div class="page-header">
@@ -26489,6 +26503,8 @@ ${sections || '<p>No one yet.</p>'}
         { id: 'dashboard', label: 'Dashboard', icon: 'dashboard', hash: '' },
         { id: 'applications', label: 'Applications', icon: 'applications', hash: '#applications', meta: 'Families applying' },
         { id: 'kids-hub', label: 'Kids', icon: 'kids', hash: '#kids', meta: 'Kid pages and community projects' },
+        // Every makeover family's contacts, from JobTread, and the link that lets a family check them (./families.js)
+        { id: 'families', label: 'Families', icon: 'families', hash: '#families', meta: 'Every makeover family’s contacts, and their update links' },
         { id: 'demo-day', label: 'Demo Day', icon: 'demoDay', hash: '#demo-day', meta: 'Calendar invites for the first day of construction' },
         { id: 'broadcast', label: 'Reveals', icon: 'goLive', hash: '#broadcast', meta: 'Live broadcast and invites' },
         { id: 'job-costs', label: 'Job Costs', icon: 'jobCosts', hash: '#job-costs', meta: 'Spending against budgets, bills, close-outs, the budget builder and the insurance audit' },
@@ -26568,6 +26584,7 @@ ${sections || '<p>No one yet.</p>'}
     const NAV_PRELOAD = {
       applications: [() => applicationsModule, (p) => { applicationsModule = p; }, './applications.js'],
       'demo-day': [() => demoInvitesModule, (p) => { demoInvitesModule = p; }, './demo-invites.js'],
+      families: [() => familiesModule, (p) => { familiesModule = p; }, './families.js'],
       broadcast: [() => controlRoomModule, (p) => { controlRoomModule = p; }, './control-room.js'],
       'press-hub': [() => pressModule, (p) => { pressModule = p; }, './press.js'],
       'site-hub': [() => siteConfigModule, (p) => { siteConfigModule = p; }, './site-config.js'],
@@ -27287,6 +27304,7 @@ ${sections || '<p>No one yet.</p>'}
         kids: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M6 21v-2a6 6 0 0 1 12 0v2" /></svg>`,
         partners: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m11 17 2 2a1 1 0 1 0 3-3" /><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4" /><path d="m21 3 1 11h-2" /><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3" /><path d="M3 4h8" /></svg>`,
         team: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="9" cy="7" r="3" /><path d="M3 21v-1a5 5 0 0 1 10 0v1" /><circle cx="18" cy="9" r="2.5" /><path d="M15 21v-1a3.5 3.5 0 0 1 7 0v1" /></svg>`,
+        families: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9" /><circle cx="12" cy="12.5" r="2.2" /><path d="M8.5 21v-1.5a3.5 3.5 0 0 1 7 0V21" /></svg>`,
         articles: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4Z" /></svg>`,
         events: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>`,
         community: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>`,
@@ -27662,6 +27680,9 @@ ${sections || '<p>No one yet.</p>'}
 
           case 'demo-day':
             return html`<${DemoDayPage} addToast=${addToast} />`;
+
+          case 'families':
+            return html`<${FamiliesLazy} addToast=${addToast} />`;
 
           // ─── Site Config: ./site-config.js, by public page (#site/<page>) ───
           case 'site-hub':
