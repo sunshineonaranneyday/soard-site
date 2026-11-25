@@ -11,13 +11,15 @@ import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { W, CG, setup, rowOf, fakeFetch, hand, read, txn, mirrorTransaction, writeState, readState, slackSaid, MIN, DAY, TX } from './lib/check-gifts-harness-2.mjs';
 import { approveWith, dontSendWith } from './lib/check-gifts-approve.mjs';
+import { READERS } from '../functions/api/_ai.js';
 
 const realFetch = globalThis.fetch;
 after(() => { globalThis.fetch = realFetch; });
 
 const env = () => W.env;
 const world = () => W.world;
-const [KIMI] = ['@cf/moonshotai/kimi-k2.6', '@cf/qwen/qwen3.8-27b'];
+// The first of the two readers: a fake answers differently for each
+const [FIRST] = Object.keys(READERS);
 
 // Deposited at 10 AM Eastern on Nov 10; read on the run after, and its card made on the run after that
 const DEPOSIT = '2026-11-10T15:00:00Z';
@@ -102,7 +104,7 @@ test('a check\'s card offers the address printed on it, and once a person sends 
 });
 
 test('readers that disagree about the address, or a cashier\'s check, put no address anywhere', async () => {
-  world().reading = (m) => read({ ...OAK, street: m === KIMI ? '12 Oak St' : '21 Oak St' });
+  world().reading = (m) => read({ ...OAK, street: m === FIRST ? '12 Oak St' : '21 Oak St' });
   await runs(T0, T0 + 10 * MIN);
   assert.equal((await rowOf()).address, null);
   assert.equal((await view()).card.checkAddress, null, 'the card offers none');
@@ -186,7 +188,7 @@ test('a letter attached just before Send is still read before the check goes in'
 });
 
 test('a letter the readers don\'t agree on, or one for another amount, is put on the card for a person, and nothing is sent', async () => {
-  world().letter = (m) => letter({ recordAs: m === KIMI ? 'Dana Whitfield' : 'Marcus Lee' });
+  world().letter = (m) => letter({ recordAs: m === FIRST ? 'Dana Whitfield' : 'Marcus Lee' });
   await runs(T0, T0 + 10 * MIN);
   attach(LETTER);
   await runs(T0 + 20 * MIN, T0 + 40 * MIN);
@@ -251,7 +253,7 @@ test('more files beside a check than the site reads are put in front of a person
 });
 
 test('a check nobody could read stays with a person: a letter added then sends nothing by itself', async () => {
-  world().reading = (m) => read({ payer: m === KIMI ? 'Pine Foundation' : 'Oakline Builders' });
+  world().reading = (m) => read({ payer: m === FIRST ? 'Pine Foundation' : 'Oakline Builders' });
   await runs(T0, T0 + 30 * MIN);
   let r = await rowOf();
   assert.deepEqual([r.state, r.reason], ['person', 'unreadable']);
@@ -415,7 +417,7 @@ test('the write test puts an address on a test contact and removes it; addresses
 });
 
 test('a letter the site couldn\'t trust lends a person\'s send nothing', async () => {
-  world().letter = (m) => letter({ recordAs: m === KIMI ? 'Dana Whitfield' : 'Marcus Lee' });
+  world().letter = (m) => letter({ recordAs: m === FIRST ? 'Dana Whitfield' : 'Marcus Lee' });
   await runs(T0, T0 + 10 * MIN); attach(LETTER); await runs(T0 + 20 * MIN, T0 + 40 * MIN);
   const r = await rowOf();
   assert.deepEqual([r.state, r.reason, r.payer], ['person', 'letter', 'Pine Foundation']);
@@ -957,7 +959,7 @@ test('a check with another Category comes with "Don\'t send" suggested, and lose
 
 test('a check nobody could read is sent under the name a person types, Category or not', async () => {
   mark(null);
-  world().reading = (m) => read({ payer: m === KIMI ? 'Pine Foundation' : 'Oakline Builders' });
+  world().reading = (m) => read({ payer: m === FIRST ? 'Pine Foundation' : 'Oakline Builders' });
   await runs(T0, T0 + 30 * MIN);
   const r = await rowOf();
   assert.equal(r.reason, 'unreadable');

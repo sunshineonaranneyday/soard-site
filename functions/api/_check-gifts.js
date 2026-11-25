@@ -47,9 +47,9 @@
 import { getTransaction, mercuryConfigured, readState, writeState } from './_mercury.js';
 import { ensureTxnSchema, mirrorTransaction } from './_mercury-txns.js';
 import { handlePayment, zeffyGet, zeffySend, givenName, WRITE_TEST_NAME, WRITE_TEST_ONE_WORD } from './_zeffy.js';
-import { READERS, answerOf } from './_score-scans.js';
+import { answerOf } from './_score-scans.js';
 import { imageKind } from './_image-types.js';
-import { aiCapped, viaGateway } from './_ai.js';
+import { aiCapped, viaGateway, READERS, runReader } from './_ai.js';
 import { slackIssue, slackResolved, SITE_ORIGIN } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
 import { readConfig as readSpendConfig } from './_spend.js';
@@ -354,7 +354,7 @@ const DOWN = Symbol('down');
 /** One model's reading, or null; DOWN when it errored. A spending cap is thrown, so the check waits without spending a try */
 async function readWith(env, model, image) {
   try {
-    const out = await timed(env.AI.run(model, {
+    const out = await timed(runReader(env, model, {
       messages: [
         { role: 'system', content: READ_PROMPT },
         { role: 'user', content: [{ type: 'text', text: 'Read this check.' }, { type: 'image_url', image_url: { url: image } }] },
@@ -545,7 +545,7 @@ async function readLetterWith(env, model, { image = null, text = '' }) {
     ? [{ type: 'text', text: 'Read this page.' }, { type: 'image_url', image_url: { url: image } }]
     : `Read this page. Its text, as the file has it:\n${text.slice(0, 8000)}`;
   try {
-    const out = await timed(env.AI.run(model, {
+    const out = await timed(runReader(env, model, {
       messages: [{ role: 'system', content: LETTER_PROMPT }, { role: 'user', content }],
       max_tokens: 800, temperature: 0, ...(READERS[model] || {}),
       response_format: { type: 'json_schema', json_schema: LETTER_SCHEMA },

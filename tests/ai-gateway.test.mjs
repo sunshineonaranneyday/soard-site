@@ -22,7 +22,8 @@ test('every Workers AI call in the site carries viaGateway', () => {
   for (const file of sources('functions')) {
     if (file.endsWith('_ai.js')) continue;
     const text = readFileSync(file, 'utf8');
-    const runs = text.match(/\.AI\??\.run\(|\bai\.run\(/g)?.length || 0;
+    // A reader's call (runReader, _ai.js) is an AI call made through the caller's viaGateway
+    const runs = text.match(/\.AI\??\.run\(|\bai\.run\(|\brunReader\(/g)?.length || 0;
     const routed = text.match(/viaGateway\('[a-z-]+'\)/g)?.length || 0;
     calls += runs;
     assert.equal(routed, runs, `${file}: ${runs} AI call(s), ${routed} through viaGateway`);

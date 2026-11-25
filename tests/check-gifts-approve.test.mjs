@@ -7,6 +7,7 @@
  */
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { READERS } from '../functions/api/_ai.js';
 import { W, CG, setup, rowOf, fakeFetch, hand, read, txn, mirrorTransaction, writeState, readState, slackSaid, approve, dontSend, card, MIN, DAY, TX, NOW } from './lib/check-gifts-harness-2.mjs';
 
 const realFetch = globalThis.fetch;
@@ -281,7 +282,7 @@ test('an older screen never overrules a newer answer', async () => {
 });
 
 test('an unreadable check still gets a card, for the person to type who it\'s from', async () => {
-  world().reading = (m) => read({ payer: m.includes('kimi') ? 'Pine Foundation' : 'Oakline Builders' });
+  world().reading = (m) => read({ payer: m === Object.keys(READERS)[0] ? 'Pine Foundation' : 'Oakline Builders' });
   world().txns[TX] = { ...world().txns[TX], counterpartyName: 'Check' };
   await runs(NOW, NOW + 40 * MIN);
   const c = await card();
