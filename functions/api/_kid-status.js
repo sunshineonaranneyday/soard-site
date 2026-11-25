@@ -387,11 +387,12 @@ export async function syncKidStatuses(env, { jobId = null, fetchImpl = fetch, no
       out.push({ slug: rec.slug, name: rec.name, change, ...(project ? { kind: 'community' } : {}) });
       if (plan.hide === 'denied' && !alerted[key]) { await alertDenied(env, { kid: rec, jobId: job.id, project }); alerted[key] = iso; }
     }
-    // Each job's cover shows the kid's (or project's) Main photo (./_job-covers.js)
-    const covers = await syncJobCovers(env, links, records.map((r) => ({ ...r, slug: keyOf(r) })), { fetchImpl, now });
     // Meet the Kids' order follows a reveal day learned or moved (a failed write waits for the next run)
     const daysMoved = await keepRevealDays(env.DB, links, records, now).catch(() => false);
-    const patch = { alerted, lastRun: { at: iso, scope: jobId ? 'job' : 'all', changed: out.length, covers: covers.length, ...(daysMoved ? { revealDays: true } : {}) } };
+    // Saved and published before the job covers below: each cover waits on JobTread fetching a photo, and a sweep
+    // runs in the time a request leaves it, so one cut short there (Nov 25 2026, with the past makeovers' new jobs
+    // all wanting a cover) has still published what changed
+    const patch = { alerted, lastRun: { at: iso, scope: jobId ? 'job' : 'all', changed: out.length, ...(daysMoved ? { revealDays: true } : {}) } };
     if (!jobId) patch.lastSweepAt = iso;
     if (out.length || daysMoved || state.deployPending) {
       const d = await deploy(env, state, now, out.length ? undefined : 'Reveal days from JobTread (Meet the Kids order)');
@@ -399,6 +400,9 @@ export async function syncKidStatuses(env, { jobId = null, fetchImpl = fetch, no
       patch.deployPending = d.pending;
     }
     await writeState(env.DB, patch);
+    // Each job's cover shows the kid's (or project's) Main photo (./_job-covers.js)
+    const covers = await syncJobCovers(env, links, records.map((r) => ({ ...r, slug: keyOf(r) })), { fetchImpl, now });
+    await writeState(env.DB, { lastRun: { ...patch.lastRun, covers: covers.length } });
     return out;
   } catch (err) {
     console.error('[kid-status]', err.message);

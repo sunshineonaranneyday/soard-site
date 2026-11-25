@@ -295,3 +295,29 @@ test('each kid’s reveal day, from their Reveal task once it has come, is kept 
   assert.deepEqual(await days(), { dex: '2026-07-09', colin: '2026-12-04' });
   assert.equal(hooks.length, 2);
 });
+
+test('a sweep cut short while JobTread fetches the job covers has already saved, published and kept the reveal days', async (t) => {
+  const hooks = [];
+  t.mock.method(globalThis, 'fetch', async (url) => { hooks.push(String(url)); return new Response('ok'); });
+  const photo = 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/kids/ava/1.jpg/public';
+  const DB = await world([
+    { slug: 'ava', name: 'Ava', year: 2026, status: 'in-progress', publishStatus: 'published', heroImage: photo, photos: [{ url: photo, alt: '' }] },
+  ]);
+  const jobs = [{ ...job('j1', 'Ava Sample (2026)', 'Closed Done'), tasks: { nodes: [{ progress: 1, startDate: '2026-11-01' }] } }];
+  let coverAsked = null;
+  const reached = new Promise((done) => { coverAsked = done; });
+  // JobTread never answers the cover upload: the request's time runs out there
+  const jt = async (url, init) => {
+    const q = JSON.parse(init.body).query;
+    if (q.createUploadRequest || q.updateJob) { coverAsked(); return new Promise(() => {}); }
+    return jtFetch(jobs)(url, init);
+  };
+  const env = { DB, JOBTREAD_GRANT_KEY: 'k', CF_PAGES_DEPLOY_HOOK: 'https://hook.example/deploy' };
+  syncKidStatuses(env, { fetchImpl: jt, now: Date.parse('2026-11-25T23:00:00Z') });
+  await reached;
+  assert.equal((await row(DB, 'ava')).status, 'completed');
+  assert.deepEqual(JSON.parse((await DB.prepare('SELECT value FROM kid_status_state WHERE key = ?').bind(REVEAL_DAYS_KEY).first()).value), { ava: '2026-11-01' });
+  assert.deepEqual(hooks, ['https://hook.example/deploy'], 'published before the covers');
+  const state = JSON.parse((await DB.prepare("SELECT value FROM kid_status_state WHERE key = 'state'").first()).value);
+  assert.equal(state.lastRun.changed, 1, 'the run is recorded');
+});
