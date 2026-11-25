@@ -28,6 +28,7 @@
 import * as stream from './_stream-live.js';
 import * as fb from './_broadcast-fb.js';
 import * as yt from './_youtube.js';
+import { autoOn as ytAutoOn } from './_youtube-live.js';
 import * as notify from './_broadcast-notify.js';
 import { probeFeed, deadSide, AUDIO } from './_stream-probe.js';
 
@@ -202,7 +203,7 @@ async function youtubeLive(env, config) {
     }
     if (ch.error) return { configured: true, ok: false, error: ch.error };
     const now = await yt.liveNow(env, ch.id);
-    return { configured: true, channelId: ch.id, channelTitle: ch.title, ...now };
+    return { configured: true, auto: ytAutoOn(env, config), channelId: ch.id, channelTitle: ch.title, ...now };
   } catch (e) {
     return { configured: true, ok: false, error: e.message };
   }
@@ -280,7 +281,7 @@ export function destinations({ config, state, phoneLive, liveForMs, probe, viewe
   else if (settling(RULES.ytGrace)) Object.assign(out.youtube, { status: 'wait', title: 'Starting', detail: 'YouTube takes up to two minutes to show a new live.' });
   else Object.assign(out.youtube, youtube.upcoming
     ? { status: 'warn', title: 'Waiting in YouTube Studio', detail: 'YouTube has the broadcast set up but hasn\'t started it.', fix: 'Turn on Auto-start in YouTube Studio, or press Go live there.', action: { label: 'Open YouTube Studio', url: studio } }
-    : { status: 'warn', title: 'Not live', detail: 'The channel has no live broadcast.', fix: 'In YouTube Studio → Go live → Stream, check the stream key matches Settings → YouTube and Auto-start is on.', action: { label: 'Open YouTube Studio', url: studio } });
+    : { status: 'warn', title: 'Not live', detail: 'The channel has no live broadcast.', fix: youtube.auto ? 'The site makes the reveal\'s YouTube live and starts it 45 s in; Settings → YouTube says why it didn\'t. In YouTube Studio → Content → Live, Go live on the reveal\'s live starts it by hand.' : 'In YouTube Studio → Go live → Stream, check the stream key matches Settings → YouTube and Auto-start is on.', action: { label: 'Open YouTube Studio', url: studio } });
 
   // Instagram Live: manual, per broadcast, and Instagram offers no API to confirm it
   const igOut = outputOf('instagram');

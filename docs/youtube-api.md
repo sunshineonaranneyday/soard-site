@@ -24,6 +24,14 @@ node scripts/youtube.mjs thumbnail <videoId> thumb.jpg
 
 Quota: 10,000 units a day for the project. A read is 1, a video or playlist update 50, a thumbnail 50, a banner upload 50. Updating every video (about 220) takes two days of quota.
 
+## The site uses the same sign-in
+
+The website signs in with the same client and refresh token, as Cloudflare Pages secrets `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET` and `YOUTUBE_REFRESH_TOKEN` (`functions/api/_youtube-auth.js`), to make each reveal's own YouTube live (docs/live-broadcast.md → YouTube). After signing in again, update the Pages secret too, from the Keychain without showing it:
+
+```bash
+security find-generic-password -s soard-site -a YOUTUBE_REFRESH_TOKEN -w | npx wrangler pages secret put YOUTUBE_REFRESH_TOKEN --project-name soard-site
+```
+
 ## Signing in again
 
 If Google stops accepting the refresh token (a password change on the account, or the app removed at myaccount.google.com/permissions):

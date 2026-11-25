@@ -52,6 +52,7 @@ import * as reels from './_broadcast-reel.js';
 import * as monitor from './_broadcast-monitor.js';
 import * as preflight from './_broadcast-preflight.js';
 import * as revealStats from './_reveal-stats.js';
+import * as ytLive from './_youtube-live.js';
 import { testGuests } from './_reveal-invites.js';
 import { cfImg, HERO_TRANSFORM } from './_reveal-invite-email.js';
 import { overLinkFor } from './_over-link.js';
@@ -199,7 +200,8 @@ export function defaultConfig() {
     rehearsalInput: null,
     outputs: {},           // { facebook: { uid, url, keyMask, enabled, createdAt }, youtube: {...} }
     facebook: { mode: 'persistent', pageUrl: 'https://www.facebook.com/SunshineOnaRanneyDay' },
-    youtube: { channelUrl: 'https://www.youtube.com/@sunshineonaranneyday/live' },
+    // auto: the site makes each reveal's YouTube live (_youtube-live.js) once it is signed in as the channel
+    youtube: { channelUrl: 'https://www.youtube.com/@sunshineonaranneyday/live', auto: true },
     instagram: { profileUrl: 'https://www.instagram.com/sunshineonaranneyday' },
     orientation: 'portrait',   // what the crew shoots; the site player matches (the team shoots vertical)
     reels: reels.defaultReelConfig(), // automatic Instagram Reel of every replay
@@ -2502,6 +2504,8 @@ async function tick(env, { source, force, by, keepLease = async () => true, answ
     },
     async () => { state = await goLiveEffects(env, config, state, work, by); },
     async () => { state = await endedEffects(env, config, state, health, work, by); },
+    // YouTube: the reveal's own live, made ahead with its name and time, tied to the key, ended with the reveal
+    async () => { await ytLive.syncYouTubeLive(env, config, state, work).catch((e) => work.push(`youtube-error: ${e.message}`)); },
     async () => { if (live() && !state.quiet) state = await fbRefreshPermalink(env, state, work); },
     // Feed watch, go/no-go and mic checks only report; nothing they do may stop the state machine (a test pings nobody)
     // While the phone is away and staff are asked "Is the reveal over?", the drop's own alert isn't texted too

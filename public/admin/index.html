@@ -1478,6 +1478,11 @@
     .bc-block p { margin: 0 0 .75rem; line-height: 1.55; }
     .bc-block-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem 1rem; flex-wrap: wrap; margin-bottom: .35rem; }
     .bc-block-head h4 { margin: 0; }
+    .bc-yt-lives { list-style: none; margin: .25rem 0 0; padding: 0; display: grid; gap: .5rem; }
+    .bc-yt-live { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .65rem; align-items: center; }
+    .bc-yt-live > span:nth-child(2) { display: grid; gap: .1rem; min-width: 0; }
+    .bc-yt-live strong { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+    .bc-block .checkbox-label + p { margin-top: .5rem; }
     .bc-indent { padding-left: 1.75rem; }
     .bc-radio { display: flex; gap: .65rem; align-items: flex-start; padding: .55rem 0; cursor: pointer; }
     .bc-radio input { margin-top: .25rem; flex: none; }
@@ -5831,6 +5836,7 @@
       facebookMode: c.facebook?.mode || 'persistent',
       pageUrl: c.facebook?.pageUrl || '',
       youtubeUrl: c.youtube?.channelUrl || '',
+      youtubeAuto: c.youtube?.auto !== false,
       instagramUrl: c.instagram?.profileUrl || '',
       orientation: c.orientation || 'portrait',
       reelsEnabled: c.reels?.enabled !== false,
@@ -5852,7 +5858,7 @@
     });
     const bcCfgTo = (f) => ({
       facebook: { mode: f.facebookMode, pageUrl: f.pageUrl },
-      youtube: { channelUrl: f.youtubeUrl },
+      youtube: { channelUrl: f.youtubeUrl, auto: f.youtubeAuto },
       instagram: { profileUrl: f.instagramUrl },
       orientation: f.orientation,
       reels: { enabled: f.reelsEnabled, facebook: f.reelsFacebook, length: f.reelsLength, caption: f.reelsCaption, leadSeconds: Number(f.reelsLead), shareToFeed: f.reelsFeed },
@@ -6210,6 +6216,7 @@
         facebookToken: go('facebook', 'Facebook settings'),
         facebookPost: { label: 'Live Producer', href: 'https://www.facebook.com/live/producer' },
         youtube: go('youtube', 'YouTube settings'),
+        youtubeOther: { label: 'YouTube Studio', href: 'https://studio.youtube.com/channel/UC/videos/live' },
         slack: go('alerts', 'Alert settings'),
         kid: st.jobId ? { label: 'Open in JobTread', href: `https://app.jobtread.com/jobs/${st.jobId}` } : { label: 'Customize', onClick: () => setEditing(true) },
       };
@@ -6404,6 +6411,40 @@
       </div>`;
     }
 
+    // Each reveal's own YouTube live, as the site made it (functions/api/_youtube-live.js)
+    const YT_STATUS = {
+      created: ['badge-yellow', 'Made, not tied to the key yet'], ready: ['badge-green', 'Upcoming, starts with the phone'],
+      testStarting: ['badge-red', 'Live now'], testing: ['badge-red', 'Live now'], liveStarting: ['badge-red', 'Live now'], live: ['badge-red', 'Live now'],
+      complete: ['badge-gray', 'Ended'], deleted: ['badge-gray', 'Deleted'],
+    };
+    function BcYouTubeLives({ s, rec, on, onToggle, busy, setup, hasKey }) {
+      if (!s.youtubeSignedIn) return html`<div class="bc-block">
+        <h4>Each reveal's own YouTube live</h4>
+        <p class="text-sm text-muted">The site can make it for every reveal (the kid's name, time, story and card, public, not made for kids) once it is signed in as the channel: add <code>YOUTUBE_CLIENT_ID</code>, <code>YOUTUBE_CLIENT_SECRET</code> and <code>YOUTUBE_REFRESH_TOKEN</code> in Cloudflare Pages (docs/youtube-api.md).</p>
+      </div>`;
+      const lives = [...(rec?.lives || [])].reverse();
+      const row = (l) => {
+        const [tone, word] = YT_STATUS[l.status] || ['badge-gray', l.status];
+        const note = l.framingCheck ? 'a framing check, made private' : l.status === 'deleted' ? (l.note || 'the reveal was cancelled or replaced') : null;
+        return html`<li key=${l.id} class="bc-yt-live">
+          <span class=${`badge ${tone}`}>${word}</span>
+          <span><strong>${l.title}</strong><span class="text-sm text-muted">${[l.scheduledAt ? bcFmt(l.scheduledAt) : null, note].filter(Boolean).join(' · ')}</span></span>
+          ${l.status !== 'deleted' ? html`<a class="btn btn-ghost btn-sm" href=${`https://www.youtube.com/watch?v=${l.id}`} target="_blank" rel="noopener">YouTube ↗</a>` : null}
+        </li>`;
+      };
+      return html`<div class="bc-block">
+        <div class="bc-block-head"><h4>Each reveal's own YouTube live</h4>
+          <div class="bc-btns"><button class="btn btn-ghost btn-sm" type="button" disabled=${!!busy || !on || !hasKey} onClick=${() => setup('youtubeSync', {}, 'YouTube')}>Check YouTube now</button></div>
+        </div>
+        <label class="checkbox-label"><input type="checkbox" checked=${on} onChange=${onToggle} /> Make each reveal's live on YouTube: the kid's name, the time, the story with the website link, the reveal card as its picture; public and not made for kids</label>
+        <p class="text-sm text-muted">It goes up as Upcoming when the countdown does, so subscribers can tap Notify me, follows JobTread's time, starts with the phone and ends with the reveal. Don't start one in Studio too.</p>
+        ${!hasKey ? html`<p class="text-sm ink-warn">Paste the stream key above first.</p>` : null}
+        ${rec?.error ? html`<p class="text-sm ink-warn">Last try didn't work${rec.errorAt ? ` (${bcAgo(rec.errorAt)})` : ''}: ${rec.error}</p>` : null}
+        ${rec?.conflicts?.length ? html`<p class="text-sm ink-warn">Also waiting on the same key: ${rec.conflicts.map((x) => x.title || x.id).join(', ')}. Delete it in YouTube Studio → Content → Live, or it may start with the reveal too.</p>` : null}
+        ${lives.length ? html`<ul class="bc-yt-lives">${lives.slice(0, 6).map(row)}</ul>` : on && hasKey ? html`<p class="text-sm text-muted">None yet: the next reveal on the countdown gets one within a few minutes.</p>` : null}
+      </div>`;
+    }
+
     const BC_SECTIONS = [['checks', 'Checks'], ['phones', 'Phones'], ['facebook', 'Facebook'], ['youtube', 'YouTube'], ['instagram', 'Instagram'], ['reminders', 'Reminders'], ['alerts', 'Alerts'], ['site', 'Site']];
     function BcSettings({ data, busy, setup, setConfirm, addToast, cfg, setCfg, dirty, jump, clearJump }) {
       const st = data.state; const s = data.setup; const c = data.config; const h = data.health; const larix = data.larix || {};
@@ -6436,7 +6477,8 @@
         { ok: s.fbConfigured ? (h.facebook?.ok ?? null) : false, label: 'Facebook token', detail: s.fbConfigured ? (h.facebook?.error || (h.facebook?.name ? `${h.facebook.name} · checked ${bcAgo(h.facebook.at)}` : 'Not checked yet')) : 'FB_PAGE_ID / FB_PAGE_TOKEN aren\'t set' },
         { ok: c.facebook?.mode === 'api' ? true : fbOut ? fbOut.exists : false, label: 'Facebook simulcast', detail: c.facebook?.mode === 'api' ? 'Automatic mode makes the output when the phone connects' : !fbOut ? 'Paste the persistent stream key under Facebook' : fbOut.exists ? 'Set' : 'Missing in Stream: paste the key again' },
         { ok: ytOut ? ytOut.exists : null, label: 'YouTube simulcast', detail: !ytOut ? 'Optional' : ytOut.exists ? 'Set' : 'Missing in Stream: paste the key again' },
-        { ok: s.youtubeConfigured ? true : null, label: 'YouTube live check', detail: s.youtubeConfigured ? 'The control room and alerts confirm the channel is live' : 'Optional: add YOUTUBE_API_KEY in Cloudflare Pages so the site can confirm YouTube went live' },
+        { ok: s.youtubeConfigured ? true : null, label: 'YouTube live check', detail: s.youtubeConfigured ? 'The control room and alerts confirm the channel is live' : 'Optional: sign the site in as the channel (YouTube settings) so it can confirm YouTube went live' },
+        ...(s.youtubeAuto ? [{ ok: data.youtubeLive?.error ? false : true, label: 'Reveals\' YouTube lives', detail: data.youtubeLive?.error || 'The site makes each reveal\'s live on YouTube' }] : []),
         { ok: s.emailConfigured, label: 'Email (Resend)', detail: s.emailConfigured ? 'Ready' : 'RESEND_API_KEY is missing' },
         { ok: s.smsConfigured ? true : null, label: 'Text messages (Twilio)', detail: s.smsConfigured ? 'Ready' : 'Optional' },
         { ok: s.pushReady ? true : null, label: 'Browser alerts', detail: s.pushReady ? 'Keys ready' : 'Optional: generate keys under Reminders' },
@@ -6546,11 +6588,12 @@
           <${BcOutput} target="facebook" title="Persistent stream key" help=${html`Live Producer → Streaming software → Advanced settings → turn on <strong>Persistent stream key</strong> → copy the key. One time only.${f.facebookMode === 'api' ? ' In automatic mode it is the fallback if Facebook refuses the API.' : ''}`} o=${fbOut} presetUrl="rtmps://live-api-s.facebook.com:443/rtmp/" ...${common} />`)}
 
         ${section('youtube', 'YouTube', null, html`
-          <${BcOutput} target="youtube" title="Stream key" help=${html`YouTube Studio → Go live → Stream → copy the <strong>Stream key</strong>. In the same screen turn on <strong>Auto-start</strong> and <strong>Auto-stop</strong> so YouTube follows the phone.`} o=${ytOut} presetUrl="rtmps://a.rtmps.youtube.com:443/live2" ...${common} />
+          <${BcOutput} target="youtube" title="Stream key" help=${s.youtubeSignedIn ? html`YouTube Studio → Go live → Stream → <strong>Stream key</strong>: copy it and paste it here. The site makes each reveal's live itself (below).` : html`YouTube Studio → Go live → Stream → copy the <strong>Stream key</strong>. In the same screen turn on <strong>Auto-start</strong> and <strong>Auto-stop</strong> so YouTube follows the phone.`} o=${ytOut} presetUrl="rtmps://a.rtmps.youtube.com:443/live2" ...${common} />
+          <${BcYouTubeLives} s=${s} rec=${data.youtubeLive} on=${f.youtubeAuto} onToggle=${set('youtubeAuto')} busy=${busy} setup=${setup} hasKey=${!!ytOut} />
           <div class="bc-block">
             <label class="form-label" for="bc-yt-url">Channel or live URL (linked from the live page)</label>
             <input class="form-input" id="bc-yt-url" value=${f.youtubeUrl} placeholder="https://www.youtube.com/@…/live" onInput=${set('youtubeUrl')} style="max-width:420px" />
-            ${!s.youtubeConfigured ? html`<div class="form-hint">Add <code>YOUTUBE_API_KEY</code> (YouTube Data API v3) in Cloudflare Pages so the site can confirm YouTube actually went live.</div>` : null}
+            ${!s.youtubeConfigured ? html`<div class="form-hint">Sign the site in as the channel (above) or add <code>YOUTUBE_API_KEY</code> in Cloudflare Pages so the site can confirm YouTube actually went live.</div>` : null}
           </div>`)}
 
         ${section('instagram', 'Instagram', igCheck && !igCheck.success ? html`<button class="btn btn-ghost btn-sm" type="button" disabled=${!!busy} onClick=${checkInstagram}>Check again</button>` : null, html`

@@ -12,8 +12,12 @@
  * listed yet.
  *
  * Env: YOUTUBE_API_KEY (Google Cloud → APIs & Services → YouTube Data API v3
- * → Credentials → API key). Read-only public data; no OAuth.
+ * → Credentials → API key), read-only public data. Without it, the channel's
+ * own sign-in (./_youtube-auth.js, the secrets that make each reveal's live)
+ * reads the same things.
  */
+
+import { oauthConfigured, ytCall } from './_youtube-auth.js';
 
 const API = 'https://www.googleapis.com/youtube/v3';
 const CACHE_MS = 25 * 1000;
@@ -23,10 +27,19 @@ const cache = new Map(); // channelId → { at, value }
 const lastSearch = new Map(); // channelId → ms
 
 export function youtubeConfigured(env) {
-  return !!env.YOUTUBE_API_KEY;
+  return !!env.YOUTUBE_API_KEY || oauthConfigured(env);
 }
 
+const NOT_SET = 'YouTube isn\'t connected (no YOUTUBE_API_KEY or channel sign-in)';
+
 async function yt(env, path, params) {
+  if (!env.YOUTUBE_API_KEY) {
+    try {
+      return { ok: true, data: await ytCall(env, 'GET', path, params) };
+    } catch (e) {
+      return { ok: false, error: e.message, status: e.status };
+    }
+  }
   const url = new URL(`${API}/${path}`);
   url.search = new URLSearchParams({ ...params, key: env.YOUTUBE_API_KEY }).toString();
   const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
@@ -47,7 +60,7 @@ export function channelRef(url) {
 
 /** Channel id (UC…) and title for the configured channel URL. */
 export async function resolveChannel(env, channelUrl) {
-  if (!youtubeConfigured(env)) return { ok: false, error: 'YOUTUBE_API_KEY is not set' };
+  if (!youtubeConfigured(env)) return { ok: false, error: NOT_SET };
   const ref = channelRef(channelUrl);
   if (!ref) return { ok: false, error: 'The YouTube channel URL needs to look like youtube.com/@handle or youtube.com/channel/UC…' };
   try {
@@ -79,7 +92,7 @@ function describe(v) {
  * → { ok, live: {videoId,title,url,embed,viewers,startedAt} | null, upcoming: {...} | null, error }
  */
 export async function liveNow(env, channelId, { fresh = false } = {}) {
-  if (!youtubeConfigured(env)) return { ok: false, error: 'YOUTUBE_API_KEY is not set', live: null, upcoming: null };
+  if (!youtubeConfigured(env)) return { ok: false, error: NOT_SET, live: null, upcoming: null };
   const hit = cache.get(channelId);
   if (!fresh && hit && Date.now() - hit.at < CACHE_MS) return hit.value;
   let value;
@@ -116,7 +129,7 @@ export async function liveNow(env, channelId, { fresh = false } = {}) {
  * (1 quota unit; likes and comments are null when the channel hides them).
  */
 export async function videoStats(env, videoId) {
-  if (!youtubeConfigured(env)) return { ok: false, error: 'YOUTUBE_API_KEY is not set' };
+  if (!youtubeConfigured(env)) return { ok: false, error: NOT_SET };
   if (!/^[\w-]{6,20}$/.test(String(videoId || ''))) return { ok: false, error: 'No YouTube video for this reveal', gone: true };
   try {
     const r = await yt(env, 'videos', { part: 'statistics', id: videoId });
