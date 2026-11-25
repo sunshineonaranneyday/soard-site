@@ -38,6 +38,7 @@ import { maybeRunNewsletterDrafts } from './_newsletter-drafts.js';
 import { maybeRunCompanyCam } from './_companycam-sync.js';
 import { maybeKeepTags } from './_file-tags.js';
 import { maybeSortPhotos } from './_photo-stages.js';
+import { maybeRunPastPhotos } from './_past-photos.js';
 import { maybeMoveTags } from './_tag-moves.js';
 import { maybeCheckJobs } from './_companycam-jobs.js';
 import { maybeCapSelfTest } from './_application-cap.js';
@@ -154,6 +155,8 @@ export async function onRequestPost(context) {
     context.waitUntil(maybeKeepTags(env));
     // Every 2 minutes, one job: its photos sorted into Before, During and After by when each was taken (see _photo-stages.js)
     context.waitUntil(maybeSortPhotos(env, { deadline }));
+    // Past makeovers' photos from Drive onto their JobTread jobs, once a founder turned it on (see _past-photos.js)
+    context.waitUntil(maybeRunPastPhotos(env, { deadline }));
     // Every 2 minutes: the next files on JobTread's old tags moved onto the new ones (see _tag-moves.js)
     context.waitUntil(maybeMoveTags(env, { deadline }));
     // Every 15 minutes: the backup Worker's MP4s and Stream key, and its alert if it has stopped (see _backup.js)

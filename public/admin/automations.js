@@ -836,6 +836,20 @@ const MAP = { t: 'SOARD', children: [
             if (!p.firstAt) return OFF(`Waiting for a founder to make the first job (${by.ready || 0} ready, ${by.ask || 0} waiting on a person).`);
             return ON(`${by.made || 0} made of ${p.total}${by.ask ? `, ${by.ask} waiting on a person` : ''}${by.ready ? `, ${by.ready} ready` : ''}.`, p.lastRunAt || p.firstAt);
           } },
+        { t: 'Past makeovers’ photos → their JobTread jobs', s: 'live', k: 'schedule',
+          when: 'Once a founder turns it on in Admin → Kids → Past makeovers in JobTread (the first job’s photos alone first, then every job’s). Every minute on the live hub’s heartbeat: one Drive folder read, or photos copied for up to 18 seconds.',
+          does: 'Copies each past makeover’s photos from its folder in Drive (Photos & Video → _Makeover Photos (to JobTread)) onto the closed JobTread job the site made for it, tagged Before, During or After when its folder or the day it was taken says so; the rest untagged, staff only. JobTread fetches each from a short link the site signs for six hours (/api/drive-file), streamed from Drive.',
+          touches: ['Google Drive', 'JobTread', 'D1'], where: 'functions/api/_past-photos.js and drive-file.js (from broadcast-hooks.js)',
+          info: 'Only the jobs the site made for past projects, so nothing lands twice; photos only (videos wait for the website library, papers for the documents step); up to 100 MB a photo. Every photo is a row in D1 (past_photos), so a stopped run picks up where it left off and never copies one twice. Drive keeps every original.',
+          live: (f) => {
+            const p = f.pastPhotos;
+            if (!p || !p.on?.scope) return OFF(p?.by?.copied ? `Stopped: ${p.by.copied.toLocaleString()} photos copied.` : 'Not turned on.');
+            const by = p.by || {};
+            if (p.lastError && (!p.lastRun || p.lastError.at > p.lastRun.at)) return ATTN(`The last run failed (${stamp(p.lastError.at)}): ${p.lastError.error}`, p.lastRun?.at);
+            if (by.failed) return ATTN(`${by.failed} photos couldn’t be copied (${(p.failed || []).map((x) => x.error).filter(Boolean)[0] || 'JobTread refused'}).`, p.lastRun?.at);
+            if (p.lastRun?.at && stale(p.lastRun.at, 10 * MIN)) return ATTN(`Hasn’t run since ${stamp(p.lastRun.at)}. It rides on the live hub’s heartbeat.`, p.lastRun.at);
+            return ON(`${(by.copied || 0).toLocaleString()} copied, ${(by.listed || 0).toLocaleString()} waiting${p.jobsToList ? `, ${p.jobsToList} folders to read` : ''}.`, p.lastRun?.at);
+          } },
         { t: 'A family replied → staff alert', s: 'live', k: 'event',
           when: 'A family answers a JobTread message, by replying to its email or in JobTread. The Applicants sync reads JobTread about every minute, and each reply alerts once.',
           does: 'Posts a card in the Slack alerts channel and emails the staff list in Applications → Settings: who replied (by email, or in JobTread’s family portal), what they wrote and the family’s status. Reply opens the family’s page answering in that same JobTread conversation; more replies in one conversation thread under one Slack post. In the admin, Applications counts families waiting on an answer, a notice pops up on any page, the Dashboard lists them, and their card and page say so until someone answers or chooses No reply needed. JobTread itself notifies no one about these replies.',

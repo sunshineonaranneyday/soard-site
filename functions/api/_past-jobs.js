@@ -75,7 +75,7 @@ export const SCHEMA = `CREATE TABLE IF NOT EXISTS past_jobs (
 export const STATE_SCHEMA = 'CREATE TABLE IF NOT EXISTS past_jobs_state (key TEXT PRIMARY KEY, value TEXT NOT NULL)';
 
 // Columns added after the table was first made (Nov 25 2026): added to a table that doesn't have them yet
-const LATER_COLUMNS = { address_cleared_at: 'TEXT' };
+const LATER_COLUMNS = { address_cleared_at: 'TEXT', folder: 'TEXT', photos_listed_at: 'TEXT', photos_note: 'TEXT' };
 const _ready = new WeakSet();
 export async function ensurePastJobs(DB) {
   if (_ready.has(DB)) return;
@@ -208,6 +208,8 @@ export function checkImport(body) {
       draft_date: isDate(r.date) ? r.date : null,
       draft_how: String(r.how || '').slice(0, 200) || null,
       draft_flag: String(r.flag || '').slice(0, 60) || null,
+      // Its photos' folder in Photos & Video / _Makeover Photos (to JobTread) (./_past-photos.js)
+      folder: String(r.folder || '').trim().slice(0, 200) || null,
     });
   });
   return { ok: errors.length === 0, rows, errors };
@@ -359,6 +361,8 @@ export async function importRows(DB, rows, { by = null, now = Date.now() } = {})
         draft_how = excluded.draft_how, draft_flag = excluded.draft_flag, updated_at = excluded.updated_at
       WHERE past_jobs.job_id IS NULL`)
     .bind(r.key, r.kind, r.slug, r.name, r.year, r.draft_date, r.draft_how, r.draft_flag, iso(now)));
+  // The photos' folder, made rows too (the photos follow the job)
+  stmts.push(...rows.filter((r) => r.folder).map((r) => DB.prepare('UPDATE past_jobs SET folder = ? WHERE key = ?').bind(r.folder, r.key)));
   for (let i = 0; i < stmts.length; i += 50) await DB.batch(stmts.slice(i, i + 50));
   await setState(DB, 'imported', { at: iso(now), by, rows: rows.length });
   return { rows: rows.length };

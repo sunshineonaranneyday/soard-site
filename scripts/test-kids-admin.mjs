@@ -112,11 +112,18 @@ function makeApi() {
     if (p === '/api/past-jobs-admin') {
       const pj = st.pastJobs;
       if (!pj) return json({ success: false, error: 'Past jobs in JobTread are open only to the founders on People → Team' }, 403);
-      const status = () => ({ success: true, rows: pj.rows, summary: { by: {} }, planned: pj.planned, first: pj.first, queued: pj.queued || null });
+      pj.photos ||= { by: {}, stages: {}, on: null, jobsToList: 0, failed: [] };
+      const status = () => ({ success: true, rows: pj.rows, summary: { by: {} }, planned: pj.planned, first: pj.first, queued: pj.queued || null, photos: pj.photos });
       if (!isPost) return json(status());
       const b = body();
       if (b.action === 'checks') return json({ success: true, quickbooks: { known: false, error: 'JobTread didn’t say' }, workflows: { ok: true, list: [{ id: 'w1', name: 'Comms Thread on new families', trigger: 't' }] } });
       if (b.action === 'plan') { pj.planned = { at: new Date().toISOString() }; return json({ success: true, rows: pj.rows }); }
+      if (b.action === 'photo-notices') return json({ success: true, notices: { subscribed: [] } });
+      if (b.action === 'photos') {
+        pj.photos.on = b.scope === 'off' ? null : { scope: b.scope };
+        if (b.scope === 'first') Object.assign(pj.photos, { by: { copied: 3, listed: 1 }, stages: { Before: 1, After: 2 } });
+        return json({ success: true, photos: pj.photos });
+      }
       if (b.action === 'answer') {
         const r = pj.rows.find((x) => x.key === b.key);
         r.answer = b.clear ? null : b.account === 'new' ? { account: 'new' } : b.jobId ? { jobId: b.jobId } : b.job === 'none' ? { job: 'none' } : { accountId: b.accountId };
@@ -603,6 +610,13 @@ try {
     ok(after.some((t) => /^Make the rest \(3\)$/.test(t)), `${label}: then Make the rest, with how many (${after.join(' | ')})`);
     ok(await page.evaluate(() => /The first, Mathew \(2012\), was made/.test(document.querySelector('.pj-checks').textContent)), `${label}: it says which job was first`);
     ok(await page.evaluate(() => !!document.querySelector('.pj-row a[href="https://app.jobtread.com/jobs/22PPASTJOB01"]')), `${label}: the made job links to JobTread`);
+    // Photos from Drive: the first job's alone, then every job's
+    ok(await page.evaluate(() => /Nobody is set up in JobTread to hear about new files/.test(document.querySelector('.pj-photos')?.textContent || '')), `${label}: it says who JobTread would tell about the photos`);
+    ok(await clickText(page, '.pj-photos .btn', 'Copy Mathew (2012)’s photos first'), `${label}: the first job’s photos can be copied first`);
+    await sleep(400);
+    ok(api.st.calls.some((c) => c.body?.action === 'photos' && c.body?.scope === 'first'), `${label}: that asks for the first job’s photos only`);
+    ok(await page.evaluate(() => /3 copied, 1 waiting/.test(document.querySelector('.pj-photos').textContent) && /1 Before, 2 After/.test(document.querySelector('.pj-photos').textContent)), `${label}: then the counts and the stages show`);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.pj-photos .btn')].map((b) => b.textContent.trim()).join('|') === 'Copy every job’s photos|Stop'), `${label}: then every job’s photos, or stop`);
     await clickText(page, '.kd-dialog__foot .btn', 'Make the rest');
     await sleep(500);
     ok(await page.evaluate(() => [...document.querySelectorAll('.pj-group h3')].some((h) => /^Being made 3/.test(h.textContent.trim()))), `${label}: the rest are being made`);

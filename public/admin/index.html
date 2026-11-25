@@ -11642,6 +11642,37 @@
       </li>`;
     }
 
+    // The past jobs' photos from Drive (functions/api/_past-photos.js): the first job's alone, then every job's
+    function PastPhotos({ data, busy, run }) {
+      const ph = data.photos;
+      const [notices, setNotices] = useState(null);
+      useEffect(() => { pjApi({ action: 'photo-notices' }).then((r) => setNotices(r.notices)).catch(() => {}); }, []);
+      if (!ph || !data.first) return null;
+      const by = ph.by || {};
+      const copied = by.copied || 0, waiting = by.listed || 0, failed = by.failed || 0, skipped = by.skipped || 0;
+      const scope = ph.on?.scope || null;
+      const firstName = data.first.jobName || 'the first job';
+      const stageWords = ['Before', 'During', 'After'].map((k) => (ph.stages?.[k] ? `${ph.stages[k].toLocaleString()} ${k}` : null)).filter(Boolean);
+      return html`<section class="pj-group pj-photos">
+        <h3>Photos from Drive</h3>
+        <p class="kd-fold__hint">Each past job gets the photos from its folder in Drive (Photos &amp; Video → _Makeover Photos (to JobTread)), tagged Before, During or After when its folder or the day it was taken says so; the rest stay untagged, for staff only. Videos and papers wait for their own steps, and Drive keeps every original.</p>
+        <div class="kd-fold__done">
+          <span>${scope === 'all' ? 'Copying every job’s photos' : scope === 'first' ? `Copying ${firstName}’s photos first` : 'Not started'}</span>
+          ${copied || waiting ? html`<span>${copied.toLocaleString()} copied, ${waiting.toLocaleString()} waiting${failed ? `, ${failed} couldn’t be copied` : ''}${skipped ? `, ${skipped} over 100 MB` : ''}</span>` : null}
+          ${scope === 'all' && ph.jobsToList ? html`<span>${kdPlural(ph.jobsToList, 'folder')} still to read</span>` : null}
+          ${stageWords.length ? html`<span>${stageWords.join(', ')}</span>` : null}
+        </div>
+        ${notices ? html`<p class="kd-fold__hint">${notices.error ? `Who JobTread tells about new files couldn’t be read (${notices.error}).` : notices.subscribed?.length ? `JobTread tells these people about each new file on a job: ${notices.subscribed.join(', ')}.` : 'Nobody is set up in JobTread to hear about new files on a job, so the copying notifies no one.'}</p>` : null}
+        ${ph.lastError ? html`<p class="kd-fold__err">Last problem (${kdFoldWhen(ph.lastError.at)}): ${ph.lastError.error}</p>` : null}
+        ${failed && ph.failed?.length ? html`<p class="kd-fold__err">${ph.failed.map((f) => `${f.name}: ${f.error || 'JobTread refused'}`).join('; ')}</p>` : null}
+        <div class="kd-fold__form">
+          ${!scope && !copied ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => run('photos', { action: 'photos', scope: 'first' })}>Copy ${firstName}’s photos first</button>` : null}
+          ${scope !== 'all' && copied ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => run('photos', { action: 'photos', scope: 'all' })}>Copy every job’s photos</button>` : null}
+          ${scope ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => run('photos', { action: 'photos', scope: 'off' })}>Stop</button>` : null}
+        </div>
+      </section>`;
+    }
+
     function PastJobsDialog({ data, onChange, onClose, addToast }) {
       const [busy, setBusy] = useState('');
       const [err, setErr] = useState('');
@@ -11670,6 +11701,7 @@
           ${data.summary?.differs?.length ? html`<p>${kdPlural(data.summary.differs.length, 'date')} differ from the reviewed list (a date outside the page’s year closes on Dec 31).</p>` : null}
         </div>
         ${err ? html`<p class="kd-fold__err" role="alert">${err}</p>` : null}
+        <${PastPhotos} data=${data} busy=${!!busy} run=${run} />
         ${PJ_GROUPS.map(([k, label, hint]) => {
           const list = by(k);
           return list.length ? html`<section class="pj-group"><h3>${label} <span class="text-muted">${list.length}</span></h3><p class="kd-fold__hint">${hint}</p>

@@ -159,6 +159,9 @@ PUBLIC_ROUTES.push('/api/companycam-webhook');
 // One CompanyCam video streamed to JobTread, which fetches it by a short link
 // the site signs (from COMPANYCAM_TOKEN) for six hours; anything else is 404
 PUBLIC_GET_ROUTES.push('/api/companycam-file');
+// One past makeover's photo streamed from Drive to JobTread, which fetches it by a short link the site signs (from the
+// Google service account's key) for six hours; only files in Photos & Video, anything else is 404 (see _past-photos.js)
+PUBLIC_GET_ROUTES.push('/api/drive-file');
 
 // Twilio's delivery reports for staff alert texts: signed with
 // TWILIO_AUTH_TOKEN and checked inside the handler, which refuses everything

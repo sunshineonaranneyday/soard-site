@@ -9,12 +9,15 @@
  * POST { action: 'answer', key, jobId | accountId | account: 'new' | clear } → a person's answer for a question row
  * POST { action: 'first' }              → makes the first job alone, to check JobTread's workflows, QuickBooks and DataX
  * POST { action: 'rest' }               → queues every ready row; the application sweep makes a few each run
+ * POST { action: 'photos', scope: 'first' | 'all' | 'off' } → the past jobs' photos from Drive (./_past-photos.js)
+ * POST { action: 'photo-notices' }      → who JobTread would tell about each photo (read only)
  *
  * See ./_past-jobs.js. Founders only (People → Team), like the Drive and mail readers; never cached.
  */
 
 import { canRead } from './_mailbox.js';
 import { checkImport, importRows, planAll, answerRow, makeFirst, queueRest, pastJobsStatus, readQuickBooks, readWorkflows, readFirstCheck } from './_past-jobs.js';
+import { photosStatus, setPhotosScope, uploadNotices } from './_past-photos.js';
 
 const headers = { 'Cache-Control': 'private, no-store' };
 const reply = (body, status = 200) => Response.json(body, { status, headers });
@@ -24,7 +27,7 @@ export async function onRequestGet(context) {
   const { env } = context;
   try {
     if (!(await canRead(env, context.data?.userEmail || ''))) return reply({ success: false, error: FOUNDERS_ONLY }, 403);
-    return reply({ success: true, ...(await pastJobsStatus(env.DB)) });
+    return reply({ success: true, ...(await pastJobsStatus(env.DB)), photos: await photosStatus(env.DB) });
   } catch (err) {
     // 500, not 502: Cloudflare replaces 502 bodies with its own error page
     return reply({ success: false, error: err.message }, err.status || 500);
@@ -58,6 +61,13 @@ export async function onRequestPost(context) {
         const r = await makeFirst(env, { by });
         return r.ok ? reply({ success: true, made: r.made }) : reply({ success: false, error: r.error, key: r.key || null }, 409);
       }
+      case 'photos': {
+        // Photos onto the past jobs: 'first' (the first job's alone), 'all', or 'off' (./_past-photos.js)
+        const r = await setPhotosScope(env.DB, body.scope, { by });
+        return r.ok ? reply({ success: true, photos: await photosStatus(env.DB) }) : reply({ success: false, error: r.error }, 409);
+      }
+      case 'photo-notices':
+        return reply({ success: true, notices: await uploadNotices(env.JOBTREAD_GRANT_KEY) });
       case 'rest': {
         const r = await queueRest(env, { by });
         return r.ok ? reply({ success: true, queued: r.queued, summary: r.summary }) : reply({ success: false, error: r.error }, 409);
