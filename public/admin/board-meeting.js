@@ -66,7 +66,7 @@ const notSavedWhy = (j) => (j.offline ? 'no connection' : j.unknown ? 'the site 
  * Board QA round 13, Nov 24 2026: an item's upload whose answer was lost said to try again, and pressed again it kept
  * the file twice. → upload's answer
  */
-async function sendUp(ctx, f, opts) {
+export async function sendUp(ctx, f, opts) {
   const fileId = uid('f_');
   const j = await upload(f, { ...opts, fileId });
   if (j.ok || !answerLost(j)) return j;
@@ -1901,7 +1901,7 @@ const doubtWords = (at, what, { once = false } = {}) => (!at ? ''
  * useAutosave's refused ("Not on the board page: The agenda goes to the board once it’s approved."), else here: `what`
  * is what's still so, `also` what that means, `again` how to do it again. → whether the site has it
  */
-async function pressSave({ set, save, saved, addToast }, patch, { has, back, what, again, also = '' }) {
+export async function pressSave({ set, save, saved, addToast }, patch, { has, back, what, again, also = '' }) {
   set(patch);
   await new Promise((r) => setTimeout(r, 0));
   await save({ own: (j) => {
