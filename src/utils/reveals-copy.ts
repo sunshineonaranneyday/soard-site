@@ -21,3 +21,14 @@ export function pastAtBuild(): { slug: string; date: string }[] {
   const copy = Object.values(files)[0];
   return Array.isArray(copy?.past) ? copy.past : [];
 }
+
+const dayFiles = import.meta.glob<{ days?: Record<string, string> }>('../data/kid-reveal-days.json', { eager: true, import: 'default' });
+
+/**
+ * The day each finished room was revealed, as far as the build knows: { slug: 'YYYY-MM-DD' } (scripts/d1-helpers.js
+ * revealDays). For the order of Meet the Kids (./kid-order.ts). Missing file = none known.
+ */
+export function revealDaysAtBuild(): Record<string, string> {
+  const days = Object.values(dayFiles)[0]?.days;
+  return days && typeof days === 'object' ? days : {};
+}

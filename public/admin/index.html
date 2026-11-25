@@ -11848,7 +11848,9 @@
         const res = await sendOrder(full).catch((e) => ({ success: false, error: e.message }));
         setSavingOrder(null);
         if (!res.success) { addToast(`Couldn’t save the order: ${res.error}`, 'error'); return false; }
-        addToast('Order saved. Meet the Kids shows it after you publish.', 'success', {
+        addToast(section === 'in-progress'
+          ? 'Order saved. It shows after you publish: Meet the Kids keeps kids with a reveal date in reveal order.'
+          : 'Order saved. Meet the Kids shows it after you publish.', 'success', {
           label: 'Undo',
           fn: async () => {
             const back = await sendOrder(before).catch((e) => ({ success: false, error: e.message }));
@@ -11995,7 +11997,7 @@
         <div class="page-header kd-head">
           <div>
             <h2>Kids</h2>
-            <p class="page-sub">${kdPlural(kids.length, 'profile')} · ${served.toLocaleString()} kids served. Listed in Meet the Kids order. Changes go live when you publish.</p>
+            <p class="page-sub">${kdPlural(kids.length, 'profile')} · ${served.toLocaleString()} kids served. Grouped as on Meet the Kids. Changes go live when you publish.</p>
           </div>
           <div class="kd-head__actions">
             <a class="btn btn-ghost btn-sm" href="/kids/" target="_blank" rel="noopener">Meet the Kids ${kdIcon.external}</a>
@@ -12052,7 +12054,7 @@
         <div class="sr-only" aria-live="assertive" aria-atomic="true">${awaitingDrag.announce || buildingDrag.announce}</div>
 
         ${activeSection('needs-funding', awaiting, awaitingDrag, 'Awaiting funding', 'First on Meet the Kids, in this order.')}
-        ${activeSection('in-progress', building, buildingDrag, 'In build', 'Next on Meet the Kids. The first one is the home page’s Now Building feature.')}
+        ${activeSection('in-progress', building, buildingDrag, 'In build', 'Next on Meet the Kids, the next reveal first (JobTread’s schedule). One with no reveal date yet goes in this order. The first one here is the home page’s Now Building feature.')}
 
         ${completedVisible.length ? html`<section class="card kd-section" aria-labelledby="kd-sec-h-completed">
           <header class="sec-head kd-section__head">
