@@ -35,3 +35,11 @@ node scripts/youtube.mjs login --hint peter@soardcharity.com
 Pick **Sunshine on a Ranney Day** (the brand account) when Google asks which account, tick Select all, Continue. A new client (if this one is deleted): create a Desktop app client in the project, then `pbpaste | node scripts/youtube.mjs set YOUTUBE_CLIENT_ID` and the same for `YOUTUBE_CLIENT_SECRET`.
 
 An Internal app doesn't work here: the channel is a brand account, and Google refuses brand accounts for Internal apps (Error 403: org_internal).
+
+## How the channel is kept (Peter's OK, Nov 25 2026)
+
+- **Audience:** the channel and every video are "not made for kids" (families and donors watch). "Made for kids" turns off comments, the notification bell and "we're live" alerts, end screens and save-to-playlist. Set in Studio → Settings → Channel → Advanced settings, and per video with `status.selfDeclaredMadeForKids: false`.
+- **Titles:** `<Name>'s <rooms> Reveal`, rooms from the kid's page: Dream Bedroom, Accessible Bathroom, Therapy Room, joined with "&" (all three: "Dream Bedroom, Bathroom & Therapy Room"). Year-in-review videos: `<year> Year in Review | Sunshine on a Ranney Day`. Titles of videos that already draw views stay as they are.
+- **Descriptions:** the kid's story first (the site's summary, or what the video already had), then `<Name>'s story: https://sunshineonaranneyday.com/kids/<slug>/`, then the standard footer (the Upload defaults hold it): what SOARD builds, Donate, Apply, Watch reveals live, Subscribe, and three hashtags (#SunshineOnARanneyDay plus the room types). Category Nonprofits & Activism, language English.
+- **Playlists:** Dream Bedroom Makeovers, Accessible Bathroom Makeovers, Therapy & Sensory Room Makeovers, Big Surprises: Braves, Hawks & Trae Young, Family Stories & Updates, Built with Our Partners, Community Projects, Our Story & Year in Review, Events: Gala, Golf & Big Wheels. A new reveal goes in its room playlists. The older playlists are private, not deleted.
+- **Profile:** banner 2560×1440 with everything that matters inside the middle 1546×423; the circle logo without the tagline as the picture; the logo as the watermark for the whole video; trailer for visitors "Making Brighter Days Possible | A Year with SOARD"; Home shelves: Live now, Upcoming live streams, For You, Videos, Shorts, Popular, playlists.

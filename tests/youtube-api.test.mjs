@@ -90,6 +90,34 @@ test('the client refreshes once on a 401, sends JSON, and names YouTube\'s reaso
   await assert.rejects(api.call('GET', 'playlists', { mine: true }), (e) => e.reason === 'quotaExceeded' && /exceeded your quota/.test(e.message));
 });
 
+test('a dropped connection or a YouTube 5xx is tried twice more, then reported', async () => {
+  let calls = 0;
+  const waits = [];
+  const flaky = async (url) => {
+    if (url.startsWith('https://oauth2')) return json(200, { access_token: 'at' });
+    calls++;
+    if (calls === 1) throw new TypeError('fetch failed');
+    if (calls === 2) return json(500, { error: { message: 'Internal error encountered.', errors: [{ reason: 'INTERNAL_ERROR' }] } });
+    return json(200, { items: [1] });
+  };
+  const api = client({ clientId: 'c', clientSecret: 's', refreshToken: 'rt', fetchImpl: flaky, wait: async (ms) => waits.push(ms) });
+  assert.deepEqual(await api.call('GET', 'playlistItems', { playlistId: 'UU1' }), { items: [1] });
+  assert.equal(calls, 3);
+  assert.deepEqual(waits, [1000, 2000]);
+
+  let down = 0;
+  const broken = async (url) => (url.startsWith('https://oauth2') ? json(200, { access_token: 'at' }) : (down++, json(503, { error: { message: 'Backend Error', errors: [{ reason: 'backendError' }] } })));
+  const api2 = client({ clientId: 'c', clientSecret: 's', refreshToken: 'rt', fetchImpl: broken, wait: async () => {} });
+  await assert.rejects(api2.call('GET', 'videos', { id: 'x' }), (e) => e.status === 503 && e.reason === 'backendError');
+  assert.equal(down, 3);
+
+  // a 4xx is YouTube's answer, not a hiccup: no retry
+  let once = 0;
+  const quota = async (url) => (url.startsWith('https://oauth2') ? json(200, { access_token: 'at' }) : (once++, json(403, { error: { message: 'quota', errors: [{ reason: 'quotaExceeded' }] } })));
+  await assert.rejects(client({ clientId: 'c', clientSecret: 's', refreshToken: 'rt', fetchImpl: quota, wait: async () => {} }).call('GET', 'videos', {}), (e) => e.reason === 'quotaExceeded');
+  assert.equal(once, 1);
+});
+
 test('uploads go to the upload endpoint as media; list calls follow every page', async () => {
   const urls = [];
   const fetchImpl = async (url) => {

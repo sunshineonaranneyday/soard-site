@@ -128,6 +128,8 @@ async function main() {
       const up = await api.upload('channelBanners/insert', {}, readFileSync(file), imageType(file));
       const [me] = await api.all('channels', { part: 'brandingSettings', mine: true });
       me.brandingSettings.image = { bannerExternalUrl: up.url };
+      delete me.brandingSettings.watch; // retired parts YouTube no longer takes back
+      delete me.brandingSettings.hints;
       await api.call('PUT', 'channels', { part: 'brandingSettings' }, { id: me.id, brandingSettings: me.brandingSettings });
       return print({ banner: up.url });
     }
