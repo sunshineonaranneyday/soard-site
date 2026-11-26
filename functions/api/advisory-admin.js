@@ -21,7 +21,7 @@ import { putFile, deleteFile, boardFileProblem } from './_board.js';
 import { logAudit } from './_audit.js';
 import { moneyView, goalNow, creditGift, uncreditGift, matchPage, findGifts, campaignFromUrl, campaignExists, sameLink } from './_advisory-money.js';
 import { pickableKids, pickKid, clearKid, kidCard } from './_advisory-sponsor.js';
-import { askPress, statusPress, sendWelcome, sendWelcomeTo, welcomesSaid, mailLog, welcomedSlugs, welcomeLog, welcomeOf, addressWhy } from './_advisory-mail.js';
+import { askPress, statusPress, sendWelcome, sendWelcomeTo, welcomesSaid, mailLog, welcomedSlugs, welcomeLog, welcomeOf, addressWhy, unsureMail, sendAgain } from './_advisory-mail.js';
 import { adminMeetings, meetingAction } from './_advisory-meetings.js';
 import { advisoryBits, sharableBoardDocs } from './_board.js';
 import { boardPapers } from './_advisory-portal.js';
@@ -91,6 +91,8 @@ export async function onRequestGet(context) {
       listWishes(env.DB), listIntros(env.DB), listHosted(env.DB), moneyView(env, settings), advisoryBits(env), advisoryGroupStatus(env).catch(() => null),
       adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []), welcomeLog(env.DB),
     ]);
+    // (emails that may not have gone and never go again by themselves: on their card or row, with Send it again)
+    const unsure = await unsureMail(env.DB);
     const nameOf = (slug) => people.find((p) => p.slug === slug)?.name || '';
     // (mailed: its emails claimed, by the write that marked it emailed, whether they've all gone yet or not: the card
     // never offers to email an ask that went or is owed. An ask emailed before that mark was kept: its log line)
@@ -117,6 +119,7 @@ export async function onRequestGet(context) {
       makeover: await kidCard(env, settings, bits),
       meetings,
       mail: log,
+      unsure,
       welcomed: await welcomedSlugs(env.DB),
     }, { headers: { 'Cache-Control': 'no-store' } });
   } catch (e) {
@@ -297,7 +300,7 @@ export async function onRequestPost(context) {
       }
       case 'send-welcome': {
         // (its words from what happened to each: ./_advisory-mail.js welcomesSaid)
-        const r = await sendWelcome(env, { by, slugs: Array.isArray(body.slugs) ? body.slugs.map(String) : null });
+        const r = await sendWelcome(env, { by, via: 'run-it', slugs: Array.isArray(body.slugs) ? body.slugs.map(String) : null });
         return Response.json({ ok: true, ...r, said: welcomesSaid(r) });
       }
       case 'send-welcome-to': {
@@ -305,6 +308,13 @@ export async function onRequestPost(context) {
         const slug = String(body.slug || '');
         const r = await sendWelcomeTo(env, slug, { by });
         if (r.sent) await audit(context, by, 'updated', `Advisory Board sign-in email ${r.again ? 'sent again' : 'sent'}: ${slug}`);
+        return Response.json({ ok: true, ...r });
+      }
+      case 'send-again': {
+        // One email that may not have gone (its answer lost, and Resend no longer keeps its key): sent now with a new key
+        // (./_advisory-mail.js sendAgain), the switch on or off, as a press on a row is
+        const r = await sendAgain(env, String(body.key || ''));
+        if (r.sent) await audit(context, by, 'updated', 'Advisory Board email sent again');
         return Response.json({ ok: true, ...r });
       }
       case 'sync-group': return Response.json({ ok: true, group: await syncAdvisoryGroup(env) });

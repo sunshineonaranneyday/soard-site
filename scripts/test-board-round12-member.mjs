@@ -688,7 +688,10 @@ try {
     const read = async (who) => { const r = await realFetch(`${SITE}/api/board-portal`, { headers: { 'x-test-user': who }, cache: 'no-store' }); let j = null; try { j = await r.json(); } catch { /* not JSON */ } return { status: r.status, j }; };
     // What each part is in the page's data, to tell a part drawn other than the clean read has it
     const PARTS = {
-      money: (j) => JSON.stringify([j.numbers?.cash?.total, (j.numbers?.cash?.accounts || []).map((a) => a.balance), j.numbers?.books?.revenue, j.numbers?.books?.expenses, j.numbers?.finance?.ytd, j.numbers?.costs?.makeovers?.length, j.numbers?.costs?.waiting?.length, j.numbers?.operating]),
+      money: (j) => JSON.stringify([j.numbers?.cash?.total, (j.numbers?.cash?.accounts || []).map((a) => a.balance), j.numbers?.books?.revenue, j.numbers?.books?.expenses, j.numbers?.finance?.ytd]),
+      /* r15: what makeovers cost (its figures from JobTread and the operating balance they rest on) is a part of its own, `costs`:
+         its read failing marks that, never all the money (Board QA round 15, public/admin/board/unread.js UNREAD_WORDS.costs) */
+      costs: (j) => JSON.stringify([j.numbers?.costs?.makeovers?.length, j.numbers?.costs?.waiting?.length, j.numbers?.operating]),
       /* r13: the month-end balances are a part of their own (`history`), their read failing marks it and the page opens */
       history: (j) => JSON.stringify((j.cashHistory || []).length),
       projects: (j) => JSON.stringify([j.numbers?.projects?.building?.map((b) => b.name), j.numbers?.projects?.waiting?.length, j.numbers?.reveals?.length]),
@@ -705,7 +708,7 @@ try {
     await read(ALEX);
     const base = DB._db.export();
     const fresh = async () => { curDB = await createD1({ bytes: base }); };
-    const WORDS = { history: 'The month-end balances couldn’t load just now', money: 'The money couldn’t load just now', projects: 'The makeovers couldn’t load just now', kids: 'The kids served couldn’t load just now', gifts: 'The major gifts couldn’t load just now', givers: 'The givers’ names couldn’t load just now', sources: 'The tax returns and audits couldn’t load just now', events: 'The events couldn’t load just now' };
+    const WORDS = { history: 'The month-end balances couldn’t load just now', money: 'The money couldn’t load just now', projects: 'The makeovers couldn’t load just now', kids: 'The kids served couldn’t load just now', gifts: 'The major gifts couldn’t load just now', givers: 'The givers’ names couldn’t load just now', sources: 'The tax returns and audits couldn’t load just now', events: 'The events couldn’t load just now', costs: 'What makeovers cost couldn’t load just now' };
     for (const who of [SAM, ALEX]) {
       await fresh();
       const clean = await read(who);
@@ -739,7 +742,7 @@ try {
           await open(p, hash);
           await sleep(hash === '#/' ? 1500 : 1800);
           const text = await p.evaluate(() => document.querySelector('main')?.innerText.replace(/\s+/g, ' ') || '');
-          const where = { '#/': ['money', 'projects', 'kids', 'gifts', 'givers'], '#/financials': ['money', 'gifts', 'givers', 'sources'] }[hash] || ['money', 'projects', 'events'];
+          const where = { '#/': ['money', 'projects', 'kids', 'gifts', 'givers'], '#/financials': ['money', 'gifts', 'givers', 'sources', 'costs'] }[hash] || ['money', 'projects', 'events'];
           for (const part of marked.filter((x) => where.includes(x))) if (!text.includes(WORDS[part])) unsaid.push(`k=${k} ${hash} ${part}`);
           const zero = [[/\b0 kids served|0\s*kids served/, 'kids'], [/None right now/, 'projects'], [/No gifts of \$1,000 or more yet/, 'gifts'], [/\bAnonymous\b/, 'givers'], [/Nothing on the calendar yet|No events on the calendar/, 'events'], [/No reveals on the calendar yet/, 'projects']].filter(([re, part]) => marked.includes(part) && re.test(text));
           for (const [, part] of zero) zeros.push(`k=${k} ${hash} ${part}`);

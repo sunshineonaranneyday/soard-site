@@ -58,8 +58,12 @@ const NOT_THE_MINUTES = 'The minutes are approved, so this stays a file, not the
 let env;
 let texts;
 let gate; // (a read held part way: { name, reached, release }, so another can finish meanwhile)
+/* r15: what each request left running after its answer (waitUntil), finished inside its own test with its own fakes,
+   never thrown away to run on into the next test (Board QA round 15's full check: tests/board.test.mjs) */
+let leftRunning = [];
 const realFetch = globalThis.fetch;
 beforeEach(async () => {
+  leftRunning = [];
   texts = {};
   gate = null;
   env = {
@@ -86,14 +90,17 @@ beforeEach(async () => {
     throw new Error(`unexpected fetch ${url}`);
   };
 });
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(async () => {
+  for (let n = 0; leftRunning.length && n < 10; n++) { const going = leftRunning; leftRunning = []; await Promise.allSettled(going); }
+  globalThis.fetch = realFetch;
+});
 
 /** /api/board-admin behind the real sign-in middleware, as `who`: JSON, or a file as the page's upload sends it (`form`) */
 async function call(who, { body = null, form = null } = {}) {
   const request = new Request(`https://sunshineonaranneyday.com/api/board-admin${form ? '?upload=1' : ''}`, {
     method: 'POST', headers: { 'CF-Access-JWT-Assertion': await signIn(who), Origin: 'https://sunshineonaranneyday.com', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: form || JSON.stringify(body),
   });
-  const ctx = { request, env, data: {}, waitUntil: () => {} };
+  const ctx = { request, env, data: {}, waitUntil: (p) => { leftRunning.push(p); } };
   ctx.next = async () => admin.onRequestPost(ctx);
   const res = await onRequest(ctx);
   return { status: res.status, body: await res.json() };
@@ -189,7 +196,8 @@ test('1: approval keeps which file it was: a newer minutes file (however it got 
   assert.equal(saved.body.meeting.approvedFile, copy.id, 'approval kept which file it was');
   assert.equal(shared.minutesIn(after), true);
   // A save from the page never moves it (the site's to set), nor does a later write
-  const again = await api({ action: 'save-meeting', meeting: { ...after, approvedFile: after.files.at(-1).id, title: 'Q4 Board Meeting, held' }, base: after.updatedAt });
+  /* r15: a change to the invite's notes, not the name: approved minutes' name is what they state, refused whole (Board QA round 15) */
+  const again = await api({ action: 'save-meeting', meeting: { ...after, approvedFile: after.files.at(-1).id, inviteNote: 'Parking behind the building' }, base: after.updatedAt });
   assert.equal(again.body.meeting.approvedFile, copy.id);
   // Marked a draft again: no approved file, and the usual rule (the PDF first)
   const back = await api({ action: 'save-meeting', meeting: { ...again.body.meeting, minutes: 'draft' }, base: again.body.meeting.updatedAt });
@@ -226,7 +234,8 @@ test('1: approved minutes from before approval kept a file (or with none yet): t
   /* r11: an approval that kept no file has the one the meeting had for them fixed as theirs by the first look that finds it (round 11, item 1) */
   assert.equal(after.approvedFile, after.files.find((f) => f.name === 'Minutes.docx').id, 'approved with no file kept: fixed by the first look that finds one');
   // ...and the next write keeps that one as the approved file
-  const kept = await api({ action: 'save-meeting', meeting: { ...after, location: 'Example Hall' }, base: after.updatedAt });
+  /* r15: a change to the invite's notes, not the place: approved minutes' place is what they state, refused whole (Board QA round 15) */
+  const kept = await api({ action: 'save-meeting', meeting: { ...after, inviteNote: 'Parking behind the building' }, base: after.updatedAt });
   assert.equal(kept.body.meeting.approvedFile, after.files.find((f) => f.name === 'Minutes.docx').id);
 });
 

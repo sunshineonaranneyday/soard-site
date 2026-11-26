@@ -32,7 +32,7 @@ test('rules 1 and 2: a word is greeted only when it is on the given-names list (
     ['Fulton County Commissioner Jordan Ames', '', ''], ['DeKalb County Commissioner Jordan Ames', '', ''], ['Georgia State Senator Jordan Ames', '', ''],
     ['Cobb County Sheriff Jordan Ames', '', ''], ['Board Chair Jordan Ames', '', ''], ['Trustee Jordan Ames', '', ''], ['Treasurer Ames', '', ''], ['Mayor-elect Jordan Ames', '', ''],
     ['Overseer Jordan Ames', '', ''], ['Missionary Ames', '', ''], ['Worship Pastor Ames', '', ''], ['CEO Jordan Ames', '', ''], ['Realtor Jordan Ames', '', ''],
-    ['Alhaji Jordan Ames', '', ''], ['Senhora Ames', '', ''], ['LtCol Jordan Ames', '', ''], ['SgtMaj Ames', '', ''], ['CPO Ames', '', ''],
+    ['Alhaji Jordan Ames', '', ''], ['Senhora Ames', '', ''], ['LtCol Jordan Ames', '', 'Jordan'] /* r27: finding 4, the lead's rule: one list of the military's ranks, read the same way by the greeting and Add */, ['SgtMaj Ames', '', ''], ['CPO Ames', '', ''],
     // (F8: families and companies)
     ['Rowe Fam', '', ''], ['Rowe Clan', '', ''], ['Rowe Crew', '', ''], ['Familia Rowe', '', ''], ['Rowe-Family', '', ''], ['Rowe L.L.C.', '', ''], ['Rowe LP', '', ''],
     ['Rowe PC', '', ''], ['Rowe Law Firm', '', ''], ['Law Offices of Jordan Rowe', '', ''], ['Rowe Real Estate', '', ''], ['Rowe Bros.', '', ''],
@@ -76,8 +76,9 @@ test('rule 5: a full name is greeted by its first word only in the plain shape (
   ['Ma. del Carmen Reyes', '', ''], ['MA. DEL CARMEN REYES', '', ''], ['Ma. de los Angeles Cruz', '', ''], ['Cruz, Ma. del Carmen', '', ''], ['Ma. Teresa Cruz', '', ''],
   ['Wm Ames', '', ''], ['Robt Ames', '', ''], ['Chas Ames', '', ''], ['Fco Javier López', '', ''], ['Mª José García', '', ''],
   // (F3: ranks with numbers)
-  ['2nd Lt. Jordan Ames', '', ''], ['1st Lt. Jordan Ames', '', ''], ['Sgt. 1st Class Jordan Ames', '', ''], ['1SG Jordan Ames', '', ''], ['CW3 Jordan Ames', '', ''],
-  ['PO2 Jordan Ames', '', ''], [J, 'CW2 Jo', 'Joanna'],
+  /* r27: finding 4, the lead's rule: one list of the military's ranks, read the same way by the greeting and Add */
+  ['2nd Lt. Jordan Ames', '', 'Jordan'], ['1st Lt. Jordan Ames', '', 'Jordan'], ['Sgt. 1st Class Jordan Ames', '', 'Jordan'], ['1SG Jordan Ames', '', 'Jordan'], ['CW3 Jordan Ames', '', 'Jordan'],
+  ['PO2 Jordan Ames', '', 'Jordan'] /* r27: finding 4, as the rest of the ranks */, [J, 'CW2 Jo', 'Joanna'],
   // (F4, F9: three people, or someone not named after "and")
   ['Jordan, Amy and Sam Rowe', '', ''], ['Jordan, Amy, and Sam Rowe', '', ''], ['Jordan and Amy, Sam Rowe', '', ''], ['Jordan Rowe and grandkids', '', ''],
   ['Jordan & grandchildren', '', ''], ['Jordan Rowe and loved ones', '', ''], ['Jordan & hubs', '', ''], ['Jordan & Amy Rowe', '', ''], ['José y María Cruz', '', ''],

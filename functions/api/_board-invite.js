@@ -28,7 +28,7 @@
 
 import { accessToken, eventIdFor, parseServiceAccount } from './_google-calendar.js';
 import { boardAdmins, activeBoard, peopleRows, readSettings, readState, writeState, normEmail, asSend, PEOPLE_DOWN, UNREAD_WARN_MS, organizerOf } from './_board-roles.js';
-import { getMeeting, listMeetings, patchMeeting, setOnMeeting, deleteMeeting, inviteNotes, inviteTitle, NOTES_START, OLD_NOTES_STARTS, claimOwn } from './_board.js';
+import { getMeeting, listMeetings, patchMeeting, setOnMeeting, deleteMeeting, inviteNotes, inviteTitle, NOTES_START, OLD_NOTES_STARTS, claimOwn, notWork, landedOr, INVITE_CANCEL } from './_board.js';
 import { meetingName, timeRange, longDate, todayEastern, isDate, meetingHeld, inviteIsRecord, noInviteFor } from '../../public/admin/board-shared.js';
 import { isEmail, alertAdmins, slackResolved } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
@@ -228,7 +228,9 @@ async function busyWords(DB, id) {
 
 async function sendClaimed(env, id, { fetchImpl, now, quiet, press }) {
   const m = await getMeeting(env.DB, id);
-  if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
+  // (gone with its delete still under way: that's what stopped it. Its invite's cancel goes after the delete's own write
+  // now, ./deleteWithInvite. Board QA round 15)
+  if (!m) throw (await beingDeleted(env.DB, id, now)) ? Object.assign(new Error(BEING_DELETED), { status: 409 }) : Object.assign(new Error('That meeting is gone'), { status: 404 });
   if (!m.date) throw Object.assign(new Error('Give the meeting a date first'), { status: 400 });
   // (a tab left open on a meeting since held, or a request made by hand: read after the claim, so a send that finished a
   // moment ago is seen)
@@ -413,34 +415,97 @@ async function takeBack(env, m, { fetchImpl, now }) {
 
 /**
  * A meeting deleted in Board, and its invite off the board's calendars (Google tells everyone on it). Marked as being
- * deleted first, so an invite pressed meanwhile doesn't go (sendInvite); then its invite cancelled from the meeting as
- * read (should Google refuse, nothing is deleted), and the meeting deleted in one statement that says what it had as it
- * went: an invite recorded in between (Send the invite landing a moment before) comes off the calendar too. An invite
- * whose Google write lands after the meeting has gone takes itself back (sendInvite). Nothing someone writes meanwhile
- * stops it. → { meeting: the meeting deleted (null: gone already), cancelled }
+ * deleted first, so an invite pressed meanwhile doesn't go (sendInvite: a claim, no one's work, so a read failing after
+ * it is said as nothing changed); then the meeting and everything kept beside it go in ONE write that also owes its
+ * invite's cancel, taken from the meeting as that write finds it, so an invite recorded a moment before (Send the
+ * invite landing just then) comes off too (_board.js deleteMeeting). The cancel goes once, after the write
+ * (cancelOwed): Google refusing just now leaves it owed, tried again by the heartbeat, and the staff told after a day of
+ * it, and again when it gets through, as a change that can't reach its invite is (Board QA round 15, Nov 26 2026: the
+ * invite was cancelled, Google emailed everyone, and then the meeting's files, RSVPs and notes stayed with no meeting
+ * when one of the steps after it failed). An invite whose Google write lands after the meeting has gone takes itself
+ * back (sendInvite). → { meeting: the meeting deleted (null: gone already), cancelled, later: words when the cancel is
+ * still to go }
  */
 export async function deleteWithInvite(env, id, { fetchImpl = fetch, now = Date.now() } = {}) {
   await readState(env.DB, deletingKey(id)); // (makes the table)
-  await env.DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at')
-    .bind(deletingKey(id), '{}', new Date(now).toISOString()).run();
+  // (its answer lost: the mark there with this time is this delete's, and it goes on)
+  const mark = new Date(now).toISOString();
+  await notWork(() => landedOr(() => env.DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET updated_at = excluded.updated_at')
+    .bind(deletingKey(id), '{}', mark).run(), async () => (await env.DB.prepare('SELECT updated_at FROM board_state WHERE key = ?').bind(deletingKey(id)).first())?.updated_at === mark));
   try {
     const m = await getMeeting(env.DB, id);
-    if (!m) return { meeting: null, cancelled: false };
-    let cancelled = await cancelInvite(env, m, { fetchImpl, now });
-    const last = await deleteMeeting(env, id);
-    // (written since it was read, with an invite: that one too, whatever it is now; Google answers a second cancel of
-    // the same event as gone)
-    if (last?.invite?.eventId && (last.updatedAt !== m.updatedAt || !cancelled)) {
-      if (await takeBack(env, { ...m, ...last, id }, { fetchImpl, now }).catch(() => false)) cancelled = true;
-    }
-    // (a change still waiting for its invite has nothing to go onto now: it goes, and the staff told it couldn't reach it
-    // hear the meeting was deleted, never asked to press Send the invite on a meeting that isn't there)
-    await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(pendingKey(id)).run().catch((err) => console.error('[board-invite] delete pending', err.message));
-    await sayChangeReached(env, id, `${inviteTitle(last || m)} was deleted, so nothing is left to go onto its invite`);
-    return { meeting: last || m, cancelled };
+    // (gone already: what a delete that stopped partway before Nov 26 2026 left beside it goes now, in the same one write)
+    const last = await deleteMeeting(env, id, { was: m });
+    if (!last) return { meeting: null, cancelled: false };
+    const sent = await cancelOwed(env, id, { fetchImpl, now });
+    // (a change still waiting for its invite had nothing to go onto: it went in the write, and the staff told it couldn't
+    // reach it hear the meeting was deleted, never asked to press Send the invite on a meeting that isn't there)
+    await sayChangeReached(env, id, `${inviteTitle(last)} was deleted, so nothing is left to go onto its invite`);
+    return { meeting: last, cancelled: sent.cancelled, ...(sent.later ? { later: sent.later } : {}) };
   } finally {
-    await env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(deletingKey(id)).run().catch((err) => console.error('[board-invite] delete mark', err.message));
+    await notWork(() => env.DB.prepare('DELETE FROM board_state WHERE key = ?').bind(deletingKey(id)).run()).catch((err) => console.error('[board-invite] delete mark', err.message));
   }
+}
+
+/** Said when a deleted meeting's invite couldn't come off the calendar just now: it's owed, and goes by itself */
+export const CANCEL_LATER = 'Google didn’t take its calendar invite off just now, so Board tries again by itself in a few minutes, and Google emails everyone on it then.';
+/**
+ * A deleted meeting's invite off the calendar, once, from what its delete owed (`invite-cancel:<id>`, the meeting as it
+ * went: _board.js deleteMeeting): gone once Google has it, or once there's nothing to take off (one that's a record, or
+ * never sent). Google refusing keeps it owed, a while later each time (RETRY_MS); after a day of it the staff hear, once,
+ * and again when it gets through. A second cancel of the same event is Google's "gone", never a second email. Never
+ * throws → { cancelled, later }
+ */
+async function cancelOwed(env, id, { fetchImpl = fetch, now = Date.now(), row = null } = {}) {
+  let r = row;
+  try {
+    r ||= await env.DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(INVITE_CANCEL(id)).first();
+    if (!r) return { cancelled: false };
+    const owed = parseState(r.data);
+    const m = { ...(owed.meeting || {}), id };
+    let cancelled;
+    try {
+      cancelled = await cancelInvite(env, m, { fetchImpl, now });
+    } catch (err) {
+      console.error('[board-invite] cancelling a deleted meeting’s invite', id, err?.message || err);
+      const tries = (owed.tries || 0) + 1;
+      const since = owed.failedSince || new Date(now).toISOString();
+      let told = !!owed.told;
+      if (!told && now - Date.parse(since) >= TELL_AFTER_MS) {
+        await sayInviteProblem(env, `cancel:${id}`, {
+          title: 'A deleted board meeting’s invite is still on the calendar',
+          detail: `The meeting on ${m.date || 'its day'} was deleted in Board, and Google has turned its invite’s cancel away for a day: ${String(err?.message || err).replace(/\S+@\S+/g, '…').slice(0, 200)}`,
+          fix: `Delete “${inviteTitle(m)}” from the organizer’s Google Calendar, and say yes to emailing the guests. Board keeps trying until then.`,
+        });
+        told = true;
+      }
+      await env.DB.prepare('UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?')
+        .bind(JSON.stringify({ ...owed, tries, failedSince: since, told, retryAt: new Date(now + RETRY_MS[Math.min(tries, RETRY_MS.length) - 1]).toISOString() }), new Date(now).toISOString(), INVITE_CANCEL(id), r.data).run()
+        .catch((e) => console.error('[board-invite] a cancel’s tries', id, e?.message || e));
+      return { cancelled: false, later: CANCEL_LATER };
+    }
+    await env.DB.prepare('DELETE FROM board_state WHERE key = ? AND data = ?').bind(INVITE_CANCEL(id), r.data).run()
+      .catch((e) => console.error('[board-invite] a cancel that went', id, e?.message || e));
+    if (owed.told) await sayInviteFixed(env, `cancel:${id}`, `${inviteTitle(m)}: its invite is off the calendar now`);
+    return { cancelled };
+  } catch (err) {
+    console.error('[board-invite] a deleted meeting’s invite', id, err?.message || err);
+    return { cancelled: false, later: CANCEL_LATER };
+  }
+}
+/** Heartbeat: each deleted meeting's invite still owed its cancel, once its wait is over (cancelOwed). Never throws */
+async function settleCancels(env, { fetchImpl, now }) {
+  try {
+    const rows = (await env.DB.prepare('SELECT key, data FROM board_state WHERE key >= ? AND key < ?').bind(INVITE_CANCEL(''), `${INVITE_CANCEL('').slice(0, -1)};`).all()).results || [];
+    for (const r of rows) {
+      const id = r.key.slice(INVITE_CANCEL('').length);
+      const owed = parseState(r.data);
+      if (owed.retryAt && now < Date.parse(owed.retryAt)) continue;
+      // (a delete under way sends its own, right after its write)
+      if (await beingDeleted(env.DB, id, now)) continue;
+      await cancelOwed(env, id, { fetchImpl, now, row: r });
+    }
+  } catch (err) { console.error('[board-invite] owed cancels', err?.message || err); }
 }
 
 /**
@@ -517,25 +582,39 @@ const loudChange = (m) => {
 };
 
 /**
- * After a save: a new place (or day or time) for an invite that's out is
- * noted, and goes to Google once it has stood for two minutes
- * (maybeRefreshInvites, on the heartbeat), so a place typed a word at a time
- * sends the board Google's update email once. Never throws.
+ * What a meeting's save writes for its invite, in the save's OWN write (_board.js saveMeetingAs, as `also`): a new
+ * place, day or time (or its name and notes) for an invite that's out is owed to the invite by that write, and goes to
+ * Google once it has stood for two minutes (maybeRefreshInvites, on the heartbeat), so a place typed a word at a time
+ * sends the board Google's update email once; undone, or now a record (noInviteFor), what was waiting goes in the same
+ * write, and the staff told it couldn't go hear so (`after`: Board QA round 6). Read before the write, so its read
+ * failing refuses the save with nothing changed. Board QA round 15, Nov 26 2026: it was a step after the save that
+ * caught its own failure, so a new place saved while it failed never reached the invite, and nobody was told.
+ * `m`: the meeting as the save writes it. → { also: [{ sql ending in a WHERE, bind }], after(env) } | null
+ */
+export async function inviteStep(DB, m, { now = Date.now() } = {}) {
+  if (!m?.invite) return null;
+  const key = changeOf(m, now);
+  const was = await readState(DB, pendingKey(m.id));
+  if (!key) {
+    return was.key ? {
+      also: [{ sql: 'DELETE FROM board_state WHERE key = ? AND data = ?', bind: [pendingKey(m.id), JSON.stringify(was)] }],
+      after: (env) => sayChangeReached(env, m.id, `Nothing is left to go onto the invite of ${inviteTitle(m)}`),
+    } : null;
+  }
+  if (was.key === key) return null;
+  const at = new Date(now).toISOString();
+  return { also: [{ sql: 'INSERT OR REPLACE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1', bind: [pendingKey(m.id), JSON.stringify({ key, at }), at] }] };
+}
+/**
+ * A meeting's change noted for its invite on its own (inviteStep's statements, written alone), for a caller with no
+ * write of its own to put them in. Never throws
  */
 export async function noteInviteChange(env, m, { now = Date.now() } = {}) {
   try {
-    const key = changeOf(m, now);
-    const was = await readState(env.DB, pendingKey(m.id));
-    if (!key) {
-      // (undone, or now a record: nothing left to send, and the staff told it couldn't go hear so: Board QA round 6)
-      if (was.key) {
-        await dropPending(env.DB, m.id, was);
-        await sayChangeReached(env, m.id, `Nothing is left to go onto the invite of ${inviteTitle(m)}`);
-      }
-      return;
-    }
-    if (was.key === key) return;
-    await writeState(env.DB, pendingKey(m.id), { key, at: new Date(now).toISOString() });
+    const step = await inviteStep(env.DB, m, { now });
+    if (!step) return;
+    for (const x of step.also) await env.DB.prepare(x.sql).bind(...x.bind).run();
+    await step.after?.(env);
   } catch (err) {
     console.error('[board-invite] note', err.message);
   }
@@ -551,6 +630,8 @@ export async function maybeRefreshInvites(env, { fetchImpl = fetch, now = Date.n
   try {
     if (!env.DB || !env.GOOGLE_CALENDAR_KEY) return [];
     const reworded = await rewordInvites(env, { fetchImpl, now });
+    // (deleted meetings' invites still owed their cancel: Board QA round 15)
+    await settleCancels(env, { fetchImpl, now });
     await movePendingOver(env.DB);
     await noteMovedBack(env, now);
     const due = Object.entries(await pendingInvites(env.DB)).filter(([, p]) => p.key && now - Date.parse(p.at) >= SETTLE_MS && !(p.retryAt && now < Date.parse(p.retryAt)));

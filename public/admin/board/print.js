@@ -10,8 +10,8 @@
  *
  * A meeting that's been held prints as its record, everything its page shows: where its minutes are, who was there,
  * each part with the notes under it, the decisions and the action items; then the minutes as a document (the signed
- * copy once there is one, else the file they were written in; the words of a Word file that can't be drawn), then
- * the rest of its files.
+ * copy while it's on the minutes as they stand, else the file they were written in, then an earlier signed copy as
+ * that: minutesDocs; the words of a Word file that can't be drawn), then the rest of its files.
  *
  * The pages are the ones the screen shows (./docs.js), so the printed
  * "page 3" is the screen's page 3. Built with the DOM's own text (never a
@@ -21,16 +21,17 @@
 import { openDoc, fileUrl } from './docs.js';
 import {
   meetingName, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, itemFiles, looseFiles, fileTitle, isDate, clock, sectionPlan, MORE,
-  showsOf, booksDraw, isStatement, attendanceCounts, quorumOf, tallyText, minutesFileOf, docxText, heldEarly, todayEastern,
+  showsOf, booksDraw, isStatement, attendanceCounts, quorumOf, tallyText, minutesDocOf, docxText, heldEarly, todayEastern,
 } from '../board-shared.js';
 import { shortDate, longDate, dayText } from './parts.js';
 import { moneyFor, moneyTiles, mixOf, mixLeftOut, mixLessWords, changeOf, ptsOf, storeOf, storeChange, budgetMonthsText, stepText, readChangeAs, changeIn, overIn, budgetName } from './money.js';
-import { UNREAD_WORDS } from './unread.js';
+import { UNREAD_WORDS, failed } from './unread.js';
 import { minutesState, MINUTES_SAID } from './minutes.js';
 import { reportDom, motionDom } from '../board-report.js';
 import { h, render } from '../vendor.js';
 import { YearCompare } from './books.js';
 import { lineKeysOf, notesByKey, noteText } from './review.js';
+import { liveLost } from './unread.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = String(text); return e; };
 
@@ -236,8 +237,9 @@ function storeBox(books) {
 function liveBox(kind, n, m, money, notes = null, books = n?.books, lostNotes = false) {
   if (!n || !kind || kind === 'minutes') return null;
   // (today's numbers whose read failed just now: said so on paper too, never a zero or an empty list: ./unread.js)
-  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events', meetings: 'meetings' }[kind];
-  if (part && n.unread?.[part]) return el('p', 'bpp-live', UNREAD_WORDS[part]);
+  // (./unread.js LIVE_PARTS: the parts each item draws from, the meeting's page's and the screen's list too)
+  const part = liveLost(kind, n);
+  if (part) return el('p', 'bpp-live', UNREAD_WORDS[part]);
   if (kind === 'projects') return makeoversBox(n);
   if (kind === 'cash') {
     // The figures, the year against last year, where the revenue came from, the store, then the statements the packet
@@ -394,14 +396,21 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, lost
   return sheet;
 }
 
-/** The minutes as a document: the signed copy once there is one (the minutes as approved, signed), else the file they're kept in */
-function minutesDoc(m) {
-  const signed = m.files.filter((f) => f.kind === 'signed').at(-1);
-  if (signed) return { f: signed, label: 'The minutes, signed' };
-  // (the one the page's "The minutes as written" opens, by the one rule: ../board-shared.js minutesFileOf, which never
-  // takes last meeting's on an item, and keeps the secretary's Word file wherever it's put. Board QA round 14)
-  const kept = minutesFileOf(m);
-  return kept ? { f: kept, label: 'The minutes as written' } : null;
+/**
+ * The minutes as documents, as the page beside it has them (../board-shared.js minutesDocOf, the one rule): the signed
+ * copy while it's on the minutes as they stand (approved, the signature on their words), else the file they're written
+ * in ("The minutes as written", which never takes last meeting's on an item, and keeps the secretary's Word file wherever
+ * it's put: round 14); then a signed copy that isn't them, as the page calls it ("An earlier signed copy"), never as the
+ * minutes. `data`: the board page's, whose minutesSigned says whether the signature is on their words. Board QA round 15,
+ * Nov 26 2026: minutes taken back to draft and changed printed their old signed copy as "The minutes, signed".
+ * → [{ f, label }]
+ */
+export function minutesDocs(m, data = null) {
+  const doc = minutesDocOf(m, data?.minutesSigned?.[m.id] || null, { known: !!data && !failed(data, 'minutesSigned') });
+  return [
+    doc.file ? { f: doc.file, label: doc.signed ? 'The minutes, signed' : 'The minutes as written' } : null,
+    doc.copy && !doc.signed ? { f: doc.copy, label: doc.copyWords } : null,
+  ].filter(Boolean);
 }
 const isDocx = (f) => /\.docx$/i.test(String(f?.name || '')) || /wordprocessingml/i.test(String(f?.type || ''));
 /** A Word file's words, when its pages can't be drawn: the minutes on paper either way. → a page (section) or null */
@@ -432,14 +441,14 @@ export async function printAll(m, { people = [], numbers = null, meetings = [], 
   // Held, as its page has it (./portal.js MeetingDetail): its record, and its minutes as a document after it
   const today = data?.today || todayEastern();
   const held = !(m.date >= today && !heldEarly(m, today) && !m.minutesFrom);
-  const minutes = held ? minutesDoc(m) : null;
+  const minutes = held ? minutesDocs(m, data) : [];
   // The books the way the money's figures go (./portal.js CashBlock): today's for a meeting today or ahead, the locked
   // ones for a past meeting
   const books = data && m.date >= data.today ? data.numbers?.books || numbers?.books : numbers?.books;
   const drawsSt = booksDraw(books).some((b) => b === 'act' || b === 'pos');
   const docFiles = (it) => itemFiles(m, it, meetings).filter((f) => !(drawsSt && showsOf(it).includes('cash') && isStatement(f)));
   const groups = [
-    ...(minutes ? [{ it: { title: minutes.label }, label: '', files: [minutes.f], minutes: true }] : []),
+    ...minutes.map((x) => ({ it: { title: x.label }, label: '', files: [x.f], minutes: true })),
     ...m.sections.flatMap((s) => s.items).map((it) => ({ it, label: items.find((x) => x.id === it.id)?.label || '', files: docFiles(it) })),
     { it: MORE, label: '', files: looseFiles(m) },
   ].filter((g) => g.files.length);
@@ -450,7 +459,9 @@ export async function printAll(m, { people = [], numbers = null, meetings = [], 
   const money = data && m.sections.some((sec) => sec.items.some((it) => showsOf(it).includes('cash'))) ? await moneyFor(data, m.date < data.today ? m.date : '', numbers).catch(() => null) : null;
   // What makeovers cost follows the money's date rule too: today's for a meeting today or ahead (./costs.js useCosts)
   const live = data && m.date >= data.today ? data.numbers : null;
-  const costsNumbers = live ? { ...numbers, costs: live.costs ?? numbers?.costs, operating: live.operating ?? numbers?.operating, cash: live.cash ?? numbers?.cash, books: live.books ?? numbers?.books } : numbers;
+  // (and today's flags with them: what makeovers cost not read just now says so on paper, never a packet's copy or a
+  // balance guessed in its place. Board QA round 15)
+  const costsNumbers = live ? { ...numbers, costs: live.costs ?? numbers?.costs, operating: live.operating ?? numbers?.operating, cash: live.cash ?? numbers?.cash, books: live.books ?? numbers?.books, unread: live.unread } : numbers;
   root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, lostNotes: !!data?.unread?.lineNotes, books, costsNumbers, held, quorum: data?.quorum || 0, quorumLost: !!data?.unread?.settings }));
   // How many pages, so the progress can say "12 of 40"
   const docs = [];

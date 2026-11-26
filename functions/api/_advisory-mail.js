@@ -30,7 +30,7 @@
 import { sendEmails, sendEmailItems, EMAIL_FROM, SITE_ORIGIN, isEmail } from './_broadcast-notify.js';
 import * as shell from './_email-shell.js';
 import { activeAdvisors, peopleRows, privateEmails, readState, boardAdmins, signInWhy, moveStateEntry, readDown, PEOPLE_DOWN, PEOPLE_DOWN_SENT } from './_board-roles.js';
-import { ensureAdvisory, getSettings, INTRO_STATUSES, HOSTED_STATUSES, LINKS_TABLE, askOut, oweStatement, unoweStatement, setIntroStatus, setHosted, ASK_NOT_OUT } from './_advisory.js';
+import { ensureAdvisory, getSettings, INTRO_STATUSES, HOSTED_STATUSES, LINKS_TABLE, askOut, oweStatement, unoweStatement, setIntroStatus, setHosted, ASK_NOT_OUT, CHANGE_DOWN } from './_advisory.js';
 import { memberNow, movingOff, movingAt, stillTheirs, personOf, onAdvisoryBoard } from './_member-write.js';
 import { stateReady } from './_board-roles.js';
 import { syncBoardAccess, canSignIn, accessStatus } from './_board-access.js';
@@ -111,6 +111,17 @@ async function setEntry(DB, group, key, value) {
   await DB.prepare(`UPDATE board_state SET data = json_set(${withGroup(group)}, ?, json(?)), updated_at = ? WHERE key = ?`)
     .bind(pathOf(group, key), JSON.stringify(value), new Date().toISOString(), LOG).run();
 }
+/**
+ * An entry written over what's there in one statement: `base` only where it has nothing (an owed welcome's key, when
+ * one of its tries may have reached Resend, and the rest it was written down with are never written over: Advisory
+ * Board QA round 27), `force` over it
+ */
+async function mergeEntry(DB, group, key, base, force = {}) {
+  await logRow(DB);
+  const path = pathOf(group, key);
+  await DB.prepare(`UPDATE board_state SET data = json_set(${withGroup(group)}, ?, json_patch(json_patch(json(?), CASE WHEN json_type(data, ?) = 'object' THEN json_extract(data, ?) ELSE '{}' END), json(?))), updated_at = ? WHERE key = ?`)
+    .bind(path, JSON.stringify(base), path, path, JSON.stringify(force), new Date().toISOString(), LOG).run();
+}
 async function removeEntry(DB, group, key) {
   await logRow(DB);
   await DB.prepare('UPDATE board_state SET data = json_remove(data, ?), updated_at = ? WHERE key = ? AND json_valid(data)')
@@ -146,7 +157,7 @@ const WELCOME_NOT_SENT = 'The site’s database didn’t answer just now, so not
 const WELCOME_UNSURE = 'The site’s database didn’t answer just now, so we can’t tell yet whether the sign-in email is on its way. If it is, it goes by itself in a few minutes. This page shows where it stands.';
 /** A read or write before anything was claimed that failed: said as nothing sent (503), in words */
 const notSent = (e) => (e?.status ? e : e?.unread && e.message === PEOPLE_DOWN ? readDown(PEOPLE_DOWN_SENT, e.cause || e) : e?.unread ? e : readDown(WELCOME_NOT_SENT, e));
-async function claimWelcome(DB, slug, now, email, { again = false, owed = null } = {}) {
+async function claimWelcome(DB, slug, now, email, { again = false, owed = null, via = '' } = {}) {
   await logRow(DB);
   const path = pathOf('welcomed', slug);
   const stale = new Date(now - SENDING_STALE_MS).toISOString();
@@ -170,7 +181,7 @@ async function claimWelcome(DB, slug, now, email, { again = false, owed = null }
       (json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) < ? AND json_extract(data, ?) IS NULL)
       OR (json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) IS NOT NULL AND json_extract(data, ?) != ?
         AND (json_extract(data, ?) IS NULL OR json_extract(data, ?) < ?))))) ${STILL_HERE}`)
-    .bind(path, JSON.stringify({ sending, sendingTo: plain(email) }), ...waitBind, new Date().toISOString(), LOG, path, path,
+    .bind(path, JSON.stringify({ sending, sendingTo: plain(email), ...(via ? { via } : {}) }), ...waitBind, new Date().toISOString(), LOG, path, path,
       `${path}.sending`, `${path}.sending`, stale, `${path}.at`,
       `${path}.at`, `${path}.to`, `${path}.to`, plain(email),
       `${path}.sending`, `${path}.sending`, stale, ...here));
@@ -196,26 +207,51 @@ async function claimWelcome(DB, slug, now, email, { again = false, owed = null }
 /** When their welcome went (a had-it record), else '' */
 const sentAt = (v) => (typeof v === 'string' ? v : v?.at || '');
 /**
- * An email the service may have taken: no answer (it timed out, the connection dropped) or a gateway's 502/503/504 in
- * front of Resend. For the owed emails (sendOwed): left owed, and asked again under the same key. Resend's own
- * error status, or email not set up, is a sure no
+ * What one send came to: the one rule for every Advisory Board email, the welcome and the owed emails alike (Advisory
+ * Board QA rounds 26 and 27: the ask and the update emails counted Resend's own no as owed and tried it again for ten
+ * hours, saying "goes in a few minutes", while the welcome called it a refusal; and a gateway's 502 was taken as "may
+ * have gone" for good)
+ *   'went'     Resend's yes, or its 409 for a key it already has (it went before)
+ *   'lost'     no answer at all (it timed out, the connection dropped): Resend may have taken it. Asked again only under
+ *              the same key, while Resend still keeps it (KEY_DAY_MS); past that it's never sent again by itself
+ *   'owed'     Resend's 5xx or 429 (a gateway's in front of it included): it didn't reach Resend. It stays owed, past a
+ *              day too, and goes once when it can
+ *   'refused'  Resend's own 4xx (not 429), or email not set up: nothing went, said as a refusal, never tried again
+ * (setup: the refusal is email not being set up on the site)
  */
-const unsureOf = (r) => r.failed > 0 && (r.errors || []).some((e) => {
-  const t = String(e);
-  return /^Resend 50[234]:/.test(t) || (!/^Resend \d+:/.test(t) && !/RESEND_API_KEY not set/.test(t));
-});
+const resendStatus = (e) => Number(/^Resend (\d+):/.exec(String(e))?.[1]) || 0;
+const unset = (e) => /RESEND_API_KEY not set/.test(String(e));
+export function sendOutcome(r) {
+  if (r.sent > 0 || r.already > 0) return 'went';
+  const errors = (r.errors || []).map(String);
+  if (errors.some((e) => !resendStatus(e) && !unset(e))) return 'lost';
+  if (errors.some((e) => resendStatus(e) >= 500 || resendStatus(e) === 429)) return 'owed';
+  return 'refused';
+}
+const notSetUp = (r) => (r.errors || []).some(unset);
+const KEY_DAY_MS = 23 * 60 * 60 * 1000; // Resend keeps an idempotency key a day: one asked again later could make a second
+/** A key of its own for an email sent again once its old key is past its day, or on purpose (Send it again) */
+const freshKey = (key, now) => `${String(key).replace(/:re\d+$/, '')}:re${now}`;
 
 /** A welcome's key at Resend: the address it goes to, and, for one sent on purpose again, when the one before it went */
 const welcomeKey = (to, was, again) => `advisory-welcome:${to}${again && hadIt(was, to) && sentAt(was) ? `:after:${sentAt(was)}` : ''}`;
 /**
- * What a welcome's send came to (Advisory Board QA round 26: a gateway's 502 was said as "They've been emailed how to
- * sign in", counted as had, and never tried again). 'went': Resend's yes, or its 409 for a key it already has (it went
- * before). 'owed': no answer that says either way (a 5xx, Resend's 429, a dropped connection, a timeout): it may have gone,
- * so it stays owed with its key and the heartbeat asks again under that key, which never sends a second. 'refused':
- * Resend's own 4xx no, or email not set up: nothing went, said as a refusal
+ * When a welcome owed under its key may first have reached Resend with no answer known, or '': its answer lost (`lost`,
+ * written on its waiting entry), or a claim of it at this address left on its way past its window by a request that
+ * ended mid-send (Advisory Board QA round 27: one lost and not asked again within the day Resend keeps a key went twice)
  */
-const sendOutcome = (r) => (r.sent > 0 || r.already > 0 ? 'went'
-  : (r.errors || []).some((e) => /^Resend (5\d\d|429):/.test(String(e)) || (!/^Resend \d+:/.test(String(e)) && !/RESEND_API_KEY not set/.test(String(e)))) ? 'owed' : 'refused');
+const lostOf = (w, v, email, now) => w?.lost || (v && typeof v === 'object' && v.sending && Date.parse(v.sending) <= now - SENDING_STALE_MS
+  && (!v.sendingTo || !email || plain(v.sendingTo) === plain(email)) ? v.sending : '');
+/**
+ * Where a welcome owed stands for its key: 'unsure' (it may have gone, and Resend no longer keeps its key: never sent
+ * again by itself; their row says so, and a press sends it again with a new key), 'stale' (none of its tries reached
+ * Resend, and its key is past its day: it goes with a new key), else 'ok'
+ */
+const welcomeKeyState = (w, v, email, now) => {
+  const lost = lostOf(w, v, email, now);
+  if (lost) return Date.parse(lost) < now - KEY_DAY_MS ? 'unsure' : 'ok';
+  return w?.tried && Date.parse(w.tried) < now - KEY_DAY_MS ? 'stale' : 'ok';
+};
 
 /**
  * Their welcome, written down as waiting (Add does this before Joined): the heartbeat sends it unless they've had it.
@@ -231,7 +267,8 @@ export async function queueWelcome(DB, slug, { by = '', now = Date.now(), greet 
   const decided = typeof greet === 'string';
   if (decided) await setEntry(DB, 'names', slug, greet);
   if (hadIt(log.welcomed?.[slug], emails[slug])) return;
-  await setEntry(DB, 'waiting', slug, { at: new Date(now).toISOString(), by, ...(decided ? { greet } : {}) });
+  // (one already owed keeps its key and what its tries came to)
+  await mergeEntry(DB, 'waiting', slug, { at: new Date(now).toISOString(), by }, decided ? { greet } : {});
 }
 
 /**
@@ -297,14 +334,18 @@ export const welcomeRecords = async (DB) => (await readState(DB, LOG)).welcomed 
 export const welcomeLog = async (DB) => { const log = await readState(DB, LOG); return { welcomed: log.welcomed || {}, waiting: log.waiting || {} }; };
 /**
  * One member's sign-in email as their row on Members shows it: { at } when they had it at the address they have now,
- * { going: true } while one is on its way (a press, Add or the heartbeat), else {}
+ * { going: true } while one is on its way (a press, Add or the heartbeat), { unsure: true } when one may not have gone
+ * and never goes by itself (Advisory Board QA round 27: their row says so, and Send it again sends it with a new key),
+ * else {}
  */
 export const welcomeOf = (v, email, now = Date.now(), w = null, emailsOn = true) => {
   if (v?.sending && Date.parse(v.sending) > now - SENDING_STALE_MS) return { going: true };
   const had = hadIt(v, email) ? { at: sentAt(v), ...(v?.unconfirmed ? { unconfirmed: true } : {}) } : null;
   // owed: a send that started and didn't finish (written down with its key, or a claim left past its window), which the
   // heartbeat sends in a few minutes (Advisory Board QA round 26): never "going out now", and never "had" when it wasn't
-  const owed = (w?.key ? (w.hand || emailsOn) && (!had || (!!w.after && had.at === w.after)) : !!v?.sending && !had && emailsOn) && !!ownAddress({ email });
+  const started = (w?.key ? !had || (!!w.after && had.at === w.after) : !!v?.sending && !had) && !!ownAddress({ email });
+  if (started && welcomeKeyState(w, v, email, now) === 'unsure') return { ...(had || {}), unsure: true };
+  const owed = started && (w?.key ? w.hand || emailsOn : emailsOn);
   return { ...(had || {}), ...(owed ? { owed: true } : {}) };
 };
 
@@ -350,10 +391,11 @@ export function answerNotice({ askId, slug, name, answer, note = '' }) {
   const base = `advisory-notice:answer:${askId}:${slug}:${fnv(said)}`;
   const statements = (DB, { now = Date.now(), guard = '1', binds = [] } = {}) => [
     // (a no in place of a yes that hasn't gone: taken back, so they're never told "can help" of a no)
-    ...(answer === 'yes' ? [] : [DB.prepare(`DELETE FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND tried_at IS NULL AND ${guard}`).bind(key, ...binds)]),
+    // (never one a try of which may have reached Resend: lost_at, Advisory Board QA round 27)
+    ...(answer === 'yes' ? [] : [DB.prepare(`DELETE FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND lost_at IS NULL AND ${guard}`).bind(key, ...binds)]),
     DB.prepare(`INSERT INTO advisory_outbox (key, kind, ref, email, msg, idem, owed_at) SELECT ?, 'notice', ?, '', ?, ?, ? WHERE ${guard} AND (? OR EXISTS (SELECT 1 FROM advisory_outbox o WHERE o.key = ?))
       ON CONFLICT(key) DO UPDATE SET msg = json_set(?, '$.n', COALESCE(json_extract(advisory_outbox.msg, '$.n'), 0) + 1),
-        idem = ? || ':' || (COALESCE(json_extract(advisory_outbox.msg, '$.n'), 0) + 1), owed_at = excluded.owed_at, tried_at = NULL, sent_at = NULL, tries = 0, outcome = NULL
+        idem = ? || ':' || (COALESCE(json_extract(advisory_outbox.msg, '$.n'), 0) + 1), owed_at = excluded.owed_at, tried_at = NULL, sent_at = NULL, tries = 0, outcome = NULL, lost_at = NULL
       WHERE json_extract(advisory_outbox.msg, '$.said') IS NOT json_extract(excluded.msg, '$.said')`)
       .bind(key, `${askId}:${slug}`, JSON.stringify(firstMsg), base, new Date(now).toISOString(), ...binds, answer === 'yes' ? 1 : 0, key, JSON.stringify(changedMsg), base),
   ];
@@ -366,9 +408,12 @@ export function answerNotice({ askId, slug, name, answer, note = '' }) {
  */
 export async function sendNotice(env, key, { now = Date.now() } = {}) {
   try {
-    const row = rowOf(await twice(() => env.DB.prepare('SELECT * FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND outcome IS NULL').bind(key).first()));
-    if (!row) return { sent: 0 };
-    const r = await sendOwed(env, [row], { now, make: async (x) => ({ item: { ...noticeItem(x), to: x.email || (await leadOf(env, await getSettings(env.DB))).email }, replyTo: '' }) });
+    // (found by its key at Resend too, which a rename never changes: renamed on People just after it was owed, the notice
+    // moved with them to a key at their new address (./_advisory.js ADVISORY_PLACES), and still goes now)
+    const idem = `advisory-${key}`;
+    const rows = ((await twice(() => env.DB.prepare('SELECT * FROM advisory_outbox WHERE (key = ?1 OR idem = ?2 OR substr(idem, 1, length(?2) + 1) = ?2 || \':\') AND sent_at IS NULL AND outcome IS NULL').bind(key, idem).all()))?.results || []).map(rowOf);
+    if (!rows.length) return { sent: 0 };
+    const r = await sendOwed(env, rows, { now, make: async (x) => ({ item: { ...noticeItem(x), to: x.email || (await leadOf(env, await getSettings(env.DB))).email }, replyTo: '' }) });
     await remember(env.DB, { kind: `notice-${String(key).split(':')[1]}`, to: 'lead', sent: r.sent }, now).catch(() => {});
     return r;
   } catch (e) { console.error('[advisory-mail] notice', e?.message || e); return { sent: 0 }; }
@@ -561,11 +606,9 @@ export function askEmail(ask, first, { yes, no }) {
  * still owed the heartbeat sends, once (sendOwedMail). The welcome has its own record of the same shape, kept where it
  * was (welcomed / waiting, claimWelcome, its key: sendWelcome), and the board's emails theirs (./_board.js sendOnce).
  */
-const KEY_DAY_MS = 23 * 60 * 60 * 1000; // Resend keeps an idempotency key a day: one asked again later could make a second
 const OWED_BUSY_MS = 2 * 60 * 1000; // a row a press has claimed this minute: the heartbeat leaves it to that press
-// Resend's own no: tried again, each time a little later (the n-th try no sooner than n² minutes after it was owed), and
-// after this many, about ten hours, it stops being tried ('refused'): an outage of the email service never loses one
-const OWED_TRIES = 24;
+// (Resend's 5xx or 429: tried again, each time a little later, the n-th try no sooner than n² minutes after it was owed,
+// for as long as it takes: an outage of the email service never loses one. Resend's own no is never tried again)
 // (to Advisory Board members: only with their emails switched on. To whoever runs the group: always)
 const TO_MEMBERS = new Set(['ask', 'update', 'gift', 'goal']);
 const TAGS = { ask: 'advisory-ask', update: 'advisory-update', gift: 'advisory-update', goal: 'advisory-update', notice: 'advisory-lead' };
@@ -579,60 +622,100 @@ const firstWord = (name) => String(name || '').trim().split(/\s+/)[0] || '';
 
 /**
  * Owed emails sent (`rows`, as their claim wrote them): each made (`make(row)` → { item } or { skip, name }), claimed
- * for this send (when it first went to Resend), sent under its own key, and marked had with its send. Each step is tried
- * twice; one that still fails leaves the email owed, for the heartbeat, and never sends anything twice. An email Resend
- * took whose mark didn't save stays owed: the heartbeat asks Resend again under the same key, which sends nothing again,
- * then marks it. → { sent, owed, had, skipped: [{ name, why }], unsure }
+ * for this send, sent under its own key, and marked with its send. Each step is tried twice; one that still fails leaves
+ * the email owed, for the heartbeat, and never sends anything twice. How long an owed email may wait is one rule, the
+ * welcome's too (sendOutcome; Advisory Board QA round 27): a try whose answer was lost may have reached Resend, so it's
+ * asked again only under the same key while Resend keeps it (KEY_DAY_MS), and past that it's never sent again by itself
+ * ('unsure': staff see it, and Send it again sends it with a new key, sendAgain); one that never reached Resend (its 5xx
+ * or 429, or claimed and never tried) stays owed past a day and goes once when it can, with a new key once its old one
+ * is past its day; Resend's own no, or email not set up, is a refusal, never tried again. An email Resend took whose mark
+ * didn't save stays owed: the heartbeat asks Resend again under the same key, which sends nothing again, then marks it.
+ * → { sent, owed, had, skipped: [{ name, why }], refused: [{ name, setup }], unsure: [{ name, key }] }
  */
 async function sendOwed(env, rows, { now = Date.now(), make, replyTo = null }) {
   const DB = env.DB;
-  const out = { sent: 0, owed: 0, had: 0, skipped: [], unsure: 0 };
+  const out = { sent: 0, owed: 0, had: 0, skipped: [], refused: [], unsure: [] };
+  const at = isoOf(now);
   for (const row of rows) {
     let made;
     try { made = await twice(() => make(row)); } catch (e) { console.error('[advisory-mail] an owed email couldn’t be made (the heartbeat sends it)', row.key, e?.message || e); out.owed += 1; continue; }
     if (made.skip) {
       // (never went: said why, and never tried again)
-      await twice(() => DB.prepare('UPDATE advisory_outbox SET outcome = ? WHERE key = ? AND idem = ? AND sent_at IS NULL AND outcome IS NULL').bind(`skipped:${made.skip}`, row.key, row.idem).run())
+      await twice(() => DB.prepare('UPDATE advisory_outbox SET outcome = ? WHERE idem = ? AND sent_at IS NULL AND outcome IS NULL').bind(`skipped:${made.skip}`, row.idem).run())
         .catch((e) => console.error('[advisory-mail] a skipped email not noted', row.key, e?.message || e));
       out.skipped.push({ name: made.name || '', why: made.skip });
       continue;
     }
+    // The claim, as this try starts: marked as one that may reach Resend (lost_at, kept from an earlier try whose answer
+    // was lost), and, when no try of it has reached Resend and its key is past its day, given a new key. Each email is
+    // found by its key at Resend (idem), which a rename moving the row to its new address never changes
     let claim;
     try {
-      claim = await twice(() => DB.prepare('UPDATE advisory_outbox SET tried_at = COALESCE(tried_at, ?) WHERE key = ? AND idem = ? AND sent_at IS NULL AND outcome IS NULL RETURNING tried_at').bind(isoOf(now), row.key, row.idem).first());
+      claim = await twice(() => DB.prepare(`UPDATE advisory_outbox SET
+          idem = CASE WHEN lost_at IS NULL AND tried_at < ?1 THEN ?2 ELSE idem END,
+          tried_at = CASE WHEN lost_at IS NULL AND tried_at < ?1 THEN ?3 ELSE COALESCE(tried_at, ?3) END,
+          lost_at = COALESCE(lost_at, ?3)
+        WHERE idem = ?4 AND sent_at IS NULL AND outcome IS NULL RETURNING idem, tried_at, lost_at`)
+        .bind(isoOf(now - KEY_DAY_MS), freshKey(row.idem, now), at, row.idem).first());
     } catch (e) { console.error('[advisory-mail] an owed email not claimed (the heartbeat sends it)', row.key, e?.message || e); out.owed += 1; continue; }
     // (had it already, or a newer one is owed in its place)
     if (!claim) { out.had += 1; continue; }
-    if (Date.parse(claim.tried_at) < now - KEY_DAY_MS) {
-      // Went to Resend a day ago and was never marked: asked again, Resend no longer knows its key, so it could make a
-      // second. Counted as gone, unconfirmed
-      await twice(() => DB.prepare("UPDATE advisory_outbox SET outcome = 'unsure' WHERE key = ? AND idem = ? AND sent_at IS NULL").bind(row.key, row.idem).run()).catch(() => {});
-      out.had += 1;
+    const idem = claim.idem;
+    const name = nameOfRow(row, made);
+    if (claim.lost_at !== at && Date.parse(claim.lost_at) < now - KEY_DAY_MS) {
+      // A try a day ago may have reached Resend, and it no longer keeps that key: asked again it could make a second.
+      // Never sent again by itself: staff see it, and can send it again with a new key
+      await twice(() => DB.prepare("UPDATE advisory_outbox SET outcome = 'unsure' WHERE idem = ? AND sent_at IS NULL AND outcome IS NULL").bind(idem).run())
+        .catch((e) => console.error('[advisory-mail] an email that may have gone not noted (the heartbeat notes it)', row.key, e?.message || e));
+      out.unsure.push({ name, full: row.msg?.name || made.name || name, key: row.key });
       continue;
     }
-    const r = await sendEmailItems(env, [made.item], { from: FROM, replyTo: made.replyTo ?? replyTo, tags: tag(TAGS[row.kind] || 'advisory-update'), idempotencyKey: row.idem });
-    if (r.sent > 0 || r.already > 0) {
+    const r = await sendEmailItems(env, [made.item], { from: FROM, replyTo: made.replyTo ?? replyTo, tags: tag(TAGS[row.kind] || 'advisory-update'), idempotencyKey: idem });
+    const how = sendOutcome(r);
+    if (how === 'went') {
       out.sent += 1;
-      await twice(() => DB.prepare("UPDATE advisory_outbox SET sent_at = ?, outcome = 'sent' WHERE key = ? AND idem = ?").bind(isoOf(now), row.key, row.idem).run())
+      await twice(() => DB.prepare("UPDATE advisory_outbox SET sent_at = ?, outcome = 'sent' WHERE idem = ?").bind(at, idem).run())
         .catch((e) => console.error('[advisory-mail] an email went but wasn’t marked (the heartbeat marks it, sending nothing again)', row.key, e?.message || e));
-    } else if (unsureOf(r)) {
+    } else if (how === 'refused') {
+      // Resend's own no, or email not set up: nothing went, and nothing sends it by itself. Said as a refusal
+      out.refused.push({ name, full: row.msg?.name || made.name || name, setup: notSetUp(r) });
+      await twice(() => DB.prepare("UPDATE advisory_outbox SET outcome = 'refused', lost_at = CASE WHEN lost_at = ? THEN NULL ELSE lost_at END WHERE idem = ? AND sent_at IS NULL AND outcome IS NULL").bind(at, idem).run())
+        .catch((e) => console.error('[advisory-mail] a refused email not noted', row.key, e?.message || e));
+    } else if (how === 'owed') {
+      // (Resend's 5xx or 429: this try never reached it. Its mark of one that may have comes off, an earlier one stays)
+      out.owed += 1;
+      await twice(() => DB.prepare('UPDATE advisory_outbox SET lost_at = CASE WHEN lost_at = ? THEN NULL ELSE lost_at END, tries = tries + 1 WHERE idem = ? AND sent_at IS NULL').bind(at, idem).run())
+        .catch((e) => console.error('[advisory-mail] an owed email’s try not noted', row.key, e?.message || e));
+    } else {
       // (no answer: it may have gone. The heartbeat asks again under the same key, which sends it only if it didn't)
       out.owed += 1;
-      out.unsure += 1;
-    } else {
-      // Resend's own no: nothing went. Tried again by the heartbeat, a few times
-      out.owed += 1;
-      await twice(() => DB.prepare(`UPDATE advisory_outbox SET tried_at = NULL, tries = tries + 1, outcome = CASE WHEN tries + 1 >= ${OWED_TRIES} THEN 'refused' ELSE NULL END WHERE key = ? AND idem = ? AND sent_at IS NULL`).bind(row.key, row.idem).run())
-        .catch((e) => console.error('[advisory-mail] a refused email not noted', row.key, e?.message || e));
     }
   }
   return out;
 }
+/** Who an owed email is to, for staff's words: the member as the row names them, else whoever runs the group */
+function nameOfRow(row, made = {}) {
+  if (row.kind === 'notice') return 'whoever runs the group';
+  return firstWord(row.msg?.name || row.msg?.first || made.name || '') || 'the Advisory Board member';
+}
+/** " The email service refused the email to Rex, so it didn't go. Check their email on People." ('' for none) */
+export function refusedWords(list = []) {
+  if (!list.length) return '';
+  const names = andWords(list.map((x) => x.name));
+  if (list.every((x) => x.setup)) return ` The site’s email isn’t set up, so the email to ${names} didn’t go.`;
+  return list.length === 1 ? ` The email service refused the email to ${names}, so it didn’t go. Check their email on People.`
+    : ` The email service refused the emails to ${names}, so they didn’t go. Check their emails on People.`;
+}
+const andWords = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+/** " The email to Rex may not have gone." (unsure: sendOwed's) */
+const unsureWords = (list = []) => (list.length ? ` The email to ${andWords(list.map((x) => x.name))} may not have gone: ${list.length === 1 ? 'it’s' : 'they’re'} on Run it to send again.` : '');
 
 /** Why a member's ask wasn't sent, as the mail log says it */
 const SKIP_WORDS = { left: 'not on the Advisory Board by then', moving: 'a change of their web address is waiting to be settled on People', busy: 'their People record kept changing', closed: 'the ask had closed',
   // (no address of their own: ownAddress, Advisory Board QA round 26)
-  none: 'no email of their own on file', group: 'their email on file is a SOARD group inbox', staff: 'their email on file is a SOARD staff address', bad: 'their email on file isn’t a whole address', address: 'their email on file isn’t their own' };
+  none: 'no email of their own on file', group: 'their email on file is a SOARD group inbox', staff: 'their email on file is a SOARD staff address', bad: 'their email on file isn’t a whole address', address: 'their email on file isn’t their own',
+  // (what happened to it: Advisory Board QA round 27)
+  refused: 'the email service refused it', setup: 'the site’s email isn’t set up', unsure: 'it may not have gone' };
 /** "Hal has no email of their own on file" (why: addressWhy) */
 const whyNotWords = (name, why) => ({ group: `${name}’s email on file is a SOARD group inbox`, staff: `${name}’s email on file is a SOARD staff address`, bad: `${name}’s email on file isn’t a whole address` }[why] || `${name} has no email of their own on file`);
 
@@ -655,15 +738,24 @@ async function askItem(env, row, { ask, preferred, now }) {
   return { item: { to: row.email, ...askEmail({ title: String(d.title || ''), body: String(d.body || ''), link: d.link || '' }, greetingOf({ name: row.msg?.name || '', ...link.person, slug: link.slug }, names), { yes: at('yes'), no: at('no') }) } };
 }
 
-/** What a press of the ask says happened, in plain words (`out`: put it out too, else Email it) */
+/**
+ * What a press of the ask says happened, in plain words (`out`: put it out too, else Email it), from what happened to
+ * each email: sent, owed (it goes in a few minutes), refused (Resend's own no, or email not set up: Advisory Board QA
+ * round 27, said as a refusal with what staff can do, never "in a few minutes"), may not have gone, skipped
+ */
 export function askWords(r, { out = true } = {}) {
   if (r.off) return out ? 'It’s on the page. Emails are off, so nothing was sent.' : 'Nothing went out: emails are off.';
   if (r.already) return out ? 'It’s on the page. The Advisory Board already had this email.' : 'The Advisory Board already had this email.';
   const skipped = r.skipped?.length ? ` Not sent to ${r.skipped.map((x) => `${x.name || 'someone'} (${SKIP_WORDS[x.why] || 'not sent'})`).join(', ')}.` : '';
-  if (!r.sent && !r.owed) return `${out ? 'It’s on the page, but' : 'Nothing went out:'} no Advisory Board member has an email the site can send it to.${skipped}`;
-  if (!r.owed) return `${out ? 'It’s out, and emailed to' : 'Emailed to'} ${many(r.sent)}.${skipped}`;
-  if (!r.sent) return `${out ? 'The ask is out. Its email goes to' : 'Its email goes to'} ${many(r.owed)} in a few minutes.${skipped}`;
-  return `${out ? 'The ask is out. ' : ''}It went to ${many(r.sent)}; the other ${r.owed} ${r.owed === 1 ? 'gets' : 'get'} it in a few minutes.${skipped}`;
+  const rest = `${refusedWords(r.refused)}${unsureWords(r.unsure)}${skipped}`;
+  const more = !!(r.refused?.length || r.unsure?.length);
+  if (!r.sent && !r.owed) {
+    if (more) return `${out ? 'It’s on the page, but its email didn’t go.' : 'Nothing went out.'}${rest}`;
+    return `${out ? 'It’s on the page, but' : 'Nothing went out:'} no Advisory Board member has an email the site can send it to.${skipped}`;
+  }
+  if (!r.owed) return `${out ? 'It’s out, and emailed to' : 'Emailed to'} ${many(r.sent)}.${rest}`;
+  if (!r.sent) return `${out ? 'The ask is out. Its email goes to' : 'Its email goes to'} ${many(r.owed)} in a few minutes.${rest}`;
+  return `${out ? 'The ask is out. ' : ''}It went to ${many(r.sent)}; ${more ? `${r.owed} more` : `the other ${r.owed}`} ${r.owed === 1 ? 'gets' : 'get'} it in a few minutes.${rest}`;
 }
 
 /**
@@ -714,18 +806,22 @@ export async function askPress(env, id, { emails, out = true, now = Date.now() }
   if (!w.mailing) return { ask: w.ask, sent: { already: true }, said: askWords({ already: true }, { out }) };
   const row = { id, sent_at: w.ask.sentAt, closed_at: w.ask.closedAt || null, data: JSON.stringify({ title: w.ask.title, body: w.ask.body, link: w.ask.link }) };
   const r = await sendOwed(env, rows, { now, replyTo: reply, make: (x) => askItem(env, x, { ask: row, preferred, now }) });
-  const result = { sent: r.sent, owed: r.owed, ...(r.skipped.length ? { skipped: r.skipped } : {}) };
+  const result = { sent: r.sent, owed: r.owed, ...(r.skipped.length ? { skipped: r.skipped } : {}), ...(r.refused.length ? { refused: r.refused } : {}), ...(r.unsure.length ? { unsure: r.unsure } : {}) };
   // (the log staff read: one that doesn't save is never in the way of the answer)
   await noteAsk(DB, { id, title: w.ask.title }, result, now).catch((e) => console.error('[advisory-mail] the ask’s log', e?.message || e));
   return { ask: w.ask, sent: result, said: askWords(result, { out }) };
 }
-/** The ask's line in the mail log, for staff to read */
+/**
+ * The ask's line in the mail log, for staff to read ("What's gone out"): sent counts only what went or goes in a few
+ * minutes, never one refused or that may not have gone (Advisory Board QA round 27), which are named
+ */
 async function noteAsk(DB, ask, r, now) {
-  const notSent = r.skipped?.length ? ` Not sent to ${r.skipped.map((x) => `${x.name} (${SKIP_WORDS[x.why] || 'not sent'})`).join(', ')}.` : '';
+  const not = [...(r.skipped || []).map((x) => ({ name: x.name, why: x.why })), ...(r.refused || []).map((x) => ({ name: x.full || x.name, why: x.setup ? 'setup' : 'refused' })), ...(r.unsure || []).map((x) => ({ name: x.full || x.name, why: 'unsure' }))];
+  const notSent = not.length ? ` Not sent to ${not.map((x) => `${x.name} (${SKIP_WORDS[x.why] || 'not sent'})`).join(', ')}.` : '';
   const went = r.sent + r.owed;
   await remember(DB, {
     kind: went ? 'ask' : 'ask-failed', id: ask.id, title: ask.title, sent: went, ...(r.owed ? { owed: r.owed } : {}),
-    ...(r.skipped?.length ? { skipped: r.skipped.map((x) => ({ name: x.name, why: x.why })) } : {}),
+    ...(not.length ? { skipped: not } : {}),
     ...(went ? (notSent ? { what: `This month’s ask: ${ask.title}.${notSent}` } : {}) : { what: `This month’s ask didn’t send: ${ask.title}.${notSent}` }),
   }, now);
 }
@@ -774,8 +870,10 @@ export async function statusPress(env, kind, id, body, { by = '', settings, now 
   const DB = env.DB;
   await ensureAdvisory(DB);
   const key = `update:${kind}:${id}`;
-  // (what's owed for it already: read before the write, as everything the email needs is)
-  const owedNow = rowOf(await DB.prepare('SELECT * FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND outcome IS NULL').bind(key).first());
+  // (what's owed for it already: read before the write, as everything the email needs is. One that fails changes
+  // nothing, and says so in words)
+  let owedNow;
+  try { owedNow = rowOf(await DB.prepare('SELECT * FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND outcome IS NULL').bind(key).first()); } catch (e) { throw readDown(CHANGE_DOWN, e); }
   let row = null;
   let member = null;
   let reply = null;
@@ -810,10 +908,14 @@ export async function statusPress(env, kind, id, body, { by = '', settings, now 
   }
   const first = going.msg?.first || firstWord(member?.name || '') || 'The Advisory Board member';
   const r = await sendOwed(env, [going], { now, replyTo: reply, make: async (x) => (member && ownAddress(member) === x.email ? { item: memberItem(x) } : { skip: 'left', name: first }) });
-  const sent = { sent: r.sent, owed: r.owed, first, ...(r.skipped.length ? { skipped: r.skipped } : {}) };
+  const sent = { sent: r.sent, owed: r.owed, first, ...(r.skipped.length ? { skipped: r.skipped } : {}), ...(r.refused.length ? { refused: r.refused.length } : {}), ...(r.unsure.length ? { unsure: r.unsure.length } : {}) };
   // (the log staff read: one that doesn't save is never in the way of the answer)
   if (r.sent) await remember(DB, { kind: 'advisory-update', sent: r.sent }, now).catch((e) => console.error('[advisory-mail] the log', e?.message || e));
-  return { record, changed: w.changed, sent, said: r.sent ? `${first} was emailed.` : r.owed ? `${first}’s email goes in a few minutes.` : r.skipped.length ? `${first} isn’t on the Advisory Board at that email now, so no email went.` : '' };
+  // (Resend's own no, or email not set up: a refusal in words, never "in a few minutes": Advisory Board QA round 27)
+  return { record, changed: w.changed, sent, said: r.sent ? `${first} was emailed.` : r.owed ? `${first}’s email goes in a few minutes.`
+    : r.refused.length ? refusedWords(r.refused.map((x) => ({ ...x, name: first }))).trim()
+      : r.unsure.length ? unsureWords([{ name: first }]).trim()
+        : r.skipped.length ? `${first} isn’t on the Advisory Board at that email now, so no email went.` : '' };
 }
 
 /**
@@ -829,10 +931,21 @@ export async function sendOwedMail(env, { now = Date.now(), only = null } = {}) 
     .filter((r) => (only ? only(r) : !r.tries || Date.parse(r.owed_at) < now - r.tries * r.tries * 60_000));
   if (!rows.length) return { sent: 0, owed: 0 };
   const settings = await getSettings(DB);
-  const due = rows.filter((r) => settings.emails || !TO_MEMBERS.has(r.kind));
+  // (one a person sent again by hand goes with the switch off too, as their press said: sendAgain)
+  const due = rows.filter((r) => settings.emails || !TO_MEMBERS.has(r.kind) || r.msg?.hand);
   if (!due.length) return { sent: 0, owed: rows.length, off: true };
-  const onBoard = due.some((r) => TO_MEMBERS.has(r.kind)) ? await activeAdvisors(DB) : [];
-  const askIds = [...new Set(due.filter((r) => r.kind === 'ask').map((r) => r.ref))];
+  const { make, lead } = await makerFor(env, due, { settings, now });
+  const r = await sendOwed(env, due, { now, replyTo: lead.email, make });
+  // (the log staff read: one that doesn't save is never in the way)
+  if (r.sent) await remember(DB, { kind: due.every((x) => x.kind === 'ask') ? 'ask-owed' : 'advisory-update', sent: r.sent, what: `${r.sent === 1 ? 'An Advisory Board email that was waiting' : `${r.sent} Advisory Board emails that were waiting`} went out` }, now)
+    .catch((e) => console.error('[advisory-mail] the log', e?.message || e));
+  return { sent: r.sent, owed: r.owed + rows.length - due.length, ...(r.skipped.length ? { skipped: r.skipped.length } : {}), ...(r.refused.length ? { refused: r.refused.length } : {}), ...(r.unsure.length ? { unsure: r.unsure.length } : {}) };
+}
+/** How each owed email is made as it goes (`rows`: the ones going now), with what it needs read once */
+async function makerFor(env, rows, { settings, now }) {
+  const DB = env.DB;
+  const onBoard = rows.some((r) => TO_MEMBERS.has(r.kind)) ? await activeAdvisors(DB) : [];
+  const askIds = [...new Set(rows.filter((r) => r.kind === 'ask').map((r) => r.ref))];
   const asks = {};
   for (const askId of askIds) asks[askId] = await DB.prepare('SELECT id, sent_at, closed_at, data FROM advisory_asks WHERE id = ?').bind(askId).first();
   const preferred = askIds.length ? await preferredNames(DB) : {};
@@ -844,11 +957,44 @@ export async function sendOwedMail(env, { now = Date.now(), only = null } = {}) 
     if (!onBoard.some((a) => ownAddress(a) === row.email)) return { skip: 'left', name: row.msg?.first || '' };
     return { item: memberItem(row) };
   };
-  const r = await sendOwed(env, due, { now, replyTo: lead.email, make });
-  // (the log staff read: one that doesn't save is never in the way)
-  if (r.sent) await remember(DB, { kind: due.every((x) => x.kind === 'ask') ? 'ask-owed' : 'advisory-update', sent: r.sent, what: `${r.sent === 1 ? 'An Advisory Board email that was waiting' : `${r.sent} Advisory Board emails that were waiting`} went out` }, now)
-    .catch((e) => console.error('[advisory-mail] the log', e?.message || e));
-  return { sent: r.sent, owed: r.owed + rows.length - due.length, ...(r.skipped.length ? { skipped: r.skipped.length } : {}) };
+  return { make, lead };
+}
+
+/**
+ * Advisory Board emails that may not have gone (a try's answer was lost, and Resend no longer keeps its key: 'unsure'),
+ * for staff to see on Run it with Send it again (Advisory Board QA round 27: nothing owed is ever lost silently).
+ * → [{ key, kind, ref, name, at }]
+ */
+export async function unsureMail(DB) {
+  await ensureAdvisory(DB);
+  const rows = ((await DB.prepare("SELECT * FROM advisory_outbox WHERE outcome = 'unsure' AND sent_at IS NULL ORDER BY owed_at LIMIT 50").all()).results || []).map(rowOf);
+  // (one to a member who has since left the Advisory Board, or whose email changed, is nobody's to send again)
+  const on = rows.some((r) => TO_MEMBERS.has(r.kind)) ? new Set((await activeAdvisors(DB)).map((a) => ownAddress(a)).filter(Boolean)) : new Set();
+  return rows.filter((r) => !TO_MEMBERS.has(r.kind) || on.has(r.email)).map((r) => ({ key: r.key, kind: r.kind, ref: r.ref, name: nameOfRow(r), at: r.lost_at || r.tried_at || r.owed_at }));
+}
+/**
+ * Send it again: one email that may not have gone, sent now with a new key (its old one may have reached Resend and is
+ * past its day, so only a new one goes for sure; a person's press, so it goes with the switch off too). The new key and
+ * the email owed again are one write, before it goes; then it goes and is marked, as every owed email (sendOwed). →
+ * { sent, owed, refused, skipped, gone } and `said`, in plain words
+ */
+export async function sendAgain(env, key, { now = Date.now() } = {}) {
+  const DB = env.DB;
+  await ensureAdvisory(DB);
+  const was = rowOf(await DB.prepare("SELECT * FROM advisory_outbox WHERE key = ? AND outcome = 'unsure' AND sent_at IS NULL").bind(String(key || '')).first());
+  if (!was) return { gone: true, said: 'That email isn’t waiting to be sent again any more. The page shows where it stands now.' };
+  const settings = await getSettings(DB);
+  const { make, lead } = await makerFor(env, [was], { settings, now });
+  const idem = freshKey(was.idem, now);
+  const row = await DB.prepare("UPDATE advisory_outbox SET idem = ?, outcome = NULL, tried_at = NULL, lost_at = NULL, tries = 0, msg = CASE WHEN json_valid(msg) THEN json_set(msg, '$.hand', json('true')) ELSE msg END WHERE key = ? AND idem = ? AND outcome = 'unsure' AND sent_at IS NULL RETURNING *")
+    .bind(idem, was.key, was.idem).first();
+  if (!row) return { gone: true, said: 'That email isn’t waiting to be sent again any more. The page shows where it stands now.' };
+  const r = await sendOwed(env, [rowOf(row)], { now, replyTo: lead.email, make });
+  const name = nameOfRow(was);
+  const said = r.sent ? `Sent to ${name}.` : r.owed ? `The email to ${name} goes in a few minutes.` : r.refused.length ? refusedWords(r.refused).trim()
+    : r.skipped.length ? `It didn’t go (${SKIP_WORDS[r.skipped[0].why] || 'it can’t go now'}).` : 'It’s on its way already.';
+  if (r.sent) await remember(DB, { kind: was.kind === 'ask' ? 'ask-owed' : 'advisory-update', sent: r.sent, what: `An Advisory Board email that may not have gone, sent again to ${name}` }, now).catch(() => {});
+  return { sent: r.sent, owed: r.owed, refused: r.refused.length, skipped: r.skipped.length, said };
 }
 
 /**
@@ -942,7 +1088,8 @@ export async function welcomeOnJoin(env, slug, { by = '', now = Date.now(), fetc
   const settings = await getSettings(env.DB);
   // (greet: as queueWelcome's, '' a decision too: no name)
   const decided = typeof greet === 'string';
-  const wait = () => setEntry(env.DB, 'waiting', slug, { at: new Date(now).toISOString(), by, ...(decided ? { greet } : {}) });
+  // (one already owed keeps its key and what its tries came to: never written over, Advisory Board QA round 27)
+  const wait = () => mergeEntry(env.DB, 'waiting', slug, { at: new Date(now).toISOString(), by }, decided ? { greet } : {});
   // (People and their private emails read so a read that fails says so: never taken for "they have no email". It waits,
   // written down as waiting, and the heartbeat sends it once it can check: 'check')
   let me;
@@ -958,7 +1105,7 @@ export async function welcomeOnJoin(env, slug, { by = '', now = Date.now(), fetc
   if (!(await canSignIn(env, me.email))) await syncBoardAccess(env, { fetchImpl, now }).catch(() => null);
   let why = 'sign-in';
   if (await canSignIn(env, me.email)) {
-    const r = await sendWelcome(env, { by, slugs: [slug], now, greet: decided ? { [slug]: greet } : {} });
+    const r = await sendWelcome(env, { by, slugs: [slug], now, via: 'add', greet: decided ? { [slug]: greet } : {} });
     // (it went, whatever doesn't save after: it's said as sent. A mark that didn't save keeps it waiting, written with
     // its claim, so the heartbeat writes the mark, asking Resend again under the same key, which sends nothing twice)
     if (r.sent) return { sent: r.sent };
@@ -967,6 +1114,8 @@ export async function welcomeOnJoin(env, slug, { by = '', now = Date.now(), fetc
     if (r.refused) return { refused: true };
     // (two at once: the other one has it, or is sending it)
     if (r.going || r.had) return { already: true };
+    // (one that may not have gone, a day ago: never sent again by itself; their row on Run it says so, with Send it again)
+    if (r.unsure) return { unsure: true };
     why = 'send'; // it couldn't be claimed just now: the heartbeat sends it
   } else {
     // Not a matter of minutes: the sign-in itself isn't set up all the way (Board → Members says what's left)
@@ -997,6 +1146,7 @@ export async function sendWaitingWelcomes(env, { now = Date.now() } = {}) {
   if (!settings.emails && !Object.values(waiting).some((w) => w?.hand)) return { sent: 0, off: true }; // (switched off meanwhile: they wait; switched on, they go)
   const on = await activeAdvisors(env.DB);
   const ready = { first: [], again: [] };
+  let unsure = 0;
   for (const [slug, w] of Object.entries(waiting)) {
     const me = on.find((a) => a.slug === slug);
     const rec = log.welcomed?.[slug];
@@ -1006,6 +1156,9 @@ export async function sendWaitingWelcomes(env, { now = Date.now() } = {}) {
     if (!owed) { if (log.waiting?.[slug]) await removeEntry(env.DB, 'waiting', slug); continue; }
     if (!settings.emails && !w?.hand) continue;
     if (rec?.sending && Date.parse(rec.sending) > now - SENDING_STALE_MS) continue; // (a press is sending it this minute)
+    // (one that may have reached Resend a day ago is never sent again by itself: their row says so, with Send it again.
+    // Advisory Board QA round 27)
+    if (ownAddress(me) && welcomeKeyState(w, rec, me.email, now) === 'unsure') { unsure += 1; continue; }
     if (ownAddress(me) && await canSignIn(env, me.email)) ready[w?.after && hadIt(rec, me.email) ? 'again' : 'first'].push(slug);
   }
   // (each with the name and the key it was written down with)
@@ -1013,10 +1166,11 @@ export async function sendWaitingWelcomes(env, { now = Date.now() } = {}) {
   for (const [kind, slugs] of Object.entries(ready)) {
     if (!slugs.length) continue;
     const greet = Object.fromEntries(slugs.map((slug) => [slug, waiting[slug]?.greet]).filter(([, g]) => typeof g === 'string'));
-    const r = await sendWelcome(env, { by: 'the site', slugs, now, greet, anyway: true, again: kind === 'again', owedAs: Object.fromEntries(slugs.map((slug) => [slug, waiting[slug]])) });
+    const r = await sendWelcome(env, { by: 'the site', slugs, now, greet, anyway: true, again: kind === 'again', via: 'site', owedAs: Object.fromEntries(slugs.map((slug) => [slug, waiting[slug]])) });
     sent += r.sent || 0;
+    unsure += r.unsure || 0;
   }
-  return { sent, waiting: Object.keys((await readState(env.DB, LOG)).waiting || {}).length };
+  return { sent, waiting: Object.keys((await readState(env.DB, LOG)).waiting || {}).length, ...(unsure ? { unsure } : {}) };
 }
 
 /**
@@ -1034,7 +1188,7 @@ export async function sendWaitingWelcomes(env, { now = Date.now() } = {}) {
  * with the claim at the new one sent again (Advisory Board QA round 21). → whether a claim of theirs was found and
  * marked: none, nothing is marked, and the claim lapses in ten minutes for the heartbeat
  */
-async function markClaim(DB, a, now, to, value, { unowe = false } = {}) {
+async function markClaim(DB, a, now, to, value, { unowe = false, lost = '' } = {}) {
   await logRow(DB);
   const sending = new Date(now).toISOString();
   const keyOf = `(SELECT j.key FROM json_each(board_state.data, '$."welcomed"') AS j WHERE json_type(j.value) = 'object' AND json_extract(j.value, '$.sending') = ?1 AND lower(json_extract(j.value, '$.sendingTo')) = ?2 ORDER BY j.key = ?3 DESC LIMIT 1)`;
@@ -1042,8 +1196,12 @@ async function markClaim(DB, a, now, to, value, { unowe = false } = {}) {
   // (unowe: it went, or Resend refused it: its waiting entry, written with the claim, comes off in this same write. A
   // mark that doesn't save leaves both, and the heartbeat asks Resend again under the same key, which sends nothing twice)
   if (unowe) set = `json_remove(${set}, '$."waiting".' || json_quote(${keyOf}))`;
+  // (lost: its answer was lost, so it may have reached Resend: when, kept on its waiting entry, the earliest of them, so
+  // it's asked again only under the same key while Resend keeps it: Advisory Board QA round 27)
+  const lostAt = `'$."waiting".' || json_quote(${keyOf}) || '.lost'`;
+  if (lost) set = `json_set(${set}, ${lostAt}, ifnull(json_extract(data, ${lostAt}), ?7))`;
   const r = await DB.prepare(`UPDATE board_state SET data = ${set}, updated_at = ?5 WHERE key = ?6 AND json_valid(data) AND ${keyOf} IS NOT NULL`)
-    .bind(sending, plain(to), a.slug, JSON.stringify(value ?? null), new Date().toISOString(), LOG).run();
+    .bind(sending, plain(to), a.slug, JSON.stringify(value ?? null), new Date().toISOString(), LOG, ...(lost ? [lost] : [])).run();
   return Number(r?.meta?.changes) > 0;
 }
 
@@ -1060,7 +1218,7 @@ async function markClaim(DB, a, now, to, value, { unowe = false } = {}) {
  * heartbeat is sending. → { sent, failed, owed, refused, going, had, unknown?, unmarked? } (going: one on its way already;
  * had: had it)
  */
-export async function sendWelcome(env, { by = '', slugs = null, now = Date.now(), greet = {}, anyway = false, again = false, who = '', hand = false, owedAs = {} } = {}) {
+export async function sendWelcome(env, { by = '', slugs = null, now = Date.now(), greet = {}, anyway = false, again = false, who = '', hand = false, owedAs = {}, fresh = false, via = '' } = {}) {
   const DB = env.DB;
   let settings; let advisors; let was; let wasWaiting; let lead; let preferred;
   try {
@@ -1081,22 +1239,38 @@ export async function sendWelcome(env, { by = '', slugs = null, now = Date.now()
   let unknown = 0;
   let going = 0;
   let had = 0;
+  let unsure = 0;
+  let changed = 0;
   let stop = null;
   for (const a0 of advisors) {
     const to = plain(a0.email);
     const before = was[a0.slug];
     const sentAgain = again && hadIt(before, to) && !!sentAt(before);
-    // (the key it was written down with, while it's for this address; else this send's own)
-    const keptKey = String(owedAs[a0.slug]?.key || '');
-    const key = keptKey.startsWith(`advisory-welcome:${to}`) ? keptKey : welcomeKey(to, before, again);
+    // (the entry it's owed under, while it's owed at this address: the heartbeat's, else the one written down)
+    const kept = owedAs[a0.slug] || (!hadIt(before, to) || (wasWaiting[a0.slug]?.after && sentAt(before) === wasWaiting[a0.slug].after) ? wasWaiting[a0.slug] : null) || null;
+    const keptKey = String(kept?.key || '');
+    const base = keptKey.startsWith(`advisory-welcome:${to}`) ? keptKey : welcomeKey(to, before, again);
+    // How long it may wait under its key (one rule for every Advisory Board email, Advisory Board QA round 27): one that
+    // may have reached Resend a day ago is never sent again by itself (`fresh`: a person's Send it again on their row,
+    // with a new key); none of whose tries reached Resend, past its key's day, goes with a new key
+    const same = !keptKey || keptKey === base;
+    const state = same ? welcomeKeyState(kept, before, to, now) : 'ok';
+    if (state === 'unsure' && !fresh) { unsure += 1; continue; }
+    const renew = state === 'stale' || state === 'unsure';
+    const key = renew ? freshKey(base, now) : base;
+    const lost = !renew && same ? lostOf(kept, before, to, now) : '';
     const owed = { ...(wasWaiting[a0.slug] || {}), ...(owedAs[a0.slug] || {}), ...(typeof greet[a0.slug] === 'string' ? { greet: greet[a0.slug] } : {}),
       at: owedAs[a0.slug]?.at || wasWaiting[a0.slug]?.at || at, by: owedAs[a0.slug]?.by || wasWaiting[a0.slug]?.by || by, key,
+      // (tried: when it first went to Resend under this key; lost: when one of its tries may have reached Resend)
+      tried: !renew && same && kept?.tried ? kept.tried : at,
       ...(hand ? { hand: true } : {}), ...(sentAgain ? { after: sentAt(before) } : {}) };
+    delete owed.lost;
+    if (lost) owed.lost = lost;
     let a = a0;
     let claimed = false;
     try {
       for (let i = 0; i < 5; i++) {
-        if (await claimWelcome(DB, a.slug, now, a.email, { again, owed })) { claimed = true; break; }
+        if (await claimWelcome(DB, a.slug, now, a.email, { again, owed, via })) { claimed = true; break; }
         // (renamed on People since the list was read: claimed at the address they have now; else it wasn't theirs to
         // claim: had it, or on its way)
         const me = await memberNow(DB, { slug: a.slug, email: a.email }, { into: false });
@@ -1113,7 +1287,9 @@ export async function sendWelcome(env, { by = '', slugs = null, now = Date.now()
     if (claimed) mine.push({ ...a, was: before, key });
     else if (hadIt(before, to) && !(before?.sending && Date.parse(before.sending) > now - SENDING_STALE_MS)) had += 1;
     else if (hasOrGoing(before, now, to)) going += 1;
-    // (their record changed between the read and the claim: a rename, an email changed. Nothing claimed for them)
+    // (their record changed between the read and the claim. Their email changed on People: said so, never as the email
+    // service's no, which was never asked (Advisory Board QA round 27). A rename or a move: nothing claimed for them)
+    else if (await emailChanged(DB, a0.slug, to)) changed += 1;
     else failed += 1;
   }
   // (nothing claimed, and a claim that failed: said in its own words, 503)
@@ -1137,17 +1313,18 @@ export async function sendWelcome(env, { by = '', slugs = null, now = Date.now()
       // stays claimed and owed, and the heartbeat's send of it, once the claim is ten minutes old, asks Resend under the
       // same key, which sends nothing again and answers as before: then it's marked
       try {
-        if (!(await markClaim(DB, a, now, to, { at, to }, { unowe: true }))) throw new Error('its claim wasn’t found');
+        if (!(await markClaim(DB, a, now, to, { at, to, ...(via ? { via } : {}) }, { unowe: true }))) throw new Error('its claim wasn’t found');
       } catch (e) {
         console.error('[advisory-mail] a welcome went but wasn’t marked (the heartbeat marks it)', a.slug, e?.message || e);
         unmarked.push(a.slug);
       }
     } else {
       // (owed: put back as it was, still written down as waiting with its key, so the heartbeat sends it at its next
-      // beat. Refused: put back, and taken off as owed. One that doesn't save is a claim that lapses in ten minutes,
-      // owed all the same, and never stops the rest of these going)
-      if (how === 'owed') owedN += 1; else refused += 1;
-      await markClaim(DB, a, now, to, sentAt(a.was) ? a.was : null, { unowe: how === 'refused' })
+      // beat; its answer lost, when, so it's asked again only while Resend keeps its key. Refused: put back, and taken
+      // off as owed. One that doesn't save is a claim that lapses in ten minutes, owed all the same, and never stops the
+      // rest of these going)
+      if (how === 'refused') refused += 1; else owedN += 1;
+      await markClaim(DB, a, now, to, sentAt(a.was) ? a.was : null, { unowe: how === 'refused', lost: how === 'lost' ? at : '' })
         .catch((e) => console.error('[advisory-mail] a welcome that didn’t go wasn’t put back (it can go again in ten minutes)', a.slug, e?.message || e));
     }
   }
@@ -1156,7 +1333,14 @@ export async function sendWelcome(env, { by = '', slugs = null, now = Date.now()
     await remember(DB, { kind: 'welcome', by, sent, failed: failed + refused, ...(owedN ? { owed: owedN } : {}), ...(who ? { who } : {}) }, now)
       .catch((e) => console.error('[advisory-mail] welcome log', e?.message || e));
   }
-  return { sent, failed, owed: owedN, refused, going, had, ...(unknown ? { unknown } : {}), ...(unmarked.length ? { unmarked } : {}) };
+  return { sent, failed, owed: owedN, refused, going, had, ...(unknown ? { unknown } : {}), ...(unmarked.length ? { unmarked } : {}), ...(unsure ? { unsure } : {}), ...(changed ? { changed } : {}) };
+}
+/** Whether their email on People is another than `to` now (a read that fails: can't tell, so not said) */
+async function emailChanged(DB, slug, to) {
+  try {
+    const r = await DB.prepare('SELECT lower(trim(email)) AS e FROM reveal_board_emails WHERE slug = ?').bind(slug).first();
+    return (r?.e || '') !== plain(to);
+  } catch { return false; }
 }
 
 /**
@@ -1170,6 +1354,8 @@ export function welcomesSaid(r) {
   if (r.owed) parts.push(r.sent ? `${r.owed === 1 ? 'One more goes' : `${r.owed} more go`} in a few minutes.` : `It goes to ${many(r.owed)} in a few minutes.`);
   if (r.going) parts.push(`${r.going === 1 ? 'One was' : `${r.going} were`} already on ${r.going === 1 ? 'its' : 'their'} way.`);
   if (r.refused) parts.push(`The email service refused ${r.refused === 1 ? 'one' : r.refused}, so ${r.refused === 1 ? 'it' : 'those'} didn’t go. Check their emails on People, then try again.`);
+  if (r.changed) parts.push(`${r.changed === 1 ? 'One person’s email' : `${r.changed} people’s emails`} changed on People just now, so ${r.changed === 1 ? 'it wasn’t' : 'those weren’t'} sent. Check ${r.changed === 1 ? 'it' : 'them'} and press again.`);
+  if (r.unsure) parts.push(`${r.unsure === 1 ? 'One' : r.unsure} may not have gone: ${r.unsure === 1 ? 'it’s' : 'they’re'} on ${r.unsure === 1 ? 'their row' : 'their rows'} below to send again.`);
   if (r.failed) parts.push(`${r.failed === 1 ? 'One' : r.failed} didn’t go just now. Try again in a moment.`);
   if (r.unknown) parts.push(`We can’t tell yet about ${r.unknown === 1 ? 'one' : r.unknown}: if it’s on its way, it goes by itself in a few minutes.`);
   if (!parts.length) return r.had ? 'Nothing went out: they’ve all had it already.' : 'Nothing went out: nobody here has an email of their own on file.';
@@ -1212,13 +1398,17 @@ export async function sendWelcomeTo(env, slug, { by = '', now = Date.now(), fetc
   } catch (e) { throw notSent(e); }
   const greet = log.waiting?.[slug]?.greet;
   const decided = typeof greet === 'string';
-  const r = await sendWelcome(env, { by, slugs: [slug], now, anyway: true, again: true, hand: true, who: me.name, greet: decided ? { [slug]: greet } : {} });
+  // (fresh: a person's press, so one that may not have gone, and that the site never sends again by itself, goes now with
+  // a new key: Advisory Board QA round 27)
+  const r = await sendWelcome(env, { by, slugs: [slug], now, anyway: true, again: true, hand: true, fresh: true, via: 'run-it', who: me.name, greet: decided ? { [slug]: greet } : {} });
   // (it went, whatever doesn't save after it: a mark that didn't save is left owed, for the heartbeat to write)
   if (r.sent) return { sent: 1, again: !!state.at, at: new Date(now).toISOString() };
   // (no answer that says: owed, with its key, and the heartbeat sends it in a few minutes. Resend's own no: said)
   if (r.owed) return { owed: 1 };
   if (r.refused) return { refused: 1 };
   if (r.going) return { going: true };
+  // (their email on People changed between the reads and the claim: nothing was sent, said so. Resend was never asked)
+  if (r.changed) return { changed: 1 };
   if (r.had) {
     const after = welcomeOf((await readState(env.DB, LOG).catch(() => ({}))).welcomed?.[slug], me.email, now);
     return after.at ? { tooSoon: true, at: after.at } : { going: true };

@@ -1130,6 +1130,25 @@ export function approvedFileAfter(cur, next) {
   // (the minutes file by the one rule, the secretary's Word file on an item too; else a staff-only one. Board QA round 14)
   return ownMinutesFile(cur)?.id || '';
 }
+
+// ─── What approved minutes state ────────────────────────────────────
+//
+// Board QA round 15, Nov 26 2026: approved typed minutes changed with a plain save of Board's agenda editor ("forty
+// thousand" made "fifty" under an item, a decision's result, who was there), the board page then said what their approved
+// Word file ("The minutes as written") didn't, and nothing told anyone. Approved minutes are the record (rounds 8, 11 and
+// 14): what they state changes only once the approval is taken back (Mark as draft). What they state is everything their
+// Word file prints from the meeting but its to-dos, so the rule lives with the template that prints it (./board-minutes-template.js
+// minutesStated, minutesStay); the site refuses every write of a meeting that breaks it (functions/api/_board.js
+// keepStated), and Board's editor shows what it covers as it is (./board-meeting.js)
+
+/** What's said when a step would change what approved minutes state: refused whole, nothing changed */
+export const MINUTES_STAY = 'These minutes are approved, so they can’t change here. Mark them as draft first to change them.';
+/**
+ * Minutes whose statement stays: approved, and in Board (minutesHeld: read in, typed, or a file of theirs on the
+ * approval's record). Minutes approved with nothing in Board yet still take theirs when they come (the email reader, a
+ * drop), as minutesNotReady asks. A practice meeting is never the record
+ */
+export const minutesKept = (m) => !m?.practice && minutesHeld(m);
 /** A copy of an item, called so until it has a name of its own (nobody's asked for a report on one: _board-asks.js wanted) */
 const COPY_MARK = ' (copy)';
 export const isCopyName = (title) => String(title || '').trim().endsWith(COPY_MARK);
@@ -1149,25 +1168,87 @@ export function copyOfItem(it, id) {
  */
 export const ownMinutesFile = (m) => minutesFileOf(m) || minutesFileOf(m || {}, { staff: true });
 /**
- * Whether a meeting has its minutes: typed or read from a file, or a file of them the board can read (minutesFileOf).
- * Approved, by the approval (minutesHeld), never by which files still carry Minutes. A file kept Staff only is never the
- * minutes in (minutesStaffOnly). Board QA round 14, Nov 24 2026: Board said the board could read them and Email the
- * board told the board they were up, while the board page had none
+ * Approved minutes the board can't read: no words of theirs on the meeting (minutesFrom: read in or typed, which the
+ * board reads on its page whatever their file is), and their file by the approval (approvedFileOf) kept Staff only, or
+ * on the board's own copy hidden from them (forBoard's APPROVED_HIDDEN). The approval still holds them (minutesHeld: no
+ * other file becomes their minutes, by any route); they just aren't the board's to read until that file is shared.
+ * → { file: that file, or null on the board's copy } | null
  */
-export const minutesIn = (m) => (m?.minutes === 'approved' ? minutesHeld(m) : !!m?.minutesFrom || !!minutesFileOf(m));
-/** Draft minutes that are in only as a file kept Staff only, which the board can't read until it's shared. → that file, or null */
-export const minutesStaffOnly = (m) => (!m || m.minutes === 'approved' || minutesIn(m) ? null : ownMinutesFile(m));
+function approvedStaffOnly(m) {
+  if (m?.minutes !== 'approved' || m.minutesFrom) return null;
+  const id = approvedFileOf(m);
+  if (id === APPROVED_HIDDEN) return { file: null };
+  const file = (m.files || []).find((f) => f.id === id);
+  return file?.staffOnly ? { file } : null;
+}
+/**
+ * Whether a meeting has its minutes, as the board can read them: typed or read from a file, or a file of them the board
+ * can read (minutesFileOf). Approved, by the approval (minutesHeld), never by which files still carry Minutes. A file kept
+ * Staff only is never the minutes in (minutesStaffOnly), approved or not. Board QA round 14, Nov 24 2026: Board said the
+ * board could read them and Email the board told the board they were up, while the board page had none; round 15, Nov 26
+ * 2026: the same, once minutes kept only as a Staff only file were marked approved
+ */
+export const minutesIn = (m) => (m?.minutes === 'approved' ? minutesHeld(m) && !approvedStaffOnly(m) : !!m?.minutesFrom || !!minutesFileOf(m));
+/**
+ * Minutes that are in only as a file kept Staff only, which the board can't read until it's shared: draft ones, or
+ * approved ones whose file by their approval is that one (approvedStaffOnly). → that file, or null (and null on the
+ * board's own copy, which never names a staff-only file)
+ */
+export const minutesStaffOnly = (m) => (!m ? null : m.minutes === 'approved' ? approvedStaffOnly(m)?.file || null : minutesIn(m) ? null : ownMinutesFile(m));
+/** Approved minutes the board can't read yet, their file kept Staff only (approvedStaffOnly), on the founders' copy or the board's: the board page says so, and offers nothing to read */
+export const approvedNotShared = (m) => !!approvedStaffOnly(m);
+/**
+ * The minutes as a document, the one the board reads now, by one rule for the board page's links and Read the minutes,
+ * Print it all and the presenting screen (an agenda item's minutes: itemFiles). A signed copy is the minutes only while
+ * they're approved and the signature is on their words as they stand: `signature`, the page's minutesSigned[m.id], whose
+ * `changed` is what makes the page say "The minutes changed after that" (none on record: a signed copy put in by hand
+ * stands for them, as minutesToSign takes it). `known` false: the signature wasn't read, or the page has none to go by,
+ * so no signed copy is taken for the minutes. Otherwise they're their own file, by round 14's rule (minutesFileOf), and a
+ * signed copy is only an earlier one, never "The minutes, signed". Board QA round 15, Nov 26 2026: minutes taken back to
+ * draft and changed printed their old signed copy as "The minutes, signed", while the board page beside it called the
+ * Word file the minutes. → { file: the minutes document, or null; signed: whether that's the signed copy; written: the
+ * minutes as written (minutesFileOf); copy: the latest signed copy, or null; copyWords: what that copy is called }
+ */
+export function minutesDocOf(m, signature = null, { known = true } = {}) {
+  const written = minutesFileOf(m);
+  const copy = (m?.files || []).filter((f) => f.kind === 'signed').at(-1) || null;
+  const signed = !!copy && known && m.minutes === 'approved' && !signature?.changed;
+  // (one not known to be on their words as they stand: an earlier one, unless the signature wasn't read and they're approved)
+  const copyWords = !copy ? '' : signed || (!known && m.minutes === 'approved') ? 'The signed copy' : 'An earlier signed copy';
+  return { file: signed ? copy : written, signed, written, copy, copyWords };
+}
 /** What Board says of minutes kept Staff only, and what to do to share them (`f`: their file) */
 export const staffOnlyWords = (f) => `${fileTitle(f?.name || '') || 'Their file'} is staff only, so the board can’t read these minutes. To share them, switch it to Board sees it in Every file.`;
 /** Signing on the board page starts with the minutes approved from here on: the secretary is never asked for years gone by */
 export const MINUTES_SIGN_FROM = '2026-11-01';
+/** Why minutes can't be signed, in the words the site refuses a signature with (minutesCantSign says which) */
+export const CANT_SIGN = {
+  draft: 'The board hasn’t approved these yet',
+  before: 'These were approved before minutes were signed here',
+  staff: 'These minutes’ file is staff only, so the board can’t read them yet. Once a founder shares it, you can sign.',
+};
+/**
+ * Whether minutes can be signed, the one rule the board page's asking (minutesToSign) and the site's signing
+ * (functions/api/_board-minutes-sign.js signMinutes) both go by, so the two never drift: approved, from MINUTES_SIGN_FROM
+ * on, and never minutes the board can't read: held in Board (minutesHeld) but not in for the board (minutesIn, the one
+ * rule: their only file kept Staff only), the secretary would sign what the board can't see. Approved with none in Board
+ * yet, they can be signed as before. Board QA round 15, Nov 26 2026: the page didn't ask, but the site signed them all
+ * the same. → '' (they can be signed), or why not: 'draft', 'before' or 'staff' (CANT_SIGN says each)
+ */
+export function minutesCantSign(m) {
+  if (m?.minutes !== 'approved') return 'draft';
+  if (String(m.approvedOn || '') < MINUTES_SIGN_FROM) return 'before';
+  if (minutesHeld(m) && !minutesIn(m)) return 'staff';
+  return '';
+}
 /**
  * Approved minutes still to be signed, the one rule every place that asks goes by (Home's For you, the meeting's Sign
- * the minutes): the signature on record ends the asking (`signature`: the page's minutesSigned[m.id], the moment it's
- * given, never waiting on the signed copy made from it), unless the minutes changed after it was given. With no
- * signature, a signed copy kept with them (one put in by hand) ends it
+ * the minutes): only minutes that can be signed (minutesCantSign, the rule the site's signing goes by), and the
+ * signature on record ends the asking (`signature`: the page's minutesSigned[m.id], the moment it's given, never waiting
+ * on the signed copy made from it), unless the minutes changed after it was given. With no signature, a signed copy
+ * kept with them (one put in by hand) ends it
  */
-export const minutesToSign = (m, signature = null) => m?.minutes === 'approved' && String(m.approvedOn || '') >= MINUTES_SIGN_FROM
+export const minutesToSign = (m, signature = null) => !minutesCantSign(m)
   && (signature ? !!signature.changed : !(m.files || []).some((f) => f.kind === 'signed'));
 
 /** The meeting an agenda's "approve the minutes" item is about: the one it names, else the last one the board had */
@@ -1203,11 +1284,15 @@ export function minutesToRead(m, meetings) {
   const file = prev ? minutesFileOf(prev) : null;
   return prev?.shared && prev.minutes !== 'approved' && (prev.minutesFrom || file) ? prev : null;
 }
-/** An item's files, in order: its documents, and for "approve the minutes" the last meeting's minutes (from `meetings`) */
+/**
+ * An item's files, in order: its documents, and for "approve the minutes" the last meeting's minutes (from `meetings`),
+ * the document the board reads for them by the one rule (minutesDocOf). An agenda item has no signature to go by (the
+ * presenting screen's view has none), so it's the minutes as written there, never a signed copy taken for them
+ */
 export function itemFiles(m, it, meetings = []) {
   const out = (it?.docs || []).map((id) => m.files.find((f) => f.id === id)).filter(Boolean);
   if (it?.live === 'minutes' && it.about) {
-    const f = minutesFileOf(meetings.find((x) => x.id === it.about));
+    const f = minutesDocOf(meetings.find((x) => x.id === it.about), null, { known: false }).file;
     if (f && !out.some((x) => x.id === f.id)) out.unshift(f);
   }
   return out;

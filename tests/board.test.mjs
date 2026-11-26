@@ -68,8 +68,13 @@ let env;
 const realFetch = globalThis.fetch;
 let outside = []; // calls this test's fake fetch saw (Resend, Cloudflare, Mercury)
 let answer = null; // (url, init) → Response for outside calls
+/* r15: what each request left running after its answer (waitUntil), finished inside its own test. Thrown away, the
+   invite check Board starts in the background when it's opened ran on into the next test, and its calendar DELETE
+   landed in that test's fake Google (the check's own test saw DELETE, POST, DELETE in round 15's loaded full run) */
+let later = [];
 
 beforeEach(async () => {
+  later = [];
   env = { DB: await createD1(), FILES: new FakeR2(), CF_ACCESS_TEAM_DOMAIN: TEAM, CF_ACCESS_AUD: AUD, RESEND_API_KEY: 're_test' };
   await env.DB.exec('CREATE TABLE team (slug TEXT PRIMARY KEY, name TEXT, "group" TEXT, order_num INTEGER, data TEXT NOT NULL, updated_at TEXT)');
   await env.DB.exec('CREATE TABLE reveal_board_emails (slug TEXT PRIMARY KEY, email TEXT NOT NULL, updated_at TEXT)');
@@ -92,7 +97,11 @@ beforeEach(async () => {
     throw new Error(`unexpected fetch ${url}`);
   };
 });
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(async () => {
+  // (what it left running finishes with this test's fakes, and what that starts in turn, before the real fetch is back)
+  for (let n = 0; later.length && n < 10; n++) { const going = later; later = []; await Promise.allSettled(going); }
+  globalThis.fetch = realFetch;
+});
 
 /** A request through the middleware, signed in as `email`, landing on `handler` (or an echo of who it was) */
 async function call(email, path, { method = 'GET', body = null, handler = null, form = null } = {}) {
@@ -100,7 +109,7 @@ async function call(email, path, { method = 'GET', body = null, handler = null, 
   const headers = { 'CF-Access-JWT-Assertion': await signIn(email), Origin: 'https://sunshineonaranneyday.com' };
   if (body) headers['Content-Type'] = 'application/json';
   const request = new Request(url, { method, headers, body: form || (body ? JSON.stringify(body) : undefined) });
-  const ctx = { request, env, data: {}, waitUntil: () => {} };
+  const ctx = { request, env, data: {}, waitUntil: (p) => { later.push(p); } };
   ctx.next = async () => (handler ? handler(ctx) : Response.json({ ok: true, user: ctx.data.userEmail, member: ctx.data.boardMember?.slug || null }));
   const res = await onRequest(ctx);
   const type = res.headers.get('Content-Type') || '';
@@ -971,17 +980,13 @@ test('board meeting invites Board didn’t send: another on a meeting’s day is
   assert.equal(data.calendar.strays[0].date, other);
 });
 
-test('deleting a meeting in Board takes its invite off the calendar, and Google tells the guests; a held one’s stays; should Google refuse, nothing is deleted', async () => {
+/* r15: the invite's cancel is owed by the delete's own write and goes once after it, a send like any other (Board QA
+   round 15, F4, decided): Google refusing just now no longer keeps the meeting. It's deleted, the answer says the
+   cancel goes by itself, and the heartbeat sends it once Google answers, once */
+test('deleting a meeting in Board takes its invite off the calendar, and Google tells the guests; a held one’s stays; should Google refuse, the meeting goes and its invite’s cancel goes once, by itself', async () => {
   const g = fakeGoogleWriter();
   let m = (await adminApi(FOUNDER, { action: 'new-meeting', date: inDays(30) })).body.meeting;
   m = (await adminApi(FOUNDER, { action: 'send-invite', id: m.id })).body.meeting;
-  const google = answer;
-  answer = (url, init) => (init.method === 'DELETE' ? Response.json({ error: { message: 'Backend Error' } }, { status: 503 }) : google(url, init));
-  const no = await adminApi(FOUNDER, { action: 'delete-meeting', id: m.id });
-  assert.notEqual(no.status, 200);
-  assert.match(no.body.error, /Backend Error/);
-  assert.ok(await getMeeting(env.DB, m.id), 'nothing deleted');
-  answer = google;
   g.calls = [];
   const yes = await adminApi(FOUNDER, { action: 'delete-meeting', id: m.id });
   assert.deepEqual([yes.status, yes.body.cancelled], [200, true]);
@@ -990,6 +995,25 @@ test('deleting a meeting in Board takes its invite off the calendar, and Google 
   assert.equal(del.method, 'DELETE');
   assert.match(del.url, new RegExp(`/events/${m.invite.eventId}\\?sendUpdates=all$`));
   assert.equal(await getMeeting(env.DB, m.id), null);
+  // Google refusing the cancel just now
+  let n = (await adminApi(FOUNDER, { action: 'new-meeting', date: inDays(31) })).body.meeting;
+  n = (await adminApi(FOUNDER, { action: 'send-invite', id: n.id })).body.meeting;
+  const google = answer;
+  answer = (url, init) => (init.method === 'DELETE' ? Response.json({ error: { message: 'Backend Error' } }, { status: 503 }) : google(url, init));
+  const no = await adminApi(FOUNDER, { action: 'delete-meeting', id: n.id });
+  assert.deepEqual([no.status, no.body.cancelled], [200, false], JSON.stringify(no.body));
+  assert.match(no.body.later, /tries again by itself/);
+  assert.equal(await getMeeting(env.DB, n.id), null, 'the meeting is deleted');
+  answer = google;
+  g.calls = [];
+  await maybeRefreshInvites(env, { now: Date.now() + 6 * 60 * 1000 });
+  const [owed, ...again] = calWrites(g);
+  assert.deepEqual(again, [], 'once');
+  assert.equal(owed.method, 'DELETE');
+  assert.match(owed.url, new RegExp(`/events/${n.invite.eventId}\\?sendUpdates=all$`));
+  g.calls = [];
+  await maybeRefreshInvites(env, { now: Date.now() + 60 * 60 * 1000 });
+  assert.deepEqual(calWrites(g), [], 'nothing owed once it went');
   // One already held keeps its event as a record
   const held = await patchMeeting(env.DB, (await adminApi(FOUNDER, { action: 'new-meeting', date: inDays(-3) })).body.meeting.id, (cur) => ({ ...cur, invite: { eventId: 'boardold', organizer: FOUNDER, sentAt: new Date().toISOString() } }));
   g.calls = [];

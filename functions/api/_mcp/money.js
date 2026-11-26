@@ -9,9 +9,10 @@
 
 import { listPayments, givenName, recurringLabel, screenPayment } from '../_zeffy.js';
 import { checksView } from '../_check-gifts.js';
-import { liveNumbers } from '../_board.js';
+import { liveNumbers, NUMBERS_READS } from '../_board.js';
 import { isBoardAdmin } from '../_board-roles.js';
 import { rowsOf, recentSeasons, statsOf } from '../../../public/admin/makeover-costs-shared.js';
+import { money } from '../../../public/admin/board-shared.js';
 import { done, refuse, adminUrl, dollars, words, isoDay, READ } from './core.js';
 
 const DAY_S = 86400;
@@ -91,15 +92,48 @@ function costsOf(c) {
   };
 }
 
+const upper = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+/** What a figure from a read that failed is said as: that it couldn't be read, by name, never a value in its place */
+const couldnt = (read) => `${upper(NUMBERS_READS[read])} couldn’t be read just now. Ask again in a moment.`;
+/** The reads only the Board area's admins are given (the money) */
+const MONEY_READS = new Set(['cash', 'finance', 'books', 'operating']);
+/** What's said of a figure that's simply not set, in words (never taken for a read that failed) */
+const NOT_SET = {
+  costs: 'None here: JobTread isn’t connected to the board page, so what makeovers cost isn’t known.',
+  noMakeovers: 'No finished makeover has its costs in JobTread yet.',
+  projects: 'None here: JobTread isn’t connected to the board page, so the makeovers under way aren’t known.',
+  cash: 'No bank balance here: no bank is connected to the site, or the banks connected hold nothing yet.',
+  books: 'None here: QuickBooks isn’t connected to the site, or hasn’t been read yet.',
+  finance: 'None here: Mercury’s record of money in and out isn’t on the board page yet.',
+};
+
+/**
+ * The board page's numbers, as its parts were read just now (./_board.js liveNumbers `notRead`): a figure from a read
+ * that failed is said to be one that couldn't be read, by name, and listed in `couldntRead`, never given as a default or
+ * as none; one that's simply not set is said so in words. Board QA round 15, Nov 26 2026: with Board's settings not
+ * read, this gave SOARD's default $500,000 as the operating balance
+ */
 async function numbers(env, _args, me) {
-  const [n, board] = await Promise.all([liveNumbers(env), isBoardAdmin(env.DB, me).catch(() => false)]);
+  // (who runs Board not checked just now: the money not given, and said why, never as though they aren't one)
+  const [n, board] = await Promise.all([liveNumbers(env, { reads: true }), isBoardAdmin(env.DB, me).catch(() => null)]);
+  const lost = n.notRead || {};
+  const said = (read, value) => (lost[read] ? couldnt(read) : value);
   const { open, ...projects } = n.projects || {};
+  const operating = !n.operating ? null : n.operating.set ? { balance: n.operating.balance }
+    : `Not set in Board’s settings, so the board page goes by SOARD’s default, ${money(n.operating.balance)}, until a Board admin sets one.`;
+  const couldntRead = Object.keys(NUMBERS_READS).filter((k) => lost[k] && (board || !MONEY_READS.has(k))).map((k) => upper(NUMBERS_READS[k]));
   return done({
-    asOf: n.at, impact: n.impact ?? null, makeoverCosts: costsOf(n.costs), projects: n.projects ? projects : null,
-    reveals: n.reveals ?? [], recentReveals: (n.pastReveals || []).slice(0, 10), events: n.events ?? [], recentEvents: n.recentEvents ?? [],
-    boardMeetings: n.meetings ?? [],
-    ...(board ? { cash: n.cash, books: n.books, finance: n.finance, operatingBalance: n.operating } : { money: 'The bank balance and the year’s books show only to the Board area’s admins, as on the board page.' }),
-    note: 'The board page’s own numbers. Makeover costs: say the median, as the board page does.',
+    asOf: n.at, impact: said('kids', n.impact ?? null),
+    makeoverCosts: said('costs', n.costs ? costsOf(n.costs) || NOT_SET.noMakeovers : NOT_SET.costs),
+    projects: said('projects', n.projects ? projects : NOT_SET.projects),
+    reveals: said('reveals', n.reveals ?? []), recentReveals: said('reveals', (n.pastReveals || []).slice(0, 10)),
+    events: said('events', n.events ?? []), recentEvents: said('events', n.recentEvents ?? []),
+    boardMeetings: said('meetings', n.meetings ?? []),
+    ...(board ? { cash: said('cash', n.cash ?? NOT_SET.cash), books: said('books', n.books ?? NOT_SET.books), finance: said('finance', n.finance ?? NOT_SET.finance), operatingBalance: said('operating', operating) }
+      : board === null ? { money: 'Whether you’re one of the Board area’s admins couldn’t be checked just now, so the bank balance and the year’s books aren’t given here. Ask again in a moment.' }
+        : { money: 'The bank balance and the year’s books show only to the Board area’s admins, as on the board page.' }),
+    ...(couldntRead.length ? { couldntRead } : {}),
+    note: `The board page’s own numbers. Makeover costs: say the median, as the board page does.${couldntRead.length ? ' What couldn’t be read just now wasn’t read: say so, and never give a figure for it.' : ''}`,
   });
 }
 
@@ -116,7 +150,7 @@ export const TOOLS = [
     inputSchema: { type: 'object', properties: { all: { type: 'boolean' } }, additionalProperties: false },
     run: checksWaiting },
   { name: 'soard_numbers', title: 'SOARD’s numbers', annotations: { title: 'SOARD’s numbers', ...READ },
-    description: 'The board page’s numbers right now: kids served and the impact so far, what finished makeovers cost (say the median), makeovers under way, reveals and events coming up and just past, and board meetings. Board admins also get the bank balance and the year’s books.',
+    description: 'The board page’s numbers right now: kids served and the impact so far, what finished makeovers cost (say the median), makeovers under way, reveals and events coming up and just past, and board meetings. Board admins also get the bank balance and the year’s books. Anything that couldn’t be read just now is said so by name (couldntRead), never given as a figure.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     run: numbers },
 ];

@@ -63,8 +63,12 @@ const APPROVED_NOW = 'These minutes are marked approved, so Board leaves them as
 
 let env;
 let texts;
+/* r15: what each request left running after its answer (waitUntil), finished inside its own test with its own fakes,
+   never thrown away to run on into the next test (Board QA round 15's full check: tests/board.test.mjs) */
+let leftRunning = [];
 const realFetch = globalThis.fetch;
 beforeEach(async () => {
+  leftRunning = [];
   texts = {};
   env = {
     DB: await createD1(), FILES: new FakeR2(), CF_ACCESS_TEAM_DOMAIN: TEAM, CF_ACCESS_AUD: AUD,
@@ -93,14 +97,17 @@ beforeEach(async () => {
     throw new Error(`unexpected fetch ${url}`);
   };
 });
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(async () => {
+  for (let n = 0; leftRunning.length && n < 10; n++) { const going = leftRunning; leftRunning = []; await Promise.allSettled(going); }
+  globalThis.fetch = realFetch;
+});
 
 /** /api/board-admin behind the real sign-in middleware, as `who`: JSON, or a file as the page's upload sends it (`form`) */
 async function call(who, { body = null, form = null } = {}) {
   const request = new Request(`https://sunshineonaranneyday.com/api/board-admin${form ? '?upload=1' : ''}`, {
     method: 'POST', headers: { 'CF-Access-JWT-Assertion': await signIn(who), Origin: 'https://sunshineonaranneyday.com', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: form || JSON.stringify(body),
   });
-  const ctx = { request, env, data: {}, waitUntil: () => {} };
+  const ctx = { request, env, data: {}, waitUntil: (p) => { leftRunning.push(p); } };
   ctx.next = async () => admin.onRequestPost(ctx);
   const res = await onRequest(ctx);
   return { status: res.status, body: await res.json() };
@@ -199,14 +206,15 @@ for (const fixed of [false, true]) {
   test(`1 (${when}): the approved minutes' file put on an agenda item is refused by name, the rest of the save goes; an item's upload of minutes is an ordinary file`, async () => {
     const { m, file } = await heldMeeting({ fixed });
     const it = lastItem(m);
-    const r = await api({ action: 'save-meeting', meeting: { ...withDoc(m, it.id, file.id), location: 'Example Hall' }, base: m.updatedAt });
+    /* r15: the rest of the save is a change to the invite's notes, not the place: approved minutes' place is what they state, refused whole (Board QA round 15) */
+    const r = await api({ action: 'save-meeting', meeting: { ...withDoc(m, it.id, file.id), inviteNote: 'Parking behind the building' }, base: m.updatedAt });
     assert.equal(r.status, 409, JSON.stringify(r.body));
     assert.equal(r.body.error, FILE_STAYS);
     assert.deepEqual([r.body.refused, r.body.fileId], [['docs'], file.id], 'refused by name, for the page to take only that back');
     let after = await getMeeting(env.DB, m.id);
     assert.deepEqual(lastItem(after).docs || [], [], 'nothing changed');
     // The page takes the file off the item and the rest goes
-    const again = await api({ action: 'save-meeting', meeting: { ...m, location: 'Example Hall' }, base: m.updatedAt });
+    const again = await api({ action: 'save-meeting', meeting: { ...m, inviteNote: 'Parking behind the building' }, base: m.updatedAt });
     assert.equal(again.status, 200);
     // An item's upload ("Upload a file" in its Add a document) of new minutes: an ordinary file, said
     const up = await addFile(again.body.meeting, pdf('Minutes-revised.pdf'), 'minutes', { forItem: true });
@@ -215,7 +223,7 @@ for (const fixed of [false, true]) {
     assert.equal(placed.status, 200, 'an ordinary file goes with the item');
     after = await getMeeting(env.DB, m.id);
     assert.deepEqual(opened(after), { editor: 'Minutes.docx', board: 'Minutes.docx' });
-    assert.equal(after.location, 'Example Hall');
+    assert.equal(after.inviteNote, 'Parking behind the building');
   });
 }
 

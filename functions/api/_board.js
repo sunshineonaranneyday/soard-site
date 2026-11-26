@@ -41,8 +41,10 @@ import {
   longDate, timeRange, shortDate, DOC_KINDS, FILE_KINDS, RSVP, DEFAULT_TEMPLATE, newMeeting, LIMITS, repliesOf, inviteOut,
   agendaIsDraft, draftAgenda, templateAgenda, previousMeeting, draftName, callName, readAgain, AGENDA_READER, isLive, cleanLive, majority, guessItem, orgName, signsAs,
   isFilled, LIVE_TITLES, agendaItems, presentersOf, reportsOn, namesText, sectionPlan, clock, docTitle, videoOf, packetDocs, partName, minutesIn,
-  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS, minutesStaffOnly, staffOnlyWords,
+  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS, minutesStaffOnly, staffOnlyWords, minutesDocOf, minutesKept,
 } from '../../public/admin/board-shared.js';
+// (what approved minutes state is what their Word file prints, so the rule lives with the template: keepStated)
+import { minutesStay } from '../../public/admin/board-minutes-template.js';
 import { welcomeHad, REPORT_LOOKS, SLIDE_PIECE, VISIT_GAP_MS, waitsForApproval, shareWaits, cleanTemplate, meetingHeld, heldNoSend } from '../../public/admin/board-shared.js';
 import { comparePeople, photoUrl } from '../../public/admin/team-shared.js';
 import { reachedCount } from '../../public/admin/community-shared.js';
@@ -270,9 +272,22 @@ export function notWork(fn) {
 export function pressLanded(err = null) {
   const s = PRESS.getStore();
   if (!s) return '';
+  if (s.done) return 'done';
   if (s.wrote) return 'some';
   return s.unsure.size ? 'unsure' : 'none';
 }
+/**
+ * The press running now has landed whole: its one write is in (or its answer was lost and the look found it). Whatever
+ * stops it after this (a read for its answer) is said by errorAnswer as done, 200 with the page told to look again,
+ * never "we can't tell yet" over a press the site knows landed. Called by the one write of a press that reads first and
+ * lands in one step (saveDoc, deleteDoc, deleteMeeting). Board QA round 15, Nov 26 2026
+ */
+export function pressDone() {
+  const s = PRESS.getStore();
+  if (s) { s.done = true; s.wrote = true; }
+}
+/** What a press that landed says when what it reads for its answer didn't come: the page looks again by itself */
+export const LOOK_AGAIN = 'This page shows it in a moment.';
 
 export async function ensureSchema(DB) {
   // (the database itself, watched or not: its tables are made once, and their setup is no press's work)
@@ -807,9 +822,11 @@ const readBack = (DB, id, cur, next) => getMeeting(DB, id).catch((err) => {
  * `prev`, the meeting it went over, so a write that changed nothing a person edits keeps nothing to compare; named as
  * the meeting names who saved it last). → whether it was written
  */
-async function writeOver(DB, m, was, { prev = null, also = [] } = {}) {
+async function writeOver(DB, m, was, { prev = null, also = [], takesBack = false, follows = null } = {}) {
   // Practice meetings live in their own table (see SCHEMA): getMeeting, and every action built on it, never finds one
   const table = m.practice ? 'board_practice' : 'board_meetings';
+  // (approved minutes state what they stated: refused before anything is written. keepStated)
+  keepStated(prev, m, { takesBack, follows });
   const data = stored(m);
   const write = was === null
     ? DB.prepare(`INSERT OR IGNORE INTO ${table} (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)`).bind(m.id, m.date || '', data, m.updatedAt, m.updatedBy || '')
@@ -826,6 +843,31 @@ async function writeOver(DB, m, was, { prev = null, also = [] } = {}) {
   const wrote = !!r?.lost || (r?.meta?.changes ?? r?.changes ?? 0) > 0;
   if (wrote) await keepSave(DB, `${table}:${m.id}`, { at: m.updatedAt, was: was || '', by: m.updatedBy, data: editedOf(m), prev: prev && editedOf(prev) });
   return wrote;
+}
+/**
+ * Approved minutes are the record (rounds 8, 11 and 14): what they state (../../public/admin/board-minutes-template.js
+ * minutesStated: everything their Word file prints from the meeting but its to-dos, its words, decisions, roll, its
+ * name, day, time and place, and each part and item printed, in order, with its name, time and who presents it) never
+ * changes while they're approved, by any route. The one guard every write of a whole meeting goes through (writeOver: a person's
+ * save and patchMeeting, so every step of the server's; patchTogether), on the meeting as the write found it (`cur`) and
+ * as it leaves it (`next`), before anything is written: refused (409) in MINUTES_STAY's words with nothing changed, the
+ * whole write (a to-do, a report, a document, the board page with it, never half of it). `refused: ['stated']` names it, so Board's editor puts back only that, as the site has it, and
+ * saves the rest. Taking the approval back (Mark as draft) is how they change. Board QA round 15, Nov 26 2026: a plain
+ * save of Board's agenda editor changed approved minutes' words, a decision and the roll, and their approved Word file
+ * didn't say any of it
+ */
+function keepStated(cur, next, { takesBack = false, follows = null } = {}) {
+  if (!cur || next?.practice) return;
+  // (a rename on People moving addresses, { old: new }: ./_board-rename.js moveBoardSlug. Judged with them followed first,
+  // so a person at a new address is the same person, and nothing else the step changes goes by)
+  if (follows && Object.keys(follows).length) cur = followAddresses(cur, follows);
+  // The one opt-out: Undo of the read that put minutes approved with none in Board into it (./_board-minutes.js
+  // undoMinutes, only when they were approved before that read: undoRefused). It takes them out of Board as they came,
+  // with none read in left (`minutesFrom` gone), never other words in their place: "minutes approved with none in Board
+  // take the first that comes, and Undo of its read leaves them with none again, truthfully" (Board QA round 11)
+  if (takesBack && !next?.minutesFrom) return;
+  const no = minutesStay(cur, next);
+  if (no) throw Object.assign(new Error(no), { status: 409, extra: { refused: ['stated'] } });
 }
 /**
  * Whether a write whose answer didn't come back landed all the same: each meeting it wrote has the time it wrote (every
@@ -956,7 +998,7 @@ export async function todayPractice(DB, now = Date.now()) {
  * kept: written only if no one saved in between, else read again and redone.
  * A newer updatedAt, so a copy open in an editor merges (`by`: the person, when one made the change). → the meeting
  */
-export async function patchMeeting(DB, id, fn, { by = '', also = [] } = {}) {
+export async function patchMeeting(DB, id, fn, { by = '', also = [], takesBack = false, follows = null } = {}) {
   for (let i = 0; i < 5; i++) {
     const cur = await getMeeting(DB, id);
     if (!cur) return null;
@@ -965,8 +1007,9 @@ export async function patchMeeting(DB, id, fn, { by = '', also = [] } = {}) {
     const next = { ...out, id, practice: false, approvedFile: approvedFileAfter(cur, out), updatedAt: stampAfter(cur.updatedAt), updatedBy: by || cur.updatedBy || '' };
     // (written: its answer is the meeting it wrote, even when the read back fails. Board QA round 11. Written only over
     // exactly `cur`, so `next` is the row as written: asWritten may stand in for the read back. Round 12. `also`: what
-    // goes in the same write, a staged file's row (./_board-minutes.js secretarySends), each only with it. Round 14)
-    if (await writeOver(DB, next, cur.updatedAt || '', { prev: cur, also })) return readBack(DB, id, cur, next);
+    // goes in the same write, a staged file's row (./_board-minutes.js secretarySends), each only with it. Round 14.
+    // `takesBack`: keepStated's one opt-out, Undo of the read that put approved minutes into Board. `follows`: a rename's addresses)
+    if (await writeOver(DB, next, cur.updatedAt || '', { prev: cur, also, takesBack, follows })) return readBack(DB, id, cur, next);
   }
   throw new Error(KEPT_CHANGING);
 }
@@ -987,6 +1030,8 @@ export async function patchTogether(DB, ids, plan, { by = '', landed = null } = 
     const curs = await Promise.all(ids.map((id) => (id ? getMeeting(DB, id) : null)));
     const { writes = [], also = [], ...rest } = plan(curs);
     const nexts = writes.map(([cur, out]) => ({ ...out, id: cur.id, practice: false, approvedFile: approvedFileAfter(cur, out), updatedAt: stampAfter(cur.updatedAt), updatedBy: by || cur.updatedBy || '' }));
+    // (approved minutes state what they stated, each meeting of the step, before any of it is written: keepStated)
+    for (const [k, m] of nexts.entries()) keepStated(writes[k][0], m);
     // Each statement goes only while every meeting is as this step has it by then: the ones before it written, the rest
     // as they were read. One meeting overtaken, and none of it goes (one batch, nothing in between)
     const as = (k) => writes.map(([cur], j) => [cur.id, j < k ? nexts[j].updatedAt : cur.updatedAt || '']).filter((_, j) => j !== k);
@@ -1055,6 +1100,8 @@ export async function setOnMeeting(DB, id, fields, { by = '', was = null } = {})
   if (after && keys.some((k) => EDITED.includes(k))) await DB.prepare('UPDATE board_saves SET data = ? WHERE record = ? AND at = ?').bind(editedOf(fromRow(row, after)), record, row.updated_at).run().catch(() => {});
   return after;
 }
+/** What setOnMeeting may write: fields only the server sets, none of them what minutes state (an invite, a send's record, the share) */
+const NOT_STATED = new Set(['snapshot', 'shared', 'notBoard', 'invite', 'inviteGone', 'video', 'packetSentAt', 'packetSentTo', 'minutesSentAt']);
 /** setOnMeeting's time for a write: now, or a millisecond after the row's last one when that's now or later (stampAfter, in SQL) */
 const STAMP = "COALESCE(CASE WHEN COALESCE(updated_at, '') < ? THEN ? ELSE strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') END, ?)";
 /**
@@ -1063,6 +1110,10 @@ const STAMP = "COALESCE(CASE WHEN COALESCE(updated_at, '') < ? THEN ? ELSE strft
  */
 function onMeetingStmt(DB, id, fields, { by = '', now = nowIso(), returning = false, also = null } = {}) {
   const keys = Object.keys(fields).filter((k) => /^[a-zA-Z]+$/.test(k));
+  // Written unread onto the meeting as it is, so never a field minutes state (keepStated can't judge a write it doesn't
+  // read): those are patchMeeting's, which reads the meeting and goes by the rule. Board QA round 15
+  const stated = keys.filter((k) => !NOT_STATED.has(k));
+  if (stated.length) throw new Error(`setOnMeeting writes only what minutes never state, not ${stated.join(', ')}: use patchMeeting`);
   const sets = [...keys.map((k) => [`$.${k}`, JSON.stringify(fields[k] ?? null)]), ...(by ? [['$.updatedBy', JSON.stringify(by)]] : [])];
   return DB.prepare(`UPDATE board_meetings SET data = json_set(data, ${sets.map(() => '?, json(?)').join(', ')}, '$.updatedAt', ${STAMP}),
     updated_at = ${STAMP}${by ? ', updated_by = ?' : ''} WHERE id = ?${also ? ` AND ${also.sql}` : ''}${returning ? ' RETURNING data, updated_at' : ''}`)
@@ -1218,13 +1269,18 @@ async function saveMeetingAs(DB, raw, { by, base = null, edit = false, env = nul
     // is the one way minutes are approved, as Board's approve and the secretary's approving send are: brought up in the
     // same step, or refused in words with nothing changed. Board QA round 13, Nov 24 2026: approved minutes said "fifty
     // thousand" while their Word file, put after the save and failing quietly, said "forty"
+    // A new day, time or place (or name and notes) for an invite that's out is owed to it by this save's own write, read
+    // first: the heartbeat takes it to Google once it has stood two minutes (./_board-invite.js inviteStep). Board QA
+    // round 15, Nov 26 2026: noted by a step after the save that caught its own failure, a new place never reached the
+    // invite and nobody heard
+    const invite = current?.invite ? await (await import('./_board-invite.js')).inviteStep(DB, asWritten(current, next)) : null;
     const file = current && env ? await minutesFileWith(env, current, next, { approving }) : null;
     // (written: its answer is the meeting it wrote, even when the read back fails. Board QA round 11)
     // (written only over exactly `current`, or only as a new one: `next` is the row as written, so asWritten may stand in
     // for the read back. Board QA round 12)
     let wrote = false;
     try {
-      wrote = await writeOver(DB, next, current ? current.updatedAt || '' : null, { prev: current, also: file?.also || [] });
+      wrote = await writeOver(DB, next, current ? current.updatedAt || '' : null, { prev: current, also: [...(file?.also || []), ...(invite?.also || [])] });
     } catch (err) {
       await file?.drop();
       throw file || approving ? notChanged(err, approving) : err;
@@ -1232,6 +1288,8 @@ async function saveMeetingAs(DB, raw, { by, base = null, edit = false, env = nul
     if (wrote) {
       // (in: the file's old bytes go, now that nothing names them; one that doesn't is the heartbeat's)
       await file?.done();
+      // (nothing left to go onto the invite: the staff told it couldn't go hear so)
+      if (env && invite?.after) await invite.after(env);
       return readBack(DB, m.id, current, next);
     }
     await file?.drop();
@@ -1358,20 +1416,41 @@ export async function importMeeting(env, parsed, { by }) {
   return saveMeeting(env.DB, m, { by });
 }
 
+/** Where a deleted meeting's invite waits for its cancel (./_board-invite.js cancelOwed), written by its delete */
+export const INVITE_CANCEL = (id) => `invite-cancel:${id}`;
+/** Tables kept beside a meeting by its id, each gone with it */
+const BESIDE_MEETING = ['board_rsvps', 'board_rsvp_links', 'board_minutes_notes', 'board_minutes_corrections', 'board_minutes_signed', 'board_checkins', 'board_votes'];
 /**
- * A meeting and everything kept beside it, gone. The meeting itself goes first, in one statement that says what it had
- * as it went (so a delete knows of an invite recorded a moment before: ./_board-invite.js deleteWithInvite), then what's
- * kept beside it → the meeting as it was when it went, or null when there was none
+ * A meeting and everything kept beside it, gone in ONE write: its files' rows (their bytes marked to go, deleted once
+ * it lands: bytesOff), its RSVPs and old answer links, the secretary's notes and her signature on its minutes, the
+ * board's corrections, check-ins and votes, a change still waiting for its invite, and (when it has an invite) that
+ * invite's cancel owed, from the meeting as the write finds it (INVITE_CANCEL: the meeting as it went, so an invite
+ * recorded a moment before comes off too; ./_board-invite.js deleteWithInvite sends it once, after). All of it lands, or
+ * none of it: never files, answers or notes left behind a meeting that's gone, and one left by a delete that stopped
+ * partway before (Board QA round 15, Nov 26 2026) goes on the next press. Its answer lost: deleted if the meeting isn't
+ * there (`was`: the meeting as read before, for the answer). → the meeting as it was when it went, or null when there
+ * was none
  */
-export async function deleteMeeting(env, id) {
-  await ensureSchema(env.DB);
-  const row = await env.DB.prepare('DELETE FROM board_meetings WHERE id = ? RETURNING data').bind(id).first();
-  const files = (await env.DB.prepare("SELECT id FROM board_files WHERE owner_type = 'meeting' AND owner_id = ?").bind(id).all()).results || [];
-  for (const f of files) await deleteFile(env, f.id);
-  await env.DB.prepare('DELETE FROM board_rsvps WHERE meeting_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM board_minutes_notes WHERE meeting_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM board_minutes_corrections WHERE meeting_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM board_minutes_signed WHERE meeting_id = ?').bind(id).run();
+export async function deleteMeeting(env, id, { was = null } = {}) {
+  const DB = env.DB;
+  await ensureSchema(DB);
+  await stateReady(DB);
+  const at = nowIso();
+  const stmts = [
+    // (first, from the meeting as this write finds it)
+    DB.prepare("INSERT OR REPLACE INTO board_state (key, data, updated_at) SELECT ?, json_object('at', ?, 'meeting', json(data)), ? FROM board_meetings WHERE id = ? AND json_valid(data) AND json_extract(data, '$.invite.eventId') IS NOT NULL").bind(INVITE_CANCEL(id), at, at, id),
+    DB.prepare("INSERT OR REPLACE INTO board_state (key, data, updated_at) SELECT ? || r2_key, json_object('key', r2_key), ? FROM board_files WHERE owner_type = 'meeting' AND owner_id = ?").bind(BYTES_OFF, at, id),
+    DB.prepare("DELETE FROM board_files WHERE owner_type = 'meeting' AND owner_id = ? RETURNING r2_key").bind(id),
+    ...BESIDE_MEETING.map((t) => DB.prepare(`DELETE FROM ${t} WHERE meeting_id = ?`).bind(id)),
+    // (./_board-invite.js pendingKey: nothing left for it to go onto)
+    DB.prepare('DELETE FROM board_state WHERE key = ?').bind(`invite-pending:${id}`),
+    DB.prepare('DELETE FROM board_meetings WHERE id = ? RETURNING data').bind(id),
+  ];
+  const r = await landedOr(() => DB.batch(stmts), async () => !(await DB.prepare('SELECT 1 AS x FROM board_meetings WHERE id = ?').bind(id).first()));
+  pressDone();
+  if (r?.lost) return was ? cleanMeeting(was) : null;
+  await bytesOff(env, (r[2]?.results || []).map((x) => x.r2_key).filter(Boolean));
+  const row = r.at(-1)?.results?.[0];
   return row ? cleanMeeting(parse(row.data)) : null;
 }
 
@@ -1717,6 +1796,10 @@ const signatureOf = (s, copies = {}) => ({
  * signed it, so a new year's "to sign" says they signed it then)
  */
 export async function listDocs(DB, year = thisYear()) {
+  return docsOf(await docsRead(DB, year));
+}
+/** What listDocs reads (every paper, their files, this year's signatures and the rest), to be made into papers by docsOf */
+async function docsRead(DB, year = thisYear()) {
   await ensureSchema(DB);
   const [rows, files, sigs, copies, prior, keptRows, declined] = await Promise.all([
     DB.prepare('SELECT data FROM board_docs').all().then((r) => r.results || []),
@@ -1730,6 +1813,10 @@ export async function listDocs(DB, year = thisYear()) {
     // Who told SOARD they can't sign it as written this year, and why (until they sign)
     declinedOf(DB, year),
   ]);
+  return { rows, files, sigs, copies, prior, keptRows, declined };
+}
+/** The papers as listDocs gives them, from what it read (docsRead) */
+function docsOf({ rows, files, sigs, copies, prior, keptRows, declined }) {
   return rows.map((r) => cleanDoc(parse(r.data))).map((d) => {
     const theirs = sigs.filter((s) => s.doc_id === d.id);
     const counts = (s) => (Number(s.version) || 0) >= d.signFrom;
@@ -1759,69 +1846,160 @@ const fieldsMoved = (a, b) => JSON.stringify(paperFields(a || '').map((f) => [f.
  * words keeps them. Decided here, from what's saved now (never from the page the admin opened a while ago):
  *   - `base`: the wording the admin's editor started from; someone else's newer one is a 409 with { conflict }
  *     (who, when, its number) and nothing is saved, until the admin chooses (base: that number, to save theirs over)
- *   - new words, or a new file (`newFile`: its name, uploaded right after), on a paper some of the board signed this
- *     year: a 409 with { ask: { names, since } } until the admin says whether they sign again (`askAgain` true or
- *     false; true: signatures on earlier wordings stop counting, a new file a wording of its own). `fromFile`: the
- *     words are its own file's, as read (the paper is the same, so nobody signs again); `wordsFrom`: the file's name,
- *     for the record
+ *   - new words, or a new file (`newFile`: its name; its bytes put by `stage` once the save is to go, saveDocWithFile),
+ *     on a paper some of the board signed this year: a 409 with { ask: { names, since } } until the admin says whether
+ *     they sign again (`askAgain` true or false; true: signatures on earlier wordings stop counting, a new file a
+ *     wording of its own). `fromFile`: the words are its own file's, as read (the paper is the same, so nobody signs
+ *     again); `wordsFrom`: the file's name, for the record
  *   - a paper everyone signs keeps its words or its file: one with neither can't be required
+ * Every read first, then ONE write: the paper, its new wording (and the file it is), a new file's row, and the paper
+ * off the Advisory Board's papers when it should be, written only over the paper as it was read, so all of it lands or
+ * none of it (Board QA round 15, Nov 26 2026: the wording and the paper were two writes, and a wording was left with no
+ * paper; a read after it said "can't tell" over a save that landed). The paper read back for the answer, or (that read
+ * failing) the paper as written, with `seen.reread` for the page to look again
  */
-export async function saveDoc(DB, raw, { by = '', askAgain = null, base = null, fromFile = false, wordsFrom = '', newFile = '' } = {}) {
+export async function saveDoc(DB, raw, opts = {}) {
+  // (its reads, then one write: the database failing before it landed changed nothing, said so; its answer lost, looked
+  // at; a read for the answer after it, the paper as written. Board QA round 15)
+  return savingDoc(DB, raw, opts).catch(nothingDone());
+}
+/**
+ * A paper saved with a new file (Board → Documents): the file's bytes put first, under a key of their own (putFile's
+ * stage), and its row written in the paper's own one write (saveDoc's `stage`), with the paper's new wording and that
+ * wording's link to it, its words' source when they were read from it (`wordsFromNew`), and "the board signs again".
+ * Should that write not land, the bytes go back and nothing changed: no wording that says it's a file the site hasn't
+ * got, no signature stopping counting over it, and the auditor's download has every wording members sign (Board QA round
+ * 15, Nov 26 2026: the file's row failed, and the paper moved to a wording that named the new file while its file stayed
+ * the old one, every signature voided)
+ */
+export async function saveDocWithFile(env, raw, file, opts = {}) {
+  const name = String(file?.name || 'file').slice(0, 200);
+  return saveDoc(env.DB, raw, {
+    ...opts, newFile: name,
+    stage: (ownerId) => putFile(env, { ownerType: 'doc', ownerId, file, by: opts.by || '', stage: true, ownerLater: true }).catch((e) => { throw e?.status || e?.setup ? e : readDown(NOTHING_SAVED, e); }),
+  });
+}
+const DOC_KEPT_CHANGING = 'The paper kept changing while it was saved. Nothing was lost: try again.';
+/** The Advisory Board's settings (./_advisory.js getSettings: board_state `advisory`), as one statement's place */
+const ADVISORY_STATE = 'advisory';
+/**
+ * A paper off the Advisory Board's papers (closeToAdvisors), as one statement for the step that makes it so (`only`: the
+ * condition it goes under, { sql, bind }): written only when the list has it, the rest of their settings as they are
+ */
+const advisoryOffStmt = (DB, id, only, at = nowIso()) => DB.prepare(`UPDATE board_state SET data = json_set(data, '$.boardDocs', json((SELECT COALESCE(json_group_array(j.value), '[]') FROM json_each(board_state.data, '$.boardDocs') j WHERE j.value <> ?))), updated_at = ?
+  WHERE key = ? AND json_valid(data) AND EXISTS (SELECT 1 FROM json_each(board_state.data, '$.boardDocs') x WHERE x.value = ?) AND ${only.sql}`).bind(id, at, ADVISORY_STATE, id, ...only.bind);
+async function savingDoc(DB, raw, { by = '', askAgain = null, base = null, fromFile = false, wordsFrom = '', newFile = '', stage = null, wordsFromNew = false, seen = {} } = {}) {
   await ensureSchema(DB);
-  const d = cleanDoc(raw);
-  if (!d.title) throw Object.assign(new Error('A document needs a title'), { status: 400 });
-  const row = await DB.prepare('SELECT data FROM board_docs WHERE id = ?').bind(d.id).first();
-  // An editor open on a paper deleted meanwhile (another tab, someone else): not made again from what it had
-  if (!row && base != null) throw Object.assign(new Error('This paper was deleted (in another tab, or by someone else), so nothing was saved'), { status: 410, extra: { deleted: true } });
-  const was = row ? cleanDoc(parse(row.data)) : null;
-  const body = raw.body === undefined ? was?.body || '' : d.body;
-  const changed = body !== (was?.body || '');
-  if (raw.wordsFile === undefined) d.wordsFile = was?.wordsFile || '';
-  // On the board page or not is its switch's: a save that doesn't say keeps it as it is (an editor opened before the
-  // switch was flipped never flips it back)
-  if (raw.shared === undefined && was) d.shared = was.shared;
-  if (was && changed && base != null && Number(base) !== was.version) {
-    throw Object.assign(new Error('These words changed while you had them open'), { status: 409, extra: { conflict: { version: was.version, by: was.wordsBy, at: was.wordsAt, body: was.body } } });
+  await stateReady(DB);
+  const d0 = cleanDoc(raw);
+  if (!d0.title) throw Object.assign(new Error('A document needs a title'), { status: 400 });
+  // (a new file's bytes, put once the save is to go, and named only by its one write)
+  let staged = null;
+  let landed = false;
+  try {
+    for (let i = 0; i < 5; i++) {
+      const d = { ...d0 };
+      const row = await DB.prepare('SELECT data, updated_at FROM board_docs WHERE id = ?').bind(d.id).first();
+      // An editor open on a paper deleted meanwhile (another tab, someone else): not made again from what it had
+      if (!row && base != null) throw Object.assign(new Error('This paper was deleted (in another tab, or by someone else), so nothing was saved'), { status: 410, extra: { deleted: true } });
+      const was = row ? cleanDoc(parse(row.data)) : null;
+      const body = raw.body === undefined ? was?.body || '' : d.body;
+      const changed = body !== (was?.body || '');
+      if (raw.wordsFile === undefined) d.wordsFile = was?.wordsFile || '';
+      // On the board page or not is its switch's: a save that doesn't say keeps it as it is (an editor opened before the
+      // switch was flipped never flips it back)
+      if (raw.shared === undefined && was) d.shared = was.shared;
+      if (was && changed && base != null && Number(base) !== was.version) {
+        throw Object.assign(new Error('These words changed while you had them open'), { status: 409, extra: { conflict: { version: was.version, by: was.wordsBy, at: was.wordsAt, body: was.body } } });
+      }
+      // Every paper as it is now, read before the write: who signed it (for the question), and the answer should the
+      // read after the write not come
+      const reads = await docsRead(DB);
+      // (a new file coming with this save is its file)
+      if (was && d.sign && !body && !newFile && !(reads.files[d.id] || []).length) throw Object.assign(new Error('A paper every member signs needs its words or its file: write them, add the file, or untick Required'), { status: 400 });
+      // A new file changes what the board reads only when it reads the paper as its file (written here, it reads the words)
+      const newRead = !!newFile && !body;
+      // Required after this save, and what the board reads changes now (new words, a new file) or changed while it wasn't
+      // required (made required again): whoever's signature would count on it is asked about
+      const reRequired = !!was && !was.sign && d.sign;
+      const changesNow = changed || newRead;
+      if (was && d.sign && (changesNow || reRequired) && askAgain == null && !(fromFile && !newFile && !was.body)) {
+        const current = docsOf(reads).find((x) => x.id === d.id);
+        const board = await activeBoard(DB);
+        const names = board.filter((p) => current?.signed[p.slug] && (changesNow || current.signed[p.slug].version < was.version)).map((p) => p.name);
+        // since: what they signed (the earlier words, or the file); now: what the board will read; newFile: a new file;
+        // paused: its words changed while it wasn't required
+        if (names.length) throw Object.assign(new Error('Do they sign the new version?'), { status: 409, extra: { ask: { names, since: was.body ? 'words' : 'file', now: body ? 'words' : 'file', newFile: newFile ? String(newFile) : '', paused: reRequired && !changesNow, fields: fieldsMoved(was.body, body) } } });
+      }
+      // The new file's bytes, put first, once (the step made again after another save keeps them)
+      if (newFile && stage && !staged) staged = await stage(d.id);
+      if (staged && wordsFromNew) d.wordsFile = staged.id;
+      // (its own time, after the last: what the step goes by, and what the look at a lost answer finds)
+      const at = stampAfter(row?.updated_at);
+      // The wording's number, and who wrote it when, are the server's
+      const next = { ...d, body, version: was?.version || 0, signFrom: was?.signFrom || 0, readFrom: was?.readFrom || 0, wordsAt: was?.wordsAt || '', wordsBy: was?.wordsBy || '', createdAt: row ? parse(row.data).createdAt : at, updatedAt: at };
+      // A new version: new words, or a new file for a paper read as its file (whether or not the board signs it again:
+      // a page still showing the old file can't sign the new one unread)
+      // (required again, the board asked to sign again: from the version it is)
+      if (reRequired && !changesNow && askAgain === true) { next.signFrom = next.version; next.readFrom = next.version; }
+      let wording = null;
+      if (changed || (was && newRead)) {
+        next.version += 1;
+        if (changed) { next.wordsAt = at; next.wordsBy = String(by || '').slice(0, 200); }
+        // (its note: where its words came from, or the file it was; and that the board signed again from it)
+        const note = [changed ? (wordsFrom ? `From ${String(wordsFrom).slice(0, 200)}` : '') : `A new file: ${String(newFile).slice(0, 200)}`, askAgain === true ? 'The board signs again from here' : ''].filter(Boolean).join(' · ');
+        // (with its SHA-256: what a signature on this wording signed, exactly; a paper read as its file, the file it is)
+        wording = { version: next.version, body, note, hash: body ? await sha256Hex(body) : null, fileId: !body && staged ? staged.id : null };
+        if (askAgain === true) next.signFrom = next.version;
+        // A page still on an earlier version re-reads before signing, unless the admin said the change doesn't need it
+        // (and always when what they initial or answer moved: a page from before can't sign without them)
+        if (askAgain !== false || fieldsMoved(was?.body, body)) next.readFrom = next.version;
+      } else if (staged && !body) {
+        // (a paper read as its file, made with it: its wording 0 is that file, so what a signature on it signed is never a
+        // later file)
+        wording = { version: next.version, body: '', note: `Its file: ${String(newFile).slice(0, 200)}`, hash: null, fileId: staged.id };
+      }
+      // One write, each statement only while the paper is as it was read (a new one: while there's none), the paper's
+      // own last: all of it lands, or none of it (Board QA round 15)
+      const pre = row
+        ? { sql: "EXISTS (SELECT 1 FROM board_docs WHERE id = ? AND COALESCE(updated_at, '') = ?)", bind: [d.id, row.updated_at || ''] }
+        : { sql: 'NOT EXISTS (SELECT 1 FROM board_docs WHERE id = ?)', bind: [d.id] };
+      const data = JSON.stringify(next);
+      const stmts = [
+        ...(wording ? [DB.prepare(`INSERT OR REPLACE INTO board_doc_versions (doc_id, version, body, at, by, note, hash, file_id) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${pre.sql}`)
+          .bind(d.id, wording.version, wording.body, at, String(by || '').slice(0, 200), wording.note, wording.hash, wording.fileId, ...pre.bind)] : []),
+        ...(staged ? [DB.prepare(`${staged.insert.sql} AND ${pre.sql}`).bind(...staged.insert.bind, ...pre.bind)] : []),
+        // (a paper the board now signs, hides or reads here is off the Advisory Board's papers in the same step)
+        ...(next.sign || next.shared === false || body ? [advisoryOffStmt(DB, d.id, pre, at)] : []),
+        row
+          ? DB.prepare("UPDATE board_docs SET data = ?, updated_at = ? WHERE id = ? AND COALESCE(updated_at, '') = ?").bind(data, at, d.id, row.updated_at || '')
+          : DB.prepare('INSERT INTO board_docs (id, data, updated_at) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM board_docs WHERE id = ?)').bind(d.id, data, at, d.id),
+      ];
+      // (its answer lost: written if the paper there is exactly this write)
+      const r = await landedOr(() => DB.batch(stmts), async () => {
+        const x = await DB.prepare('SELECT data, updated_at FROM board_docs WHERE id = ?').bind(d.id).first();
+        return !!x && x.updated_at === at && x.data === data;
+      });
+      // Saved meanwhile (another tab, the other admin): read again and made again from what's there now
+      if (!r?.lost && !((r?.at?.(-1)?.meta?.changes ?? 0) > 0)) continue;
+      landed = true;
+      pressDone();
+      // The paper as it is now for the answer; that read failing, as this write left it, the page told to look again
+      try {
+        const now = (await listDocs(DB)).find((x) => x.id === d.id);
+        if (now) return now;
+      } catch (err) { console.error('[board] reading a paper back after its save', d.id, err?.message || err); }
+      seen.reread = true;
+      const file = staged ? (({ insert, drop, ...f }) => ({ id: f.id, name: f.name, type: f.type, size: f.size || 0, kind: f.kind || 'other', staffOnly: !!f.staffOnly, at: f.at }))(staged) : null;
+      return docsOf({ ...reads, rows: [{ data }], files: file ? { ...reads.files, [d.id]: [...(reads.files[d.id] || []), file] } : reads.files })[0];
+    }
+    throw Object.assign(new Error(DOC_KEPT_CHANGING), { status: 409 });
+  } catch (err) {
+    // (not written: the new file's bytes go back. One the site can't tell yet keeps them: its row may name them, and
+    // bytes no row names are the heartbeat's: takeLooseBytes)
+    if (staged && !landed && !err?.extra?.unsure) await staged.drop().catch((e) => console.error('[board] a staged paper file', e?.message || e));
+    throw err;
   }
-  if (was && d.sign && !body) {
-    const file = await DB.prepare("SELECT id FROM board_files WHERE owner_type = 'doc' AND owner_id = ? LIMIT 1").bind(d.id).first();
-    if (!file) throw Object.assign(new Error('A paper every member signs needs its words or its file: write them, add the file, or untick Required'), { status: 400 });
-  }
-  // A new file changes what the board reads only when it reads the paper as its file (written here, it reads the words)
-  const newRead = !!newFile && !body;
-  // Required after this save, and what the board reads changes now (new words, a new file) or changed while it wasn't
-  // required (made required again): whoever's signature would count on it is asked about
-  const reRequired = !!was && !was.sign && d.sign;
-  const changesNow = changed || newRead;
-  if (was && d.sign && (changesNow || reRequired) && askAgain == null && !(fromFile && !newFile && !was.body)) {
-    const current = (await listDocs(DB)).find((x) => x.id === d.id);
-    const board = await activeBoard(DB);
-    const names = board.filter((p) => current?.signed[p.slug] && (changesNow || current.signed[p.slug].version < was.version)).map((p) => p.name);
-    // since: what they signed (the earlier words, or the file); now: what the board will read; newFile: a new file;
-    // paused: its words changed while it wasn't required
-    if (names.length) throw Object.assign(new Error('Do they sign the new version?'), { status: 409, extra: { ask: { names, since: was.body ? 'words' : 'file', now: body ? 'words' : 'file', newFile: newFile ? String(newFile) : '', paused: reRequired && !changesNow, fields: fieldsMoved(was.body, body) } } });
-  }
-  // The wording's number, and who wrote it when, are the server's
-  const next = { ...d, body, version: was?.version || 0, signFrom: was?.signFrom || 0, readFrom: was?.readFrom || 0, wordsAt: was?.wordsAt || '', wordsBy: was?.wordsBy || '', createdAt: row ? parse(row.data).createdAt : nowIso(), updatedAt: nowIso() };
-  // A new version: new words, or a new file for a paper read as its file (whether or not the board signs it again:
-  // a page still showing the old file can't sign the new one unread)
-  // (required again, the board asked to sign again: from the version it is)
-  if (reRequired && !changesNow && askAgain === true) { next.signFrom = next.version; next.readFrom = next.version; }
-  if (changed || (was && newRead)) {
-    next.version += 1;
-    if (changed) { next.wordsAt = nowIso(); next.wordsBy = String(by || '').slice(0, 200); }
-    // (its note: where its words came from, or the file it was; and that the board signed again from it)
-    const note = [changed ? (wordsFrom ? `From ${String(wordsFrom).slice(0, 200)}` : '') : `A new file: ${String(newFile).slice(0, 200)}`, askAgain === true ? 'The board signs again from here' : ''].filter(Boolean).join(' · ');
-    // (with its SHA-256: what a signature on this wording signed, exactly)
-    await DB.prepare('INSERT OR REPLACE INTO board_doc_versions (doc_id, version, body, at, by, note, hash) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(d.id, next.version, body, nowIso(), String(by || '').slice(0, 200), note, body ? await sha256Hex(body) : null).run();
-    if (askAgain === true) next.signFrom = next.version;
-    // A page still on an earlier version re-reads before signing, unless the admin said the change doesn't need it
-    // (and always when what they initial or answer moved: a page from before can't sign without them)
-    if (askAgain !== false || fieldsMoved(was?.body, body)) next.readFrom = next.version;
-  }
-  await DB.prepare('INSERT OR REPLACE INTO board_docs (id, data, updated_at) VALUES (?, ?, ?)').bind(d.id, JSON.stringify(next), next.updatedAt).run();
-  if (next.sign || next.shared === false || body) await closeToAdvisors(DB, d.id);
-  return (await listDocs(DB)).find((x) => x.id === d.id);
 }
 
 /**
@@ -1866,16 +2044,54 @@ async function everSigned(DB, id) {
   return Number(r?.n) > 0;
 }
 
+/** Said when a paper the board has signed is to be deleted: it's SOARD's record */
+const SIGNED_KEPT = 'The board has signed this paper, so it’s kept as SOARD’s record. Take it off the board page instead (the switch on its row), or untick Required.';
+/** Said when a member signed it the moment it was to be deleted: the signature landed first, so the paper stays */
+const signedJustNow = (name) => `${String(name || '').trim().split(/\s+/)[0]} signed this paper a moment ago, so it can’t be deleted. Take it off the board page instead.`;
+/** Anyone ever signed it, as a statement's condition (everSigned, read as the write goes) */
+const SIGNED_ONCE = "(EXISTS (SELECT 1 FROM board_signatures WHERE doc_id = ?) OR EXISTS (SELECT 1 FROM board_signatures_earlier WHERE doc_id = ?) OR EXISTS (SELECT 1 FROM board_sign_events WHERE doc_id = ? AND kind IN ('signed', 'superseded', 'taken-off')))";
+/**
+ * A paper nobody has signed, deleted: ONE write that takes it away only while nobody has signed it (any year, any
+ * wording, a signature since replaced or taken off: everSigned, as the write's own condition), and with it, only once
+ * it's gone, its file's rows (their bytes marked to go, deleted once the write lands: bytesOff), its wordings and its
+ * place among the Advisory Board's papers. Nothing is left behind for a paper that's gone, and a partial delete can't
+ * leave a paper without its file. A member signing it at the same moment: whichever lands first stands; the signature
+ * first keeps the paper, said by name (signedJustNow), and a signature after the delete finds no paper to sign
+ * (signing). Every read before the write: the database failing anywhere changed nothing, said so; its answer lost,
+ * looked at. Board QA round 15, Nov 26 2026: the delete and a signature both answered 200, and the signature, its
+ * agreement to sign electronically and their events stayed for a paper whose words were gone
+ */
 export async function deleteDoc(env, id) {
-  await ensureSchema(env.DB);
-  if (await everSigned(env.DB, id)) throw Object.assign(new Error('The board has signed this paper, so it’s kept as SOARD’s record. Take it off the board page instead (the switch on its row), or untick Required.'), { status: 409, extra: { signed: true } });
-  // Its file, and the signed copies kept beside it
-  const files = (await env.DB.prepare("SELECT id FROM board_files WHERE owner_type IN ('doc', 'signed') AND owner_id = ?").bind(id).all()).results || [];
-  for (const f of files) await deleteFile(env, f.id);
-  await env.DB.prepare('DELETE FROM board_signatures WHERE doc_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM board_signatures_earlier WHERE doc_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM board_doc_versions WHERE doc_id = ?').bind(id).run();
-  await env.DB.prepare('DELETE FROM board_docs WHERE id = ?').bind(id).run();
+  return deletingDoc(env, id).catch(nothingDone());
+}
+async function deletingDoc(env, id) {
+  const DB = env.DB;
+  await ensureSchema(DB);
+  await stateReady(DB);
+  if (await everSigned(DB, id)) throw Object.assign(new Error(SIGNED_KEPT), { status: 409, extra: { signed: true } });
+  // (its files' bytes as read, to delete once the write lands; any put on it since are marked by the write itself)
+  const had = ((await DB.prepare("SELECT r2_key FROM board_files WHERE owner_type = 'doc' AND owner_id = ?").bind(id).all()).results || []).map((r) => r.r2_key);
+  const at = nowIso();
+  const gone = { sql: 'NOT EXISTS (SELECT 1 FROM board_docs WHERE id = ?)', bind: [id] };
+  const stmts = [
+    DB.prepare(`DELETE FROM board_docs WHERE id = ? AND NOT ${SIGNED_ONCE}`).bind(id, id, id, id),
+    DB.prepare(`INSERT OR REPLACE INTO board_state (key, data, updated_at) SELECT ? || r2_key, json_object('key', r2_key), ? FROM board_files WHERE owner_type = 'doc' AND owner_id = ? AND ${gone.sql}`).bind(BYTES_OFF, at, id, ...gone.bind),
+    DB.prepare(`DELETE FROM board_files WHERE owner_type = 'doc' AND owner_id = ? AND ${gone.sql} RETURNING r2_key`).bind(id, ...gone.bind),
+    DB.prepare(`DELETE FROM board_doc_versions WHERE doc_id = ? AND ${gone.sql}`).bind(id, ...gone.bind),
+    advisoryOffStmt(DB, id, gone, at),
+  ];
+  // (its answer lost: deleted if the paper isn't there now)
+  const r = await landedOr(() => DB.batch(stmts), async () => !(await DB.prepare('SELECT 1 AS x FROM board_docs WHERE id = ?').bind(id).first()));
+  if (!r?.lost && !((r?.[0]?.meta?.changes ?? 0) > 0)) {
+    // Not taken: gone already (another tab), or signed between the look and the write. Which, read now (failing: the
+    // delete didn't land, so nothing was changed, said so)
+    const now = await DB.prepare('SELECT (SELECT COUNT(*) FROM board_docs WHERE id = ?) AS there, (SELECT name FROM board_signatures WHERE doc_id = ? ORDER BY at DESC LIMIT 1) AS name').bind(id, id).first();
+    if (Number(now?.there) > 0) throw Object.assign(new Error(now.name ? signedJustNow(now.name) : SIGNED_KEPT), { status: 409, extra: { signed: true } });
+  }
+  pressDone();
+  const keys = [...new Set([...had, ...(r?.lost ? [] : (r?.[2]?.results || []).map((x) => x.r2_key))])].filter(Boolean);
+  await bytesOff(env, keys);
+  return true;
 }
 
 // Why a paper can't be signed now: taken off the board page, gone, or no longer asking (the page reloads it)
@@ -1944,15 +2160,19 @@ export async function fileOfVersion(DB, docId, version) {
  * still needs (`need`: an agreement the record doesn't have yet), never skipping it. Board QA round 13, Nov 24 2026:
  * the agreement was a second and third write after the signature, and one failing left a signature without it for good
  */
-async function writeSignature(DB, sig, { keep = false, same = null, with: also = null } = {}) {
+async function writeSignature(DB, sig, { keep = false, same = null, with: also = null, only = null } = {}) {
   const { docId, slug, year } = sig;
   const e = sig.evidence || {};
+  // `only` ({ sql, bind }: its paper still there, paperThere): every statement and event of the write goes only while it
+  // holds, so a signature never lands for a paper deleted between its read and its write; `{ written: false, gone }`
+  // when it didn't hold (Board QA round 15)
+  const guarded = (plan) => (only && (plan.stmts?.length || plan.events?.length) ? { ...plan, guard: only, after: (res) => ((res?.[0]?.meta?.changes ?? 0) > 0 ? plan.result : { written: false, gone: true }) } : plan);
   return appendEvents(DB, async () => {
     const was = await DB.prepare('SELECT * FROM board_signatures WHERE doc_id = ? AND slug = ? AND year = ?').bind(docId, slug, year).first();
     if (was && keep) return { result: { written: false, was } };
     const repeat = was && same ? same(was) : null;
     const more = also ? await also(was) : null;
-    if (repeat) return more?.need ? { stmts: more.stmts, events: more.events, result: { written: false, was, same: repeat } } : { result: { written: false, was, same: repeat } };
+    if (repeat) return more?.need ? guarded({ stmts: more.stmts, events: more.events, result: { written: false, was, same: repeat } }) : { result: { written: false, was, same: repeat } };
     const at = sig.at || nowIso();
     const row = {
       doc_id: docId, slug, year, version: sig.version || 0, name: sig.name, at, how: sig.how, file_id: sig.fileId || null,
@@ -1970,22 +2190,27 @@ async function writeSignature(DB, sig, { keep = false, same = null, with: also =
         // (its wording before the board signed again: kept as it was, its copy too)
         const there = await DB.prepare('SELECT * FROM board_signatures_earlier WHERE doc_id = ? AND slug = ? AND year = ? AND version = ?').bind(docId, slug, year, wasV).first();
         if (there) events.push({ kind: 'superseded', docId, slug, year, version: wasV, at, by: row.added_by, detail: { row: there } });
-        stmts.push(putSignature(DB, 'board_signatures_earlier', { ...was, version: wasV }));
+        stmts.push(putSignature(DB, 'board_signatures_earlier', { ...was, version: wasV }, undefined, only));
       } else {
         events.push({ kind: 'superseded', docId, slug, year, version: wasV, at, by: row.added_by, detail: { row: was } });
-        if (was.file_id && was.file_id !== row.file_id) stmts.push(DB.prepare('UPDATE board_files SET superseded_at = ?1 WHERE (id = ?2 OR id = (SELECT original_id FROM board_files WHERE id = ?2)) AND superseded_at IS NULL').bind(at, was.file_id));
+        if (was.file_id && was.file_id !== row.file_id) stmts.push(DB.prepare(`UPDATE board_files SET superseded_at = ? WHERE (id = ? OR id = (SELECT original_id FROM board_files WHERE id = ?)) AND superseded_at IS NULL${only ? ` AND ${only.sql}` : ''}`).bind(at, was.file_id, was.file_id, ...(only ? only.bind : [])));
         // (its signed copy too: kept, as an earlier signature's)
-        if (was.record_id) stmts.push(DB.prepare('UPDATE board_files SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL').bind(at, was.record_id));
+        if (was.record_id) stmts.push(DB.prepare(`UPDATE board_files SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL${only ? ` AND ${only.sql}` : ''}`).bind(at, was.record_id, ...(only ? only.bind : [])));
       }
     }
-    stmts.push(putSignature(DB, 'board_signatures', row));
+    stmts.push(putSignature(DB, 'board_signatures', row, undefined, only));
     events.push({
       kind: 'signed', docId, slug, year, version: row.version, at, by: row.added_by, ip: e.ip, device: e.device,
       detail: { how: row.how, name: row.name, hash: row.hash, file: row.file_id, drive: row.drive_id, signerEmail: row.signer_email, signinAt: row.signin_at, ...(sig.detail || {}) },
     });
-    return { stmts: [...stmts, ...(more?.stmts || [])], events: [...events, ...(more?.events || [])], result: { written: true, row, was } };
+    return guarded({ stmts: [...stmts, ...(more?.stmts || [])], events: [...events, ...(more?.events || [])], result: { written: true, row, was } });
   });
 }
+/** A paper still there, as the condition a signature's write goes under (writeSignature's `only`) */
+const paperThere = (docId) => ({ sql: 'EXISTS (SELECT 1 FROM board_docs WHERE id = ?)', bind: [docId] });
+/** Said when the paper was deleted between a member's page and their signature's write: nothing was signed */
+export const PAPER_DELETED = 'That paper was deleted a moment ago, so there’s nothing to sign.';
+const paperDeleted = () => Object.assign(new Error(PAPER_DELETED), { status: 404, extra: { gone: true } });
 
 /**
  * Whether a member's agreement to sign electronically is on record: kept with them (board_member_marks' consent_at)
@@ -2007,13 +2232,14 @@ export async function agreedOnRecord(DB, slug, marks) {
  * as the step is made, so a second device's agreement written first is the agreement. → { stmts, events, need }
  * (`need`: the agreement is to be written)
  */
-export async function markPlan(DB, member, { mark, typed, at, evidence = {}, consentHash, docId, year, version }) {
+export async function markPlan(DB, member, { mark, typed, at, evidence = {}, consentHash, docId, year, version, only = null }) {
   const marks = await DB.prepare('SELECT consent_at FROM board_member_marks WHERE slug = ?').bind(member.slug).first();
   const first = !(await agreedOnRecord(DB, member.slug, marks));
+  // (`only`: the condition the signature goes under, so the agreement never lands without it: writeSignature)
   return {
     need: first,
-    stmts: [DB.prepare('INSERT INTO board_member_marks (slug, mark, initials, consent_at, consent_ip, consent_hash, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(slug) DO UPDATE SET mark = excluded.mark, initials = excluded.initials, consent_at = COALESCE(board_member_marks.consent_at, excluded.consent_at), consent_ip = COALESCE(board_member_marks.consent_ip, excluded.consent_ip), consent_hash = COALESCE(board_member_marks.consent_hash, excluded.consent_hash), updated_at = excluded.updated_at')
-      .bind(member.slug, JSON.stringify({ type: mark.type, style: mark.style, text: typed, ...(mark.path ? { path: mark.path } : {}) }), mark.initials, first ? at : null, first ? evidence.ip || '' : null, first ? consentHash : null, at)],
+    stmts: [DB.prepare(`INSERT INTO board_member_marks (slug, mark, initials, consent_at, consent_ip, consent_hash, updated_at) ${only ? `SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${only.sql}` : 'VALUES (?, ?, ?, ?, ?, ?, ?)'} ON CONFLICT(slug) DO UPDATE SET mark = excluded.mark, initials = excluded.initials, consent_at = COALESCE(board_member_marks.consent_at, excluded.consent_at), consent_ip = COALESCE(board_member_marks.consent_ip, excluded.consent_ip), consent_hash = COALESCE(board_member_marks.consent_hash, excluded.consent_hash), updated_at = excluded.updated_at`)
+      .bind(member.slug, JSON.stringify({ type: mark.type, style: mark.style, text: typed, ...(mark.path ? { path: mark.path } : {}) }), mark.initials, first ? at : null, first ? evidence.ip || '' : null, first ? consentHash : null, at, ...(only ? only.bind : []))],
     events: first ? [{ kind: 'consented', docId, slug: member.slug, year, version, at, by: member.email || '', ip: evidence.ip, device: evidence.device, detail: { consentHash, text: CONSENT_TEXT } }] : [],
   };
 }
@@ -2074,8 +2300,11 @@ async function signing(DB, docId, member, name, { version = null, evidence = {},
     detail: mark ? { mark: { type: mark.type, style: mark.style }, fields: fields.map((f) => ({ n: f.n, kind: f.kind, value: f.value })), consentHash } : undefined,
   }, {
     same: (was) => (onPage(was.how) && (Number(was.version) || 0) === on ? was : null),
-    with: mark ? () => markPlan(DB, member, { mark, typed, at, evidence, consentHash, docId, year, version: on }) : null,
+    with: mark ? () => markPlan(DB, member, { mark, typed, at, evidence, consentHash, docId, year, version: on, only: paperThere(docId) }) : null,
+    // (only while the paper is there: deleted since this read it, nothing is signed, said so. Board QA round 15)
+    only: paperThere(docId),
   });
+  if (r?.gone) throw paperDeleted();
   // (Sign pressed twice, or from two devices: the first one is the signature; an agreement the record didn't have with
   // it was written above, never skipped)
   if (r?.same) return { docId, year, name: r.same.name, at: r.same.at, how: r.same.how, version: on, copy: null, drive: null };
@@ -2124,7 +2353,9 @@ async function signingWithCopy(env, docId, file, { member = null, slug = '', by 
     kept = original && typeof original.arrayBuffer === 'function' ? await stage({ ownerType: 'signed', ownerId: docId, file: original, staffOnly: true, by: by || who.email || '', slug: who.slug }) : null;
     copy = await stage({ ownerType: 'signed', ownerId: docId, file, staffOnly: true, by: by || who.email || '', slug: who.slug, originalId: kept?.id || null });
   } catch (err) { await dropAll(); throw err; }
-  const rows = staged.map((f) => env.DB.prepare(f.insert.sql).bind(...f.insert.bind));
+  // (each only while the paper is there, as the signature: a copy never lands for a paper deleted meanwhile. Round 15)
+  const there = paperThere(docId);
+  const rows = staged.map((f) => env.DB.prepare(`${f.insert.sql} AND ${there.sql}`).bind(...f.insert.bind, ...there.bind));
   const at = nowIso();
   const on = member ? signedOn(doc, version) : doc.version;
   const hash = await versionHash(storeOf(env), doc, on);
@@ -2139,11 +2370,12 @@ async function signingWithCopy(env, docId, file, { member = null, slug = '', by 
     if (!telling || !was || !(onPage(was.how) || was.how === 'copy')) return { stmts: rows, events: [] };
     await stateReady(env.DB);
     owed = `void:${docId}:${who.slug}:${year}:${was.at}`;
-    return { stmts: [...rows, dueStmt(env.DB, owed, { kind: 'void', docId, slug: who.slug, year, at: was.at, to: who.email, replacedByCopy: true, reason: 'SOARD put a signed copy it was given in its place', by }, Date.now())], events: [] };
+    return { stmts: [...rows, dueStmt(env.DB, owed, { kind: 'void', docId, slug: who.slug, year, at: was.at, to: who.email, replacedByCopy: true, reason: 'SOARD put a signed copy it was given in its place', by }, Date.now(), there)], events: [] };
   };
   let w;
   try {
-    w = await writeSignature(env.DB, { docId, slug: who.slug, year, name: who.name, how: member ? 'copy' : 'staff', fileId: copy.id, by: by || who.email || '', at, version: on, signFrom: doc.signFrom, evidence, hash, detail: { copySha256: copy.sha256, original: kept ? { id: kept.id, sha256: kept.sha256 } : null } }, { with: withIt });
+    w = await writeSignature(env.DB, { docId, slug: who.slug, year, name: who.name, how: member ? 'copy' : 'staff', fileId: copy.id, by: by || who.email || '', at, version: on, signFrom: doc.signFrom, evidence, hash, detail: { copySha256: copy.sha256, original: kept ? { id: kept.id, sha256: kept.sha256 } : null } }, { with: withIt, only: there });
+    if (w?.gone) throw paperDeleted();
   } catch (err) {
     // (not written: its bytes go back. One the site can't tell yet keeps them: its rows may name them)
     if (!err?.extra?.unsure) await dropAll();
@@ -2391,7 +2623,7 @@ export async function stageRewrite(env, id, bytes, { unlessSame = false } = {}) 
  * Store an uploaded file for a meeting, a document, or a member's signed copy of a document (`signed`, always
  * staff-only: signWithCopy) → its row as the admin shows it
  */
-export async function putFile(env, { ownerType, ownerId, file, kind = 'other', staffOnly = false, by = '', slug = null, originalId = null, stage = false, fileId = '' }) {
+export async function putFile(env, { ownerType, ownerId, file, kind = 'other', staffOnly = false, by = '', slug = null, originalId = null, stage = false, fileId = '', ownerLater = false }) {
   await ensureSchema(env.DB);
   const bucket = boardFiles(env);
   if (!bucket) throw Object.assign(new Error('File storage isn’t set up (FILES)'), { status: 503 });
@@ -2402,7 +2634,9 @@ export async function putFile(env, { ownerType, ownerId, file, kind = 'other', s
     staffOnly = true;
     if (!slug) throw Object.assign(new Error('Whose is it?'), { status: 400 });
   }
-  const owner = ownerType === 'meeting'
+  // (`ownerLater`, staged only: what it's for is written in the same step as its row, a new paper saved with its file:
+  // saveDocWithFile)
+  const owner = stage && ownerLater ? true : ownerType === 'meeting'
     ? await env.DB.prepare('SELECT id FROM board_meetings WHERE id = ?').bind(ownerId).first()
     : await env.DB.prepare(`SELECT id FROM ${ADVISORY_OWNERS[ownerType] || 'board_docs'} WHERE id = ?`).bind(ownerId).first();
   if (!owner) throw Object.assign(new Error(`Save the ${ownerType === 'meeting' || ownerType === 'advisory-meeting' ? 'meeting' : 'document'} first`), { status: 404 });
@@ -2604,7 +2838,9 @@ export async function cashNow(env, { fetchImpl = fetch } = {}) {
   const mercuryOn = !!String(env.MERCURY_API_TOKEN || '').trim();
   const [m, banks] = await Promise.all([
     mercuryOn ? mercury(env, '/accounts', { fetchImpl }).then((r) => r?.accounts || []) : null,
-    bankBalances(env.DB).catch((err) => { console.error('[board] banks', err.message); return null; }),
+    // (the banks' record not read is thrown, never taken for no bank connected: a total of Mercury's alone, or none,
+    // said as SOARD's cash. Board QA round 15: a packet locked the numbers a read that failed left)
+    bankBalances(env.DB),
   ]);
   if (!m && !banks) return null;
   // Mercury's own accounts only: a bank linked in Mercury for transfers isn't SOARD's Mercury money (Plaid counts it)
@@ -2771,32 +3007,74 @@ export async function boardFinanceNow(env, { now = Date.now(), fresh = false } =
   return value;
 }
 
-/** Everything an agenda's live items show, as of now */
-export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } = {}) {
+/**
+ * Each of today's numbers' reads by what it is (liveNumbers `notRead`), as an answer names one it couldn't read: a press
+ * that needs them all (takeSnapshot) and the SOARD connection (./_mcp/money.js soard_numbers). A part of the board page
+ * (`unread`) can be more than one of them: the money is the cash, Mercury's record and the books; what makeovers cost,
+ * JobTread's figures and the operating balance; the makeovers, JobTread's projects and the reveals
+ */
+export const NUMBERS_READS = {
+  cash: 'the bank balances',
+  finance: 'Mercury’s record of money in and out',
+  books: 'the year’s books from QuickBooks',
+  projects: 'the makeovers in JobTread',
+  reveals: 'the reveals',
+  events: 'the events',
+  meetings: 'the board’s meetings',
+  kids: 'the kids served',
+  costs: 'the makeover costs',
+  operating: 'the operating balance kept to run SOARD',
+};
+/** "a", "a and b", "a, b and c" */
+const andWords = (l) => (l.length > 1 ? `${l.slice(0, -1).join(', ')} and ${l.at(-1)}` : l[0] || '');
+/** What of today's numbers couldn't be read just now, in words (`notRead`: liveNumbers'), in NUMBERS_READS' order */
+export const notReadWords = (notRead) => andWords(Object.keys(NUMBERS_READS).filter((k) => notRead?.[k]).map((k) => NUMBERS_READS[k]));
+
+/**
+ * Everything an agenda's live items show, as of now. A read whose connection isn't set up at all answers none (null,
+ * or an empty list), and is never a failure: cashNow with neither Mercury's token nor a bank connected in Settings,
+ * projectsNow and makeoverCostsNow with no JobTread key and no copy kept, booksNow with QuickBooks not connected,
+ * boardFinanceNow before Mercury's record is there, no events or kids table. A read that fails throws (each falls back
+ * on its last good copy first, said with when it was read), and only a throw is marked (`lost`): so none is never a
+ * failure, and a failure is never none. `reads`: each read that failed by what it is too (`notRead`, NUMBERS_READS), for
+ * an answer that names the figure it couldn't read; the board page goes by the parts (`unread`) alone
+ */
+export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now(), reads = false } = {}) {
   const today = todayEastern(now);
   // A read that fails marks its part (`unread`), never a part drawn empty or as zero: the board page says that part
-  // couldn't load just now (public/admin/board/unread.js). The money is the cash, the books, Mercury's record, what
-  // makeovers cost and the operating balance it rests on; the makeovers are JobTread's projects and the reveals; the
-  // kids, those served; the events, the calendar's. Board QA round 12 (the privacy tester's sweep: each statement failing
-  // once in turn drew "0 kids served", no makeovers and no money as facts)
+  // couldn't load just now (public/admin/board/unread.js). Each read marks the part it's read for, by its own name, never
+  // a bigger part beside it, nor a name the page's own read has (portalData merges these flags with its own): the money
+  // is the cash, the books and Mercury's record; what makeovers cost (`costs`) is JobTread's figures and the operating
+  // balance kept to run SOARD, its only user; the makeovers are JobTread's projects and the reveals; the kids, those
+  // served; the events, the calendar's; the meetings on the calendar (`meetingDates`), an agenda item's list of the
+  // meetings ahead and the screen's year of them. Board QA round 12 (the privacy tester's sweep: each statement failing
+  // once in turn drew "0 kids served", no makeovers and no money as facts); round 15 (Nov 26 2026: this list of the
+  // meetings failing said every meeting couldn't load, under a full list, and hid every meeting's file on Documents; the
+  // operating balance's setting failing hid all the money)
   const unread = {};
-  const lost = (part, fallback = null) => (err) => { console.error(`[board] ${part}`, err?.message || err); unread[part] = true; return fallback; };
+  const notRead = {};
+  // (`part`: the board page's, ./unread.js; `read`: which of NUMBERS_READS it was)
+  const lost = (part, read, fallback = null) => (err) => { console.error(`[board] ${read}`, err?.message || err); unread[part] = true; notRead[read] = true; return fallback; };
   const [cash, projects, reveals, events, meetings, kids, finance, pages, books, costs, settings] = await Promise.all([
-    cachedCash(env, { fetchImpl, now }).catch(lost('money')),
-    projectsNow(env, { fetchImpl, now }).catch(lost('projects')),
-    cachedReveals(env, now).then((r) => { if (r?.unread) unread.projects = true; return r; }, lost('projects', { upcoming: [], past: [] })),
-    eventsList(env.DB, today).catch(lost('events', { upcoming: [], recent: [] })),
-    // (the meetings ahead and the year's, an item's live list: not read, its part says so, Board QA round 13)
-    listMeetings(env.DB).catch((e) => { if (e?.setup) throw e; return lost('meetings', [])(e); }),
-    impact(env.DB).catch(lost('kids')),
-    boardFinanceNow(env, { now }).catch(lost('money')),
+    cachedCash(env, { fetchImpl, now }).catch(lost('money', 'cash')),
+    projectsNow(env, { fetchImpl, now }).catch(lost('projects', 'projects')),
+    cachedReveals(env, now).then((r) => { if (r?.unread) { unread.projects = true; notRead.reveals = true; } return r; }, lost('projects', 'reveals', { upcoming: [], past: [] })),
+    eventsList(env.DB, today).catch(lost('events', 'events', { upcoming: [], recent: [] })),
+    // (the meetings ahead and the year's, an item's live list: not read, its part says so, Board QA round 13; that list's
+    // own part, never the page's meetings, which are read apart and drawn whole: round 15)
+    listMeetings(env.DB).catch((e) => { if (e?.setup) throw e; return lost('meetingDates', 'meetings', [])(e); }),
+    impact(env.DB).catch(lost('kids', 'kids')),
+    boardFinanceNow(env, { now }).catch(lost('money', 'finance')),
     loadKids(env.DB).catch(() => []),
     // The year's revenue and expenses so far, as QuickBooks last answered (Settings → QuickBooks)
-    booksNow(env.DB, { now }).catch(lost('money')),
+    booksNow(env.DB, { now }).catch(lost('money', 'books')),
     // What finished makeovers cost, and the families waiting on the money (./_makeover-costs.js)
     // (the heartbeat's copy: a page never waits on JobTread for it)
-    makeoverCostsNow(env, { fetchImpl, now, maxAge: PAGE_MAX_AGE_MS }).catch(lost('money')),
-    readSettings(env.DB).catch(lost('money', {})),
+    makeoverCostsNow(env, { fetchImpl, now, maxAge: PAGE_MAX_AGE_MS }).catch(lost('costs', 'costs')),
+    // (the operating balance kept to run SOARD: What makeovers cost rests on it, and nothing else does. Not read, it's
+    // none (null), never SOARD's default in its place: Board QA round 15, the SOARD connection said the default
+    // $500,000 as the operating balance when the settings couldn't be read)
+    readSettings(env.DB).catch(lost('costs', 'operating')),
   ]);
   // Each reveal's kid by their published page's photo (a draft page's kid has none)
   const photos = Object.fromEntries(pages.map((k) => [k.slug, photoOf(k.heroImage)]).filter(([, p]) => p));
@@ -2822,10 +3100,14 @@ export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } =
     thisYear: meetings.filter((m) => isDate(m.date) && m.date.slice(0, 4) === today.slice(0, 4) && boardSees(m, today)).sort((a, b) => a.date.localeCompare(b.date)).map((m) => ({ id: m.id, name: meetingName(m), date: m.date, start: m.start, shared: m.shared })),
     impact: kids,
     costs,
-    operating: { balance: Number(settings?.operatingBalance) > 0 ? Math.round(Number(settings.operatingBalance)) : OPERATING_BALANCE },
+    // (read: the one Board's settings keep, else SOARD's default, `set` false; not read: none)
+    operating: settings ? operatingIn(settings) : null,
     unread,
+    ...(reads ? { notRead } : {}),
   };
 }
+/** The operating balance as Board's settings keep it: theirs (`set`), else SOARD's default, which the board page goes by until one is set */
+const operatingIn = (s) => (Number(s?.operatingBalance) > 0 ? { balance: Math.round(Number(s.operatingBalance)), set: true } : { balance: OPERATING_BALANCE, set: false });
 
 /** Read the cash now and keep it as the board page's copy (System → Settings calls this when a bank is connected, read or disconnected) */
 export async function saveCashNow(env, { fetchImpl = fetch, now = Date.now() } = {}) {
@@ -2872,14 +3154,17 @@ async function boardSnapshot(DB, snapshot) {
 
 /**
  * Lock today's numbers into a meeting's packet. Reading them takes a while (the banks, JobTread, QuickBooks), so the
- * snapshot is put onto the meeting as it is then (patchMeeting): what was saved meanwhile stays
+ * snapshot is put onto the meeting as it is then (patchMeeting): what was saved meanwhile stays. It locks only numbers
+ * that were read: any part it keeps not read just now (liveNumbers `unread`, each read named by `notRead`) refuses it in
+ * words that name what, and nothing is written; a part with no connection set up is none, and locked as none (Board QA
+ * round 13: the meetings; round 15: every part, after the default operating balance was locked when the settings
+ * couldn't be read)
  */
 export async function takeSnapshot(env, id, { by, fetchImpl = fetch, now = Date.now() } = {}) {
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
-  const n = await liveNumbers(env, { fetchImpl, now });
-  // (the meetings not read just now: never a packet locked with none, Board QA round 13)
-  if (n.unread?.meetings) throw Object.assign(new Error('We couldn’t read the board’s meetings just now, so nothing was changed. Please try again in a moment.'), { status: 503, unread: true });
+  const n = await liveNumbers(env, { fetchImpl, now, reads: true });
+  if (Object.values(n.unread || {}).some(Boolean)) throw Object.assign(new Error(`We couldn’t read ${notReadWords(n.notRead) || 'today’s numbers'} just now, so nothing was changed. Please try again in a moment.`), { status: 503, unread: true });
   const snapshot = { at: n.at, by: by || '', cash: n.cash, mercury: n.mercury, finance: n.finance, books: n.books, projects: n.projects, reveals: n.reveals, pastReveals: n.pastReveals, events: n.events, recentEvents: n.recentEvents, meetings: n.meetings.filter((x) => x.id !== id), thisYear: n.thisYear || [], impact: n.impact, costs: n.costs, operating: n.operating };
   // (the server's own field, from the numbers, never from the meeting: one write, never lost to an edit saved meanwhile)
   const saved = await setOnMeeting(env.DB, id, { snapshot }, { by, was: m });
@@ -3530,7 +3815,8 @@ export async function maybeSendApprovedAgendas(env, { now = Date.now() } = {}) {
  * have been held (its day come, or the chair started it), with its minutes in Board. The same as Board's After the
  * meeting goes by (public/admin/board-meeting.js), for a tab left open or a request made by hand. Minutes kept only as a
  * staff-only file (minutesStaffOnly) can be marked approved, as ever, but the board is never told they're up: they can't
- * read them (`toBoard`, the minutes notice), said in words with what to do (Board QA round 14, Nov 24 2026)
+ * read them (`toBoard`, the minutes notice), said in words with what to do (Board QA round 14, Nov 24 2026), approved
+ * or not (round 15, Nov 26 2026: once marked approved, all four were emailed "Read them" for minutes they couldn't read)
  */
 export function minutesNotReady(m, today = todayEastern(), { toBoard = false } = {}) {
   if (!m) return 'That meeting is gone';
@@ -4302,7 +4588,9 @@ export async function portalData(env, { member = null, admin = false, adminEmail
     (meetingsRead || listMeetings(env.DB)).catch(lostHere('meetings')), listDocs(env.DB).catch(lostHere('docs')), liveNumbers(env, { now }), cashHistory(env.DB).catch(lostHere('history')), roster(env.DB, { withEmails: true }),
     // (the tax returns and the tax return's year, and the year's major gifts: a read that failed marks its part, as
     // liveNumbers' do, never an empty list: Board QA round 12)
-    siteDoc(env.DB, 'financials').catch(lostHere('sources')), siteDoc(env.DB, 'financial-snapshot').catch(lostHere('sources')), getSettings(env.DB).catch(lostHere('settings')), giftsNow(env.DB, { now }).catch(lostHere('gifts')),
+    // (the year at a glance, from the latest tax return, its own part: never the tax returns and audits beside it, which
+    // are read apart: Board QA round 15)
+    siteDoc(env.DB, 'financials').catch(lostHere('sources')), siteDoc(env.DB, 'financial-snapshot').catch(lostHere('glance')), getSettings(env.DB).catch(lostHere('settings')), giftsNow(env.DB, { now }).catch(lostHere('gifts')),
   ]);
   const meetings = meetingsNow || [];
   const docs = docsNow || [];
@@ -4412,8 +4700,9 @@ export async function portalData(env, { member = null, admin = false, adminEmail
     numbers: unreadHere.history ? { ...numbers, unread: { ...(numbers.unread || {}), history: true } } : numbers,
     // Each part whose read failed just now (the money, the makeovers, the kids served, the gifts, the tax returns, the
     // events, and round 13's: the meetings, the papers, the settings, the month-end balances, which files are theirs,
-    // the papers' words, their mark, their signed copies): the page says so in its place and leaves it out of search
-    // (public/admin/board/unread.js)
+    // the papers' words, their mark, their signed copies; round 15's: what makeovers cost, the meetings on the calendar,
+    // the year at a glance): the page says so in its place and leaves it out of search (public/admin/board/unread.js).
+    // Today's numbers' parts are named apart from the page's own (liveNumbers), so one never marks the other here
     // (the givers' names among them: Keep anonymous not read, every name kept hidden and said so, ./_board-gifts.js)
     unread: { ...(numbers.unread || {}), ...unreadHere, ...(gifts?.namesUnread ? { givers: true } : {}) },
     // Cash at each month's end: QuickBooks' own month-ends once it's connected (13 of them, the books'), else the banks' history
@@ -4471,7 +4760,9 @@ export function sayable(e) {
  * off still said "Something went wrong … Reload the page"). "Nothing was changed" only when nothing of the press landed
  * (pressLanded: its database watched while it ran, watchPress); a write that landed, or one whose answer was lost and
  * that nobody looked at, is never told as nothing: the site can't tell yet (UNSURE_SAVED). A press that reads first,
- * lands in one write and looks at a lost answer (landedOr) answers as written before it gets here.
+ * lands in one write and looks at a lost answer (landedOr) answers as written before it gets here; one whose one write
+ * has landed (pressDone) and that something after it stopped is told so: 200, the page told to look again (LOOK_AGAIN),
+ * never "can't tell" when the site can (Board QA round 15).
  * tests/board-round14-privacy.test.mjs walks every action of both routes to keep it so
  */
 export function errorAnswer(err, { current = false, press = false } = {}) {
@@ -4480,6 +4771,8 @@ export function errorAnswer(err, { current = false, press = false } = {}) {
   if (press && !err?.status && dbFailed(err)) {
     const landed = pressLanded(err);
     console.error('[board] a press the database stopped', landed || 'not watched', err?.message || err);
+    // (its one write in, and a read after it didn't answer: done, the page told to look again. Board QA round 15)
+    if (landed === 'done') return Response.json({ ok: true, reread: true, later: LOOK_AGAIN });
     return landed === 'none' || landed === ''
       ? Response.json({ ok: false, error: NOTHING_SAVED }, { status: 503 })
       : Response.json({ ok: false, error: UNSURE_SAVED, unsure: true }, { status: 503 });
@@ -4607,7 +4900,9 @@ async function liveReads(env, m, canAct, { member = null, adminEmail = '', me = 
   for (const id of new Set(seen.sections.flatMap((sec) => sec.items.filter((it) => it.live === 'minutes' && it.about).map((it) => it.about)))) {
     const prev = await getMeeting(env.DB, id);
     if (!boardCopy(prev)) continue;
-    const f = minutesFileOf(prev);
+    // (the document the board reads for them, by the one rule the board page and Print go by: ../../public/admin/
+    // board-shared.js minutesDocOf, with no signature to go by here, so the minutes as written. Board QA round 15)
+    const f = minutesDocOf(prev, null, { known: false }).file;
     // Its date and name for the screen's "since we last met"; its minutes for the item that approves them
     prior.push({ id: prev.id, date: prev.date, name: meetingName(prev), files: f ? [f] : [] });
   }
@@ -4887,12 +5182,13 @@ export async function maybeTemplateAgendas(env, { now = Date.now(), force = fals
     const today = todayEastern(now);
     const changed = [];
     const real = meetings.filter((x) => !x.notBoard);
-    for (const m of real.filter((x) => x.date >= today && agendaIsDraft(x, settings.template))) {
+    // (never approved minutes' meeting, held earlier today: its parts carry what they state. minutesKept, round 15)
+    for (const m of real.filter((x) => x.date >= today && agendaIsDraft(x, settings.template) && !minutesKept(x))) {
       const prev = previousMeeting(m, real);
       const name = prev ? draftName(prev) : '';
       const fresh = keepDocs(m.sections, templateAgenda(prev, { template: settings.template, date: m.date }));
       if (m.agendaFrom?.kind === 'template' && m.agendaFrom.name === name && agendaSkeleton({ sections: fresh }) === agendaSkeleton(m)) continue;
-      const done = await patchMeeting(env.DB, m.id, (cur) => (agendaIsDraft(cur, settings.template)
+      const done = await patchMeeting(env.DB, m.id, (cur) => (agendaIsDraft(cur, settings.template) && !minutesKept(cur)
         ? { ...cur, sections: keepDocs(cur.sections, templateAgenda(prev, { template: settings.template, date: cur.date })), agendaFrom: { kind: 'template', name, at: new Date(now).toISOString() } }
         : cur));
       if (done) changed.push(m.id);
@@ -4917,12 +5213,15 @@ export async function maybeRereadEmailAgendas(env, { now = Date.now() } = {}) {
       const f = m.files.find((x) => x.name === m.agendaFrom.name);
       let parsed = null;
       // (People not answering: nothing is marked read again, and the next heartbeat reads it: never an agenda read
-      // against nobody, nor one that's done with for want of a read. Round 10)
-      if (f) { try { parsed = await readFileAsAgenda(env, f.id); } catch (err) { if (err?.unread) throw err; console.error('[board] reading again', f.name, err.message); } }
-      const better = !!parsed?.sections.some((s) => s.items.length);
-      await patchMeeting(env.DB, m.id, (cur) => (cur.agendaFrom?.kind === 'email' && readAgain(cur) && !cur.minutesFrom?.typed
-        ? { ...cur, ...(better ? { sections: parsed.sections } : {}), agendaFrom: { ...cur.agendaFrom, ...(better ? { at: new Date(now).toISOString() } : {}), v: AGENDA_READER } }
-        : cur));
+      // against nobody, nor one that's done with for want of a read. Round 10. Approved minutes' meeting is never read
+      // again: its parts carry what they state, minutesKept, round 15. It's marked read all the same)
+      if (f && !minutesKept(m)) { try { parsed = await readFileAsAgenda(env, f.id); } catch (err) { if (err?.unread) throw err; console.error('[board] reading again', f.name, err.message); } }
+      let better = false;
+      await patchMeeting(env.DB, m.id, (cur) => {
+        if (!(cur.agendaFrom?.kind === 'email' && readAgain(cur) && !cur.minutesFrom?.typed)) return cur;
+        better = !!parsed?.sections.some((s) => s.items.length) && !minutesKept(cur);
+        return { ...cur, ...(better ? { sections: parsed.sections } : {}), agendaFrom: { ...cur.agendaFrom, ...(better ? { at: new Date(now).toISOString() } : {}), v: AGENDA_READER } };
+      });
       if (better) done.push(m.id);
     }
   } catch (err) {

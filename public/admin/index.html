@@ -3877,6 +3877,8 @@
     .ppl-paste__row.is-skip { background: #FAFAF8; }
     .ppl-paste__row.is-skip .ppl-paste__who strong { font-weight: 500; color: var(--color-text-secondary); }
     .ppl-paste__state { grid-area: state; justify-self: end; }
+    /* The server's word on an email saved that isn't the member's own (a SOARD group inbox, a staff address) */
+    .ppl-paste__note { margin: 0.3rem 0 0; font-size: var(--fs-xs); color: var(--color-text-secondary); overflow-wrap: anywhere; }
     .ppl-paste__state.ppl-chip--add { background: #E8F5EC; color: var(--tone-success-fg); }
     .ppl-paste__state.ppl-chip--done { background: #E8F5EC; color: var(--tone-success-fg); }
     .ppl-paste__show { margin-top: 1rem; }
@@ -4687,6 +4689,7 @@
       PHOTO_MIN as TS_PHOTO_MIN, PHOTO_GOOD as TS_PHOTO_GOOD, hasProfile as tsHasProfile, profilePath as tsProfilePath, boardTitleLine as tsBoardTitleLine,
       COMMITTEES_PATH as TS_COMMITTEES_PATH, DEFAULT_COMMITTEES as TS_DEFAULT_COMMITTEES, committeeList as tsCommitteeList,
       committeeMembers as tsCommitteeMembers, sortCommittees as tsSortCommittees, sameCommittee as tsSameCommittee, cleanCommittee as tsCleanCommittee,
+      savePersonEmail as tsSavePersonEmail, savedWords as tsSavedWords,
     } from './team-shared.js';
     // Kid profile rules (gallery split, hero intro, plan crop, what's missing), shared with the kid page Preview
     import * as KS from './kids-shared.js';
@@ -20505,6 +20508,8 @@ ${sections || '<p>No one yet.</p>'}
       const [show, setShow] = useState(true);
       const [busy, setBusy] = useState(null);       // { at, of }
       const [done, setDone] = useState({});         // slug → 'ok' | error message
+      const [notes, setNotes] = useState({});       // slug → the server's note on the email saved (tsSavePersonEmail)
+      const [what, setWhat] = useState({});         // slug → what was done ('Added' | 'Email saved'), kept once the list reloads
       const plan = useMemo(() => tsPlanPeopleList(tsParsePeopleList(text), team, group, emails), [text, team, group, emails]);
       const todo = plan.filter((p) => p.act !== 'skip' && done[p.slug] !== 'ok');
       const adds = todo.filter((p) => p.act === 'add').length;
@@ -20513,6 +20518,8 @@ ${sections || '<p>No one yet.</p>'}
       const go = async () => {
         let order = team.filter((t) => t.group === group).reduce((m, t) => Math.max(m, Number(t.order) || 0), -1) + 1;
         const result = { ...done };
+        const said = { ...notes };
+        const did = { ...what };
         let added = 0;
         let emailed = 0;
         for (const [i, p] of todo.entries()) {
@@ -20530,30 +20537,41 @@ ${sections || '<p>No one yet.</p>'}
               added++;
             }
             if (p.email) {
-              const r = await fetch('/api/reveal-invites-admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ boardEmail: { slug: p.slug, email: p.email } }) });
-              const d = await r.json().catch(() => ({}));
-              if (!r.ok || !d.ok) throw new Error(p.act === 'add' ? `Added, but the email didn’t save (${d.error || `status ${r.status}`})` : d.error || `status ${r.status}`);
+              // (People's one save of a private email, as the one-person editor's: its note, about an address that isn't
+              // an Advisory Board member's own, is kept and said, never dropped: Advisory Board QA round 27)
+              const d = await tsSavePersonEmail(p.slug, p.email);
+              if (!d.ok) throw new Error(p.act === 'add' ? `Added, but the email didn’t save (${d.error})` : d.error);
+              if (d.note) said[p.slug] = d.note;
               if (p.act === 'email') emailed++;
             }
             result[p.slug] = 'ok';
+            did[p.slug] = p.act === 'add' ? 'Added' : 'Email saved';
           } catch (e) { result[p.slug] = e.message; }
           setDone({ ...result });
+          setNotes({ ...said });
+          setWhat({ ...did });
         }
         setBusy(null);
         // The list behind (and this plan) catch up with what was saved
         if (Object.values(result).includes('ok')) onChanged?.();
         const failed = todo.filter((p) => result[p.slug] !== 'ok');
-        const said = [added && `${nouns(added)} added`, emailed && `${pplPlural(emailed, 'email')} saved`].filter(Boolean).join(', ');
+        const summary = [added && `${nouns(added)} added`, emailed && `${pplPlural(emailed, 'email')} saved`].filter(Boolean).join(', ');
+        const noted = todo.filter((p) => result[p.slug] === 'ok' && said[p.slug]).map((p) => said[p.slug]);
         if (!failed.length) {
-          addToast(`${said || 'Done'}.${added && show ? ' They’re on the site after you publish.' : added ? ' They stay hidden until you turn on Show on the site.' : ''}`, 'success');
-          onDone();
+          const end = tsSavedWords(`${summary || 'Done'}.${added && show ? ' They’re on the site after you publish.' : added ? ' They stay hidden until you turn on Show on the site.' : ''}`, noted);
+          addToast(end.words, end.tone);
+          // (a note to read: the list stays open with it on each row, so nothing said is only in a toast that fades)
+          if (!noted.length) onDone();
           return;
         }
-        addToast(`${said ? `${said}. ` : ''}${pplPlural(failed.length, 'line')} didn’t go through. They’re marked in the list.`, 'error');
+        addToast(tsSavedWords(`${summary ? `${summary}. ` : ''}${pplPlural(failed.length, 'line')} didn’t go through. They’re marked in the list.`, noted).words, 'error');
       };
       const stateOf = (p) => {
         const d = done[p.slug];
-        if (p.act !== 'skip' && d === 'ok') return { tone: 'done', label: p.act === 'add' ? 'Added' : 'Email saved' };
+        // (what was saved, with the server's note on an email that isn't the member's own, stays on its row once the
+        // list behind has caught up and calls it "Already here")
+        if (d === 'ok' && notes[p.slug]) return { tone: 'warn', label: what[p.slug] || (p.act === 'add' ? 'Added' : 'Email saved'), note: notes[p.slug].replace(/^Saved\.\s*/, '') };
+        if (d === 'ok' && (p.act !== 'skip' || what[p.slug])) return { tone: 'done', label: what[p.slug] || (p.act === 'add' ? 'Added' : 'Email saved') };
         if (p.act !== 'skip' && d) return { tone: 'warn', label: d };
         return { tone: p.act === 'skip' ? 'quiet' : p.act === 'add' ? 'add' : 'quiet', label: p.note };
       };
@@ -20567,7 +20585,7 @@ ${sections || '<p>No one yet.</p>'}
           <div class="form-group u-m-0">
             <label class="form-label" for="ppl-paste">Names and emails</label>
             <textarea id="ppl-paste" data-autofocus class="form-input" rows="7" spellcheck=${false} value=${text} disabled=${!!busy}
-              placeholder=${'Jane Smith: jane@example.com\nSam Lee, sam@company.com'} onInput=${(e) => { setText(e.target.value); setDone({}); }}></textarea>
+              placeholder=${'Jane Smith: jane@example.com\nSam Lee, sam@company.com'} onInput=${(e) => { setText(e.target.value); setDone({}); setNotes({}); setWhat({}); }}></textarea>
           </div>
           ${plan.length ? html`
             <div class="ppl-paste__sum" aria-live="polite">
@@ -20577,9 +20595,9 @@ ${sections || '<p>No one yet.</p>'}
             <ul class="ppl-paste__rows" aria-label="What Add will do">
               ${plan.map((p, i) => {
                 const st = stateOf(p);
-                return html`<li key=${`${i}-${p.slug}`} class=${`ppl-paste__row${p.act === 'skip' ? ' is-skip' : ''}`}>
+                return html`<li key=${`${i}-${p.slug}`} class=${`ppl-paste__row${p.act === 'skip' && done[p.slug] !== 'ok' ? ' is-skip' : ''}`}>
                   <span class="ppl-avatar ppl-avatar--initials" aria-hidden="true">${pplInitials(p.name)}</span>
-                  <div class="ppl-paste__who"><strong>${p.name || p.line}</strong>${p.email ? html`<small>${p.email}</small>` : null}</div>
+                  <div class="ppl-paste__who"><strong>${p.name || p.line}</strong>${p.email ? html`<small>${p.email}</small>` : null}${st.note ? html`<p class="ppl-paste__note">${st.note}</p>` : null}</div>
                   <span class=${`ppl-chip ppl-paste__state ppl-chip--${st.tone}`}>${st.tone === 'warn' ? pplIcon.alert : st.tone === 'done' ? pplIcon.check : null}${st.label}</span>
                 </li>`;
               })}
@@ -21165,9 +21183,9 @@ ${sections || '<p>No one yet.</p>'}
         }
         if (emailDirty) {
           try {
-            const r = await fetch('/api/reveal-invites-admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ boardEmail: { slug: rec.slug, email: emailClean } }) });
-            const d = await r.json().catch(() => ({}));
-            if (!r.ok || !d.ok) throw new Error(d.error || `status ${r.status}`);
+            // (People's one save of a private email: tsSavePersonEmail, as Paste a list's)
+            const d = await tsSavePersonEmail(rec.slug, emailClean);
+            if (!d.ok) throw new Error(d.error);
             setEmail(null);
             reloadEmails();
             // (an Advisory Board member's email that isn't their own, a SOARD group inbox or staff address: saved, and the

@@ -16,7 +16,7 @@
 
 import { getMeeting, listMeetings, roster, putFile, boardFiles, ensureSchema, markPlan, agreedOnRecord, nothingDone, NOTHING_SIGNED, ID, boardCopy } from './_board.js';
 import { sha256Hex, canonical, cleanMark, appendEvents, recordHtml, printPdf, finishPdf, fontFaces, CONSENT_TEXT } from './_board-sign.js';
-import { minutesFileOf, meetingName, signsAs, longDate, shortDate, timeRange, MINUTES_SIGN_FROM, docxText } from '../../public/admin/board-shared.js';
+import { minutesFileOf, meetingName, signsAs, longDate, shortDate, timeRange, minutesCantSign, CANT_SIGN, docxText } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
 import { esc } from './_email-shell.js';
 
@@ -98,8 +98,11 @@ async function signingMinutes(env, id, member, { mark: rawMark = null, consent =
   if (!ID.test(String(id || ''))) throw no('Which meeting?', 400);
   const m = await getMeeting(DB, id);
   if (!m || m.practice || m.notBoard || !m.shared) throw no('That meeting isn’t on the board page', 404);
-  if (m.minutes !== 'approved') throw no('The board hasn’t approved these yet', 409, { reload: true });
-  if (String(m.approvedOn || '') < MINUTES_SIGN_FROM) throw no('These were approved before minutes were signed here', 409);
+  // (minutes that can be signed, by the one rule the board page asks by: approved, from when signing began here, and
+  // never ones the board can't read, their only file kept Staff only. Board QA round 15: the page didn't ask, but the
+  // site signed them)
+  const cant = minutesCantSign(m);
+  if (cant) throw no(CANT_SIGN[cant], 409, cant === 'draft' ? { reload: true } : undefined);
   const mark = cleanMark(rawMark || {});
   if (typeof mark === 'string') throw no(mark, 400);
   const typed = signsAs(mark.text, member.name);

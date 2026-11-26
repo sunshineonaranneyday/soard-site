@@ -96,10 +96,14 @@ const down = (words = PEOPLE_DOWN) => (e) => e?.unread === true && e.status === 
 
 let env;
 let raw;
+/* r15: what each request left running after its answer (waitUntil), finished inside its own test with its own fakes,
+   never thrown away to run on into the next test (Board QA round 15's full check: tests/board.test.mjs) */
+let leftRunning = [];
 const realFetch = globalThis.fetch;
 let google; // { events, calls }
 let mail; // every email Resend was asked to send: { to, subject }
 beforeEach(async () => {
+  leftRunning = [];
   fault = null;
   raw = await createD1();
   const files = new Map();
@@ -151,14 +155,17 @@ beforeEach(async () => {
     return new Response('{}', { status: 503 });
   };
 });
-afterEach(() => { globalThis.fetch = realFetch; fault = null; });
+afterEach(async () => {
+  for (let n = 0; leftRunning.length && n < 10; n++) { const going = leftRunning; leftRunning = []; await Promise.allSettled(going); }
+  globalThis.fetch = realFetch; fault = null;
+});
 
 /** A route behind the real sign-in middleware, as `who` */
 async function route(handler, path, who, { method = 'GET', body = null } = {}) {
   const request = new Request(`https://sunshineonaranneyday.com${path}`, {
     method, headers: { 'CF-Access-JWT-Assertion': await signIn(who), Origin: 'https://sunshineonaranneyday.com', ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined,
   });
-  const ctx = { request, env, data: {}, waitUntil: () => {} };
+  const ctx = { request, env, data: {}, waitUntil: (p) => { leftRunning.push(p); } };
   ctx.next = async () => (method === 'GET' ? handler.onRequestGet(ctx) : handler.onRequestPost(ctx));
   const res = await onRequest(ctx);
   const bytes = new Uint8Array(await res.arrayBuffer());

@@ -345,8 +345,12 @@ class FakeR2 {
 }
 let env;
 let texts; // what Workers AI's PDF converter reads in each file, by name
+/* r15: what each request left running after its answer (waitUntil), finished inside its own test with its own fakes,
+   never thrown away to run on into the next test (Board QA round 15's full check: tests/board.test.mjs) */
+let leftRunning = [];
 const realFetch = globalThis.fetch;
 beforeEach(async () => {
+  leftRunning = [];
   texts = {};
   env = { DB: await createD1(), FILES: new FakeR2(), CF_ACCESS_TEAM_DOMAIN: TEAM, CF_ACCESS_AUD: AUD, AI: { toMarkdown: async (doc) => ({ name: doc.name, format: 'text', data: texts[doc.name] || '' }) } };
   await env.DB.exec('CREATE TABLE team (slug TEXT PRIMARY KEY, name TEXT, "group" TEXT, order_num INTEGER, data TEXT NOT NULL, updated_at TEXT)');
@@ -365,13 +369,16 @@ beforeEach(async () => {
     throw new Error(`unexpected fetch ${input}`);
   };
 });
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(async () => {
+  for (let n = 0; leftRunning.length && n < 10; n++) { const going = leftRunning; leftRunning = []; await Promise.allSettled(going); }
+  globalThis.fetch = realFetch;
+});
 
 async function adminPost(body) {
   const request = new Request('https://sunshineonaranneyday.com/api/board-admin', {
     method: 'POST', headers: { 'CF-Access-JWT-Assertion': await signIn(FOUNDER), Origin: 'https://sunshineonaranneyday.com', 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
-  const ctx = { request, env, data: {}, waitUntil: () => {} };
+  const ctx = { request, env, data: {}, waitUntil: (p) => { leftRunning.push(p); } };
   ctx.next = async () => admin.onRequestPost(ctx);
   const res = await onRequest(ctx);
   return { status: res.status, body: await res.json() };
@@ -574,7 +581,7 @@ test('the board’s secretary sends the typed minutes template from the board pa
     const form = new FormData();
     if (file) form.append('file', file);
     const request = new Request(`https://sunshineonaranneyday.com/api/board-portal?minutes=${id}`, { method: 'POST', headers: { 'CF-Access-JWT-Assertion': await signIn(email), Origin: 'https://sunshineonaranneyday.com' }, body: form });
-    const ctx = { request, env, data: {}, waitUntil: () => {} };
+    const ctx = { request, env, data: {}, waitUntil: (p) => { leftRunning.push(p); } };
     ctx.next = async () => portal.onRequestPost(ctx);
     const res = await onRequest(ctx);
     return { status: res.status, body: await res.json() };
@@ -631,7 +638,7 @@ test('the secretary sending another meeting’s minutes: nothing kept, and “se
     const form = new FormData();
     form.append('file', pdf('Minutes 2026-08-06.pdf'));
     const request = new Request(`https://sunshineonaranneyday.com/api/board-portal?minutes=${m.id}${anyway ? '&anyway=1' : ''}`, { method: 'POST', headers: { 'CF-Access-JWT-Assertion': await signIn('lee.board@example.com'), Origin: 'https://sunshineonaranneyday.com' }, body: form });
-    const ctx = { request, env, data: {}, waitUntil: () => {} };
+    const ctx = { request, env, data: {}, waitUntil: (p) => { leftRunning.push(p); } };
     ctx.next = async () => portal.onRequestPost(ctx);
     const res = await onRequest(ctx);
     return { status: res.status, body: await res.json() };

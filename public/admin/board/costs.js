@@ -29,6 +29,7 @@ import { rowsOf, recentSeasons, typicalLately, planOf, pipelineOf, operatingOf, 
 import { useCashNow, compact, asWritten } from './money.js';
 import { sized } from './kanban.js';
 import { More, dayText } from './parts.js';
+import { CouldntLoad, UNREAD_WORDS, liveLost } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -336,6 +337,10 @@ export function useCosts(data, n, m = null) {
   const upTo = m && m.date < (data.today || todayEastern()) ? m.date : '';
   const cash = useCashNow(data, upTo, n);
   const src = upTo ? n : data.numbers || n;
+  // (the part it draws from that failed just now, of the numbers it's drawn from: the money, or what makeovers cost
+  // itself, its figures from JobTread or the operating balance they rest on. Its place says so, never a card worked out
+  // on a balance guessed: Board QA round 15, the operating balance's setting not read drew SOARD's default as its own)
+  const lost = liveLost('costs', src);
   const c = src?.costs || null;
   const operating = operatingOf(src);
   const makeovers = c?.makeovers || [];
@@ -346,7 +351,7 @@ export function useCosts(data, n, m = null) {
   const stats = statsOf(typical?.seasons ? makeovers.filter((x) => typical.seasons.includes(Number(x.season))) : makeovers);
   // How many SOARD can build next season, as of the meeting's day (today's for one today or ahead)
   const pipe = c ? pipelineOf({ reveals: c.reveals || [], underway: plan?.jobs || c.underway || [], waiting: plan?.families || c.waiting || [], plan: c.plan, today: upTo || data.today || todayEastern() }) : null;
-  return { c, cash, operating, makeovers, plan, pipe, recent: recentSeasons(makeovers), typical, stats };
+  return { c, cash, operating, makeovers, plan, pipe, recent: recentSeasons(makeovers), typical, stats, lost };
 }
 
 /** The recommended pipeline, first: how many new families next season has room for, and why */
@@ -491,8 +496,13 @@ function Seasons({ recent, first, range, setRange }) {
  * admin, not looking as the board) may change the operating balance; `onBalance(amount)` puts the new one in place
  */
 export function CostsCard({ data, n, m = null, variant = 'home', admin = false, onBalance = null }) {
-  const { c, cash, operating, makeovers, plan, pipe, recent, typical, stats } = useCosts(data, n, m);
+  const { c, cash, operating, makeovers, plan, pipe, recent, typical, stats, lost } = useCosts(data, n, m);
   const [range, setRange] = useState('recent');
+  if (lost) {
+    return variant === 'home' ? html`<section class="bp-card bc" aria-labelledby="costs-h" id="costs">
+      <div class="bp-cardhead"><h2 class="bp-h2" id="costs-h">What makeovers cost</h2></div><${CouldntLoad} part=${lost} />
+    </section>` : html`<${CouldntLoad} part=${lost} />`;
+  }
   if (!c) return variant === 'home' ? null : html`<p class="bp-muted">What makeovers cost isn’t available from JobTread right now.</p>`;
   const seasons = range === 'recent' ? recent : null;
   const first = Math.min(...makeovers.map((x) => Number(x.season) || 9999));
@@ -558,7 +568,8 @@ export function CostsCard({ data, n, m = null, variant = 'home', admin = false, 
 /** The meeting on the screen: the money and its sentence, the median, and the dots, at the size of a room */
 export function CostsSlide({ n, data, date }) {
   const m = date ? { date } : null;
-  const { c, cash, operating, makeovers, plan, pipe, recent, typical } = useCosts(data, n, m);
+  const { c, cash, operating, makeovers, plan, pipe, recent, typical, lost } = useCosts(data, n, m);
+  if (lost) return html`<div class="bs-numbers"><p class="bs-quiet" role="status">${UNREAD_WORDS[lost]}</p></div>`;
   if (!c) return null;
   const free = plan ? plan.free : null;
   return html`<div class="bc bc--screen">

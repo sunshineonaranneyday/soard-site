@@ -811,7 +811,10 @@ for (const width of [390, 1280]) {
       /* r26: only the email service's yes is "sent": no answer that says either way is owed (it goes by itself under its key), and its own no is a refusal */
       [{ owed: 1 }, 'sign-in email goes in a few minutes'],
       [{ refused: 1 }, 'The email service refused'],
-      [{ failed: 1 }, 'the email service didn’t take it'],
+      /* r27: a claim that didn't take, their email the same, is a rename or a move on People, never the email service's no (it
+         was never asked); their email changing between the reads and the claim is said as that (Advisory Board QA round 27, minor 10) */
+      [{ failed: 1 }, 'record on People changed just now'],
+      [{ changed: 1 }, 'email changed on People just now, so nothing was sent'],
       [{ tooSoon: true, at: new Date().toISOString() }, 'It can go again at'],
     ]) {
       w.rowAnswer = answer;

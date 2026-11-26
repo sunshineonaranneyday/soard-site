@@ -49,8 +49,12 @@ const TYPED = { kind: 'typed', name: '', at: '' };
 
 let env;
 let resendCalls;
+/* r15: what each request left running after its answer (waitUntil), finished inside its own test with its own fakes,
+   never thrown away to run on into the next test (Board QA round 15's full check: tests/board.test.mjs) */
+let leftRunning = [];
 const realFetch = globalThis.fetch;
 beforeEach(async () => {
+  leftRunning = [];
   env = { DB: await createD1(), CF_ACCESS_TEAM_DOMAIN: TEAM, CF_ACCESS_AUD: AUD, RESEND_API_KEY: 're_test' };
   await env.DB.exec('CREATE TABLE team (slug TEXT PRIMARY KEY, name TEXT, "group" TEXT, order_num INTEGER, data TEXT NOT NULL, updated_at TEXT)');
   await env.DB.exec('CREATE TABLE reveal_board_emails (slug TEXT PRIMARY KEY, email TEXT NOT NULL, updated_at TEXT)');
@@ -68,13 +72,16 @@ beforeEach(async () => {
     throw new Error(`unexpected fetch ${url}`);
   };
 });
-afterEach(() => { globalThis.fetch = realFetch; });
+afterEach(async () => {
+  for (let n = 0; leftRunning.length && n < 10; n++) { const going = leftRunning; leftRunning = []; await Promise.allSettled(going); }
+  globalThis.fetch = realFetch;
+});
 
 async function call(email, path, { method = 'GET', body = null, handler }) {
   const headers = { 'CF-Access-JWT-Assertion': await signIn(email), Origin: 'https://sunshineonaranneyday.com' };
   if (body) headers['Content-Type'] = 'application/json';
   const request = new Request(`https://sunshineonaranneyday.com${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  const ctx = { request, env, data: {}, waitUntil: () => {} };
+  const ctx = { request, env, data: {}, waitUntil: (p) => { leftRunning.push(p); } };
   ctx.next = async () => handler(ctx);
   const res = await onRequest(ctx);
   return { status: res.status, body: (res.headers.get('Content-Type') || '').includes('json') ? await res.json() : await res.text() };
