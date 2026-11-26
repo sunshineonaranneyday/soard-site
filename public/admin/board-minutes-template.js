@@ -23,7 +23,7 @@
  * nothing typed into an agenda can turn into markup.
  */
 
-import { meetingName, longDate, timeRange, agendaItems, sectionPlan, clock, quorumOf, nextMeeting, isDate, isFilled, presentersOf, namesText } from './board-shared.js';
+import { meetingName, longDate, timeRange, agendaItems, sectionPlan, clock, quorumOf, nextMeeting, isDate, isFilled, presentersOf, namesText, cleanMeeting, endedClock, minutesKept, MINUTES_STAY, LIVE_TITLES } from './board-shared.js';
 
 /**
  * The meeting after this one, as the template names it: { name, when } ("Q1 2027 Board Meeting", "Thursday, March 4,
@@ -78,6 +78,104 @@ export function minutesOutline(m, { meetings = [], next, quorum = 0, quorumLost 
     }),
     next: next === undefined ? nextLine(m, meetings) : next?.name ? { name: String(next.name), when: String(next.when || '') } : null,
   };
+}
+
+// ─── What approved minutes state ────────────────────────────────────
+//
+// Board QA round 15, Nov 26 2026: approved minutes are the record, and what they state is everything their Word file
+// prints from the meeting (documentXml, from minutesOutline and the record ../../functions/api/_board-notes.js
+// minutesFileBytes fills it with), but for its action items. Those are the to-dos, which the founders keep working after
+// the meeting (a due date moves, an owner changes, reminders and "late" follow them across meetings): the approved file
+// keeps them as they were assigned at the meeting, and the live to-do moving on after that is the tracker, never a change
+// to the minutes (decided Nov 26 2026). Taken here from the template itself, so the rule and the file can't drift:
+// tests/board-round15-approved.test.mjs makes the file again for every change a meeting can have, and fails when it
+// prints one this doesn't cover. The site refuses every write that changes it while they're approved
+// (../../functions/api/_board.js keepStated); Board's editor shows it as it is (./board-meeting.js). Taking the approval
+// back (Mark as draft) is how they change.
+
+/**
+ * What minutes state, as one string to compare: the template's own outline of the meeting (minutesOutline: the name,
+ * day, time and place; who was there, board then staff, and how; the quorum; each part printed, its name and time, in
+ * order, and each item printed in it, in order, with its name, who presents it by name, its words and the vote it asks
+ * for), and what the file fills in from the meeting: each part's own words, the guests, the decisions (each motion's
+ * words, who moved and seconded it, the count and how it went) and when the chair adjourned it. Never the action items:
+ * the to-dos go on as the founders' tracker (above). The roll by name, never by address. Who presents an item is named as the file
+ * names them, from People by address (`who`), so each item's addresses count as who they are: a rename on People that
+ * moves one is followed first (./board-shared.js followAddresses; ../../functions/api/_board.js keepStated `follows`),
+ * and changes nothing they say. Never what the file doesn't print (the board page, the invite, a report, a private note,
+ * a document)
+ */
+export function minutesStated(m) {
+  const c = cleanMeeting(m || {});
+  const people = c.attendance.filter((p) => p.slug).map((p) => ({ slug: p.slug, name: p.name }));
+  const { roll, next: _next, ...outline } = minutesOutline(c, { next: null, quorum: 0, people });
+  return JSON.stringify({
+    ...outline,
+    roll: roll.map((p) => [p.kind, p.name, p.status]),
+    guests: c.attendance.filter((p) => p.kind === 'guest').map((p) => [p.name, p.status]),
+    partWords: c.sections.filter((s) => s.notes).map((s) => [s.id, s.notes]),
+    presentedBy: c.sections.flatMap((s) => s.items.filter(isFilled).map((it) => [it.id, it.who, it.guests])),
+    decisions: c.motions.map((x) => [x.text, x.by, x.second, x.result, x.tally ? [x.tally.for, x.tally.against, x.tally.abstain] : null]),
+    adjourned: endedClock(c),
+  });
+}
+/**
+ * The one rule for any step that writes a meeting (`cur`: as the site has it; `next`: as the step leaves it): minutes
+ * kept (./board-shared.js minutesKept: approved, in Board) that stay approved never state anything else. → MINUTES_STAY,
+ * or '' when the step may go. Taking the approval back (Mark as draft) is how they change, and a step that does may
+ * change them with it
+ */
+export const minutesStay = (cur, next) => (minutesKept(cur) && next?.minutes === 'approved' && minutesStated(cur) !== minutesStated(next) ? MINUTES_STAY : '');
+/** What an item has that the file never prints, kept as an editor has it when what the minutes state is put back */
+const ITEM_OWN = ['report', 'reportBy', 'reportAt', 'reportLook', 'slideOrder', 'docs', 'staffNote', 'confidential'];
+/**
+ * An editor's copy of a meeting (`x`) with what the minutes state as the site has them (`sv`): the meeting's name, day,
+ * time and place, the roll, the decisions, when it was adjourned, and the agenda as printed (its parts and items, in
+ * order, each name, time, presenter, words and vote). The rest stays as `x` has it (the to-dos, the board page, the
+ * invite's notes, each item's report, documents and private note). For a save refused in MINUTES_STAY's
+ * words: that part put back as the site has it, and the rest saved. Always what the site states: one kept as typed that
+ * would print otherwise (an item filled only by a document taken off) has the site's agenda whole
+ */
+export function withStated(x, sv) {
+  const s0 = cleanMeeting(sv || {});
+  const mine = new Map((x.sections || []).flatMap((s) => (s.items || []).map((it) => [it.id, it])));
+  const own = (it) => { const y = mine.get(it.id); return y ? { ...it, ...Object.fromEntries(ITEM_OWN.filter((k) => k in y).map((k) => [k, y[k]])) } : it; };
+  const back = {
+    ...x, title: s0.title, date: s0.date, start: s0.start, end: s0.end, location: s0.location, address: s0.address,
+    attendance: s0.attendance, motions: s0.motions, live: s0.live,
+    sections: s0.sections.map((s) => ({ ...s, items: s.items.map(own) })),
+  };
+  return minutesStated(back) === minutesStated(s0) ? back : { ...back, sections: s0.sections };
+}
+/**
+ * What an editor's copy (`x`) says that approved minutes as the site has them (`sv`) don't, in words a person can copy:
+ * [{ key, label, text }]: the name, day, time and place typed, each part's and item's name, and the words and votes typed
+ * under them. What a refused save took back (withStated), kept on the page so nothing typed is lost
+ */
+export function typedOver(x, sv) {
+  const a = cleanMeeting(x || {});
+  const b = cleanMeeting(sv || {});
+  const out = [];
+  const named = (it) => it?.title || LIVE_TITLES[it?.live] || '';
+  const parts = new Map(b.sections.map((s) => [s.id, s]));
+  const items = new Map(b.sections.flatMap((s) => s.items.map((it) => [it.id, it])));
+  if (meetingName(a) !== meetingName(b) && a.title) out.push({ key: 'title', label: 'The name', text: a.title });
+  if (a.date !== b.date && a.date) out.push({ key: 'date', label: 'The day', text: longDate(a.date) });
+  if (timeRange(a.start, a.end) !== timeRange(b.start, b.end) && a.start) out.push({ key: 'time', label: 'The time', text: timeRange(a.start, a.end) });
+  const place = (m) => [m.location, m.address].filter(Boolean).join(', ');
+  if (place(a) !== place(b) && place(a)) out.push({ key: 'place', label: 'The place', text: place(a) });
+  for (const s of a.sections) {
+    const was = parts.get(s.id);
+    if (s.title && s.title !== was?.title) out.push({ key: `t:${s.id}`, label: was?.title ? `The part named ${was.title}` : 'A part’s name', text: s.title });
+    if (s.notes && s.notes !== was?.notes) out.push({ key: `n:${s.id}`, label: `Under ${s.title || 'a part'}`, text: s.notes });
+    for (const it of s.items) {
+      const w = items.get(it.id);
+      if (it.title && it.title !== w?.title) out.push({ key: `t:${it.id}`, label: named(w) ? `The item named ${named(w)}` : 'An item’s name', text: it.title });
+      if (it.notes && it.notes !== w?.notes) out.push({ key: `n:${it.id}`, label: `Under ${named(it) || 'an item'}`, text: it.notes });
+      if (it.motion && it.motion !== w?.motion) out.push({ key: `v:${it.id}`, label: `The vote ${named(it) ? `on ${named(it)}` : 'asked for'}`, text: it.motion });
+    }
+  }
+  return out;
 }
 
 /** "Q4 2026 Board Meeting minutes (2026-11-05).docx": "minutes" and the date in the name, so Board's email and Drive readers file it on this meeting */

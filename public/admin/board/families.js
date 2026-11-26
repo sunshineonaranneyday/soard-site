@@ -32,14 +32,20 @@ import { Face, Score, asked, place, areaWords, byScore, day, read, cache, season
 import { FamilyMap } from './family-map.js';
 import { STAGES, stageLabel, byStage, isFamily, stageKnown } from './stages.js';
 import { itemsOf, inSeason, sumLine, Track, LifeBoard, SeasonSwitch, StageChip, STAGE_SCHEME, Journey, toStep } from './lifecycle.js';
+import { CouldntLoad } from './unread.js';
 
 const html = htm.bind(h);
 /** A score, or a blank said to a screen reader (scoring-shared.js fmtScore writes a dash for none) */
 const scoreOf = (n) => (n == null || !Number.isFinite(Number(n)) ? html`<${Blank} say="Not scored" />` : fmtScore(n));
 const external = (href) => /^\//.test(href);
 
-/** Every family from application to reveal: a board, a list or the map, now or a season at a time */
-export function FamiliesPage({ view = 'board', open = '', projects = null, reveals = [] }) {
+/**
+ * Every family from application to reveal: a board, a list or the map, now or a season at a time. `lost`: the page's
+ * makeovers part not read just now (JobTread's projects, or the reveals: ./unread.js failed(data, 'projects')): said in
+ * its place, as Home, the meeting's item, Print and the slides say it, and no card says a reveal it doesn't know
+ * (Board QA round 15: every card "Reveal date to come", with nothing said)
+ */
+export function FamiliesPage({ view = 'board', open = '', projects = null, reveals = [], lost = false }) {
   const [data, setData] = useState(cache.list);
   const [err, setErr] = useState('');
   useEffect(() => {
@@ -84,8 +90,9 @@ export function FamiliesPage({ view = 'board', open = '', projects = null, revea
       <p class="bf-sum">${nbw(sumLine(list, shownSeason, app)) || 'Nobody here.'}</p>
       <${Track} list=${list} application=${windowed} onStep=${view === 'board' ? toStep : view === 'list' ? (k) => setStage(k) : null} />
       ${!data.jobs ? html`<p class="lc-note" role="status" data-unread="projects">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
+      ${lost ? html`<${CouldntLoad} part="projects" cls="lc-note" />` : null}
       ${view === 'map' ? html`<${FamilyMap} key="map" families=${families} boundary=${data.boundary} open=${open} tall=${true} scheme=${STAGE_SCHEME} level=${2} away=${list.filter((x) => !isFamily(x))} />`
-      : view === 'board' ? html`<${LifeBoard} key=${shownSeason} list=${list} application=${windowed} reveals=${reveals} />
+      : view === 'board' ? html`<${LifeBoard} key=${shownSeason} list=${list} application=${windowed} reveals=${reveals} revealsLost=${lost} />
         ${aside ? html`<p class="lc-note">${nbw(`${plural(aside, 'family', 'families')} not chosen or with no status ${aside === 1 ? 'isn’t' : 'aren’t'} on the board.`)} <a class="bp-link" href="#/families/list">See them in the list</a></p>` : null}`
       : html`
         <div class="bf-chips" role="group" aria-label="Step">
@@ -121,8 +128,11 @@ function Meanings({ crit }) {
   </div>`;
 }
 
-/** One family: what they asked for, the facts their score rests on, and each scorer's card */
-export function FamilyPage({ id, reveals = [] }) {
+/**
+ * One family: what they asked for, the facts their score rests on, and each scorer's card. `lost`: the makeovers part
+ * not read just now (their reveal's day among it): said under their way, never a way drawn as if no day were set
+ */
+export function FamilyPage({ id, reveals = [], lost = false }) {
   const [f, setF] = useState(cache.one.get(id) || null);
   const [err, setErr] = useState(null);
   useEffect(() => {
@@ -169,8 +179,9 @@ export function FamilyPage({ id, reveals = [] }) {
       <div><h1 class="bp-h1">${f.name}</h1><p class="bf-head__meta"><${StageChip} f=${f} /> <span>${nbw([f.season ? `${f.season} season` : '', f.kind === 'organization' ? 'Community project' : ''].filter(Boolean).join(' · '))}</span>${f.page ? html` <a class="bp-link" href=${f.page} target="_blank" rel="noopener">Their page</a>` : null}</p></div>
       <div class="bf-head__score"><${Score} s=${f.score} big=${true} /></div>
     </header>
-    <${Journey} f=${f} reveals=${reveals} known=${stageKnown(f, f.jobs)} />
+    <${Journey} f=${f} reveals=${lost ? [] : reveals} known=${stageKnown(f, f.jobs)} />
     ${stageKnown(f, f.jobs) ? null : html`<p class="lc-note" role="status" data-unread="projects">JobTread can’t be reached right now, so their step is their application’s.</p>`}
+    ${lost ? html`<${CouldntLoad} part="projects" cls="lc-note" />` : null}
     <${Media} f=${f} />
     <div class="bf-split">
       <section class="bp-card" aria-labelledby="bf-facts-h">

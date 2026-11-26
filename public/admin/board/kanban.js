@@ -124,10 +124,13 @@ export function kanbanLine(projects) {
 /**
  * A makeover's reveal on its card: the day and time once it's set, else the part of the month, else "date to come"
  * (none while it's awaiting funding: its column says why). `reveals`: numbers.reveals. Also Home's Makeovers card
- * (./lifecycle.js)
+ * (./lifecycle.js). `lost`: the makeovers not read just now (the reveals, or JobTread's projects that match a card to its
+ * reveal; ./unread.js failed(data, 'projects')): no reveal said on the card at all, never "date to come" for a day not
+ * known, as the page says in its place that they couldn't load (Board QA round 15)
  */
-export function revealTag(b, reveals = []) {
+export function revealTag(b, reveals = [], lost = false) {
   if (b.kind === 'community') return html`<span class="bk-card__reveal is-quiet">Community project</span>`;
+  if (lost) return null;
   const r = b.slug ? reveals.find((x) => x.slug === b.slug) : null;
   if (r?.confirmed && r.date) return html`<span class="bk-card__reveal is-set">${CAL}Reveal ${shortDate(r.date).replace(/, \d{4}$/, '').replace(' ', '\u00a0')}${r.time ? `\u00a0· ${kept(clock(r.time).replace(':00', ''))}` : ''}</span>`;
   if (r?.window?.label) return html`<span class="bk-card__reveal">${CAL}Reveal ${r.window.label}</span>`;

@@ -326,7 +326,7 @@ test('Send it again, claimed: the earlier date rides along while it goes, and a 
   assert.equal((await sendWelcomeTo(env, 'ada-advisor', { now: t0 + AGAIN_MS + 1000 })).refused, 1); /* r26: said as a refusal */
   assert.equal(seen.at, first, 'while it went, her record still said when the last one went');
   assert.ok(seen.sending);
-  assert.deepEqual(await record('ada-advisor'), { at: first, to: 'ada@private.example' });
+  assert.deepEqual(await record('ada-advisor'), { at: first, to: 'ada@private.example', via: 'run-it' }); /* r27: a sign-in email kept with where it went from (Run it), so Add's refusal can say so */
 });
 
 test('the row’s light look gives each member’s sign-in email alone', async () => {

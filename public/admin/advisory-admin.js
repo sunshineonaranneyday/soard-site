@@ -163,17 +163,65 @@ function Card({ title, sub = '', count = null, children, cls = '' }) {
 function Fold({ summary, children }) {
   return html`<details class="ar-fold"><summary>${summary}</summary><div class="ar-fold__b">${children}</div></details>`;
 }
-/** Anything that can't be undone asks once, in place: the first press says what will happen, the second does it */
+/**
+ * Anything that can't be undone asks once, in place: the first press says what will happen, the second does it. By
+ * keyboard as by pointer (Advisory Board QA round 27: the focus fell to the page, so a screen reader heard nothing of the
+ * question): opening it moves the focus to its safe choice, Keep it as it is; Tab stays within its buttons, in order;
+ * Escape closes it; closing it puts the focus back on the button that opened it, or, when that button is gone (the
+ * press did all there was to do), on its card
+ */
 function Sure({ label, yes, note = '', onYes, cls = '', disabled = false }) {
   const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
-  if (!asking) return html`<button type="button" class=${`ar-btn ${cls}`} disabled=${disabled} onClick=${() => setAsking(true)}>${label}</button>`;
-  return html`<span class="ar-sure" role="group" aria-label=${label}>
-    ${note ? html`<span class="ar-sure__n">${note}</span>` : null}
-    <button type="button" class="ar-btn ar-btn--go" disabled=${busy} onClick=${async () => { setBusy(true); await onYes(); setBusy(false); setAsking(false); }}>${yes}</button>
-    <button type="button" class="ar-btn ar-btn--quiet" disabled=${busy} onClick=${() => setAsking(false)}>Keep it as it is</button>
+  const opener = useRef(null);
+  const keep = useRef(null);
+  const group = useRef(null);
+  const home = useRef(null);
+  const back = useRef(false);
+  const noteId = useRef(`ar-sure-${Math.random().toString(36).slice(2, 9)}`).current;
+  useEffect(() => {
+    if (asking) { home.current = group.current?.closest('.ar-card') || null; keep.current?.focus(); } else if (back.current) { back.current = false; opener.current?.focus(); }
+  }, [asking]);
+  // (gone with the question open, or as it closed: the focus stays in its card, never on the page)
+  useEffect(() => () => {
+    const card = home.current;
+    if (!card) return;
+    requestAnimationFrame(() => {
+      const now = document.activeElement;
+      if (!card.isConnected || (now && now !== document.body && now.isConnected)) return;
+      if (!card.hasAttribute('tabindex')) card.setAttribute('tabindex', '-1');
+      card.focus();
+    });
+  }, []);
+  const close = () => { back.current = true; setAsking(false); };
+  const onKeyDown = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); if (!busy) close(); return; }
+    if (e.key !== 'Tab' || !group.current) return;
+    const btns = [...group.current.querySelectorAll('button')];
+    const i = btns.indexOf(document.activeElement);
+    e.preventDefault();
+    btns[(i + (e.shiftKey ? -1 : 1) + btns.length) % btns.length]?.focus();
+  };
+  if (!asking) return html`<button type="button" ref=${opener} class=${`ar-btn ${cls}`} disabled=${disabled} onClick=${() => setAsking(true)}>${label}</button>`;
+  // (busy: aria-disabled, never disabled, so the focus stays on the button pressed while it works)
+  return html`<span class="ar-sure" role="group" aria-label=${label} aria-describedby=${note ? noteId : null} ref=${group} onKeyDown=${onKeyDown}>
+    ${note ? html`<span class="ar-sure__n" id=${noteId}>${note}</span>` : null}
+    <button type="button" class="ar-btn ar-btn--go" aria-disabled=${busy ? 'true' : null} onClick=${async () => { if (busy) return; setBusy(true); try { await onYes(); } finally { setBusy(false); close(); } }}>${yes}</button>
+    <button type="button" ref=${keep} class="ar-btn ar-btn--quiet" aria-disabled=${busy ? 'true' : null} onClick=${() => { if (!busy) close(); }}>Keep it as it is</button>
   </span>`;
 }
+/**
+ * Advisory Board emails that may not have gone (functions/api/_advisory-mail.js unsureMail: a try whose answer was lost,
+ * and the email service no longer keeps its key), which the site never sends again by itself: each said where it
+ * belongs, with Send it again, which sends it with a new key (Advisory Board QA round 27: nothing owed is lost silently)
+ */
+const UNSURE_WORDS = { ask: 'This month’s ask', update: 'The update', gift: 'The note about a gift', goal: 'The thank-you for the goal', notice: 'The notice' };
+function MayNotHaveGone({ rows, ctx }) {
+  if (!rows?.length) return null;
+  return html`<ul class="ar-list ar-unsure">${rows.map((u) => html`<li key=${u.key}><p class="ar-note ar-unsure__n"><span>${UNSURE_WORDS[u.kind] || 'An email'} to ${u.name} may not have gone. Send it again?</span>
+    <button type="button" class="ar-btn ar-btn--small" disabled=${ctx.busy} aria-label=${`Send it again to ${u.name}`} onClick=${() => ctx.act({ action: 'send-again', key: u.key }, (j) => j.said || 'Sent.')}>Send it again</button></p></li>`)}</ul>`;
+}
+const unsureFor = (data, test) => (data.unsure || []).filter(test);
 function Toggle({ checked, onChange, label, sub = '', disabled = false }) {
   return html`<label class="ar-toggle">
     <input type="checkbox" role="switch" checked=${checked} disabled=${disabled} onChange=${(e) => onChange(e.currentTarget.checked)} />
@@ -214,7 +262,13 @@ function Waiting({ ctx }) {
   const n = intros.length + hosted.length + pages.length + lost.length;
   const restIntros = data.intros.filter((i) => !introNew(i));
   const restHosted = data.hosted.filter((x) => x.status !== 'new');
+  // (one that may not have gone with no card of its own: a gift note, the goal's thank-you, a notice, or an update or ask
+  // whose card isn't on the page)
+  const onCards = new Set([...data.intros.map((i) => `update:intro:${i.id}`), ...data.hosted.map((x) => `update:hosted:${x.id}`)]);
+  const asked = new Set(data.asks.filter((a) => a.sentAt && !a.closedAt).map((a) => a.id));
+  const loose = unsureFor(data, (u) => !onCards.has(u.key) && !(u.kind === 'ask' && asked.has(u.ref)));
   return html`<${Card} title="Waiting on you" count=${n || null} sub=${n ? 'Every introduction gets an answer, so Advisory Board members keep making them.' : ''}>
+    <${MayNotHaveGone} rows=${loose} ctx=${ctx} />
     ${n ? html`<ul class="ar-list">
       ${intros.map((i) => html`<li key=${i.id}><${IntroRow} i=${i} ctx=${ctx} /></li>`)}
       ${hosted.map((x) => html`<li key=${x.id}><${HostedRow} x=${x} ctx=${ctx} /></li>`)}
@@ -253,6 +307,7 @@ function IntroRow({ i, ctx }) {
       ${data.introStatuses.map((st) => html`<button type="button" key=${st.id} aria-pressed=${i.status === st.id && !undecided} onClick=${() => set(st.id)}>${statusWord(st)}</button>`)}
     </div>
     ${data.settings.emails ? html`<p class="ar-muted ar-small">${emailsLine(data, i)}</p>` : null}
+    <${MayNotHaveGone} rows=${unsureFor(data, (u) => u.key === `update:intro:${i.id}`)} ctx=${ctx} />
   </div>`;
 }
 /**
@@ -326,6 +381,7 @@ function HostedRow({ x, ctx }) {
         ${x.status !== 'not-now' ? html`<button type="button" class="ar-btn" disabled=${busy} onClick=${() => send('not-now', 'Marked not now')}>Not now</button>` : null}
       </div>
       ${ctx.data.settings.emails ? html`<p class="ar-muted ar-small">${emailsLine(ctx.data, x)}</p>` : null}`}
+    <${MayNotHaveGone} rows=${unsureFor(ctx.data, (u) => u.key === `update:hosted:${x.id}`)} ctx=${ctx} />
   </div>`;
 }
 
@@ -356,8 +412,14 @@ function AskCard({ ctx }) {
   // With the emails on, this reaches every advisor's inbox at once: it asks first
   // (the count and the words are who it really goes to, from the same rule as the send: Advisory Board QA round 26)
   const r = reach(data.advisors);
+  // (who the email really goes to decides the card's words: with nobody it can go to, nothing is promised, no box asks
+  // about emailing, and there's no Email it: Advisory Board QA round 27)
+  const mails = data.settings.emails && r.to.length > 0;
   const toWords = r.not.length ? membersN(r.to.length) : 'every Advisory Board member';
-  const agree = ({ text = `This puts the ask on the page and emails ${toWords} now.${notEmailed(r.not)}`, yes = 'Put it out and email them' } = {}) => ask({ title: r.to.length ? `Email ${reachWords(r)}?` : 'Put it on the page?', text: r.to.length ? text : `No Advisory Board member has an email of their own on file, so nobody is emailed.${notEmailed(r.not)}`, yes: r.to.length ? yes : 'Put it on the page', no: 'Not yet', careful: true });
+  const agree = ({ text = `This puts the ask on the page and emails ${toWords} now.${notEmailed(r.not)}`, yes = 'Put it out and email them' } = {}) => (!r.to.length ? Promise.resolve(true)
+    : ask({ title: `Email ${reachWords(r)}?`, text, yes, no: 'Not yet', careful: true }));
+  // (the server's words name each email the service refused, with what to do: something to act on)
+  const toAct = (j) => !!(j?.sent?.refused?.length || j?.sent?.unsure?.length);
   // What really happened, in the server's words (functions/api/_advisory-mail.js askWords): emailed, or the rest going
   // by themselves in a few minutes, once each
   const sentWords = (j) => j?.said || 'It’s on the page.';
@@ -367,7 +429,7 @@ function AskCard({ ctx }) {
     const j = await act({ action: 'email-ask', id }, '', { raw: true });
     if (!j) return;
     if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); return; }
-    ctx.tell(sentWords(j), !j.sent?.sent && !j.sent?.owed && !j.sent?.already);
+    ctx.tell(sentWords(j), (!j.sent?.sent && !j.sent?.owed && !j.sent?.already) || toAct(j));
   };
   // agreed: they said yes to emailing everyone. The server holds the real switch: if it was turned on since this
   // screen last looked, it says so, and this asks before anything goes
@@ -380,7 +442,7 @@ function AskCard({ ctx }) {
     }
     if (!j) return false;
     if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); return false; }
-    ctx.tell(sentWords(j));
+    ctx.tell(sentWords(j), toAct(j));
     return true;
   };
   const save = async (thenOut) => {
@@ -391,14 +453,14 @@ function AskCard({ ctx }) {
     if (j) setDraft(blank());
   };
   return html`<${Card} title="This month’s ask" sub="One clear ask at a time. It sits on every Advisory Board member’s Home page.">
-    ${out ? html`<${AskOut} a=${out} ctx=${ctx} emailIt=${emailIt} />` : html`<p class="ar-muted">Nothing is out right now.</p>`}
+    ${out ? html`<${AskOut} a=${out} ctx=${ctx} emailIt=${mails ? emailIt : null} />` : html`<p class="ar-muted">Nothing is out right now.</p>`}
     <div class="ar-sub">
       <h4>${out ? 'Write the next one' : 'Write one'}</h4>
       <${Field} label="The ask"><input class="ar-input" maxlength="140" placeholder="Do you know a plumber who’d work with us?" value=${draft.title} onInput=${up('title')} /><//>
       <${Field} label="A little more, if it helps"><textarea class="ar-input" rows="3" maxlength="1500" value=${draft.body} onInput=${up('body')}></textarea><//>
       <${Field} label="A link, if there’s one"><input class="ar-input" type="url" inputmode="url" placeholder="https://" value=${draft.link} onInput=${up('link')} /><//>
       <div class="ar-btns">
-        <button type="button" class="ar-btn ar-btn--go" disabled=${busy || !draft.title.trim()} onClick=${() => save(true)}>${data.settings.emails ? 'Put it out and email the Advisory Board' : 'Put it on the page'}</button>
+        <button type="button" class="ar-btn ar-btn--go" disabled=${busy || !draft.title.trim()} onClick=${() => save(true)}>${mails ? 'Put it out and email the Advisory Board' : 'Put it on the page'}</button>
         <button type="button" class="ar-btn" disabled=${busy || !draft.title.trim()} onClick=${() => save(false)}>Save for later</button>
       </div>
       <p class="ar-muted ar-small">${data.settings.emails ? (r.to.length ? `This emails ${reachWords(r)}.${notEmailed(r.not)}` : `No Advisory Board member has an email of their own on file, so this only goes on the page.${notEmailed(r.not)}`) : 'Emails are off, so this only goes on the page.'}${out ? ' A new one closes the one that’s out now.' : ''}</p>
@@ -444,8 +506,9 @@ function AskOut({ a, ctx, past = false, emailIt = null }) {
     ${a.body ? html`<p class="ar-muted">${a.body}</p>` : null}
     <p class="ar-muted ar-small">Out since ${dayOf(a.sentAt)}. ${yes.length} can help, ${no.length} not this time.</p>
     ${a.answers.length ? html`<ul class="ar-answers">${[...yes, ...no].map((x) => html`<li key=${x.slug}><span class="ar-answers__w"><strong>${x.name}</strong><span class=${`ar-tag ${x.answer === 'yes' ? 'ar-tag--ok' : ''}`}>${x.answer === 'yes' ? 'Can help' : 'Not this time'}</span></span>${x.note ? html`<span>${x.note}</span>` : null}</li>`)}</ul>` : null}
+    ${past ? null : html`<${MayNotHaveGone} rows=${unsureFor(ctx.data, (u) => u.kind === 'ask' && u.ref === a.id)} ctx=${ctx} />`}
     ${past ? null : html`<div class="ar-btns">
-      ${ctx.data.settings.emails && a.mailed === false ? html`<button type="button" class="ar-btn ar-btn--go" disabled=${ctx.busy} onClick=${() => emailIt?.(a.id)}>Email it to the Advisory Board</button>` : null}
+      ${emailIt && ctx.data.settings.emails && a.mailed === false ? html`<button type="button" class="ar-btn ar-btn--go" disabled=${ctx.busy} onClick=${() => emailIt(a.id)}>Email it to the Advisory Board</button>` : null}
       <${Sure} label="Close it" yes="Yes, close it" note="It comes off every Advisory Board member’s Home page." onYes=${() => act({ action: 'close-ask', id: a.id }, 'Closed')} />
     </div>`}
   </div>`;
@@ -612,7 +675,8 @@ function GroupCard({ ctx }) {
   // (only those it can go to: an email on file that signs them in, never a SOARD address or a group inbox, which the
   // send skips, so the count and the names are who it goes to: Advisory Board QA round 24)
   // (and one on its way now isn't counted: Advisory Board QA round 26)
-  const unsent = data.advisors.filter((a) => !a.lastSeen && a.email && !a.emailWhy && !data.welcomed?.[a.slug] && !a.welcome?.going);
+  // (nor one that may not have gone: never sent again by itself or with the group, only from their row: round 27)
+  const unsent = data.advisors.filter((a) => !a.lastSeen && a.email && !a.emailWhy && !data.welcomed?.[a.slug] && !a.welcome?.going && !a.welcome?.unsure);
   // What happened to each, in the server's words (functions/api/_advisory-mail.js welcomesSaid): "they've all had it
   // already" only when they have. A press that fails reads the page again (act)
   const welcome = async () => {
@@ -654,7 +718,10 @@ const sentWords = (j, a, me) => (j.sent ? `Sign-in email sent to ${a.name}${j.ag
           : j.notReady ? `Nothing was sent: the sign-in doesn’t know ${a.name}’s email yet. Cloudflare usually takes a new one within a few minutes, so try again then.`
             : j.noEmail ? `Nothing was sent. ${j.why === 'none' ? `There’s no email for ${a.name} on People.` : `${a.name}’s email on People ${j.why === 'staff' ? 'is a SOARD address, which signs in as staff' : j.why === 'group' ? 'is a SOARD group inbox' : 'isn’t a whole address'}, so it can’t be their sign-in.`} Put their own on their People page.`
               : j.gone ? `${a.name} isn’t on the Advisory Board now.`
-                : 'It didn’t go: the email service didn’t take it. Try again in a few minutes.');
+                // (their email changed on People between the press's reads and its claim: the email service was never
+                // asked, Advisory Board QA round 27)
+                : j.changed ? `${a.name}’s email changed on People just now, so nothing was sent. Check it and press again.`
+                  : `Nothing was sent: ${a.name}’s record on People changed just now. Press again.`);
 function People({ ctx }) {
   const { data, setData, act, tell, load } = ctx;
   const agreement = data.docs.find((d) => d.kind === 'agreement' && d.shared !== false);
@@ -717,10 +784,12 @@ function SignIn({ a, now, sending, onSend }) {
   if (a.lastSeen) return dayOf(a.lastSeen);
   const w = a.welcome || {};
   const soon = !!w.at && now - Date.parse(w.at) < AGAIN_MS;
-  const label = sending === a.slug ? 'Sending…' : w.at ? 'Send it again' : 'Send the sign-in email';
+  const label = sending === a.slug ? 'Sending…' : w.at || w.unsure ? 'Send it again' : 'Send the sign-in email';
   return html`<span class="ar-signin" data-slug=${a.slug} tabindex="-1" role="group" aria-label=${`${a.name}’s sign-in email`}>
     <span class="ar-muted">Not yet</span>
     ${w.going ? html`<span class="ar-muted ar-small">Sign-in email going out now</span>`
+      // (one that may not have gone, which the site never sends again by itself: Advisory Board QA round 27)
+      : w.unsure ? html`<span class="ar-note ar-small">The welcome to ${first(a.name) || a.name} may not have gone. Send it again?</span>`
       : w.owed && !w.at ? html`<span class="ar-muted ar-small">Sign-in email goes in a few minutes</span>`
       : w.at ? html`<span class="ar-muted ar-small">Sign-in email sent ${dayOf(w.at)}${w.unconfirmed ? ' (not confirmed)' : ''}${w.owed ? '. It goes again in a few minutes' : ''}</span>`
         : a.emailWhy ? html`<span class="ar-muted ar-small">${notSignIn(a.emailWhy)}</span>` : null}
@@ -1054,6 +1123,9 @@ textarea.ar-input { resize: vertical; }
 .ar-goal__w { flex: 1 1 200px; min-width: 0; }
 .ar-plain { margin: 3px 0 0; padding-left: 18px; }
 .ar-note { padding: 7px 11px; border-radius: 9px; background: var(--ar-warn-bg); color: var(--ar-warn); font-size: 0.93em; }
+/* An email that may not have gone, with Send it again beside it (or under it on a phone) */
+.ar-unsure { margin-bottom: 8px; }
+.ar-unsure__n { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; }
 .ar-money { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .ar-money li { display: flex; justify-content: space-between; gap: 12px; }
 .ar-answers { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }

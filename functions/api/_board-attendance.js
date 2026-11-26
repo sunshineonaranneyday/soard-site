@@ -18,7 +18,7 @@
 import { accessToken } from './_google-calendar.js';
 import { readState, writeState } from './_board-roles.js';
 import { listMeetings, patchMeeting } from './_board.js';
-import { todayEastern } from '../../public/admin/board-shared.js';
+import { todayEastern, minutesKept } from '../../public/admin/board-shared.js';
 
 const MEET_API = 'https://meet.googleapis.com/v2';
 export const MEET_READ_SCOPE = 'https://www.googleapis.com/auth/meetings.space.readonly';
@@ -155,7 +155,9 @@ export async function maybeFillAttendance(env, { fetchImpl = fetch, now = Date.n
         const at = new Date(now).toISOString();
         if (r.status !== 'ok') return { ...cur, fromMeet: { at, status: r.status, error: r.error, joined: cur.fromMeet?.joined || [] } };
         const { attendance, joined } = withJoined(cur, r.joined);
-        return { ...cur, attendance, fromMeet: { at, status: 'ok', error: '', joined } };
+        // (approved minutes' roll is the record: who Meet saw join is kept beside it, never put on it. minutesKept,
+        // Board QA round 15)
+        return { ...cur, attendance: minutesKept(cur) ? cur.attendance : attendance, fromMeet: { at, status: 'ok', error: '', joined } };
       });
       done.push(m.id);
     }

@@ -57,7 +57,7 @@ import { signedMinutes } from './_board-minutes-sign.js';
 import { sendActionPreview, reminderReach } from './_board-actions.js';
 import {
   ensureSchema, getSettings, saveSettings, listMeetings, getMeeting, saveMeeting, createMeeting, importMeeting,
-  setActionDone, listDocs, saveDoc, deleteDoc, boardFileProblem, fillDocWords, docVersions, signWithCopy, unsignDoc, putFile, updateFile, deleteFile, fileRowOf, fileLocked, liveNumbers, takeSnapshot, sendPacket,
+  setActionDone, listDocs, saveDoc, saveDocWithFile, deleteDoc, boardFileProblem, fillDocWords, docVersions, signWithCopy, unsignDoc, putFile, updateFile, deleteFile, fileRowOf, fileLocked, liveNumbers, takeSnapshot, sendPacket,
   memberStatus, roster, packetList, ID, readFileAsAgenda, sendWelcome, askToSign, approveMinutes, remindRsvp, sendMinutesNotice, patchMeeting,
   chairLive, createPractice, getPractice, resetPractice, agendaApprovals, maybeTemplateAgendas, UNSURE_SEND, NOTED_LATER, sentWhen, errorAnswer, nothingDone, NOTHING_SAVED,
   watchPress,
@@ -70,7 +70,7 @@ import { groupStatus, syncBoardGroup } from './_board-group.js';
 import { emailAll } from './_board-email-all.js';
 import { maybeSyncBoardCalendar, calendarStatus } from './_board-calendar.js';
 import { maybeReadBoardMail, mailStatus, mailLog, clientIdOf } from './_board-mail.js';
-import { sendInvite, deleteWithInvite, noteInviteChange, projectOf, inviteCheck, maybeCheckInvites } from './_board-invite.js';
+import { sendInvite, deleteWithInvite, projectOf, inviteCheck, maybeCheckInvites } from './_board-invite.js';
 import { meetingName } from '../../public/admin/board-shared.js';
 import { readMinutesInto, undoMinutes, minutesKindNo, uploadKind, approvedFileNo } from './_board-minutes.js';
 import { activityOverview, memberActivity, deviceOf, accessIat } from './_board-activity.js';
@@ -363,26 +363,21 @@ async function pressed(context, env) {
         const doc = await readAfter(listDocs(env.DB).then((docs) => docs.find((d) => d.id === docId)), SHOWS_SOON);
         return Response.json({ ok: true, signed, ...laterOf(answerOf({ doc }), owed.later ? { later: owed.later } : {}) });
       }
-      // A paper saved with its new file, in one: the file checked first, so nothing changes (no new version, nobody
-      // asked to sign again) unless it can go up; a new paper whose file then didn't go isn't left without it
+      // A paper saved with its new file, in one: the file checked first, then its bytes put, and the paper, its new
+      // wording (the file it is), the file's row and its words' source (`wordsFromNew`) in ONE write, so nothing changes
+      // (no new version, nobody asked to sign again) unless all of it lands: the database failing is "nothing was
+      // changed", its answer lost is looked at, and a read after it that fails answers with the paper as written, the
+      // page told to look again (./_board.js saveDocWithFile, Board QA round 15)
       if (form.get('saveDoc')) {
         let req = {};
         try { req = JSON.parse(String(form.get('saveDoc'))); } catch { return fail('Expected the paper with its file'); }
         const upload = form.get('file');
         const why = await boardFileProblem(upload);
         if (why) return fail(why, 415);
-        const d = await saveDoc(env.DB, req.doc || {}, { ...docOptions(req, me), newFile: String(upload.name || 'file').slice(0, 200) });
-        let put;
-        try { put = await putFile(env, { ownerType: 'doc', ownerId: d.id, file: upload, by: me }); } catch (err) { if (!req.doc?.id) await deleteDoc(env, d.id); throw err; }
-        // (a new version that's this file: which file it was, for what a signature on it signed)
-        // (a paper's first file, version 0, gets its row too: what a signature on it signed is never a later file)
-        if (!d.body) await env.DB.prepare("INSERT OR IGNORE INTO board_doc_versions (doc_id, version, body, at, by, note) VALUES (?, ?, '', ?, ?, ?)").bind(d.id, d.version, new Date().toISOString(), me, `Its file: ${String(upload.name || 'file').slice(0, 200)}`).run();
-        await env.DB.prepare("UPDATE board_doc_versions SET file_id = ? WHERE doc_id = ? AND version = ? AND (body IS NULL OR body = '')").bind(put.id, d.id, d.version).run();
-        let doc = (await listDocs(env.DB)).find((x) => x.id === d.id);
-        // Its words read from this file: where they came from
-        if (req.wordsFromNew) doc = await saveDoc(env.DB, { ...doc, body: undefined, wordsFile: put.id }, { by: me });
+        const seen = {};
+        const doc = await saveDocWithFile(env, req.doc || {}, upload, { ...docOptions(req, me), wordsFromNew: req.wordsFromNew === true, seen });
         await audit(env, me, 'updated', `Board document saved with a new file: ${doc.title}`);
-        return Response.json({ ok: true, doc });
+        return Response.json({ ok: true, doc, ...(seen.reread ? { reread: true, later: SHOWS_SOON } : {}) });
       }
       // A meeting's file only: a paper's file goes with its save (above), a signed copy with its signature, and a
       // signing record is the site's own
@@ -433,21 +428,22 @@ async function pressed(context, env) {
         // nothing is saved and it says so in words: _board.js saveMeeting, `env` for the file store. The database failing
         // changed nothing and says so in words, a 503 the page goes on trying after, never "Reload the page" with a change
         // not saved. Board QA round 13)
+        // (an invite already out follows a new day, time or place once it has settled: owed to it by the save's own write,
+        // never a step after it. ./_board-invite.js inviteStep, Board QA round 15)
         const m = await saveMeeting(env.DB, mine, { by: me, base, edit: true, env }).catch(nothingDone());
         // A practice meeting is the admins' alone: nothing for the audit log
         if (m.practice) return Response.json({ ok: true, meeting: m });
         await audit(env, me, 'updated', `Board meeting saved: ${meetingName(m)}`);
-        // An invite already out follows a new place, once it has settled (./_board-invite.js)
-        if (m.invite) await noteInviteChange(env, m);
         return Response.json({ ok: true, meeting: m });
       }
       case 'delete-meeting': {
         needId();
-        // Its invite comes off the board's calendars first (Google tells them): should Google refuse, nothing is deleted.
-        // An invite pressed at the same moment never outlives it (_board-invite.js deleteWithInvite)
-        const { meeting: m, cancelled } = await deleteWithInvite(env, id);
+        // The meeting and everything beside it in one write, its invite's cancel owed by that write and sent once after
+        // it (Google tells everyone on it): should Google refuse just now, it goes by itself, said in words (`later`). An
+        // invite pressed at the same moment never outlives it (_board-invite.js deleteWithInvite, Board QA round 15)
+        const { meeting: m, cancelled, later } = await deleteWithInvite(env, id);
         await audit(env, me, 'deleted', `Board meeting deleted: ${m ? meetingName(m) : id}${cancelled ? ', its calendar invite cancelled' : ''}`);
-        return Response.json({ ok: true, cancelled });
+        return Response.json({ ok: true, cancelled, ...(later ? { later } : {}) });
       }
       case 'keep-agenda': {
         // The draft agenda, as it is, becomes the meeting's (an emailed agenda no longer replaces it)
@@ -492,12 +488,17 @@ async function pressed(context, env) {
         return Response.json({ ok: r.sent > 0, ...sendAnswer(r, AGAIN.test, { one: true }) });
       }
       case 'save-doc': {
-        const d = await saveDoc(env.DB, body.doc || {}, docOptions(body, me));
+        // (its reads, then one write; a read after it that fails answers with the paper as written, the page told to look
+        // again. ./_board.js saveDoc, Board QA round 15)
+        const seen = {};
+        const d = await saveDoc(env.DB, body.doc || {}, { ...docOptions(body, me), seen });
         await audit(env, me, 'updated', `Board document saved: ${d.title}`);
-        return Response.json({ ok: true, doc: d });
+        return Response.json({ ok: true, doc: d, ...(seen.reread ? { reread: true, later: SHOWS_SOON } : {}) });
       }
       case 'delete-doc': {
         needId();
+        // (one write, only while nobody has signed it; a signature landing first keeps it, said by name: ./_board.js
+        // deleteDoc, Board QA round 15)
         await deleteDoc(env, id);
         await audit(env, me, 'deleted', 'Board document deleted');
         return Response.json({ ok: true });

@@ -249,11 +249,12 @@ function PracticeMeeting({ ctx }) {
 const prepOf = (m, data) => pathOf(m, data, 'ahead').filter((x) => x.id !== 'day' && x.id !== 'minutes');
 /**
  * Where a past meeting's minutes stand, as a tag: whether they're in is one fact (minutesIn), as its own page says it
- * (Board QA round 13); in only as a file kept Staff only, said as that (minutesStaffOnly, round 14)
+ * (Board QA round 13); in only as a file kept Staff only, said as that (minutesStaffOnly, round 14), approved or not
+ * (round 15, Nov 26 2026: approved, they said "Minutes approved" while the board had nothing to read)
  */
-const minutesTag = (m) => (m.minutes === 'approved' ? html`<span class="tag tag--success">Minutes approved</span>`
+const minutesTag = (m) => (minutesStaffOnly(m) ? html`<span class="tag tag--warn">Minutes staff only</span>`
+  : m.minutes === 'approved' ? html`<span class="tag tag--success">Minutes approved</span>`
   : minutesIn(m) ? html`<span class="tag tag--warn">Draft minutes</span>`
-  : minutesStaffOnly(m) ? html`<span class="tag tag--warn">Minutes staff only</span>`
   : html`<span class="tag">No minutes yet</span>`);
 const sharedTag = (m) => (m.shared ? html`<span class="tag tag--success">On the board page</span>` : html`<span class="tag">Not shared</span>`);
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -420,7 +421,7 @@ function NextCard({ m, ctx }) {
       </div>
       <button class="btn btn-primary" onClick=${() => go({ meetingId: m.id })}>${today && !held ? 'Open for the meeting' : 'Open the meeting'}</button>
     </div>
-    ${held ? html`<p class="bh-nextline">${m.minutes === 'approved' ? html`<strong>The minutes are approved.</strong>` : minutesIn(m) ? html`<strong>The minutes are in.</strong> The board votes on them at the next meeting.` : minutesStaffOnly(m) ? html`<strong>Next:</strong> share its minutes. Their file is staff only, so the board can’t read them.` : html`<strong>Next:</strong> its minutes.`}</p>` : today ? html`<p class="bh-nextline">${now ? null : html`<strong>Today.</strong> `}Open it to present the agenda and its documents on the screen.</p>` : html`
+    ${held ? html`<p class="bh-nextline">${minutesStaffOnly(m) ? html`<strong>Next:</strong> share its minutes. Their file is staff only, so the board can’t read them.` : m.minutes === 'approved' ? html`<strong>The minutes are approved.</strong>` : minutesIn(m) ? html`<strong>The minutes are in.</strong> The board votes on them at the next meeting.` : html`<strong>Next:</strong> its minutes.`}</p>` : today ? html`<p class="bh-nextline">${now ? null : html`<strong>Today.</strong> `}Open it to present the agenda and its documents on the screen.</p>` : html`
       <ol class="bh-prep" aria-label="Getting ready">${prep.map((x) => html`<li class=${`is-${x.state}`} title=${x.sub} aria-current=${x === up ? 'step' : null}><span class="bh-prep__mark" aria-hidden="true">${x.done ? CHECK : null}</span>${x.title}</li>`)}</ol>
       <p class="bh-nextline">${up ? html`<strong>Next:</strong> ${up.todo}.` : html`<strong>Ready.</strong> The board was emailed the link ${ago(m.packetSentAt)}.`}</p>`}
     ${held ? (here.boardHere ? html`<p class="bh-rsvp"><strong>Who was there:</strong> ${here.boardHere} of ${plural(here.board, 'board member')}</p>` : null)
@@ -1016,6 +1017,8 @@ function DocumentsTab({ ctx }) {
     const d = j.doc;
     setSaving(false);
     putDoc(d);
+    // (saved; the paper not read back with it: as written here, and read again. Board QA round 15)
+    if (j.reread) call().then((r) => { if (r.ok) setData(r); });
     opened.current = snap(null);
     setDraft(null);
     setRead(null);
@@ -1042,6 +1045,7 @@ function DocumentsTab({ ctx }) {
     const j = await call({ action: 'save-doc', doc: { ...d, ...patch, body: undefined }, base: d.version || 0 });
     if (!j.ok) { addToast(j.error, 'error'); if (j.deleted) call().then((r) => { if (r.ok) setData(r); }); return; }
     putDoc(j.doc);
+    if (j.reread) call().then((r) => { if (r.ok) setData(r); });
   };
   // The file to read words from: one just chosen, else the paper's own
   const source = draft && readable(draft.file) ? draft.file : draft && readable(draft.existing) ? draft.existing : null;

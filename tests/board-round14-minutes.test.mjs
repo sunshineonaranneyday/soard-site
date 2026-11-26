@@ -359,13 +359,19 @@ for (const [how, approve] of Object.entries(APPROVE_ROUTES)) {
     await same('the next meeting moved, Settings changed, the last meeting renamed');
     await heartbeats();
     await same('after the heartbeat, now and a month on');
-    // A founder's later saves of the held meeting: its room, then (Board doesn't lock them) its words
+    // A founder's later saves of the held meeting: its room, then its words
+    /* r15: approved minutes' place and words are what they state, so each save is refused in words with nothing changed
+       (Board QA round 15, decided: "Round 14's tests that saved the held meeting's room after approval now expect that
+       save refused in words with the file unchanged") */
+    const STAY = 'These minutes are approved, so they can’t change here. Mark them as draft first to change them.';
     let m = await board.getMeeting(env.DB, ms.held.id);
     let sv = await onAdmin({ action: 'save-meeting', meeting: { ...m, location: 'Example Hall, Room 2' }, base: m.updatedAt });
-    assert.equal(sv.status, 200, JSON.stringify(sv.body));
+    assert.deepEqual([sv.status, sv.body?.error], [409, STAY], JSON.stringify(sv.body));
     m = await board.getMeeting(env.DB, ms.held.id);
     sv = await onAdmin({ action: 'save-meeting', meeting: withWords(m, V2), base: m.updatedAt });
-    assert.equal(sv.status, 200, JSON.stringify(sv.body));
+    assert.deepEqual([sv.status, sv.body?.error], [409, STAY], JSON.stringify(sv.body));
+    const after = await board.getMeeting(env.DB, ms.held.id);
+    assert.deepEqual([after.location, item(after, 'i_budget').notes, after.updatedAt], [m.location, V1, m.updatedAt], 'nothing changed');
     await same('the held meeting saved again');
     await heartbeats();
     await same('the heartbeat after those saves');
@@ -400,9 +406,14 @@ test('M1: approved, then a founder’s save of the held meeting (its room) after
   const m = await board.getMeeting(env.DB, ms.held.id);
   const mine = { ...m, location: 'Example Hall, Room 2' };
   const observe = async () => ({ location: (await meetingRow(ms.held.id)).location || '', file: await fileOf(ms.held.id) });
+  /* r15: the place is what approved minutes state, so the control is refused in words with nothing changed, and so is
+     every run; none ever lands (Board QA round 15, decided 3) */
+  const STAY = 'These minutes are approved, so they can’t change here. Mark them as draft first to change them.';
   const out = await sweep('approved, saved again', saveState(), () => onAdmin({ action: 'save-meeting', meeting: mine, base: m.updatedAt }), async ({ mode, r, after }) => {
     const landed = after.location === mine.location;
-    if (!mode && !(landed && r.status === 200)) return `the control: ${JSON.stringify(after.location)} (${r.status})`;
+    if (landed) return 'the place of approved minutes changed';
+    if (!mode && !(r.status === 409 && said(r) === STAY)) return `the control: ${JSON.stringify(after.location)} (${r.status} “${said(r)}”)`;
+    if (r.status === 409 && said(r) === STAY && r.body?.ok === false) return JSON.stringify(after.file) !== JSON.stringify(approved) ? 'the approved file changed' : '';
     if (JSON.stringify(after.file) !== JSON.stringify(approved)) return `the approved file changed: ${JSON.stringify(after.file).slice(0, 200)}`;
     await notesApi.maybeBringUpMinutesFiles(env);
     if (JSON.stringify(await fileOf(ms.held.id)) !== JSON.stringify(approved)) return 'the heartbeat changed the approved file';

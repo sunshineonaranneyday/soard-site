@@ -426,14 +426,18 @@ function partsOf(path) {
   if (/^docs\.\d+\.myCopies/.test(path)) return ['copies', 'docs'];
   if (/^docs\.\d+\.signedBody/.test(path)) return ['signedBodies', 'docs'];
   if (/^me\.mark/.test(path)) return ['mark'];
-  if (/^numbers\.(cash|mercury|finance|operating|costs|books)/.test(path)) return ['money'];
+  /* r15: what makeovers cost (JobTread's figures, the operating balance they rest on) is its own part, never all the money */
+  if (/^numbers\.(operating|costs)/.test(path)) return ['costs'];
+  if (/^numbers\.(cash|mercury|finance|books)/.test(path)) return ['money'];
   if (/^numbers\.(projects|reveals|pastReveals)/.test(path)) return ['projects'];
   if (/^numbers\.(impact|rooms|photos)/.test(path)) return ['kids'];
   if (/^numbers\.(events|recentEvents)/.test(path)) return ['events'];
-  if (/^numbers\.(meetings|thisYear)/.test(path)) return ['meetings'];
+  /* r15: today's numbers' list of the meetings (an item's list, the screen's year) is its own part, never the page's meetings */
+  if (/^numbers\.(meetings|thisYear)/.test(path)) return ['meetingDates'];
   return ({
     meetings: ['meetings'], next: ['meetings'], actions: ['meetings'], nextPending: ['meetings'], previews: ['meetings'], docs: ['docs'], cashHistory: ['history', 'money'],
-    filings: ['sources'], snapshot: ['sources'], gifts: ['gifts', 'givers'], lineNotes: ['lineNotes'], myAsks: ['myAsks'], presenting: ['presenting'], review: ['review'], reviewShut: ['review'],
+    /* r15: the year at a glance is its own part, never the tax returns and audits beside it */
+    filings: ['sources'], snapshot: ['glance'], gifts: ['gifts', 'givers'], lineNotes: ['lineNotes'], myAsks: ['myAsks'], presenting: ['presenting'], review: ['review'], reviewShut: ['review'],
     corrections: ['corrections'], minutesSigned: ['minutesSigned'], org: ['facts'], notesWaiting: ['notesWaiting'], minutesTypedBy: ['notesWaiting'], admins: ['settings'], contact: ['settings'], quorum: ['settings'],
     practice: ['practice'], emailAll: ['emailAll'],
   })[top] || [];

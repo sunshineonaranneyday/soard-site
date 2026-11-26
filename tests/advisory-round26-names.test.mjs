@@ -112,7 +112,8 @@ test('finding 2: an organization or an official country name is read whole from 
   assert.deepEqual(bad, []);
   // (a Spanish name with "de" stays a name; what the code doesn't know stops the organization and the name keeps it, as before)
   for (const [n, address] of [['Juan de la Cruz', 'juan-de-la-cruz'], ['María de los Ángeles', 'maria-de-los-angeles'], ['Maria de los Angeles Garcia', 'maria-de-los-angeles-garcia'],
-    ['Jordan Ames Grace Church of God', 'jordan-ames-grace'], ['Jordan Lee Qorvath Church of God', 'jordan-lee-qorvath'], ['Jordan Ames City of Atlanta', 'jordan-ames'],
+    /* r27: finding 2, the lead's rule: a word that starts an organisation belongs to it even when it's a given name too, so "Grace Church of God" is cut from its first word */
+    ['Jordan Ames Grace Church of God', 'jordan-ames'], ['Jordan Lee Qorvath Church of God', 'jordan-lee-qorvath'], ['Jordan Ames City of Atlanta', 'jordan-ames'],
     ['Jordan Ames Church of God', 'jordan-ames'], ['Jordan Ames of Atlanta', 'jordan-ames'], ['Jordan Ames for Congress', 'jordan-ames']]) {
     assert.equal(addressOf(n), address, n);
   }
@@ -262,7 +263,9 @@ test('finding 3: by rule, "St." for every "Saint" and "Sint" place, hyphenated a
   const L = F.placeLists();
   assert.ok(Array.isArray(L.round26) && L.round26.length >= 400, 'the round 26 words that count anywhere');
   assert.deepEqual(L.round26.filter((w) => common.has(w) || G.onTheLists(w)), [], 'a round 26 word that\'s a given or family name on the lists');
-  assert.deepEqual((L.orgWords || []).filter((w) => common.has(w) || G.onTheLists(w)), [], 'a word before an organization\'s head that\'s a name');
+  /* r27: finding 2, the lead's rule: the given names that are words organisations are named by ("Mercy", "Grace", "Hope") are read back as the organisation's, a test of their own in round 27's file; any other is still never a name */
+  const orgNames = new Set(L.orgNames || []);
+  assert.deepEqual((L.orgWords || []).filter((w) => !orgNames.has(w)).filter((w) => common.has(w) || G.onTheLists(w)), [], 'a word before an organization\'s head that\'s a name');
 });
 
 test('finding 3: the US military whole: "Ret.", "(Ret.)" and "Retired" after any branch or its letters; the Naval Reserve; the Navy SEALs, the Merchant Marine, the Public Health Service and the NOAA Corps; every branch\'s and Reserve\'s letters; every state\'s Guard and its short forms; "Bodega"', () => {

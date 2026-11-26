@@ -76,8 +76,9 @@ export const SIG_EVIDENCE = {
 export const SIG_COLS = ['doc_id', 'slug', 'year', 'version', 'name', 'at', 'how', 'file_id', 'drive_id', 'drive_name', 'added_by', ...Object.keys(SIG_EVIDENCE)];
 
 /** A signature row written whole into `table` (board_signatures or board_signatures_earlier) */
-export const putSignature = (DB, table, row, verb = 'INSERT OR REPLACE') => DB.prepare(`${verb} INTO ${table} (${SIG_COLS.join(', ')}) VALUES (${SIG_COLS.map(() => '?').join(', ')})`)
-  .bind(...SIG_COLS.map((c) => (row[c] === undefined ? null : row[c])));
+// (`only`: a condition it's written under, { sql, bind }: a signature goes only while its paper is there. Board QA round 15)
+export const putSignature = (DB, table, row, verb = 'INSERT OR REPLACE', only = null) => DB.prepare(`${verb} INTO ${table} (${SIG_COLS.join(', ')}) ${only ? `SELECT ${SIG_COLS.map(() => '?').join(', ')} WHERE ${only.sql}` : `VALUES (${SIG_COLS.map(() => '?').join(', ')})`}`)
+  .bind(...SIG_COLS.map((c) => (row[c] === undefined ? null : row[c])), ...(only ? only.bind : []));
 
 /** The columns a table is missing, added once (PRAGMA, not an ALTER tried on every start) */
 export async function addColumns(DB, table, cols) {

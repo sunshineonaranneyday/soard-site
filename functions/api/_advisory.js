@@ -30,7 +30,8 @@ import { sameMember } from './_member-places.js';
 import { isEmail } from './_broadcast-notify.js';
 import { todayEastern } from './_reveals.js';
 import { photoUrl } from '../../public/admin/team-shared.js';
-import { rowsPlace, moveJsonRows, tallyJsonRows } from './_member-places.js';
+import { rowsPlace, moveJsonRows, tallyJsonRows, noTable } from './_member-places.js';
+import { auditStatement } from './_audit.js';
 import { writeAsMember, stillTheirs, movingOff, personOf, GONE_STAFF, MOVING_STAFF } from './_member-write.js';
 import { stateReady } from './_board-roles.js';
 
@@ -85,11 +86,14 @@ export const MEETINGS_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_meetings (id 
  * ask put out, a status changed), before it goes; it goes under its own idempotency key (`idem`), and is marked had with
  * its send; whatever is still owed the heartbeat sends, once. key: the one email ('ask:<ask id>:<address>',
  * 'update:intro:<id>', 'update:hosted:<id>', ...); email: the address it goes to as the write read it; msg: what it says,
- * as JSON, when that's settled by the write (an update's words); tried_at: when it first went to Resend; sent_at: had it;
- * outcome: 'sent', 'unsure' (it went to Resend a day ago and was never marked: asked again it could make a second), or
- * why it never went ('skipped:<why>', 'refused')
+ * as JSON, when that's settled by the write (an update's words); tried_at: when it first went to Resend under its key
+ * (`idem`); lost_at: when a try under that key may first have reached Resend with no answer known (its answer lost, or
+ * the request ended mid-try: set as each try starts, taken off when Resend's 5xx or 429 says that try never reached it:
+ * Advisory Board QA round 27); tries: Resend's 5xx and 429 answers, for when it's next tried; sent_at: had it; outcome:
+ * 'sent', 'unsure' (it may have gone, and Resend no longer keeps its key: never sent again by itself, staff see it and can
+ * send it again with a new key), or why it never went ('skipped:<why>', 'refused': Resend's own no, or email not set up)
  */
-export const OUTBOX_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_outbox (key TEXT PRIMARY KEY, kind TEXT NOT NULL, ref TEXT, email TEXT NOT NULL, msg TEXT, idem TEXT NOT NULL, owed_at TEXT NOT NULL, tried_at TEXT, sent_at TEXT, tries INTEGER NOT NULL DEFAULT 0, outcome TEXT)';
+export const OUTBOX_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_outbox (key TEXT PRIMARY KEY, kind TEXT NOT NULL, ref TEXT, email TEXT NOT NULL, msg TEXT, idem TEXT NOT NULL, owed_at TEXT NOT NULL, tried_at TEXT, sent_at TEXT, tries INTEGER NOT NULL DEFAULT 0, outcome TEXT, lost_at TEXT)';
 /**
  * An owed email's row, as a statement for the write that makes it owed: `row` { key, kind, ref, email, msg, idem },
  * written only when `guard` (SQL, with its `binds`) holds as that write runs (the change it belongs to landed). replace: a
@@ -98,12 +102,15 @@ export const OUTBOX_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_outbox (key TEX
  */
 export function oweStatement(DB, row, { now = Date.now(), guard = '1', binds = [], replace = false } = {}) {
   const sql = `INSERT INTO advisory_outbox (key, kind, ref, email, msg, idem, owed_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${guard}`
-    + (replace ? ' ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, ref = excluded.ref, email = excluded.email, msg = excluded.msg, idem = excluded.idem, owed_at = excluded.owed_at, tried_at = NULL, sent_at = NULL, tries = 0, outcome = NULL WHERE advisory_outbox.idem != excluded.idem'
+    + (replace ? ' ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, ref = excluded.ref, email = excluded.email, msg = excluded.msg, idem = excluded.idem, owed_at = excluded.owed_at, tried_at = NULL, sent_at = NULL, tries = 0, outcome = NULL, lost_at = NULL WHERE advisory_outbox.idem != excluded.idem'
       : ' ON CONFLICT(key) DO NOTHING');
   return DB.prepare(sql).bind(row.key, row.kind, row.ref ?? null, row.email, row.msg == null ? null : JSON.stringify(row.msg), row.idem, nowIso(now), ...binds);
 }
-/** An owed email that hasn't gone, taken back in the same write as the change that makes it not owed any more */
-export const unoweStatement = (DB, key, { guard = '1', binds = [] } = {}) => DB.prepare(`DELETE FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND tried_at IS NULL AND ${guard}`).bind(key, ...binds);
+/**
+ * An owed email that hasn't gone, taken back in the same write as the change that makes it not owed any more: only one
+ * no try of which may have reached Resend (lost_at: one going now, or one whose answer was lost, could have gone)
+ */
+export const unoweStatement = (DB, key, { guard = '1', binds = [] } = {}) => DB.prepare(`DELETE FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND lost_at IS NULL AND ${guard}`).bind(key, ...binds);
 
 const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS advisory_asks (id TEXT PRIMARY KEY, data TEXT NOT NULL, sent_at TEXT, closed_at TEXT, at TEXT NOT NULL, by TEXT)',
@@ -129,6 +136,11 @@ const ready = new WeakSet();
 export async function ensureAdvisory(DB) {
   if (ready.has(DB)) return;
   for (const sql of SCHEMA) await DB.prepare(sql).run();
+  // (an outbox made before round 27 kept no lost_at: added. Any other failure is said, as every statement's here)
+  try { await DB.prepare('SELECT lost_at FROM advisory_outbox LIMIT 1').run(); } catch (e) {
+    if (!/no such column/i.test(e?.message || '')) throw e;
+    await DB.prepare('ALTER TABLE advisory_outbox ADD COLUMN lost_at TEXT').run();
+  }
   ready.add(DB);
 }
 
@@ -937,6 +949,17 @@ export const ADVISORY_PLACES = [
   rowsPlace({ owner: 'advisory', table: 'advisory_credits', words: ['gift credited to their Advisory Board page', 'gifts credited to their Advisory Board page'] }),
   rowsPlace({ owner: 'advisory', table: 'advisory_links', words: ['link to answer a monthly ask by email', 'links to answer monthly asks by email'] }),
   {
+    // The Advisory Board's emails, owed and had (advisory_outbox), kept under their address: the notice to whoever runs
+    // the group of their answer to an ask or of their renewal. A record of the person like every other (Advisory Board QA
+    // round 27: renamed on People between two answers, the "can help" notice stayed at the old address, so the same yes
+    // again sent a second and a no sent no "changed their answer"): counted, held and moved with them, so the notice's
+    // key follows them. (Their other emails are kept by the email they go to, never their address: the ask's names them
+    // only to greet them, read again by that email as it goes)
+    kind: 'advisory_outbox', owner: 'advisory',
+    tally: async (DB, slug) => [{ kind: 'advisory_outbox', n: await tallyOutbox(DB, slug), words: OUTBOX_WORDS }],
+    async move(DB, from, to, ctx) { return [{ kind: 'advisory_outbox', words: OUTBOX_WORDS, ...(await moveOutbox(DB, from, to, ctx)) }]; },
+  },
+  {
     // Who's on a meeting's list, who answered, who leads an item: wherever its record names them, read as data
     kind: 'advisory_meetings', owner: 'advisory',
     tally: async (DB, slug) => [{ kind: 'advisory_meetings', n: await tallyJsonRows(DB, 'advisory_meetings', slug), words: MEETING_WORDS }],
@@ -956,6 +979,63 @@ export const ADVISORY_PLACES = [
     move: (DB, from, to) => moveSettings(DB, from, to),
   },
 ];
+
+const OUTBOX_WORDS = ['Advisory Board email about them', 'Advisory Board emails about them'];
+// (an outbox row keyed by their address `?1`: the notice of their answer to an ask, 'notice:answer:<ask>:<address>', or of
+// their renewal, 'notice:renew:<address>:<ends>')
+const KEYED_BY = `kind = 'notice' AND ((key = 'notice:answer:' || ref AND substr(ref, -length(?1) - 1) = ':' || ?1)
+  OR (key = 'notice:renew:' || ref AND substr(ref, 1, length(?1) + 1) = ?1 || ':'))`;
+/** How many of the Advisory Board's emails, owed or had, are kept under `slug` */
+async function tallyOutbox(DB, slug) {
+  const r = await DB.prepare(`SELECT COUNT(*) AS n FROM advisory_outbox WHERE ${KEYED_BY}`).bind(slug).first().catch(noTable);
+  return Number(r?.n) || 0;
+}
+/**
+ * Their emails moved from → to: a notice keyed by their address goes to its key at the new one, keeping its key at
+ * Resend (one tried is asked again under the same key, which never sends a second), so their next answer is read
+ * against it (the same yes again sends nothing, a no after a yes that went sends one "changed their answer"). One there
+ * already (a rename back, a swap) is a clash: the newer kept, the older in the audit log, written in the same write that
+ * removes it. A row made at the new key since it was read stops the batch, and it's read again. → { moved, folded }
+ */
+async function moveOutbox(DB, from, to, { by = '' } = {}) {
+  let moved = 0;
+  let folded = 0;
+  for (let attempt = 0; ; attempt++) {
+    const rows = (await DB.prepare(`SELECT * FROM advisory_outbox WHERE ${KEYED_BY}`).bind(from).all()).results || [];
+    if (!rows.length) break;
+    if (attempt >= 6) throw new Error('the Advisory Board’s emails about them kept changing, so they weren’t moved');
+    const stmts = [];
+    const moves = [];
+    const drops = [];
+    for (const row of rows) {
+      const answer = row.key.startsWith('notice:answer:');
+      const ref = answer ? `${row.ref.slice(0, row.ref.length - from.length)}${to}` : `${to}${row.ref.slice(from.length)}`;
+      const key = `${answer ? 'notice:answer:' : 'notice:renew:'}${ref}`;
+      const there = await DB.prepare('SELECT * FROM advisory_outbox WHERE key = ?').bind(key).first();
+      const shift = () => { moves.push(stmts.length); stmts.push(DB.prepare('UPDATE advisory_outbox SET key = ?, ref = ? WHERE key = ?').bind(key, ref, row.key)); };
+      if (!there) { shift(); continue; }
+      const fromNewer = String(row.owed_at || '') > String(there.owed_at || '');
+      const gone = fromNewer ? there : row;
+      stmts.push(auditStatement(DB, {
+        userEmail: by || 'the site', action: 'updated', entityType: 'team', entitySlug: to,
+        entityName: `The older of two: ${OUTBOX_WORDS[0]}, folded in when “${from}” moved to “${to}”`,
+        changes: [{ field: 'advisory_outbox', from: JSON.stringify(gone), to: `the newer one kept at “${to}”` }],
+      }));
+      drops.push(stmts.length);
+      stmts.push(DB.prepare('DELETE FROM advisory_outbox WHERE key = ?').bind(gone.key));
+      if (fromNewer) shift();
+    }
+    try {
+      const res = await DB.batch(stmts);
+      moved += moves.filter((i) => Number(res[i]?.meta?.changes) > 0).length;
+      folded += drops.filter((i) => Number(res[i]?.meta?.changes) > 0).length;
+    } catch (e) {
+      // (a row made at the new address since it was read: read again, a few times, then said as the failure it is)
+      if (attempt >= 4 || !/UNIQUE constraint failed/i.test(String(e?.message || e))) throw e;
+    }
+  }
+  return { moved, folded };
+}
 
 /**
  * The settings' addresses moved, written only over the settings as read (a save made meanwhile is never undone, as

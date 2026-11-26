@@ -36,13 +36,14 @@ import {
   RESULTS, FILE_KINDS, LIVE, minutesIn, cleanMeeting, meetingName, longDate, shortDate, timeRange, plural, uid, clock,
   todayEastern, attendanceCounts, quorumFor, majority, answerOf, repliesOf, fileTitle, mergeMeeting, agendaIsDraft,
   isLive, agendaItems, isFilled, hasSince, reportsOn, showsOf, slidesOf, booksDraw, isStatement, LIVE_TITLES, SHOW_KINDS, tallyText, cleanLive, presentersOf, namesText, itemFiles, guessItem, deckOf, stopIndex, liveOfStop, pagesText, MORE,
-  sectionPlan, sectionOf, sectionClock, clockText, facesOf, itemDocs, docTitle, formatOf, docsOf, looseFiles, NOTHING_NEW, isNothingNew, copyOfItem, minutesToRead, packetDocs, minutesFileOf, ownMinutesFile, minutesStaffOnly, staffOnlyWords,
+  sectionPlan, sectionOf, sectionClock, clockText, facesOf, itemDocs, docTitle, formatOf, docsOf, looseFiles, NOTHING_NEW, isNothingNew, copyOfItem, minutesToRead, packetDocs, minutesFileOf, ownMinutesFile, minutesStaffOnly, staffOnlyWords, approvedNotShared,
   signInKnown, minutesTarget, meetingOver, meetingHeld, inviteIsRecord, shareWaits, cleanTemplate, followAddresses,
   noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay, approvedFileOf, FILE_STAYS, askedOf, heldNoSend,
   UNSURE_SAVED, sendUntilAnswered, uploadId, uploadKey,
+  minutesKept, MINUTES_STAY,
 } from './board-shared.js';
 import { openScreen, mirrorUrl, useScreen, usePages, stepKey, useCover } from './board-present.js';
-import { printMinutesTemplate, downloadMinutesDocx } from './board-minutes-template.js';
+import { printMinutesTemplate, downloadMinutesDocx, withStated, typedOver } from './board-minutes-template.js';
 import { ReportEditor, ReportCoach, Report } from './board-report.js';
 import { partFor } from './board-coach.js';
 import { mdWords } from './board-md.js';
@@ -451,6 +452,8 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
   // Who's on the board on the copy a save sent, and the copy of this meeting the page last put in Board's data itself
   const sentBoard = useRef('');
   const ours = useRef(meeting);
+  // What was typed into approved minutes and couldn't be saved (approved in another tab meanwhile): kept here to copy
+  const [typed, setTyped] = useState([]);
 
   // ── Saving by itself (useAutosave, as the agenda template does) ──
   // Leaving for another page in Board or the admin: a change made a moment ago saves on the way out, so nothing asks.
@@ -526,6 +529,17 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
     // Refused for good, by name (functions/api/_board.js holdShare, saveMeeting): those fields put back as the site has
     // them now (the refusal carries the meeting as it is), never from this tab's own copy, which may be older
     refused: (j) => {
+      // (what approved minutes state changed here: refused whole by the site, in its words, nothing changed. That part is
+      // put back as the site has it, what was typed into it kept beside the agenda to copy (typedOver), and the rest goes.
+      // A tab whose minutes were approved elsewhere meanwhile, above all. functions/api/_board.js keepStated, Board QA
+      // round 15)
+      if (j.status === 409 && Array.isArray(j.refused) && j.refused.includes('stated')) {
+        const sv = saved.current;
+        const over = typedOver(mRef.current, sv);
+        if (over.length) setTyped((t) => [...t.filter((x) => !over.some((y) => y.key === x.key)), ...over]);
+        setM((x) => withStated(x, sv));
+        return 'Not saved';
+      }
       // (approved minutes' own file put on an item: it comes off the items here, as the site has it on none, and the rest
       // goes. functions/api/_board.js saveMeeting, Board QA round 11)
       if (j.status === 409 && Array.isArray(j.refused) && j.refused.includes('docs') && j.fileId) {
@@ -683,6 +697,8 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
     markDirty(false);
     ctx.setData((d) => ({ ...d, meetings: d.meetings.filter((x) => x.id !== m.id) }));
     addToast(`Deleted the ${meetingName(m)}${m.date ? ` (${shortDate(m.date)})` : ''}`, 'info');
+    // (its invite's cancel still to go, by itself: said. Board QA round 15)
+    if (j.later) addToast(j.later, 'info');
     // (back on the list, the focus goes to its heading: ./board-admin.js BoardArea)
     go({});
   };
@@ -706,7 +722,12 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
   const [focusId, setFocusId] = useState('');
   // The presentation in its own window: shared with the board or not (only Board's admins can open one that isn't)
   const present = () => openScreen(m.id);
-  const p = { m, set, setNow, ctx, act, take, save, numbers, keepSaved, saved, practice, onFocusItem: setFocusId, openWhere: () => setEditWhere(true), closeWhere: () => { setEditWhere(false); requestAnimationFrame(() => document.getElementById('bm-where-toggle')?.focus()); } };
+  // Approved minutes in Board: what they state shows read-only, with the way to take the approval back (MinutesStay)
+  const stay = {
+    locked: !practice && minutesKept(m), typed, forget: () => setTyped([]),
+    unlock: async () => { if (await pressSave({ set, save, saved, addToast }, ...approvalPress(false))) addToast('Back to draft minutes', 'info'); },
+  };
+  const p = { m, set, setNow, ctx, act, take, save, numbers, keepSaved, saved, practice, stay, onFocusItem: setFocusId, openWhere: () => setEditWhere(true), closeWhere: () => { setEditWhere(false); requestAnimationFrame(() => document.getElementById('bm-where-toggle')?.focus()); } };
 
   const days = daysFrom(m.date);
   // Where it is in its life: ahead (getting it to the board), its day (present it), held (the minutes): a meeting is
@@ -913,8 +934,8 @@ export function pathOf(m, data, phase) {
     { id: 'day', card: 'bm-work', title: phase === 'today' ? 'Today' : held ? 'Held' : 'The meeting', done: held, sub: [m.date ? shortDate(m.date) : 'No date yet', m.start ? clock(m.start) : ''].filter(Boolean).join(' · ') },
     // (whether they're in is one fact, minutesIn, as After the meeting's card and Home go by: a file of them filed by its
     // name is the minutes in, never "Drop them in" (Board QA round 13); a file the board can't read, kept Staff only, is
-    // said as that, never "In": minutesStaffOnly, round 14)
-    { id: 'minutes', card: phase === 'ahead' ? 'bm-work' : 'bm-minutes', title: 'Minutes', done: m.minutes === 'approved', sub: m.minutes === 'approved' ? `Approved${m.approvedOn ? ` ${shortDate(m.approvedOn)}` : ''}` : minutesStaffOnly(m) ? 'Staff only, not shared' : !minutesIn(m) ? (held ? 'Drop them in' : 'After the meeting') : m.minutesFrom?.typed ? `${typedWords(m, data)}, to approve next time` : m.minutesFrom ? 'Read in, to approve next time' : 'In, to approve next time' },
+    // said as that, never "In": minutesStaffOnly, round 14; approved ones too, which the board can't read yet: round 15)
+    { id: 'minutes', card: phase === 'ahead' ? 'bm-work' : 'bm-minutes', title: 'Minutes', done: m.minutes === 'approved', sub: m.minutes === 'approved' ? `Approved${m.approvedOn ? ` ${shortDate(m.approvedOn)}` : ''}${approvedNotShared(m) ? ', staff only' : ''}` : minutesStaffOnly(m) ? 'Staff only, not shared' : !minutesIn(m) ? (held ? 'Drop them in' : 'After the meeting') : m.minutesFrom?.typed ? `${typedWords(m, data)}, to approve next time` : m.minutesFrom ? 'Read in, to approve next time' : 'In, to approve next time' },
   ];
   // The next step: the first one not done (before the day, the agenda's reports count only once the rest is out)
   const order = (held ? ['minutes'] : phase === 'today' ? ['invite', 'approved', 'shared', 'emailed', 'day'] : ['invite', 'approved', 'shared', 'emailed', 'agenda'])
@@ -925,7 +946,7 @@ export function pathOf(m, data, phase) {
 
 // ─── When and where ─────────────────────────────────────────────────
 
-function WhenWhere({ m, set, closeWhere }) {
+function WhenWhere({ m, set, closeWhere, stay = null }) {
   // Opened: the focus goes into it; Escape closes it
   const head = useRef(null);
   useEffect(() => { head.current?.focus(); }, []);
@@ -934,18 +955,24 @@ function WhenWhere({ m, set, closeWhere }) {
   // rule, ./board-shared.js inviteIsRecord, on the meeting as typed: what the site has once it's saved)
   const record = inviteIsRecord(m);
   const field = (id, label, input) => html`<div class="form-group"><label class="form-label" for=${id}>${label}</label>${input}</div>`;
+  // Approved minutes state the meeting's day, time, place and name: shown as they are, never a box to type in, until the
+  // approval is taken back (MinutesStay). Board QA round 15
+  const locked = !!stay?.locked;
+  const fixed = (id, label, text) => html`<div class="form-group" id=${id}><span class="form-label">${label}</span><p class="bm-fixed">${text || html`<span class="bd-muted">None</span>`}</p></div>`;
   return html`<div class="card" id="bm-where" onKeyDown=${(e) => { if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); closeWhere(); } }}>
     <div class="bd-card-head bm-where__head"><div><h3 tabindex="-1" ref=${head}>When and where</h3>${m.invite ? html`<p>${record ? 'This meeting has been held, so its calendar invite stays as it was: a change here doesn’t go on it, and nobody is emailed.' : 'A new day, time or place goes on the invite a couple of minutes after you stop typing, and Google emails the guests once.'}</p>` : null}</div>
       <button type="button" class="btn btn-ghost btn-sm" onClick=${closeWhere}>Done</button></div>
+    ${locked ? html`<${MinutesStay} stay=${stay} />` : null}
     <div class="bd-grid3">
-      ${field('bd-date', 'Date', html`<input id="bd-date" class="form-input" type="date" value=${m.date} onInput=${(e) => set({ date: e.target.value })} />`)}
-      ${field('bd-start', 'Starts', html`<input id="bd-start" class="form-input" type="time" value=${m.start} onInput=${(e) => set({ start: e.target.value })} />`)}
-      ${field('bd-end', 'Ends', html`<input id="bd-end" class="form-input" type="time" value=${m.end} onInput=${(e) => set({ end: e.target.value })} />`)}
-      ${field('bd-loc', 'Place', html`<input id="bd-loc" class="form-input" value=${m.location} placeholder="Whose office" onInput=${(e) => set({ location: e.target.value })} />`)}
-      ${field('bd-addr', 'Address', html`<input id="bd-addr" class="form-input" value=${m.address} placeholder="Street, city" onInput=${(e) => set({ address: e.target.value })} />`)}
+      ${locked ? fixed('bd-date', 'Date', longDate(m.date)) : field('bd-date', 'Date', html`<input id="bd-date" class="form-input" type="date" value=${m.date} onInput=${(e) => set({ date: e.target.value })} />`)}
+      ${locked ? fixed('bd-start', 'Starts', clock(m.start)) : field('bd-start', 'Starts', html`<input id="bd-start" class="form-input" type="time" value=${m.start} onInput=${(e) => set({ start: e.target.value })} />`)}
+      ${locked ? fixed('bd-end', 'Ends', clock(m.end)) : field('bd-end', 'Ends', html`<input id="bd-end" class="form-input" type="time" value=${m.end} onInput=${(e) => set({ end: e.target.value })} />`)}
+      ${locked ? fixed('bd-loc', 'Place', m.location) : field('bd-loc', 'Place', html`<input id="bd-loc" class="form-input" value=${m.location} placeholder="Whose office" onInput=${(e) => set({ location: e.target.value })} />`)}
+      ${locked ? fixed('bd-addr', 'Address', m.address) : field('bd-addr', 'Address', html`<input id="bd-addr" class="form-input" value=${m.address} placeholder="Street, city" onInput=${(e) => set({ address: e.target.value })} />`)}
       <div class="form-group"><span class="form-label">Video call</span><p class="bm-fixed">${meet ? html`<a class="link" href=${meet} target="_blank" rel="noopener">Google Meet</a>` : html`<span>Google Meet, added with the invite</span>`}</p></div>
-      <div class="form-group span-3"><label class="form-label" for="bd-title">Name</label><input id="bd-title" class="form-input" value=${m.title} placeholder=${meetingName({ ...m, title: '' })} aria-describedby="bd-title-hint" onInput=${(e) => set({ title: e.target.value })} />
-        <p class="form-hint bm-hint" id="bd-title-hint">${m.title ? 'Empty it to go back to the quarter’s name.' : `Left empty, it’s the “${meetingName({ ...m, title: '' })}”.`}</p></div>
+      ${locked ? html`<div class="form-group span-3" id="bd-title"><span class="form-label">Name</span><p class="bm-fixed">${meetingName(m)}</p></div>`
+        : html`<div class="form-group span-3"><label class="form-label" for="bd-title">Name</label><input id="bd-title" class="form-input" value=${m.title} placeholder=${meetingName({ ...m, title: '' })} aria-describedby="bd-title-hint" onInput=${(e) => set({ title: e.target.value })} />
+        <p class="form-hint bm-hint" id="bd-title-hint">${m.title ? 'Empty it to go back to the quarter’s name.' : `Left empty, it’s the “${meetingName({ ...m, title: '' })}”.`}</p></div>`}
       <div class="form-group span-3"><label class="form-label" for="bd-invite-note">Notes for the invite</label><${FitBox} id="bd-invite-note" maxlength="1000" value=${m.inviteNote} placeholder="Parking, which door to use, a gate code" aria-describedby="bd-invite-note-hint" onInput=${(e) => set({ inviteNote: e.target.value })} />
         <p class="form-hint bm-hint" id="bd-invite-note-hint">${record ? 'On the board page and the meeting emails. The calendar invite stays as it was, since the meeting has been held.' : 'On the calendar invite, the board page and the meeting emails. A change updates the invite without emailing anyone.'}</p></div>
     </div>
@@ -1016,8 +1043,15 @@ const dragKind = (e) => { const t = [...(e.dataTransfer?.types || [])]; return t
  * parts move by dragging their grip (or ⋯ → Move, or Alt ↑ ↓ in an item's name), and slide to their new places.
  * A file dropped on an item is uploaded and goes with it.
  */
-function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () => {}, template = false }) {
+function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () => {}, template = false, stay = null }) {
   const { data, addToast } = ctx;
+  // Approved minutes in Board (board-shared.js minutesKept): what their Word file prints from the agenda is what they
+  // state (./board-minutes-template.js minutesStated): each part and item printed, in order, its name, time and who
+  // presents it, the words under it and the vote it asks for. All of it shows as it is, never a box to type in, and nothing
+  // here adds, moves, copies or takes out a part or item that prints, until the approval is taken back (MinutesStay). What
+  // the file never prints still changes as ever: a report, a document, Board only, a private note. Board QA round 15
+  const locked = !template && !!stay?.locked;
+  const printed = (s) => !!(s.title || s.notes || s.items.some(isFilled));
   const setSection = (si, patch) => set((x) => ({ sections: x.sections.map((s, i) => (i === si ? { ...s, ...patch } : s)) }));
   const setItem = (si, ii, patch) => set((x) => ({ sections: x.sections.map((s, i) => (i === si ? { ...s, items: s.items.map((it, j) => (j === ii ? { ...it, ...patch } : it)) } : s)) }));
   const others = youAnd(data.settings.admins, data.me);
@@ -1187,39 +1221,43 @@ function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () =>
       setItem(si, ii, patch);
       refocus(it.id, '.agx-item__title');
     };
-    return html`<${Menu} label=${`More for ${named}`} items=${[
-      !it.presenter && !it.who?.length && !it.showWho && { icon: 'person', label: 'Add who presents', run: () => setItem(si, ii, { showWho: true }) },
+    // (approved minutes: a row that doesn't print stays one; one that prints keeps all it prints. `fixed`)
+    const row = locked && !isFilled(it);
+    const fixed = locked && isFilled(it);
+    return html`<${Menu} label=${`More for ${named}`} items=${row ? [deleteItem(s, si, it, ii, named)] : [
+      !locked && !it.presenter && !it.who?.length && !it.showWho && { icon: 'person', label: 'Add who presents', run: () => setItem(si, ii, { showWho: true }) },
       !template && { icon: 'doc', label: 'Add a document', run: () => setItem(si, ii, { showDocs: true }) },
       !template && !it.report && !writing.has(it.id) && { icon: 'report', label: 'Write the report', run: () => write(it.id, true) },
       // What the presenter asks the board to vote on: one line, on the board page, the screen, paper and the minutes template
-      !template && !it.motion && !it.showMotion && { icon: 'report', label: 'Ask the board to vote', run: () => setItem(si, ii, { showMotion: true }) },
+      !template && !locked && !it.motion && !it.showMotion && { icon: 'report', label: 'Ask the board to vote', run: () => setItem(si, ii, { showMotion: true }) },
       // The live lists are on the item itself (Shows); here only the way in for an item that shows none yet
-      !template && it.live !== 'minutes' && !showsOf(it).length && !it.showShows && { icon: 'live', label: 'Show live numbers…', run: () => setItem(si, ii, { showShows: true }) },
+      !template && !locked && it.live !== 'minutes' && !showsOf(it).length && !it.showShows && { icon: 'live', label: 'Show live numbers…', run: () => setItem(si, ii, { showShows: true }) },
       { divider: true },
       !template && { icon: 'lock', label: 'Board only', hint: 'Its name is never emailed', checked: !!it.confidential, run: () => setItem(si, ii, { confidential: !it.confidential }) },
       // (into the note at once, as "Ask the board to vote" goes into its box: the focus left on ⋯ would open it again)
       !template && !(it.staffNote || it.showStaff) && { icon: 'private', label: 'Private note', hint: `Only ${others}`, run: () => { setItem(si, ii, { showStaff: true }); refocus(it.id, '.bd-notes.is-private'); } },
       !template && { divider: true },
-      { pair: [
+      !locked && { pair: [
         { icon: 'up', label: 'Move up', disabled: first, title: 'Move up (Alt ↑ in its name does it too)', run: () => { keepClear(ii > 0 ? withMotion(() => setSection(si, { items: move(s.items, ii, -1) })) : moveItem(it.id, m.sections[si - 1].id, ''), `[data-item="${it.id}"]`); refocus(it.id, '.bd-menu > summary'); } },
         { icon: 'down', label: 'Move down', disabled: last, title: 'Move down (Alt ↓ in its name does it too)', run: () => { keepClear(ii < s.items.length - 1 ? withMotion(() => setSection(si, { items: move(s.items, ii, 1) })) : moveItem(it.id, m.sections[si + 1].id, m.sections[si + 1].items[0]?.id || ''), `[data-item="${it.id}"]`); refocus(it.id, '.bd-menu > summary'); } },
       ] },
       // (the minutes come up for approval once)
-      it.live !== 'minutes' && { icon: 'copy', label: 'Duplicate', run: () => duplicate(s, si, it) },
+      it.live !== 'minutes' && !locked && { icon: 'copy', label: 'Duplicate', run: () => duplicate(s, si, it) },
       { divider: true },
-      (it.notes || it.showNotes) && { icon: 'remove', label: 'Remove the background', run: () => clear('the background', it.notes, { notes: '', showNotes: false }) },
-      (it.motion || it.showMotion) && { icon: 'remove', label: 'Remove the motion', run: () => clear('the motion', it.motion, { motion: '', showMotion: false }) },
+      !locked && (it.notes || it.showNotes) && { icon: 'remove', label: 'Remove the background', run: () => clear('the background', it.notes, { notes: '', showNotes: false }) },
+      !locked && (it.motion || it.showMotion) && { icon: 'remove', label: 'Remove the motion', run: () => clear('the motion', it.motion, { motion: '', showMotion: false }) },
       (it.staffNote || it.showStaff) && { icon: 'remove', label: 'Remove your private note', run: () => clear('your private note', it.staffNote, { staffNote: '', showStaff: false }) },
-      it.report && { icon: 'trash', label: 'Delete the report', danger: true, run: async () => { if (await ask({ title: `Delete the report on “${named}”?`, text: `${it.reportBy ? `${it.reportBy} wrote it. ` : ''}The board stops seeing it.`, yes: 'Delete', danger: true })) { write(it.id, false); setItem(si, ii, { report: '' }); refocus(it.id, '.agx-item__title'); } } },
-      { icon: 'trash', label: 'Delete the item', danger: true, run: async () => {
-        if ((it.notes || it.report) && !(await ask({ title: `Delete “${named}”?`, text: `${it.report ? 'Its report goes with it.' : 'Its notes go with it.'} Its documents stay with the meeting.`, yes: 'Delete', danger: true }))) return;
-        // The focus onto what's there now: the next item's name, else the last one's, else the part's "Add an item"
-        const next = s.items[ii + 1]?.id || s.items[ii - 1]?.id;
-        withMotion(() => setSection(si, { items: s.items.filter((_, j) => j !== ii) }));
-        setTimeout(() => (next ? document.querySelector(`[data-item="${next}"] .agx-item__title`) : document.querySelector(`#agx-${s.id} .agx-add`))?.focus(), 140);
-      } },
+      it.report && !(fixed && !isFilled({ ...it, report: '' })) && { icon: 'trash', label: 'Delete the report', danger: true, run: async () => { if (await ask({ title: `Delete the report on “${named}”?`, text: `${it.reportBy ? `${it.reportBy} wrote it. ` : ''}The board stops seeing it.`, yes: 'Delete', danger: true })) { write(it.id, false); setItem(si, ii, { report: '' }); refocus(it.id, '.agx-item__title'); } } },
+      !fixed && deleteItem(s, si, it, ii, named),
     ]} />`;
   };
+  const deleteItem = (s, si, it, ii, named) => ({ icon: 'trash', label: 'Delete the item', danger: true, run: async () => {
+    if ((it.notes || it.report) && !(await ask({ title: `Delete “${named}”?`, text: `${it.report ? 'Its report goes with it.' : 'Its notes go with it.'} Its documents stay with the meeting.`, yes: 'Delete', danger: true }))) return;
+    // The focus onto what's there now: the next item's name, else the last one's, else the part's "Add an item"
+    const next = s.items[ii + 1]?.id || s.items[ii - 1]?.id;
+    withMotion(() => setSection(si, { items: s.items.filter((_, j) => j !== ii) }));
+    setTimeout(() => (next ? document.querySelector(`[data-item="${next}"] .agx-item__title`) : document.querySelector(`#agx-${s.id} .agx-add`))?.focus(), 140);
+  } });
   // Alt ↑ ↓ in an item's name moves it, across parts too
   const keys = (s, si, it, ii) => (e) => {
     // A name is one line, however it wraps
@@ -1236,6 +1274,13 @@ function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () =>
     // Back into its name once it has moved (the move runs inside a view transition)
     setTimeout(() => document.querySelector(`[data-item="${it.id}"] .agx-item__title`)?.focus(), 120);
   };
+  const deletePart = (s, si) => ({ icon: 'trash', label: 'Delete the part', danger: true, run: async () => {
+    if ((s.notes || s.items.some((it) => it.notes || it.report)) && !(await ask({ title: `Delete “${s.title || 'this part'}”?`, text: 'Its items and their notes go with it. Their documents stay with the meeting.', yes: 'Delete', danger: true }))) return;
+    // The focus onto what's there now: the next part's name, else the last one's, else "Add a part"
+    const near = m.sections[si + 1]?.id || m.sections[si - 1]?.id;
+    withMotion(() => set((x) => ({ sections: x.sections.filter((_, i) => i !== si) })));
+    setTimeout(() => (near ? document.querySelector(`#agx-${near} .agx-sec__title`) : document.querySelector('.agx-addsec'))?.focus(), 140);
+  } });
   // The run of show: the meeting's time and what's planned in it
   const total = [...plan.values()].reduce((n, p) => n + p.minutes, 0);
   const s0 = /^\d{2}:\d{2}$/.test(m.start) ? m.start : '';
@@ -1247,7 +1292,7 @@ function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () =>
   const itemCount = agendaItems(m).length;
   return html`<div class="card agx">
     ${template ? null : html`    <div class="agx-head">
-      <div class="bd-card-head"><h3>Agenda <span class=${`tag ${src.empty ? '' : src.label === 'From email' ? 'tag--info' : 'tag--success'}`}>${src.label}</span></h3>${src.text ? html`<p>${src.text}</p>` : null}</div>
+      <div class="bd-card-head"><h3>Agenda <span class=${`tag ${src.empty ? '' : src.label === 'From email' ? 'tag--info' : 'tag--success'}`}>${src.label}</span></h3>${src.text && !locked ? html`<p>${src.text}</p>` : null}</div>
     </div>
     <nav class="agx-run" aria-label="The run of show">
       ${m.sections.map((s, si) => html`<a class=${`agx-run__part ${s.minutes ? 'is-own' : ''}`} key=${s.id} href=${`#agx-${s.id}`} style=${`flex:${plan.get(s.id)?.minutes || 5} 1 0`} title=${`${s.title || 'A part'}: ${plan.get(s.id)?.minutes} min`}
@@ -1260,35 +1305,30 @@ function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () =>
       <span>${plural(m.sections.length, 'part')} · ${plural(itemCount, 'item')}</span>
       <span class=${overBy > 0 ? 'is-over' : ''}>${overBy > 0 ? `${overBy} min over the meeting’s ${length}` : lastEnd ? `Ends ${clock(lastEnd)}` : `${total} min`}</span>
     </p>`}
+    ${!template && stay && (locked || stay.typed.length) ? html`<${MinutesStay} stay=${stay} typedHere />` : null}
     <div class="agx-edit" onFocusIn=${(e) => { const li = e.target.closest?.('[data-item]'); if (li) onFocusItem(li.dataset.item); readPeople(e); }} onPointerDown=${(e) => { const li = e.target.closest?.('[data-item]'); if (li) onFocusItem(li.dataset.item); readPeople(e); }}>
     <ol class="agx-secs">
       ${m.sections.map((s, si) => {
         const t = plan.get(s.id);
         return html`<li class=${`agx-sec ${drag?.id === s.id ? 'is-dragging' : ''} ${hint?.id === s.id ? (hint.after ? 'drop-after' : 'drop-before') : ''}`} key=${s.id} id=${`agx-${s.id}`} style=${`view-transition-name: agx-${s.id}`} ...${partTarget(s, si)}>
         <div class="ag-sec__head agx-sec__head">
-          ${grip('part', s.id, `Move the part ${s.title || si + 1}`)}
+          ${locked ? null : grip('part', s.id, `Move the part ${s.title || si + 1}`)}
           <span class="agx-sec__n" aria-hidden="true">${String(si + 1).padStart(2, '0')}</span>
-          <textarea class="ag-input ag-input--sec agx-sec__title" rows="1" aria-label=${`Section ${si + 1}`} aria-describedby=${template && !s.title.trim() ? `agx-unnamed-${s.id}` : null} value=${s.title} placeholder="Name this part" ref=${grow}
-            onInput=${(e) => { grow(e.target); setSection(si, { title: e.target.value.replace(/\s*\n\s*/g, ' ') }); }} onKeyDown=${(e) => { if (e.key === 'Enter') e.preventDefault(); }} />
-          ${template ? null : html`<label class="ag-mins" title=${s.minutes ? 'The time this part has. Empty shares out the meeting’s time by itself.' : 'Shared out from the meeting’s time by itself. Type minutes to give it its own.'}>
+          ${locked ? html`<span class="ag-input ag-input--sec agx-sec__title is-fixed">${s.title || html`<span class="bd-muted">No name</span>`}</span>` : html`<textarea class="ag-input ag-input--sec agx-sec__title" rows="1" aria-label=${`Section ${si + 1}`} aria-describedby=${template && !s.title.trim() ? `agx-unnamed-${s.id}` : null} value=${s.title} placeholder="Name this part" ref=${grow}
+            onInput=${(e) => { grow(e.target); setSection(si, { title: e.target.value.replace(/\s*\n\s*/g, ' ') }); }} onKeyDown=${(e) => { if (e.key === 'Enter') e.preventDefault(); }} />`}
+          ${template ? null : locked ? html`<span class="ag-mins is-fixed">${t?.start ? html`<span class="ag-mins__at">${clock(t.start)}</span>` : null}<b>${t?.minutes || ''}</b><span>min</span></span>` : html`<label class="ag-mins" title=${s.minutes ? 'The time this part has. Empty shares out the meeting’s time by itself.' : 'Shared out from the meeting’s time by itself. Type minutes to give it its own.'}>
             ${t?.start ? html`<span class="ag-mins__at">${clock(t.start)}</span>` : null}
             <input type="number" min="1" max="600" inputmode="numeric" aria-label=${`Minutes for ${s.title || `section ${si + 1}`}`} value=${s.minutes || ''} placeholder=${String(t?.minutes || '')} onInput=${(e) => setSection(si, { minutes: Math.max(0, Math.min(600, Math.round(Number(e.target.value) || 0))) })} />
             <span>min</span>
           </label>`}
-          <${Menu} label=${`More for the part ${s.title || si + 1}`} items=${[
+          ${locked && printed(s) ? null : html`<${Menu} label=${`More for the part ${s.title || si + 1}`} items=${locked ? [deletePart(s, si)] : [
             { pair: [
               { icon: 'up', label: 'Move up', disabled: si === 0, run: () => keepClear(withMotion(() => set((x) => ({ sections: move(x.sections, si, -1) }))), `#agx-${s.id}`) },
               { icon: 'down', label: 'Move down', disabled: si === m.sections.length - 1, run: () => keepClear(withMotion(() => set((x) => ({ sections: move(x.sections, si, 1) }))), `#agx-${s.id}`) },
             ] },
             { divider: true },
-            { icon: 'trash', label: 'Delete the part', danger: true, run: async () => {
-              if ((s.notes || s.items.some((it) => it.notes || it.report)) && !(await ask({ title: `Delete “${s.title || 'this part'}”?`, text: 'Its items and their notes go with it. Their documents stay with the meeting.', yes: 'Delete', danger: true }))) return;
-              // The focus onto what's there now: the next part's name, else the last one's, else "Add a part"
-              const near = m.sections[si + 1]?.id || m.sections[si - 1]?.id;
-              withMotion(() => set((x) => ({ sections: x.sections.filter((_, i) => i !== si) })));
-              setTimeout(() => (near ? document.querySelector(`#agx-${near} .agx-sec__title`) : document.querySelector('.agx-addsec'))?.focus(), 140);
-            } },
-          ]} />
+            deletePart(s, si),
+          ]} />`}
         </div>
         ${template && !s.title.trim() ? html`<p class="agx-sec__unnamed" id=${`agx-unnamed-${s.id}`}>This part isn’t added to new meetings until it has a name.</p>` : null}
         <ul class="ag-items agx-items">
@@ -1300,17 +1340,19 @@ function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () =>
             const shows = showsOf(it);
             return html`<li class=${`ag-item agx-item ${over === it.id ? 'is-over' : ''} ${live ? 'has-live' : ''} ${drag?.id === it.id ? 'is-dragging' : ''} ${hint?.id === it.id ? (hint.after ? 'drop-after' : 'drop-before') : ''}`} key=${it.id} data-item=${it.id} style=${`view-transition-name: agx-${it.id}`} ...${itemTarget(s, it)}>
             <div class="ag-item__row agx-item__row">
-              ${grip('item', it.id, `Move ${it.title || 'this item'}`)}
+              ${locked ? null : grip('item', it.id, `Move ${it.title || 'this item'}`)}
               ${labels.get(it.id) ? html`<span class="agx-item__n" aria-hidden="true">${labels.get(it.id)}</span>` : html`<span class="agx-item__n is-blank" aria-hidden="true"></span>`}
-              <textarea class="ag-input agx-item__title" rows="1" aria-label=${labels.get(it.id) ? `Item ${labels.get(it.id)}` : 'New item'} value=${it.title} placeholder=${LIVE_TITLES[it.live] || 'What’s it about?'} ref=${grow}
+              ${locked ? html`<span class="ag-input agx-item__title is-fixed">${it.title || LIVE_TITLES[it.live] || html`<span class="bd-muted">Empty row</span>`}</span>
+              ${presentersOf(it, people).length ? html`<span class="ag-item__who agx-who-fixed">${namesText(presentersOf(it, people).map((x) => x.name))}</span>` : null}` : html`<textarea class="ag-input agx-item__title" rows="1" aria-label=${labels.get(it.id) ? `Item ${labels.get(it.id)}` : 'New item'} value=${it.title} placeholder=${LIVE_TITLES[it.live] || 'What’s it about?'} ref=${grow}
                 onInput=${(e) => { grow(e.target); setItem(si, ii, { title: e.target.value.replace(/\s*\n\s*/g, ' ') }); }} onKeyDown=${keys(s, si, it, ii)} />
               <${PersonPicker} people=${people} value=${presentersOf(it, people)} label=${`Who presents ${it.title || 'this item'}`} startOpen=${!!it.showWho}
                 onClosed=${() => { if (it.showWho) setItem(si, ii, { showWho: false }); }}
-                onChange=${(list) => setItem(si, ii, { who: list.filter((x) => x.slug).map((x) => x.slug), guests: list.filter((x) => !x.slug).map((x) => x.name), presenter: namesText(list.map((x) => x.name)) })} />
+                onChange=${(list) => setItem(si, ii, { who: list.filter((x) => x.slug).map((x) => x.slug), guests: list.filter((x) => !x.slug).map((x) => x.name), presenter: namesText(list.map((x) => x.name)) })} />`}
               ${itemMenu(s, si, it, ii)}
             </div>
             ${it.confidential || shows.length || it.showShows || it.live === 'minutes' ? html`<div class="ag-tags agx-tags">
-              ${it.live !== 'minutes' && (shows.length || it.showShows) ? html`<${ShowsPicker} value=${shows} label=${`What ${it.title || 'this item'} shows live`} startOpen=${!!it.showShows}
+              ${locked ? shows.map((k) => html`<span class="tag" key=${k}>${LIVE_SHORT[k] || LIVE_TITLES[k] || k}</span>`)
+              : it.live !== 'minutes' && (shows.length || it.showShows) ? html`<${ShowsPicker} value=${shows} label=${`What ${it.title || 'this item'} shows live`} startOpen=${!!it.showShows}
                 onClosed=${() => { if (it.showShows) setItem(si, ii, { showShows: false }); }}
                 onChange=${(list) => setItem(si, ii, { live: list[0] || '', also: list.slice(1), showShows: true })} />` : null}
               ${it.live === 'minutes' ? html`<span class="agx-live is-minutes"><span class="agx-live__dot" aria-hidden="true"></span>${minutesState(m, it, data.meetings)}</span>` : null}
@@ -1342,26 +1384,53 @@ function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () =>
               <${Report} text=${it.report} clamp=${50} />
               <${ReportCoach} ...${coachFor(si, ii, it)} value=${it.report} onChange=${(md) => setItem(si, ii, { report: md })} />
             </div>` : null}
-            ${it.motion || it.showMotion ? html`<div class="agx-motion">
+            ${locked ? (it.motion ? html`<div class="agx-motion is-said"><span class="agx-motion__label">The board votes on</span><p class="agx-motion__said">${it.motion}</p></div>` : null)
+            : it.motion || it.showMotion ? html`<div class="agx-motion">
               <label class="agx-motion__label" for=${`agx-mo-${it.id}`}>The board votes on</label>
               <textarea id=${`agx-mo-${it.id}`} class="ag-input agx-motion__box" rows="1" maxlength="1000" value=${it.motion || ''} placeholder="Move to …"
                 ref=${(el) => { grow(el); if (el && it.showMotion && !it.motion && !el.dataset.focused) { el.dataset.focused = '1'; el.focus({ preventScroll: true }); } }}
                 onKeyDown=${(e) => { if (e.key === 'Enter') e.preventDefault(); }}
                 onInput=${(e) => { grow(e.target); setItem(si, ii, { motion: e.target.value.replace(/\s*\n\s*/g, ' ') }); }} />
             </div>` : null}
-            ${it.notes || it.showNotes ? html`<${NotesBox} label=${`Background for ${it.title || 'this item'}`} value=${it.notes} placeholder="Background for the board" onChange=${(v) => setItem(si, ii, { notes: v, showNotes: true })} />` : null}
+            ${locked ? (it.notes ? html`<div class="agx-said" role="group" aria-label=${`What the minutes say under ${it.title || 'this item'}`}><${Notes} text=${it.notes} /></div>` : null)
+            : it.notes || it.showNotes ? html`<${NotesBox} label=${`Background for ${it.title || 'this item'}`} value=${it.notes} placeholder="Background for the board" onChange=${(v) => setItem(si, ii, { notes: v, showNotes: true })} />` : null}
             ${it.staffNote || it.showStaff ? html`<p class="bd-private-label">Only ${others} see this</p><${NotesBox} tone="is-private" label="Your private note" value=${it.staffNote} placeholder="A private note" onChange=${(v) => setItem(si, ii, { staffNote: v, showStaff: true })} />` : null}
             ${over === it.id ? html`<p class="agx-dropnote" aria-hidden="true">Drop to put it with ${it.title || 'this item'}</p>` : null}
           </li>`;
           })}
-          <li class=${`agx-end ${hint?.id === `end:${s.id}` ? 'drop-before' : ''}`} ...${partEnd(s)}><button type="button" class="ag-add agx-add" onClick=${() => { const it = blankItem(); withMotion(() => setSection(si, { items: [...s.items, it] })); setTimeout(() => document.querySelector(`[data-item="${it.id}"] .agx-item__title`)?.focus(), 140); }}>+ Add an item</button></li>
+          ${locked ? null : html`<li class=${`agx-end ${hint?.id === `end:${s.id}` ? 'drop-before' : ''}`} ...${partEnd(s)}><button type="button" class="ag-add agx-add" onClick=${() => { const it = blankItem(); withMotion(() => setSection(si, { items: [...s.items, it] })); setTimeout(() => document.querySelector(`[data-item="${it.id}"] .agx-item__title`)?.focus(), 140); }}>+ Add an item</button></li>`}
         </ul>
       </li>`;
       })}
     </ol>
-    <button type="button" class="ag-add ag-add--sec agx-addsec" onClick=${() => { const id = uid('s_'); withMotion(() => set((x) => ({ sections: [...x.sections, { id, title: '', minutes: 0, items: [blankItem()] }] }))); setTimeout(() => document.querySelector(`#agx-${id} .agx-sec__title`)?.focus(), 140); }}>+ Add a part</button>
+    ${locked ? null : html`<button type="button" class="ag-add ag-add--sec agx-addsec" onClick=${() => { const id = uid('s_'); withMotion(() => set((x) => ({ sections: [...x.sections, { id, title: '', minutes: 0, items: [blankItem()] }] }))); setTimeout(() => document.querySelector(`#agx-${id} .agx-sec__title`)?.focus(), 140); }}>+ Add a part</button>`}
     ${template ? null : html`<${MoreCard} m=${m} set=${set} ctx=${ctx} keepSaved=${keepSaved} take=${take} />`}
     </div>
+  </div>`;
+}
+
+/**
+ * Approved minutes in Board (board-shared.js minutesKept): one line saying what they state can't change here, with the
+ * way to take the approval back (Mark as draft), above the agenda and in When and where, where what they state shows as
+ * it is. What was typed into them and refused (approved in another tab meanwhile: functions/api/_board.js keepStated)
+ * stays under it (`typedHere`), each piece to copy, until it's put away, whether or not they're still approved.
+ * Board QA round 15
+ */
+function MinutesStay({ stay, typedHere = false }) {
+  const [copied, setCopied] = useState('');
+  const copy = async (t) => { try { await navigator.clipboard.writeText(t.text); setCopied(t.key); setTimeout(() => setCopied((x) => (x === t.key ? '' : x)), 1500); } catch { /* the words are there to select */ } };
+  const typed = typedHere ? stay.typed : [];
+  return html`<div class="bm-stay">
+    ${stay.locked ? html`<p class="bm-note bm-stay__line" role="note"><span>${MINUTES_STAY}</span><button type="button" class="btn btn-ghost btn-sm" onClick=${stay.unlock}>Mark as draft</button></p>` : null}
+    ${typed.length ? html`<div class="bm-stay__typed" role="group" aria-label="Typed here and not saved">
+      <p class="bm-stay__head"><strong>Typed here and not saved.</strong> ${stay.locked ? 'Copy what you need, and mark the minutes as draft to change them.' : 'Copy what you need into the minutes.'}</p>
+      ${typed.map((t) => html`<div class="bm-stay__piece" key=${t.key}>
+        <span class="form-label">${t.label}</span>
+        <p class="bm-stay__text">${t.text}</p>
+        <button type="button" class="btn btn-ghost btn-sm" onClick=${() => copy(t)}>${copied === t.key ? 'Copied' : 'Copy'}</button>
+      </div>`)}
+      <button type="button" class="btn btn-ghost btn-sm bm-stay__done" onClick=${stay.forget}>Done with these</button>
+    </div>` : null}
   </div>`;
 }
 
@@ -1918,7 +1987,11 @@ const doubtWords = (at, what, { once = false } = {}) => (!at ? ''
  * and said as not saved. Only when that look fails too does it say it can't tell yet (UNSURE_SAVED): nothing is put back
  * that the site may not have, the save line says "Not saved" (never "Saved") and Board keeps trying by itself, which
  * finds what the site has. Board QA round 14, Nov 24 2026: Mark them approved landed with its answer lost, and the page
- * put the minutes back to draft beside "Saved", and only told the founder to reload. → whether the site has it
+ * put the minutes back to draft beside "Saved", and only told the founder to reload. Before each look, and after the
+ * last, the page checks the copy it already has from the site: Board's own try again (useAutosave) may have had the
+ * site's answer meanwhile (saved), and a copy that shows the press done settles it, in the press's own words, with no
+ * look needed; "can't tell yet" only when neither that copy nor the looks can tell. Board QA round 15, Nov 26 2026: the
+ * page said "Saved", then a second later that it couldn't tell whether that was saved. → whether the site has it
  */
 export async function pressSave({ set, save, saved, addToast, look = null, take = null }, patch, { has, back, what, again, also = '' }) {
   set(patch);
@@ -1932,10 +2005,19 @@ export async function pressSave({ set, save, saved, addToast, look = null, take 
         : `${what}: ${sentence(notSavedWhy(j))}${also ? ` ${also}` : ''}`, 'error');
   } });
   if (!lost) return has(saved.current);
+  // (the site's copy the page has now, from Board's own try again: it shows the press done, so the site has it. One that
+  // doesn't show it says nothing yet: it may be from before the press, or from another change)
+  const told = () => has(saved.current);
+  if (told()) return true;
   // (a look that fails is tried once more a moment later, before the page says it can't tell)
   let now = await look();
-  if (!now) { await new Promise((r) => setTimeout(r, 1500)); now = await look(); }
-  if (!now) { addToast(UNSURE_SAVED, 'error'); return false; }
+  if (!now) {
+    if (told()) return true;
+    await new Promise((r) => setTimeout(r, 1500));
+    if (told()) return true;
+    now = await look();
+  }
+  if (!now) { if (told()) return true; addToast(UNSURE_SAVED, 'error'); return false; }
   // (Board's data was read for it: the copy is there already. One older than the copy the page has had from the site
   // since, Board's own try again landing while the look was out, changes nothing: the page goes by the newer one)
   const sv = String(now.updatedAt || '') < String(saved.current?.updatedAt || '') ? saved.current : now;
@@ -1953,6 +2035,14 @@ const ON_PAGE = {
 };
 /** The meeting put on the board page or taken off it, from a button → whether the site has it so now (pressSave) */
 const putOnPage = (p, v) => pressSave(p, { shared: v }, { has: (sv) => sv.shared === v, back: (sv) => ({ shared: sv.shared }), ...ON_PAGE[v] });
+/**
+ * The minutes marked approved (on `day`) or as draft, pressed: pressSave's change and its words, the one press After the
+ * meeting's Mark them approved and Mark as draft and approved minutes' own line (MinutesStay) share
+ */
+const approvalPress = (v, day = '') => [v ? { minutes: 'approved', approvedOn: day } : { minutes: 'draft', approvedOn: '' }, {
+  has: (sv) => (sv.minutes === 'approved') === v, back: (sv) => ({ minutes: sv.minutes, approvedOn: sv.approvedOn }),
+  what: v ? 'Not marked approved' : 'Still approved', again: v ? 'Mark them approved again' : 'Mark them as draft again',
+}];
 const NO_MAIL = html`<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16v12H4z" /><path d="m4 7 8 6 8-6" /><path d="M3 21 21 3" /></svg>`;
 /** Board members with no email on file: named where it matters, each with the way to add theirs */
 function NoEmail({ ctx, what }) {
@@ -2757,10 +2847,7 @@ function WrapUp({ m, set, ctx, act, save, saved, keepSaved, take }) {
   const approve = async (v) => {
     if (v && !(await ask({ title: 'Mark the minutes approved?', text: `As approved on ${shortDate(approvedDay)}${apDay ? `, at the ${nameIn(ap, data.meetings)}` : ''}. ${m.shared ? 'The board page shows them approved.' : onceShared}${fixes.some((c) => c.state === 'waiting') ? ' A correction to them is still waiting on the board page, and approving them leaves it out.' : ''}${data.notesWaiting?.includes(m.id) ? ' The secretary has typed notes on this meeting that were never sent: approved, they can’t be sent any more.' : ''}`, yes: 'Mark them approved' }))) return;
     // Said once the site has it, never before: minutes it won't take as approved (not in Board) say why, and stay draft
-    const went = await pressSave(pressed, v ? { minutes: 'approved', approvedOn: approvedDay } : { minutes: 'draft', approvedOn: '' }, {
-      has: (sv) => (sv.minutes === 'approved') === v, back: (sv) => ({ minutes: sv.minutes, approvedOn: sv.approvedOn }),
-      what: v ? 'Not marked approved' : 'Still approved', again: v ? 'Mark them approved again' : 'Mark them as draft again',
-    });
+    const went = await pressSave(pressed, ...approvalPress(v, approvedDay));
     if (!went) return;
     // The board was told about draft minutes: offer to tell them they're approved
     addToast(v ? `Marked approved, ${shortDate(saved.current.approvedOn || approvedDay)}` : 'Back to draft minutes', 'info', v && m.shared && m.minutesSentAt ? { label: 'Tell the board', fn: () => send(false) } : undefined);
@@ -2787,7 +2874,7 @@ function WrapUp({ m, set, ctx, act, save, saved, keepSaved, take }) {
         : data.meetings.some((x) => x.date > m.date) ? 'At the next meeting: its agenda asks for this approval.' : 'The next meeting isn’t in Board yet. Its agenda asks for this approval once it’s added.';
   const nextVote = apDay ? '' : ' The board approves them at the next meeting.';
   return html`<div class="card bm-check bm-wrap">
-    <div class="bd-card-head"><h3 tabindex="-1">After the meeting</h3><p>${approved ? (m.shared ? 'Done: the minutes are approved.' : 'The minutes are approved. Share them with the board next.') : hasMinutes || staffOnly ? (apDay ? 'They aren’t marked approved yet.' : nextVote.trim()) : `Drop the minutes in and Board does the rest.${nextVote}`}</p></div>
+    <div class="bd-card-head"><h3 tabindex="-1">After the meeting</h3><p>${approved ? (approvedNotShared(m) ? 'The minutes are approved, but the board can’t read them until their file is shared.' : m.shared ? 'Done: the minutes are approved.' : 'The minutes are approved. Share them with the board next.') : hasMinutes || staffOnly ? (apDay ? 'They aren’t marked approved yet.' : nextVote.trim()) : `Drop the minutes in and Board does the rest.${nextVote}`}</p></div>
     <ol class="bm-tasks">
       <${Task} state=${sIn} title=${hasMinutes ? 'The minutes are in' : staffOnly ? 'The minutes are staff only' : 'The minutes'} sub=${m.minutesFrom?.typed ? `${typedWords(m, data)}.` : m.minutesFrom ? `Read from ${fileTitle(m.minutesFrom.name)}.` : hasMinutes ? '' : staffOnly ? staffOnlyWords(staffOnly) : ahead ? 'After the meeting, drop them in: a PDF or Word file.' : 'Drop them in: a PDF or Word file.'} />
       <${Task} state=${sShared} title=${m.shared ? 'On the board page' : 'Share them with the board'} sub=${m.shared ? (m.minutesSentAt ? `The board was told ${ago(m.minutesSentAt)}.` : hasMinutes ? (ap && !apDay && !ap.packetSentAt && !approved && minutesToRead(ap, data.meetings)?.id === m.id ? 'The board can read them now, and the next agenda email asks them to before the vote.' : 'The board can read them now.') : staffOnly ? 'The board can’t read them while their file is staff only.' : 'The minutes show there once they’re in.') : approved ? `They’re approved, and only ${few} can see them until they’re shared.` : 'As draft minutes until they’re approved.'}>
@@ -2818,8 +2905,25 @@ const MOTION_CSS = `
 .agx-motion__label { display: block; margin: 0 0 0.25rem; font-size: var(--fs-2xs, 0.72rem); font-weight: 750; letter-spacing: 0.07em; text-transform: uppercase; color: #765C00; }
 .agx-motion__box { display: block; width: 100%; min-height: 2.4rem; resize: none; background: #fff; font-weight: 600; }
 .agx-sec__unnamed { margin: 0.1rem 0 0.4rem 2.95rem; font-size: var(--fs-sm, 0.85rem); color: #765C00; }
+.agx-motion__said { margin: 0; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.agx-sec__title.is-fixed, .agx-item__title.is-fixed { cursor: default; overflow-wrap: anywhere; }
+.ag-mins.is-fixed { cursor: default; }
+.ag-mins.is-fixed b { color: var(--color-text); }
+.agx-who-fixed { flex: none; align-self: center; max-width: 45%; overflow-wrap: anywhere; text-align: right; }
+.agx-said { margin: 0.4rem 0 0.25rem 2.95rem; font-size: var(--fs-sm, 0.85rem); line-height: 1.55; overflow-wrap: anywhere; }
+.agx-said .bm-notes { margin: 0; }
+.bm-stay { margin: 0 0 0.85rem; }
+.bm-stay__line { align-items: center; flex-wrap: wrap; margin: 0; }
+.bm-stay__line > span { flex: 1 1 16rem; min-width: 0; }
+.bm-stay__typed { margin-top: 0.5rem; padding: 0.6rem 0.75rem; border: 1px solid var(--color-border, #E4E4DF); border-radius: var(--radius-md, 10px); background: var(--color-bg, #fff); }
+.bm-stay__head { margin: 0 0 0.35rem; font-size: var(--fs-sm, 0.85rem); line-height: 1.45; }
+.bm-stay__piece { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.15rem 0.6rem; align-items: start; padding: 0.45rem 0; border-top: 1px solid var(--color-border, #E4E4DF); }
+.bm-stay__piece .form-label { grid-column: 1 / -1; margin: 0; }
+.bm-stay__text { margin: 0; font-size: var(--fs-sm, 0.85rem); white-space: pre-wrap; overflow-wrap: anywhere; }
+.bm-stay__done { margin-top: 0.35rem; }
 @media (max-width: 640px) { .agx-sec__unnamed { margin-left: 0; } }
 @media (max-width: 640px) { .agx-motion { margin-left: 0; } }
+@media (max-width: 640px) { .agx-said { margin-left: 0.4rem; } }
 `;
 if (typeof document !== 'undefined' && !document.getElementById('board-motion-css')) {
   const st = document.createElement('style');

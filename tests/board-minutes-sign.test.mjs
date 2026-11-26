@@ -151,7 +151,9 @@ test('pressing Sign twice is one signature', async () => {
 test('the second time they don’t agree to e-sign again', async () => {
   await approve();
   await signMinutes(env, ID, SECRETARY, { mark: MARK, consent: true });
-  await patchMeeting(env.DB, ID, (m) => ({ ...m, motions: [] }), { by: 'x' });
+  /* r15: approved minutes change only once the approval is taken back (Board QA round 15): Mark as draft, the change, approved again */
+  await patchMeeting(env.DB, ID, (m) => ({ ...m, minutes: 'draft', approvedOn: '', motions: [] }), { by: 'x' });
+  await approve();
   const again = await signMinutes(env, ID, SECRETARY, { mark: MARK });
   assert.equal(again.name, 'Kim Park');
 });
@@ -161,7 +163,9 @@ test('minutes changed after signing say so, and signing again makes a new copy',
   await signMinutes(env, ID, SECRETARY, { mark: MARK, consent: true }, { now: Date.parse('2027-01-14T15:00:00Z') });
   await buildMinutesRecord(env, ID, { render });
   const m = await getMeeting(env.DB, ID);
-  await patchMeeting(env.DB, ID, (x) => ({ ...x, sections: x.sections.map((s) => ({ ...s, items: s.items.map((it) => (it.id === 'i_a' ? { ...it, notes: 'Changed words' } : it)) })) }), { by: 'x' });
+  /* r15: approved minutes change only once the approval is taken back (Board QA round 15): Mark as draft, the change, approved again */
+  await patchMeeting(env.DB, ID, (x) => ({ ...x, minutes: 'draft', approvedOn: '', sections: x.sections.map((s) => ({ ...s, items: s.items.map((it) => (it.id === 'i_a' ? { ...it, notes: 'Changed words' } : it)) })) }), { by: 'x' });
+  await approve();
   assert.notEqual(await minutesHash(m), await minutesHash(await getMeeting(env.DB, ID)));
   assert.equal((await signedMinutes(env.DB))[ID].changed, true);
   await signMinutes(env, ID, SECRETARY, { mark: MARK }, { now: Date.parse('2027-01-14T16:00:00Z') });
