@@ -3,8 +3,8 @@
  * Kid page templates for the admin Preview (behind Access with the rest of
  * /admin/, and kept out of the sitemap).
  *
- * The real kid page rendered with the made-up kids in ../_preview-fixtures.js,
- * which between them switch on every optional part. public/admin/kid-preview.js
+ * The real kid page rendered with the made-up kids (and partners) in
+ * ../_preview-fixtures.js, which between them switch on every optional part. public/admin/kid-preview.js
  * clones their sections to rebuild a kid's page from unsaved edits, so the
  * preview is always this template's markup.
  */
@@ -15,6 +15,6 @@ export function getStaticPaths() {
   return Object.keys(FIXTURES.kid).map((variant) => ({ params: { variant } }));
 }
 
-const { item, video } = FIXTURES.kid[Astro.params.variant as keyof typeof FIXTURES.kid];
+const { item, video, partners } = FIXTURES.kid[Astro.params.variant as keyof typeof FIXTURES.kid];
 ---
-<KidPage kid={item} prevKid={null} nextKid={null} relatedKids={[]} forceVideo={video} showDesign={true} />
+<KidPage kid={item} prevKid={null} nextKid={null} relatedKids={[]} forceVideo={video} showDesign={true} partners={partners} />

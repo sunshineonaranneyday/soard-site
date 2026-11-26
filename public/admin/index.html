@@ -14989,7 +14989,7 @@
           onClose=${() => setStreamPick(null)}
           onPick=${(v) => { set(streamPick === 'reveal' ? { revealVideoUrl: v.watch } : { streamVideoId: v.uid }); setStreamPick(null); }} />` : null}
         ${showPreview ? html`<${PagePreview} kind="kid" item=${record} slug=${slug} dirty=${dirty}
-          otherSlugs=${existingSlugs} buildOpts=${{ confirmed: !!reveal?.confirmed }} onClose=${() => setShowPreview(false)} />` : null}
+          otherSlugs=${existingSlugs} buildOpts=${{ confirmed: !!reveal?.confirmed, partners }} onClose=${() => setShowPreview(false)} />` : null}
         <datalist id="kd-plan-captions">${KD_PLAN_CAPTIONS.map((c) => html`<option value=${c} />`)}</datalist>
 
         <nav class="breadcrumb" aria-label="Breadcrumb">

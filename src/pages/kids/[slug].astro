@@ -28,6 +28,7 @@ import RevealInvite from '../../components/live/RevealInvite.astro';
 import { upcomingAtBuild, pastAtBuild } from '../../utils/reveals-copy';
 import { getCollection } from 'astro:content';
 import { isPublished, linkFor, isArchived, outletNameFor } from '../../utils/press';
+import { partnerTiers, tierTitle } from '../../../public/admin/partners-shared.js';
 
 const computed = await getSiteStats();
 
@@ -307,8 +308,23 @@ const supportingPhotos = galleryPhotos.slice(2, 8);
 const overflowGalleryPhotos = galleryPhotos.slice(8);
 const showExpandButton = galleryPhotos.length > 8;
 
-// ── Partner count for hero stats ──────────
-const partnerCount = kid.partnerLogos?.length || 0;
+// ── Partners, by level (Partners section) ──────────
+// The room's sponsors, then the partners on the build by their level on the partner record: Signature, Champion,
+// Builder, Friend (partnerTiers, public/admin/partners-shared.js). The admin Preview mirrors this (kid-preview.js),
+// and its template page passes made-up partners (src/pages/admin/kid-template/)
+type PartnerCard = { name: string; url: string; slug: string; website: string };
+const partnerRecords = (Astro.props.partners ?? await getCollection('partners')).map((p: { id: string; data: Record<string, unknown> }) => ({ slug: p.id, ...p.data }));
+const partnerGroups = partnerTiers(kid.partnerLogos, kid.sponsors, partnerRecords) as { tier: string; list: PartnerCard[] }[];
+const partnerCount = partnerGroups.reduce((n, g) => n + g.list.length, 0);
+// The logo as asked of Cloudflare for each tier's cards: its white edges trimmed, fit inside [w, h] (CSS px; 2× for
+// sharp screens)
+const PARTNER_LOGO: Record<string, [number, number]> = { room: [400, 170], signature: [320, 130], champion: [250, 100], builder: [210, 84], friend: [190, 76] };
+const partnerLogoAt = (url: string, tier: string, x = 1) => {
+  const [w, h] = PARTNER_LOGO[tier] || PARTNER_LOGO.friend;
+  return cfRaw(url, `trim=border,w=${w * x},h=${h * x},fit=contain,q=${x > 1 ? 80 : 88}`);
+};
+const partnerRooms = (kid.roomCount || 1) > 1 ? 'rooms' : 'room';
+const partnerLead = `${partnerCount === 1 ? 'One partner' : `${partnerCount} partners`} ${kid.status === 'completed' ? 'gave' : partnerCount === 1 ? 'is giving' : 'are giving'} their time, materials and funding.`;
 
 // ── Hero hook — fuller version for premium feel ─────────────────────────────
 const _rawHook = kid.heroSummary
@@ -347,7 +363,7 @@ const chapters = [
   { id: 'chapter-transform', label: 'Transform', icon: 'compare', show: hasBeforeAfter },
   { id: 'chapter-reveal', label: 'Reveal', icon: 'play', show: !!hasVideo },
   { id: 'chapter-gallery', label: 'Gallery', icon: 'camera', show: galleryPhotos.length > 1 },
-  { id: 'chapter-partners', label: 'Partners', icon: 'heart', show: kid.partnerLogos && kid.partnerLogos.length > 0 },
+  { id: 'chapter-partners', label: 'Partners', icon: 'heart', show: partnerCount > 0 },
 ].filter(c => c.show);
 
 // Orientation detection for adaptive layout (based on first plan)
@@ -922,29 +938,56 @@ const planOrientation = (() => {
       </section>
     )}
 
-    {/* ═══ The Village — Partners ═══ */}
-    {kid.partnerLogos && kid.partnerLogos.length > 0 && (
-      <section class="village" id="chapter-partners" data-chapter="Partners">
-        <div class="container container--narrow">
-          <h2 class="village__title">Partners</h2>
-          <div class="village__inner">
-            <div class="village__logos">
-              {kid.partnerLogos.map(logo => (
-                <div class="village__logo">
-                  <img
-                    src={cfUrl(logo.url, 'w=200,q=85')}
-                    srcset={`${cfUrl(logo.url, 'w=200,q=85')} 1x, ${cfUrl(logo.url, 'w=400,q=80')} 2x`}
-                    alt={logo.name || 'Project partner'}
-                    loading="lazy"
-                    decoding="async"
-                    width="120"
-                    height="60"
-                    data-img-fallback=".village__logo"
-                  />
-                </div>
-              ))}
+    {/* ═══ The Village — Partners, by level ═══ */}
+    {partnerCount > 0 && (
+      <section class="village" id="chapter-partners" data-chapter="Partners" aria-labelledby="village-heading">
+        <div class="village__wrap">
+          <header class="village__head">
+            <p class="village__eyebrow">Partners</p>
+            <h2 class="village__title" id="village-heading">The team behind {kid.name}'s {partnerRooms}</h2>
+            <p class="village__lead">{partnerLead}</p>
+          </header>
+          {partnerGroups.map((g) => (
+            <div class={`village__tier village__tier--${g.tier}`} data-tier={g.tier}>
+              <h3 class="village__label"><span class="village__label-text">{tierTitle(g.tier, g.list.length)}</span><span class="village__count" aria-hidden="true">{g.list.length}</span></h3>
+              <ul class="village__grid" role="list">
+                {g.list.map((p, i) => {
+                  const body = (
+                    <Fragment>
+                      {p.url && (
+                        <img
+                          class="village__logo"
+                          src={partnerLogoAt(p.url, g.tier)}
+                          srcset={`${partnerLogoAt(p.url, g.tier)} 1x, ${partnerLogoAt(p.url, g.tier, 2)} 2x`}
+                          alt={p.name || 'Project partner'}
+                          width={(PARTNER_LOGO[g.tier] || PARTNER_LOGO.friend)[0]}
+                          height={(PARTNER_LOGO[g.tier] || PARTNER_LOGO.friend)[1]}
+                          loading="lazy"
+                          decoding="async"
+                          data-img-fallback={p.name ? 'next' : '.village__item'}
+                        />
+                      )}
+                      <span class="village__wordmark" style={p.url ? 'display:none' : undefined}>{p.name}</span>
+                      {p.name && <span class="village__name" aria-hidden="true">{p.name}</span>}
+                    </Fragment>
+                  );
+                  return (
+                    <li class="village__item" style={`--i: ${i}`}>
+                      {p.website ? (
+                        <a class="village__card" href={p.website} target="_blank" rel="noopener" aria-label={`${p.name}, opens their website`}>
+                          {body}
+                          <span class="village__go" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M8 7h9v9"/></svg></span>
+                        </a>
+                      ) : (
+                        <div class="village__card">{body}</div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-          </div>
+          ))}
+          <p class="village__foot">Want your logo on the next room? <a href="/partners/#ways">Become a partner</a></p>
         </div>
       </section>
     )}
@@ -1082,6 +1125,7 @@ const planOrientation = (() => {
   let _chapterObserver: IntersectionObserver | null = null;
   let _revealObserver: IntersectionObserver | null = null;
   let _galleryCascadeObserver: IntersectionObserver | null = null;
+  let _villageObserver: IntersectionObserver | null = null;
   let _cleanupFns: (() => void)[] = [];
 
   function cleanupKidPage() {
@@ -1095,6 +1139,8 @@ const planOrientation = (() => {
     _revealObserver = null;
     _galleryCascadeObserver?.disconnect();
     _galleryCascadeObserver = null;
+    _villageObserver?.disconnect();
+    _villageObserver = null;
     _cleanupFns.forEach(fn => fn());
     _cleanupFns = [];
     document.documentElement.classList.remove('kid-page-active');
@@ -1181,6 +1227,36 @@ const planOrientation = (() => {
       _galleryCascadeObserver.observe(galleryGrid);
     } else if (galleryGrid) {
       galleryGrid.classList.add('gallery__grid--visible');
+    }
+
+    // ── Partners ─────────────────────────
+    // Each logo is weighed once it loads (--r, its width ÷ height, which sizes it in its card), and each tier draws in
+    // as it scrolls into view (data-motion; with reduced motion everything is simply there)
+    const village = document.querySelector<HTMLElement>('.village');
+    if (village) {
+      village.querySelectorAll<HTMLImageElement>('img.village__logo').forEach((img) => {
+        const weigh = () => {
+          if (!img.naturalWidth || !img.naturalHeight) return;
+          img.style.setProperty('--r', (img.naturalWidth / img.naturalHeight).toFixed(3));
+          img.setAttribute('data-shape', '');
+        };
+        if (img.complete && img.naturalWidth) weigh();
+        else img.addEventListener('load', weigh, { once: true });
+      });
+      if (!prefersReducedMotion && 'IntersectionObserver' in window) {
+        village.setAttribute('data-motion', '');
+        _villageObserver = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (!entry.isIntersecting) return;
+              entry.target.classList.add('is-in');
+              _villageObserver?.unobserve(entry.target);
+            });
+          },
+          { rootMargin: '0px 0px -6% 0px', threshold: 0.12 }
+        );
+        village.querySelectorAll('.village__head, .village__tier').forEach((el) => _villageObserver!.observe(el));
+      }
     }
 
 
@@ -4194,49 +4270,365 @@ const planOrientation = (() => {
     transform: scale(0.98);
   }
 
-  /* ═══ Village — Partners (Minimal) ══════════════════ */
+  /* ═══ Village — Partners, by level ══════════════════
+     Peter, Nov 26 2026: "list it out by partner level ... logos should be legible". The room's sponsors on a dark
+     band, then Signature, Champion, Builder and Friends, each tier a row of white cards that get smaller down the
+     levels. Every logo is trimmed of its white edges (trim=border) and sized by its shape (--r, width ÷ height, set
+     once it loads): about the same ink for a square mark, a tall one and a long wordmark, so none of them reads
+     small beside the others.
+     A card links to the partner's website when there is one; its name shows above it on hover. Each tier draws in
+     as it scrolls into view (data-motion, set by the script; never with reduced motion) */
   .village {
-    padding-block: clamp(80px, 12vw, 120px);
-    background: var(--c-white);
+    --v-gap: clamp(10px, 1.3vw, 16px);
+    position: relative;
+    padding-block: clamp(80px, 11vw, 136px);
+    background: var(--c-cream);
     border-top: 1px solid var(--c-border);
     content-visibility: auto;
-    contain-intrinsic-size: auto 300px;
+    contain-intrinsic-size: auto 1400px;
+  }
+
+  .village__wrap {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding-inline: clamp(16px, 4vw, 40px);
+  }
+
+  .village__head {
+    text-align: center;
+    max-width: 720px;
+    margin: 0 auto clamp(44px, 6vw, 76px);
+  }
+
+  .village__eyebrow {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0 0 18px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--c-text-muted);
+  }
+
+  .village__eyebrow::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--c-yellow);
+    box-shadow: 0 0 0 4px rgba(255, 218, 36, 0.28);
   }
 
   .village__title {
     font-family: var(--font-display);
-    font-size: clamp(2.2rem, 4vw, 3rem);
+    font-size: clamp(2rem, 4.2vw, 3.1rem);
     font-weight: 700;
     color: var(--c-dark);
-    text-align: center;
-    line-height: 1;
+    line-height: 1.08;
     letter-spacing: -0.03em;
-    margin: 0 0 clamp(48px, 8vw, 72px);
+    text-wrap: balance;
+    margin: 0 0 16px;
   }
 
-  .village__inner {
+  .village__lead {
+    margin: 0;
+    font-size: clamp(1rem, 1.4vw, 1.125rem);
+    line-height: 1.6;
+    color: var(--c-text-muted);
+    text-wrap: balance;
+  }
+
+  /* ── A tier: its label, then its cards (--cols to a row, --ar their width ÷ height) ── */
+  /* (--k: a square mark's height, as a share of the card's inside) */
+  .village__tier { --cols: 6; --ar: 1.75; --pad: clamp(8px, 0.9vw, 11px); --k: 0.92; --radius: 16px; }
+  .village__tier--room { --cols: 2; --ar: 2.2; --pad: clamp(18px, 2vw, 26px); --k: 0.9; --radius: 22px; }
+  .village__tier--signature { --cols: 3; --ar: 2.2; --pad: clamp(16px, 1.6vw, 20px); --k: 0.84; --radius: 20px; }
+  .village__tier--champion { --cols: 4; --ar: 2; --pad: clamp(12px, 1.2vw, 15px); --k: 0.86; --radius: 18px; }
+  .village__tier--builder { --cols: 5; --ar: 1.9; --pad: clamp(10px, 1vw, 13px); --k: 0.88; }
+  /* Room sponsors two to a row, each at most 440px wide, so one or two never fill the band */
+  .village__tier--room .village__item { max-width: 440px; }
+
+  .village__tier + .village__tier { margin-top: clamp(40px, 5.5vw, 68px); }
+
+  .village__label {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 24px;
+    gap: 14px;
+    margin: 0 0 clamp(16px, 2.2vw, 24px);
+    font-family: var(--font-body);
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--c-text-muted);
   }
 
-  .village__logos {
+  .village__label::before,
+  .village__label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(55, 58, 54, 0.14);
+  }
+  .village__label::before { transform-origin: right center; }
+  .village__label::after { transform-origin: left center; }
+
+  .village__label-text { white-space: nowrap; }
+
+  .village__count {
+    display: inline-grid;
+    place-items: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 7px;
+    margin-left: -6px;
+    border-radius: 999px;
+    background: #fff;
+    box-shadow: inset 0 0 0 1px rgba(55, 58, 54, 0.12);
+    font-size: 11px;
+    letter-spacing: 0;
+    color: var(--c-dark);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .village__grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
     display: flex;
     flex-wrap: wrap;
-    gap: 32px;
     justify-content: center;
+    gap: var(--v-gap);
+  }
+
+  .village__item {
+    flex: 0 0 calc((100% - (var(--cols) - 1) * var(--v-gap)) / var(--cols));
+    min-width: 0;
+  }
+
+  /* ── A card ── */
+  .village__card {
+    position: relative;
+    display: flex;
     align-items: center;
+    justify-content: center;
+    container-type: inline-size;
+    aspect-ratio: var(--ar);
+    padding: var(--pad);
+    background: #fff;
+    border: 1px solid rgba(55, 58, 54, 0.08);
+    border-radius: var(--radius);
+    box-shadow: 0 1px 2px rgba(30, 31, 37, 0.04), 0 12px 32px -20px rgba(30, 31, 37, 0.22);
+    color: var(--c-dark);
+    text-decoration: none;
+    isolation: isolate;
+    transition: transform 0.5s var(--m-move), box-shadow 0.5s var(--m-move), border-color 0.3s var(--m-fade);
   }
 
+  /* The logo, its own shape kept; white in the file melts into the card. Until it's weighed (and without the
+     script) it fits 80% of the card's height and its whole width */
   .village__logo {
-    width: 100px;
+    --h: calc((100cqw + 2 * var(--pad)) / var(--ar) - 2 * var(--pad));
+    display: block;
+    flex: none;
+    width: 100%;
+    height: calc(var(--h) * 0.8);
+    object-fit: contain;
+    mix-blend-mode: multiply;
+    transition: transform 0.5s var(--m-move), opacity 0.6s var(--m-fade);
+  }
+  /* Weighed: the same ink whatever its shape. A square mark is --k of the card's height; a wider one is shorter
+     and wider (by its shape to the 0.42), up to the card's width; a tall one taller, up to the card's height */
+  @supports (height: calc(pow(2, 0.5) * 1px)) {
+    .village__logo[data-shape] { height: min(var(--h), calc(var(--h) * var(--k) / pow(var(--r), 0.42)), calc(100cqw / var(--r))); }
   }
 
-  .village__logo img {
-    width: 100%;
-    height: auto;
-    object-fit: contain;
+  /* No logo (a room sponsor without one, or a logo that didn't load): the name, set like one */
+  .village__wordmark {
+    font-family: var(--font-display);
+    font-size: clamp(0.95rem, 1.5vw, 1.2rem);
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    text-align: center;
+    text-wrap: balance;
+    color: var(--c-dark);
+  }
+  .village__tier--room .village__wordmark,
+  .village__tier--signature .village__wordmark { font-size: clamp(1.15rem, 2vw, 1.55rem); }
+
+  /* The partner's name, over the card on hover or focus */
+  .village__name {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 10px);
+    z-index: 3;
+    width: max-content;
+    max-width: min(280px, 80vw);
+    padding: 7px 12px;
+    border-radius: 10px;
+    background: var(--c-dark-deep);
+    color: #fff;
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: center;
+    box-shadow: 0 12px 28px -10px rgba(30, 31, 37, 0.5);
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.96);
+    transform-origin: 50% 100%;
+    pointer-events: none;
+    transition: opacity 0.2s var(--m-fade), transform 0.35s var(--m-move);
+  }
+  .village__name::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -6px;
+    border: 6px solid transparent;
+    border-top-color: var(--c-dark-deep);
+  }
+
+  /* The way out to their website */
+  .village__go {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 2;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--c-yellow);
+    color: var(--c-dark-deep);
+    opacity: 0;
+    transform: scale(0.6);
+    transition: opacity 0.25s var(--m-fade), transform 0.45s var(--m-pop);
+  }
+  .village__go svg { width: 14px; height: 14px; }
+
+  @media (hover: hover) {
+    .village__card:hover { z-index: 2; border-color: rgba(55, 58, 54, 0.14); }
+    .village__card:hover .village__name { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    a.village__card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 2px 4px rgba(30, 31, 37, 0.04), 0 24px 48px -22px rgba(30, 31, 37, 0.32);
+    }
+    a.village__card:hover .village__logo { transform: scale(1.045); }
+    a.village__card:hover .village__go { opacity: 1; transform: scale(1); }
+  }
+  a.village__card:active { transform: translateY(-1px) scale(0.985); transition-duration: 0.15s; }
+  .village__card:focus-visible { z-index: 2; outline: 3px solid var(--c-yellow); outline-offset: 3px; }
+  .village__card:focus-visible .village__name { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  a.village__card:focus-visible .village__go { opacity: 1; transform: scale(1); }
+
+  /* ── The room's sponsors: a dark band, the name under the logo ── */
+  .village__tier--room {
+    padding: clamp(28px, 4.5vw, 52px) clamp(16px, 4vw, 52px);
+    border-radius: clamp(22px, 3vw, 34px);
+    background: var(--c-dark-deep);
+  }
+  .village__tier--room .village__label { color: var(--c-yellow); }
+  .village__tier--room .village__label::before,
+  .village__tier--room .village__label::after { background: rgba(255, 255, 255, 0.16); }
+  .village__tier--room .village__count { background: rgba(255, 218, 36, 0.14); box-shadow: inset 0 0 0 1px rgba(255, 218, 36, 0.35); color: var(--c-yellow); }
+  .village__tier--room .village__card { border-color: transparent; box-shadow: 0 24px 60px -28px rgba(0, 0, 0, 0.6); }
+
+  .village__foot {
+    margin: clamp(40px, 6vw, 68px) 0 0;
+    text-align: center;
+    font-size: 15px;
+    color: var(--c-text-muted);
+  }
+  .village__foot a {
+    color: var(--c-dark);
+    font-weight: 700;
+    text-decoration: underline;
+    text-decoration-color: var(--c-yellow);
+    text-decoration-thickness: 2px;
+    text-underline-offset: 4px;
+    transition: text-decoration-color 0.2s var(--m-fade);
+  }
+  .village__foot a:hover { text-decoration-color: var(--c-dark); }
+
+  /* ── Motion: each tier draws in as it scrolls into view ── */
+  .village[data-motion] .village__head {
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity 0.8s var(--m-fade), transform 1s var(--m-move);
+  }
+  .village[data-motion] .village__head.is-in { opacity: 1; transform: none; }
+
+  .village[data-motion] .village__tier--room {
+    opacity: 0;
+    transform: translateY(28px) scale(0.985);
+    transition: opacity 0.8s var(--m-fade), transform 1.1s var(--m-move);
+  }
+  .village[data-motion] .village__tier--room.is-in { opacity: 1; transform: none; }
+
+  .village[data-motion] .village__label::before,
+  .village[data-motion] .village__label::after {
+    transform: scaleX(0);
+    transition: transform 1.2s var(--m-move) 0.1s;
+  }
+  .village[data-motion] .village__tier.is-in .village__label::before,
+  .village[data-motion] .village__tier.is-in .village__label::after { transform: scaleX(1); }
+
+  .village[data-motion] .village__label-text,
+  .village[data-motion] .village__count {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.5s var(--m-fade), transform 0.7s var(--m-move);
+  }
+  .village[data-motion] .village__count { transition-delay: 0.12s; }
+
+  .village[data-motion] .village__item {
+    opacity: 0;
+    transform: translateY(22px) scale(0.97);
+    transition: opacity 0.6s var(--m-fade), transform 0.9s var(--m-move);
+    transition-delay: calc(160ms + min(var(--i), 12) * 55ms);
+  }
+  .village[data-motion] .village__tier.is-in :is(.village__label-text, .village__count, .village__item) { opacity: 1; transform: none; }
+
+  /* A logo fades in once it has loaded and been weighed (data-shape), never popping in; a slow one shows by 3 s */
+  .village[data-motion] .village__logo:not([data-shape]) { opacity: 0; animation: villageLate 0s linear 3s forwards; }
+
+  @keyframes villageLate { to { opacity: 1; } }
+
+  /* ── Smaller screens: fewer to a row, never too small to read ── */
+  @media (max-width: 1023px) {
+    .village__tier--signature,
+    .village__tier--champion { --cols: 3; }
+    .village__tier--builder,
+    .village__tier--friend { --cols: 4; }
+  }
+  @media (max-width: 639px) {
+    .village { --v-gap: 10px; }
+    .village__tier--signature,
+    .village__tier--champion,
+    .village__tier--builder,
+    .village__tier--friend { --cols: 2; --radius: 14px; }
+    .village__tier--room { --cols: 1; --ar: 2.6; --pad: 20px; }
+    .village__tier--signature { --ar: 1.6; --pad: 14px; }
+    .village__tier--champion { --ar: 1.75; --pad: 12px; }
+    .village__tier--builder,
+    .village__tier--friend { --ar: 1.9; --pad: 11px; }
+    .village__label { gap: 10px; letter-spacing: 0.14em; }
+    .village__go { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .village__card,
+    .village__logo,
+    .village__name,
+    .village__go { transition: none; }
+    a.village__card:hover,
+    a.village__card:active { transform: none; }
+    a.village__card:hover .village__logo { transform: none; }
   }
 
   /* ═══ In the News ═══════════ */
@@ -5032,11 +5424,6 @@ const planOrientation = (() => {
       grid-column: span 3;
       grid-row: span 2;
     }
-
-    .village { padding-block: 56px; }
-    .village__title { font-size: 1.8rem; margin-bottom: 32px; }
-    .village__logos { gap: 24px; }
-    .village__logo { width: 80px; }
 
     /* Kids Strip — Mobile */
     .kids-strip { padding: 64px 0 48px; }

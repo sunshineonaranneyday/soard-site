@@ -25,6 +25,7 @@ import {
 
 import { youTubeId, splitBio, heroHookOf, TITLE_BLOCK, isFloorPlan, isWholeSheet, focusCss } from './kids-shared.js';
 import { pagePlans, pageBefores, pagePairs, planKind, addressChecked } from './reveal-design.js';
+import { partnerTiers, tierTitle } from './partners-shared.js';
 
 export { cfId, youTubeId };
 
@@ -130,7 +131,8 @@ function sizedImages(kid) {
  * photos are measured and a Stream video is checked, like the build does.
  */
 // confirmed: JobTread has confirmed this kid's reveal (the page then shows its before photos and plans, pagePlans)
-export async function buildModel(kid, kit, { measure: measureNew = true, video: forcedVideo, showDesign = false, confirmed = false } = {}) {
+// partners: the partner records, for the Partners section's levels (the build reads the same records)
+export async function buildModel(kid, kit, { measure: measureNew = true, video: forcedVideo, showDesign = false, confirmed = false, partners = [] } = {}) {
   const dims = { ...kit.dims };
   // (measureNew: false matches a dev server, whose pages use [4, 3] for photos the manifest lacks)
   await Promise.all(sizedImages(kid).filter((id) => measureNew && !dims[id]).map(async (id) => {
@@ -143,7 +145,7 @@ export async function buildModel(kid, kit, { measure: measureNew = true, video: 
     ...(kid.beforeAfterPhotos || []).flatMap((p) => [p.before, p.after]), ...(kid.beforePhotos || []).map((p) => p.url), ...(kid.partnerLogos || []).map((p) => p.url)]);
   const notes = [video?.note, ...blobs.notes].filter(Boolean);
   const alive = blobs.alive;
-  return { kid, dims, lqip: kit.lqip, video, notes, liveBlobs: alive, templates: kit.templates, showDesign, confirmed };
+  return { kid, dims, lqip: kit.lqip, video, notes, liveBlobs: alive, templates: kit.templates, showDesign, confirmed, partners };
 }
 
 // ── Patch ─────────────────────────────────────────────────────────────
@@ -182,7 +184,9 @@ export function patchKidPage(doc, win, model) {
   const beforeStart = galleryShown + plans.length;
   const BEFORES_SHOWN = 6;
   const planBadge = (p) => (addressChecked(p) && p?.addressCheck ? { 'as-built': 'Existing', proposed: 'Proposed' }[planKind(p)] || '' : '');
-  const partnerLogos = kid.partnerLogos || [];
+  // The Partners section's tiers (the page's partnerGroups): the room's sponsors, then the logos by their partner's level
+  const partnerGroups = partnerTiers(kid.partnerLogos, kid.sponsors, (model.partners || []).map((p) => ({ slug: p.id, ...p })));
+  const partnerCount = partnerGroups.reduce((n, g) => n + g.list.length, 0);
   const accentPhoto = kid.accentImage || null;
   const heroDims = kid.heroImage ? dimsOf(kid.heroImage) : [3, 4];
   const isHeroLandscape = heroDims[0] > heroDims[1];
@@ -274,7 +278,7 @@ export function patchKidPage(doc, win, model) {
     'chapter-transform': pairs.length > 0,
     'chapter-reveal': hasVideo,
     'chapter-gallery': galleryPhotos.length > 1,
-    'chapter-partners': partnerLogos.length > 0,
+    'chapter-partners': partnerCount > 0,
   };
   let nav = null;
   if (Object.values(chapters).filter(Boolean).length > 1) {
@@ -508,20 +512,64 @@ export function patchKidPage(doc, win, model) {
     }
   }
 
-  // ── Partners ──
+  // ── Partners, by level ──
   let village = null;
-  if (partnerLogos.length) {
+  if (partnerCount) {
     village = take('full', 'section.village');
-    const list = village.querySelector('.village__logos');
-    const proto = list.querySelector('.village__logo');
-    list.replaceChildren(...partnerLogos.map((logo) => {
-      const d = proto.cloneNode(true);
-      const img = d.querySelector('img');
-      img.src = cfRaw(logo.url, 'w=200,q=85');
-      img.setAttribute('srcset', isLocal(logo.url) ? '' : `${cfRaw(logo.url, 'w=200,q=85')} 1x, ${cfRaw(logo.url, 'w=400,q=80')} 2x`);
-      img.alt = logo.name || 'Project partner';
-      return d;
-    }));
+    const rooms = (kid.roomCount || 1) > 1 ? 'rooms' : 'room';
+    const done = (kid.status || 'completed') === 'completed';
+    village.querySelector('.village__title').textContent = `The team behind ${kid.name}'s ${rooms}`;
+    village.querySelector('.village__lead').textContent = `${partnerCount === 1 ? 'One partner' : `${partnerCount} partners`} ${done ? 'gave' : partnerCount === 1 ? 'is giving' : 'are giving'} their time, materials and funding.`;
+    const LOGO = { room: [400, 170], signature: [320, 130], champion: [250, 100], builder: [210, 84], friend: [190, 76] };
+    const logoAt = (url, tier, x = 1) => {
+      const [w, h] = LOGO[tier] || LOGO.friend;
+      return cfRaw(url, `trim=border,w=${w * x},h=${h * x},fit=contain,q=${x > 1 ? 80 : 88}`);
+    };
+    const tiers = [...village.querySelectorAll('.village__tier')];
+    const tierProto = tiers[0];
+    // (the template's cards: one with a website and one without, each with a logo and a name)
+    const proto = (tag) => [...village.querySelectorAll(`${tag}.village__card`)].find((c) => c.querySelector('img.village__logo') && c.querySelector('.village__name')).closest('li');
+    const linked = proto('a');
+    const plain = proto('div');
+    const card = (p, tier, i) => {
+      const li = (p.website ? linked : plain).cloneNode(true);
+      li.setAttribute('style', `--i: ${i}`);
+      if (p.website) {
+        const a = li.querySelector('a.village__card');
+        a.href = p.website;
+        a.setAttribute('aria-label', `${p.name}, opens their website`);
+      }
+      const img = li.querySelector('img.village__logo');
+      const word = li.querySelector('.village__wordmark');
+      if (p.url) {
+        const [w, h] = LOGO[tier] || LOGO.friend;
+        img.src = logoAt(p.url, tier);
+        img.setAttribute('srcset', isLocal(p.url) ? '' : `${logoAt(p.url, tier)} 1x, ${logoAt(p.url, tier, 2)} 2x`);
+        img.alt = p.name || 'Project partner';
+        img.setAttribute('width', String(w));
+        img.setAttribute('height', String(h));
+        img.setAttribute('data-img-fallback', p.name ? 'next' : '.village__item');
+        word.setAttribute('style', 'display:none');
+      } else {
+        img.remove();
+        word.removeAttribute('style');
+      }
+      word.textContent = p.name;
+      const label = li.querySelector('.village__name');
+      if (p.name) label.textContent = p.name;
+      else label.remove();
+      return li;
+    };
+    const groups = partnerGroups.map((g) => {
+      const t = tierProto.cloneNode(true);
+      t.className = `village__tier village__tier--${g.tier}`;
+      t.dataset.tier = g.tier;
+      t.querySelector('.village__label-text').textContent = tierTitle(g.tier, g.list.length);
+      t.querySelector('.village__count').textContent = String(g.list.length);
+      t.querySelector('.village__grid').replaceChildren(...g.list.map((p, i) => card(p, g.tier, i)));
+      return t;
+    });
+    tiers.forEach((t, i) => (i ? t.remove() : t.replaceWith(...groups)));
   }
 
   // ── Closing call to action ──

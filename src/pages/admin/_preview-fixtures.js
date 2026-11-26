@@ -18,7 +18,10 @@ const kidFull = {
   videoUrl: 'https://www.youtube.com/watch?v=aaaaaaaaaaa', streamVideoId: 'templatestream',
   revealVideoUrl: 'https://example.com/live/templatestream',
   fundraisingUrl: 'https://example.com/give', heroSummary: '',
-  partnerLogos: [{ url: kidImg('partner'), name: 'Template Partner' }],
+  // Partners by level: two room sponsors (one with a logo and a website, one with neither), a logo that's a Signature
+  // partner's (a website), one with no partner record (a Friend) and one with no name either (kidPartners below)
+  partnerLogos: [{ url: kidImg('partner'), name: 'Template Partner' }, { url: 'partners-template/kid-sig', name: '' }, { url: kidImg('partner-2'), name: '' }],
+  sponsors: ['tpl-kid-room', 'tpl-kid-family'],
   // The first two with their address seen to, so the page's Existing and Proposed badges are there to copy
   plans: [
     { url: kidImg('plan-1'), label: 'Existing floor plan', type: 'as-built', addressCheck: 'wiped' },
@@ -34,6 +37,11 @@ const kidFull = {
   beforeAfterPhotos: [{ before: kidImg('before'), after: kidImg('after'), room: 'Bedroom', beforeAlt: '', afterAlt: '' }],
   roomCount: 2, childCount: 1,
 };
+const kidPartners = [
+  { id: 'tpl-kid-room', data: { slug: 'tpl-kid-room', name: 'Template Room Sponsor', level: 'champion', logo: 'partners-template/kid-room', website: 'https://example.com/room' } },
+  { id: 'tpl-kid-family', data: { slug: 'tpl-kid-family', name: 'Template Family', level: 'friend' } },
+  { id: 'tpl-kid-sig', data: { slug: 'tpl-kid-sig', name: 'Template Signature', level: 'signature', logo: 'partners-template/kid-sig', website: 'https://example.com/sig' } },
+];
 // alt: the other badge, the YouTube player and the general closing ask
 const kidAlt = { ...kidFull, status: 'needs-funding', accentImage: '', fundraisingUrl: '', revealVideoUrl: '' };
 // nophoto: the name placeholder shown when there's no hero photo
@@ -183,9 +191,9 @@ const profilePartners = [{ id: 'tpl-partner', data: { name: 'Template Partner', 
 
 export const FIXTURES = {
   kid: {
-    full: { item: kidFull, video: { type: 'stream', id: 'templatestream' } },
-    alt: { item: kidAlt, video: { type: 'youtube', id: 'aaaaaaaaaaa' } },
-    nophoto: { item: kidNophoto, video: { type: 'youtube', id: 'aaaaaaaaaaa' } },
+    full: { item: kidFull, video: { type: 'stream', id: 'templatestream' }, partners: kidPartners },
+    alt: { item: kidAlt, video: { type: 'youtube', id: 'aaaaaaaaaaa' }, partners: kidPartners },
+    nophoto: { item: kidNophoto, video: { type: 'youtube', id: 'aaaaaaaaaaa' }, partners: kidPartners },
   },
   event: {
     upcoming: { item: eventUpcoming },

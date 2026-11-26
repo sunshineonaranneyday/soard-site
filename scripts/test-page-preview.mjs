@@ -35,6 +35,8 @@ const ONLY = process.env.ONLY ? new RegExp(process.env.ONLY) : null;
 // region: the part of the page compared; skip: parts that list other items
 const TYPES = {
   kid: { dir: 'kids', path: (s) => `/kids/${s}/`, region: 'article.kid-profile', skip: ['.kids-strip', '.kid-news'], include: (k) => k.publishStatus !== 'draft',
+    // (the partner records: the Partners section lists the logos by their partner's level)
+    opts: () => ({ measure: false, partners: itemsOf('partners') }),
     parts: {
       full: ['section.hero .hero__portrait .hero__badge--building', 'section.hero .hero__accent', 'section.hero .hero__cta',
         'section.hero .hero__reveal-link', '#reveal-modal [role="dialog"]', '#chapter-nav .chapter-nav__link[data-target="chapter-partners"]',
@@ -42,7 +44,9 @@ const TYPES = {
         'section.design #design-view-all', 'section.design div[hidden] .masonry__item', 'section.ba-section .ba-slider .ba-slider__room',
         'section.reveal #stream-facade img', 'section.gallery .gallery__credit', 'section.gallery .gallery__cell--hero',
         'section.gallery #gallery .gallery__cell:not(.gallery__cell--hero) .gallery__counter', 'section.gallery #gallery-overflow .gallery__cell',
-        'section.gallery #gallery-expand', 'section.village .village__logo img', 'section.page-cta .page-cta__btn[target]'],
+        'section.gallery #gallery-expand', 'section.village .village__tier--room a.village__card img.village__logo',
+        'section.village .village__tier--room div.village__card .village__wordmark:not([style])', 'section.village div.village__card img.village__logo + .village__wordmark + .village__name',
+        'section.page-cta .page-cta__btn[target]'],
       alt: ['section.hero .hero__badge--funding', 'section.reveal #yt-facade source', 'section.page-cta'],
       nophoto: ['.hero__portrait--empty .hero__placeholder-text'],
     } },

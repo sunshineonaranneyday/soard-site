@@ -295,17 +295,15 @@ const folderKey = (s) => {
   return k.replace(/-and-/g, '-').replace(/[^a-z0-9]/g, '').replace(/and/g, '');
 };
 /**
- * Every kid page's partner logos, matched to the directory: by the exact
- * image, else by the folder it was uploaded to (/partners/<folder>/), else
- * by a folder that's the same partner under an older name ("cambria" for
- * Cambria's "cambria-black", "tko-plumbing-2023"), or by a folder someone
- * linked to the partner (logoFolders: "CR Construction is Construction
- * Resources"). Returns
- *   byPartner  Map(partner slug → [{ slug, name, year, url, logoName }]), newest first
- *   unmatched  [{ key, folders, name, url, kids: [...] }]: logos on kid pages
- *              with no directory partner, most kids first
+ * Which partner a logo on a kid page is: by the exact image, else by the
+ * folder it was uploaded to (/partners/<folder>/), else by a folder that's
+ * the same partner under an older name ("cambria" for Cambria's
+ * "cambria-black", "tko-plumbing-2023"), or by a folder someone linked to
+ * the partner (logoFolders: "CR Construction is Construction Resources").
+ * Returns match(url) → partner slug, or null. The kid page's Partners
+ * section sorts its logos by level with it (partnerTiers, below).
  */
-export function kidUsage(kids, partners) {
+export function logoMatcher(partners) {
   const byImage = new Map();
   const byKey = new Map();
   const linked = new Map();
@@ -334,6 +332,18 @@ export function kidUsage(kids, partners) {
     for (const kk of keys) if (kk.length >= 6 && (kk.startsWith(k) || k.startsWith(kk))) byKey.get(kk).forEach((s) => near.add(s));
     return near.size === 1 ? [...near][0] : null;
   };
+  return match;
+}
+
+/**
+ * Every kid page's partner logos, matched to the directory (logoMatcher).
+ * Returns
+ *   byPartner  Map(partner slug → [{ slug, name, year, url, logoName }]), newest first
+ *   unmatched  [{ key, folders, name, url, kids: [...] }]: logos on kid pages
+ *              with no directory partner, most kids first
+ */
+export function kidUsage(kids, partners) {
+  const match = logoMatcher(partners);
   const byPartner = new Map();
   const loose = new Map();
   for (const kid of kids || []) {
@@ -375,6 +385,68 @@ export function kidUsage(kids, partners) {
     return { key: g.key, folder: g.folder, folders: [...g.folders].sort(), name: named || titled(g.folder), url: g.kids[0]?.url || g.urls[0], kids: g.kids };
   }).sort((a, b) => b.kids.length - a.kids.length || a.name.localeCompare(b.name));
   return { byPartner, unmatched };
+}
+
+// ── A build's partners by level ───────────────────────────────────────────────
+/** The tiers, biggest first: the room's sponsor, then the partner levels */
+export const TIERS = ['room', 'signature', 'champion', 'builder', 'friend'];
+const TIER_TITLES = {
+  room: ['Room sponsor', 'Room sponsors'],
+  signature: ['Signature partner', 'Signature partners'],
+  champion: ['Champion partner', 'Champion partners'],
+  builder: ['Builder partner', 'Builder partners'],
+  friend: ['Friend', 'Friends'],
+};
+export const tierTitle = (tier, n) => (TIER_TITLES[tier] || TIER_TITLES.friend)[n === 1 ? 0 : 1];
+const tierOf = (level) => (level === 'signature' || level === 'champion' || level === 'builder' ? level : 'friend');
+
+/**
+ * A kid's partners by tier, biggest first, tiers with nobody left out
+ * (Peter, Nov 26 2026: "on the kids pages in the partners section can you
+ * list it out by partner level"). The kid page's Partners
+ * section and the Theater's sponsors column (src/utils/live-sponsors-html.ts)
+ * both draw from it.
+ *   partnerLogos  the page's logos ({ url, name })
+ *   roomSponsors  the room's sponsors, as partner slugs (JobTread's Monetary
+ *                 Sponsor): first, in their own tier, in the order given
+ *   partners      the partner records ({ slug, name, level, logo, website, order })
+ * A logo is its partner's by logoMatcher, else by name; it goes in its
+ * partner's level, under the partner's name and website (http(s) only). A
+ * logo with no partner record is a Friend, under the name it was given. One
+ * partner shows once, at its highest place. Each level is in the Partners
+ * page's order (order, then A to Z); a logo with no name comes last.
+ * Returns [{ tier, list: [{ name, url, slug, website }] }]; a room sponsor
+ * with no logo has url ''.
+ */
+export function partnerTiers(partnerLogos, roomSponsors, partners) {
+  const records = (partners || []).filter((p) => p?.slug);
+  const bySlug = new Map(records.map((p) => [p.slug, p]));
+  const byName = new Map();
+  for (const p of records) if (p.name && !byName.has(nameKey(p.name))) byName.set(nameKey(p.name), p);
+  const match = logoMatcher(records);
+  const site = (p) => (/^https?:\/\//i.test(String(p?.website || '').trim()) ? String(p.website).trim() : '');
+  const groups = new Map(TIERS.map((t) => [t, []]));
+  const seen = new Set();
+  for (const slug of Array.isArray(roomSponsors) ? roomSponsors : []) {
+    const p = bySlug.get(String(slug));
+    if (!p || seen.has(p.slug)) continue;
+    seen.add(p.slug);
+    groups.get('room').push({ name: String(p.name || '').trim(), url: String(p.logo || '').trim(), slug: p.slug, website: site(p), order: 0 });
+  }
+  for (const l of Array.isArray(partnerLogos) ? partnerLogos : []) {
+    const url = String(l?.url || '').trim();
+    if (!url) continue;
+    const given = String(l?.name || '').trim();
+    const p = bySlug.get(match(url)) || (given ? byName.get(nameKey(given)) : undefined);
+    const key = p ? p.slug : `logo:${cfId(url)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    groups.get(p ? tierOf(p.level) : 'friend').push({
+      name: String(p?.name || given).trim(), url, slug: p?.slug || '', website: site(p), order: Number(p?.order) || 0,
+    });
+  }
+  const sorted = (tier, list) => (tier === 'room' ? list : [...list].sort((a, b) => (!a.name - !b.name) || (a.name && b.name ? compareSite(a, b) : 0)));
+  return TIERS.map((tier) => ({ tier, list: sorted(tier, groups.get(tier)).map(({ order, ...rest }) => rest) })).filter((g) => g.list.length);
 }
 
 /** The key that groups a folder with its older names (for links and dismissals) */
