@@ -60,6 +60,7 @@ import {
   setActionDone, listDocs, saveDoc, deleteDoc, boardFileProblem, fillDocWords, docVersions, signWithCopy, unsignDoc, putFile, updateFile, deleteFile, fileRowOf, fileLocked, liveNumbers, takeSnapshot, sendPacket,
   memberStatus, roster, packetList, ID, readFileAsAgenda, sendWelcome, askToSign, approveMinutes, remindRsvp, sendMinutesNotice, patchMeeting,
   chairLive, createPractice, getPractice, resetPractice, agendaApprovals, maybeTemplateAgendas, UNSURE_SEND, NOTED_LATER, sentWhen, errorAnswer, nothingDone, NOTHING_SAVED,
+  watchPress,
 } from './_board.js';
 import { chairApprove, APPROVE_DOWN } from './_board-asks.js';
 import { isBoardAdmin, isStaffEmail, readState, asSend, readDown, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
@@ -112,6 +113,9 @@ const fail = (error, status = 400, extra = {}) => Response.json({ ok: false, err
 // (a 503 is ours and in words: a read that decides something didn't answer, so nothing was done. Board QA round 9. The
 // same answer as the board page's, from one place: ./_board.js errorAnswer. Board QA round 13)
 const fromError = (err) => errorAnswer(err, { current: true });
+// (a press: the database failing in it said in its words by default, never "Something went wrong", so no press is left
+// out. Board QA round 14)
+const pressError = (err) => errorAnswer(err, { current: true, press: true });
 // A page's read of People that didn't answer: the sign-in's words with Try again on the page, never Board with nobody on it
 // (Board QA round 10: Members empty, "has no email" on every to-do)
 const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));
@@ -326,7 +330,12 @@ export async function onRequestGet(context) {
 }
 
 export async function onRequestPost(context) {
-  const { env, request } = context;
+  // (its database watched while it runs: what of it landed is what the answer to a failure says, ./_board.js errorAnswer.
+  // Board QA round 14)
+  return watchPress(context.env, (env) => pressed(context, env));
+}
+async function pressed(context, env) {
+  const { request } = context;
   // (who it is, checked inside the answer's own catch: Board's tables not set up on a fresh server is said in words, never
   // the platform's error page. Board QA round 12)
   let me;
@@ -334,7 +343,7 @@ export async function onRequestPost(context) {
     const g = await gate(context);
     if (g.refused) return g.refused;
     me = g.me;
-  } catch (err) { return fromError(err); }
+  } catch (err) { return pressError(err); }
   try {
     if ((request.headers.get('Content-Type') || '').includes('multipart/form-data')) {
       const form = await request.formData();
@@ -349,7 +358,10 @@ export async function onRequestPost(context) {
         const signed = await signWithCopy(env, docId, form.get('file'), { slug: String(form.get('slug') || ''), by: me, replace: form.get('replace') === '1', evidence: evidence(context), original: original && typeof original.arrayBuffer === 'function' ? original : null, tell: true });
         await audit(env, me, 'updated', `Board signature added for ${signed.name}`);
         const owed = signed.owed ? await sendNotice(env, signed.owed, { waitUntil: (p) => context.waitUntil?.(p), who: noticeName(signed.name) }).catch((e) => { console.error('[board-admin] the notice', e?.message || e); return { later: 'The email to them goes by itself in a few minutes.' }; }) : {};
-        return Response.json({ ok: true, signed, doc: (await listDocs(env.DB)).find((d) => d.id === docId), ...(owed.later ? { later: owed.later } : {}) });
+        // (signed: the paper as it is now read for the answer, or on the page's next look when that read fails, never an
+        // error over a signature that's in. Board QA round 14)
+        const doc = await readAfter(listDocs(env.DB).then((docs) => docs.find((d) => d.id === docId)), SHOWS_SOON);
+        return Response.json({ ok: true, signed, ...laterOf(answerOf({ doc }), owed.later ? { later: owed.later } : {}) });
       }
       // A paper saved with its new file, in one: the file checked first, so nothing changes (no new version, nobody
       // asked to sign again) unless it can go up; a new paper whose file then didn't go isn't left without it
@@ -505,7 +517,10 @@ export async function onRequestPost(context) {
         if (!off) return fail('That signature is gone', 404);
         await audit(env, me, 'deleted', 'Board signature taken off');
         const owed = off.owed ? await sendNotice(env, off.owed, { waitUntil: (p) => context.waitUntil?.(p), who: noticeName(off.row.name) }).catch((e) => { console.error('[board-admin] the notice', e?.message || e); return { later: 'The email to them goes by itself in a few minutes.' }; }) : {};
-        return Response.json({ ok: true, doc: (await listDocs(env.DB)).find((d) => d.id === docId), ...(owed.later ? { later: owed.later } : {}) });
+        // (taken off: the paper read for the answer, or on the page's next look when that read fails, never "nothing was
+        // changed" or "that signature is gone" over one that's off. Board QA round 14)
+        const doc = await readAfter(listDocs(env.DB).then((docs) => docs.find((d) => d.id === docId)), SHOWS_SOON);
+        return Response.json({ ok: true, ...laterOf(answerOf({ doc }), owed.later ? { later: owed.later } : {}) });
       }
       case 'update-file': {
         needId();
@@ -654,7 +669,7 @@ export async function onRequestPost(context) {
           // Never "the connection dropped" for a send that never began. Board QA round 13)
           if (err.status) return Response.json({ ok: false, error: err.message }, { status: err.status });
           console.error('email-all', err);
-          return fromError(err);
+          return pressError(err);
         }
         if (!r.test && !r.already) await audit(env, me, 'updated', `Board emailed (${r.sent}): ${String(body.subject).replace(/\s+/g, ' ').trim().slice(0, 120)}`);
         return Response.json({ ok: true, ...r });
@@ -688,11 +703,16 @@ export async function onRequestPost(context) {
         const now = body.test ? {} : await welcomeNow(env.DB);
         return Response.json({ ok: r.failed === 0, ...sendAnswer(r, body.test ? AGAIN.test : AGAIN.ask), ...laterOf(now.welcomeUnread ? { reread: true, later: 'Board access shows who has it in a moment.' } : now, notedLater(r)) });
       }
-      case 'practice':
-        return Response.json({ ok: true, meeting: await createPractice(env, { by: me }) });
-      case 'practice-reset':
+      // (made, and not read back: as written, the page told to look again. Board QA round 14)
+      case 'practice': {
+        const pm = await createPractice(env, { by: me });
+        return Response.json({ ok: true, meeting: pm, ...(pm?.reread ? { reread: true, later: SHOWS_SOON } : {}) });
+      }
+      case 'practice-reset': {
         needId();
-        return Response.json({ ok: true, meeting: await resetPractice(env, id, { by: me }) });
+        const pm = await resetPractice(env, id, { by: me });
+        return Response.json({ ok: true, meeting: pm, ...(pm?.reread ? { reread: true, later: SHOWS_SOON } : {}) });
+      }
       case 'sync-access':
         return Response.json({ ok: true, access: { ...(await syncBoardAccess(env)), ...(await accessStatus(env)) } });
       // A shorter version of a report being written in the agenda (nothing saved; the item may not be saved yet)
@@ -705,6 +725,6 @@ export async function onRequestPost(context) {
         return fail('Unknown action');
     }
   } catch (err) {
-    return fromError(err);
+    return pressError(err);
   }
 }

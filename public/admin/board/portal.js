@@ -33,10 +33,10 @@ import { OrgFacts, factsOf, factHay, FORM_PAPERS } from './facts.js';
 import { viewerLink, openViewer, sizeText } from '../file-viewer.js';
 import {
   RSVP, DOC_KINDS, FILE_KINDS, meetingName, timeRange, clock, money, plural, noteBlocks, liveLines, attendanceCounts, isDate, todayEastern, monthName, answerOf, fileTitle,
-  videoOf, isHeic, asJpeg, isLive, agendaItems, tallyText, unzip, quorumFor, itemFiles, minutesFileOf, presentersOf, sectionPlan, sectionClock, clockText, formatOf, docTitle, itemDocs, signsAs, initialsOf, CONSENT_TEXT, SIGN_STYLES, styleFont, MEMBER_HOW, dueOn, dueWords,
+  videoOf, isHeic, asJpeg, isLive, agendaItems, tallyText, unzip, quorumOf, itemFiles, minutesFileOf, presentersOf, sectionPlan, sectionClock, clockText, formatOf, docTitle, itemDocs, signsAs, initialsOf, CONSENT_TEXT, SIGN_STYLES, styleFont, MEMBER_HOW, dueOn, dueWords,
   reportsOn, namesText, showsOf, booksDraw, isStatement, mainLines, forBoard, cleanMeeting, heldEarly, minutesToSign,
   NOTHING_NEW, isNothingNew, LIMITS, slidesOfItem, reportAlone, decidesAlone, facesOf, hasReport, LIVE_TITLES, orderUnits,
-  uid,
+  sendUntilAnswered, uploadId, uploadKey,
 } from '../board-shared.js';
 import { YearCompare, booksTitle } from './books.js';
 import { FinanceReview, NoteLine, notesByKey, lineKeysOf, withLineNotes, dueText } from './review.js';
@@ -55,10 +55,12 @@ import { MakeoversCard, itemsOf } from './lifecycle.js';
 import { read as readFamilies, cache as familyCache } from './family-parts.js';
 import { useCashNow, cashKnown, budgetKnown, useBudget, liveCash, Both, compact, shortAsOf, pctOf, andText, moneyTiles, fromBooks, monthsPhrase, paceText, paceOf, monthSoFar, mixOf, RevenueMix, MixHead, mixLeftOut, storeOf, StoreFigures, StoreTable, budgetDue, budgetMonthsText as budgetMonths, stepText, useChangeAs, changeIn, overIn, yearFigures, inKindWords, budgetName, Blank, cashLines, lessWritten, nonCashName, nonCashOf, ioOf, throughWords, wentParts, budgetHeading } from './money.js';
 import { figureTiles, moneyFigures, giftWho, giftAbout, giftKind, moneyTileId } from './figures.js';
-import { failed, CouldntLoad, UNREAD_WORDS } from './unread.js';
+import { failed, CouldntLoad, UNREAD_WORDS, unreadWords, emptyRead, lostOn, routeName } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
+/** The page's own ids for files whose last send got no answer, so choosing one again is the same upload (../board-shared.js uploadId) */
+const UNSURE_IDS = new Map();
 const LOGO = '/cdn-cgi/imagedelivery/ROYFuPmfN2vPS6mt5sCkZQ/brand-logo-admin/w=128';
 
 // A meeting's link on its calendar invite, or a paper's in an email (/board/<id>, public/_redirects), arrives as
@@ -714,7 +716,7 @@ function App() {
         </div>
       </div>
     </header>
-    <main class="bp-main" id="main" tabindex="-1">${page}</main>
+    <main class="bp-main" id="main" tabindex="-1" data-route=${routeName(route)} data-lost=${lostOn(data, routeName(route)).join(' ') || null}>${page}</main>
     <footer class="bp-foot">
       <div class="bp-foot__in">
         ${data.contact ? html`<p>Questions about a meeting or this page? <a href=${`mailto:${data.contact.email}`}>Email ${firstName(data.contact.name)}</a></p>` : html`<p>Sunshine on a Ranney Day · Board of Directors</p>`}
@@ -834,7 +836,7 @@ function Figures({ data, variant = 'home' }) {
       ${t.spark ? html`<${Spark} rows=${t.spark} />` : null}
       ${t.meter ? html`<${Meter} x=${t.meter} />` : null}
       <span class="bp-fig__sub">${nbw(t.sub)}</span>
-      ${t.note ? html`<span class=${`bp-fig__note ${t.tone ? `is-${t.tone}` : ''}`}>${nbw(t.note)}</span>` : null}
+      ${t.note ? html`<span class=${`bp-fig__note ${t.tone ? `is-${t.tone}` : ''}`} data-unread=${t.noteUnread || null}>${t.noteUnread ? t.note : nbw(t.note)}</span>` : null}
       ${t.aside ? html`<span class="bp-fig__note">${nbw(t.aside)}</span>` : null}
     </a>
   </li>`))}</ul>`;
@@ -859,7 +861,8 @@ function SinceLast({ ctx }) {
       <h2 class="bp-h2" id="since-h">Last meeting</h2>
       <a class="bp-cardhead__go" href=${`#/meetings/${m.id}`} onClick=${claimMorph}>${m.minutes === 'approved' ? 'The minutes' : 'The meeting'}<${Icon} name="arrow" size=${16} cls="bp-go" /></a>
     </div>
-    <div class="bp-since__what"><${DateTile} d=${m.date} mid=${m.id} /><p><strong>${meetingName(m)}</strong><span>${c.boardHere ? nbw(`${c.boardHere} of ${c.board} board members${failed(data, 'settings') ? '' : c.boardHere >= quorumFor(m, data.quorum) ? ', a quorum' : ', short of a quorum'}`) : dayOf(m.date)}</span></p><${MinutesChip} m=${m} /></div>
+    <div class="bp-since__what"><${DateTile} d=${m.date} mid=${m.id} /><p><strong>${meetingName(m)}</strong><span>${c.boardHere ? nbw(`${c.boardHere} of ${c.board} board members${quorumOf(m, quorumArgs(data)).after.replace(/ \(\d+\)$/, '')}`) : dayOf(m.date)}</span></p><${MinutesChip} m=${m} /></div>
+    ${c.boardHere && failed(data, 'settings') ? html`<${CouldntLoad} part="settings" />` : null}
     ${decided.length ? html`<h3 class="bp-mini-h">Decided</h3><ul class="bp-facts-list">${decided.map((x) => html`<li key=${x.id || x.text}><span>${x.text}</span><strong>${tallyText(x) || ({ passed: 'Passed', failed: 'Did not pass', tabled: 'Tabled' }[x.result] || '')}</strong></li>`)}</ul>` : null}
   </section>`;
 }
@@ -1234,6 +1237,7 @@ function Rsvp({ m, ctx, quiet = false }) {
     <p class="bp-rsvp__said">${m.myInvite === 'invited' ? `Answer the calendar invite${to}: yes, no or maybe. ${team} ${sees} your answer there.`
       : m.inviteOut === false ? `The calendar invite comes by email${m.inviteBy ? ` from ${m.inviteBy}` : ''} before the meeting. Answer it there: that’s where SOARD sees who’s coming.`
       : `You’re not on this meeting’s calendar invite yet, and that’s where SOARD sees who’s coming. ${by} can add you.`}</p>
+    ${!m.inviteBy && failed(data, 'settings') ? html`<p class="bp-rsvp__said" role="status" data-unread="settings">${unreadWords('settings', 'invite')}</p>` : null}
   </div>`;
 }
 
@@ -1586,7 +1590,7 @@ function MeetingsPage({ ctx }) {
           </details>`;
         })}</div>
       </div>` : null}
-      ${failed(data, 'meetings') ? html`<div class="bp-card"><${CouldntLoad} part="meetings" /></div>` : !d.past.length ? html`<div class="bp-card"><p class="bp-muted">Past meetings show here once they’re added.</p></div>` : null}
+      ${failed(data, 'meetings') ? html`<div class="bp-card"><${CouldntLoad} part="meetings" /></div>` : emptyRead(data, 'meetings', d.past) ? html`<div class="bp-card"><p class="bp-muted">Past meetings show here once they’re added.</p></div>` : null}
     </section>`;
   }, [qs, words, data, d, opened.join(), wordsTrouble, wordsComing]);
   return html`
@@ -1623,6 +1627,10 @@ function Notes({ text }) {
 const NotFound = ({ lost = '' }) => html`<a class="bp-back" href="#/meetings"><${Icon} name="back" size=${18} />All meetings</a>
   ${lost ? html`<div class="bp-card bp-empty"><h1 class="bp-h2">That meeting didn’t open</h1><${CouldntLoad} part=${lost} /></div>`
     : html`<div class="bp-card bp-empty"><h1 class="bp-h2">That meeting isn’t on the board page</h1><p class="bp-muted">It may not be shared yet.</p></div>`}`;
+/** The quorum as the page has it, for ../board-shared.js quorumOf: Settings' number, and whether the settings were read */
+const quorumArgs = (data) => ({ quorum: data?.quorum || 0, lost: failed(data, 'settings') });
+/** The same for the minutes' outline (../board-minutes-template.js minutesOutline) */
+const quorumOpts = (data) => ({ quorum: data?.quorum || 0, quorumLost: failed(data, 'settings') });
 /** Which read failed that a meeting's link could be in ('' when both came) */
 const lostMeeting = (data) => (failed(data, 'meetings') ? 'meetings' : failed(data, 'presenting') ? 'presenting' : data.me?.admin && failed(data, 'practice') ? 'practice' : '');
 
@@ -1742,7 +1750,7 @@ function reportStanding(m, it, data) {
   if (String(it.report || '').trim()) return { tone: 'ok', text: m.shared === false ? 'In' : 'In · the board can read it' };
   const a = (data.myAsks || []).find((x) => x.meetingId === m.id && x.itemId === it.id);
   // (when it's due not read just now: said so, never as if nothing were asked. Board QA round 13)
-  if (!a?.due) return failed(data, 'myAsks') ? { tone: '', text: 'When it’s due couldn’t load just now' } : null;
+  if (!a?.due) return failed(data, 'myAsks') ? { tone: '', text: 'When it’s due couldn’t load just now', unread: 'myAsks' } : null;
   return a.status === 'late' || Date.parse(a.due) <= Date.now() ? { tone: 'warn', text: `Late, was due ${dueText(a.due)}` } : { tone: '', text: `Due ${dueText(a.due)}` };
 }
 
@@ -1955,7 +1963,7 @@ function slideBy(s, it) {
  * write or fills in by itself; its documents in their place, by name and pages. What's typed reaches every slide a
  * moment after typing stops, and the slide it changed is marked and brought into view
  */
-function SlideStack({ m, it, files, draft, onOrder = null }) {
+function SlideStack({ m, it, files, draft, onOrder = null, orderLost = '' }) {
   const holder = useRef(null);
   const [w, setW] = useState(0);
   const [stops, setStops] = useState(null); // the item's stops, as the first frame's deck has them
@@ -2045,6 +2053,7 @@ function SlideStack({ m, it, files, draft, onOrder = null }) {
   ].filter(Boolean).join(' ');
   return html`<div class="bp-rp__stack" ref=${holder}>
     ${stops ? html`<p class="bp-rp__count">${list.length === 1 ? 'One slide' : `${list.length} slides`} in the meeting, in this order${movable ? html`<span class="bp-rp__count-how">Drag one to move it, or use its arrows</span>` : null}</p>` : null}
+    ${stops && orderLost ? html`<${CouldntLoad} part=${orderLost} of="order" />` : null}
     <ol class="bp-rp__slides">${units.map((u, i) => {
       const ctl = movable ? html`<span class="bp-rp__move">
         <span class="bp-rp__grip" aria-hidden="true">${GRIP}</span>
@@ -2083,10 +2092,10 @@ const ARROW_UP = html`<svg viewBox="0 0 20 20" width="16" height="16" aria-hidde
 const ARROW_DOWN = html`<svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true"><path d="M10 4.5v11M5 10.5l5 5 5-5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>`;
 
 /** Beside the report as it's written: the item's slides, as the meeting's screen will show them */
-function ReportPreview({ m, it, files, draft, onOrder }) {
+function ReportPreview({ m, it, files, draft, onOrder, orderLost = '' }) {
   return html`<div class="bp-rp__pv">
     <h2 class="bp-mini-h bp-rp__pv-h" id="rp-pv-h">In the meeting</h2>
-    <${SlideStack} m=${m} it=${it} files=${files} draft=${draft} onOrder=${onOrder} />
+    <${SlideStack} m=${m} it=${it} files=${files} draft=${draft} onOrder=${onOrder} orderLost=${orderLost} />
   </div>`;
 }
 
@@ -2347,6 +2356,10 @@ function ReportPage({ id, itemId, ctx }) {
     setData((dd) => withItem(dd, id, itemId, { slideOrder: j.slideOrder }));
   };
   const standing = reportStanding(m, it, data);
+  // (today's money not read just now: the numbers to go over and the money's slides, gone from this page, are said so in
+  // their place, never without a word; and the slides' order can't be changed meanwhile, as a new order made without the
+  // money's slides would leave them out: Board QA round 14)
+  const lostMoney =showsOf(it).includes('cash') && m.date >= data.today && failed(data, 'money');
   const copy = async () => {
     try { await navigator.clipboard.writeText(latest.current); ctx.say('Your words are copied'); } catch { ctx.say('Select the words and copy them', 'warn'); }
   };
@@ -2356,9 +2369,11 @@ function ReportPage({ id, itemId, ctx }) {
     for (const f of [...(list || [])]) {
       setAdding(f.name);
       // (the page's own id for the file, made once: sent again, the site answers with the file it kept, on its item, never
-      // a second copy. An answer lost on the way back goes once more under it before anything says to try again. Board QA
-      // round 13)
-      const fileId = uid('f_');
+      // a second copy. An answer lost on the way back goes again under it, however many are lost, before anything is said:
+      // only the site's own no says to try again, and one that never answers says it can't tell yet, with the same file
+      // chosen again going under the same id. Board QA rounds 13 and 14)
+      const key = uploadKey(f, `${id}:${itemId}`);
+      const fileId = uploadId(UNSURE_IDS, key);
       const send = async () => {
         const fd = new FormData();
         fd.append('file', f);
@@ -2368,8 +2383,8 @@ function ReportPage({ id, itemId, ctx }) {
           return await r.json().catch(() => ({ ok: false, lost: true, error: 'The site didn’t answer. Try again in a moment.' }));
         } catch { return { ok: false, lost: navigator.onLine !== false, error: navigator.onLine === false ? 'No connection. Check your internet and try again.' : 'No answer came back from the site. Try again in a moment.' }; }
       };
-      let j = await send();
-      if (!j.ok && j.lost) j = await send();
+      const j = await sendUntilAnswered(send, { lost: (x) => !x.ok && !!x.lost });
+      uploadId(UNSURE_IDS, key, { id: fileId, unsure: !!j.unsure });
       if (!j.ok) { ctx.say(`${f.name}: ${j.error}`, 'warn'); continue; }
       setData((dd) => withDocs(dd, id, itemId, j.docs, { add: { ...j.file, mine: true } }));
     }
@@ -2400,11 +2415,12 @@ function ReportPage({ id, itemId, ctx }) {
       <p class="bp-eyebrow">${labelOf(m, it)} · ${at.section || 'Agenda'}<span class="bp-soon">${m.date === data.today ? 'Today' : dayOf(m.date)}</span></p>
       <h1 class="bp-rp__title">${it.title}</h1>
       ${who.length || standing ? html`<div class="bp-rp__who">${who.length ? html`<${Presenters} people=${who} />` : null}
-        ${standing ? html`<span class=${`bp-chip ${standing.tone ? `bp-chip--${standing.tone}` : ''} bp-rp__standing`}>${standing.tone === 'ok' ? html`<${Icon} name="check" size=${14} />` : null}${standing.text}</span>` : null}</div>` : null}
+        ${standing ? html`<span class=${`bp-chip ${standing.tone ? `bp-chip--${standing.tone}` : ''} bp-rp__standing`} role=${standing.unread ? 'status' : null} data-unread=${standing.unread || null}>${standing.tone === 'ok' ? html`<${Icon} name="check" size=${14} />` : null}${standing.text}</span>` : null}</div>` : null}
     </header>
     ${showsOf(it).includes('cash') && failed(data, 'lineNotes') ? html`<${CouldntLoad} part="lineNotes" />` : null}
+    ${lostMoney ? html`<${CouldntLoad} part="money" />` : null}
     ${showsOf(it).includes('cash') ? html`<${FinanceReview} books=${m.date < data.today ? m.snapshot?.books : data.numbers?.books} meeting=${m} item=${it}
-      notes=${data.lineNotes?.[m.id]?.[it.id] || []} due=${null} canEdit=${mine && !failed(data, 'lineNotes')}
+      notes=${data.lineNotes?.[m.id]?.[it.id] || []} due=${null} canEdit=${mine && !failed(data, 'lineNotes')} notesLost=${failed(data, 'lineNotes')}
       onSaved=${(list) => setData((dd) => withLineNotes(dd, m.id, it.id, list))} />` : null}
     ${!mine ? html`<div class="bp-card bp-rp__read">
         ${it.report ? html`<${Report} text=${it.report} />` : html`<p class="bp-muted">No report on this item yet.</p>`}
@@ -2464,7 +2480,7 @@ function ReportPage({ id, itemId, ctx }) {
         <a class=${`bp-btn bp-btn--primary ${leaving ? 'is-busy' : ''}`} href=${back} aria-disabled=${leaving ? 'true' : null} onClick=${leave}>${leaving ? 'Saving…' : 'Done'}</a>
       </div>
     </div>
-    <aside class="bp-rp__preview" aria-labelledby="rp-pv-h" tabindex="0"><${ReportPreview} m=${m} it=${it} files=${files} draft=${draft} onOrder=${reorder} /></aside>
+    <aside class="bp-rp__preview" aria-labelledby="rp-pv-h" tabindex="0"><${ReportPreview} m=${m} it=${it} files=${files} draft=${draft} onOrder=${lostMoney ? null : reorder} orderLost=${lostMoney ? 'money' : ''} /></aside>
   </div>`}
   </div>`;
 }
@@ -2833,7 +2849,7 @@ function TakeMinutes({ m, ctx, noting, setNoting }) {
   // The secretary sees it as theirs; a founder sees whose it is
   const mine = d.me?.seat === 'secretary';
   const secretary = mine ? null : data.people.board.find((p) => p.seat === 'secretary');
-  const opts = { meetings: data.meetings, quorum: data.quorum, people: d.people };
+  const opts = { meetings: data.meetings, ...quorumOpts(data), people: d.people };
   const canSend = m.date <= data.today || !!m.live?.endedAt;
   const sent = m.minutesFrom?.name ? m.minutesFrom : null;
   const shut = m.minutes === 'approved';
@@ -2875,6 +2891,7 @@ function TakeMinutes({ m, ctx, noting, setNoting }) {
     <p class="bp-minutes__said">${notesOnDevice(m.id) && !shut && !noting ? 'Some of your notes haven’t saved yet. Open them to finish. ' : unsent ? (sent ? 'Changes are saved in the notes but not sent yet. ' : 'The notes are saved but not sent yet. ') : ''}${shut ? 'These were approved, and some of the notes never went in. They’re still here to read.' : sent?.typed ? `${typedWho ? `${typedWho} typed these. ` : ''}${m.shared ? 'The board can read them now and votes on them at the next meeting.' : 'The board sees them once this meeting is shared.'} To fix anything, open the notes and send the changes.` : sent ? `Board has them${sent.at ? ` as of ${shortDate(new Date(sent.at).toLocaleDateString('en-CA', { timeZone: 'America/New_York' })).replace(/, \d{4}$/, '')}` : ''}. A newer copy replaces what they say.`
       : !mine ? `${secretary ? `${secretary.name} takes them as Board Secretary, with this same card.` : 'The board’s secretary takes them, with this same card.'} They can be typed right here, or on the form or Word file.`
       : unsent ? '' : 'Type them right here beside the agenda, or use the form or Word file.'}</p>
+    ${!shut && failed(data, 'notesWaiting') ? html`<${CouldntLoad} part="notesWaiting" />` : null}
     <${Waiting} m=${m} ctx=${ctx} />
     <div class="bp-minutes__do">
       <button type="button" class="bp-btn bp-btn--primary bp-minutes__open" aria-expanded=${noting} onClick=${() => setNoting(!noting)}><${Icon} name="edit" size=${18} />${notesButton(m, data, noting)}</button>
@@ -2890,8 +2907,11 @@ function TakeMinutes({ m, ctx, noting, setNoting }) {
   </div>`;
 }
 
-/** What the button to the notes says, on the meeting's card and in the live room alike */
-const notesButton = (m, data, noting) => (noting ? 'Close the notes' : m?.minutes === 'approved' || m?.minutesFrom?.typed || data.notesWaiting?.includes(m?.id) || notesOnDevice(m?.id) ? 'Open the notes' : 'Take notes here');
+/**
+ * What the button to the notes says, on the meeting's card and in the live room alike (the notes waiting to be sent not
+ * read just now: "Open the notes", never "Take notes here" as if none were kept: Board QA round 14)
+ */
+const notesButton = (m, data, noting) => (noting ? 'Close the notes' : m?.minutes === 'approved' || m?.minutesFrom?.typed || data.notesWaiting?.includes(m?.id) || failed(data, 'notesWaiting') || notesOnDevice(m?.id) ? 'Open the notes' : 'Take notes here');
 /** Notes typed on this device that the server doesn't have yet (./notes.js) */
 const notesOnDevice = (id) => { try { return !!localStorage.getItem(`bp-notes-${id}`); } catch { return false; } };
 /** Whether this person takes this meeting's minutes: the secretary's seat, or one of Board's admins, until they're approved */
@@ -3176,9 +3196,9 @@ function MeetingDetail({ m, ctx, notes = null, lv = null }) {
   const i = d.byDate.findIndex((x) => x.id === m.id);
   const before = i > 0 ? d.byDate[i - 1] : null;
   const after = i >= 0 && i < d.byDate.length - 1 ? d.byDate[i + 1] : null;
-  // (the board's settings not read just now: no quorum said, never one guessed: Board QA round 13)
-  const need = failed(data, 'settings') ? 0 : quorumFor(m, data.quorum);
-  const quorum = need && c.boardHere ? c.boardHere >= need : null;
+  // (the board's settings not read just now: no quorum said, never one guessed: Board QA round 13; one function for it
+  // here, on Home, in Print and the minutes' outline, ../board-shared.js quorumOf: round 14)
+  const { need, met: quorum } = quorumOf(m, quorumArgs(data));
   const decided = m.motions.filter((x) => x.text);
   const presenting = [...new Map(m.sections.flatMap((s) => s.items.flatMap((it) => presentersOf(it, d.people))).map((p) => [p.slug || p.name, person(p)])).values()];
   // Where: its address a way there only while there's still coming to it (held or over, it's said, never linked)
@@ -3569,7 +3589,9 @@ function CashCard({ data }) {
       <div>
         <h2 class="bp-h2" id="cash-h">Cash in the bank</h2>
         <p class="bp-cash__total">${money(cash.total)}</p>
-        <p class="bp-muted">${cash.asOf ? `As of ${cash.asOf}` : ''}${change != null ? (Math.round(change) === 0 ? ` · even with ${cash.priorAsOf || 'a year earlier'}` : html` · <span class=${change >= 0 ? 'bp-up' : 'bp-down'}>${change >= 0 ? 'up' : 'down'} ${money(Math.abs(change))}</span> from ${cash.priorAsOf || 'a year earlier'}`) : ''}</p>
+        <p class="bp-muted">${cash.asOf ? `As of ${cash.asOf}` : ''}${change != null ? (Math.round(change) === 0 ? ` · even with ${cash.priorAsOf || 'a year earlier'}` : html` · <span class=${change >= 0 ? 'bp-up' : 'bp-down'}>${change >= 0 ? 'up' : 'down'} ${money(Math.abs(change))}</span> from ${cash.priorAsOf || 'a year earlier'}`)
+          // (the month-end balances not read just now: the change on a year says so here, never just gone: Board QA round 14)
+          : cash.priorLost ? html`${cash.asOf ? ' · ' : ''}<span data-unread="history" role="status">${unreadWords('history', 'change')}</span>` : ''}</p>
         ${cash.months != null ? html`<p class="bp-cash__months" id="cash-months"><strong>${nbw(monthsPhrase(cash.months))}</strong>${nbw(` of spending${cash.perMonth ? `, at the ${money(cash.perMonth)} a month that left the bank in the last 12 months (moves between SOARD’s own accounts aside)` : ''}`)}</p>` : null}
       </div>
       ${cash.live
@@ -3602,7 +3624,7 @@ function FinancialsPage({ ctx }) {
   const [allEarlier, setAllEarlier] = useKept('earlier-all', false);
   // A part whose read failed says so in its place and nothing of it is drawn (./unread.js): the money (the cash, the
   // books, Mercury's record, what makeovers cost), the major gifts, the tax returns
-  const lost = { money: failed(data, 'money'), gifts: failed(data, 'gifts'), sources: failed(data, 'sources') };
+  const lost = { money: failed(data, 'money'), gifts: failed(data, 'gifts'), sources: failed(data, 'sources'), meetings: failed(data, 'meetings'), docs: failed(data, 'docs') };
   // QuickBooks is the books once it's connected. Until then, Mercury's own record speaks for SOARD only once it holds the money
   const books = lost.money ? null : data.numbers.books;
   const funded = !!data.numbers.mercury && !data.numbers.mercury.empty;
@@ -3633,15 +3655,17 @@ function FinancialsPage({ ctx }) {
   const shownYears = allYears ? years : years.slice(0, 6);
   const others = lost.sources ? [] : data.filings.filter((x) => typeOf(x) === 'other');
   const cell = (y, t) => { const x = data.filings.find((z) => String(z.year) === y && typeOf(z) === t); return x ? html`<a class="bp-doclink" ...${viewerLink(fv, data.filings.indexOf(x))}><${Icon} name="documents" size=${16} />Open</a>` : html`<span class="bp-muted">None</span>`; };
-  // What the page holds, said once at the top (only what's here)
+  // What the page holds, said once at the top: what's here, and each part not read just now by the name of its place, as
+  // that place says it couldn't load (the money, the major gifts, the meetings' statements, the tax returns). Never
+  // rewritten to leave a part out because its read failed (Board QA round 14)
   const lede = `${andText([
-    lost.money ? '' : 'The cash',
+    lost.money ? 'The money' : 'The cash',
     !lost.money && (books || f?.ytd || budgetRows(budget).length || (budget === undefined && budgetDue(data))) ? 'the year in numbers' : '',
-    data.gifts && !lost.gifts ? 'its major gifts' : '',
+    data.gifts || lost.gifts ? 'its major gifts' : '',
     data.numbers.costs && !lost.money ? 'what makeovers cost' : '',
     books?.statements ? 'QuickBooks’ latest statements' : '',
-    latest ? 'the statements from each meeting' : '',
-    years.length ? 'every tax return and audit' : '',
+    latest || lost.meetings ? 'the statements from each meeting' : '',
+    years.length || lost.sources ? 'every tax return and audit' : '',
   ].filter(Boolean)).replace(/^./, (c) => c.toUpperCase())}.`;
   // Peter, Nov 7 2026: "every card is maximized in size, we should do charts and where its a longer card a show more
   // type thing". The four figures first, each to its card; then a card to a question, a chart first and its details a
@@ -3686,15 +3710,18 @@ function FinancialsPage({ ctx }) {
   const side = [budgetCard, storeCard].filter(Boolean);
   // QuickBooks' statements as they are now (as of the last full month's end), then the files of the newest meeting's
   // packet, each said for what it is: the packet's are as of that meeting, never the ones drawn above
+  // (the meetings not read just now: the packets' statements say so where they'd be, never "show here" as if there were
+  // none: Board QA round 14)
   const statements = books?.statements ? html`<section class="bp-card bp-latest" aria-labelledby="st-h">
       <${SecHead} id="st-h" title="The statements" sub="The latest from QuickBooks" />
       <${Statements} s=${books.statements} books=${books} />
-      ${latest ? html`<${More} k="packet" summary=${`The statements in the ${meetingName(latest)} packet, ${shortDate(latest.date)}`}><${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} /><//>` : null}
+      ${latest ? html`<${More} k="packet" summary=${`The statements in the ${meetingName(latest)} packet, ${shortDate(latest.date)}`}><${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} /><//>` : lost.meetings ? html`<${CouldntLoad} part="meetings" of="statements" />` : null}
     </section>`
+    : lost.meetings ? html`<section class="bp-card bp-latest" aria-labelledby="st-h"><h2 class="bp-h2" id="st-h">Financial statements</h2><${CouldntLoad} part="meetings" of="statements" /></section>`
     : latest ? html`<section class="bp-card bp-latest" aria-labelledby="st-h">
       <${SecHead} id="st-h" title="The latest statements" sub=${html`From the <a class="bp-link" href=${`#/meetings/${latest.id}`} onClick=${claimMorph}>${meetingName(latest)}</a>, ${longDate(latest.date)}`} />
       <${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} />
-    </section>` : html`<section class="bp-card"><h2 class="bp-h2">Financial statements</h2><p class="bp-muted">The income statement and balance sheet from each meeting show here.</p></section>`;
+    </section>` : emptyRead(data, 'meetings', withStatements) ? html`<section class="bp-card"><h2 class="bp-h2">Financial statements</h2><p class="bp-muted">The income statement and balance sheet from each meeting show here.</p></section>` : null;
   const papers = [
     lost.sources ? html`<section class="bp-card" aria-labelledby="tx-h" key="tx"><h2 class="bp-h2" id="tx-h">Tax returns and audits</h2><${CouldntLoad} part="sources" /></section>` : null,
     s ? html`<section class="bp-card" aria-labelledby="yr-h" key="yr" id="glance">
@@ -3710,7 +3737,7 @@ function FinancialsPage({ ctx }) {
         ${years.length > 6 ? html`<button type="button" class="bp-more-btn" aria-expanded=${allYears} onClick=${() => setAllYears(!allYears)}>${allYears ? 'Show fewer years' : nbw(`Show all ${years.length} years`)}</button>` : null}
         ${others.length ? html`<p class="bp-note">Also: ${others.map((x, k) => html`${k ? ', ' : ''}<a class="bp-link" ...${viewerLink(fv, data.filings.indexOf(x))}>${x.title}</a>`)}</p>` : null}
       </section>` : null,
-    earlier.length || budgets.length ? html`<div class="bp-stack" key="ea">
+    earlier.length || budgets.length || lost.docs ? html`<div class="bp-stack" key="ea">
         ${earlier.length ? html`<section class="bp-card" aria-labelledby="ea-h">
           <${SecHead} id="ea-h" title="Earlier statements" sub="From each meeting’s packet" />
           <ul class="bp-rows">${(allEarlier ? earlier : earlier.slice(0, 4)).map((m) => html`<li key=${m.id}><a class="bp-row" href=${`#/meetings/${m.id}`} onClick=${claimMorph}>
@@ -3721,7 +3748,9 @@ function FinancialsPage({ ctx }) {
           ${earlier.length > 4 ? html`<button type="button" class="bp-more-btn" aria-expanded=${allEarlier} onClick=${() => setAllEarlier(!allEarlier)}>${allEarlier ? 'Show the newest 4' : `Show all ${earlier.length}`}</button>` : null}
         </section>` : null}
         ${budgets.length ? html`<section class="bp-card" aria-labelledby="bu-h"><h2 class="bp-h2" id="bu-h">Budgets and audits</h2>
-          <${FileList} files=${budgets.map((x) => ({ ...x.file, name: x.title }))} labels=${false} /></section>` : null}
+          <${FileList} files=${budgets.map((x) => ({ ...x.file, name: x.title }))} labels=${false} /></section>`
+          // (SOARD's papers not read just now: the budgets and audits among them say so, never left out without a word)
+          : lost.docs ? html`<section class="bp-card" aria-labelledby="bu-h"><h2 class="bp-h2" id="bu-h">Budgets and audits</h2><${CouldntLoad} part="docs" of="budgets" /></section>` : null}
       </div>` : null,
   ].filter(Boolean);
   return html`
@@ -4223,6 +4252,9 @@ function Library({ data, q = '', words = null }) {
   // (searching, the newest six meetings with what's found, the rest a tap away: a word in every file never draws them all)
   const cut = !all && shown.length > (terms.length ? 7 : 5);
   const list = cut ? shown.slice(0, terms.length ? 6 : 4) : shown;
+  // (the meetings not read just now: their files' place says so, never a page that reads as if there were none: Board
+  // QA round 14)
+  if (failed(data, 'meetings')) return html`<section class="bp-card bp-library" aria-labelledby="lib-h"><${SecHead} id="lib-h" title="Every meeting’s files" sub="Minutes, packets and statements, newest first" /><${CouldntLoad} part="meetings" of="files" /></section>`;
   if (!meetings.length) return null;
   // A search that finds nothing here at all is said once, at the top of the page
   if (terms.length && !list.length && !elsewhere) return null;
@@ -4300,11 +4332,15 @@ function DocumentsPage({ ctx }) {
   };
   // What the page holds, said once at the top: what there is to sign, the shelves there are, the meetings' files
   const SAY = { governing: 'SOARD’s governing documents', status: 'its tax-exempt status', standing: 'registrations and insurance', plan: 'plans and reports', money: 'budgets and audits' };
+  // (a part not read just now is still named, as its place says it couldn't load: the papers, the meetings' files. The
+  // lede never rewrites itself to leave it out: Board QA round 14)
+  const lostDocs = failed(data, 'docs');
   const said = [
     factsOf(data.org, data.numbers).length ? 'SOARD’s facts' : '',
+    lostDocs ? 'SOARD’s papers' : '',
     toSign.length ? 'the papers each board member signs each year' : '',
     ...[...SHELVES, ...MORE_SHELVES].filter((sh) => SAY[sh.id] && docs.some((x) => !(x.sign && readable(x)) && shelfOf(x) === sh.id)).map((sh) => (sh.id === 'governing' && factsOf(data.org, data.numbers).length ? 'its governing documents' : SAY[sh.id])),
-    data.meetings.some((m) => m.files.length) ? 'every file from every meeting' : '',
+    data.meetings.some((m) => m.files.length) || failed(data, 'meetings') ? 'every file from every meeting' : '',
   ].filter(Boolean);
   const lede = said.length ? `${said.length > 2 ? `${said.slice(0, -1).join(', ')}, and ${said.at(-1)}` : said.join(' and ')}.`.replace(/^\w/, (c) => c.toUpperCase()) : 'SOARD’s papers, and every file from every meeting.';
   const orgCard = html`<${OrgFacts} ctx=${ctx} terms=${terms} match=${hits} focus=${aimNow()} papers=${formPapers(data)} />`;
@@ -4360,13 +4396,13 @@ function DocumentsPage({ ctx }) {
     </section>`
     : docs.length ? null
     // (the papers not read just now: said so, never "they show here once they're added". Board QA round 13)
-    : failed(data, 'docs') ? html`<section class="bp-card bp-gap bp-rise" style=${rise(1)} aria-labelledby="papers-lost-h"><h2 class="bp-h2" id="papers-lost-h">SOARD’s papers</h2><${CouldntLoad} part="docs" /></section>`
+    : !emptyRead(data, 'docs', docs) ? html`<section class="bp-card bp-gap bp-rise" style=${rise(1)} aria-labelledby="papers-lost-h"><h2 class="bp-h2" id="papers-lost-h">SOARD’s papers</h2><${CouldntLoad} part="docs" /></section>`
     : html`<div class="bp-card bp-empty bp-empty--row bp-gap bp-rise" style=${rise(1)}>
       <span class="bp-empty__icon"><${Icon} name="documents" size=${24} /></span>
       <div><h2 class="bp-h2">Bylaws and policies show here</h2>
       <p class="bp-muted">${data.contact ? `Once ${firstName(data.contact.name)} adds them, they’re here to read.` : 'They’re here to read once they’re added.'} Anything to read and sign shows on Home too.</p></div>
     </div>`}
-    ${terms.length && !onShelves.length && !toSign.some(found) && !factsOf(data.org, data.numbers).some((x) => hits(factHay(x), terms)) && !data.meetings.some((m) => m.files.some((f) => fileHit(m, f, words, terms))) ? html`<p class="bp-found" role="status">No document or file matches “${qs.trim()}”.</p>` : null}
+    ${terms.length && !onShelves.length && !toSign.some(found) && !factsOf(data.org, data.numbers).some((x) => hits(factHay(x), terms)) && !data.meetings.some((m) => m.files.some((f) => fileHit(m, f, words, terms))) ? html`<p class="bp-found" role="status">${failed(data, 'docs') || failed(data, 'meetings') ? `Nothing that loaded matches “${qs.trim()}”.` : `No document or file matches “${qs.trim()}”.`}</p>` : null}
     ${library}`;
 }
 
@@ -4415,6 +4451,11 @@ function DocPage({ id, ctx }) {
   // out): its page is the file to open, and signing
   if (!doc || (!doc.body && !doc.file)) {
     const t = signTrouble.get(id);
+    // (the papers not read just now: it didn't open, said so, as a meeting's page says it, never that it may have been
+    // taken off the board page: Board QA round 14)
+    if (!doc && failed(data, 'docs')) return html`<a class="bp-back" href="#/documents"><${Icon} name="back" size=${18} />Documents</a>
+      <div class="bp-card bp-empty bp-empty--row bp-gap"><span class="bp-empty__icon"><${Icon} name="documents" size=${24} /></span>
+        <div><h1 class="bp-h2" tabindex="-1">That document didn’t open</h1><${CouldntLoad} part="docs" of="paper" /></div></div>`;
     return html`<a class="bp-back" href="#/documents"><${Icon} name="back" size=${18} />Documents</a>
       <div class="bp-card bp-empty bp-empty--row bp-gap"><span class="bp-empty__icon"><${Icon} name="documents" size=${24} /></span>
         <div><h1 class="bp-h2" tabindex="-1" id=${t ? `trouble-${id}` : null}>${t ? 'Your signature didn’t go through' : 'That document isn’t here'}</h1><p class="bp-muted">${t ? `${t.title} ${/deleted|isn’t on the board page/.test(t.msg) ? 'was taken off the board page' : 'changed'} while you were signing it.` : 'It may have been taken off the board page.'} Everything that’s on it is in <a class="bp-link" href="#/documents">Documents</a>.</p></div></div>`;
@@ -4637,6 +4678,10 @@ function useVocab(ctx, words, on) {
   }, [ctx.data, words, on]);
 }
 
+/** The parts of the page's read search finds things in (./searchIndex) */
+const SEARCHED = ['meetings', 'presenting', 'docs', 'money', 'history', 'gifts', 'sources', 'projects', 'events', 'facts'];
+/** Those not read just now */
+const lostSearched = (data) => SEARCHED.filter((x) => failed(data, x));
 const GROUPS = ['Meetings', 'Decisions', 'In agendas and minutes', 'Files', 'People', 'Documents', 'Money', 'Makeovers', 'Coming up'];
 /**
  * A meeting's own words, for finding it by what it is and has: "meeting", "agenda", "minutes", "packet", and the next
@@ -4830,6 +4875,9 @@ function Finder({ ctx, onClose }) {
   const { words, loading, failed, retry } = useFindWords(data, true);
   // (the words of SOARD's papers come with the page's read: not read just now, they're found by their names, said so)
   const lostWords = !!data.unread?.paperWords;
+  // (a part search finds things in, not read just now: what it finds is what loaded, and nothing found says so, never
+  // "Nothing found" as if the part were empty: ./unread.js, Board QA round 14)
+  const lostFind = lostSearched(data);
   const fams = useFamilies();
   // (the cash and the budget as the board shows them: found by their amounts once they're known, ./money.js cashKnown)
   const cashSig = `${cashSigOf(useCashNow(data))}#${budgetSigOf(useBudget(data))}`;
@@ -4944,7 +4992,8 @@ function Finder({ ctx, onClose }) {
         ${terms.length && results.length && loading && !failed ? html`<p class="bp-finder__fixed" role="status">Looking in the files too…</p>` : null}
         ${terms.length && failed ? html`<p class="bp-finder__fixed" role="status">The files’ words didn’t load, so only names and agendas were searched. <button type="button" class="bp-linkbtn" onClick=${() => { retry(); ref.current?.querySelector('input')?.focus(); }}>Try again</button></p>` : null}
         ${terms.length && lostWords ? html`<p class="bp-finder__fixed" role="status">${UNREAD_WORDS.paperWords}</p>` : null}
-        ${terms.length && !results.length ? html`<p class="bp-finder__none" role="status">${loading ? 'Looking in the files…' : `Nothing found for “${qs.trim()}”.`}</p>` : null}
+        ${terms.length && !results.length ? html`<p class="bp-finder__none" role="status">${loading ? 'Looking in the files…' : lostFind.length ? `Nothing that loaded matches “${qs.trim()}”.` : `Nothing found for “${qs.trim()}”.`}</p>` : null}
+        ${terms.length && !results.length && !loading ? lostFind.map((x) => html`<${CouldntLoad} part=${x} cls="bp-finder__fixed" key=${x} />`) : null}
         ${!terms.length && q.trim() ? html`<p class="bp-finder__none" role="status">Type a word, a name or a number to search for.</p>` : null}
         ${terms.length && results.length ? html`<p class="sr-only" role="status">${plural(found.reduce((n, g) => n + g.all.length, 0), 'result')}</p>` : null}
         ${grouped.length ? html`<div role="listbox" id="bp-finder-list" aria-label=${terms.length ? 'Results' : 'Opened lately'}>${grouped.map(({ g, list, total }) => html`<div role="group" aria-labelledby=${gid(g)} key=${g}>

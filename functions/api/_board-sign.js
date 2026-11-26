@@ -149,6 +149,8 @@ export async function appendEvents(DB, build, { tries = 5 } = {}) {
       if (hashes.length && !/UNIQUE/i.test(String(err?.message || err)) && await inChain(DB, hashes.at(-1), err)) {
         return typeof plan.after === 'function' ? plan.after(all.map(() => ({ meta: { changes: 1 } }))) : plan.result;
       }
+      // (looked at, and not in the chain: none of it went in. Board QA round 14: the press's answer says so)
+      if (hashes.length) (await import('./_board.js')).notThere(err);
       // Another writer took the same place in the chain: nothing of this batch went in; look again
       if (!/UNIQUE/i.test(String(err?.message || err)) || !/prev|board_sign_events/i.test(String(err?.message || err)) || attempt >= tries - 1) throw err;
       await new Promise((r) => setTimeout(r, 15 + Math.random() * 60 * (attempt + 1)));

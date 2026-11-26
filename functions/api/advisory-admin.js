@@ -15,13 +15,13 @@
 
 import {
   whoIs, getSettings, saveSettings, leadNamed, listAsks, saveAsk, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros,
-  listHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES } from './_advisory.js';
-import { activeAdvisors, peopleRows, readState, signInWhy, asSend, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
+  listHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES, CHANGE_DOWN } from './_advisory.js';
+import { activeAdvisors, peopleRows, readState, asSend, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
 import { putFile, deleteFile, boardFileProblem } from './_board.js';
 import { logAudit } from './_audit.js';
 import { moneyView, goalNow, creditGift, uncreditGift, matchPage, findGifts, campaignFromUrl, campaignExists, sameLink } from './_advisory-money.js';
 import { pickableKids, pickKid, clearKid, kidCard } from './_advisory-sponsor.js';
-import { askPress, statusPress, sendWelcome, sendWelcomeTo, mailLog, welcomedSlugs, welcomeRecords, welcomeOf } from './_advisory-mail.js';
+import { askPress, statusPress, sendWelcome, sendWelcomeTo, welcomesSaid, mailLog, welcomedSlugs, welcomeLog, welcomeOf, addressWhy } from './_advisory-mail.js';
 import { adminMeetings, meetingAction } from './_advisory-meetings.js';
 import { advisoryBits, sharableBoardDocs } from './_board.js';
 import { boardPapers } from './_advisory-portal.js';
@@ -38,6 +38,7 @@ const fromError = (e) => {
   return Response.json({ ok: false, error: 'That didn’t go through. Try again in a moment.' }, { status: 500 });
 };
 const REFUSED = 'Only the people who run the Advisory Board can open this';
+const NOTHING_SENT = 'The site’s database didn’t answer just now, so nothing was sent. Please try again in a moment.';
 const OVERVIEW_KEY = 'advisory/SOARD_Advisory Board Overview.docx.pdf';
 const OVERVIEW_URL = 'https://files.sunshineonaranneyday.com/advisory/SOARD_Advisory%20Board%20Overview.docx.pdf';
 
@@ -65,8 +66,8 @@ export async function onRequestGet(context) {
     if (new URL(context.request.url).searchParams.get('zeffyForms')) return Response.json({ ok: true, forms: await zeffyForms(env) });
     // Each member's sign-in email alone, for a row showing one going out (a light look, every few seconds while it goes)
     if (new URL(context.request.url).searchParams.get('welcomes')) {
-      const [advisors, welcomes] = await Promise.all([activeAdvisors(env.DB), welcomeRecords(env.DB)]);
-      return Response.json({ ok: true, welcomes: Object.fromEntries(advisors.map((a) => [a.slug, welcomeOf(welcomes[a.slug], a.email)])) }, { headers: { 'Cache-Control': 'no-store' } });
+      const [advisors, w, s] = await Promise.all([activeAdvisors(env.DB), welcomeLog(env.DB), getSettings(env.DB)]);
+      return Response.json({ ok: true, welcomes: Object.fromEntries(advisors.map((a) => [a.slug, welcomeOf(w.welcomed[a.slug], a.email, Date.now(), w.waiting[a.slug], s.emails)])) }, { headers: { 'Cache-Control': 'no-store' } });
     }
     // Admin → Site Config → Zeffy: the group's campaign and each approved fundraiser's Zeffy page, nothing else
     if (new URL(context.request.url).searchParams.get('zeffyLinks')) {
@@ -88,7 +89,7 @@ export async function onRequestGet(context) {
     const [advisors, people, term, seen, sigs, missing, docs, asks, wishes, intros, hosted, money, bits, group, meetings, kids, log, welcomes] = await Promise.all([
       activeAdvisors(env.DB), peopleRows(env.DB), allTerms(env.DB, settings), lastSeen(env.DB), signatures(env.DB), missingEmails(env.DB), listDocs(env.DB), listAsks(env.DB),
       listWishes(env.DB), listIntros(env.DB), listHosted(env.DB), moneyView(env, settings), advisoryBits(env), advisoryGroupStatus(env).catch(() => null),
-      adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []), welcomeRecords(env.DB),
+      adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []), welcomeLog(env.DB),
     ]);
     const nameOf = (slug) => people.find((p) => p.slug === slug)?.name || '';
     // (mailed: its emails claimed, by the write that marked it emailed, whether they've all gone yet or not: the card
@@ -103,7 +104,7 @@ export async function onRequestGet(context) {
       group,
       // welcome: their sign-in email ({ at } | { going } | {}); emailWhy: why their email can't be their sign-in ('' when it can)
       advisors: advisors.map((a) => ({ slug: a.slug, name: a.name, email: a.email, photo: a.photo || '', organization: a.organization || '', term: term(a.slug), lastSeen: seen[a.slug] || '', signed: Object.fromEntries(Object.entries(sigs).map(([id, by]) => [id, by[a.slug] || null])),
-        welcome: welcomeOf(welcomes[a.slug], a.email), emailWhy: a.email ? signInWhy(a.email) : 'none' })),
+        welcome: welcomeOf(welcomes.welcomed[a.slug], a.email, Date.now(), welcomes.waiting[a.slug], settings.emails), emailWhy: addressWhy(a.email) })),
       missing,
       board: people.filter((p) => p.group === 'board' && p.status === 'active').map((p) => ({ slug: p.slug, name: p.name, committees: p.committees || [] })),
       docs, docKinds: DOC_KINDS, shelves: SHELVES, boardDocs: await sharableBoardDocs(env.DB),
@@ -127,10 +128,14 @@ export async function onRequestGet(context) {
 export async function onRequestPost(context) {
   const { env, request } = context;
   let sending = false;
+  // (until a press's own work begins, nothing of it is done: the database failing in who's asking, its tables or the
+  // settings is said as nothing changed (503), in words: Advisory Board QA round 26)
+  let began = false;
   try {
     const { w, by, refused } = await gate(context);
     if (refused) return refused;
     if ((request.headers.get('Content-Type') || '').includes('multipart/form-data')) {
+      began = true;
       const form = await request.formData();
       const upload = form.get('file');
       const why = await boardFileProblem(upload);
@@ -159,6 +164,7 @@ export async function onRequestPost(context) {
     sending = /^(send|email)-/.test(String(body.action || ''));
     const id = String(body.id || '');
     const settings = await getSettings(env.DB);
+    began = true;
     switch (body.action) {
       case 'save-settings': {
         const s = body.settings || {};
@@ -289,7 +295,11 @@ export async function onRequestPost(context) {
         await audit(context, by, 'updated', 'Advisory Board makeover cleared');
         return Response.json({ ok: true, ...out });
       }
-      case 'send-welcome': return Response.json({ ok: true, ...(await sendWelcome(env, { by, slugs: body.slugs })) });
+      case 'send-welcome': {
+        // (its words from what happened to each: ./_advisory-mail.js welcomesSaid)
+        const r = await sendWelcome(env, { by, slugs: Array.isArray(body.slugs) ? body.slugs.map(String) : null });
+        return Response.json({ ok: true, ...r, said: welcomesSaid(r) });
+      }
       case 'send-welcome-to': {
         // One member's, from their row: emails on or off (./_advisory-mail.js sendWelcomeTo)
         const slug = String(body.slug || '');
@@ -301,5 +311,8 @@ export async function onRequestPost(context) {
       default:
         return await meetingAction(context, { action: body.action, body, by, w });
     }
-  } catch (e) { return fromError(sending ? asSend(e) : e); }
+  } catch (e) {
+    if (!began && !e?.status) { console.error('[advisory] before a press began', e?.message || e); return fail(sending ? NOTHING_SENT : CHANGE_DOWN, 503); }
+    return fromError(sending ? asSend(e) : e);
+  }
 }

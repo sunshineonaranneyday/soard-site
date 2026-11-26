@@ -67,10 +67,9 @@ import { DEFAULT_RECEIPT_INBOX, attachToCharge } from './_spend-receipts.js';
 import { rampCardCharges, rampUserEmails, rampTransaction, rampAttach, rampConfigured } from './_ramp.js';
 import { vendorLikeness } from './_spend-match.js';
 import { pdfText, scannedPages, answerOf } from './_vendor-read.js';
-import { READERS } from './_score-scans.js';
 import { imageKind } from './_image-types.js';
 import { FREE_MAIL } from './_kid-partners.js';
-import { viaGateway, aiCapped, AI_REST_MS, AI_WAIT_NOTE } from './_ai.js';
+import { viaGateway, aiCapped, AI_REST_MS, AI_WAIT_NOTE, READERS, runReader } from './_ai.js';
 import { emailShell, esc as escHtml } from './_email-shell.js';
 import { REMINDER_SCHEMA, noteReminder, settleReminders, reminderStatus } from './_mercury-reminders.js';
 
@@ -943,7 +942,7 @@ export async function readPhoto(env, bytes) {
     let timer;
     try {
       const out = await Promise.race([
-        env.AI.run(model, {
+        runReader(env, model, {
           messages: [{ role: 'system', content: PHOTO_PROMPT }, { role: 'user', content: [{ type: 'text', text: 'Read this receipt.' }, { type: 'image_url', image_url: { url } }] }],
           max_tokens: 400, temperature: 0, ...extra, response_format: { type: 'json_schema', json_schema: RECEIPT_SCHEMA },
         }, viaGateway('mail-sweep')),

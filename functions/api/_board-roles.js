@@ -237,9 +237,26 @@ export function moveStateEntry(DB, key, group, from, to) {
  * `sure: false` only where a missing founder changes nothing anyone relies on
  */
 export async function boardAdmins(DB, settings = null, { sure = true } = {}) {
-  const saved = (settings || await readSettings(DB))?.admins;
-  if (Array.isArray(saved) && saved.some((e) => isStaffEmail(e))) return [...new Set(saved.map(normEmail).filter(isStaffEmail))];
-  return founderEmails(await peopleRows(DB, { sure }));
+  const s = settings || await readSettings(DB);
+  return adminsSaved(s) ? adminsOf(s, []) : adminsOf(s, await peopleRows(DB, { sure }));
+}
+/** Whether Settings has who runs Board saved (else it's the founders on People) */
+export const adminsSaved = (settings) => Array.isArray(settings?.admins) && settings.admins.some((e) => isStaffEmail(e));
+/**
+ * Who runs Board from the settings and People as already read (`people`: peopleRows, needed only when adminsSaved isn't):
+ * boardAdmins without a read, for an answer made from what a press read before its write (Board QA round 14)
+ */
+export const adminsOf = (settings, people) => (adminsSaved(settings) ? [...new Set(settings.admins.map(normEmail).filter(isStaffEmail))] : founderEmails(people || []));
+/**
+ * Who sends the board's invites, from the settings, who runs Board and People as already read (./_board-invite.js
+ * organizerFor reads them first; a save's answer is made from what it read before its write: Board QA round 14).
+ * `people` is needed only when Settings doesn't name one of the admins
+ */
+export function organizerOf(s, admins, people = []) {
+  if (s?.invitesFrom && admins.includes(normEmail(s.invitesFrom))) return normEmail(s.invitesFrom);
+  const president = (people || []).find((p) => p.group !== 'board' && p.role === 'founder' && /president/i.test(p.title || '') && !/vice/i.test(p.title || ''));
+  const first = president && String(president.name).toLowerCase().match(/[a-z]+/)?.[0];
+  return admins.find((e) => first && e.startsWith(`${first}@`)) || admins[0] || '';
 }
 
 /** One of the Board area's admins (always a staff sign-in). A read that fails throws readDown(SIGN_IN_DOWN), a 503, never "not one of them" */

@@ -148,6 +148,23 @@ export function webLink(v) {
 const plusYear = (date) => `${Number(date.slice(0, 4)) + 1}${date.slice(4)}`;
 export const newId = (prefix) => `${prefix}_${[...crypto.getRandomValues(new Uint8Array(9))].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b % 32]).join('')}`;
 const err = (message, status = 400) => Object.assign(new Error(message), { status });
+/**
+ * A staff save's one write (`write()`), with its answer lost looked at (`look()` → what that write alone wrote, when
+ * it's there): there, it's answered as done (→ { meta: { changes: 1 }, saved, lost }), never "That didn't go through"
+ * of a save the site has; not there, nothing was changed (503, CHANGE_DOWN); the look failing too, it can't be told yet
+ * (503, CHANGE_UNSURE). Board's landedOr (./_board.js), in the Advisory Board's words: Advisory Board QA round 26 (a gift
+ * credit, the settings, a term and a deleted ask had landed and were said as not)
+ */
+export async function staffLanded(write, look) {
+  try { return await write(); } catch (e) {
+    if (e?.status) throw e;
+    console.error('[advisory] a staff save: its answer lost, or it never ran (looked at)', e?.message || e);
+    let saved;
+    try { saved = await look(); } catch { throw err(CHANGE_UNSURE, 503); }
+    if (saved) return { meta: { changes: 1 }, saved, lost: true };
+    throw err(CHANGE_DOWN, 503);
+  }
+}
 const ID = /^[a-z]+_[a-z2-7]{6,24}$/;
 export const isId = (s) => ID.test(String(s || ''));
 
@@ -249,9 +266,11 @@ export async function saveSettings(DB, patch0, { naming = '', as = 'page' } = {}
     const me = naming ? await namedNow(DB, naming, as) : null;
     const guard = me ? ` AND EXISTS (SELECT 1 FROM team t WHERE ${stillTheirs('t', { into: false })})` : '';
     const g = me ? [me.slug, me.data] : [];
-    const r = row
-      ? await DB.prepare(`UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?${guard}`).bind(JSON.stringify(next), at, STATE, row.data, ...g).run()
-      : await DB.prepare(`INSERT OR IGNORE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1${guard}`).bind(STATE, JSON.stringify(next), at, ...g).run();
+    // (its answer lost: the settings as this write wrote them there, saved: staffLanded)
+    const r = await staffLanded(() => (row
+      ? DB.prepare(`UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?${guard}`).bind(JSON.stringify(next), at, STATE, row.data, ...g).run()
+      : DB.prepare(`INSERT OR IGNORE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1${guard}`).bind(STATE, JSON.stringify(next), at, ...g).run()),
+    async () => (await DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(STATE).first())?.data === JSON.stringify(next));
     if (Number(r?.meta?.changes) > 0) return next;
   }
   throw err('The settings kept changing. Try again in a moment.', 409);
@@ -441,7 +460,9 @@ export async function deleteAsk(DB, id) {
   const row = await DB.prepare('SELECT sent_at FROM advisory_asks WHERE id = ?').bind(id).first();
   if (row?.sent_at) throw err('That ask has gone out, so it stays on the record. Close it instead.', 409);
   await DB.prepare('DELETE FROM advisory_answers WHERE ask_id = ?').bind(id).run();
-  await DB.prepare('DELETE FROM advisory_asks WHERE id = ?').bind(id).run();
+  // (its answer lost: gone is deleted, staffLanded)
+  await staffLanded(() => DB.prepare('DELETE FROM advisory_asks WHERE id = ?').bind(id).run(),
+    async () => !(await DB.prepare('SELECT 1 AS x FROM advisory_asks WHERE id = ?').bind(id).first()));
 }
 export async function currentAsk(DB) {
   await ensureAdvisory(DB);
@@ -471,9 +492,13 @@ export async function answerAsk(DB, askId, who, { answer, note = '', via = 'page
     await askOpen(DB, askId);
     const stmt = DB.prepare(`INSERT OR REPLACE INTO advisory_answers (ask_id, slug, answer, note, at, via) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} AND ${OPEN_ASK}`)
       .bind(askId, answer, text, at, via, me.slug, me.data, askId);
-    // (a yes: whoever runs the group told, owed in this same write, so it's never lost: Advisory Board QA round 25)
-    owed = answer === 'yes' && notice ? notice(me, { askId, note: text, at }) : null;
-    const also = owed ? [oweStatement(DB, owed, { now, guard: "EXISTS (SELECT 1 FROM advisory_answers WHERE ask_id = ? AND slug = ? AND at = ? AND answer = 'yes')", binds: [askId, me.slug, at] })] : [];
+    // (whoever runs the group told, owed in this same write, so it's never lost: Advisory Board QA round 25. A notice
+    // keyed by the ask, the member and the answer brings its own statements, for a yes and a no alike: the same answer
+    // again sends nothing, a changed one says where it stands now, round 26: ./_advisory-mail.js answerNotice)
+    owed = notice ? notice(me, { askId, answer, note: text, at }) : null;
+    if (owed && !owed.statements && answer !== 'yes') owed = null;
+    const guard = { now, guard: 'EXISTS (SELECT 1 FROM advisory_answers WHERE ask_id = ? AND slug = ? AND at = ? AND answer = ?)', binds: [askId, me.slug, at, answer] };
+    const also = !owed ? [] : owed.statements ? owed.statements(DB, guard) : [oweStatement(DB, owed, guard)];
     return memberWritten(DB, stmt, also, {
       recheck: DB.prepare('SELECT ask_id FROM advisory_answers WHERE ask_id = ? AND slug = ? AND at = ? AND answer = ?').bind(askId, me.slug, at, answer), returns: false });
   });
@@ -709,7 +734,9 @@ export async function setHostedLink(DB, id, giveUrl, { by = '', now = Date.now()
   if (!row) throw err('That request is gone', 404);
   if (row.status !== 'approved') throw err('Only an approved fundraiser has a Zeffy page here', 409);
   const data = { ...parse(row.data), giveUrl: webLink(giveUrl) };
-  return hostedOf(await staffWritten(DB.prepare('UPDATE advisory_hosted SET data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), nowIso(now), by, id), 'That request is gone'));
+  // (its answer lost: looked for, by what this write alone wrote, Advisory Board QA round 26)
+  return hostedOf(await staffWritten(DB.prepare('UPDATE advisory_hosted SET data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), nowIso(now), by, id), 'That request is gone',
+    { recheck: DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id), landed: (r) => r.data === JSON.stringify(data) && r.updated_at === nowIso(now) && (r.updated_by || '') === by }));
 }
 
 // ─── Terms ──────────────────────────────────────────────────────────
@@ -779,8 +806,11 @@ export async function setTerm(DB, slug, { ends, left }, settings) {
   // (someone who left keeps their term row: a staff change to it still lands, at their address now)
   const { result } = await writeAsMember(DB, slug, async (me) => {
     const term = await termOf(DB, me.slug, settings);
-    return termWritten(DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) SELECT t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on${TERM_SAVED}`)
-      .bind(term.started, ends ?? term.ends, term.renewedOn || null, left === undefined ? term.left || null : left || null, me.slug, me.data));
+    const to = { ends: ends ?? term.ends, left: left === undefined ? term.left || null : left || null };
+    // (its answer lost: their term as this write wrote it there, saved: staffLanded)
+    return staffLanded(() => termWritten(DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) SELECT t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on${TERM_SAVED}`)
+      .bind(term.started, to.ends, term.renewedOn || null, to.left, me.slug, me.data)),
+    () => DB.prepare('SELECT started_on, ends_on, renewed_on, left_on FROM advisory_terms WHERE slug = ? AND ends_on IS ? AND left_on IS ?').bind(me.slug, to.ends, to.left).first());
   }, { fits: (p) => p.group === 'advisory', gone: GONE_STAFF, moving: MOVING_STAFF });
   return termFrom(result.saved, settings);
 }

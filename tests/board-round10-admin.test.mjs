@@ -191,10 +191,11 @@ test('1: approval keeps which file it was: a newer minutes file (however it got 
   // A save from the page never moves it (the site's to set), nor does a later write
   const again = await api({ action: 'save-meeting', meeting: { ...after, approvedFile: after.files.at(-1).id, title: 'Q4 Board Meeting, held' }, base: after.updatedAt });
   assert.equal(again.body.meeting.approvedFile, copy.id);
-  // Marked a draft again: no approved file, and the usual rule (the editor's newest, the board's PDF first)
+  // Marked a draft again: no approved file, and the usual rule (the PDF first)
   const back = await api({ action: 'save-meeting', meeting: { ...again.body.meeting, minutes: 'draft' }, base: again.body.meeting.updatedAt });
   assert.equal(back.body.meeting.approvedFile, '');
-  assert.deepEqual(opened(back.body.meeting), { editor: 'Minutes-final.docx', board: 'Minutes.pdf' });
+  /* r14: one fact says which file is the minutes (Board QA round 14, finding 2): the editor names the file the board reads, never the newest in its place */
+  assert.deepEqual(opened(back.body.meeting), { editor: 'Minutes.pdf', board: 'Minutes.pdf' });
   void word;
 });
 

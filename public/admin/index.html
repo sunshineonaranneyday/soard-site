@@ -1478,6 +1478,11 @@
     .bc-block p { margin: 0 0 .75rem; line-height: 1.55; }
     .bc-block-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem 1rem; flex-wrap: wrap; margin-bottom: .35rem; }
     .bc-block-head h4 { margin: 0; }
+    .bc-yt-lives { list-style: none; margin: .25rem 0 0; padding: 0; display: grid; gap: .5rem; }
+    .bc-yt-live { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .65rem; align-items: center; }
+    .bc-yt-live > span:nth-child(2) { display: grid; gap: .1rem; min-width: 0; }
+    .bc-yt-live strong { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+    .bc-block .checkbox-label + p { margin-top: .5rem; }
     .bc-indent { padding-left: 1.75rem; }
     .bc-radio { display: flex; gap: .65rem; align-items: flex-start; padding: .55rem 0; cursor: pointer; }
     .bc-radio input { margin-top: .25rem; flex: none; }
@@ -2812,6 +2817,12 @@
     .kd-fold__done strong { color: var(--color-text); }
     .kd-fold__err { font-size: var(--fs-sm); color: var(--tone-warn-text, var(--color-text)); }
     @media (max-width: 640px) { .kd-fold__open { margin-left: 0; } .kd-fold__form .btn, .kd-fold__form .form-select, .kd-fold__form .form-input, .kd-fold__done .btn { min-height: 44px; } }
+    /* Kids → Past makeovers in JobTread */
+    .pj-checks { display: grid; gap: 0.35rem; margin-bottom: 1rem; font-size: var(--fs-sm); color: var(--color-text-secondary); }
+    .pj-checks p { margin: 0; }
+    .pj-group { margin-bottom: 1.25rem; }
+    .pj-group h3 { margin: 0 0 0.15rem; font-size: var(--fs-base); }
+    .pj-group > .kd-fold__hint { margin: 0 0 0.6rem; }
     .kd-toolbar { position: sticky; top: 0; z-index: 30; display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; margin: 0 -0.5rem 0.75rem; padding: 0.5rem; background: var(--color-bg); }
     .kd-toolbar.is-stuck { box-shadow: 0 1px 0 var(--color-border), 0 8px 16px -12px rgba(26,27,31,0.25); }
     .kd-search { position: relative; }
@@ -5457,6 +5468,34 @@
       if (err) return html`<${LoadErrorCard} error=${`Could not load demo day invites: ${err}`} onRetry=${() => { setErr(null); load(); }} />`;
       return mod ? html`<${mod.DemoInvitesPanel} ...${props} ConfirmModal=${ConfirmModal} />` : html`<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
     }
+    // Photos & Videos (#media): every photo and video on the website to download, with what's happening at reveals
+    // and events, kept in ./media.js and loaded on first visit
+    let mediaModule = null;
+    function MediaLazy(props) {
+      const [mod, setMod] = useState(() => lazyNow(mediaModule));
+      const [err, setErr] = useState(null);
+      const load = () => {
+        mediaModule ||= lazyKeep(import('./media.js'));
+        mediaModule.then((m) => setMod(m)).catch((e) => { mediaModule = null; setErr(e.message); });
+      };
+      useEffect(load, []);
+      if (err) return html`<${LoadErrorCard} error=${`Could not load Photos & Videos: ${err}`} onRetry=${() => { setErr(null); load(); }} />`;
+      return mod ? html`<${mod.MediaArea} ...${props} />` : html`<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
+    }
+    // Families: every makeover family's contacts and their update links (#families,
+    // #families/<JobTread account>), kept in ./families.js and loaded on first visit
+    let familiesModule = null;
+    function FamiliesLazy(props) {
+      const [mod, setMod] = useState(() => lazyNow(familiesModule));
+      const [err, setErr] = useState(null);
+      const load = () => {
+        familiesModule ||= lazyKeep(import('./families.js'));
+        familiesModule.then((m) => setMod(m)).catch((e) => { familiesModule = null; setErr(e.message); });
+      };
+      useEffect(load, []);
+      if (err) return html`<${LoadErrorCard} error=${`Could not load Families: ${err}`} onRetry=${() => { setErr(null); load(); }} />`;
+      return mod ? html`<${mod.FamiliesArea} ...${props} />` : html`<div style="text-align:center;padding:2rem"><span class="spinner" /></div>`;
+    }
     function DemoDayPage(props) {
       return html`
         <div class="page-header">
@@ -5825,6 +5864,7 @@
       facebookMode: c.facebook?.mode || 'persistent',
       pageUrl: c.facebook?.pageUrl || '',
       youtubeUrl: c.youtube?.channelUrl || '',
+      youtubeAuto: c.youtube?.auto !== false,
       instagramUrl: c.instagram?.profileUrl || '',
       orientation: c.orientation || 'portrait',
       reelsEnabled: c.reels?.enabled !== false,
@@ -5846,7 +5886,7 @@
     });
     const bcCfgTo = (f) => ({
       facebook: { mode: f.facebookMode, pageUrl: f.pageUrl },
-      youtube: { channelUrl: f.youtubeUrl },
+      youtube: { channelUrl: f.youtubeUrl, auto: f.youtubeAuto },
       instagram: { profileUrl: f.instagramUrl },
       orientation: f.orientation,
       reels: { enabled: f.reelsEnabled, facebook: f.reelsFacebook, length: f.reelsLength, caption: f.reelsCaption, leadSeconds: Number(f.reelsLead), shareToFeed: f.reelsFeed },
@@ -6204,6 +6244,7 @@
         facebookToken: go('facebook', 'Facebook settings'),
         facebookPost: { label: 'Live Producer', href: 'https://www.facebook.com/live/producer' },
         youtube: go('youtube', 'YouTube settings'),
+        youtubeOther: { label: 'YouTube Studio', href: 'https://studio.youtube.com/channel/UC/videos/live' },
         slack: go('alerts', 'Alert settings'),
         kid: st.jobId ? { label: 'Open in JobTread', href: `https://app.jobtread.com/jobs/${st.jobId}` } : { label: 'Customize', onClick: () => setEditing(true) },
       };
@@ -6398,6 +6439,40 @@
       </div>`;
     }
 
+    // Each reveal's own YouTube live, as the site made it (functions/api/_youtube-live.js)
+    const YT_STATUS = {
+      created: ['badge-yellow', 'Made, not tied to the key yet'], ready: ['badge-green', 'Upcoming, starts with the phone'],
+      testStarting: ['badge-red', 'Live now'], testing: ['badge-red', 'Live now'], liveStarting: ['badge-red', 'Live now'], live: ['badge-red', 'Live now'],
+      complete: ['badge-gray', 'Ended'], deleted: ['badge-gray', 'Deleted'],
+    };
+    function BcYouTubeLives({ s, rec, on, onToggle, busy, setup, hasKey }) {
+      if (!s.youtubeSignedIn) return html`<div class="bc-block">
+        <h4>Each reveal's own YouTube live</h4>
+        <p class="text-sm text-muted">The site can make it for every reveal (the kid's name, time, story and card, public, not made for kids) once it is signed in as the channel: add <code>YOUTUBE_CLIENT_ID</code>, <code>YOUTUBE_CLIENT_SECRET</code> and <code>YOUTUBE_REFRESH_TOKEN</code> in Cloudflare Pages (docs/youtube-api.md).</p>
+      </div>`;
+      const lives = [...(rec?.lives || [])].reverse();
+      const row = (l) => {
+        const [tone, word] = YT_STATUS[l.status] || ['badge-gray', l.status];
+        const note = l.framingCheck ? 'a framing check, made private' : l.status === 'deleted' ? (l.note || 'the reveal was cancelled or replaced') : null;
+        return html`<li key=${l.id} class="bc-yt-live">
+          <span class=${`badge ${tone}`}>${word}</span>
+          <span><strong>${l.title}</strong><span class="text-sm text-muted">${[l.scheduledAt ? bcFmt(l.scheduledAt) : null, note].filter(Boolean).join(' · ')}</span></span>
+          ${l.status !== 'deleted' ? html`<a class="btn btn-ghost btn-sm" href=${`https://www.youtube.com/watch?v=${l.id}`} target="_blank" rel="noopener">YouTube ↗</a>` : null}
+        </li>`;
+      };
+      return html`<div class="bc-block">
+        <div class="bc-block-head"><h4>Each reveal's own YouTube live</h4>
+          <div class="bc-btns"><button class="btn btn-ghost btn-sm" type="button" disabled=${!!busy || !on || !hasKey} onClick=${() => setup('youtubeSync', {}, 'YouTube')}>Check YouTube now</button></div>
+        </div>
+        <label class="checkbox-label"><input type="checkbox" checked=${on} onChange=${onToggle} /> Make each reveal's live on YouTube: the kid's name, the time, the story with the website link, the reveal card as its picture; public and not made for kids</label>
+        <p class="text-sm text-muted">It goes up as Upcoming when the countdown does, so subscribers can tap Notify me, follows JobTread's time, starts with the phone and ends with the reveal. Don't start one in Studio too.</p>
+        ${!hasKey ? html`<p class="text-sm ink-warn">Paste the stream key above first.</p>` : null}
+        ${rec?.error ? html`<p class="text-sm ink-warn">Last try didn't work${rec.errorAt ? ` (${bcAgo(rec.errorAt)})` : ''}: ${rec.error}</p>` : null}
+        ${rec?.conflicts?.length ? html`<p class="text-sm ink-warn">Also waiting on the same key: ${rec.conflicts.map((x) => x.title || x.id).join(', ')}. Delete it in YouTube Studio → Content → Live, or it may start with the reveal too.</p>` : null}
+        ${lives.length ? html`<ul class="bc-yt-lives">${lives.slice(0, 6).map(row)}</ul>` : on && hasKey ? html`<p class="text-sm text-muted">None yet: the next reveal on the countdown gets one within a few minutes.</p>` : null}
+      </div>`;
+    }
+
     const BC_SECTIONS = [['checks', 'Checks'], ['phones', 'Phones'], ['facebook', 'Facebook'], ['youtube', 'YouTube'], ['instagram', 'Instagram'], ['reminders', 'Reminders'], ['alerts', 'Alerts'], ['site', 'Site']];
     function BcSettings({ data, busy, setup, setConfirm, addToast, cfg, setCfg, dirty, jump, clearJump }) {
       const st = data.state; const s = data.setup; const c = data.config; const h = data.health; const larix = data.larix || {};
@@ -6430,7 +6505,8 @@
         { ok: s.fbConfigured ? (h.facebook?.ok ?? null) : false, label: 'Facebook token', detail: s.fbConfigured ? (h.facebook?.error || (h.facebook?.name ? `${h.facebook.name} · checked ${bcAgo(h.facebook.at)}` : 'Not checked yet')) : 'FB_PAGE_ID / FB_PAGE_TOKEN aren\'t set' },
         { ok: c.facebook?.mode === 'api' ? true : fbOut ? fbOut.exists : false, label: 'Facebook simulcast', detail: c.facebook?.mode === 'api' ? 'Automatic mode makes the output when the phone connects' : !fbOut ? 'Paste the persistent stream key under Facebook' : fbOut.exists ? 'Set' : 'Missing in Stream: paste the key again' },
         { ok: ytOut ? ytOut.exists : null, label: 'YouTube simulcast', detail: !ytOut ? 'Optional' : ytOut.exists ? 'Set' : 'Missing in Stream: paste the key again' },
-        { ok: s.youtubeConfigured ? true : null, label: 'YouTube live check', detail: s.youtubeConfigured ? 'The control room and alerts confirm the channel is live' : 'Optional: add YOUTUBE_API_KEY in Cloudflare Pages so the site can confirm YouTube went live' },
+        { ok: s.youtubeConfigured ? true : null, label: 'YouTube live check', detail: s.youtubeConfigured ? 'The control room and alerts confirm the channel is live' : 'Optional: sign the site in as the channel (YouTube settings) so it can confirm YouTube went live' },
+        ...(s.youtubeAuto ? [{ ok: data.youtubeLive?.error ? false : true, label: 'Reveals\' YouTube lives', detail: data.youtubeLive?.error || 'The site makes each reveal\'s live on YouTube' }] : []),
         { ok: s.emailConfigured, label: 'Email (Resend)', detail: s.emailConfigured ? 'Ready' : 'RESEND_API_KEY is missing' },
         { ok: s.smsConfigured ? true : null, label: 'Text messages (Twilio)', detail: s.smsConfigured ? 'Ready' : 'Optional' },
         { ok: s.pushReady ? true : null, label: 'Browser alerts', detail: s.pushReady ? 'Keys ready' : 'Optional: generate keys under Reminders' },
@@ -6540,11 +6616,12 @@
           <${BcOutput} target="facebook" title="Persistent stream key" help=${html`Live Producer → Streaming software → Advanced settings → turn on <strong>Persistent stream key</strong> → copy the key. One time only.${f.facebookMode === 'api' ? ' In automatic mode it is the fallback if Facebook refuses the API.' : ''}`} o=${fbOut} presetUrl="rtmps://live-api-s.facebook.com:443/rtmp/" ...${common} />`)}
 
         ${section('youtube', 'YouTube', null, html`
-          <${BcOutput} target="youtube" title="Stream key" help=${html`YouTube Studio → Go live → Stream → copy the <strong>Stream key</strong>. In the same screen turn on <strong>Auto-start</strong> and <strong>Auto-stop</strong> so YouTube follows the phone.`} o=${ytOut} presetUrl="rtmps://a.rtmps.youtube.com:443/live2" ...${common} />
+          <${BcOutput} target="youtube" title="Stream key" help=${s.youtubeSignedIn ? html`YouTube Studio → Go live → Stream → <strong>Stream key</strong>: copy it and paste it here. The site makes each reveal's live itself (below).` : html`YouTube Studio → Go live → Stream → copy the <strong>Stream key</strong>. In the same screen turn on <strong>Auto-start</strong> and <strong>Auto-stop</strong> so YouTube follows the phone.`} o=${ytOut} presetUrl="rtmps://a.rtmps.youtube.com:443/live2" ...${common} />
+          <${BcYouTubeLives} s=${s} rec=${data.youtubeLive} on=${f.youtubeAuto} onToggle=${set('youtubeAuto')} busy=${busy} setup=${setup} hasKey=${!!ytOut} />
           <div class="bc-block">
             <label class="form-label" for="bc-yt-url">Channel or live URL (linked from the live page)</label>
             <input class="form-input" id="bc-yt-url" value=${f.youtubeUrl} placeholder="https://www.youtube.com/@…/live" onInput=${set('youtubeUrl')} style="max-width:420px" />
-            ${!s.youtubeConfigured ? html`<div class="form-hint">Add <code>YOUTUBE_API_KEY</code> (YouTube Data API v3) in Cloudflare Pages so the site can confirm YouTube actually went live.</div>` : null}
+            ${!s.youtubeConfigured ? html`<div class="form-hint">Sign the site in as the channel (above) or add <code>YOUTUBE_API_KEY</code> in Cloudflare Pages so the site can confirm YouTube actually went live.</div>` : null}
           </div>`)}
 
         ${section('instagram', 'Instagram', igCheck && !igCheck.success ? html`<button class="btn btn-ghost btn-sm" type="button" disabled=${!!busy} onClick=${checkInstagram}>Check again</button>` : null, html`
@@ -11584,6 +11661,126 @@
       </${KdDialog}>`;
     }
 
+    // ═══════════════════════════════════════════
+    // KIDS: PAST MAKEOVERS IN JOBTREAD
+    // Every finished kid page and community project with no JobTread job gets a
+    // closed one (functions/api/_past-jobs.js). Founders only: read JobTread
+    // again, answer a row with several customers, make the first job alone,
+    // then queue the rest for the application sweep.
+    // ═══════════════════════════════════════════
+    const pjApi = async (body) => {
+      const res = await fetch('/api/past-jobs-admin', body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {});
+      const r = await res.json().catch(() => ({ success: false, error: `Couldn’t reach the site (${res.status})` }));
+      if (!r.success) { const e = new Error(r.error || 'Something went wrong'); e.status = res.status; throw e; }
+      return r;
+    };
+    const PJ_GROUPS = [
+      ['ask', 'Needs a person', 'JobTread may already have its job under another name or year, or more than one customer fits. Say which.'],
+      ['failed', 'Couldn’t be made', 'JobTread refused three times. The reason is on each row.'],
+      ['queued', 'Being made', 'The site makes a few every two minutes.'],
+      ['ready', 'Ready to make', 'Each gets a closed job, Status Closed Done, closed on its reveal date.'],
+      ['made', 'Made', 'Closed jobs in JobTread now.'],
+      ['has-job', 'Already in JobTread', 'The kid status sync already links these pages to a job, so nothing is made.'],
+      ['listed', 'Not read yet', 'Read JobTread again to plan these.'],
+    ];
+    const pjDate = (d) => { if (!d) return ''; const [y, m, day] = String(d).split('-').map(Number); try { return new Date(y, m - 1, day).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }); } catch { return d; } };
+
+    function PastJobRow({ r, onAnswer, busy }) {
+      const customer = r.state === 'made' ? r.account_name : r.plan_account_name;
+      return html`<li class="kd-fold pj-row">
+        <div class="kd-fold__top">
+          <span class="kd-fold__name">${r.name} · ${r.year}</span>
+          <span class="kd-fold__meta">${r.kind === 'community' ? 'Community project' : 'Kid makeover'}</span>
+          ${r.job_id ? html`<a class="kd-fold__open" href=${`https://app.jobtread.com/jobs/${r.job_id}`} target="_blank" rel="noopener">Open the job ${kdIcon.external}</a>` : null}
+        </div>
+        ${r.state === 'has-job' ? html`<div class="kd-fold__hint">${r.plan_note}</div>` : html`<div class="kd-fold__done">
+          <span>Job <strong>${r.made_job_name || r.job_name || ''}</strong></span>
+          ${r.close_on ? html`<span>closed ${pjDate(r.close_on)}</span>` : null}
+          ${customer ? html`<span>${r.state !== 'made' && !r.plan_account_id ? 'new customer' : 'customer'} ${customer}</span>` : null}
+        </div>
+        ${r.close_on && r.close_how && r.close_on !== r.draft_date ? html`<div class="kd-fold__hint">${r.close_how}.</div>` : null}`}
+        ${r.state === 'ask' ? html`<div class="kd-fold__hint">${r.plan_note}</div>
+          ${(r.candidates || []).some((c) => c.kind === 'job') ? html`<div class="kd-fold__form">
+            ${r.candidates.filter((c) => c.kind === 'job').map((c) => html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, jobId: c.id })}>Its job is ${c.name}</button>`)}
+            <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, job: 'none' })}>It has no job: make one</button>
+          </div>` : html`<div class="kd-fold__form">
+            ${(r.candidates || []).map((c) => html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, accountId: c.id })}>${c.name}</button>`)}
+            <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, account: 'new' })}>A new customer</button>
+          </div>`}` : null}
+        ${r.answer && r.state !== 'made' ? html`<div class="kd-fold__done"><span>${r.answered_by ? kdFoldWho(r.answered_by) : 'Someone'} ${r.answer.jobId ? 'said JobTread already has its job' : r.answer.job === 'none' ? 'said it has no job yet' : `picked ${r.answer.account === 'new' ? 'a new customer' : 'this customer'}`}.</span>
+          <button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => onAnswer({ key: r.key, clear: true })}>Change</button></div>` : null}
+        ${r.error && r.state !== 'made' ? html`<div class="kd-fold__err">${r.error}</div>` : null}
+      </li>`;
+    }
+
+    // The past jobs' photos from Drive (functions/api/_past-photos.js): the first job's alone, then every job's
+    function PastPhotos({ data, busy, run }) {
+      const ph = data.photos;
+      const [notices, setNotices] = useState(null);
+      useEffect(() => { pjApi({ action: 'photo-notices' }).then((r) => setNotices(r.notices)).catch(() => {}); }, []);
+      if (!ph || !data.first) return null;
+      const by = ph.by || {};
+      const copied = by.copied || 0, waiting = by.listed || 0, failed = by.failed || 0, skipped = by.skipped || 0;
+      const scope = ph.on?.scope || null;
+      const firstName = data.first.jobName || 'the first job';
+      const stageWords = ['Before', 'During', 'After'].map((k) => (ph.stages?.[k] ? `${ph.stages[k].toLocaleString()} ${k}` : null)).filter(Boolean);
+      return html`<section class="pj-group pj-photos">
+        <h3>Photos from Drive</h3>
+        <p class="kd-fold__hint">Each past job gets the photos from its folder in Drive (Photos &amp; Video → _Makeover Photos (to JobTread)), tagged Before, During or After when its folder or the day it was taken says so; the rest stay untagged, for staff only. Videos and papers wait for their own steps, and Drive keeps every original.</p>
+        <div class="kd-fold__done">
+          <span>${scope === 'all' ? 'Copying every job’s photos' : scope === 'first' ? `Copying ${firstName}’s photos first` : 'Not started'}</span>
+          ${copied || waiting ? html`<span>${copied.toLocaleString()} copied, ${waiting.toLocaleString()} waiting${failed ? `, ${failed} couldn’t be copied` : ''}${skipped ? `, ${skipped} over 100 MB` : ''}</span>` : null}
+          ${scope === 'all' && ph.jobsToList ? html`<span>${kdPlural(ph.jobsToList, 'folder')} still to read</span>` : null}
+          ${stageWords.length ? html`<span>${stageWords.join(', ')}</span>` : null}
+        </div>
+        ${notices ? html`<p class="kd-fold__hint">${notices.error ? `Who JobTread tells about new files couldn’t be read (${notices.error}).` : notices.subscribed?.length ? `JobTread tells these people about each new file on a job: ${notices.subscribed.join(', ')}.` : 'Nobody is set up in JobTread to hear about new files on a job, so the copying notifies no one.'}</p>` : null}
+        ${ph.lastError ? html`<p class="kd-fold__err">Last problem (${kdFoldWhen(ph.lastError.at)}): ${ph.lastError.error}</p>` : null}
+        ${failed && ph.failed?.length ? html`<p class="kd-fold__err">${ph.failed.map((f) => `${f.name}: ${f.error || 'JobTread refused'}`).join('; ')}</p>` : null}
+        <div class="kd-fold__form">
+          ${!scope && !copied ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => run('photos', { action: 'photos', scope: 'first' })}>Copy ${firstName}’s photos first</button>` : null}
+          ${scope !== 'all' && copied ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => run('photos', { action: 'photos', scope: 'all' })}>Copy every job’s photos</button>` : null}
+          ${scope ? html`<button type="button" class="btn btn-ghost btn-sm" disabled=${busy} onClick=${() => run('photos', { action: 'photos', scope: 'off' })}>Stop</button>` : null}
+        </div>
+      </section>`;
+    }
+
+    function PastJobsDialog({ data, onChange, onClose, addToast }) {
+      const [busy, setBusy] = useState('');
+      const [err, setErr] = useState('');
+      const [checks, setChecks] = useState(null);
+      const rows = data.rows || [];
+      const by = (k) => rows.filter((r) => r.state === k);
+      const run = async (label, body, after) => {
+        setBusy(label); setErr('');
+        try { const r = await pjApi(body); await onChange(); after?.(r); } catch (e) { setErr(e.message); } finally { setBusy(''); }
+      };
+      useEffect(() => { pjApi({ action: 'checks' }).then(setChecks).catch(() => {}); }, []);
+      const ready = by('ready').length;
+      const counts = [[ready, 'ready to make'], [by('ask').length, 'waiting on a person'], [by('queued').length, 'being made'], [by('failed').length, 'couldn’t be made'],
+        [by('made').length, 'made'], [by('has-job').length, 'already in JobTread']].filter(([n]) => n).map(([n, w]) => `${n.toLocaleString()} ${w}`);
+      const sub = data.planned ? `Read from JobTread ${kdFoldWhen(data.planned.at)}: ${counts.join(', ') || 'nothing on the list'}.` : 'Not read from JobTread yet.';
+      const qb = checks?.quickbooks;
+      return html`<${KdDialog} title="Past makeovers in JobTread" size="lg" onClose=${onClose} busy=${!!busy} sub=${sub}
+        footer=${html`
+          <button type="button" class="btn btn-ghost" disabled=${!!busy} onClick=${() => run('plan', { action: 'plan' })}>${busy === 'plan' ? 'Reading JobTread…' : 'Read JobTread again'}</button>
+          ${!data.first ? html`<button type="button" class="btn btn-primary" disabled=${!!busy || !ready} onClick=${() => run('first', { action: 'first' }, (r) => addToast?.(`Made ${r.made?.jobName || 'the first job'} in JobTread`, 'success'))}>${busy === 'first' ? 'Making it…' : 'Make the first job'}</button>`
+            : ready ? html`<button type="button" class="btn btn-primary" disabled=${!!busy} onClick=${() => run('rest', { action: 'rest' }, (r) => addToast?.(`${kdPlural(r.queued || 0, 'job')} on the way to JobTread`, 'success'))}>${busy === 'rest' ? 'Queuing…' : `Make the rest (${ready})`}</button>` : null}`}>
+        <div class="pj-checks">
+          <p>The first job is made alone, so JobTread’s workflows, QuickBooks and DataX can be checked before the rest.${data.first ? ` The first, ${data.first.jobName || 'one job'}, was made ${kdFoldWhen(data.first.at)}.` : ''}</p>
+          ${qb ? html`<p>QuickBooks: ${qb.known ? (qb.connected ? (qb.creatingProjects ? 'JobTread makes a QuickBooks project for every new job, so these would get closed, empty projects.' : 'connected, and new jobs don’t make projects.') : 'not connected to JobTread.') : 'JobTread doesn’t say whether new jobs make QuickBooks projects, so QuickBooks itself is checked after the first job.'}</p>` : null}
+          ${checks?.workflows?.list?.length ? html`<p>JobTread workflows that are on: ${checks.workflows.list.map((w) => w.name).join(', ')}.</p>` : null}
+          ${data.summary?.differs?.length ? html`<p>${kdPlural(data.summary.differs.length, 'date')} differ from the reviewed list (a date outside the page’s year closes on Dec 31).</p>` : null}
+        </div>
+        ${err ? html`<p class="kd-fold__err" role="alert">${err}</p>` : null}
+        <${PastPhotos} data=${data} busy=${!!busy} run=${run} />
+        ${PJ_GROUPS.map(([k, label, hint]) => {
+          const list = by(k);
+          return list.length ? html`<section class="pj-group"><h3>${label} <span class="text-muted">${list.length}</span></h3><p class="kd-fold__hint">${hint}</p>
+            <ul class="kd-fold-list">${list.map((r) => html`<${PastJobRow} key=${r.key} r=${r} busy=${!!busy} onAnswer=${(body) => run('answer', { action: 'answer', ...body })} />`)}</ul></section>` : null;
+        })}
+      </${KdDialog}>`;
+    }
+
     function KidsList({ kids, partners = [], dashboardFilter, onClearFilter, onEdit, onDelete, addToast, onReload, onDeploy }) {
       const [search, setSearch] = useState('');
       // Upload photos and videos (profiles themselves are made when a family is approved)
@@ -11609,6 +11806,12 @@
         return () => { on = false; };
       }, []);
       const foldersLeft = folders.folders.filter((f) => !f.decision).length;
+      // Past makeovers in JobTread (founders only: anyone else's read is refused, and the card stays away)
+      const [pastJobs, setPastJobs] = useState(null);
+      const [pastOpen, setPastOpen] = useState(false);
+      const loadPastJobs = () => pjApi().then((r) => setPastJobs(r)).catch(() => setPastJobs(null));
+      useEffect(() => { loadPastJobs(); }, []);
+      const pastLeft = (pastJobs?.rows || []).filter((r) => !['made', 'has-job'].includes(r.state)).length;
       const folderSaved = (row) => setFolders((x) => ({ ...x, folders: x.folders.map((f) => (f.folder === row.folder ? row : f)) }));
       const [deleted, setDeleted] = useState([]);
       const [showDeleted, setShowDeleted] = useState(false);
@@ -11702,7 +11905,9 @@
         const res = await sendOrder(full).catch((e) => ({ success: false, error: e.message }));
         setSavingOrder(null);
         if (!res.success) { addToast(`Couldn’t save the order: ${res.error}`, 'error'); return false; }
-        addToast('Order saved. Meet the Kids shows it after you publish.', 'success', {
+        addToast(section === 'in-progress'
+          ? 'Order saved. It shows after you publish: Meet the Kids keeps kids with a reveal date in reveal order.'
+          : 'Order saved. Meet the Kids shows it after you publish.', 'success', {
           label: 'Undo',
           fn: async () => {
             const back = await sendOrder(before).catch((e) => ({ success: false, error: e.message }));
@@ -11843,12 +12048,13 @@
         ${uploading ? html`<${KidMediaUpload} kids=${kids} addToast=${addToast} onClose=${() => setUploading(false)} onReload=${onReload} onDeploy=${onDeploy}
           onOpen=${(slug) => { setUploading(false); onEdit(slug); }} />` : null}
         ${naming ? html`<${KidFoldersDialog} folders=${folders.folders} kids=${folders.kids} onSaved=${folderSaved} onClose=${() => setNaming(false)} />` : null}
+        ${pastOpen && pastJobs ? html`<${PastJobsDialog} data=${pastJobs} onChange=${loadPastJobs} addToast=${addToast} onClose=${() => setPastOpen(false)} />` : null}
         ${showDeleted ? html`<${KidsDeletedDialog} kids=${kids} deleted=${deleted} addToast=${addToast} onClose=${() => setShowDeleted(false)}
           onRestored=${(slug) => { setShowDeleted(false); setDeleted((d) => d.filter((x) => x.slug !== slug)); onReload?.(); }} />` : null}
         <div class="page-header kd-head">
           <div>
             <h2>Kids</h2>
-            <p class="page-sub">${kdPlural(kids.length, 'profile')} · ${served.toLocaleString()} kids served. Listed in Meet the Kids order. Changes go live when you publish.</p>
+            <p class="page-sub">${kdPlural(kids.length, 'profile')} · ${served.toLocaleString()} kids served. Grouped as on Meet the Kids. Changes go live when you publish.</p>
           </div>
           <div class="kd-head__actions">
             <a class="btn btn-ghost btn-sm" href="/kids/" target="_blank" rel="noopener">Meet the Kids ${kdIcon.external}</a>
@@ -11870,6 +12076,14 @@
             <span>${kdPlural(foldersLeft, 'folder')} of makeover photos in Dropbox ${foldersLeft === 1 ? 'matches' : 'match'} no kid page. Say whose each one is before the photos move to JobTread.</span>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setNaming(true)}>${kdIcon.check} Name them…</button>
+        </div>` : null}
+
+        ${pastJobs && pastLeft ? html`<div class="kd-tidy-banner pj-banner" role="note">
+          <div class="kd-tidy-banner__text">
+            <strong>Past makeovers in JobTread</strong>
+            <span>${kdPlural(pastLeft, 'past project')} ${pastLeft === 1 ? 'has' : 'have'} no JobTread job yet. Each gets a closed one, so JobTread holds every project and its old photos have a place to go.</span>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" onClick=${() => setPastOpen(true)}>${kdIcon.check} Open…</button>
         </div>` : null}
 
         ${!kids.length ? html`<div class="card kd-empty-all">
@@ -11897,7 +12111,7 @@
         <div class="sr-only" aria-live="assertive" aria-atomic="true">${awaitingDrag.announce || buildingDrag.announce}</div>
 
         ${activeSection('needs-funding', awaiting, awaitingDrag, 'Awaiting funding', 'First on Meet the Kids, in this order.')}
-        ${activeSection('in-progress', building, buildingDrag, 'In build', 'Next on Meet the Kids. The first one is the home page’s Now Building feature.')}
+        ${activeSection('in-progress', building, buildingDrag, 'In build', 'Next on Meet the Kids, the next reveal first (JobTread’s schedule). One with no reveal date yet goes in this order. The first one here is the home page’s Now Building feature.')}
 
         ${completedVisible.length ? html`<section class="card kd-section" aria-labelledby="kd-sec-h-completed">
           <header class="sec-head kd-section__head">
@@ -20956,6 +21170,9 @@ ${sections || '<p>No one yet.</p>'}
             if (!r.ok || !d.ok) throw new Error(d.error || `status ${r.status}`);
             setEmail(null);
             reloadEmails();
+            // (an Advisory Board member's email that isn't their own, a SOARD group inbox or staff address: saved, and the
+            // server says their Advisory Board emails won't go there: Advisory Board QA round 26)
+            if (d.note) addToast(d.note, 'info');
           } catch (e) { addToast(`Saved, but the invite email didn’t: ${e.message}`, 'error'); }
         }
         if (wasNew) onSaved?.(rec.slug);
@@ -26348,8 +26565,13 @@ ${sections || '<p>No one yet.</p>'}
         { id: 'dashboard', label: 'Dashboard', icon: 'dashboard', hash: '' },
         { id: 'applications', label: 'Applications', icon: 'applications', hash: '#applications', meta: 'Families applying' },
         { id: 'kids-hub', label: 'Kids', icon: 'kids', hash: '#kids', meta: 'Kid pages and community projects' },
+        // Every makeover family's contacts, from JobTread, and the link that lets a family check them (./families.js)
+        { id: 'families', label: 'Families', icon: 'families', hash: '#families', meta: 'Every makeover family’s contacts, and their update links' },
         { id: 'demo-day', label: 'Demo Day', icon: 'demoDay', hash: '#demo-day', meta: 'Calendar invites for the first day of construction' },
         { id: 'broadcast', label: 'Reveals', icon: 'goLive', hash: '#broadcast', meta: 'Live broadcast and invites' },
+        // Photos & Videos (Nov 2026, for whoever posts SOARD's social media): every photo and video on the website to
+        // download, and what's coming up and just happened at reveals and events (./media.js)
+        { id: 'media', label: 'Photos & Videos', icon: 'media', hash: '#media', meta: 'Every photo and video to download, and what’s happening at reveals and events' },
         { id: 'job-costs', label: 'Job Costs', icon: 'jobCosts', hash: '#job-costs', meta: 'Spending against budgets, bills, close-outs, the budget builder and the insurance audit' },
         // Donors & Partners (Nov 2026): everyone who gives, the partners on the website, and checks into Zeffy, one area
         // with one set of tabs (./donor-tabs.js); Partners kept its own address (#partners) under it
@@ -26427,6 +26649,8 @@ ${sections || '<p>No one yet.</p>'}
     const NAV_PRELOAD = {
       applications: [() => applicationsModule, (p) => { applicationsModule = p; }, './applications.js'],
       'demo-day': [() => demoInvitesModule, (p) => { demoInvitesModule = p; }, './demo-invites.js'],
+      media: [() => mediaModule, (p) => { mediaModule = p; }, './media.js'],
+      families: [() => familiesModule, (p) => { familiesModule = p; }, './families.js'],
       broadcast: [() => controlRoomModule, (p) => { controlRoomModule = p; }, './control-room.js'],
       'press-hub': [() => pressModule, (p) => { pressModule = p; }, './press.js'],
       'site-hub': [() => siteConfigModule, (p) => { siteConfigModule = p; }, './site-config.js'],
@@ -27146,6 +27370,7 @@ ${sections || '<p>No one yet.</p>'}
         kids: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4" /><path d="M6 21v-2a6 6 0 0 1 12 0v2" /></svg>`,
         partners: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m11 17 2 2a1 1 0 1 0 3-3" /><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4" /><path d="m21 3 1 11h-2" /><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3" /><path d="M3 4h8" /></svg>`,
         team: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="9" cy="7" r="3" /><path d="M3 21v-1a5 5 0 0 1 10 0v1" /><circle cx="18" cy="9" r="2.5" /><path d="M15 21v-1a3.5 3.5 0 0 1 7 0v1" /></svg>`,
+        families: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5" /><path d="M5 9v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9" /><circle cx="12" cy="12.5" r="2.2" /><path d="M8.5 21v-1.5a3.5 3.5 0 0 1 7 0V21" /></svg>`,
         articles: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4Z" /></svg>`,
         events: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>`,
         community: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></svg>`,
@@ -27165,6 +27390,7 @@ ${sections || '<p>No one yet.</p>'}
         press: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2Zm0 0a2 2 0 0 1-2-2v-9c0-1.1.9-2 2-2h2" /><path d="M18 14h-8" /><path d="M15 18h-5" /><path d="M10 6h8v4h-8V6Z" /></svg>`,
         mail: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><rect width="20" height="16" x="2" y="4" rx="2" /><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" /></svg>`,
         goLive: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" /><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" /><circle cx="12" cy="12" r="2" /><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" /><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19" /></svg>`,
+        media: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 22H4a2 2 0 0 1-2-2V6" /><path d="m22 13-1.296-1.296a2.41 2.41 0 0 0-3.408 0L11 18" /><circle cx="12" cy="8" r="2" /><rect width="16" height="16" x="6" y="2" rx="2" /></svg>`,
         demoDay: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9" /><path d="m18 15 4-4" /><path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5" /></svg>`,
         auditLog: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M22 12h-2.5a2 2 0 0 0-1.9 1.5l-2.4 8.3a.3.3 0 0 1-.5 0L9.2 2.2a.3.3 0 0 0-.5 0l-2.4 8.3A2 2 0 0 1 4.5 12H2" /></svg>`,
         history: html`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></svg>`,
@@ -27521,6 +27747,13 @@ ${sections || '<p>No one yet.</p>'}
 
           case 'demo-day':
             return html`<${DemoDayPage} addToast=${addToast} />`;
+
+          case 'media':
+            return html`<${MediaLazy} addToast=${addToast} kids=${kids} events=${events} communityProjects=${communityProjects}
+              listsReady=${!loading || kids.length > 0} />`;
+
+          case 'families':
+            return html`<${FamiliesLazy} addToast=${addToast} />`;
 
           // ─── Site Config: ./site-config.js, by public page (#site/<page>) ───
           case 'site-hub':

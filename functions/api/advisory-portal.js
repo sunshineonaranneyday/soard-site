@@ -21,7 +21,7 @@
 
 import { whoIs, answerAsk, addIntro, requestHost, signDoc, renew, getSettings } from './_advisory.js';
 import { advisoryPortalData } from './_advisory-portal.js';
-import { leadNotice, sendNotice } from './_advisory-mail.js';
+import { leadNotice, answerNotice, sendNotice } from './_advisory-mail.js';
 import { noteGet, noteEvents } from './_board-activity.js';
 import { PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
 
@@ -67,7 +67,9 @@ export async function onRequestPost(context) {
     switch (body.action) {
       case 'answer': {
         const { slug, name, notice, ...mine } = await answerAsk(env.DB, String(body.askId || ''), w, { answer: body.answer, note: body.note }, {
-          notice: (me, a) => leadNotice('answer', { name: me.person.name, note: a.note, ref: `${a.askId}:${me.slug}:${a.at}` }) });
+          // (keyed by the ask, the member and the answer, never the moment of the press: the same answer again sends
+          // nothing; a changed one sends one notice saying where it stands now: Advisory Board QA round 26)
+          notice: (me, a) => answerNotice({ askId: a.askId, slug: me.slug, name: me.person.name, answer: a.answer, note: a.note }) });
         if (notice) await later(context, sendNotice(env, notice));
         return Response.json({ ok: true, mine });
       }

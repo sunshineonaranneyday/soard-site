@@ -45,7 +45,7 @@ test('the words: the season, the sentence, the close day when there is one', () 
 });
 
 test('pages where someone is doing something never get it', () => {
-  for (const p of ['/apply/', '/apply', '/apply/form/', '/apply/community-project/', '/donate/', '/trade-partners/', '/trade-partners/account/', '/advisory-board/apply/', '/profile-update/', '/admin/', '/api/application-open']) {
+  for (const p of ['/apply/', '/apply', '/apply/form/', '/apply/community-project/', '/donate/', '/trade-partners/', '/trade-partners/account/', '/advisory-board/apply/', '/profile-update/', '/family-update/', '/admin/', '/api/application-open']) {
     assert.equal(barSkips(p), true, p);
   }
   for (const p of ['/', '/kids/', '/kids/max/', '/reveals/', '/faq/', '/about/financials/', '/advisory-board/', '/live/', '/application-tips/', '/applyx/']) {
@@ -86,7 +86,7 @@ test('the server shows it only while open, not to someone who closed it, never o
 
 // Every page section has a decision, and the ones that show it run the bar
 const SHOW = ['about', 'advisory-board', 'community', 'events', 'faq', 'how-it-works', 'kids', 'partners', 'privacy-policy', 'publicity', 'resources', 'reveals', 'terms', 'ways-to-give'];
-const SKIP = ['404', '[book]', 'admin', 'api', 'apply', 'book-version.json', 'branding', 'donate', 'llms-full.txt', 'llms.txt', 'og', 'profile-update', 'sunny-and-ranney', 'trade-partners'];
+const SKIP = ['404', '[book]', 'admin', 'api', 'apply', 'book-version.json', 'branding', 'donate', 'family-update', 'llms-full.txt', 'llms.txt', 'og', 'profile-update', 'sunny-and-ranney', 'trade-partners'];
 const SPECIAL = ['index', 'live']; // home: functions/index.js; live: functions/live/[[path]].js
 
 test('every page section is decided: the bar runs where it shows and nowhere else', () => {

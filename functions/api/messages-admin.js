@@ -54,6 +54,7 @@ import { errorAlert } from './stream-webhook.js';
 import { medicalNote, fallbackMedicalNote } from './_applicant-comms.js';
 import { activity, comingUp, deliverability, deliveryFacts, emailDetail, invitesOut } from './_messages-activity.js';
 import { applicantEmail as advisoryThanks, staffEmail as advisoryStaff } from './_advisory-applications.js';
+import { familyEmail, linkUrl as familyLinkUrl, LINK_DAYS as FAMILY_LINK_DAYS } from './_families.js';
 import { packetEmail, welcomeEmail, reminderEmail, minutesEmail, inviteNotes } from './_board.js';
 import { correctionEmail, correctionDecidedEmail } from './_board-corrections.js';
 import { actionReminderEmail } from './_board-actions.js';
@@ -507,6 +508,8 @@ export async function buildPreview(env, id, { lang = 'en', me = '', now = Date.n
     }
     case 'app-resume':
       return email(resumeLinkEmail({ year: (await readAppSettings(env.DB, now)).year, first: SAMPLE.parentFirst, link: sampleApplicationUrl, lang }), { to: 'The family, at the address they type on the form' });
+    case 'family-update':
+      return email(familyEmail({ greeting: `${SAMPLE.parentFirst} and Sam Stone`, child: SAMPLE.childFirst, url: familyLinkUrl('sample-link-for-preview-only'), expiresAt: new Date(now + FAMILY_LINK_DAYS * DAY).toISOString() }), { to: 'Everyone in the family with an email address in JobTread' });
     case 'app-reminder': {
       const year = (await readAppSettings(env.DB, now)).year;
       const form = await formFor(env.DB, { year, lang });

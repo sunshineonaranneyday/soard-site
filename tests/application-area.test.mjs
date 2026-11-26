@@ -225,7 +225,7 @@ test('an address the Census can’t find, or a Census outage, leaves the answer 
   assert.equal(app.jt_state.formArea.reason, 'no-match');
 
   w.world.censusDown = true;
-  const down = await readyDraft(answersAt(HOME_IN, { boundary: AREA_VALUES.near }));
+  const down = await readyDraft(answersAt(HOME_IN, { boundary: AREA_VALUES.near, childName: { first: 'Blake', last: 'Stone' } })); // (another child: one child's second application of the season is turned away)
   const out = await areaCheck(env, await form(), HOME_IN, { draft: down });
   assert.equal(out.reason, 'error');
   assert.equal((await getDraft(env.DB, down.id)).area, null, 'an outage isn’t kept: the next try asks again');

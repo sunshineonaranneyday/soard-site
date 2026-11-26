@@ -235,7 +235,7 @@ test('m1: a welcome that went but couldn’t be marked as sent is said as sent, 
   const app = await applied('Wes Mark', 'wes.mark@example.org');
   const key = (await plan(app.id)).key;
   // (the write that marks it had, after it went: setEntry('welcomed', …), never the claim, which has conditions)
-  const undo = fault((sql) => /^UPDATE board_state SET data = json_set\(data, '\$\."welcomed"\.' \|\| json_quote\(/.test(sql)); /* r21: the mark is now one statement that finds its claim as it's written (a rename between finding and marking left it at the old address), so the fault is put on that statement */
+  const undo = fault((sql) => /^UPDATE board_state SET data = (json_remove\()?json_set\(data, '\$\."welcomed"\.' \|\| json_quote\(/.test(sql)); /* r21: the mark is now one statement that finds its claim as it's written (a rename between finding and marking left it at the old address), so the fault is put on that statement */ /* r26: that statement also takes the owed entry off (json_remove around it) */
   const r = await add(app.id, 'new', key);
   undo();
   assert.equal(r.success, true, r.error);

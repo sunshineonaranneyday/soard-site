@@ -21,7 +21,7 @@
 
 import { zeffyGet } from './_zeffy.js';
 import { readState, writeState, activeAdvisors, normEmail } from './_board-roles.js';
-import { ensureAdvisory, saveSettings, listHosted, getSettings } from './_advisory.js';
+import { ensureAdvisory, saveSettings, listHosted, getSettings, staffLanded } from './_advisory.js';
 import { writeAsMember, stillTheirs, GONE_STAFF, MOVING_STAFF } from './_member-write.js';
 import { nameKey } from '../../public/admin/partners-shared.js';
 import { sameForm } from '../../public/admin/zeffy-links.js';
@@ -254,8 +254,14 @@ export async function creditGift(env, settings, { paymentId, slug = '', note = '
   const id = String(paymentId || '').trim();
   if (!/^[\w-]{6,80}$/.test(id)) throw err('Which gift?');
   const who = String(slug || '').slice(0, 120);
-  const write = (to, guard = '', g = []) => env.DB.prepare(`INSERT OR REPLACE INTO advisory_credits (payment_id, slug, note, at, by) SELECT ?, ?, ?, ?, ?${guard}`)
-    .bind(id, to, String(note || '').slice(0, 300), new Date(now).toISOString(), by, ...g).run();
+  const at = new Date(now).toISOString();
+  const text = String(note || '').slice(0, 300);
+  // The answer comes from the write itself. One whose answer was lost is looked at, by what this write alone wrote (its
+  // moment and who pressed): there, it's answered as done (./_advisory.js staffLanded). Advisory Board QA round 26: a
+  // credit that had saved was said as "That didn't go through"
+  const write = (to, guard = '', g = []) => staffLanded(() => env.DB.prepare(`INSERT OR REPLACE INTO advisory_credits (payment_id, slug, note, at, by) SELECT ?, ?, ?, ?, ?${guard}`)
+    .bind(id, to, text, at, by, ...g).run(),
+  () => env.DB.prepare('SELECT 1 AS x FROM advisory_credits WHERE payment_id = ? AND at = ? AND by IS ? AND slug IS ?').bind(id, at, by, to).first());
   // Credited to a member: at the address they have as it's written, only while they're on the Advisory Board there and no
   // rename is moving records off it (./_member-write.js; Advisory Board QA round 21). To the group: nobody's
   if (who) await writeAsMember(env.DB, who, (me) => write(me.slug, ` FROM team t WHERE ${stillTheirs('t')}`, [me.slug, me.data]), { fits: (p) => p.group === 'advisory', gone: GONE_STAFF, moving: MOVING_STAFF });

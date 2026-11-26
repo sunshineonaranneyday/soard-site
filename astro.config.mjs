@@ -57,7 +57,9 @@ export default defineConfig({
         !page.includes('/terms') &&
         !page.includes('/privacy-policy') &&
         // Private bio form reached only from a link SOARD sends (also noindex)
-        !page.includes('/profile-update'),
+        !page.includes('/profile-update') &&
+        // Private contact form for makeover families, reached only from a link SOARD sends (also noindex)
+        !page.includes('/family-update'),
       // No lastmod: stamping every URL with the build time makes the field
       // meaningless and Google ignores (or distrusts) uniform values.
     }),

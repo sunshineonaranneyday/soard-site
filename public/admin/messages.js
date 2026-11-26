@@ -145,6 +145,7 @@ const CHANGE = {
   revealSettings: { label: 'Reveals → Settings', view: 'broadcast', hash: '#broadcast/settings' },
   board: { label: 'People → Board', view: 'people-hub', tab: 'board' },
   boardArea: { label: 'Board', view: 'board', hash: '#board' },
+  families: { label: 'Families', view: 'families', hash: '#families' },
 };
 
 const MAP = { t: 'Everything we send', children: [
@@ -219,6 +220,16 @@ const MAP = { t: 'Everything we send', children: [
           does: 'Whatever staff write. It posts on the family’s JobTread account like the status emails, so replies come back to the same page. Reply on any message answers in that JobTread conversation (no new subject), the way staff reply in JobTread.',
           touches: ['JobTread', 'D1'], where: 'functions/api/_applicants.js (messageFamily)',
           live: first(needs('jobtread', NO_JT), (f) => (!f.family ? null : ON(sentLine(f.family.message), f.family.message?.last))) },
+      ]},
+      { t: 'After the makeover', children: [
+        { t: 'Check your contact info', s: 'live', k: 'email', by: 'staff', preview: 'family-update', change: CHANGE.families,
+          who: 'Everyone in a makeover family with an email address in JobTread: parents, guardians and anyone else listed.',
+          when: 'Only when staff press “Email them their link” in Families, for one family or several picked at once.',
+          subject: 'Is this still the best way to reach you?',
+          does: 'A private link (60 days) to a page with what we have for the family. They confirm it, fix it, add people (a spouse, a grandparent) and tell us a new address. Changes go straight to their contacts in JobTread; anyone they ask us to take off waits for staff in Families.',
+          touches: ['Resend', 'JobTread', 'D1'], where: 'functions/api/_families.js (familyEmail, sendFamilyLink) · family-update.js',
+          info: 'The wording is in the code, not the admin. Staff can also copy a link to text a family.',
+          live: needs('resend', NO_RESEND) },
       ]},
       { t: 'Community projects', children: [
         { t: 'Received (community project)', s: 'live', k: 'jobtread', by: 'auto', preview: 'org-welcome', change: CHANGE.appEmails,

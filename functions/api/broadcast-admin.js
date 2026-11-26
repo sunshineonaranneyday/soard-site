@@ -13,6 +13,7 @@
  *   setConfig { ...partial }
  *   generateVapid { force? }
  *   testStream | testFacebook | testFacebookLive | testHub | testAlert | runTick | lifecycle
+ *   youtubeSync                        look at the reveal's YouTube live now (_youtube-live.js)
  *   slackStatus | slackChannels | setSlackChannel { id, role }   the Slack app's connection and its two channels
  *     (role 'news': good news everyone sees; 'attention': alerts that need a hand, id '' to share the news one)
  *   monitor { feed: live|rehearsal }   Control room: picture, audio level, every destination's verdict, open issues
@@ -35,6 +36,8 @@ import * as messages from './_live-messages.js';
 import * as monitor from './_broadcast-monitor.js';
 import * as preflight from './_broadcast-preflight.js';
 import { youtubeConfigured } from './_youtube.js';
+import * as ytLive from './_youtube-live.js';
+import { oauthConfigured as youtubeSignedIn } from './_youtube-auth.js';
 import { syncBroadcastSchedule, readScheduleRecord } from './_broadcast-schedule.js';
 import { emailShell, paragraphs, link as mailLink } from './_email-shell.js';
 import { historyStats } from './_reveal-stats.js';
@@ -169,6 +172,8 @@ export async function onRequestGet(context) {
         slackMode: env.SLACK_BOT_TOKEN ? 'bot' : env.SLACK_WEBHOOK_URL ? 'webhook' : null,
         kitConfigured: kitConfigured(env),
         youtubeConfigured: youtubeConfigured(env),
+        youtubeSignedIn: youtubeSignedIn(env),
+        youtubeAuto: ytLive.autoOn(env, config),
         hubBound: !!env.LIVE_HUB,
         deployHook: !!(env.CF_PAGES_DEPLOY_HOOK || env.CF_DEPLOY_HOOK || env.DEPLOY_HOOK_URL),
         inputReady: !!config.liveInput?.uid,
@@ -180,6 +185,8 @@ export async function onRequestGet(context) {
       },
       health,
       schedule: schedule.record || null,
+      // Each reveal's YouTube live, as the site made it (_youtube-live.js): ids, titles, times, the last error
+      youtubeLive: await ytLive.readRecord(DB).catch(() => null),
       // Test mode: the switch, when it goes off by itself, how many Stream outputs it holds paused
       quiet: b.quietStatus(r.quiet || b.defaultQuiet(), state),
       hub: r.hub,
@@ -328,6 +335,7 @@ export async function onRequestPost(context) {
           if (typeof p.facebook.pageUrl === 'string' && /^https:\/\/(www\.)?facebook\.com\//.test(p.facebook.pageUrl)) c.facebook.pageUrl = p.facebook.pageUrl.trim();
         }
         if (p.youtube && typeof p.youtube.channelUrl === 'string') c.youtube.channelUrl = p.youtube.channelUrl.trim().slice(0, 200);
+        if (p.youtube && typeof p.youtube.auto === 'boolean') c.youtube = { ...(c.youtube || {}), auto: p.youtube.auto };
         if (p.instagram && typeof p.instagram.profileUrl === 'string') c.instagram = { ...(c.instagram || {}), profileUrl: p.instagram.profileUrl.trim().slice(0, 200) };
         if (p.orientation && ['landscape', 'portrait'].includes(p.orientation)) c.orientation = p.orientation;
         if (p.reels) {
@@ -479,6 +487,12 @@ export async function onRequestPost(context) {
         const state = await b.readState(env.DB);
         await b.publishToHub(env, state, config, 'admin:tick');
         return Response.json({ success: true, ...r });
+      }
+      case 'youtubeSync': {
+        // Look at YouTube now (the tick does, under its lease, so two looks never make two lives)
+        await ytLive.lookNow(env.DB);
+        const r = await b.runTick(env, { source: 'admin', force: true, by: userEmail });
+        return Response.json({ success: true, work: (r.work || []).filter((w) => String(w).startsWith('youtube')), youtubeLive: await ytLive.readRecord(env.DB) });
       }
       case 'lifecycle': {
         const lc = config.liveInput?.uid ? await stream.lifecycle(config.customerCode, config.liveInput.uid) : null;

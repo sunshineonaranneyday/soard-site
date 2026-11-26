@@ -108,6 +108,43 @@ function makeApi() {
     if (!p.startsWith('/api/')) return false;
     const isPost = req.method() === 'POST';
     st.calls.push({ path: p, method: req.method(), body: isPost && !/upload-image/.test(p) ? body() : null, query: url.search });
+    // Past makeovers in JobTread (functions/api/past-jobs-admin.js): founders only, so off unless a check sets it
+    if (p === '/api/past-jobs-admin') {
+      const pj = st.pastJobs;
+      if (!pj) return json({ success: false, error: 'Past jobs in JobTread are open only to the founders on People → Team' }, 403);
+      pj.photos ||= { by: {}, stages: {}, on: null, jobsToList: 0, failed: [] };
+      const status = () => ({ success: true, rows: pj.rows, summary: { by: {} }, planned: pj.planned, first: pj.first, queued: pj.queued || null, photos: pj.photos });
+      if (!isPost) return json(status());
+      const b = body();
+      if (b.action === 'checks') return json({ success: true, quickbooks: { known: false, error: 'JobTread didn’t say' }, workflows: { ok: true, list: [{ id: 'w1', name: 'Comms Thread on new families', trigger: 't' }] } });
+      if (b.action === 'plan') { pj.planned = { at: new Date().toISOString() }; return json({ success: true, rows: pj.rows }); }
+      if (b.action === 'photo-notices') return json({ success: true, notices: { subscribed: [] } });
+      if (b.action === 'photos') {
+        pj.photos.on = b.scope === 'off' ? null : { scope: b.scope };
+        if (b.scope === 'first') Object.assign(pj.photos, { by: { copied: 3, listed: 1 }, stages: { Before: 1, After: 2 } });
+        return json({ success: true, photos: pj.photos });
+      }
+      if (b.action === 'answer') {
+        const r = pj.rows.find((x) => x.key === b.key);
+        r.answer = b.clear ? null : b.account === 'new' ? { account: 'new' } : b.jobId ? { jobId: b.jobId } : b.job === 'none' ? { job: 'none' } : { accountId: b.accountId };
+        r.answered_by = 'peter@soardcharity.com';
+        if (b.jobId) Object.assign(r, { state: 'has-job', plan: 'has-job', plan_note: 'a person said JobTread already has its job' });
+        else if (!b.clear) Object.assign(r, { state: 'ready', plan: 'make', plan_account_name: b.account === 'new' || b.job === 'none' ? `${r.name} (${r.year})` : r.candidates.find((c) => c.id === b.accountId).name, plan_account_id: b.accountId || null });
+        return json({ success: true });
+      }
+      if (b.action === 'first') {
+        const r = pj.rows.find((x) => x.state === 'ready' && !x.plan_account_id);
+        Object.assign(r, { state: 'made', job_id: '22PPASTJOB01', made_job_name: r.job_name, account_name: r.plan_account_name, made_at: new Date().toISOString() });
+        pj.first = { at: new Date().toISOString(), jobName: r.job_name };
+        return json({ success: true, made: { key: r.key, jobId: r.job_id, jobName: r.job_name } });
+      }
+      if (b.action === 'rest') {
+        const ready = pj.rows.filter((x) => x.state === 'ready');
+        ready.forEach((x) => { x.state = 'queued'; });
+        return json({ success: true, queued: ready.length });
+      }
+      return json({ success: false, error: 'Which action?' }, 400);
+    }
     // Dropbox folders to name (functions/api/kid-folders-admin.js)
     if (p === '/api/kid-folders-admin') {
       const kidsOut = Object.values(st.kids).map((k) => ({ slug: k.slug, name: k.name, year: k.year ?? null }));
@@ -528,6 +565,73 @@ try {
     await sleep(300);
     ok(!(await page.$('.kd-fold-banner')), 'with every folder named, the banner goes');
     await shot(page, 'desktop-kid-folders');
+    ok(errors.length === 0, `no console errors${errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''}`);
+    await page.close();
+  }
+
+  // Past makeovers in JobTread (functions/api/_past-jobs.js): a founder's banner and dialog; nobody else sees it
+  const pastRows = () => [
+    { key: 'mathew', kind: 'kid', slug: 'mathew', name: 'Mathew', year: 2012, state: 'ready', plan: 'make', job_name: 'Mathew (2012)', close_on: '2012-07-14', draft_date: '2012-07-14', close_how: 'most reveal photos', plan_account_name: 'Mathew (2012)', plan_account_id: null },
+    { key: 'helen', kind: 'kid', slug: 'helen', name: 'Helen', year: 2021, state: 'ready', plan: 'make', job_name: 'Helen (2021)', close_on: '2021-12-31', draft_date: '2016-06-04', close_how: 'the reviewed date, 2016-06-04, isn’t in 2021, so Dec 31 of the year', plan_account_name: 'Helen (2021)', plan_account_id: null },
+    { key: 'max', kind: 'kid', slug: 'max', name: 'Max', year: 2019, state: 'ask', plan: 'ask', job_name: 'Max (2019)', close_on: '2019-06-01', plan_note: '2 customers fit: Max Hill, Max Ray', candidates: [{ id: '22PMAXHILL01', name: 'Max Hill' }, { id: '22PMAXRAY001', name: 'Max Ray' }] },
+    { key: 'community/camp-twin-lakes', kind: 'community', slug: 'camp-twin-lakes', name: 'Camp Twin Lakes', year: 2018, state: 'ready', plan: 'make', job_name: 'Camp Twin Lakes (2018)', close_on: '2018-05-19', draft_date: '2018-05-19', plan_account_name: 'Camp Twin Lakes', plan_account_id: '22PCAMPTL001' },
+    { key: 'ava', kind: 'kid', slug: 'ava', name: 'Ava', year: 2026, state: 'has-job', plan: 'has-job', plan_note: 'already has “Ava Lee (2026)”' },
+    { key: 'emery', kind: 'kid', slug: 'emery', name: 'Emery', year: 2025, state: 'ask', plan: 'ask', job_name: 'Emery (2025)', close_on: '2025-02-06', plan_note: 'JobTread may already have its job: “Emery Smith (2024)”', candidates: [{ id: '22PEMERYJOB1', name: 'Emery Smith (2024)', kind: 'job' }] },
+  ];
+  for (const [label, width, height, mobile] of [['Desktop 1440', 1440, 1000, false], ['Phone 390', 390, 844, true]]) {
+    console.log(`${label}: Past makeovers in JobTread`);
+    const { page, api, errors } = await open(browser, { width, height, mobile, prep: (s) => { s.pastJobs = { rows: pastRows(), planned: { at: new Date().toISOString() }, first: null }; } });
+    await goKids(page, mobile);
+    const banner = await page.$eval('.pj-banner', (e) => e.textContent.replace(/\s+/g, ' ')).catch(() => '');
+    ok(/Past makeovers in JobTread/.test(banner) && /5 past projects have no JobTread job yet/.test(banner), `${label}: the banner counts what has no job yet (${banner.slice(0, 90)})`);
+    await clickText(page, '.pj-banner button', 'Open');
+    await page.waitForSelector('.pj-group', { timeout: 5000 });
+    const groups = await page.$$eval('.pj-group h3', (hs) => hs.map((h) => h.textContent.replace(/\s+/g, ' ').trim()));
+    ok(JSON.stringify(groups) === JSON.stringify(['Needs a person 2', 'Ready to make 3', 'Already in JobTread 1']), `${label}: questions first, then ready, then already in JobTread (${groups.join(' | ')})`);
+    // A job JobTread may already have: say it's its job, and it joins Already in JobTread
+    ok(await clickText(page, '.pj-row .btn', 'Its job is Emery Smith (2024)'), `${label}: a likely job is offered as its job`);
+    await sleep(400);
+    const said = api.st.calls.filter((c) => c.path === '/api/past-jobs-admin' && c.body?.action === 'answer').at(-1)?.body;
+    ok(said?.key === 'emery' && said?.jobId === '22PEMERYJOB1', `${label}: saying it's its job sends that job`);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.pj-group h3')].map((h) => h.textContent).join('|').includes('Already in JobTread 2')), `${label}: then it's already in JobTread`);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.pj-row')].some((l) => /closed Dec 31, 2021/.test(l.textContent) && /the reviewed date, 2016-06-04, isn’t in 2021/.test(l.textContent))), `${label}: a date moved to Dec 31 says why`);
+    ok(await page.evaluate(() => /Comms Thread on new families/.test(document.querySelector('.pj-checks').textContent)), `${label}: JobTread’s workflows that are on are listed before anything is made`);
+    const makeRest = () => page.evaluate(() => [...document.querySelectorAll('.kd-dialog__foot .btn')].map((b) => b.textContent.trim()));
+    ok((await makeRest()).includes('Make the first job'), `${label}: only the first job can be made first`);
+    await clickText(page, '.pj-row .btn', 'Max Ray');
+    await sleep(400);
+    const answer = api.st.calls.filter((c) => c.path === '/api/past-jobs-admin' && c.body?.action === 'answer').at(-1)?.body;
+    ok(answer?.key === 'max' && answer?.accountId === '22PMAXRAY001', `${label}: picking a customer sends it`);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.pj-group h3')].map((h) => h.textContent).join('|').includes('Ready to make 4')), `${label}: the answered row is ready`);
+    await clickText(page, '.kd-dialog__foot .btn', 'Make the first job');
+    await sleep(500);
+    ok(api.st.calls.some((c) => c.body?.action === 'first'), `${label}: Make the first job asks the site to make one`);
+    const after = await makeRest();
+    ok(after.some((t) => /^Make the rest \(3\)$/.test(t)), `${label}: then Make the rest, with how many (${after.join(' | ')})`);
+    ok(await page.evaluate(() => /The first, Mathew \(2012\), was made/.test(document.querySelector('.pj-checks').textContent)), `${label}: it says which job was first`);
+    ok(await page.evaluate(() => !!document.querySelector('.pj-row a[href="https://app.jobtread.com/jobs/22PPASTJOB01"]')), `${label}: the made job links to JobTread`);
+    // Photos from Drive: the first job's alone, then every job's
+    ok(await page.evaluate(() => /Nobody is set up in JobTread to hear about new files/.test(document.querySelector('.pj-photos')?.textContent || '')), `${label}: it says who JobTread would tell about the photos`);
+    ok(await clickText(page, '.pj-photos .btn', 'Copy Mathew (2012)’s photos first'), `${label}: the first job’s photos can be copied first`);
+    await sleep(400);
+    ok(api.st.calls.some((c) => c.body?.action === 'photos' && c.body?.scope === 'first'), `${label}: that asks for the first job’s photos only`);
+    ok(await page.evaluate(() => /3 copied, 1 waiting/.test(document.querySelector('.pj-photos').textContent) && /1 Before, 2 After/.test(document.querySelector('.pj-photos').textContent)), `${label}: then the counts and the stages show`);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.pj-photos .btn')].map((b) => b.textContent.trim()).join('|') === 'Copy every job’s photos|Stop'), `${label}: then every job’s photos, or stop`);
+    await clickText(page, '.kd-dialog__foot .btn', 'Make the rest');
+    await sleep(500);
+    ok(await page.evaluate(() => [...document.querySelectorAll('.pj-group h3')].some((h) => /^Being made 3/.test(h.textContent.trim()))), `${label}: the rest are being made`);
+    ok(!(await makeRest()).some((t) => /^Make the rest/.test(t)), `${label}: with nothing left ready, no Make the rest button`);
+    ok(await page.evaluate(() => /3 being made, 1 made, 2 already in JobTread\.$/.test(document.querySelector('.kd-dialog__sub').textContent.trim())), `${label}: the counts under the title say what’s happening`);
+    const wide = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
+    ok(wide <= 0, `${label}: nothing wider than the screen (${wide}px over)`);
+    await shot(page, `${mobile ? 'phone' : 'desktop'}-past-jobs`, { grow: false });
+    ok(errors.length === 0, `${label}: no console errors${errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''}`);
+    await page.close();
+  }
+  {
+    const { page, errors } = await open(browser, { width: 1440, height: 1000, mobile: false });
+    await goKids(page, false);
+    ok(!(await page.$('.pj-banner')), 'someone who isn’t a founder never sees the past-jobs banner');
     ok(errors.length === 0, `no console errors${errors.length ? ': ' + errors.slice(0, 3).join(' | ') : ''}`);
     await page.close();
   }

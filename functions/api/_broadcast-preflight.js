@@ -14,6 +14,7 @@
 import * as stream from './_stream-live.js';
 import * as fb from './_broadcast-fb.js';
 import * as yt from './_youtube.js';
+import * as ytLive from './_youtube-live.js';
 import * as notify from './_broadcast-notify.js';
 import { ADMIN_URL } from './_broadcast-monitor.js';
 
@@ -114,6 +115,13 @@ export async function run(env, config, state, health, { hub = null } = {}) {
   if (!yo) add('youtube', 'off', 'YouTube isn\'t set up (optional)');
   else if (!yo.exists) add('youtube', 'fail', 'The YouTube output is missing in Stream', null, 'Settings → YouTube: paste the stream key again.');
   else if (!yo.enabled) add('youtube', 'warn', 'The YouTube output is paused', null, 'Settings → YouTube → Resume.');
+  else if (ytLive.autoOn(env, config)) {
+    // The site makes the reveal's own live (_youtube-live.js): it must be there, waiting on the key
+    const rec = await ytLive.readRecord(env.DB);
+    const it = ytLive.preflightItem(rec, state, config);
+    add('youtube', it.status, it.label, it.detail || null, it.fix || null);
+    if (rec.conflicts?.length) add('youtubeOther', 'warn', 'Another YouTube live is waiting on the same stream key', rec.conflicts.map((c) => c.title || c.id).join(', '), 'Delete it in YouTube Studio → Content → Live (Studio\'s Go live → Stream makes one), or it may start with the reveal too.');
+  }
   else if (!yt.youtubeConfigured(env)) add('youtube', 'ok', 'Stream will send the reveal to YouTube', 'Add YOUTUBE_API_KEY so the site can confirm it actually went live. Make sure Auto-start is on in YouTube Studio.');
   else {
     const ch = await yt.resolveChannel(env, config.youtube?.channelUrl);

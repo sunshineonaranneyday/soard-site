@@ -71,6 +71,7 @@ test('the other first-screen blocks whose pieces lay each other out are whole to
     'src/pages/community/[slug].astro': /<section class="cp-detail-hero"[^>]*\sdata-whole>/,
     'src/pages/branding.astro': /<section class="brand-hero" data-whole>/,
     'src/pages/profile-update.astro': /<section class="pu-hero" data-whole>/,
+    'src/pages/family-update.astro': /<section class="fu-hero" data-whole>/,
     'src/pages/404.astro': /<section class="lost" data-whole>/,
     'src/components/global/Footer.astro': /<div class="footer-container footer-newsletter-inner" data-whole>/, // the newsletter words centred beside its form
     'src/pages/kids/index.astro': /<section class="kids-hero"[^>]*\sdata-whole>[\s\S]*<div class="kid-card__frame"[^>]*\sdata-whole>/, // and each card: its badge grows leftward as its words arrive

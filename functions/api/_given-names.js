@@ -1444,14 +1444,23 @@ export function familyFirstUnsure(ws, { pair = false } = {}) {
   const peoples = [...(BEFORE.get(nameKey(ws[0])) || [])];
   const hu = hungarianFamily(ws[0]);
   if (!peoples.length && !hu) return false;
+  const rest = ws.slice(1);
+  // Round 26 (finding 1: "Ann Da Young", "Ann Bo Young", "Seung Da Bin" were greeted by the Korean family name, Da-young,
+  // Bo-young and Da-bin written as two words): a given name written in parts. After a family name of a people whose given
+  // names are made of syllables (inParts, below), the two words after it, each one syllable of that people's given names
+  // and the two together their given name's shape, are their given name written in parts: never evidence for a greeting,
+  // whatever other list the last is on ("Young" is on SURNAMES too), and read before the pair, the particle reading and
+  // the middle-word check below, so none of them takes either word ("Ann Da Young Smith" gets no name either)
+  if (rest.length >= 2 && peoples.some((p) => inParts(p, rest[0], rest[1]))) return true;
   // (two given names people go by together, then a family name: that family name the evidence, "Thanh Huong Ames")
   if (pair) return !givenFirstFamily(ws[ws.length - 1]);
-  const rest = ws.slice(1);
   const cased = /\p{Lu}/u.test(ws.join('')) && /\p{Ll}/u.test(ws.join(''));
   const theirs = (w) => peoples.some((p) => GIVEN_OF[p].has(nameKey(w))) || (hu && (givenFamilyFirst(w) || marriedName(w)));
   if (rest.some(theirs)) return true;
-  // (a word of that people's own: a given name, a family name, or one of their syllables or a given name's shape)
-  const own = (w) => peoples.some((p) => GIVEN_OF[p].has(nameKey(w)) || FAMILY_OF[p].has(nameKey(w)) || !!SHAPES[p]?.(syllablesTyped(w)));
+  // (a word of that people's own: a given name, a family name, or one of their syllables or a given name's shape; round
+  // 26: a single syllable of their given names too, so the particle reading never takes "Da" before "Young", "Jan de Vries"
+  // being read as before, Vries being no syllable of anyone's)
+  const own = (w) => peoples.some((p) => GIVEN_OF[p].has(nameKey(w)) || FAMILY_OF[p].has(nameKey(w)) || !!SHAPES[p]?.(syllablesTyped(w)) || oneSyllable(p, w));
   // (a particle starting a family name in parts: never one of that people's family names, nor Vietnamese Văn or Thị; one
   // of their syllables only before a word that's none of theirs, "Jan de Vries" but never "Kai De Hua")
   const particle = (w, next) => {
@@ -1469,6 +1478,16 @@ export function familyFirstUnsure(ws, { pair = false } = {}) {
   return !rest.slice(0, -1).every((w, i) => /^\p{L}\.?$/u.test(w) || particle(w, rest[i + 1]) || PARTICLE_KEY.test(nameKey(w)) && !peoples.some((p) => FAMILY_OF[p].has(nameKey(w)))
     || !!givenName(w) || givenFirstFamily(w));
 }
+/**
+ * Round 26 (finding 1): a family name some people write first, then their given name written in parts ("Ann Da Young",
+ * "Ann Young Ra": Da-young and Young-ra of the Ann family). The greeting asks it of the name as typed too, before letters
+ * are set apart, since a syllable can be a degree's letters as well ("Ra", "Ma", "Do", ALSO_A_NAME's)
+ */
+export function givenInParts(ws) {
+  if (!BEFORE) build();
+  if (!ws || ws.length < 3) return false;
+  return [...(BEFORE.get(nameKey(ws[0])) || [])].some((p) => inParts(p, ws[1], ws[2]));
+}
 // (a family name of a people who write the given name first: SURNAMES', or two of them joined by a hyphen)
 const givenFirstFamily = (w) => {
   if (!SURNAME) SURNAME = new Set(SURNAMES.flatMap(words).map(nameKey));
@@ -1481,6 +1500,15 @@ const ownSyllable = (p, k) => {
   const s = syllables();
   return p === 0 ? [s.py, s.wg, s.hk, s.hok].some((x) => x.has(k)) : p === 1 ? s.ja.has(k) : p === 2 ? s.ko.has(k) : p === 3 && k === 'van';
 };
+// Round 26 (finding 1): the peoples whose given names are written in syllables that may be typed apart, by their place in
+// FAMILY_NAMES_OF: Korean ("Da Young" for Da-young), and Chinese in each of its romanizations ("Jin Long", "Mei Ling").
+// Japanese given names aren't written in parts (a mora is no name's part people type apart), nor the others', which have
+// no syllable table here
+const SYLLABLE_PEOPLES = [2, 0];
+// (one word, typed without a hyphen, that's one syllable of that people's given names)
+const oneSyllable = (p, w) => SYLLABLE_PEOPLES.includes(p) && syllablesTyped(w).length === 1 && ownSyllable(p, nameKey(w));
+// (two words, each one syllable of that people's given names, the two together their given name's shape: written in parts)
+const inParts = (p, a, b) => oneSyllable(p, a) && oneSyllable(p, b) && !!SHAPES[p]?.([nameKey(a), nameKey(b)]);
 /** (for the tests: each Chinese family name in pinyin, its Wade-Giles form made from it, its Hong Kong forms) */
 export function chineseForms() { return chinese().map(([py, wg, hk, st]) => ({ pinyin: py, wadeGiles: wg, hongKong: [...hk], straits: [...st] })); }
 /** (for the tests: the ways Singapore and Malaysia spell a reading, round 25) */

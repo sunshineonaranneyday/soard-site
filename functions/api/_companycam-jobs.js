@@ -60,6 +60,7 @@
  * JOBTREAD_GRANT_KEY.
  */
 
+import { madeClosed } from './_jt-jobs.js';
 import { pave, SOARD_ORG_ID } from './_reveals.js';
 import { slackPost, SITE_ORIGIN } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
@@ -186,6 +187,9 @@ export async function listJobs(env, fetchImpl = fetch, { closed = false } = {}) 
     const jobs = r?.organization?.jobs;
     for (const j of jobs?.nodes || []) {
       if ((j.closedOn && !closed) || isTest(j.name) || isTest(j.location?.account?.name)) continue;
+      // A past makeover's record (made already closed, ./_past-jobs.js): its CompanyCam photos, if any, are its
+      // family's worked job's; "a project at the family's street started near the job" would be today's, not the past's
+      if (madeClosed(j)) continue;
       out.push({ id: j.id, name: j.name || '', createdAt: j.createdAt || null, closed: !!j.closedOn, companycamId: j.companycamId ? String(j.companycamId) : null, street: j.location?.street || '', accountName: j.location?.account?.name || '' });
     }
     if (!jobs?.nextPage) break;

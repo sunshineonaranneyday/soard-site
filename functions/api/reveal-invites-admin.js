@@ -38,6 +38,7 @@ import { kitConfigured } from './_kit.js';
 import { kitInviteStatus, kidPageReady } from './_reveal-invite-kit.js';
 import { readProjectRow, refreshProjectDraft } from './_project-emails.js';
 import { pressStatus, readPressSettings, senderOf } from './_reveal-press.js';
+import { addressWhy } from './_advisory-mail.js';
 
 const ID = /^[A-Za-z0-9]{6,32}$/;
 const fail = (error, status = 400) => Response.json({ ok: false, error }, { status });
@@ -312,7 +313,13 @@ export async function onRequestPost(context) {
       }
       await logAudit(env.DB, { userEmail: me, action: 'updated', entityType: 'team', entitySlug: slug, entityName: `Reveal invite email for ${member.name}`, gitStatus: 'ok' }).catch(() => {});
       context.waitUntil(refreshForBoardChange(env));
-      return Response.json({ ok: true, board: board.map((m) => (m.slug === slug ? { ...m, email: saved.email } : m)) });
+      // An Advisory Board member's email that isn't their own (a SOARD group inbox, a staff address): saved, and said that
+      // their Advisory Board emails won't go there, by the rule every one of those emails takes (./_advisory-mail.js
+      // addressWhy: Advisory Board QA round 26)
+      const why = !onBoard && saved?.email ? addressWhy(saved.email) : '';
+      const note = why === 'group' ? `Saved. ${saved.email} is a SOARD group inbox, so ${member.name}’s Advisory Board emails won’t go there: everyone in the group reads it. Put their own email here for those.`
+        : why === 'staff' ? `Saved. ${saved.email} is a SOARD staff address, so ${member.name}’s Advisory Board emails won’t go there. Put their own email here for those.` : '';
+      return Response.json({ ok: true, board: board.map((m) => (m.slug === slug ? { ...m, email: saved.email } : m)), ...(note ? { note } : {}) });
     }
 
     const patch = {};

@@ -27,8 +27,8 @@
  */
 
 import { accessToken, eventIdFor, parseServiceAccount } from './_google-calendar.js';
-import { boardAdmins, activeBoard, peopleRows, readSettings, readState, writeState, normEmail, asSend, PEOPLE_DOWN, UNREAD_WARN_MS } from './_board-roles.js';
-import { getMeeting, listMeetings, patchMeeting, setOnMeeting, deleteMeeting, inviteNotes, inviteTitle, NOTES_START, OLD_NOTES_STARTS } from './_board.js';
+import { boardAdmins, activeBoard, peopleRows, readSettings, readState, writeState, normEmail, asSend, PEOPLE_DOWN, UNREAD_WARN_MS, organizerOf } from './_board-roles.js';
+import { getMeeting, listMeetings, patchMeeting, setOnMeeting, deleteMeeting, inviteNotes, inviteTitle, NOTES_START, OLD_NOTES_STARTS, claimOwn } from './_board.js';
 import { meetingName, timeRange, longDate, todayEastern, isDate, meetingHeld, inviteIsRecord, noInviteFor } from '../../public/admin/board-shared.js';
 import { isEmail, alertAdmins, slackResolved } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
@@ -48,10 +48,7 @@ export async function organizerFor(DB) {
   const s = await readSettings(DB);
   const admins = await boardAdmins(DB, s);
   if (s.invitesFrom && admins.includes(normEmail(s.invitesFrom))) return normEmail(s.invitesFrom);
-  const people = await peopleRows(DB);
-  const president = people.find((p) => p.group !== 'board' && p.role === 'founder' && /president/i.test(p.title || '') && !/vice/i.test(p.title || ''));
-  const first = president && String(president.name).toLowerCase().match(/[a-z]+/)?.[0];
-  return admins.find((e) => first && e.startsWith(`${first}@`)) || admins[0] || '';
+  return organizerOf(s, admins, await peopleRows(DB));
 }
 
 /** Everyone the invite goes to: the active board (with an email) and the Board area's admins */
@@ -206,9 +203,11 @@ const byBoard = (by) => !by || by === 'Board';
 async function claimInvite(DB, id, { now, by }) {
   await readState(DB, sendingKey(id)); // (makes the table)
   const mark = JSON.stringify({ by: byBoard(by) ? 'Board' : String(by), n: crypto.randomUUID() });
-  const r = await DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at WHERE board_state.updated_at < ?')
-    .bind(sendingKey(id), mark, new Date(now).toISOString(), new Date(now - INVITE_HOLD_MS).toISOString()).run();
-  return (r?.meta?.changes ?? r?.changes ?? 0) > 0 ? mark : '';
+  // (its answer lost: the claim there with this mark is this send's, and it goes on. Board QA round 14)
+  const mine = await claimOwn(() => DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at WHERE board_state.updated_at < ?')
+    .bind(sendingKey(id), mark, new Date(now).toISOString(), new Date(now - INVITE_HOLD_MS).toISOString()).run(),
+  async () => (await DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(sendingKey(id)).first())?.data === mark);
+  return mine ? mark : '';
 }
 /** Let go of this send's claim (never another's that took over a stale one): a claim that won't come off expires */
 async function letGoOf(DB, id, mark) {

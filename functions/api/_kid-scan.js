@@ -15,10 +15,9 @@
  * read, nothing goes to JobTread.
  */
 
-import { viaGateway, aiCapped } from './_ai.js';
+import { viaGateway, aiCapped, READERS, runReader } from './_ai.js';
 import { imageKind } from './_image-types.js';
 import { answerOf } from './_vendor-read.js';
-import { READERS } from './_score-scans.js';
 import { kidFromPo, tokensOf, orderGroups, orderKeys, isCarrier } from './_kid-match.js';
 import { orderMail, mailStage } from './_kid-checkin.js';
 
@@ -78,7 +77,7 @@ export async function readLabel(env, bytes) {
     let timer;
     try {
       const out = await Promise.race([
-        env.AI.run(model, {
+        runReader(env, model, {
           messages: [{ role: 'system', content: LABEL_PROMPT }, { role: 'user', content: [{ type: 'text', text: 'Read this label.' }, { type: 'image_url', image_url: { url } }] }],
           max_tokens: 500, temperature: 0, ...extra, response_format: { type: 'json_schema', json_schema: LABEL_SCHEMA },
         }, viaGateway('checkin-scan')),

@@ -4,6 +4,7 @@
  */
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
 import { Icon, useKept, nbw, mapsHref } from './parts.js';
+import { failed, unreadWords } from './unread.js';
 
 const html = htm.bind(h);
 const rise = (i) => `--i:${i}`;
@@ -140,7 +141,9 @@ export function OrgFacts({ ctx, terms = [], match = () => true, focus = null, pa
     ${found ? null : html`<div class="bp-org__foot bp-noprint">
       ${rest.length ? html`<button type="button" class="bp-org__toggle" aria-expanded=${shown} aria-controls="org-rest" onClick=${() => setOpen(!shown)}>${shown ? 'Fewer facts' : 'All of SOARD’s facts'}<${Icon} name="chevron" size=${16} cls=${shown ? 'is-up' : ''} /></button>` : null}
       ${papers.length ? html`<p class="bp-org__papers">${papers.map((p) => html`<a class="bp-chip bp-chip--link" ...${p.link} key=${p.x.id}><${Icon} name="documents" size=${14} />${p.word}</a>`)}</p>` : null}
-      <p class="bp-org__more"><a class="bp-link" href="/branding/" target="_blank" rel="noopener">Logos, colors and fonts<${Icon} name="external" size=${13} /></a>${who?.email ? html`<span aria-hidden="true">·</span><span>Something out of date? <a class="bp-link" href=${`mailto:${who.email}?subject=${encodeURIComponent('SOARD’s facts')}`}>Tell ${firstName(who.name)}</a></span>` : null}</p>
+      <p class="bp-org__more"><a class="bp-link" href="/branding/" target="_blank" rel="noopener">Logos, colors and fonts<${Icon} name="external" size=${13} /></a>${who?.email ? html`<span aria-hidden="true">·</span><span>Something out of date? <a class="bp-link" href=${`mailto:${who.email}?subject=${encodeURIComponent('SOARD’s facts')}`}>Tell ${firstName(who.name)}</a></span>`
+        // (the board's settings not read just now: who to tell isn't known, said so, never just gone: Board QA round 14)
+        : failed(data, 'settings') ? html`<span aria-hidden="true">·</span><span role="status" data-unread="settings">${unreadWords('settings', 'contact')}</span>` : null}</p>
     </div>`}
   </section>`;
 }

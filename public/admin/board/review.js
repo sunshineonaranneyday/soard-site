@@ -21,6 +21,7 @@ import { h, htm, useState, useEffect, useRef, useMemo } from '../vendor.js';
 import { money } from '../board-shared.js';
 import { dayText } from './parts.js';
 import { compact, Blank, budgetName } from './money.js';
+import { emptyRead } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -260,9 +261,10 @@ function Lines({ which, rows, asOf, priorAsOf, flags, notes, open, setOpen, canE
 /**
  * The numbers to go over, above the report: when the report is due, the lines worth a word, then the statements (and
  * the budget) with a note on any line. `notes`: this item's [{ key, line, text, by, at }]; `due`: its ask
- * ({ due, status }) or null; `canEdit`: they present it (anyone else reads it, notes and all)
+ * ({ due, status }) or null; `canEdit`: they present it (anyone else reads it, notes and all); `notesLost`: the notes on
+ * the lines couldn't be read just now (the page says so above), so none is said to be there or not (./unread.js emptyRead)
  */
-export function FinanceReview({ books, meeting, item, notes = [], due = null, canEdit = false, onSaved = () => {} }) {
+export function FinanceReview({ books, meeting, item, notes = [], due = null, canEdit = false, notesLost = false, onSaved = () => {} }) {
   const s = books?.statements || null;
   const budget = books?.budget?.rows?.length ? books.budget : null;
   const tabs = [s?.activity?.length ? ['act', 'Profit & loss'] : null, s?.position?.length ? ['pos', 'Balance sheet'] : null, budget ? ['bud', 'Budget vs actual'] : null].filter(Boolean);
@@ -320,7 +322,9 @@ export function FinanceReview({ books, meeting, item, notes = [], due = null, ca
         : html`<${Lines} which="act" rows=${s.activity} asOf=${s.asOf} priorAsOf=${s.priorAsOf} caption="Profit and loss" ...${shared} key="act" />`}
     </div>
     ${show === 'bud' && budget?.asOf ? html`<p class="fr-how">${budgetName(budget)}, January 1 through ${fullDate(budget.asOf)}.</p>` : null}
-    <p class="fr-foot">${count ? `${count === 1 ? 'Your note shows' : `Your ${count} notes show`} under ${count === 1 ? 'its line' : 'their lines'} for the board: on the agenda, on the screen and in Print it all.` : canEdit ? 'Notes show under their lines for the board: on the agenda, on the screen and in Print it all.' : 'No notes on these numbers yet.'}</p>
+    ${((foot) => (foot ? html`<p class="fr-foot">${foot}</p>` : null))(count ? `${count === 1 ? 'Your note shows' : `Your ${count} notes show`} under ${count === 1 ? 'its line' : 'their lines'} for the board: on the agenda, on the screen and in Print it all.` : canEdit ? 'Notes show under their lines for the board: on the agenda, on the screen and in Print it all.'
+      // (none said only when the notes were read and there are none: Board QA round 14, beside "couldn't load" it said none)
+      : emptyRead({ unread: { lineNotes: notesLost } }, 'lineNotes', notes) ? 'No notes on these numbers yet.' : '')}
   </section>`;
 }
 

@@ -317,7 +317,9 @@ test('a send cut off long ago leaves no one "going out now" on the next send', a
   await env.DB.prepare("INSERT INTO board_state (key, data, updated_at) VALUES ('welcome-sending', ?, ?)").bind(JSON.stringify({ to: ['alex-rivera'] }), new Date(Date.now() - 5 * 60 * 1000).toISOString()).run();
   let during = null;
   await sendWelcome(env, { by: 'jane@soardcharity.com', slugs: ['sam-ortiz'], due: true, check: async () => { during = (await env.DB.prepare("SELECT data FROM board_state WHERE key = 'welcome-sending'").first()).data; } });
-  assert.equal(during, '{}');
+  /* r14: the claim carries the press's own token now (./_board.js claimOwn), and still names nobody going out */
+  assert.deepEqual(Object.keys(JSON.parse(during)), ['claim']);
+  assert.equal(JSON.parse(during).to, undefined);
 });
 
 test('one who has signed in is never sent it, whatever a page left open asks: left out, and named', async () => {

@@ -19,7 +19,7 @@ import { join } from 'path';
 import {
   CONTENT, loadEnv, getD1Credentials, getD1ApiUrl,
   queryD1, collections, ensureDir, countExistingFiles,
-  writeCollection, writeSiteConfig, writeTheaterKids,
+  writeCollection, writeSiteConfig, writeTheaterKids, writeRevealDays,
 } from './d1-helpers.js';
 import { PAST_REVEALS_SQL } from '../functions/live/_past-reveal-rule.js';
 
@@ -88,12 +88,28 @@ try {
 
   // ─── Children with a Theater (their reveal cards open it) ───────────
   // Unreadable: the file is left as it was (none yet = every card keeps the pop-up)
+  let pastReveals = null;
   try {
-    const rows = await query(PAST_REVEALS_SQL);
-    writeTheaterKids(rows);
-    console.log(`  theater kids: ${new Set(rows.map((r) => r.kid_slug)).size} with a recording`);
+    pastReveals = await query(PAST_REVEALS_SQL);
+    writeTheaterKids(pastReveals);
+    console.log(`  theater kids: ${new Set(pastReveals.map((r) => r.kid_slug)).size} with a recording`);
   } catch (err) {
     console.warn(`  ⚠ theater kids: skipped (${err.message})`);
+  }
+
+  // ─── The day each finished room was revealed (Meet the Kids' order) ──
+  // Unreadable: the file is left as it was (none yet = each year's kids by name)
+  try {
+    if (!pastReveals) throw new Error('the broadcasts weren’t read');
+    const [pastJobs, taskRows] = await Promise.all([
+      query("SELECT slug, draft_date FROM past_jobs WHERE kind = 'kid' AND draft_date IS NOT NULL"),
+      // The Reveal task days the kid status sweep keeps (functions/api/_kid-status.js REVEAL_DAYS_KEY)
+      query("SELECT value FROM kid_status_state WHERE key = 'reveal_days'"),
+    ]);
+    const taskDays = JSON.parse(taskRows[0]?.value || '{}');
+    console.log(`  reveal days: ${writeRevealDays({ pastJobs, taskDays, siteRows, broadcasts: pastReveals })} kids`);
+  } catch (err) {
+    console.warn(`  ⚠ reveal days: skipped (${err.message})`);
   }
 
   // ─── Validation ────────────────────────────────────────────────────

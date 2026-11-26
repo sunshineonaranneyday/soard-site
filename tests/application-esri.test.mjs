@@ -439,7 +439,8 @@ test('a home no map service finds is held: the family’s answer isn’t taken, 
   const sub2 = await submitDraft(env, await readyDraft({ ...answersAt(COPPER), boundary: AREA_VALUES.far }));
   assert.equal(sub2.ok, false, 'found 19.6 miles out with stop on: stopped at the form');
   await form({ beyond: 'warn' });
-  const sub3 = await submitDraft(env, await readyDraft({ ...answersAt(COPPER), boundary: AREA_VALUES.far }));
+  // (another child: one child's second application of the season is turned away)
+  const sub3 = await submitDraft(env, await readyDraft({ ...answersAt(COPPER), childName: { first: 'Blake', last: 'Stone' }, boundary: AREA_VALUES.far }));
   await processApplication(env, sub3.id, { fetchImpl: fetch });
   const found = await getApplication(env.DB, sub3.id);
   await assert.rejects(placeHomeByStaff(env, found.jt_account_id, { lat: 34, lng: -84 }), /Esri already found this home/);
