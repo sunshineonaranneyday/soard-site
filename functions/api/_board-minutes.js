@@ -27,7 +27,7 @@
 import { fileText, attendanceIn, dateIn } from './_board-mail.js';
 import { getMeeting, patchMeeting, listMeetings, roster, boardFiles, updateFile, approveMinutes, putFile, deleteFile, fileLocked, MAX_FILE, ID } from './_board.js';
 import { readState, writeState } from './_board-roles.js';
-import { parseAgendaText, agendaIsDraft, meetingName, shortDate, isDate, uid, LIVE_TITLES, todayEastern, cleanMeeting, mergeMeeting, minutesHeld, approvedFileOf, FILE_KINDS, FILE_STAYS } from '../../public/admin/board-shared.js';
+import { parseAgendaText, agendaIsDraft, meetingName, shortDate, isDate, uid, LIVE_TITLES, todayEastern, cleanMeeting, mergeMeeting, minutesHeld, approvedFileOf, FILE_KINDS, FILE_STAYS, minutesFilesOf } from '../../public/admin/board-shared.js';
 import { viaGateway, aiCapped, AI_REST_MS } from './_ai.js';
 
 const MODEL = '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
@@ -1017,8 +1017,8 @@ const undoShape = (m) => {
   const c = cleanMeeting(m);
   return { ...c, files: [], actions: c.actions.map((a) => ({ ...a, done: false, doneOn: '' })), attendance: c.attendance.map((p) => ({ ...p, rsvp: '' })) };
 };
-/** A meeting's own minutes files: a minutes file on an agenda item is the last meeting's, up for approval (as ../../public/admin/board-shared.js ownMinutesFile) */
-const ownMinutesFiles = (m) => { const onItem = new Set((m.sections || []).flatMap((s) => s.items.flatMap((it) => it.docs || []))); return (m.files || []).filter((x) => x.kind === 'minutes' && !onItem.has(x.id)); };
+/** A meeting's own minutes files, by the one rule (../../public/admin/board-shared.js minutesFilesOf): a minutes file on an agenda item is the last meeting's, up for approval */
+const ownMinutesFiles = (m) => minutesFilesOf(m, { staff: true });
 /** Where a meeting's minutes stand, to compare: approved (on a day) or a draft */
 const approvalOf = (m) => ({ minutes: m?.minutes === 'approved' ? 'approved' : 'draft', approvedOn: m?.minutes === 'approved' ? m.approvedOn || '' : '' });
 const andWords = (l) => (l.length > 1 ? `${l.slice(0, -1).join(', ')} and ${l.at(-1)}` : l[0] || '');

@@ -41,7 +41,7 @@ import {
   longDate, timeRange, shortDate, DOC_KINDS, FILE_KINDS, RSVP, DEFAULT_TEMPLATE, newMeeting, LIMITS, repliesOf, inviteOut,
   agendaIsDraft, draftAgenda, templateAgenda, previousMeeting, draftName, callName, readAgain, AGENDA_READER, isLive, cleanLive, majority, guessItem, orgName, signsAs,
   isFilled, LIVE_TITLES, agendaItems, presentersOf, reportsOn, namesText, sectionPlan, clock, docTitle, videoOf, packetDocs, partName, minutesIn,
-  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS,
+  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS, minutesStaffOnly, staffOnlyWords,
 } from '../../public/admin/board-shared.js';
 import { welcomeHad, REPORT_LOOKS, SLIDE_PIECE, VISIT_GAP_MS, waitsForApproval, shareWaits, cleanTemplate, meetingHeld, heldNoSend } from '../../public/admin/board-shared.js';
 import { comparePeople, photoUrl } from '../../public/admin/team-shared.js';
@@ -2139,6 +2139,52 @@ export async function finishBytesOff(env, { limit = 50 } = {}) {
   }
   return n;
 }
+/**
+ * How old bytes under board/ have to be, with no row naming them, before the heartbeat takes them (takeLooseBytes): far
+ * longer than any press takes to name what it put (a Worker stops within minutes), so bytes on their way to their row
+ * are never taken
+ */
+export const LOOSE_AFTER_MS = 60 * 60 * 1000;
+/** How often the heartbeat looks the file store over, a few pages of keys each time until it has seen them all */
+const LOOSE_EVERY_MS = 60 * 60 * 1000;
+const LOOSE_STATE = 'loose-bytes-look';
+/**
+ * Heartbeat: bytes in the file store under board/ (every Board file's bytes: putFile's and stageRewrite's keys, the only
+ * ways Board puts bytes, the Advisory Board's papers among them) that no row names, LOOSE_AFTER_MS after they were put,
+ * deleted. The one place for bytes put first whose row never came, whatever route put them and however it ended: a put
+ * that landed with its answer lost, a step after it that didn't land, a drop of them that failed, the Worker stopped in
+ * between. Nothing is written for it before a put, so no press says or does anything differently. The file store is
+ * looked over a few pages at a time (where it got to kept in board_state), once an hour; never bytes a row names (each
+ * page's keys checked against board_files just before they go). A file store with no list (a test's) is left as it is.
+ * Board QA round 14, Nov 24 2026: a put that landed with its answer lost left bytes nothing named, for good, since only
+ * bytes known to have landed were ever marked to go. → how many were deleted
+ */
+export async function takeLooseBytes(env, { now = Date.now(), pages = 4, limit = 500 } = {}) {
+  const bucket = boardFiles(env);
+  if (typeof bucket?.list !== 'function') return 0;
+  const was = await readState(env.DB, LOOSE_STATE);
+  // (a look over all of them done within the hour: nothing to do yet; one part way through goes on)
+  if (!was.cursor && was.at && now - Date.parse(was.at) < LOOSE_EVERY_MS) return 0;
+  let cursor = was.cursor || '';
+  let n = 0;
+  for (let i = 0; i < pages; i++) {
+    const page = await bucket.list({ prefix: 'board/', limit, ...(cursor ? { cursor } : {}) });
+    const old = (page.objects || []).filter((o) => { const t = new Date(o.uploaded || 0).getTime(); return t > 0 && t < now - LOOSE_AFTER_MS; }).map((o) => o.key);
+    for (let j = 0; j < old.length; j += 50) {
+      const part = old.slice(j, j + 50);
+      const named = new Set(((await env.DB.prepare(`SELECT r2_key FROM board_files WHERE r2_key IN (${part.map(() => '?').join(', ')})`).bind(...part).all()).results || []).map((r) => r.r2_key));
+      for (const key of part) {
+        if (named.has(key)) continue;
+        await bucket.delete(key);
+        n += 1;
+      }
+    }
+    cursor = page.truncated && page.cursor ? page.cursor : '';
+    if (!cursor) break;
+  }
+  await writeState(env.DB, LOOSE_STATE, { cursor, at: cursor ? was.at || new Date(now).toISOString() : new Date(now).toISOString() });
+  return n;
+}
 
 /**
  * New bytes for a file already kept (the same file, wherever it's linked, its words to be read again), staged: kept
@@ -3297,11 +3343,15 @@ export async function maybeSendApprovedAgendas(env, { now = Date.now() } = {}) {
 /**
  * Why a meeting's minutes can't be approved, or the board told they're up, yet ('' when they can): the meeting has to
  * have been held (its day come, or the chair started it), with its minutes in Board. The same as Board's After the
- * meeting goes by (public/admin/board-meeting.js), for a tab left open or a request made by hand
+ * meeting goes by (public/admin/board-meeting.js), for a tab left open or a request made by hand. Minutes kept only as a
+ * staff-only file (minutesStaffOnly) can be marked approved, as ever, but the board is never told they're up: they can't
+ * read them (`toBoard`, the minutes notice), said in words with what to do (Board QA round 14, Nov 24 2026)
  */
-export function minutesNotReady(m, today = todayEastern()) {
+export function minutesNotReady(m, today = todayEastern(), { toBoard = false } = {}) {
   if (!m) return 'That meeting is gone';
   if (!isDate(m.date) || (m.date > today && !m.live?.startedAt)) return 'This meeting hasn’t happened yet, so it has no minutes to approve or send.';
+  const staff = minutesStaffOnly(m);
+  if (staff) return toBoard ? staffOnlyWords(staff) : '';
   if (!minutesIn(m)) return 'This meeting’s minutes aren’t in Board yet. Drop them in first.';
   return '';
 }
@@ -3437,8 +3487,8 @@ export function minutesEmail(m, { test = false, next = null } = {}) {
 export async function sendMinutesNotice(env, id, { to = null, replyTo = [], by = '', seen = '' } = {}) {
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
-  // (never "the minutes are up" before there are any, from a tab left open or a request made by hand)
-  const why = minutesNotReady(m);
+  // (never "the minutes are up" before there are any the board can read, from a tab left open or a request made by hand)
+  const why = minutesNotReady(m, todayEastern(), { toBoard: true });
   if (why) throw Object.assign(new Error(why), { status: 409 });
   if (m.notBoard) throw Object.assign(new Error(OFF_PAGE), { status: 409 });
   if (!m.shared) throw Object.assign(new Error('Share the minutes with the board first'), { status: 409 });
@@ -4671,6 +4721,9 @@ export async function maybeRunBoard(env, { fetchImpl = fetch, now = Date.now() }
     try { await (await import('./_board-notes.js')).maybeBringUpMinutesFiles(env, { now }); } catch (err) { console.error('[board] minutes files', err?.message || err); }
     // Bytes of files taken off whose delete didn't go just after (bytesOff): deleted now
     try { await finishBytesOff(env); } catch (err) { console.error('[board] file bytes', err?.message || err); }
+    // Bytes put first whose row never came (a put that landed with its answer lost, a step after it that didn't): taken
+    // once they're old enough that no press is still on its way to naming them (takeLooseBytes, Board QA round 14)
+    try { await takeLooseBytes(env, { now }); } catch (err) { console.error('[board] loose file bytes', err?.message || err); }
     // Last: board mail (it reads for seconds while it has a backlog), then minutes read without Workers AI (it ran out
     // of time): their motions and action items, one meeting at a time
     await maybeReadBoardMail(env, { fetchImpl, now });

@@ -393,11 +393,11 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, lost
 
 /** The minutes as a document: the signed copy once there is one (the minutes as approved, signed), else the file they're kept in */
 function minutesDoc(m) {
-  const onItem = new Set(m.sections.flatMap((s) => s.items.flatMap((it) => it.docs || [])));
   const signed = m.files.filter((f) => f.kind === 'signed').at(-1);
   if (signed) return { f: signed, label: 'The minutes, signed' };
-  // (the one the page's "The minutes as written" opens: ../board-shared.js minutesFileOf; never last meeting's on an item)
-  const kept = minutesFileOf({ ...m, files: m.files.filter((f) => !onItem.has(f.id)) });
+  // (the one the page's "The minutes as written" opens, by the one rule: ../board-shared.js minutesFileOf, which never
+  // takes last meeting's on an item, and keeps the secretary's Word file wherever it's put. Board QA round 14)
+  const kept = minutesFileOf(m);
   return kept ? { f: kept, label: 'The minutes as written' } : null;
 }
 const isDocx = (f) => /\.docx$/i.test(String(f?.name || '')) || /wordprocessingml/i.test(String(f?.type || ''));

@@ -37,7 +37,7 @@ import { namesIn } from './_member-places.js';
 import { asSend, readDown } from './_board-roles.js';
 import { mergeAttendance, minutesPeople } from './_board-minutes.js';
 import { minutesDocx, minutesFileName, approveWords, noteLines } from '../../public/admin/board-minutes-template.js';
-import { isDate, todayEastern, endedClock, minutesTarget } from '../../public/admin/board-shared.js';
+import { isDate, todayEastern, endedClock, minutesTarget, sentMinutesFile } from '../../public/admin/board-shared.js';
 
 export const MAX_NOTE = 20000;
 export const MAX_LINE = 1000;
@@ -261,7 +261,7 @@ const keysWith = (notes, kind) => Object.keys(notes).filter((k) => k.startsWith(
  *   `approves`: a passed vote on the agenda's minutes item, and only that, approves the meeting it's about.
  * → { next, sent, approves, kept, read, record }
  */
-export function applyNotes(cur, notes, { sent = null, people = [], target = null, checkins = {}, taker = '', fileName = '', now = Date.now() } = {}) {
+export function applyNotes(cur, notes, { sent = null, people = [], target = null, checkins = {}, taker = '', fileName = '', fileId = '', now = Date.now() } = {}) {
   const was = sent || {};
   const at = iso(now);
   let kept = 0;
@@ -452,7 +452,9 @@ export function applyNotes(cur, notes, { sent = null, people = [], target = null
   return {
     // (`ai`: nothing to read again: the heartbeat goes back only to minutes the model hasn't read, and these were never read)
     // (`first`: when they first went in; a correction later is its own date, and never takes that one's place)
-    next: { ...cur, sections, attendance, motions, actions, minutesFrom: anything ? { name: one(fileName, 200), at, ai: true, tries: 0, typed: true, first: was.at ? cur.minutesFrom?.first || was.at : at } : fromBefore },
+    // (`file`: the Word file this send keeps, by its id: the minutes file wherever a founder puts it, board-shared.js
+    // sentMinutesFile. Board QA round 14)
+    next: { ...cur, sections, attendance, motions, actions, minutesFrom: anything ? { name: one(fileName, 200), at, ai: true, tries: 0, typed: true, first: was.at ? cur.minutesFrom?.first || was.at : at, ...(fileId ? { file: fileId } : {}) } : fromBefore },
     sent: {
       at, items: had, put, left, parts, rollWas, rollPut, fromBefore, keeper: keeperKey, ...(was.cleared ? { cleared: was.cleared } : {}),
       // Everyone this draft added to the meeting's list, guests or not
@@ -610,7 +612,7 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
           // (changed since its Word file was made from it: made again)
           if (staged && (cur.updatedAt || '') !== (m.updatedAt || '')) throw AGAIN;
           const of = (x) => rest[others.indexOf(x)] || null;
-          done = applyNotes(cur, notes, opts);
+          done = applyNotes(cur, notes, { ...opts, fileId: staged?.id || '' });
           const writes = [[cur, done.next]];
           approved = '';
           undone = 0;
@@ -638,9 +640,11 @@ export async function sendNotes(env, id, w, { now = Date.now() } = {}) {
           const record = { sql: `UPDATE board_minutes_notes SET sent = ?${anything ? '' : ', took = NULL'} WHERE meeting_id = ?`, bind: [keeps, id] };
           // The last send's Word file goes only while it's still the send's: one a founder has filed under Other, put on an
           // item or renamed since is theirs and stays (Board QA round 13, Nov 24 2026: the next send deleted it however
-          // Board had kept it, and an item kept naming a file that was gone). Taken off as every file is (takeFileOff):
-          // its row, its bytes and every item that names it, in this one step, and only while it's still as read
-          const ours = old ? sendsFile(cur, lastSent) : null;
+          // Board had kept it, and an item kept naming a file that was gone); taking the minutes back takes it from its
+          // items too, since it's the minutes file wherever it is (sendsFile `anywhere`, Board QA round 14). Taken off as
+          // every file is (takeFileOff): its row, its bytes and every item that names it, in this one step, and only while
+          // it's still as read
+          const ours = old ? sendsFile(cur, lastSent, { anywhere: !anything }) : null;
           const off = ours ? takeFileOff(done.next, lastSent.fileId, old, { only: { kind: 'minutes', name: ours.name } }) : null;
           if (off?.next) writes[0] = [cur, off.next];
           replaced = !!ours;
@@ -712,23 +716,28 @@ export function mergePatch(target, patch) {
 }
 /**
  * Whether a meeting has a Word file a send kept (`last`: its notes' record of that send): typed minutes, with that file
- * still theirs: still filed as the minutes and on none of the agenda's items. One a founder has filed under something
- * else or put on an item is theirs, and its words are never written over (Board QA round 13)
+ * still theirs: the minutes file by the one rule (board-shared.js sentMinutesFile), still filed as the minutes, wherever
+ * a founder has put it. One a founder has filed under something else is theirs, and its words are never written over
+ * (Board QA round 13). Board QA round 14, Nov 24 2026: put on an agenda item, it stopped being brought up, and approving
+ * left the minutes with no file, while the board page still read it as the minutes as written
  */
 export const keptFile = (m, last) => {
-  const f = m?.minutesFrom?.typed && last?.fileId && last.notes ? (m.files || []).find((x) => x.id === last.fileId) : null;
-  return !!f && f.kind === 'minutes' && !onItem(m, f.id);
+  const f = last?.fileId && last.notes ? sentMinutesFile(m, last.fileId) : null;
+  return !!f && f.id === last.fileId;
 };
 const onItem = (m, id) => (m?.sections || []).some((s) => s.items.some((it) => (it.docs || []).includes(id)));
 const sameName = (a, b) => String(a || '').replace(/\s+/g, ' ').trim().slice(0, 200) === String(b || '').replace(/\s+/g, ' ').trim().slice(0, 200);
 /**
  * The last send's Word file, when it's still the send's to replace: the kept file (keptFile), under the name the send
- * gave it (the minutes' own record of it). One a founder has filed under something else, put on an item or renamed is
- * theirs, and stays. → the file as the meeting lists it, or null
+ * gave it (the minutes' own record of it). One a founder has filed under something else or renamed is theirs, and stays;
+ * one they put on an item stays there as theirs when the next send replaces the minutes (Board QA round 13), and goes
+ * from everywhere when the send takes them back (`anywhere`: Board QA round 14, Nov 24 2026, the board page still read a
+ * withdrawn Word file on an item as the minutes as written). → the file as the meeting lists it, or null
  */
-const sendsFile = (m, last) => {
+const sendsFile = (m, last, { anywhere = false } = {}) => {
   if (!keptFile(m, last)) return null;
   const f = m.files.find((x) => x.id === last.fileId);
+  if (!anywhere && onItem(m, f.id)) return null;
   return sameName(f.name, m.minutesFrom?.name) ? f : null;
 };
 /** What else a kept Word file is made from, read first (a read that fails throws, and nothing is made). `have`: what the caller has read already */

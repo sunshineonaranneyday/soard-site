@@ -29,7 +29,7 @@ import { pdfLines, docxLines, wordsFromLines } from './board-words.js';
 import { BoardActivity, signDocsOf, unsignedOf } from './board-activity.js';
 import {
   isHeic, asJpeg, DOC_KINDS, meetingName, quarterOf, longDate, shortDate, timeRange, plural, todayEastern,
-  attendanceCounts, openActions, nextMeeting, parseAgendaText, isDate, docxText, fileTitle, answerOf, repliesOf, agendaIsDraft, majority, agendaItems, isLive, heldEarly, minutesIn, meetingOver,
+  attendanceCounts, openActions, nextMeeting, parseAgendaText, isDate, docxText, fileTitle, answerOf, repliesOf, agendaIsDraft, majority, agendaItems, isLive, heldEarly, minutesIn, meetingOver, minutesStaffOnly,
 } from './board-shared.js';
 import { welcomeHad, usableEmail, PROCESS_TEXT, dueOn, dueWords } from './board-shared.js';
 
@@ -247,9 +247,13 @@ function PracticeMeeting({ ctx }) {
  * agenda and its reports, the invite, the approval, the board page and the email; done, next or still to come
  */
 const prepOf = (m, data) => pathOf(m, data, 'ahead').filter((x) => x.id !== 'day' && x.id !== 'minutes');
-/** Where a past meeting's minutes stand, as a tag: whether they're in is one fact (minutesIn), as its own page says it (Board QA round 13) */
+/**
+ * Where a past meeting's minutes stand, as a tag: whether they're in is one fact (minutesIn), as its own page says it
+ * (Board QA round 13); in only as a file kept Staff only, said as that (minutesStaffOnly, round 14)
+ */
 const minutesTag = (m) => (m.minutes === 'approved' ? html`<span class="tag tag--success">Minutes approved</span>`
   : minutesIn(m) ? html`<span class="tag tag--warn">Draft minutes</span>`
+  : minutesStaffOnly(m) ? html`<span class="tag tag--warn">Minutes staff only</span>`
   : html`<span class="tag">No minutes yet</span>`);
 const sharedTag = (m) => (m.shared ? html`<span class="tag tag--success">On the board page</span>` : html`<span class="tag">Not shared</span>`);
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -416,7 +420,7 @@ function NextCard({ m, ctx }) {
       </div>
       <button class="btn btn-primary" onClick=${() => go({ meetingId: m.id })}>${today && !held ? 'Open for the meeting' : 'Open the meeting'}</button>
     </div>
-    ${held ? html`<p class="bh-nextline">${m.minutes === 'approved' ? html`<strong>The minutes are approved.</strong>` : minutesIn(m) ? html`<strong>The minutes are in.</strong> The board votes on them at the next meeting.` : html`<strong>Next:</strong> its minutes.`}</p>` : today ? html`<p class="bh-nextline">${now ? null : html`<strong>Today.</strong> `}Open it to present the agenda and its documents on the screen.</p>` : html`
+    ${held ? html`<p class="bh-nextline">${m.minutes === 'approved' ? html`<strong>The minutes are approved.</strong>` : minutesIn(m) ? html`<strong>The minutes are in.</strong> The board votes on them at the next meeting.` : minutesStaffOnly(m) ? html`<strong>Next:</strong> share its minutes. Their file is staff only, so the board can’t read them.` : html`<strong>Next:</strong> its minutes.`}</p>` : today ? html`<p class="bh-nextline">${now ? null : html`<strong>Today.</strong> `}Open it to present the agenda and its documents on the screen.</p>` : html`
       <ol class="bh-prep" aria-label="Getting ready">${prep.map((x) => html`<li class=${`is-${x.state}`} title=${x.sub} aria-current=${x === up ? 'step' : null}><span class="bh-prep__mark" aria-hidden="true">${x.done ? CHECK : null}</span>${x.title}</li>`)}</ol>
       <p class="bh-nextline">${up ? html`<strong>Next:</strong> ${up.todo}.` : html`<strong>Ready.</strong> The board was emailed the link ${ago(m.packetSentAt)}.`}</p>`}
     ${held ? (here.boardHere ? html`<p class="bh-rsvp"><strong>Who was there:</strong> ${here.boardHere} of ${plural(here.board, 'board member')}</p>` : null)
