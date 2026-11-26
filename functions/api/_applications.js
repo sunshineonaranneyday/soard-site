@@ -54,6 +54,7 @@ import { maybeSyncApplicants, familiesWithHomes } from './_applicants.js';
 import { runJotformBackfill, jotformSecondLook } from './_jotform-backfill.js';
 import { runNotifications } from './_applicant-notify.js';
 import { runApprovals } from './_applicant-approved.js';
+import { runPastJobs } from './_past-jobs.js';
 import { logAudit } from './_audit.js';
 import { seasonSummary } from './_application-season.js';
 import { capOf, capFacts, countReceived, claimWarning, tellCap, fullMessageOf, wholeNumber, CAP_USER, MAX_LIMIT } from './_application-cap.js';
@@ -741,9 +742,65 @@ export function isTestAnswers(answers, kind = 'family') {
   return /^test\b/i.test(String(v || '').trim());
 }
 
+/** Two first names that are the same, or (5 letters and up) one typo apart: a letter added, dropped, changed or two swapped */
+export function sameFirstName(a, b) {
+  a = norm(a); b = norm(b);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (Math.min(a.length, b.length) < 5 || Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (a[i] === b[i]) i++;
+  const rest = (x, y) => a.slice(i + x) === b.slice(i + y);
+  return rest(1, 1) || rest(1, 0) || rest(0, 1) || (a[i] === b[i + 1] && a[i + 1] === b[i] && rest(2, 2));
+}
+
+/**
+ * The same family's makeover application already in this season, or null: the same child (the same last
+ * name and birthday, and the same first name or one typo apart; twins have their own first names), else
+ * with `email` the same parent email when these answers name no child yet. Test runs and deleted
+ * applications don't count (deleting one lets the family send it again). One child, one application a
+ * season: a second came in when a reminder went to the draft a family left before starting over and
+ * sending (Nov 2026).
+ */
+export async function sentThisSeason(DB, { year, answers, email = null }) {
+  const a = answers || {};
+  const first = a.childName?.first;
+  const last = norm(a.childName?.last);
+  const born = String(a.birthdate || '');
+  const named = !!norm(first) || !!last;
+  const mail = String(email || '').trim().toLowerCase();
+  if (!(last && norm(first)) && !mail) return null;
+  let rows = [];
+  try {
+    rows = (await DB.prepare("SELECT id, child_name, parent_email, answers, submitted_at FROM applications WHERE year = ? AND COALESCE(kind, 'family') = 'family' AND is_test = 0 AND deleted_at IS NULL ORDER BY submitted_at").bind(String(year)).all()).results || [];
+  } catch { return null; }
+  // (Without a birthday on either, the whole name has to match)
+  const sameChild = (ra) => !!last && norm(ra.childName?.last) === last
+    && (born && ra.birthdate ? ra.birthdate === born && sameFirstName(ra.childName?.first, first) : norm(ra.childName?.first) === norm(first));
+  let byEmail = null;
+  for (const r of rows) {
+    const ra = parse(r.answers, {});
+    if (sameChild(ra)) return { id: r.id, child: r.child_name, at: r.submitted_at, why: 'child' };
+    if (mail && !byEmail && String(r.parent_email || '').trim().toLowerCase() === mail) byEmail = { id: r.id, child: r.child_name, at: r.submitted_at, why: 'email' };
+  }
+  // The same parent email for a child these answers don't name yet: the same family's. One that names
+  // another child is a sibling's application, which they may send
+  return byEmail && !named ? byEmail : null;
+}
+
+/** What the form says when that child's application is already in (in their language) */
+export function alreadyAppliedText({ first, year, lang = 'en' }) {
+  const name = String(first || '').trim();
+  return lang === 'es'
+    ? `${name || 'Su hijo o hija'} ya tiene una solicitud para ${year}, así que no hace falta enviar otra. Para cambiar o agregar algo, escríbanos a info@soardcharity.com.`
+    : `${name ? `${name} already has` : 'Your child already has'} an application in for ${year}, so there's no need to send another. To change or add anything, email info@soardcharity.com.`;
+}
+
 /**
  * Freeze a draft into an application. Returns { ok, id } or { ok: false,
- * errors | error }. Submitting twice returns the same application.
+ * errors | error }. Submitting twice returns the same application; a second
+ * draft for a child whose application is already in this season is turned
+ * away ({ ok: false, error: 'already-applied', message }).
  */
 export async function submitDraft(env, draft, { now = Date.now(), forceTest = false } = {}) {
   const { DB } = env;
@@ -776,6 +833,15 @@ export async function submitDraft(env, draft, { now = Date.now(), forceTest = fa
   const id = newApplicationId();
   const childName = applicantNameOf(answers, kind);
   const isTest = forceTest || !!testTo || isTestAnswers(answers, kind);
+  // One application a child a season: no second JobTread account or welcome emails, and no more reminders
+  // for this draft. (Staff test runs and TEST rehearsals send as often as they like)
+  if (kind === 'family' && !isTest) {
+    const sent = await sentThisSeason(DB, { year: draft.year, answers });
+    if (sent) {
+      await stopReminders(DB, draft.id);
+      return { ok: false, error: 'already-applied', message: alreadyAppliedText({ first: answers[roles.name]?.first, year: draft.year, lang }) };
+    }
+  }
   const at = iso(now);
   // Claim the draft first so a double tap can't make two applications
   const claimed = await DB.prepare('UPDATE application_drafts SET submitted_id = ?, updated_at = ? WHERE id = ? AND submitted_id IS NULL').bind(id, at, draft.id).run();
@@ -1671,7 +1737,10 @@ export async function maybeSweepApplications(env, { fetchImpl = fetch, now = Dat
     const jotform = await runJotformBackfill(env, { fetchImpl, now });
     // Then, once: the families it couldn't place, and JobTread's Application URLs off Jotform
     const jotformLook = await jotformSecondLook(env, { fetchImpl, now });
-    return { processed, reminded, expired, notified, approved, applicants, capped, spanish, jotform, jotformLook };
+    // Past makeovers as closed JobTread jobs, a few a run once a founder pressed Make the rest (./_past-jobs.js);
+    // after the applicants' own work, so families come first
+    const pastJobs = await runPastJobs(env, { fetchImpl, now }).catch((e) => ({ error: e.message }));
+    return { processed, reminded, expired, notified, approved, applicants, capped, spanish, jotform, jotformLook, pastJobs };
   } catch {
     return null;
   }
@@ -1814,6 +1883,8 @@ export function reminderEmail({ form, draft, link, stopLink, percent }) {
  * Nudge families who started and went quiet: the Nth reminder goes once their
  * last change is form.reminders.days[N] days old. Never after they submit,
  * hit a stop screen, ask to stop, or the draft expires; at most one a day.
+ * Nor once the family sent an application from another draft this season
+ * (sentThisSeason): that draft's reminders stop for good.
  */
 export async function sendReminders(env, { now = Date.now(), limit = 20 } = {}) {
   const { DB } = env;
@@ -1831,6 +1902,10 @@ export async function sendReminders(env, { now = Date.now(), limit = 20 } = {}) 
     const draft = draftRow(r);
     const n = Number(draft.reminders_sent) || 0;
     if (now - Date.parse(draft.updated_at) < days[n] * DAY_MS) continue;
+    if (!isOrganizationKind(draft.kind) && await sentThisSeason(DB, { year: draft.year, answers: draft.answers, email: draft.email })) {
+      await stopReminders(DB, draft.id);
+      continue;
+    }
     const form = await formFor(DB, { kind: draft.kind, year: draft.year, lang: draft.lang || 'en' });
     const link = `${SITE_ORIGIN}${isOrganizationKind(draft.kind) ? '/apply/community-project/' : '/apply/form/'}?resume=${draft.id}`;
     const stopLink = `${link}&reminders=off`;

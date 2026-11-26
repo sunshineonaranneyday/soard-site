@@ -1083,7 +1083,7 @@ function liveSlide(kind, n, id, data, date, as = 'pct') {
   if (!n || !kind || kind === 'minutes') return null;
   // (today's numbers whose read failed just now: the slide says so in plain words, never a zero or an empty list. Board
   // QA round 12; a past meeting's locked numbers have no such flags: ./unread.js)
-  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events' }[kind];
+  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events', meetings: 'meetings' }[kind];
   if (part && n.unread?.[part]) return html`<div class="bs-numbers"><p class="bs-quiet" role="status">${UNREAD_WORDS[part]}</p></div>`;
   // (JobTread not answering: the pipeline says so, never a slide with nothing on it)
   if (kind === 'projects') return html`<${Pipeline} projects=${n.projects} reveals=${n.reveals || []} />`;
@@ -1120,6 +1120,8 @@ function SinceSlide({ v, n, meeting }) {
   const inRange = (d) => isDate(d) && (!from || d > from) && d <= meeting.date;
   const reveals = (n?.pastReveals || []).filter((r) => inRange(r.date)).sort((a, b) => a.date.localeCompare(b.date));
   const events = (n?.recentEvents || []).filter((e) => inRange(e.date));
+  // (a part whose read failed just now says so in its place, never a quiet stretch: ./unread.js, Board QA round 13)
+  const lost = { reveals: !!n?.unread?.projects, events: !!n?.unread?.events };
   const open = (v.actions || []).filter((a) => !a.done);
   const shown = reveals.length > 6 ? reveals.slice(0, 5) : reveals;
   const more = reveals.length - shown.length;
@@ -1145,11 +1147,13 @@ function SinceSlide({ v, n, meeting }) {
         <strong dir="auto">${r.name}</strong><span>${day(r.date)}</span>
       </li>`)}${more ? html`<li class="bs-since__more" key="more"><span class="bs-since__photo"><b>+${more}</b></span><strong>${more} more</strong><span>through ${day(reveals.at(-1).date)}</span></li>` : null}</ul>
     </div>` : null}
-    ${events.length || open.length ? html`<div class=${`bs-since__side ${events.length && open.length ? 'is-both' : ''}`}>
+    ${lost.reveals ? html`<p class="bs-quiet" role="status">${UNREAD_WORDS.projects}</p>` : null}
+    ${events.length || open.length || lost.events ? html`<div class=${`bs-since__side ${(events.length || lost.events) && open.length ? 'is-both' : ''}`}>
+      ${lost.events ? html`<div><p class="bs-eyebrow">Events held</p><p class="bs-quiet" role="status">${UNREAD_WORDS.events}</p></div>` : null}
       ${events.length ? html`<div><p class="bs-eyebrow">Events held</p><ul class="bs-since__list">${ev.map((e) => html`<li key=${e.title + e.date}><b>${day(e.date)}</b><span dir="auto">${e.title}</span></li>`)}</ul>${left(events, ev.length, 'held')}</div>` : null}
       ${open.length ? html`<div><p class="bs-eyebrow">Action items still open</p><ul class="bs-since__list">${acts.map((a) => html`<li key=${a.id}><b>${a.ownerName || 'Open'}</b><span dir="auto">${a.text}</span></li>`)}</ul>${left(open, acts.length, 'open')}</div>` : null}
     </div>` : null}
-    ${!shown.length && !events.length && !open.length ? html`<p class="bs-quiet">${prev ? `The ${prev.name}’s minutes are up for approval next.` : 'The agenda is next.'}</p>` : null}
+    ${!shown.length && !events.length && !open.length && !lost.reveals && !lost.events ? html`<p class="bs-quiet">${prev ? `The ${prev.name}’s minutes are up for approval next.` : 'The agenda is next.'}</p>` : null}
   </div>`;
 }
 
@@ -1363,13 +1367,18 @@ export function Screen({ id, data, d, onBack = null }) {
   const plan = useMemo(() => (meeting ? sectionPlan(meeting) : new Map()), [meeting]);
   // QuickBooks' slides after the money, the way the money's figures go (CashSlide, the board page): today's for a
   // meeting today or ahead, the locked ones for a past meeting
-  const books = (v?.date && v.date < todayEastern() ? v.snapshot : data.numbers)?.books || null;
-  const deck = useMemo(() => (meeting ? deckOf(meeting, { pages, parts: shows, meetings: v.prior || [], books }) : []), [meeting, pages, shows, books]);
+  // (and those numbers' parts whose read failed just now, as the meeting's page and Print go by them: with the money not
+  // loaded, no slide of QuickBooks' figures, ./board-shared.js deckOf. Board QA round 13)
+  const deckNumbers = v?.date && v.date < todayEastern() ? v.snapshot : data.numbers;
+  const books = deckNumbers?.books || null;
+  const lostHere = deckNumbers?.unread || null;
+  const lostKey = JSON.stringify(lostHere || {});
+  const deck = useMemo(() => (meeting ? deckOf(meeting, { pages, parts: shows, meetings: v.prior || [], books, unread: lostHere }) : []), [meeting, pages, shows, books, lostKey]);
   // Every document's pages and parts from the start (kept on this device, else worked out a file at a time), so the
   // deck is whole before its documents are shown: a reload or Play from here lands on its slide, and the count holds
   const docFiles = useMemo(() => {
     if (!meeting) return [];
-    const ids = new Set(deckOf(meeting, { meetings: v.prior || [], books }).filter((s) => s.kind === 'doc').map((s) => s.fileId));
+    const ids = new Set(deckOf(meeting, { meetings: v.prior || [], books, unread: lostHere }).filter((s) => s.kind === 'doc').map((s) => s.fileId));
     const all = [...meeting.files, ...(v.prior || []).flatMap((x) => x.files || [])];
     // The one a slide asked for (Play from here, a reload) counted first
     const asked = (here.key || '').split(':')[1] || '';
@@ -1532,7 +1541,9 @@ export function Screen({ id, data, d, onBack = null }) {
     stage = html`<${Chapter} n=${cardSi + 1} sec=${meeting.sections[cardSi]} t=${plan.get(meeting.sections[cardSi]?.id)} items=${items} people=${people} />`;
   } else if (stop.kind === 'books') {
     // QuickBooks' own: the year against last year, or a statement beside a year before
-    stage = html`<${BooksSlide} books=${books} kind=${stop.fileId.slice(6)} page=${stop.page} notes=${data.lineNotes?.[id]?.[item?.id]} as=${chg} />`;
+    // (never with the money not loaded, as the money's own slide says: a stop kept from before the read failed says so)
+    stage = lostHere?.money ? html`<div class="bs-item bs-item--facts"><div class="bs-item__facts"><div class="bs-numbers"><p class="bs-quiet" role="status">${UNREAD_WORDS.money}</p></div></div></div>`
+      : html`<${BooksSlide} books=${books} kind=${stop.fileId.slice(6)} page=${stop.page} notes=${data.lineNotes?.[id]?.[item?.id]} lostNotes=${!!data.unread?.lineNotes} as=${chg} />`;
   } else if (stop.kind === 'live') {
     // One of the item's other live lists, as the item's own would show
     const k = stop.fileId.slice(5);

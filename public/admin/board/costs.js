@@ -45,6 +45,28 @@ const seasonsText = (s) => and([...(s || [])].filter((x) => x != null && String(
  * costs slide read "Completed makeovers by room," while JobTread had no completed makeover with bills
  */
 export const seasonsTitle = (words, seasons) => [words, seasonsText(seasons)].filter(Boolean).join(', ');
+/**
+ * The makeovers left out of the chart (no bills in JobTread), after the note: a handful by name; past that, the newest
+ * few by name and the rest counted with their seasons, so every past makeover's closed JobTread record (made Nov 2026)
+ * doesn't become a paragraph of names. "" when there are none
+ */
+export function notCounted(list) {
+  const all = [...(list || [])].sort((a, b) => Number(b.season || 0) - Number(a.season || 0) || String(a.name).localeCompare(String(b.name)));
+  if (!all.length) return '';
+  const seasonsOf = (l) => seasonsText([...new Set(l.map((x) => x.season))]);
+  if (all.length <= NAMED_MAX) {
+    const s = seasonsOf(all);
+    return ` Not counted: ${and(all.map((x) => x.name))}${s ? ` (${s})` : ''}, with no bills in JobTread.`;
+  }
+  const named = all.slice(0, NAMED_SOME);
+  const rest = all.slice(NAMED_SOME);
+  const ys = rest.map((x) => Number(x.season)).filter(Boolean);
+  const span = ys.length ? (Math.min(...ys) === Math.max(...ys) ? ` from ${Math.min(...ys)}` : ` from ${Math.min(...ys)} to ${Math.max(...ys)}`) : '';
+  const s = seasonsOf(named);
+  return ` Not counted, with no bills in JobTread: ${and(named.map((x) => x.name))}${s ? ` (${s})` : ''} and ${rest.length} more${span}.`;
+}
+const NAMED_MAX = 6;
+const NAMED_SOME = 4;
 const hueOf = (s) => [42, 28, 96, 152, 200, 18][[...String(s)].reduce((a, c) => a + c.charCodeAt(0), 0) % 6];
 const roomsText = (m) => (m.kind === 'community' ? 'Community project' : m.rooms?.length ? m.rooms.join(' + ') : typeById(m.type).label);
 // Each type in a sentence, one and many: "3 therapy rooms"
@@ -484,7 +506,7 @@ export function CostsCard({ data, n, m = null, variant = 'home', admin = false, 
       </div>
       ${shownStats ? html`<p class="bc-stats">${nbw(`${plural(shownStats.count, 'completed makeover')}: median ${dollars(shownStats.median)}, average ${dollars(shownStats.average)}, low ${dollars(shownStats.low)} (${shownStats.lowOf.name}, ${shownStats.lowOf.season}), high ${dollars(shownStats.high)} (${shownStats.highOf.name}, ${shownStats.highOf.season})`)}</p>` : null}
       <${CostChart} makeovers=${makeovers} seasons=${seasons} spots=${!table} />
-      ${shown.length || noBills.length ? html`<p class="bc-note">${nbw(`Each face or dot is one makeover, at what SOARD paid: its bills in JobTread, without donated work. The line marks each room’s median; the shading, its middle half.${noBills.length ? ` Not counted: ${and(noBills.map((x) => x.name))}${seasonsText([...new Set(noBills.map((x) => x.season))]) ? ` (${seasonsText([...new Set(noBills.map((x) => x.season))])})` : ''}, with no bills in JobTread.` : ''}`)}</p>` : null}
+      ${shown.length || noBills.length ? html`<p class="bc-note">${nbw(`Each face or dot is one makeover, at what SOARD paid: its bills in JobTread, without donated work. The line marks each room’s median; the shading, its middle half.${notCounted(noBills)}`)}</p>` : null}
       ${table ? html`<${Table} makeovers=${shown} />` : null}
     </div>`;
   if (variant === 'home') {
@@ -519,7 +541,7 @@ export function CostsCard({ data, n, m = null, variant = 'home', admin = false, 
       </div>
       ${shownStats ? html`<p class="bc-stats">${nbw(`${plural(shownStats.count, 'completed makeover')}: median ${dollars(shownStats.median)}, average ${dollars(shownStats.average)}, low ${dollars(shownStats.low)} (${shownStats.lowOf.name}, ${shownStats.lowOf.season}), high ${dollars(shownStats.high)} (${shownStats.highOf.name}, ${shownStats.highOf.season})`)}</p>` : null}
       <${CostChart} makeovers=${makeovers} seasons=${seasons} />
-      ${shown.length || noBills.length ? html`<p class="bc-note">${nbw(`Each face or dot is one makeover, at what SOARD paid: its bills in JobTread, without donated work. The line marks each room’s median; the shading, its middle half.${noBills.length ? ` Not counted: ${and(noBills.map((x) => x.name))}${seasonsText([...new Set(noBills.map((x) => x.season))]) ? ` (${seasonsText([...new Set(noBills.map((x) => x.season))])})` : ''}, with no bills in JobTread.` : ''}`)}</p>` : null}
+      ${shown.length || noBills.length ? html`<p class="bc-note">${nbw(`Each face or dot is one makeover, at what SOARD paid: its bills in JobTread, without donated work. The line marks each room’s median; the shading, its middle half.${notCounted(noBills)}`)}</p>` : null}
       <${Table} makeovers=${shown} k=${`costs-table-${m?.id || variant}`} />
     </div>
     ${variant === 'home' ? html`<p class="bc-families"><a class="bp-cardhead__go" href="#/families">Every family’s application and score <span aria-hidden="true">→</span></a></p>` : null}`;

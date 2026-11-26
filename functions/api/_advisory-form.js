@@ -20,7 +20,7 @@
 
 import { isWebAddress } from './_application-constants.js';
 import { PHOTO_MIN, PHOTO_GOOD } from '../../public/admin/team-shared.js';
-import { givenName, givenPair, familyFirst, titleToo, lettersToo, nameKey, womansName, titleBeforeNames, titlePair, familyFirstBefore, hungarianOrder, onTheLists } from './_given-names.js';
+import { givenName, givenPair, familyFirst, titleToo, lettersToo, nameKey, womansName, titleBeforeNames, titlePair, familyFirstBefore, familyFirstUnsure, hungarianOrder, onTheLists } from './_given-names.js';
 
 export const OVERVIEW_PDF = 'https://files.sunshineonaranneyday.com/advisory/SOARD_Advisory%20Board%20Overview.docx.pdf';
 
@@ -649,45 +649,83 @@ let NAMED_CITIES = null;
 const nameCount = (ts) => ts.filter((t) => /\p{L}/u.test(t) && !TITLE.test(t) && !/^(?:the|&|and)$/iu.test(t)).length;
 // (how many of the name's words come before each place: one look at each word, so a long name reads at once)
 const countsBefore = (ts) => { const out = [0]; for (const t of ts) out.push(out[out.length - 1] + (nameCount([t]) ? 1 : 0)); return out; };
-// (the words from k on surely a place, a company or a job after a whole name: k, or -1 when there are none)
-const placeTail = (ts, least = 2) => {
+// Round 25 (finding 5, the lead's rule): what's after a name, read as the places, organizations and jobs it's made of, each
+// a unit: a phrase of the lists, longest first ("Trinidad and Tobago", "Georgia National Guard", "Ben Hill County",
+// "Holly Springs"), an "X of Y" (OF_HEADS: "City of Atlanta", "Bank of America", "Department of Labor", by rule), "The",
+// "US", "U.S." or "United States" before one ("The Home Depot", "US Air Force", by rule), a kind of place after a word
+// ("Orange County"), a city a family name too and its state ("Decatur GA"), or one word surely a place, an organization or
+// a job. → [[its length, whether it may start what's after the name]]: a word that's a kind of place a name goes before
+// ("County", "City", "University") never starts it on its own. `headEnd`: the last word, an OF_HEADS word, is one too, its
+// "of" past the end (cutAfter)
+const placeUnits = (ts, keys, i, cased, { headEnd = false } = {}) => {
   if (!NAMED_CITIES) NAMED_CITIES = new Set(splitWords(NAMED_CITY));
-  const cased = /\p{Lu}/u.test(ts.join(' ')) && /\p{Ll}/u.test(ts.join(' '));
-  let k = ts.length;
-  const before = countsBefore(ts);
-  while (k > 0 && before[k - 1] >= least) {
-    const j = k - 1;
-    const w = plain(ts[j]);
-    const next = k < ts.length ? plain(ts[k]) : '';
-    const sure = !!w && (placeWord(w) || whereWord(w, { named: j === ts.length - 1 }) || stateAt(ts, j, cased)
-      || (NOT_A_FIRST_NAME.test(w) && !/^(?:pastor|coach)$/u.test(w)) || (ORG.test(w) && !ORG_AS_NAME.test(w))
-      || (j > 0 && placeTwo(plain(ts[j - 1]), w) && before[j - 1] >= least)
-      || (!!next && (placeTwo(w, next) || (NAMED_CITIES.has(w) && stateAt(ts, k, cased)) || /^(?:county|city|state|district|township|borough)$/u.test(next)
-        || (/^(?:us|u\.s)$/u.test(w) && /^(?:army|navy|marines|military|air|coast)$/u.test(next)))));
-    if (!sure) break;
-    k = j;
+  if (!STANDALONE) { STANDALONE = new Set([...keyed(PLACE_WORDS[PLACE_WORDS.length - 1]), ...PLACE_MORE.slice(1).flatMap(keyed), ...keyed(ON_ITS_OWN)]); ON_ITS_OWN_SET = new Set(keyed(ON_ITS_OWN)); }
+  if (!PHRASES) buildPlaces();
+  const k = keys[i];
+  const out = [];
+  if (!k) return out;
+  for (const n of phraseLens(keys, i)) out.push([n, true]);
+  if (HEADS.has(k) && keys[i + 1] === 'of' && i + 2 < keys.length) out.push([keys.length - i, true]);
+  if (headEnd && i === keys.length - 1 && HEADS.has(k)) out.push([1, true]);
+  const pre = k === 'the' || k === 'us' ? 1 : (k === 'united' && keys[i + 1] === 'states' ? 2 : 0);
+  if (pre && i + pre < keys.length) for (const [n] of placeUnits(ts, keys, i + pre, cased, { headEnd })) out.push([pre + n, true]);
+  // (a state's name before an organization, "Georgia Department of Education", "Virginia Tech": never before a word that
+  // isn't one, "Georgia Power" being a given name and a family name a person could have)
+  const st = STATE_PHRASES.has(`${k} ${keys[i + 1] || ''}`) ? 2 : STATE_PHRASES.has(k) ? 1 : 0;
+  if (st && i + st < keys.length) {
+    const j = i + st;
+    const org = (HEADS.has(keys[j]) && keys[j + 1] === 'of' && j + 2 < keys.length) || (headEnd && j === keys.length - 1 && HEADS.has(keys[j])) || (ORG.test(keys[j]) && !ORG_AS_NAME.test(keys[j]));
+    if (org) for (const [n] of placeUnits(ts, keys, j, cased, { headEnd })) out.push([st + n, true]);
   }
-  // (and it starts with a word that's a place, a company or a job on its own, or the name of a county, city or place of
-  // two words: never a kind of place a name goes before, "Jordan Ames Holly Springs" being Jordan Ames, but "Jordan Ames
-  // Grace Community" as typed)
-  if (!STANDALONE) STANDALONE = new Set([...keyed(PLACE_WORDS[PLACE_WORDS.length - 1]), ...PLACE_MORE.slice(1).flatMap(keyed), ...keyed(ON_ITS_OWN)]);
-  const own = (j) => {
-    const w = plain(ts[j]);
-    const next = j + 1 < ts.length ? plain(ts[j + 1]) : '';
-    return STANDALONE.has(placeKey(w)) || whereWord(w, { named: j === ts.length - 1 }) || stateAt(ts, j, cased) || NOT_A_FIRST_NAME.test(w)
-      || (!!next && (placeTwo(w, next) || (NAMED_CITIES.has(w) && stateAt(ts, j + 1, cased)) || /^(?:county|city|state|district|township|borough)$/u.test(next)
-        || (/^(?:us|u\.s)$/u.test(w) && STANDALONE.has(placeKey(next)))));
-  };
-  while (k < ts.length && !own(k)) k++;
-  // (never inside a place of two words, "Charlotte North Carolina"; and a word that joins people goes with what's after it,
-  // "Jordan Rowe and Co." being Jordan Rowe)
-  if (k > 0 && k < ts.length && placeTwo(plain(ts[k - 1]), plain(ts[k]))) return -1;
-  while (k > 1 && k < ts.length && /^(?:and|&|y|e|et|und|n)$/iu.test(ts[k - 1]) && before[k - 1] >= least) k--;
-  return k < ts.length ? k : -1;
+  if (/^(?:county|city|district|township|borough|parish)$/u.test(keys[i + 1] || '') && keys[i + 2] !== 'of' && !(headEnd && i + 2 === keys.length) && /\p{L}/u.test(k)) out.push([2, true]);
+  if (NAMED_CITIES.has(k) && i + 1 < ts.length && stateAt(ts, i + 1, cased)) out.push([1, true]);
+  const w = plain(ts[i]);
+  const last = i === ts.length - 1;
+  const job = NOT_A_FIRST_NAME.test(w) && !/^(?:pastor|coach)$/u.test(w);
+  const where = whereWord(w, { named: last }) || stateAt(ts, i, cased);
+  // (the military and work words on their own, "Retired", "Navy" only last, as Georgia is: a given name too)
+  const onItsOwn = ON_ITS_OWN_SET.has(k) && (last || !WHERES_NAMED.has(k));
+  if (job || where || onItsOwn || placeWord(w) || (ORG.test(w) && !ORG_AS_NAME.test(w))) out.push([1, job || where || onItsOwn || STANDALONE.has(k)]);
+  return out;
+};
+// (the lengths of the phrases of the lists starting at word i, longest first)
+const phraseLens = (keys, i) => {
+  if (!PHRASES) buildPlaces();
+  const out = [];
+  for (let n = Math.min(PHRASE_MAX, keys.length - i); n >= 2; n--) if (PHRASES.has(keys.slice(i, i + n).join(' '))) out.push(n);
+  return out;
+};
+const keysOf = (ts) => ts.map((t) => (/^(?:&|\+)$/u.test(t) ? 'and' : placeKey(t)));
+// (the word at which what's after a whole name, all of it, is places, organizations or jobs: k, or -1 when it isn't. Round
+// 25: read as units from the end, so each is one look at each word; never a cut inside a place or an organization of more
+// words, "Jordan Ames Ben Hill County" being Jordan Ames, never Jordan Ames Ben, and "Charlotte North Carolina" as typed;
+// what can't be read, as typed: "Jordan Ames Edward Jones", "Jordan Lee Church")
+const placeTail = (ts, least = 2, opts = {}) => {
+  const n = ts.length;
+  const cased = /\p{Lu}/u.test(ts.join(' ')) && /\p{Ll}/u.test(ts.join(' '));
+  const keys = keysOf(ts);
+  const before = countsBefore(ts);
+  const all = new Array(n + 1).fill(false);
+  const start = new Array(n + 1).fill(false);
+  const units = [];
+  all[n] = true;
+  for (let i = n - 1; i >= 0; i--) {
+    units[i] = placeUnits(ts, keys, i, cased, opts);
+    all[i] = units[i].some(([m]) => all[i + m]);
+    start[i] = units[i].some(([m, s]) => s && all[i + m]);
+  }
+  let k = -1;
+  for (let i = 1; i < n && k < 0; i++) if (before[i] >= least && start[i]) k = i;
+  if (k < 0) return -1;
+  for (let j = Math.max(0, k - PHRASE_MAX); j < k; j++) if (units[j].some(([m]) => m > 1 && j + m > k)) return -1;
+  // (a word that joins people goes with what's after it, "Jordan Rowe and Co." being Jordan Rowe)
+  while (k > 1 && /^(?:and|&|y|e|et|und|n)$/iu.test(ts[k - 1]) && before[k - 1] >= least) k--;
+  return k;
 };
 // (the military and work words that stand on their own after a name)
-const ON_ITS_OWN = `army navy marines usmc usaf usn uscg military veterans selfemployed freelance freelancer unemployed retired`;
+const ON_ITS_OWN = `army navy marines usmc usaf usn uscg military veterans veteran selfemployed freelance freelancer unemployed retired`;
 let STANDALONE = null;
+let ON_ITS_OWN_SET = null;
 // (a part of the name with what follows a spaced dash, "of", "at", "from", "with" or "@", and a place, a company or a job at its
 // end set apart, after `least` words of the name)
 const cutAfter = (part, least, tail = true) => {
@@ -701,7 +739,17 @@ const cutAfter = (part, least, tail = true) => {
   let ts = p.trim().split(/\s+/).filter(Boolean);
   const counts = countsBefore(ts);
   const j = ts.findIndex((x, k) => k > 0 && k < ts.length - 1 && JOINS_A_PLACE.test(x) && counts[k] >= least);
-  if (j > 0) ts = ts.slice(0, j);
+  // (round 25: a place or an organization with "of" inside it, read whole before any "of" is: "Jordan Ames Democratic
+  // Republic of the Congo", "Jordan Ames Isle of Man")
+  const whole = tail ? placeTail(ts, least) : -1;
+  if (whole > 0 && (j < 0 || whole < j)) return ts.slice(0, whole).join(' ');
+  if (j > 0) {
+    // (round 25, finding 5: an organization or a place of the "X of Y" kind is all of it, its first words before the "of"
+    // too, "Jordan Ames City of Atlanta", "Jordan Ames Federal Reserve Bank of Atlanta" being Jordan Ames)
+    const h = tail && /^of$/iu.test(ts[j]) ? placeTail(ts.slice(0, j), least, { headEnd: true }) : -1;
+    if (h > 0) return ts.slice(0, h).join(' ');
+    ts = ts.slice(0, j);
+  }
   const k = tail ? placeTail(ts, least) : -1;
   return (k > 0 ? ts.slice(0, k) : ts).join(' ');
 };
@@ -734,8 +782,10 @@ export function ownWordsOf(full) {
     if (i === 0) { const first = p.trim().split(/\s+/).find((x) => !TITLE.test(x) && !/^the$/iu.test(x)) || ''; if (listedGiven(first) || /^(?:\p{L}\.)+$/u.test(first)) p = cutAfter(p, 2); }
     // (right after a lone family name and its comma, only when what's left starts with a given name the lists have:
     // "Ames, Jordan - Realtor" is Jordan Ames; "Ames, Fulton County" is never "Fulton")
+    // (round 25, finding 7: a place, a company, a job or the military written straight after the given name too, "Ames, Jordan
+    // Realtor", "Ames, Jordan US Navy", "Ames, Jordan Department of Labor", as after a whole name)
     else if (i === 1) {
-      const cut = cutAfter(p, 1, false);
+      const cut = cutAfter(p, 1);
       const first = cut.split(' ').find((x) => !TITLE.test(x)) || '';
       if (cut !== p.replace(/\s+/g, ' ').trim() && listedGiven(first)) p = cut;
     }
@@ -1003,7 +1053,7 @@ const STATE_CODES = `al ak az ar ca co ct de fl ga hi id il in ia ks ky la me mi
 const PLACE_MORE = [
   `county counties city cities state states district districts federal national council congressional police fire township
   borough municipal government army navy marines usmc usaf usn uscg military veterans selfemployed freelance freelancer
-  unemployed`,
+  unemployed department departments dept rescue sheriffs afb arb`,
   // (every country, as people write them, the short forms too; those of two words are PLACE_TWO_MORE's)
   `afghanistan albania algeria andorra angola antigua argentina armenia australia austria azerbaijan bahamas bahrain bangladesh
   barbados belarus belgium belize benin bhutan bolivia bosnia herzegovina botswana brazil brunei bulgaria burkina faso burundi
@@ -1017,19 +1067,45 @@ const PLACE_MORE = [
   senegal serbia seychelles singapore slovakia slovenia somalia spain sudan suriname sweden switzerland syria taiwan tajikistan
   tanzania thailand timor togo tonga tobago tunisia turkey turkmenistan tuvalu uganda ukraine uruguay uzbekistan vanuatu
   vatican venezuela vietnam yemen zambia zimbabwe england scotland wales britain uk uae drc prc emirates arabia saudi zealand
-  africa europe asia caribbean trinidad`,
+  africa europe asia caribbean trinidad
+  türkiye brasil guinea-bissau timor-leste españa italia deutschland nederland polska schweiz suisse österreich éire cymru
+  pilipinas kampuchea magyarország česko hrvatska srbija türkiye guam aruba curaçao bermuda anguilla montserrat martinique
+  guadeloupe réunion mayotte tahiti gibraltar greenland macau macao somaliland bonaire usvi usa america`,
   // (large employers, national and around Atlanta, written as people write them after their name; those of two words that
   // are a given name and a family name a person could have, "Edward Jones", "Raymond James", "Georgia Power", are left out)
   `delta target starbucks regions ameris fidelity vanguard nationwide anthem honeywell gulfstream mohawk orkin westrock
   pultegroup mailchimp spanx napa uga choa aps cdc cnn ey fed permanente georgia-pacific mercedes-benz arby's zaxby's apple
-  meta waffle at&t spelman oglethorpe lowe's homedepot wellsfargo ups`,
+  meta waffle at&t spelman oglethorpe lowe's homedepot wellsfargo ups
+  usps irs fbi nasa fema faa tsa dhs hhs hud usda epa ssa nih nsa doj dod kroger jpmorgan hartsfield-jackson`,
   // (Spanish business words, and a few French ones, as written with their accents and without)
   `iglesia ministerio ministerios restaurante taquería panadería tienda tiendas carnicería construcción seguros abogados abogado
   clínica farmacia escuela fundación asociación compañía empresa empresas servicios inmobiliaria bienes raíces peluquería
   lavandería joyería florería pupusería supermercado barbería zapatería ferretería mueblería tortillería paletería dulcería
   cafetería licorería notaría consultorio distribuidora importadora transportes mudanzas limpieza jardinería plomería
   remodelaciones pinturas estética academia colegio universidad instituto parroquia templo comida mariscos antojitos grupo
-  hermanos pâtisserie boulangerie crêperie atelier`,
+  hermanos pâtisserie boulangerie crêperie atelier
+  agencia agencias oficina oficinas despacho despachos empresa compañía corporación sociedad cooperativa sindicato asociaciones
+  fundaciones organización comercial comercializadora distribuidoras importaciones exportadora exportaciones fábrica industrias
+  manufacturas productos almacén almacenes depósito bodegas proveedora suministros
+  contabilidad contador contadora contadores contaduría impuestos impuesto asesoría asesorías asesores consultoría consultores
+  gestoría trámites financiera finanzas préstamos préstamo créditos inversiones aseguradora remesas envíos notario notarios
+  bufete abogada licenciado
+  constructora constructoras construcciones remodelación carpintería herrería electricidad eléctrica eléctricos albañilería
+  jardinería jardines paisajismo mantenimiento instalaciones climatización refrigeración soldadura techos techados pisos
+  azulejos ventanas puertas cercas fletes mudanza transportista paquetería mensajería grúas taller talleres mecánica mecánico
+  llantera llantería hojalatería autopartes refacciones refaccionaria autolavado lavandería tintorería
+  pastelería repostería pescadería frutería verdulería nevería heladería cocina cocinas comedor lonchería cenaduría pizzería
+  marisquería comidas tamales tacos birria birriería pollería rosticería churrería juguería licuados raspados botanas
+  abarrotes minisúper tianguis vinatería cervecería vinos carnes pollos mariscos
+  clínicas consultorios farmacias botica médico médicos odontología dentista ortodoncia óptica optometría laboratorio
+  laboratorios radiología fisioterapia rehabilitación quiropráctico psicología terapia terapias salud enfermería veterinaria
+  hospitalaria
+  peluquerías barberías belleza uñas cosméticos ropa modas novias zapaterías joyerías relojería bisutería sastrería costura
+  floristería regalos papelería imprenta fotografía fotógrafo estudio estudios publicidad diseño rotulación
+  escuelas colegios academias institutos universidades guardería preescolar kínder primaria secundaria preparatoria
+  congregación capilla catedral evangélica asamblea asambleas misión misiones
+  viajes turismo hostal eventos banquetes renta rentas alquiler música producciones grabaciones computación celulares
+  telefonía electrónica muebles colchones ferreterías tlapalería pinturería vidriería`,
 ];
 // (a country that's a common family name, never a place: "Grace Jordan", "Amy Israel", "Ann England", "Kate Holland";
 const PLACE_NEVER = `jordan israel england ireland holland wales trinidad montenegro portugal malta mercado iglesias
@@ -1043,16 +1119,73 @@ const PLACE_TWO_MORE = `puerto_rico costa_rica el_salvador hong_kong south_afric
   san_marino new_guinea equatorial_guinea south_sudan east_timor sao_tome great_britain viet_nam marshall_islands solomon_islands
   wells_fargo waffle_house home_depot norfolk_southern genuine_parts southern_company coast_guard air_force national_guard
   marine_corps state_farm kaiser_permanente`;
+// Round 25 (findings 5 and 6, the lead's rule): places and organizations of more words, matched as phrases at every
+// position after the name, longest first, before any one word is read ("Trinidad and Tobago", "Saint Kitts and Nevis",
+// "Sierra Leone", "Georgia National Guard", "Ben Hill County"), so a place is never cut in two and never read as a couple.
+// Every UN member and observer state and the common territories, in their English short and official names (one word,
+// PLACE_MORE's; of more, these), a "Saint" one with "St." too (buildPlaces); the US military whole, each Reserve and every
+// state's National Guard (MILITARY, STATE_NAMES), with "US", "U.S." or "United States" before it by rule (placeUnits);
+// Georgia's 159 counties (GA_COUNTIES), as "<county> County"; and organizations that are a phrase of their own
+const PLACE_PHRASES = `antigua_and_barbuda bosnia_and_herzegovina bosnia_herzegovina central_african_republic cote_divoire
+  democratic_republic_of_the_congo democratic_republic_of_congo republic_of_the_congo north_macedonia papua_new_guinea
+  saint_kitts_and_nevis saint_kitts saint_lucia saint_vincent_and_the_grenadines saint_vincent sao_tome_and_principe
+  sierra_leone trinidad_and_tobago united_arab_emirates holy_see vatican_city timor_leste guinea_bissau united_states_of_america
+  russian_federation syrian_arab_republic lao_peoples_democratic_republic democratic_peoples_republic_of_korea
+  peoples_republic_of_china federated_states_of_micronesia slovak_republic kyrgyz_republic northern_ireland new_caledonia
+  french_polynesia french_guiana western_sahara isle_of_man faroe_islands falkland_islands cook_islands cayman_islands
+  virgin_islands british_virgin_islands turks_and_caicos turks_and_caicos_islands american_samoa northern_mariana_islands
+  sint_maarten saint_martin saint_barthelemy saint_pierre_and_miquelon wallis_and_futuna
+  clark_atlanta clark_atlanta_university morehouse_college spelman_college georgia_tech georgia_state_university kennesaw_state_university
+  georgia_institute_of_technology federal_reserve federal_reserve_bank childrens_healthcare childrens_healthcare_of_atlanta
+  delta_air_lines public_schools us_postal_service postal_service social_security_administration armed_forces dr_congo
+  jpmorgan_chase lockheed_martin coldwell_banker northwestern_mutual inspire_brands
+  fort_moore fort_eisenhower fort_gordon fort_benning fort_stewart hunter_army_airfield robins_afb robins_air_force_base
+  moody_afb moody_air_force_base dobbins_arb dobbins_air_reserve_base kings_bay naval_submarine_base air_force_base`;
+// (the US military, every branch and its Reserve, written with "US", "U.S." or "United States" before it or without)
+const MILITARY = `army navy marines air_force coast_guard marine_corps space_force national_guard army_national_guard
+  air_national_guard army_reserve navy_reserve air_force_reserve marine_corps_reserve marine_forces_reserve coast_guard_reserve
+  space_force_reserve national_guard_bureau`;
+// (the states, for "<State> National Guard", its Army and Air National Guard too, and DC, Puerto Rico, Guam and the
+// Virgin Islands)
+const STATE_NAMES = `alabama alaska arizona arkansas california colorado connecticut delaware florida georgia hawaii idaho illinois
+  indiana iowa kansas kentucky louisiana maine maryland massachusetts michigan minnesota mississippi missouri montana nebraska
+  nevada new_hampshire new_jersey new_mexico new_york north_carolina north_dakota ohio oklahoma oregon pennsylvania rhode_island
+  south_carolina south_dakota tennessee texas utah vermont virginia washington west_virginia wisconsin wyoming
+  district_of_columbia dc puerto_rico guam virgin_islands`;
+// (Georgia's counties, each with "County" after it)
+const GA_COUNTIES = `appling atkinson bacon baker baldwin banks barrow bartow ben_hill berrien bibb bleckley brantley brooks bryan
+  bulloch burke butts calhoun camden candler carroll catoosa charlton chatham chattahoochee chattooga cherokee clarke clay clayton
+  clinch cobb coffee colquitt columbia cook coweta crawford crisp dade dawson decatur dekalb dodge dooly dougherty douglas early
+  echols effingham elbert emanuel evans fannin fayette floyd forsyth franklin fulton gilmer glascock glynn gordon grady greene
+  gwinnett habersham hall hancock haralson harris hart heard henry houston irwin jackson jasper jeff_davis jefferson jenkins
+  johnson jones lamar lanier laurens lee liberty lincoln long lowndes lumpkin mcduffie mcintosh macon madison marion meriwether
+  miller mitchell monroe montgomery morgan murray muscogee newton oconee oglethorpe paulding peach pickens pierce pike polk
+  pulaski putnam quitman rabun randolph richmond rockdale schley screven seminole spalding stephens stewart sumter talbot
+  taliaferro tattnall taylor telfair terrell thomas tift toombs towns treutlen troup turner twiggs union upson walker walton
+  ware warren washington wayne webster wheeler white whitfield wilcox wilkes wilkinson worth`;
+// (a word that starts an organization or a place of the "X of Y" kind, by rule: "City of Atlanta", "State of Georgia", "Town
+// of Tyrone", "University of Georgia", "Bank of America", "Department of Labor", "Republic of Korea", "Church of God")
+const OF_HEADS = `city cities state states town towns village villages county counties commonwealth republic kingdom principality
+  emirate sultanate federation union university universities college colleges bank banks department departments dept office
+  offices board boards bureau ministry ministries embassy consulate court courts school schools institute academy society
+  association league council commission committee authority agency administration division district port province parish
+  diocese archdiocese church churches chamber house center centre foundation fund museum hospital hospitals clinic sisters
+  friends daughters sons knights boys girls corps order temple congregation assembly assemblies healthcare`;
 let PLACES = null;
 let WHERES = null;
 let WHERES_NAMED = null;
 let TWOS = null;
 let STATES = null;
+let PHRASES = null;
+let PHRASE_MAX = 2;
+let HEADS = null;
+let STATE_PHRASES = null;
 const splitWords = (s) => s.split(/\s+/).filter(Boolean);
 // Round 24 (finding 6: "Jordan Taquería" was greeted while "Jordan Taqueria" wasn't): place and business words, as listed and
 // as typed, compared by the spelling-neutral key, accents, apostrophes, hyphens and capitals aside ("Taquería" is taqueria,
 // "Arby's" arbys, "Coca-Cola" cocacola), as names are (_given-names.js nameKey)
-const placeKey = (w) => nameKey(plain(w)).replace(/[^\p{L}\p{N}]+/gu, '');
+// (round 25: a word of plain a to z alone, as the lists' words are, is its own key in small letters, at once)
+const placeKey = (w) => (/^[A-Za-z]+$/.test(w) ? w.toLowerCase() : nameKey(plain(w)).replace(/[^\p{L}\p{N}]+/gu, ''));
 const keyed = (s) => splitWords(s).map(placeKey);
 const buildPlaces = () => {
   PLACES = new Set(PLACE_WORDS.flatMap(keyed));
@@ -1074,11 +1207,25 @@ const buildPlaces = () => {
   }
   TWOS = new Set(splitWords(`${PLACE_TWO} ${PLACE_TWO_MORE}`).map((p) => p.split('_').map(placeKey).join(' ')));
   STATES = new Set(splitWords(STATE_CODES));
+  // (round 25: the phrases, a "Saint" one with "St." too; the military; every state's National Guard; Georgia's counties)
+  const of = (list) => splitWords(list).map((p) => p.split('_').map(placeKey).join(' '));
+  PHRASES = new Set([...TWOS, ...of(PLACE_PHRASES), ...of(MILITARY).filter((p) => p.includes(' '))]);
+  for (const st of of(STATE_NAMES)) for (const g of ['national guard', 'army national guard', 'air national guard']) PHRASES.add(`${st} ${g}`);
+  for (const b of of(MILITARY)) for (const w of ['veteran', 'veterans', 'retired']) PHRASES.add(`${b} ${w}`);
+  STATE_PHRASES = new Set(of(STATE_NAMES));
+  for (const c of of(GA_COUNTIES)) PHRASES.add(`${c} county`);
+  for (const p of [...PHRASES]) if (p.startsWith('saint ')) PHRASES.add(`st ${p.slice(6)}`);
+  PHRASE_MAX = Math.max(...[...PHRASES].map((p) => p.split(' ').length));
+  HEADS = new Set(keyed(OF_HEADS));
 };
 /** A word (as `plain` has it) that marks a place or an organization wherever it is after a name's first word */
 export const placeWord = (w) => { if (!PLACES) buildPlaces(); return PLACES.has(placeKey(w)); };
 /** (for the tests: every word the place lists hold, by where it counts, each word's other number among them) */
-export const placeLists = () => { if (!PLACES) buildPlaces(); return { anywhere: [...PLACES], last: splitWords(WHERE), lastNamed: splitWords(WHERE_NAMED), two: [...TWOS] }; };
+// (round 25: and the phrases, the words that count only last, and the countries that are common family names, never a place)
+export const placeLists = () => {
+  if (!PLACES) buildPlaces();
+  return { anywhere: [...PLACES], last: splitWords(WHERE), lastNamed: splitWords(WHERE_NAMED), two: [...TWOS], phrases: [...PHRASES], named: [...WHERES_NAMED], never: keyed(PLACE_NEVER) };
+};
 /** Two words (as `plain` has them) that are a place together ("ann arbor", "villa rica") */
 const placeTwo = (a, b) => { if (!TWOS) buildPlaces(); return TWOS.has(`${placeKey(a)} ${placeKey(b)}`); };
 // (the word at k a state's two letters after another word: in capitals, in a name typed all in one case, or after a city
@@ -1097,13 +1244,23 @@ export const whereWord = (w, { named = true } = {}) => { if (!WHERES) buildPlace
 // after "de" or "del", a given name's own, "Reyes, Ma. de los Angeles")
 // (round 23: and a city and its state's two letters, "Ames, Decatur GA", and the lists' new kinds, other numbers and places
 // of two words, the same lists as the greeting's)
+// (round 25, findings 6 and 7: and a phrase of the lists anywhere in it, matched before the "&" or "and" of a couple is
+// read, "Saint Kitts and Nevis", "Trinidad & Tobago", "Sierra Leone", "Navy Reserve"; an "X of Y", "Town of Tyrone"; or
+// "US", "U.S.", "United States" or "The" before one, or before the military or a place, "US Navy", "The Philippines")
 const placeOrOrg = (p) => {
   const raw = String(p || '').split(/\s+/).filter((x) => plain(x));
   const ws = raw.map(plain);
   const cased = /\p{Lu}/u.test(String(p || '')) && /\p{Ll}/u.test(String(p || ''));
-  return ws.some((w, k) => placeWord(w) || (ORG.test(w) && !NOT_NAMED.test(w) && !/^households?$/u.test(w)) || whereWord(w, { named: false })
-    || (k > 0 && placeTwo(ws[k - 1], w) && !(k > 1 && /^(?:de|del)$/u.test(ws[k - 2]))) || stateAt(raw, k, cased));
+  if (ws.some((w, k) => placeWord(w) || (ORG.test(w) && !NOT_NAMED.test(w) && !/^households?$/u.test(w)) || whereWord(w, { named: false })
+    || (k > 0 && placeTwo(ws[k - 1], w) && !(k > 1 && /^(?:de|del)$/u.test(ws[k - 2]))) || stateAt(raw, k, cased))) return true;
+  const keys = keysOf(String(p || '').split(/\s+/).filter((x) => plain(x) || /^(?:&|\+)$/u.test(x)));
+  if (!PHRASES) buildPlaces();
+  const many = (i) => phraseLens(keys, i).length > 0 || (HEADS.has(keys[i]) && keys[i + 1] === 'of' && i + 2 < keys.length);
+  const one = (i) => !!keys[i] && (many(i) || STANDALONE_MILITARY.test(keys[i]) || placeWord(keys[i]) || whereWord(keys[i]));
+  return keys.some((k, i) => !(i > 1 && /^(?:de|del)$/u.test(keys[i - 1])) && (many(i) || ((k === 'us' || k === 'the') && one(i + 1)) || (k === 'united' && keys[i + 1] === 'states' && one(i + 2))));
 };
+// (the military's words of one, after "US", "U.S." or "United States")
+const STANDALONE_MILITARY = /^(?:army|navy|marines|military|armedforces)$/u;
 // Pronouns written after a name, a slash between ("she/her", "they/them", "(he/him)", "Pronouns: she/they"): never a name,
 // never in an address (round 23)
 const PRONOUN = /^(?:she|her|hers|he|him|his|they|them|their|theirs|xe|xem|xyr|ze|zir|hir|ey|em|eir|fae|faer|it|its|any|all)$/u;
@@ -1200,8 +1357,15 @@ export const plainWords = (raw) => plainParts(raw)?.words || null;
 // after the first is evidence, not only the last or the next ("Fábián Gergely Norbert", "Tien Van Minh"); and Hungary's
 // order is _given-names.js hungarianOrder's (finding 3, "Simon Zoltánné", a wife by her husband's name; finding 5,
 // Hungary's family names before the names Hungarians share with everyone, "Simon Rita")
+//   Round 25 (findings 1 to 3, the lead's rule): after a family name some people write first, the first word is theirs
+// only on positive evidence the name is written given name first, a family name of a people who write it last after it
+// ("Ann Smith", "Sam Johnson", "Juan Luna"): anything else gets no name ("Ann Hye-kyo", "Sam Thida", "Simon Martinne"),
+// the lists and the shapes no longer the guard (_given-names.js familyFirstUnsure)
+// (two given names people go by together first, "Thanh Huong Ames", "Soo Ah Kow": a pair only before a family name of a
+// people who write it last, as the evidence is read, "Soo Ah Kow" being Ah Kow of the Soo family)
 const firstIsFamily = (ws) => ws.length > 1 && (familyFirst(ws[0]) || (!givenName(ws[0]) && familyFirst(ws[0].split('-')[0]))
-  || (!(ws.length === 3 && givenPair(ws[0], ws[1])) && ws.slice(1).some((w) => familyFirstBefore(ws[0], w))) || hungarianOrder(ws));
+  || (ws.length === 3 && givenPair(ws[0], ws[1]) ? familyFirstUnsure(ws, { pair: true })
+    : ws.slice(1).some((w) => familyFirstBefore(ws[0], w)) || familyFirstUnsure(ws)) || hungarianOrder(ws));
 
 // The words of a full name that may be its family name, whatever its shape (round 21, finding 5: "Grant, Jordan",
 // "Jordan Grant (she/her)", "Jordan Grant, Realtor"): the last word of each name in it (each part between commas,
@@ -1284,7 +1448,9 @@ function fullGreeting(raw) {
   // (a place of two words anywhere in it, "Charlotte North Carolina", "Virginia Beach"; and round 22: a state or a city
   // last, after another word, "Hope Atlanta", "Austin Georgia", "Tucker Georgia")
   // (round 23: and a city and its state's two letters last, "Hope Atlanta GA", "Grace Decatur GA")
-  if (ws.some((w, k) => k > 0 && placeTwo(plain(ws[k - 1]), plain(w))) || whereWord(plain(ws[ws.length - 1])) || stateAt(ws, ws.length - 1, cased)) return '';
+  // (round 25: and a phrase of the lists anywhere in it, "Jordan Côte d'Ivoire", "Hope Sierra Leone", "Grace Ben Hill County")
+  const keys = keysOf(ws);
+  if (ws.some((w, k) => (k > 0 && placeTwo(plain(ws[k - 1]), plain(w))) || phraseLens(keys, k).length) || whereWord(plain(ws[ws.length - 1])) || stateAt(ws, ws.length - 1, cased)) return '';
   // ("y" and "e" join two people in Spanish and Portuguese, "José y María Cruz": in small letters, or in a name with no
   // small letters at all, never an initial)
   if (rest.some((w) => /^[ye]$/u.test(w) || (!cased && /^[YE]$/u.test(w)))) return '';

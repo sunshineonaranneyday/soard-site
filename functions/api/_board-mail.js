@@ -40,7 +40,7 @@ import { accessToken, GMAIL_READ_SCOPE, parseServiceAccount } from './_google-ca
 import { boardAdmins, readState, writeState, peopleRows, activeBoard, normEmail, unreadStatus } from './_board-roles.js';
 import { ensureSchema, listMeetings, getMeeting, saveMeeting, patchMeeting, putFile, deleteFile, roster } from './_board.js';
 import { readMinutes, applyMinutes, minutesNewer } from './_board-minutes.js';
-import { parseAgendaText, isDate, todayEastern, meetingName, docxText, unzip, cleanMeeting, agendaIsDraft, shortDate, AGENDA_READER, minutesHeld } from '../../public/admin/board-shared.js';
+import { parseAgendaText, isDate, todayEastern, meetingName, docxText, unzip, cleanMeeting, agendaIsDraft, shortDate, AGENDA_READER, minutesHeld, minutesKept } from '../../public/admin/board-shared.js';
 import { viaGateway, aiCapped, AI_REST_MS, AI_WAIT_NOTE } from './_ai.js';
 import { slackPost } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
@@ -432,11 +432,12 @@ async function bringIn(env, { token, admin, id, fetchImpl, people, boardEmails, 
     // A past meeting's agenda, while its own is still empty or a draft (never one a person wrote).
     // Agendas for meetings ahead are written in Board, so an emailed one is only kept as a file
     let agendaFilled = false;
-    if (f.kind === 'agenda' && past && agendaIsDraft(m)) {
+    // (never over approved minutes: their parts, roll, time and place are what they state. minutesKept, round 15)
+    if (f.kind === 'agenda' && past && agendaIsDraft(m) && !minutesKept(m)) {
       const parsed = parseAgendaText(f.text, people);
       if (parsed.sections.some((s) => s.items.length)) {
         const marked = m.attendance.some((p) => p.status);
-        m = await patchMeeting(env.DB, m.id, (cur) => (agendaIsDraft(cur) ? {
+        m = await patchMeeting(env.DB, m.id, (cur) => (agendaIsDraft(cur) && !minutesKept(cur) ? {
           ...cur, sections: parsed.sections, agendaFrom: { kind: 'email', name: f.name, at: new Date(now).toISOString(), v: AGENDA_READER },
           attendance: past && !marked && parsed.attendance.length ? parsed.attendance : cur.attendance,
           location: cur.location || parsed.location, start: cur.start || parsed.start || '', end: cur.end || parsed.end || '',

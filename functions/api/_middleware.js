@@ -128,6 +128,11 @@ PUBLIC_GET_ROUTES.push('/api/live-replay');
 // nothing goes live until someone in the admin uses it
 PUBLIC_ROUTES.push('/api/profile-request');
 
+// A makeover family checking and updating their contacts (/family-update/): keyed by
+// an unguessable link token checked inside the handler (_families.js), rate limited
+// below; changes go to the family's own contacts in JobTread, removals wait for staff
+PUBLIC_ROUTES.push('/api/family-update');
+
 // A vendor sending their insurance certificate or W-9 (/trade-partners/account/):
 // the same kind of link token, checked inside (_vendors.js), rate limited below;
 // files go straight onto the vendor's account in JobTread, never kept here
@@ -159,6 +164,9 @@ PUBLIC_ROUTES.push('/api/companycam-webhook');
 // One CompanyCam video streamed to JobTread, which fetches it by a short link
 // the site signs (from COMPANYCAM_TOKEN) for six hours; anything else is 404
 PUBLIC_GET_ROUTES.push('/api/companycam-file');
+// One past makeover's photo streamed from Drive to JobTread, which fetches it by a short link the site signs (from the
+// Google service account's key) for six hours; only files in Photos & Video, anything else is 404 (see _past-photos.js)
+PUBLIC_GET_ROUTES.push('/api/drive-file');
 
 // Twilio's delivery reports for staff alert texts: signed with
 // TWILIO_AUTH_TOKEN and checked inside the handler, which refuses everything
@@ -233,7 +241,7 @@ PUBLIC_GET_ROUTES.push('/api/jobtread-callback');
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const RATE_LIMIT_MAX = 5;
 // Abuse-prone POST routes (newsletter signup, live-banner click beacon).
-const RATE_LIMITED_POST_ROUTES = new Set(['/api/book-stats', '/api/newsletter', '/api/live-click', '/api/reminders', '/api/broadcast-event', '/api/live-watch', '/api/profile-request', '/api/advisory-apply', '/api/advisory-action', '/api/vendor-docs', '/api/trade-partner', '/api/board-rsvp', '/api/over-answer']);
+const RATE_LIMITED_POST_ROUTES = new Set(['/api/book-stats', '/api/newsletter', '/api/live-click', '/api/reminders', '/api/broadcast-event', '/api/live-watch', '/api/profile-request', '/api/family-update', '/api/advisory-apply', '/api/advisory-action', '/api/vendor-docs', '/api/trade-partner', '/api/board-rsvp', '/api/over-answer']);
 // Public GET routes that fan out to paid upstreams / build large responses.
 const RATE_LIMITED_GET_ROUTES = new Set(['/api/download-branding-photos', '/api/books-callback', '/api/jobtread-callback']);
 // The application form autosaves every step and uploads photos one by one, so
@@ -241,7 +249,7 @@ const RATE_LIMITED_GET_ROUTES = new Set(['/api/download-branding-photos', '/api/
 // Per minute per address. A watch party or a gala table shares one Wi-Fi, so the
 // beacons and the signup forms get room for a crowd; the handlers add their own
 // per-person limits behind these.
-const ROUTE_LIMITS = { '/api/book-stats': 300, '/api/broadcast-event': 120, '/api/live-watch': 600, '/api/live-click': 120, '/api/newsletter': 20, '/api/reminders': 20, '/api/profile-request': 10, '/api/vendor-docs': 10, '/api/trade-partner': 20, '/api/board-rsvp': 10, '/api/over-answer': 20 };
+const ROUTE_LIMITS = { '/api/book-stats': 300, '/api/broadcast-event': 120, '/api/live-watch': 600, '/api/live-click': 120, '/api/newsletter': 20, '/api/reminders': 20, '/api/profile-request': 10, '/api/family-update': 20, '/api/vendor-docs': 10, '/api/trade-partner': 20, '/api/board-rsvp': 10, '/api/over-answer': 20 };
 const APPLY_ROUTE = '/api/apply';
 const APPLY_RATE_LIMIT_MAX = 60;
 const _rateLimitMap = new Map(); // "<route>:<ip>" → { count, resetAt }

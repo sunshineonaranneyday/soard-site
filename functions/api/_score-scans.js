@@ -48,18 +48,11 @@ import { ensureScoreSchema, cleanEvaluator, saveScannedCard, restoreScannedCard,
 import { normalizeName } from './_reveals.js';
 import { staffDirectory } from './_staff-access.js';
 import { isTestFamily } from './_applicant-approved.js';
-import { viaGateway } from './_ai.js';
+import { viaGateway, READERS, runReader } from './_ai.js';
 import { COMMUNITY_PROJECT_LIKE } from './_application-constants.js';
 
-/**
- * Two vision models from different makers, so one's habits can't fool both,
- * each with its thinking turned down: a scoresheet needs reading, not reasoning,
- * and thinking spends the time and tokens the answer needs
- */
-export const READERS = {
-  '@cf/moonshotai/kimi-k2.6': { chat_template_kwargs: { thinking: false } },
-  '@cf/qwen/qwen3.8-27b': { reasoning_effort: 'low' },
-};
+/** The two picture readers, kept in _ai.js with their stand-ins (exported here too, where they were first) */
+export { READERS };
 const AI_TIMEOUT_MS = 60000;
 export const MAX_PAGES = 150;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
@@ -182,7 +175,7 @@ export async function readWith(env, model, { image, text = '' }) {
   // JSON mode first; then plain; then without the thinking setting, in case the model won't take it
   for (const [json, opts] of [[true, extra], [false, extra], [false, {}]]) {
     try {
-      const out = await withTimeout(env.AI.run(model, {
+      const out = await withTimeout(runReader(env, model, {
         messages, max_tokens: 4000, temperature: 0, ...opts,
         ...(json ? { response_format: { type: 'json_schema', json_schema: READ_SCHEMA } } : {}),
       }, viaGateway('score-scans')), AI_TIMEOUT_MS);

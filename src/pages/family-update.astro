@@ -1,0 +1,390 @@
+---
+/**
+ * /family-update/#t=<token> — where a makeover family checks the contacts SOARD
+ * has for them: confirms them, fixes what changed, adds people we should be able
+ * to reach (a spouse, a grandparent), and tells us a new address. Staff email the
+ * link from Admin → Families. The token stays in the fragment so it never reaches
+ * a server log or a referrer. Changes go straight to the family's contacts in
+ * JobTread; someone they ask us to take off waits for staff. Not indexed, not
+ * linked from the site. API: functions/api/family-update.js.
+ */
+import BotTrap from '../components/global/BotTrap.astro';
+import BaseLayout from '../layouts/BaseLayout.astro';
+import { cfUrl } from '../utils/cf-image';
+import { heroHtml, type HeroPart } from '../utils/hero-words';
+
+// The hero's words: the page shows them and its share card repeats them (BaseLayout og)
+const hero = {
+  eyebrow: 'Stay in touch',
+  title: ['Help us ', { em: 'stay in touch' }] as HeroPart[],
+  lead: 'Here’s what we have on file for your family. Tell us it’s right, fix anything that has changed, or add someone we should be able to reach.',
+};
+---
+
+<BaseLayout title="Stay in touch with SOARD" description="Check the contact information Sunshine on a Ranney Day has for your family." og={{ layout: 'text', eyebrow: hero.eyebrow, title: heroHtml(hero.title), lead: heroHtml(hero.lead) }} noindex>
+  <section class="fu-hero" data-whole>
+    <div class="fu-hero__inner">
+      <div class="fu-hero__text">
+        <p class="fu-eyebrow">{hero.eyebrow}</p>
+        <h1 id="fu-title">{hero.title.map((p) => typeof p === 'string' ? p : <em>{p.em}</em>)}</h1>
+        <p class="fu-lead" id="fu-lead">{hero.lead}</p>
+      </div>
+      <div class="fu-frame" aria-hidden="true">
+        <div class="fu-accent"></div>
+        <div class="fu-photo">
+          <img class="fu-logo" src={cfUrl('brand-logo-circle-display', { w: 256 })} alt="" width="256" height="256" />
+        </div>
+      </div>
+    </div>
+    <span data-whole-end hidden></span>
+  </section>
+
+  <section class="fu-body">
+    <div class="fu-card">
+      <p class="fu-status" id="fu-status" role="status" aria-live="polite">Loading your information…</p>
+
+      <form id="fu-form" hidden novalidate>
+        <fieldset class="fu-group">
+          <legend>Who we can reach</legend>
+          <p class="fu-help" id="fu-people-help">Everyone here hears from SOARD about your family. Fix anything that’s out of date.</p>
+          <div id="fu-people" class="fu-people"></div>
+          <button type="button" class="fu-add" id="fu-add">
+            <span aria-hidden="true">+</span> Add someone
+          </button>
+          <p class="fu-help fu-small">A spouse or partner, a grandparent, another caregiver: anyone we should be able to reach about your family.</p>
+        </fieldset>
+
+        <fieldset class="fu-group">
+          <legend>Home address</legend>
+          <p class="fu-help" id="fu-address-help">Where we can mail something to your family.</p>
+          <div class="fu-grid">
+            <div class="fu-field fu-span-2">
+              <label for="fu-line1">Street address</label>
+              <input id="fu-line1" name="line1" autocomplete="address-line1" maxlength="120" />
+            </div>
+            <div class="fu-field fu-span-2">
+              <label for="fu-line2">Apartment, suite, unit <span class="fu-optional">optional</span></label>
+              <input id="fu-line2" name="line2" autocomplete="address-line2" maxlength="120" />
+            </div>
+            <div class="fu-field">
+              <label for="fu-city">City</label>
+              <input id="fu-city" name="city" autocomplete="address-level2" maxlength="60" />
+            </div>
+            <div class="fu-field fu-pair">
+              <div>
+                <label for="fu-state">State</label>
+                <input id="fu-state" name="state" autocomplete="address-level1" maxlength="30" />
+              </div>
+              <div>
+                <label for="fu-zip">ZIP code</label>
+                <input id="fu-zip" name="zip" autocomplete="postal-code" inputmode="numeric" maxlength="10" />
+              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <div class="fu-field">
+          <label for="fu-note">Anything else we should know? <span class="fu-optional">optional</span></label>
+          <textarea id="fu-note" name="note" rows="3" maxlength="1000"></textarea>
+        </div>
+
+        <!-- Left empty by people; bots fill it in -->
+        <BotTrap />
+
+        <p class="fu-error" id="fu-error" role="alert" hidden></p>
+        <button class="btn btn-primary btn-lg fu-submit" id="fu-submit" type="submit">Yes, this is all correct</button>
+        <p class="fu-help fu-small fu-center" id="fu-submit-help">Nothing changed? This lets us know it’s all still right.</p>
+      </form>
+
+      <div class="fu-done" id="fu-done" hidden tabindex="-1">
+        <h2 id="fu-done-title">Thank you!</h2>
+        <p id="fu-done-text"></p>
+        <p class="fu-help" id="fu-done-again"></p>
+      </div>
+    </div>
+  </section>
+
+  <template id="fu-person">
+    <div class="fu-person">
+      <div class="fu-person__head">
+        <p class="fu-person__title"><span class="fu-person__name"></span> <small class="fu-main" hidden>main contact</small></p>
+        <button type="button" class="fu-link fu-remove">Remove</button>
+      </div>
+      <p class="fu-person__gone" hidden><span></span> <button type="button" class="fu-link fu-undo">Undo</button></p>
+      <div class="fu-grid fu-person__boxes">
+        <div class="fu-field">
+          <label data-for="name">Name</label>
+          <input data-k="name" autocomplete="off" maxlength="80" />
+        </div>
+        <div class="fu-field">
+          <label data-for="title">Relationship <span class="fu-optional"></span></label>
+          <input data-k="title" list="fu-relationships" autocomplete="off" maxlength="40" placeholder="Mother, grandfather, aunt…" />
+        </div>
+        <div class="fu-field">
+          <label data-for="email">Email</label>
+          <input data-k="email" type="email" inputmode="email" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="200" />
+        </div>
+        <div class="fu-field">
+          <label data-for="phone">Mobile phone</label>
+          <input data-k="phone" type="tel" inputmode="tel" autocomplete="off" maxlength="40" placeholder="(404) 555-0100" />
+        </div>
+      </div>
+    </div>
+  </template>
+  <datalist id="fu-relationships"></datalist>
+</BaseLayout>
+
+<style>
+  /* The site's editorial split, like /profile-update/: the greeting beside the sun */
+  .fu-hero { background: var(--c-cream); padding: clamp(56px, 8vw, 110px) 0 clamp(40px, 6vw, 72px); overflow: hidden; }
+  .fu-hero__inner { max-width: 960px; margin: 0 auto; padding: 0 var(--space-xl); display: grid; grid-template-columns: 1.15fr 0.85fr; gap: clamp(32px, 5vw, 72px); align-items: center; }
+  .fu-eyebrow { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; font-size: 12px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--c-text-muted); }
+  .fu-eyebrow::before { content: ''; width: 28px; height: 2px; background: currentColor; }
+  .fu-hero h1 { font-size: clamp(2.1rem, 5vw, 3.4rem); line-height: 1.08; letter-spacing: -0.03em; margin-bottom: 18px; }
+  .fu-hero h1 em { font-style: italic; background-image: linear-gradient(transparent 52%, var(--c-yellow-soft) 52%); padding: 0 0.05em; }
+  .fu-lead { font-size: clamp(16px, 1.6vw, 18px); line-height: 1.65; color: var(--c-text-muted); max-width: 470px; }
+  .fu-frame { position: relative; max-width: 260px; margin-left: auto; width: 100%; }
+  .fu-accent { position: absolute; right: -14px; bottom: -14px; width: 65%; height: 50%; background: var(--c-yellow); border-radius: 22px; opacity: 0.35; }
+  .fu-photo { position: relative; aspect-ratio: 1; border-radius: 50%; overflow: hidden; background: var(--c-warm-gray); box-shadow: 0 24px 60px rgba(0, 0, 0, 0.1); display: grid; place-items: center; }
+  .fu-logo { width: 62%; height: auto; }
+
+  .fu-body { padding: 0 var(--space-xl) clamp(56px, 8vw, 96px); background: var(--c-cream); }
+  .fu-card { max-width: 760px; margin: 0 auto; background: #fff; border: 1px solid var(--c-border); border-radius: 20px; padding: clamp(22px, 4vw, 40px); box-shadow: 0 12px 40px rgba(0, 0, 0, 0.05); }
+  .fu-status { color: var(--c-text-muted); line-height: 1.6; }
+  .fu-status:empty { display: none; }
+  .fu-group { border: 0; padding: 0; margin: 0 0 34px; min-width: 0; }
+  .fu-group legend { font-family: var(--font-display); font-size: clamp(1.3rem, 3vw, 1.6rem); font-weight: 700; margin-bottom: 6px; padding: 0; }
+  .fu-help { font-size: 0.95rem; color: var(--c-text-muted); margin-bottom: 14px; line-height: 1.55; }
+  .fu-small { font-size: 0.88rem; margin: 10px 0 0; }
+  .fu-center { text-align: center; }
+  .fu-optional { font-weight: 400; font-size: 0.84rem; color: var(--c-text-muted); margin-left: 4px; }
+  .fu-people { display: grid; gap: 14px; }
+  .fu-person { border: 1px solid var(--c-border); border-radius: 16px; padding: 16px 18px 6px; background: var(--c-cream); }
+  .fu-person.is-new { border-style: dashed; border-color: #CFCBBE; background: #fff; }
+  .fu-person.is-gone { padding-bottom: 14px; background: var(--c-warm-gray); }
+  .fu-person.is-gone .fu-person__boxes { display: none; }
+  .fu-person__head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+  .fu-person__title { font-weight: 700; font-size: 1.05rem; margin: 0; overflow-wrap: anywhere; }
+  .fu-main { font-weight: 400; color: var(--c-text-muted); font-size: 0.86rem; margin-left: 4px; }
+  .fu-person__gone { margin: 0; color: var(--c-text-muted); }
+  .fu-person.is-gone .fu-person__head .fu-remove { display: none; }
+  .fu-remove { white-space: nowrap; flex-shrink: 0; }
+  .fu-link { border: 0; background: none; padding: 6px 2px; font: inherit; font-size: 0.92rem; color: var(--c-text-muted); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; min-height: 32px; }
+  .fu-link:hover { color: var(--c-text); }
+  .fu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  .fu-span-2 { grid-column: span 2; }
+  .fu-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .fu-field { margin-bottom: 14px; min-width: 0; }
+  .fu-field label { display: block; font-weight: 600; font-size: 0.92rem; margin-bottom: 5px; color: var(--c-text); }
+  .fu-field input, .fu-field textarea {
+    width: 100%; font: inherit; font-size: 16px; line-height: 1.5; color: var(--c-text);
+    padding: 11px 13px; border: 1px solid #D4D2CB; border-radius: 12px; background: #fff;
+  }
+  .fu-field input:focus, .fu-field textarea:focus { outline: none; border-color: var(--c-text); box-shadow: 0 0 0 3px var(--c-yellow-soft); }
+  .fu-field input[aria-invalid="true"] { border-color: #B54708; box-shadow: 0 0 0 3px rgba(181, 71, 8, 0.15); }
+  .fu-add { display: inline-flex; align-items: center; gap: 8px; margin-top: 14px; padding: 11px 18px; min-height: 44px; border: 1.5px dashed #BDB8A8; border-radius: 999px; background: #fff; font: inherit; font-weight: 700; color: var(--c-text); cursor: pointer; }
+  .fu-add span { font-size: 1.25rem; line-height: 1; }
+  .fu-add:hover { border-color: var(--c-text); background: var(--c-cream); }
+  .fu-add:focus-visible, .fu-link:focus-visible { outline: 2px solid var(--c-dark); outline-offset: 2px; }
+  .fu-error { margin-bottom: 16px; padding: 12px 14px; border-radius: 12px; background: #FFF3BF; color: #5C4500; font-weight: 600; }
+  .fu-submit { width: 100%; justify-content: center; min-height: 54px; }
+  .fu-done h2 { font-family: var(--font-display); font-size: clamp(1.6rem, 4vw, 2.2rem); margin-bottom: 12px; }
+  .fu-done p { color: var(--c-text-muted); line-height: 1.7; }
+  .fu-done:focus, .fu-done:focus-visible { outline: none; }
+
+  @media (max-width: 760px) {
+    .fu-hero__inner { grid-template-columns: 1fr; text-align: center; gap: 28px; }
+    .fu-eyebrow { justify-content: center; }
+    .fu-lead { margin-inline: auto; }
+    .fu-frame { order: -1; max-width: 150px; margin: 0 auto; }
+    .fu-body { padding-inline: 14px; }
+  }
+  @media (max-width: 560px) {
+    .fu-grid { grid-template-columns: 1fr; }
+    .fu-span-2 { grid-column: auto; }
+    .fu-person { padding: 14px 14px 4px; }
+  }
+</style>
+
+<script>
+  import { trapValue } from '../../functions/api/_bot-trap.js';
+
+  type Person = { id?: string; name: string; title: string; email: string; phone: string; main?: boolean };
+  type Family = { child: string; greeting: string; contacts: Person[]; address: Record<string, string> | null; relationships: string[]; answered: boolean; expiresAt: string | null };
+
+  const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+  const token = new URLSearchParams(location.hash.slice(1)).get('t') || '';
+  const status = $('fu-status');
+  const form = $<HTMLFormElement>('fu-form');
+  const people = $('fu-people');
+  const tpl = $<HTMLTemplateElement>('fu-person');
+  const error = $('fu-error');
+  const submit = $<HTMLButtonElement>('fu-submit');
+  const submitHelp = $('fu-submit-help');
+  const ADDR = ['line1', 'line2', 'city', 'state', 'zip'];
+  let family: Family | null = null;
+  let start = '';
+  let seq = 0;
+
+  const longDay = (s: string) => new Date(s).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+  /** One person's card: their boxes filled in, or empty for someone new */
+  function addCard(p: Person | null) {
+    const node = (tpl.content.firstElementChild as HTMLElement).cloneNode(true) as HTMLElement;
+    const n = ++seq;
+    const isNew = !p?.id;
+    node.dataset.id = p?.id || '';
+    if (isNew) node.classList.add('is-new');
+    const title = node.querySelector('.fu-person__name') as HTMLElement;
+    (node.querySelector('.fu-main') as HTMLElement).hidden = !p?.main;
+    const setTitle = () => {
+      const name = (node.querySelector('[data-k="name"]') as HTMLInputElement).value.trim();
+      title.textContent = name || (isNew ? 'Someone new' : 'Name');
+    };
+    for (const input of node.querySelectorAll<HTMLInputElement>('input[data-k]')) {
+      const k = input.dataset.k!;
+      input.id = `fu-${k}-${n}`;
+      input.name = `${k}-${n}`;
+      input.value = (p as Record<string, unknown> | null)?.[k] as string || '';
+      (node.querySelector(`label[data-for="${k}"]`) as HTMLLabelElement).htmlFor = input.id;
+      input.addEventListener('input', () => { input.removeAttribute('aria-invalid'); if (k === 'name') setTitle(); changed(); });
+    }
+    if (family?.child) (node.querySelector('label[data-for="title"] .fu-optional') as HTMLElement).textContent = `to ${family.child}`;
+    setTitle();
+    const remove = node.querySelector('.fu-remove') as HTMLButtonElement;
+    const gone = node.querySelector('.fu-person__gone') as HTMLElement;
+    remove.textContent = isNew ? 'Remove' : 'Take off our list';
+    remove.addEventListener('click', () => {
+      if (isNew) {
+        const next = (node.nextElementSibling || node.previousElementSibling) as HTMLElement | null;
+        node.remove();
+        changed();
+        ((next?.querySelector('input') as HTMLInputElement) || $('fu-add')).focus();
+        return;
+      }
+      node.classList.add('is-gone');
+      (gone.querySelector('span') as HTMLElement).textContent = `We’ll take ${p?.name || 'them'} off our list.`;
+      gone.hidden = false;
+      (gone.querySelector('.fu-undo') as HTMLButtonElement).focus();
+      changed();
+    });
+    gone.querySelector('.fu-undo')!.addEventListener('click', () => {
+      node.classList.remove('is-gone');
+      gone.hidden = true;
+      remove.focus();
+      changed();
+    });
+    people.append(node);
+    return node;
+  }
+
+  /** Everything on the form, as the server takes it */
+  function read() {
+    const contacts = [...people.querySelectorAll<HTMLElement>('.fu-person')].map((node) => {
+      const v = (k: string) => (node.querySelector(`[data-k="${k}"]`) as HTMLInputElement).value.trim();
+      const id = node.dataset.id || undefined;
+      if (node.classList.contains('is-gone')) return { id, remove: true, name: v('name') };
+      return { id, name: v('name'), title: v('title'), email: v('email'), phone: v('phone') };
+    }).filter((c) => c.id || c.name || ('email' in c && (c.email || c.phone)));
+    const address = Object.fromEntries(ADDR.map((k) => [k, ($(`fu-${k}`) as HTMLInputElement).value.trim()]));
+    return { contacts, address, note: ($<HTMLTextAreaElement>('fu-note')).value.trim() };
+  }
+  const snapshot = () => JSON.stringify(read());
+
+  function changed() {
+    const dirty = snapshot() !== start;
+    submit.textContent = dirty ? 'Save my changes' : 'Yes, this is all correct';
+    submitHelp.textContent = dirty ? 'Your changes go to SOARD’s team right away.' : 'Nothing changed? This lets us know it’s all still right.';
+  }
+
+  async function load() {
+    if (!token) { status.textContent = 'This link is missing its code. Open it again from the email SOARD sent you.'; return; }
+    try {
+      const res = await fetch(`/api/family-update?token=${encodeURIComponent(token)}`, { cache: 'no-store' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.ok) { status.textContent = d.error || 'This link didn’t work. Reply to our email and we’ll send a new one.'; return; }
+      family = d.family as Family;
+      if (family.greeting) {
+        const h1 = $('fu-title');
+        h1.textContent = `Hi ${family.greeting}, let’s `;
+        const em = document.createElement('em');
+        em.textContent = 'stay in touch';
+        h1.append(em);
+      }
+      if (family.child) $('fu-lead').textContent = `Here’s what we have on file for ${family.child}’s family. Tell us it’s right, fix anything that has changed, or add someone we should be able to reach.`;
+      const list = $('fu-relationships');
+      for (const r of family.relationships || []) { const o = document.createElement('option'); o.value = r; list.append(o); }
+      for (const p of family.contacts) addCard(p);
+      if (!family.contacts.length) { $('fu-people-help').textContent = 'We don’t have anyone on file yet. Add the people we should be able to reach.'; addCard(null); }
+      const a = family.address;
+      for (const k of ADDR) ($(`fu-${k}`) as HTMLInputElement).value = a?.[k] || '';
+      if (!a) $('fu-address-help').textContent = 'We don’t have an address for you. Add one if you’d like us to be able to mail something to your family.';
+      for (const k of [...ADDR, 'note']) $(`fu-${k}`).addEventListener('input', changed);
+      start = snapshot();
+      changed();
+      status.textContent = family.answered ? 'You’ve answered before. Here’s what we have now. You can make more changes.' : '';
+      form.hidden = false;
+    } catch {
+      status.textContent = 'We couldn’t load your information. Check your connection and refresh the page.';
+    }
+  }
+
+  $('fu-add').addEventListener('click', () => {
+    const node = addCard(null);
+    changed();
+    (node.querySelector('input') as HTMLInputElement).focus();
+  });
+
+  function showError(message: string, field?: string | null) {
+    error.textContent = message;
+    error.hidden = false;
+    // "contacts.2.email" → the third card's email box; "address.zip" → the ZIP box
+    let box: HTMLInputElement | null = null;
+    const m = /^contacts\.(\d+)\.(\w+)$/.exec(field || '');
+    if (m) {
+      const cards = [...people.querySelectorAll<HTMLElement>('.fu-person')].filter((node) => {
+        const v = (k: string) => (node.querySelector(`[data-k="${k}"]`) as HTMLInputElement).value.trim();
+        return node.dataset.id || v('name') || v('email') || v('phone');
+      });
+      box = cards[Number(m[1])]?.querySelector(`[data-k="${m[2]}"]`) || null;
+    } else if (/^address\.\w+$/.test(field || '')) box = $(`fu-${String(field).split('.')[1]}`) as HTMLInputElement;
+    if (box) { box.setAttribute('aria-invalid', 'true'); box.focus(); } else error.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    error.hidden = true;
+    const dirty = snapshot() !== start;
+    const body = { token, ...read(), ...(dirty ? {} : { address: { same: true } }), 'leave-this-empty': trapValue(form) };
+    const label = submit.textContent;
+    submit.disabled = true;
+    submit.textContent = dirty ? 'Saving…' : 'Sending…';
+    try {
+      const res = await fetch('/api/family-update', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.ok) { showError(d.error || 'That didn’t send. Please try again.', d.field); return; }
+      form.hidden = true;
+      status.textContent = '';
+      const parts: string[] = [];
+      if (d.kind === 'confirmed') parts.push('Thanks for letting us know everything is still right. We’re so glad to stay in touch.');
+      else {
+        parts.push('We’ve updated your family’s information.');
+        if (d.removeAsked) parts.push(`We’ll take ${d.removeAsked === 1 ? 'that person' : 'those people'} off our list shortly.`);
+        if (d.trouble) parts.push('One change didn’t go through on our side, so someone from SOARD will check it.');
+      }
+      $('fu-done-title').textContent = family?.greeting ? `Thank you, ${family.greeting}!` : 'Thank you!';
+      $('fu-done-text').textContent = parts.join(' ');
+      $('fu-done-again').textContent = family?.expiresAt ? `Need to change something else? Use this same link until ${longDay(family.expiresAt)}.` : '';
+      const done = $('fu-done');
+      done.hidden = false;
+      done.focus();
+    } catch {
+      showError('That didn’t send. Check your connection and try again.');
+    } finally {
+      submit.disabled = false;
+      submit.textContent = label;
+    }
+  });
+
+  load();
+</script>

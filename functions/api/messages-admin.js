@@ -54,6 +54,7 @@ import { errorAlert } from './stream-webhook.js';
 import { medicalNote, fallbackMedicalNote } from './_applicant-comms.js';
 import { activity, comingUp, deliverability, deliveryFacts, emailDetail, invitesOut } from './_messages-activity.js';
 import { applicantEmail as advisoryThanks, staffEmail as advisoryStaff } from './_advisory-applications.js';
+import { familyEmail, linkUrl as familyLinkUrl, LINK_DAYS as FAMILY_LINK_DAYS } from './_families.js';
 import { packetEmail, welcomeEmail, reminderEmail, minutesEmail, inviteNotes } from './_board.js';
 import { correctionEmail, correctionDecidedEmail } from './_board-corrections.js';
 import { actionReminderEmail } from './_board-actions.js';
@@ -63,8 +64,9 @@ import { newMeeting, meetingName } from '../../public/admin/board-shared.js';
 import { checkAnswers as advisoryAnswers } from './_advisory-form.js';
 import { askEmail as advisoryAsk, welcomeMessage as advisoryWelcome } from './_advisory-mail.js';
 import { planDemo, demoAlert, sendTestDemo, readConfig as readDemoConfig, listPeople as demoPeople } from './_demo-invites.js';
-import { revealInviteEmail, TEAM_PICTURE } from './_reveal-invite-email.js';
+import { revealInviteEmail, TEAM_PICTURE, shortStory } from './_reveal-invite-email.js';
 import { reviewNote, brokenLogos, KIT_INVITE_DEFAULTS } from './_reveal-invite-kit.js';
+import { pressRelease, pressNote, readPressSettings, gmailLink, PRESS_DEFAULTS } from './_reveal-press.js';
 import { projectKickoffEmail, projectRevealEmail, revealChecks } from './_project-email.js';
 import { projectNote } from './_project-emails.js';
 import { eventRecapEmail, monthlyImpactEmail, recapParts, recapImageUrls, monthlyImageUrls, monthName } from './_newsletter-email.js';
@@ -506,6 +508,8 @@ export async function buildPreview(env, id, { lang = 'en', me = '', now = Date.n
     }
     case 'app-resume':
       return email(resumeLinkEmail({ year: (await readAppSettings(env.DB, now)).year, first: SAMPLE.parentFirst, link: sampleApplicationUrl, lang }), { to: 'The family, at the address they type on the form' });
+    case 'family-update':
+      return email(familyEmail({ greeting: `${SAMPLE.parentFirst} and Sam Stone`, child: SAMPLE.childFirst, url: familyLinkUrl('sample-link-for-preview-only'), expiresAt: new Date(now + FAMILY_LINK_DAYS * DAY).toISOString() }), { to: 'Everyone in the family with an email address in JobTread' });
     case 'app-reminder': {
       const year = (await readAppSettings(env.DB, now)).year;
       const form = await formFor(env.DB, { year, lang });
@@ -742,6 +746,25 @@ export async function buildPreview(env, id, { lang = 'en', me = '', now = Date.n
       }
       const m = revealInviteEmail({ kid, date: day, time: '16:00', address: SAMPLE.address, notes: facts.details });
       return { channel: 'kit', from: KIT_FROM, to: `Kit’s “${KIT_INVITE_DEFAULTS.audience}” group, once staff send the draft`, subject: m.subject, html: m.html, text: m.text, note: `${kid.name}’s page as it reads now, with a sample day, time and address. Kit adds its own unsubscribe link and mailing address under it.`, send: 'email' };
+    }
+    case 'press-release':
+    case 'staff-press-review': {
+      // The next kid still being built, as their page reads now, at a sample day, time and address
+      const row = await env.DB.prepare("SELECT data FROM kids WHERE status = 'in-progress' ORDER BY year DESC, name LIMIT 1").first().catch(() => null);
+      let kid = null;
+      try { kid = row ? JSON.parse(row.data) : null; } catch { /* sample below */ }
+      kid = kid || { name: SAMPLE.childFirst, slug: '', roomTypes: ['Accessible Bathroom'], heroSummary: 'A sample story for the preview.' };
+      const day = new Date(now + 14 * 86400e3).toISOString().slice(0, 10);
+      const settings = await readPressSettings(env.DB).catch(() => PRESS_DEFAULTS);
+      const f = { date: day, start: '16:00', address: SAMPLE.address, details: 'Park along the street. We’ll have signs out front.' };
+      if (id === 'staff-press-review') {
+        return email(pressNote('drafted', { name: kid.name, f, count: settings.list.length, link: gmailLink(settings.from) }), { to: `${settings.from} (who it’s drafted for, in Reveals → Invites → Press release)` });
+      }
+      const m = pressRelease({ kid, date: day, time: '16:00', address: SAMPLE.address, details: f.details, story: shortStory(kid), settings, contact: { name: settings.contactName || 'The sender’s name in Google', title: settings.contactTitle, email: settings.from, phone: settings.contactPhone } });
+      return {
+        channel: 'email', from: `${settings.from}’s own Gmail (a draft there)`, to: `${settings.list.length} on the press list, in Bcc, once the draft is sent from Gmail`, subject: m.subject, html: m.html, text: m.text, send: null,
+        note: `${kid.name}’s page as it reads now, with a sample day, time and address. In the real draft the sentences about the kid are Workers AI’s, from the page’s story, and the sender’s Gmail signature goes under it.`,
+      };
     }
     case 'kit-kickoff':
     case 'kit-project-reveal': {

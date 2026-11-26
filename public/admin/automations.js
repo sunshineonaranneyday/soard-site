@@ -449,6 +449,12 @@ const MAP = { t: 'SOARD', children: [
           touches: ['JobTread', 'Kit', 'Resend', 'D1'], where: 'functions/api/_reveal-invite-kit.js · _reveal-invite-email.js · _reveal-invites.js',
           info: 'Emails to Linzi and Peter only, never Slack. With no “Reveal Emails” group in Kit there is no draft, because the email has the family’s address.',
           live: (f) => (!env(f) ? null : !f.env.kit ? ATTN('KIT_API_KEY is missing, so invite emails can’t be drafted.') : ON()) },
+        { t: 'Press release drafted in Linzi’s Gmail', s: 'live', k: 'event',
+          when: 'At the same look as the invite email: Reveal Date Confirmed is Yes with a time, and the kid’s page is published.',
+          does: 'Drafts the press release in Linzi’s own Gmail, the press list from Reveals → Invites → Press release in Bcc, laid out like the one she sent for Max, and emails her that it’s there. Nothing goes out until she sends it from Gmail. JobTread changes rewrite a draft nobody has touched; once she’s changed it, she’s emailed the new details instead. Staff can draft it sooner: Draft press release on each kid’s reveal in Reveals → Now.',
+          touches: ['JobTread', 'Gmail', 'Workers AI', 'Resend', 'D1'], where: 'functions/api/_reveal-press.js · _reveal-invites.js',
+          info: 'Never for TEST jobs, the office sandbox or community projects. A draft sent or deleted in Gmail is never made again unless someone presses Draft it again.',
+          live: (f) => (!env(f) ? null : !f.env.calendar ? ATTN('GOOGLE_CALENDAR_KEY is missing in Cloudflare, so nothing can be drafted in Gmail.') : ON()) },
         { t: 'Project emails drafted in Kit', s: 'live', k: 'event',
           when: 'Project Kickoff: Set Start Date checked off with a Demo date still ahead. Project Reveal: a kid turns Completed and the page has at least 3 photos and the reveal video (checked hourly). Either can be drafted sooner: Draft in Kit on the kid in Kids.',
           does: 'Drafts the email in Kit to the newsletter list, filled in from the kid’s page, and emails Linzi and Peter to review it. Once per kid, and nothing goes out until staff send it from Kit. Past kids are never swept up.',
@@ -815,6 +821,34 @@ const MAP = { t: 'SOARD', children: [
             const WHY = { 'no-home': 'needs a home address in JobTread', 'no-year': 'needs a *Makeover Year in JobTread', error: 'JobTread refused, trying again' };
             if (a.waiting.length) return ATTN(a.waiting.map((x) => `${x.name} ${WHY[x.problem] || 'is waiting'}.`).join(' '), a.lastRunAt);
             return ON(a.last ? `Last set up ${a.last.name}${a.last.project ? ' (a community project)' : ''} (${stamp(a.last.at)}).` : 'No family has been approved since it started.', a.lastRunAt);
+          } },
+        { t: 'Past makeovers → closed JobTread jobs', s: 'live', k: 'schedule',
+          when: 'Once a founder presses Make the rest in Admin → Kids → Past makeovers in JobTread (after the first job, made alone). A few each application sweep, every 2 minutes, until the list is done.',
+          does: 'Gives every finished kid page and community project with no JobTread job a closed one, so JobTread holds every project SOARD has done: the family’s or organization’s customer when exactly one fits, else a new one (no Status, Makeover Year or contact, so never an applicant and nobody emailed) with a location that has no address; the job named “Name (Year)” so the kid status sync links it, closed on the reveal date (else Dec 31 of its year), Status Closed Done.',
+          touches: ['JobTread', 'D1'], where: 'functions/api/_past-jobs.js (from _applications.js maybeSweepApplications; past-jobs-admin.js for the admin)',
+          info: 'A row with more than one possible customer waits for a person. Each row saves what it made as it goes, so a stopped run never makes a second customer or job. A job made already closed is a past record: close-outs, the CompanyCam copier, the Zillow check and the applicants’ “current job” leave it out, and the board names past makeovers with no bills by count.',
+          live: (f) => {
+            const p = f.pastJobs;
+            if (!p) return OFF('The list of past projects hasn’t been loaded.');
+            const by = p.by || {};
+            if (p.failed?.length) return ATTN(`${p.failed.length} couldn’t be made: ${p.failed.map((x) => `${x.name} (${x.year}): ${x.error || 'JobTread refused'}`).join('; ')}.`, p.lastRunAt);
+            if (by.queued) return ON(`${by.queued} being made, ${by.made || 0} made of ${p.total}.`, p.lastRunAt);
+            if (!p.firstAt) return OFF(`Waiting for a founder to make the first job (${by.ready || 0} ready, ${by.ask || 0} waiting on a person).`);
+            return ON(`${by.made || 0} made of ${p.total}${by.ask ? `, ${by.ask} waiting on a person` : ''}${by.ready ? `, ${by.ready} ready` : ''}.`, p.lastRunAt || p.firstAt);
+          } },
+        { t: 'Past makeovers’ photos → their JobTread jobs', s: 'live', k: 'schedule',
+          when: 'Once a founder turns it on in Admin → Kids → Past makeovers in JobTread (the first job’s photos alone first, then every job’s). Every minute on the live hub’s heartbeat: one Drive folder read, or photos copied for up to 18 seconds.',
+          does: 'Copies each past makeover’s photos from its folder in Drive (Photos & Video → _Makeover Photos (to JobTread)) onto the closed JobTread job the site made for it, tagged Before, During or After when its folder or the day it was taken says so; the rest untagged, staff only. JobTread fetches each from a short link the site signs for six hours (/api/drive-file), streamed from Drive.',
+          touches: ['Google Drive', 'JobTread', 'D1'], where: 'functions/api/_past-photos.js and drive-file.js (from broadcast-hooks.js)',
+          info: 'Only the jobs the site made for past projects, so nothing lands twice; photos only (videos wait for the website library, papers for the documents step); up to 100 MB a photo. Every photo is a row in D1 (past_photos), so a stopped run picks up where it left off and never copies one twice. Drive keeps every original.',
+          live: (f) => {
+            const p = f.pastPhotos;
+            if (!p || !p.on?.scope) return OFF(p?.by?.copied ? `Stopped: ${p.by.copied.toLocaleString()} photos copied.` : 'Not turned on.');
+            const by = p.by || {};
+            if (p.lastError && (!p.lastRun || p.lastError.at > p.lastRun.at)) return ATTN(`The last run failed (${stamp(p.lastError.at)}): ${p.lastError.error}`, p.lastRun?.at);
+            if (by.failed) return ATTN(`${by.failed} photos couldn’t be copied (${(p.failed || []).map((x) => x.error).filter(Boolean)[0] || 'JobTread refused'}).`, p.lastRun?.at);
+            if (p.lastRun?.at && stale(p.lastRun.at, 10 * MIN)) return ATTN(`Hasn’t run since ${stamp(p.lastRun.at)}. It rides on the live hub’s heartbeat.`, p.lastRun.at);
+            return ON(`${(by.copied || 0).toLocaleString()} copied, ${(by.listed || 0).toLocaleString()} waiting${p.jobsToList ? `, ${p.jobsToList} folders to read` : ''}.`, p.lastRun?.at);
           } },
         { t: 'A family replied → staff alert', s: 'live', k: 'event',
           when: 'A family answers a JobTread message, by replying to its email or in JobTread. The Applicants sync reads JobTread about every minute, and each reply alerts once.',

@@ -16,6 +16,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
 import { maybeSweepMail, mailSweepStatus, triage, senderOf, withoutQuoted, familyAddresses, receiptText, judgeReceipt, amountsIn, WATCH_MS } from '../functions/api/_mail-sweep.js';
 import { clearTokenCache } from '../functions/api/_google-calendar.js';
+import { READERS } from '../functions/api/_ai.js';
 import { forgetRampToken } from '../functions/api/_ramp.js';
 import { reminderCharge, isReminder } from '../functions/api/_mercury-reminders.js';
 
@@ -967,7 +968,7 @@ test('ap@: a receipt photo texted in, filed as spam, goes on the card charge it�
   calls.length = 0;
   await twice(at + 5 * MIN);
 
-  assert.deepEqual(of('photo').map((c) => c.model).sort(), ['@cf/moonshotai/kimi-k2.6', '@cf/qwen/qwen3.8-27b'], 'both readers read it');
+  assert.deepEqual(of('photo').map((c) => c.model).sort(), Object.keys(READERS).sort(), 'both readers read it');
   assert.deepEqual(of('mercury').map((c) => [c.method, c.path, c.attachmentType, c.file, c.type]), [['POST', '/transaction/ch10/attachments', 'receipt', '815939890.jpg', 'image/jpeg']], 'the photo itself, on Sam’s charge');
   assert.deepEqual(await cardRow('mercury:ch10'), { state: 'attached', msg_id: `${GRACIE}:${photo.id}`, detail: 'put “815939890.jpg” (THE HOME DEPOT #0123 $58.77), texted to ap@, on the Mercury card charge (The Home Depot $58.77)' });
   assert.equal((await cardRow('mercury:ch11')).state, 'looking', 'the same amount at another store the week before isn’t it');
@@ -1013,7 +1014,7 @@ test('ap@: only a sure match goes on: readers who disagree need the store’s na
   await mercuryCharge('p2', 4410, 'Studio Supply', at - DAY, PAT);
   await mercuryCharge('p3', 2500, 'Gas Station', at - DAY, PAT);
   await mercuryCharge('p4', 2500, 'Bakery', at - DAY, SAM);
-  const split = (a, b) => (model) => ({ ...a, ...(model.includes('qwen') ? b : {}) });
+  const split = (a, b) => (model) => ({ ...a, ...(model === Object.keys(READERS)[1] ? b : {}) });
   photoReads.paint = split({ type: 'receipt', vendor: 'PAINT DEPOT', total: '$58.77', date: '', reason: 'a receipt' }, { total: '$58.11' });
   photoReads.smudged = split({ type: 'receipt', vendor: '', total: '$44.10', date: '', reason: 'a receipt' }, { total: '$44.70' });
   photoReads.twenty = { type: 'receipt', vendor: '', total: '$25.00', date: dayOf(at - DAY), reason: 'a receipt' };

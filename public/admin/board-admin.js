@@ -247,9 +247,9 @@ function PracticeMeeting({ ctx }) {
  * agenda and its reports, the invite, the approval, the board page and the email; done, next or still to come
  */
 const prepOf = (m, data) => pathOf(m, data, 'ahead').filter((x) => x.id !== 'day' && x.id !== 'minutes');
-/** Where a past meeting's minutes stand, as a tag */
+/** Where a past meeting's minutes stand, as a tag: whether they're in is one fact (minutesIn), as its own page says it (Board QA round 13) */
 const minutesTag = (m) => (m.minutes === 'approved' ? html`<span class="tag tag--success">Minutes approved</span>`
-  : m.files.some((f) => f.kind === 'minutes') || m.sections.some((s) => s.items.some((it) => it.notes)) ? html`<span class="tag tag--warn">Draft minutes</span>`
+  : minutesIn(m) ? html`<span class="tag tag--warn">Draft minutes</span>`
   : html`<span class="tag">No minutes yet</span>`);
 const sharedTag = (m) => (m.shared ? html`<span class="tag tag--success">On the board page</span>` : html`<span class="tag">Not shared</span>`);
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];

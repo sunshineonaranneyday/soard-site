@@ -70,7 +70,9 @@ export function AdvisoryMeetings({ data, reload, call }) {
     setBusy(true);
     const j = await call({ action: 'new-meeting', date });
     setBusy(false);
-    if (!j.ok) { setNote(j.error || 'That didn’t save. Try again.'); return; }
+    // (a press that fails reads the list again, quietly: a meeting its write made, its answer lost, shows: Advisory Board
+    // QA round 25)
+    if (!j.ok) { setNote(j.error || 'That didn’t save. Try again.'); await reload(); return; }
     setNote('');
     setDate('');
     await reload();
@@ -216,7 +218,15 @@ function Editor({ from, data, call, reload, onBack }) {
       return null;
     }
     const j = form ? await call(null, { form }) : await call(body);
-    if (!j.ok) { say(String(j.error || 'That didn’t go through. Try again.').replace(/\bBoard files\b/, 'Files')); return null; }
+    if (!j.ok) {
+      say(String(j.error || 'That didn’t go through. Try again.').replace(/\bBoard files\b/, 'Files'));
+      // (read again, quietly: what the server keeps of this meeting, its sharing and its invite, shown as it is now, so a
+      // change that landed with its answer lost shows as made; what's typed here stays. Advisory Board QA round 25)
+      const all = await reload().catch(() => null);
+      const now = all?.ok ? (all.meetings || []).find((x) => x.id === latest.current.id) : null;
+      if (now) setM((cur) => ({ ...cur, ...serverPart(now) }));
+      return null;
+    }
     if (j.meeting) {
       base.current = j.meeting;
       setM((cur) => {

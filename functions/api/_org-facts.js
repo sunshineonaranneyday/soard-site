@@ -65,10 +65,15 @@ const addr = (a) => (a && str(a.street) ? { street: str(a.street, 120), city: st
 
 /**
  * What the board page shows under Documents → SOARD's facts: the site's facts as saved, and what the IRS's list
- * says of the exemption when it's SOARD's EIN that was looked up (never a stale line for another EIN)
+ * says of the exemption when it's SOARD's EIN that was looked up (never a stale line for another EIN). Each of its three
+ * reads is its own part: one that fails is in `unread` (settings: the name, EIN, addresses, phone and email; media: the
+ * founding, the mission and the few lines; irs: the tax status), so the card says what couldn't load and Copy all never
+ * copies what's left as if it were all of them (Board QA round 13: a failed read emptied the card without a word)
  */
 export async function orgFacts(env) {
-  const [settings, media, check] = await Promise.all([readDoc(env.DB, 'settings'), readDoc(env.DB, 'media'), readCheck(env.DB)]).catch(() => [null, null, null]);
+  const unread = {};
+  const lost = (part) => (err) => { console.error(`[org-facts] ${part}`, err?.message || err); unread[part] = true; return null; };
+  const [settings, media, check] = await Promise.all([readDoc(env.DB, 'settings').catch(lost('settings')), readDoc(env.DB, 'media').catch(lost('media')), readCheck(env.DB).catch(lost('irs'))]);
   const st = settings || {};
   const m = media || {};
   const rec = check?.irs?.record && check.irs.record.ein === einDigits(st.ein) ? check.irs.record : null;
@@ -93,6 +98,7 @@ export async function orgFacts(env) {
     vision: str(st.vision),
     values,
     irs: rec ? { exempt: exempt(rec), since: rulingText(rec.ruling), publicCharity: PUBLIC_CHARITY[Number(rec.foundation)] || '', listed: check.irs.date || '' } : null,
+    ...(Object.keys(unread).length ? { unread } : {}),
   };
 }
 

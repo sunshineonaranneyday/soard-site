@@ -18,6 +18,7 @@ import {
   createDraft, getDraft, saveDraft, setDraftFile, submitDraft, processApplication, getApplication,
   maybeSweepApplications, expireDrafts, accountFields, contactInputs, JT_FIELDS, photoKey, TEST_JPEG,
   testAnswers, createTestApplication, listApplications, applicationUrl, DRAFT_TTL_DAYS, reminderEmail, jobtreadCounty, forgetCountyChoices,
+  sendReminders, sameFirstName, deleteApplicationData,
 } from '../functions/api/_applications.js';
 import { handleApplicantEvent, QC_USER_ID } from '../functions/api/_applicant-comms.js';
 import { handleWorkflowCall, runNotifications } from '../functions/api/_applicant-notify.js';
@@ -284,7 +285,7 @@ test('JobTread gets the county the address check found, as its County field take
   // A County field that takes any text gets it
   forgetCountyChoices();
   w.world.customFields = [{ id: JT_FIELDS.county, targetType: 'location', options: [] }];
-  sub = await submitDraft(env, await readyDraft(fullAnswers({ parentEmail: 'other@example.com' })));
+  sub = await submitDraft(env, await readyDraft(fullAnswers({ parentEmail: 'other@example.com', childName: { first: 'Blake', last: 'Stone' } }))); // (another child: one child's second application of the season is turned away)
   await run(sub.id);
   acct = Object.values(w.world.accounts).at(-1);
   assert.equal(acct.locations[0].customFieldValues[JT_FIELDS.county], 'Paulding');
@@ -371,6 +372,84 @@ test('submitting twice gives the same application; stops and gaps are refused', 
   assert.deepEqual(await submitDraft(env, renter), { ok: false, error: 'stopped', stop: 'rental' });
   const noVideo = await readyDraft(fullAnswers(), { video: false });
   assert.ok((await submitDraft(env, noVideo)).errors.video);
+});
+
+test('one child, one application a season: a second draft for the same child is turned away and its reminders stop', async () => {
+  const one = await submitDraft(env, await readyDraft());
+  assert.equal(one.ok, true);
+  const countApps = async () => (await env.DB.prepare('SELECT COUNT(*) AS n FROM applications').first()).n;
+
+  // The draft the family left before starting over (Nov 2026): the same child, another device and email
+  const again = await readyDraft(fullAnswers({ parentEmail: 'mom.phone@example.com' }));
+  const out = await submitDraft(env, again);
+  assert.equal(out.ok, false);
+  assert.equal(out.error, 'already-applied');
+  assert.equal(out.message, "Avery already has an application in for 2027, so there's no need to send another. To change or add anything, email info@soardcharity.com.");
+  const left = await getDraft(env.DB, again.id);
+  assert.equal(left.submitted_id, null, 'nothing made: no second JobTread account, no second welcome');
+  assert.equal(Number(left.reminders_off), 1, 'and no reminders for it');
+  // The same child with a typo in the first name, or any case and accents
+  for (const first of ['Avrey', 'AVERY', 'Ávery', 'Averyy']) {
+    assert.equal((await submitDraft(env, await readyDraft(fullAnswers({ childName: { first, last: 'Stone' } })))).error, 'already-applied', first);
+  }
+  assert.equal(await countApps(), 1);
+
+  // A twin (same birthday and last name, their own first name), another child with the same name, a rehearsal: all go
+  assert.equal((await submitDraft(env, await readyDraft(fullAnswers({ childName: { first: 'Blake', last: 'Stone' } })))).ok, true, 'a twin');
+  assert.equal((await submitDraft(env, await readyDraft(fullAnswers({ birthdate: '2019-03-14', parentEmail: 'someone@example.com' })))).ok, true, 'another Avery Stone');
+  assert.equal((await submitDraft(env, await readyDraft(fullAnswers({ childName: { first: 'Test', last: 'Stone' } })))).ok, true);
+  assert.equal((await submitDraft(env, await readyDraft(fullAnswers({ childName: { first: 'Test', last: 'Stone' } })))).ok, true, 'TEST rehearsals as often as staff like');
+  assert.equal(await countApps(), 5);
+
+  // Deleted by staff: the family may send it again
+  await deleteApplicationData(env, one.id, { fetchImpl: w.fetchImpl });
+  assert.equal((await submitDraft(env, await readyDraft())).ok, true);
+
+  // Through the endpoint: a 409 the form shows by Submit, in their language
+  const es = await readyDraft(fullAnswers({ childName: { first: 'Blake', last: 'Stone' } }));
+  await env.DB.prepare("UPDATE application_drafts SET lang = 'es' WHERE id = ?").bind(es.id).run();
+  const res = await applyApi.onRequestPost({ env, request: new Request('https://soard.test/api/apply', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'submit', token: es.id }) }), waitUntil: () => {} });
+  assert.equal(res.status, 409);
+  const body = await res.json();
+  assert.equal(body.code, 'already-applied');
+  assert.equal(body.error, 'Blake ya tiene una solicitud para 2027, así que no hace falta enviar otra. Para cambiar o agregar algo, escríbanos a info@soardcharity.com.');
+});
+
+test('first names one typo apart count as the same child; short or different ones never do', () => {
+  assert.equal(sameFirstName('Gabreil', 'Gabriel'), true);
+  assert.equal(sameFirstName('Avery', 'avery '), true);
+  assert.equal(sameFirstName('Jayden', 'Jaden'), true);
+  assert.equal(sameFirstName('Ava', 'Eva'), false, 'short names: only the same');
+  assert.equal(sameFirstName('Jacob', 'Jack'), false);
+  assert.equal(sameFirstName('Gabe', 'Gabriel'), false);
+  assert.equal(sameFirstName('', 'Avery'), false);
+});
+
+test('reminders skip a draft whose child is already sent (from another draft), and still nudge a sibling’s', async () => {
+  const sent = await submitDraft(env, await readyDraft());
+  assert.equal(sent.ok, true);
+  const draftWith = async (answers) => {
+    const id = await createDraft(env.DB, { year: YEAR, ipHash: 'ip', verified: true });
+    await saveDraft(env.DB, await getDraft(env.DB, id), { answers, page: 'basic' });
+    return id;
+  };
+  const born = fullAnswers().birthdate;
+  const left = await draftWith({ childName: { first: 'Avery', last: 'Stone' }, birthdate: born, parentEmail: 'mom.phone@example.com' });
+  const unnamed = await draftWith({ parentEmail: 'mom@example.com' });
+  const sibling = await draftWith({ childName: { first: 'Blake', last: 'Stone' }, birthdate: '2018-02-02', parentEmail: 'mom@example.com' });
+  const other = await draftWith({ childName: { first: 'Casey', last: 'Lee' }, parentEmail: 'other@example.com' });
+  await env.DB.prepare("UPDATE application_drafts SET updated_at = '2026-01-01T00:00:00.000Z' WHERE submitted_id IS NULL").run();
+  const before = w.world.emails.length;
+  assert.equal(await sendReminders(env, { now: Date.now() }), 2);
+  assert.deepEqual(w.world.emails.slice(before).flatMap(e => e.to).sort(), ['mom@example.com', 'other@example.com']);
+  const d = async (id) => getDraft(env.DB, id);
+  assert.equal(Number((await d(sibling)).reminders_sent), 1, 'the sibling’s draft got its reminder');
+  assert.equal(Number((await d(other)).reminders_sent), 1);
+  for (const id of [left, unnamed]) {
+    const x = await d(id);
+    assert.equal(Number(x.reminders_sent) || 0, 0);
+    assert.equal(Number(x.reminders_off), 1, 'stopped for good');
+  }
 });
 
 test('a sample application goes only to whoever sent it, is marked TEST, and archives itself', async () => {

@@ -30,6 +30,7 @@
  * /api/applicant-sync call, so a status change in JobTread shows up at once.
  */
 
+import { latestJob } from './_jt-jobs.js';
 import { pave, SOARD_ORG_ID, matchProject, isProject, loadProjects, normalizeName } from './_reveals.js';
 import { NOT_A_NAME } from '../../public/admin/application-files.js';
 import { bestPhotoOf, photoUrl } from './_job-covers.js';
@@ -148,7 +149,8 @@ const ACCOUNT = {
     id: {}, address: {}, city: {}, county: {}, latitude: {}, longitude: {},
     customFieldValues: { $: { size: HOME_VALUES }, nodes: { value: {}, customField: { id: {} } } },
   },
-  jobs: { $: { size: 2, sortBy: [{ field: 'createdAt', order: 'desc' }] }, nodes: { id: {}, name: {} } },
+  // The newest few: latestJob picks the family's current one (a past makeover's job is made today, already closed)
+  jobs: { $: { size: 5, sortBy: [{ field: 'createdAt', order: 'desc' }] }, nodes: { id: {}, name: {}, closedOn: {}, createdAt: {} } },
   comms: { _: 'comments', $: { size: 1, where: ['name', '=', 'Comms Thread'] }, nodes: { id: {} } },
   // Photos on the account itself (the application's), oldest first; the job's are build photos
   files: {
@@ -235,7 +237,7 @@ export function rowFromAccount(a, polygon, now = Date.now()) {
   const lat = num(loc?.latitude);
   const lng = num(loc?.longitude);
   const { area, miles } = placeOnArea(lat, lng, polygon);
-  const job = a.jobs?.nodes?.[0] || null;
+  const job = latestJob(a.jobs?.nodes);
   const photo = childPhotoFile(a.files?.nodes, [a.name, job?.name]);
   return {
     account_id: a.id, name: a.name || '(no name)', status: fields.status || null, year: fields.year || null,

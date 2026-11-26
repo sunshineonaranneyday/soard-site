@@ -7,7 +7,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createD1 } from './lib/d1-shim.mjs';
-import { siteStatusFor, planKid, planProject, jobFacts, syncKidStatuses, maybeSyncKidStatuses, deniedAlert, FIELD_STATUS, REVEAL_TASK_TYPE, SYNC_USER } from '../functions/api/_kid-status.js';
+import { siteStatusFor, planKid, planProject, jobFacts, syncKidStatuses, maybeSyncKidStatuses, deniedAlert, revealDayOf, FIELD_STATUS, REVEAL_TASK_TYPE, SYNC_USER, REVEAL_DAYS_KEY } from '../functions/api/_kid-status.js';
 import { buildAdminView } from '../functions/api/reveals-admin.js';
 
 const SOARD = '22NJw42j5GLg';
@@ -263,4 +263,61 @@ test('the hourly sweep also looks at the project emails', async () => {
   await maybeSyncKidStatuses({ DB, JOBTREAD_GRANT_KEY: 'k' }, { fetchImpl: jtFetch([]), now: Date.parse('2026-10-20T15:00:00Z') });
   const rows = (await DB.prepare("SELECT slug, state FROM project_emails ORDER BY slug").all()).results;
   assert.deepEqual(rows, [{ slug: '__seeded__', state: 'done' }, { slug: 'old', state: 'skipped' }]);
+});
+
+test('each kid’s reveal day, from their Reveal task once it has come, is kept for Meet the Kids’ order and publishes', async (t) => {
+  assert.equal(revealDayOf({ tasks: { nodes: [{ progress: 1, startDate: '2026-07-09' }] } }, '2026-11-25'), '2026-07-09');
+  assert.equal(revealDayOf({ tasks: { nodes: [{ progress: 0, startDate: '2026-12-04' }] } }, '2026-11-25'), null, 'not yet');
+  assert.equal(revealDayOf({ tasks: { nodes: [{ progress: 0 }] } }, '2026-11-25'), null, 'no day on the task');
+  assert.equal(revealDayOf({}, '2026-11-25'), null);
+
+  const hooks = [];
+  t.mock.method(globalThis, 'fetch', async (url) => { hooks.push(String(url)); return new Response('ok'); });
+  const DB = await world([
+    { slug: 'dex', name: 'Dex', year: 2026, status: 'completed', publishStatus: 'published' },
+    { slug: 'colin', name: 'Colin', year: 2026, status: 'in-progress', publishStatus: 'published' },
+  ]);
+  const env = { DB, JOBTREAD_GRANT_KEY: 'k', CF_PAGES_DEPLOY_HOOK: 'https://hook.example/deploy' };
+  const withTask = (j, startDate, progress) => ({ ...j, tasks: { nodes: [{ progress, startDate }] } });
+  const jobs = [
+    withTask(job('j1', 'Declan Dex Noel (2026)', 'Closed Done'), '2026-07-09', 1),
+    withTask(job('j2', 'Colin Lindsay (2026)', 'Build'), '2026-12-04', 0),
+  ];
+  const days = async () => JSON.parse((await DB.prepare('SELECT value FROM kid_status_state WHERE key = ?').bind(REVEAL_DAYS_KEY).first())?.value || 'null');
+  assert.deepEqual(await syncKidStatuses(env, { fetchImpl: jtFetch(jobs), now: Date.parse('2026-11-25T15:00:00Z') }), [], 'no status changed');
+  assert.deepEqual(await days(), { dex: '2026-07-09' }, 'Colin’s reveal is still ahead');
+  assert.deepEqual(hooks, ['https://hook.example/deploy'], 'a day learned publishes, so the page takes its order');
+
+  // Nothing new: no deploy. Colin's day comes (one job's wake-up): kept with the others, and published
+  await syncKidStatuses(env, { fetchImpl: jtFetch(jobs), now: Date.parse('2026-11-25T16:00:00Z') });
+  assert.equal(hooks.length, 1);
+  await syncKidStatuses(env, { jobId: 'j2', fetchImpl: jtFetch(jobs), now: Date.parse('2026-12-04T23:00:00Z') });
+  assert.deepEqual(await days(), { dex: '2026-07-09', colin: '2026-12-04' });
+  assert.equal(hooks.length, 2);
+});
+
+test('a sweep cut short while JobTread fetches the job covers has already saved, published and kept the reveal days', async (t) => {
+  const hooks = [];
+  t.mock.method(globalThis, 'fetch', async (url) => { hooks.push(String(url)); return new Response('ok'); });
+  const photo = 'https://imagedelivery.net/ROYFuPmfN2vPS6mt5sCkZQ/kids/ava/1.jpg/public';
+  const DB = await world([
+    { slug: 'ava', name: 'Ava', year: 2026, status: 'in-progress', publishStatus: 'published', heroImage: photo, photos: [{ url: photo, alt: '' }] },
+  ]);
+  const jobs = [{ ...job('j1', 'Ava Sample (2026)', 'Closed Done'), tasks: { nodes: [{ progress: 1, startDate: '2026-11-01' }] } }];
+  let coverAsked = null;
+  const reached = new Promise((done) => { coverAsked = done; });
+  // JobTread never answers the cover upload: the request's time runs out there
+  const jt = async (url, init) => {
+    const q = JSON.parse(init.body).query;
+    if (q.createUploadRequest || q.updateJob) { coverAsked(); return new Promise(() => {}); }
+    return jtFetch(jobs)(url, init);
+  };
+  const env = { DB, JOBTREAD_GRANT_KEY: 'k', CF_PAGES_DEPLOY_HOOK: 'https://hook.example/deploy' };
+  syncKidStatuses(env, { fetchImpl: jt, now: Date.parse('2026-11-25T23:00:00Z') });
+  await reached;
+  assert.equal((await row(DB, 'ava')).status, 'completed');
+  assert.deepEqual(JSON.parse((await DB.prepare('SELECT value FROM kid_status_state WHERE key = ?').bind(REVEAL_DAYS_KEY).first()).value), { ava: '2026-11-01' });
+  assert.deepEqual(hooks, ['https://hook.example/deploy'], 'published before the covers');
+  const state = JSON.parse((await DB.prepare("SELECT value FROM kid_status_state WHERE key = 'state'").first()).value);
+  assert.equal(state.lastRun.changed, 1, 'the run is recorded');
 });

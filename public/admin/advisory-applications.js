@@ -418,9 +418,12 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
   // as their sign-in" or emailed how to sign in
   const fileOkOf = (x) => !!x.email && x.emailOk !== false;
   const fileOk = fileOkOf(p);
+  // (a sign-in email that waits for their own address waits for Advisory Board emails too while they're off: one fact,
+  // as the toast after the press says it, Advisory Board QA round 25)
+  const offToo = boardEmails ? '' : ' and Advisory Board emails are turned on';
   const onFileOf = (x, many = false) => (x.email && !fileOkOf(x) ? html`<p class="ava-note">${many ? `${x.name}’s` : 'Their'} email on file, <strong>${x.email}</strong>, ${x.emailWhy === 'group'
     ? 'is a SOARD group inbox: everyone in the group reads it, so it can’t sign them in.'
-    : x.emailWhy === 'staff' ? 'is a SOARD address, which signs in as staff, never as an Advisory Board member.' : 'can’t be used to sign in.'} Put their own on their People page: their sign-in email goes once it’s there.</p>` : null);
+    : x.emailWhy === 'staff' ? 'is a SOARD address, which signs in as staff, never as an Advisory Board member.' : 'can’t be used to sign in.'} Put their own on their People page: their sign-in email goes once it’s there${offToo}.</p>` : null);
   const onFile = onFileOf(p);
   // This application's email the sign-in can't use: said where it matters (never beside one of theirs that's kept)
   const unusable = plan.emailUsable === false && appEmail && appEmail !== p.email && !(plan.kind === 'same' && p.email)
@@ -429,7 +432,7 @@ function AddDialog({ app, plan, shot, soft, boardEmails, busy, onAdd, onClose })
       : plan.emailWhy === 'staff' ? html`<strong>${appEmail}</strong> ${plan.emailAs ? html`signs in as <strong>${plan.emailAs}</strong>, a SOARD address, which` : 'is a SOARD address, which'} signs in as staff, never as an Advisory Board member, so it isn’t saved.`
         : html`This application’s email, <strong>${appEmail}</strong>, can’t be used to sign in, so it isn’t saved.`} ${plan.kind === 'choose' && p.email
       ? 'As a different person, they’d need their own on their People page to sign in and get reveal invites.'
-      : 'Add their own on their People page so they can sign in and get reveal invites: their sign-in email goes once it’s there.'}</p>` : null;
+      : `Add their own on their People page so they can sign in and get reveal invites: their sign-in email goes once it’s there${offToo}.`}</p>` : null;
   const softLine = soft && shot ? html`<p class="ava-note">Their headshot is ${shot.width} × ${shot.height} pixels, so it may look a little soft on the site.</p>` : null;
   const advisoryAt = groupAddress(boardEmails);
   // The address a choice leaves them signing in with ('': none): the same person's, kept when it can sign them in, else
@@ -700,6 +703,12 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       if (j.status === 404) deletedNow(j);
       // Changed elsewhere since this panel opened: shown as it is now, nothing done
       else if (j.status === 409 && j.application) { setApp(j.application); onChanged(j.application); }
+      // Any other failure: the panel read again, quietly, so it shows what's true (a change that landed with its answer
+      // lost shows as made: Advisory Board QA round 25), never only what it showed before the press
+      else if (what !== 'remove') {
+        const r = await call(`${API}?id=${encodeURIComponent(id)}`);
+        if (r.success) { setApp(r.application); onChanged(r.application); }
+      }
       return null;
     }
     // (an answer about the application with none to show: deleted in the moment, said so, never a panel stuck loading)
@@ -717,8 +726,12 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
     const j = await post({ status: { id, status, from: app.status } }, 'status');
     if (j) { setApp(j.application); onChanged(j.application); addToast?.(`Marked ${statuses.find((s) => s.id === status)?.label}`, 'info'); }
   };
+  // (each note's own key, made once for the words in the box: pressed again after an answer that was lost, the note is
+  // there once, never twice. New words, a new note)
+  const noteKey = useRef({ text: null, key: '' });
   const addNote = async () => {
-    const j = await post({ note: { id, text: note } }, 'note');
+    if (noteKey.current.text !== note) noteKey.current = { text: note, key: `n${[...crypto.getRandomValues(new Uint8Array(12))].map((b) => b.toString(16).padStart(2, '0')).join('')}` };
+    const j = await post({ note: { id, text: note, key: noteKey.current.key } }, 'note');
     if (j) { setApp(j.application); onChanged(j.application); setNote(''); document.getElementById('ava-note')?.focus(); } // (the keys back in the box, for another)
   };
   const remove = async () => {
@@ -750,6 +763,19 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
     : (kit.team || []).find((t) => t.slug === app.personSlug) || { slug: app.personSlug, name: app.name };
   const onBoardNow = !!person && (person.group || 'advisory') === 'advisory' && (person.status || 'active') === 'active';
   const linked = onBoardNow ? person : null;
+  /*
+   * The panel's line for an application linked but not marked Joined (a press that stopped partway), from the same facts
+   * as the box and the toasts (Advisory Board QA round 25): their sign-in and welcome are promised only when Add leaves
+   * them with an email that signs them in, the one on their People page, or, with none there, this application's
+   * (app.emailWhy: why it can't, '' when it can, as the server reads it)
+   */
+  const partwayLine = (x) => {
+    const appOk = !!app?.email && !app.emailWhy;
+    const why = x.emailWhy ? 'their email on file can’t sign them in' : !app?.email ? 'this application has no email' : !appOk ? (app.emailWhy === 'group' ? 'this application’s email is a SOARD group inbox' : app.emailWhy === 'staff' ? 'this application’s email is a SOARD address, which signs in as staff' : 'this application’s email can’t be used to sign in') : '';
+    return x.hasEmail || (!x.emailWhy && appOk)
+      ? 'This application isn’t marked Joined: Add to Advisory Board below finishes adding them (their sign-in and welcome) and marks it Joined'
+      : `This application isn’t marked Joined: Add to Advisory Board below marks it Joined. ${why.charAt(0).toUpperCase()}${why.slice(1)}, so they get their sign-in and welcome once their own email is on their People page`;
+  };
   // Linked once, but that person's record was deleted, or they're not on the Advisory Board now: Add again, as the
   // server plans it (it brings back someone who left)
   const gone = !!app?.personSlug && app.person === null;
@@ -825,13 +851,15 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
       : w.off ? 'Advisory Board emails are off, so their sign-in email goes once those are turned on.'
         : w.noEmail ? 'Add a working email on their People page so they can sign in.'
           : w.error ? 'Their sign-in email didn’t go just now. The site sends it again in a few minutes.' : '');
+  // (Advisory Board emails off, as the box's plan read them: a sign-in email waiting for their own address waits for those too)
+  const offToo = () => (plan && plan.emailsOn === false ? ' and Advisory Board emails are turned on' : '');
   // What a press that went all the way says: who they are now, their sign-in email, their welcome (the server's answer)
   // (lead: the first line when it's said from the box's plan, which knows who they are, not what this press made)
   const doneWords = (p, w) => [
     p.lead ? p.lead : p.made ? `${p.name} is on the Advisory Board${p.photoAdded ? ', with their headshot as their photo' : ''}.`
       : `${app.name}’s application is linked to ${p.name} on People → Advisory.${p.restored ? ' They’re on the Advisory Board again, off the public site until you turn on Show on the site.' : ''}${p.photoAdded ? ' Their headshot is their photo now.' : ''}`,
-    p.emailUnusable ? `${p.emailUnusable} ${p.emailWhy === 'group' ? 'is a SOARD group inbox' : p.emailWhy === 'staff' ? (p.emailAs ? `signs in as ${p.emailAs}, a SOARD address, which signs in as staff` : 'is a SOARD address, which signs in as staff') : 'can’t be used to sign in'}, so it wasn’t saved. Add their own on their People page: their sign-in email goes once it’s there.` : '',
-    p.emailOnFile ? `Their email on file, ${p.emailOnFile.email}, ${p.emailOnFile.why === 'group' ? 'is a SOARD group inbox, so it can’t sign them in' : p.emailOnFile.why === 'staff' ? 'is a SOARD address, which signs in as staff' : 'can’t be used to sign in'}: put their own on their People page, and their sign-in email goes once it’s there.`
+    p.emailUnusable ? `${p.emailUnusable} ${p.emailWhy === 'group' ? 'is a SOARD group inbox' : p.emailWhy === 'staff' ? (p.emailAs ? `signs in as ${p.emailAs}, a SOARD address, which signs in as staff` : 'is a SOARD address, which signs in as staff') : 'can’t be used to sign in'}, so it wasn’t saved. Add their own on their People page: their sign-in email goes once it’s there${offToo()}.` : '',
+    p.emailOnFile ? `Their email on file, ${p.emailOnFile.email}, ${p.emailOnFile.why === 'group' ? 'is a SOARD group inbox, so it can’t sign them in' : p.emailOnFile.why === 'staff' ? 'is a SOARD address, which signs in as staff' : 'can’t be used to sign in'}: put their own on their People page, and their sign-in email goes once it’s there${offToo()}.`
       : p.emailKept && p.email && p.email !== String(app.email || '').toLowerCase() ? `Their sign-in email stays ${p.email}.` : '',
     (p.emailUnusable || p.emailOnFile) && w?.noEmail ? '' : welcomeWords(w),
     p.made ? (p.photoAdded ? 'They stay off the public site until you turn on Show on the site.' : 'Add a photo on their People page, then turn on Show on the site and publish.') : '',
@@ -922,7 +950,7 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
                   title=${byAdd ? 'Opens Add to Advisory Board, which marks it Joined' : STATUS_HINT[s.id]} onClick=${() => { if (!busy) setStatus(s.id); }}><span class="ava-dot"></span>${s.label}</button>`;
               })}
             </div>
-            ${linked ? html`<div class="ava-callout is-good" tabindex="-1">On People → Advisory as ${linked.name}${linked.publishStatus === 'draft' ? ' (hidden from the public site for now)' : ''}${app.status !== 'joined' ? '. This application isn’t marked Joined: Add to Advisory Board below finishes adding them (their sign-in and welcome) and marks it Joined' : ''}. ${kit.onOpenPerson ? html`<button class="btn btn-ghost btn-sm" onClick=${() => kit.onOpenPerson(linked.slug)}>Open their page</button>` : ''}</div>` : null}
+            ${linked ? html`<div class="ava-callout is-good" tabindex="-1">On People → Advisory as ${linked.name}${linked.publishStatus === 'draft' ? ' (hidden from the public site for now)' : ''}${app.status !== 'joined' ? `. ${partwayLine(linked)}` : ''}. ${kit.onOpenPerson ? html`<button class="btn btn-ghost btn-sm" onClick=${() => kit.onOpenPerson(linked.slug)}>Open their page</button>` : ''}</div>` : null}
             ${app.deleting ? html`<div class="ava-callout" role="alert">${app.deletingNow ? 'This application is being deleted right now, in another tab or by someone else.'
                 : 'Deleting this application didn’t finish: it’s still here. Press Delete application below to finish it.'}</div>`
               : linked && app.status === 'joined' ? null

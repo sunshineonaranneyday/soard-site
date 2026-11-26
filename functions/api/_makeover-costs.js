@@ -51,6 +51,7 @@ import { roomList, typeOf } from '../../public/admin/makeover-costs-shared.js';
 import { scoreSummaries } from './_applicant-scores.js';
 import { pledgesFor } from './_sponsor-pledges.js';
 import { REVEAL_TASK_TYPE } from './_kid-status.js';
+import { madeClosed } from './_jt-jobs.js';
 
 /** What comes off a family's cost. The Advisory Board's is money it has already raised, so it's in the bank's cash already */
 export const countedPledges = (list) => list.filter((p) => p.slug !== 'soard-advisory-board');
@@ -175,8 +176,11 @@ export function looseMatch(job, records) {
   ].filter((t) => t && !NOT_NAMES.has(t) && !/^\d+$/.test(t)));
   if (!words.size) return null;
   const named = Number((String(job.name || '').match(/\((\d{4})\)\s*$/) || [])[1]) || null;
-  const from = Math.min(...[yearOf(job.createdAt), named].filter(Boolean)) - 1;
-  const to = Math.max(...[yearOf(job.closedOn), yearOf(job.createdAt), named].filter(Boolean)) + 1;
+  // A past makeover's record is made years after it closed (./_past-jobs.js): the day it was made says nothing of
+  // when the work ran, so its years are its name's and its close date's only
+  const made = madeClosed(job) ? null : yearOf(job.createdAt);
+  const from = Math.min(...[made, yearOf(job.closedOn), named].filter(Boolean)) - 1;
+  const to = Math.max(...[yearOf(job.closedOn), made, named].filter(Boolean)) + 1;
   if (!Number.isFinite(from) || !Number.isFinite(to)) return null;
   const fits = records.filter((r) => !(r.jobtreadJobId && r.jobtreadJobId !== job.id) && yearsOf(r).some((y) => y >= from && y <= to) && nameWords(r.name).length);
   for (const test of [

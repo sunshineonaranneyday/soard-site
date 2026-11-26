@@ -40,11 +40,14 @@ const NONE = { signins: 0, looks: 0, reports: 0, seen: 0 };
 async function aSitting(member) {
   const env = { DB };
   const now = Date.now();
-  await noteGet(env, member, request(), { now });
-  await noteLook(env, member, request(), 'calendar', 'm_example1', { now });
-  await noteFamilyOpen(env, member, request(), 'acctIris01', 'application', 'Iris Example', { now });
+  /* r14: one sign-in for the whole sitting, as a real one has (one Access token, one iat): a fresh iat for each request
+     made two sign-ins whenever the sitting crossed a second on a busy machine (Nov 25 2026, full unit run) */
+  const iat = Math.floor(now / 1000) - 60;
+  await noteGet(env, member, request(iat), { now });
+  await noteLook(env, member, request(iat), 'calendar', 'm_example1', { now });
+  await noteFamilyOpen(env, member, request(iat), 'acctIris01', 'application', 'Iris Example', { now });
   // (a report with time in it keeps their visit going too: ./_board.js keepVisit, board_seen)
-  await noteEvents(env, member, request(), { events: [{ id: 'lookhome0001', kind: 'view', ref: 'home', at: now - 120_000, end: now - 60_000, secs: 60, touched: 60 }], now }, { now });
+  await noteEvents(env, member, request(iat), { events: [{ id: 'lookhome0001', kind: 'view', ref: 'home', at: now - 120_000, end: now - 60_000, secs: 60, touched: 60 }], now }, { now });
 }
 
 beforeEach(async () => {
