@@ -36,9 +36,10 @@ import {
   RESULTS, FILE_KINDS, LIVE, minutesIn, cleanMeeting, meetingName, longDate, shortDate, timeRange, plural, uid, clock,
   todayEastern, attendanceCounts, quorumFor, majority, answerOf, repliesOf, fileTitle, mergeMeeting, agendaIsDraft,
   isLive, agendaItems, isFilled, hasSince, reportsOn, showsOf, slidesOf, booksDraw, isStatement, LIVE_TITLES, SHOW_KINDS, tallyText, cleanLive, presentersOf, namesText, itemFiles, guessItem, deckOf, stopIndex, liveOfStop, pagesText, MORE,
-  sectionPlan, sectionOf, sectionClock, clockText, facesOf, itemDocs, docTitle, formatOf, docsOf, looseFiles, NOTHING_NEW, isNothingNew, copyOfItem, minutesToRead, packetDocs, minutesFileOf, ownMinutesFile,
+  sectionPlan, sectionOf, sectionClock, clockText, facesOf, itemDocs, docTitle, formatOf, docsOf, looseFiles, NOTHING_NEW, isNothingNew, copyOfItem, minutesToRead, packetDocs, minutesFileOf, ownMinutesFile, minutesStaffOnly, staffOnlyWords,
   signInKnown, minutesTarget, meetingOver, meetingHeld, inviteIsRecord, shareWaits, cleanTemplate, followAddresses,
   noInviteFor, waitsForApproval, minutesApprover, heldOn, chairReviewDay, approvedFileOf, FILE_STAYS, askedOf, heldNoSend,
+  UNSURE_SAVED, sendUntilAnswered, uploadId, uploadKey,
 } from './board-shared.js';
 import { openScreen, mirrorUrl, useScreen, usePages, stepKey, useCover } from './board-present.js';
 import { printMinutesTemplate, downloadMinutesDocx } from './board-minutes-template.js';
@@ -58,6 +59,36 @@ const WENT_OUT = 'Emails & invites → What went out lists every email that went
  * the save's to say (GOES_AGAIN), so it never reads as two instructions that disagree
  */
 const notSavedWhy = (j) => (j.offline ? 'no connection' : j.unknown ? 'the site didn’t answer' : String((j.page && j.what) || j.error || 'the site didn’t say why').trim().replace(/[.\s]+$/, ''));
+/** This meeting as the site has it now (Board's data read again), or null when that read fails (undefined: not there) */
+async function siteNow(ctx, id) {
+  const look = await ctx.load?.({ quick: true }).catch(() => null);
+  return look?.ok ? (look.meetings || []).find((x) => x.id === id) : null;
+}
+/** The page's own ids for files whose last send got no answer, so choosing one again is the same upload (uploadId) */
+const UNSURE_IDS = new Map();
+/**
+ * A file chosen on this page, sent up under the page's own id for it, made once here (./board-ui.js upload): sent again,
+ * the site answers with the file it kept, never a second copy. An answer lost on the way back isn't a refusal: the page
+ * looks at the site (Board's data read again), and a file there by that id is this one, kept, and goes on as if the
+ * answer had come (onto its item, for an item's upload); not there yet, or the look failing too, it goes again under the
+ * same id, and keeps looking, however many answers are lost (./board-shared.js sendUntilAnswered). Only the site's own
+ * no says to try again; still no answer after that, it says it can't tell yet (UNSURE_SAVED), and the same file chosen
+ * again goes under the same id. Board QA rounds 13 and 14, Nov 24 2026: two lost answers said "Try again", and pressed
+ * again it kept the file twice, one loose under Also for this meeting. → upload's answer
+ */
+export async function sendUp(ctx, f, { place = '', ...opts }) {
+  // (`place`: the item it's for, if any: the same file chosen again for the same place is the same upload)
+  const key = uploadKey(f, `${opts.ownerType}:${opts.ownerId}:${opts.kind || ''}:${place}`);
+  const fileId = uploadId(UNSURE_IDS, key);
+  const j = await sendUntilAnswered(() => upload(f, { ...opts, fileId }), {
+    lost: answerLost,
+    look: async () => { const now = await siteNow(ctx, opts.ownerId); return now === null ? undefined : now?.files?.find((x) => x.id === fileId) || null; },
+  });
+  uploadId(UNSURE_IDS, key, { id: fileId, unsure: !!j.unsure });
+  return j;
+}
+/** A meeting's files with one more, once (a file the page looked up may have come in with the site's copy already) */
+const withFile = (x, f) => ({ ...x, files: x.files.some((y) => y.id === f.id) ? x.files : [...x.files, f] });
 /**
  * What kind of failure a save's answer is, to say each new kind once (no connection, no answer, the site failing, or a
  * refusal in its own words): a refusal and then no connection are both said, a retry failing the same way again isn't
@@ -307,7 +338,10 @@ function useAutosave({ pending, contents = null, check = null, send, took, where
           // went. Each new kind of failure is said, not only the first (QA round 5, Nov 21 2026: a refusal, then no
           // connection, said only the refusal)
           const lost = !!(j.offline || j.unknown || j.status >= 500);
-          const said = notSavedWhy(j);
+          // (the site failing, whatever its words, is said as that: never "Reload the page" while a change isn't saved,
+          // round 5's rule, since Board goes on trying by itself. Board QA round 13: "Not saved: Something went wrong …
+          // Reload the page to see what was saved … Board keeps trying.")
+          const said = lost && !j.offline && !j.unknown ? 'we couldn’t save that just now' : notSavedWhy(j);
           const told = ownSays(j);
           const kind = failKind(j);
           if (!lost) { k.held = sent; k.why = whyOf(said); }
@@ -877,7 +911,10 @@ export function pathOf(m, data, phase) {
     { id: 'shared', card: held ? 'bm-after' : 'bm-ready', title: 'Board page', done: !!m.shared, sub: m.shared ? 'The board can see it' : 'Only you can see it', todo: 'put the meeting on the board page' },
     { id: 'emailed', card: ready, title: 'Board emailed', done: !!m.packetSentAt, skip: held && !m.packetSentAt, sub: m.packetSentAt ? `${plural(m.packetSentTo || 0, 'member')}, ${dayOf(m.packetSentAt)}` : held ? 'Not before the meeting' : 'Not yet', todo: 'email the board the link to the agenda and documents' },
     { id: 'day', card: 'bm-work', title: phase === 'today' ? 'Today' : held ? 'Held' : 'The meeting', done: held, sub: [m.date ? shortDate(m.date) : 'No date yet', m.start ? clock(m.start) : ''].filter(Boolean).join(' · ') },
-    { id: 'minutes', card: phase === 'ahead' ? 'bm-work' : 'bm-minutes', title: 'Minutes', done: m.minutes === 'approved', sub: m.minutes === 'approved' ? `Approved${m.approvedOn ? ` ${shortDate(m.approvedOn)}` : ''}` : m.minutesFrom?.typed ? `${typedWords(m, data)}, to approve next time` : m.minutesFrom ? 'Read in, to approve next time' : held ? 'Drop them in' : 'After the meeting' },
+    // (whether they're in is one fact, minutesIn, as After the meeting's card and Home go by: a file of them filed by its
+    // name is the minutes in, never "Drop them in" (Board QA round 13); a file the board can't read, kept Staff only, is
+    // said as that, never "In": minutesStaffOnly, round 14)
+    { id: 'minutes', card: phase === 'ahead' ? 'bm-work' : 'bm-minutes', title: 'Minutes', done: m.minutes === 'approved', sub: m.minutes === 'approved' ? `Approved${m.approvedOn ? ` ${shortDate(m.approvedOn)}` : ''}` : minutesStaffOnly(m) ? 'Staff only, not shared' : !minutesIn(m) ? (held ? 'Drop them in' : 'After the meeting') : m.minutesFrom?.typed ? `${typedWords(m, data)}, to approve next time` : m.minutesFrom ? 'Read in, to approve next time' : 'In, to approve next time' },
   ];
   // The next step: the first one not done (before the day, the agenda's reports count only once the rest is out)
   const order = (held ? ['minutes'] : phase === 'today' ? ['invite', 'approved', 'shared', 'emailed', 'day'] : ['invite', 'approved', 'shared', 'emailed', 'agenda'])
@@ -1050,13 +1087,14 @@ function AgendaEditor({ m, set, ctx, keepSaved, take = null, onFocusItem = () =>
     if (!files.length) return;
     setBusy(id);
     for (const f of files) {
-      // (for this item: on a meeting whose minutes are approved, never their minutes. Board QA round 11)
-      const j = await upload(f, { ownerType: 'meeting', ownerId: m.id, kind: kindOfName(f.name), forItem: true });
+      // (for this item: on a meeting whose minutes are approved, never their minutes. Board QA round 11. Its answer lost:
+      // looked for at the site before anything says to try again, never kept twice: sendUp, round 13)
+      const j = await sendUp(ctx, f, { ownerType: 'meeting', ownerId: m.id, kind: kindOfName(f.name), forItem: true, place: id });
       if (!j.ok) { addToast(`${f.name}: ${j.error}`, 'error'); continue; }
       // (sent as the minutes when the minutes are approved: an ordinary file of the meeting, and said. Board QA round 10)
       if (j.asFile) addToast(`${docTitle(j.file.name)}: ${j.asFile}`, 'info');
-      keepSaved((x) => ({ ...x, files: [...x.files, j.file] }));
-      set(withItem(id, (it) => ({ docs: [...(it.docs || []), j.file.id] })));
+      keepSaved((x) => withFile(x, j.file));
+      set(withItem(id, (it) => ({ docs: (it.docs || []).includes(j.file.id) ? it.docs : [...(it.docs || []), j.file.id] })));
     }
     setBusy('');
   };
@@ -1733,12 +1771,13 @@ function FilesCard({ m, set, ctx, keepSaved, take, title, sub, goes = false }) {
     let siteHas = null;
     for (const f of files) {
       const kind = kindOfName(f.name);
-      const j = await upload(f, { ownerType: 'meeting', ownerId: m.id, kind: goes && (kind === 'minutes' || kind === 'signed') ? 'other' : kind });
+      // (its answer lost: looked for at the site before anything says to try again, never kept twice: sendUp. Round 13)
+      const j = await sendUp(ctx, f, { ownerType: 'meeting', ownerId: m.id, kind: goes && (kind === 'minutes' || kind === 'signed') ? 'other' : kind });
       if (j.ok) { added.push(j.file); if (j.asFile) asFiles.push([j.file, j.asFile]); if (j.meeting) siteHas = j.meeting; } else addToast(`${f.name}: ${j.error}`, 'error');
       setUploading((u) => { const i = u.indexOf(f.name); return i < 0 ? u : [...u.slice(0, i), ...u.slice(i + 1)]; });
     }
     if (siteHas) take?.(siteHas);
-    if (added.length) keepSaved((x) => ({ ...x, files: [...x.files, ...added] }));
+    if (added.length) keepSaved((x) => added.reduce(withFile, x));
     // The focus goes to the file that came in
     if (added.length) requestAnimationFrame(() => document.querySelector(`#${cardId} [data-file="${added[0].id}"]`)?.focus());
     for (const [f, why] of asFiles) addToast(`${docTitle(f.name)}: ${why}`, 'info');
@@ -1873,19 +1912,41 @@ const doubtWords = (at, what, { once = false } = {}) => (!at ? ''
  * and said once the site has it, never before: `has(copy)` is whether the site's copy (MeetingEditor's saved) has it.
  * One that doesn't go is put back as the site has it (`back(copy)` → the fields) and said in words: refused for good by
  * useAutosave's refused ("Not on the board page: The agenda goes to the board once it’s approved."), else here: `what`
- * is what's still so, `also` what that means, `again` how to do it again. → whether the site has it
+ * is what's still so, `also` what that means, `again` how to do it again. An answer lost on the way back may have landed
+ * all the same, so the page looks at the site before it says anything (`look`, Board's data read again: this meeting as
+ * the site has it) and shows what the site has (`take`): there, it's done; not there, it's put back as the site has it
+ * and said as not saved. Only when that look fails too does it say it can't tell yet (UNSURE_SAVED): nothing is put back
+ * that the site may not have, the save line says "Not saved" (never "Saved") and Board keeps trying by itself, which
+ * finds what the site has. Board QA round 14, Nov 24 2026: Mark them approved landed with its answer lost, and the page
+ * put the minutes back to draft beside "Saved", and only told the founder to reload. → whether the site has it
  */
-async function pressSave({ set, save, saved, addToast }, patch, { has, back, what, again, also = '' }) {
+export async function pressSave({ set, save, saved, addToast, look = null, take = null }, patch, { has, back, what, again, also = '' }) {
   set(patch);
   await new Promise((r) => setTimeout(r, 0));
+  let lost = false;
   await save({ own: (j) => {
+    if (j.unknown && look && take) { lost = true; return; }
     set(back(saved.current));
-    addToast(j.unknown ? `${LOST}, so this page can’t tell whether that went. Reload the page to see what the site has.`
+    addToast(j.unknown ? UNSURE_SAVED
       : j.offline ? `${what}: no connection.${also ? ` ${also}` : ''} ${again} once you’re back online.`
         : `${what}: ${sentence(notSavedWhy(j))}${also ? ` ${also}` : ''}`, 'error');
   } });
-  return has(saved.current);
+  if (!lost) return has(saved.current);
+  // (a look that fails is tried once more a moment later, before the page says it can't tell)
+  let now = await look();
+  if (!now) { await new Promise((r) => setTimeout(r, 1500)); now = await look(); }
+  if (!now) { addToast(UNSURE_SAVED, 'error'); return false; }
+  // (Board's data was read for it: the copy is there already. One older than the copy the page has had from the site
+  // since, Board's own try again landing while the look was out, changes nothing: the page goes by the newer one)
+  const sv = String(now.updatedAt || '') < String(saved.current?.updatedAt || '') ? saved.current : now;
+  if (sv === now) take(now, { looked: true });
+  if (has(sv)) return true;
+  set(back(sv));
+  addToast(`${what}: the site didn’t answer, so that wasn’t saved.${also ? ` ${also}` : ''} ${again}.`, 'error');
+  return false;
 }
+/** What a pressed change needs to look at the site when its answer is lost (pressSave): this meeting as the site has it, and the way onto the page */
+const pressOf = ({ set, save, saved, take, ctx, m }) => ({ set, save, saved, addToast: ctx.addToast, take, look: () => siteNow(ctx, m.id) });
 const ON_PAGE = {
   true: { what: 'Not on the board page', again: 'Share it again' },
   false: { what: 'Still on the board page', also: 'The board can still see it.', again: 'Take it off again' },
@@ -1901,7 +1962,7 @@ function NoEmail({ ctx, what }) {
   return html`<p class="bm-note is-warn" role="note">${NO_MAIL}<span><strong>${namesText(none.map((x) => x.name))} ${one ? 'has' : 'have'} no email on file</strong>, so ${one ? 'gets' : 'get'} ${what}.${none.map((x) => html` <a class="link" href=${`#people/board/${x.slug}`}>${one ? 'Add it' : `Add ${x.name.split(' ')[0]}’s`}</a>`)}</span></p>`;
 }
 
-function GettingReady({ m, set, ctx, act, save, saved }) {
+function GettingReady({ m, set, ctx, act, save, saved, take }) {
   const { data, addToast } = ctx;
   const [working, setWorking] = useState('');
   // Each send whose last press got no answer, and when ({ invite, approve, send }): its next press says so first
@@ -1928,7 +1989,7 @@ function GettingReady({ m, set, ctx, act, save, saved }) {
   const testLost = () => ({ text: `${LOST}, so this page can’t tell whether the test went. Look in your inbox before sending it again.`, known: false });
   // Shared says so once the site has it, and moves on to what's next; taking it off asks first (its button is where Share
   // was). One that didn't go says why, and the page shows what the site has (putOnPage)
-  const pressed = { set, save, saved, addToast };
+  const pressed = pressOf({ set, save, saved, take, ctx, m });
   const share = async (v) => {
     if (!v && !(await ask({ title: 'Take it off the board page?', text: 'Board members stop seeing its agenda and files until you share it again.', yes: 'Take it off' }))) return;
     if (!(await putOnPage(pressed, v))) return;
@@ -2398,12 +2459,14 @@ function MinutesDoc({ m, ctx }) {
   const noRoll = held && !!m.minutesFrom && !c.boardHere && !!c.board;
   const names = new Map(agendaItems(m).map((x) => [x.id, x.title]));
   const written = (minutesIn(m) || m.motions.length || m.actions.length) && (m.sections.some((s) => s.notes || s.items.some((it) => it.notes)) || m.motions.length || m.actions.length);
-  // Typed: the file the send kept, whatever else has been filed since
-  const minutesFile = m.minutesFrom?.typed ? minutesFileOf(m) : ownMinutesFile(m);
+  // The minutes file by the one rule (typed: the file the send kept, wherever it's put), the one the board reads; one kept
+  // Staff only is named as that (Board QA round 14)
+  const minutesFile = ownMinutesFile(m);
+  const staffNote = minutesFile?.staffOnly ? ' (staff only: the board can’t read it)' : '';
   const vf = viewerFiles(minutesFile ? [minutesFile] : []);
   return html`<div class="card bm-minutes">
     <div class="bd-card-head"><h3>The minutes ${m.minutes === 'approved' ? html`<span class="tag tag--success">Approved${m.approvedOn ? ` ${shortDate(m.approvedOn)}` : ''}</span>` : written ? html`<span class="tag">Draft</span>` : null}</h3>
-      <p>${m.shared ? 'This is what board members read on their page.' : 'What board members will read once you share the meeting.'}${m.minutesFrom?.typed ? html` ${typedWords(m, data)}.${minutesFile ? html` <a class="link" ...${viewerLink(vf, 0)}>The minutes as written</a>.` : ''}` : m.minutesFrom ? ` Read from ${fileTitle(m.minutesFrom.name)}.` : minutesFile ? html` Written up in <a class="link" ...${viewerLink(vf, 0)}>${fileTitle(minutesFile.name)}</a>.` : ''}</p></div>
+      <p>${m.shared ? 'This is what board members read on their page.' : 'What board members will read once you share the meeting.'}${m.minutesFrom?.typed ? html` ${typedWords(m, data)}.${minutesFile ? html` <a class="link" ...${viewerLink(vf, 0)}>The minutes as written</a>${staffNote}.` : ''}` : m.minutesFrom ? ` Read from ${fileTitle(m.minutesFrom.name)}.` : minutesFile ? html` Written up in <a class="link" ...${viewerLink(vf, 0)}>${fileTitle(minutesFile.name)}</a>${staffNote}.` : ''}</p></div>
     ${groups.length ? html`<dl class="bm-who bm-who--doc">${groups.map(([t, l]) => html`<div><dt>${t} <b>${l.length}</b></dt><dd>${l.map((x) => x.name).join(', ')}</dd></div>`)}</dl>` : null}
     ${noRoll ? html`<p class="bd-muted bm-noroll">The minutes don’t say who was there.</p>` : null}
     ${written ? html`<ol class="bm-doc__sections">${m.sections.map((s) => html`<li key=${s.id}>
@@ -2496,9 +2559,9 @@ function MinutesDrop({ m, set, ctx, act, keepSaved }) {
     if (!file) return;
     setBusy(true);
     // Unfiled until it's read in: a question left unanswered never leaves it as this meeting's minutes
-    const up = await upload(file, { ownerType: 'meeting', ownerId: m.id, kind: 'other' });
+    const up = await sendUp(ctx, file, { ownerType: 'meeting', ownerId: m.id, kind: 'other' });
     if (!up.ok) { setBusy(false); addToast(up.error, 'error'); return; }
-    keepSaved((x) => ({ ...x, files: [...x.files, up.file] }));
+    keepSaved((x) => withFile(x, up.file));
     const body = { action: 'read-minutes', id: m.id, fileId: up.file.id };
     const dropHere = async () => {
       const d = await call({ action: 'delete-file', id: up.file.id });
@@ -2520,7 +2583,7 @@ function MinutesDrop({ m, set, ctx, act, keepSaved }) {
       // Where they belong, first: that meeting, when Board has it
       if (other && !other.minutesFrom?.typed && await ask({ title: `Put them on the ${meetingName(other)} (${shortDate(other.date)})?`, text: `${j.error} Board can read them into that meeting instead, and this one stays as it is.`, yes: `Put them on the ${shortDate(other.date)} meeting`, no: 'Not those' })) {
         setBusy(true);
-        const there = await upload(file, { ownerType: 'meeting', ownerId: other.id, kind: 'other' });
+        const there = await sendUp(ctx, file, { ownerType: 'meeting', ownerId: other.id, kind: 'other' });
         const k = there.ok ? await call({ action: 'read-minutes', id: other.id, fileId: there.file.id }) : there;
         setBusy(false);
         if (!k.ok) {
@@ -2628,7 +2691,7 @@ function MinutesTemplate({ m, ctx }) {
   </div>`;
 }
 
-function WrapUp({ m, set, ctx, act, save, saved, keepSaved }) {
+function WrapUp({ m, set, ctx, act, save, saved, keepSaved, take }) {
   const { data, addToast } = ctx;
   const [working, setWorking] = useState('');
   const approved = m.minutes === 'approved';
@@ -2668,13 +2731,15 @@ function WrapUp({ m, set, ctx, act, save, saved, keepSaved }) {
     if (j) { if (!test) setDoubt(''); addToast(test ? `Sent to ${j.to?.[0] || 'you'}` : `Emailed ${plural(j.sent, 'board member')}${j.later ? `. ${j.later}` : ''}`, 'info'); focusNext('.bm-wrap'); } else focusTask(task, '.bm-wrap');
   };
   // Said once the site has it, never before; one that didn't go says why, and the page shows what the site has (putOnPage)
-  const pressed = { set, save, saved, addToast };
+  const pressed = pressOf({ set, save, saved, take, ctx, m });
   const share = async (v) => {
     if (!(await putOnPage(pressed, v))) return;
     addToast(v ? 'On the board page' : 'Taken off the board page', 'info', v ? { label: 'Undo', fn: () => share(false) } : undefined);
     focusNext('.bm-wrap');
   };
   const hasMinutes = minutesIn(m);
+  // (in only as a file kept Staff only: the board can't read them, said with what to do. Board QA round 14)
+  const staffOnly = minutesStaffOnly(m);
   const today = todayEastern();
   // Not held yet: its day is ahead and it hasn't been run here (a meeting held early is held)
   const ahead = !!m.date && m.date > today && !m.live.startedAt;
@@ -2706,10 +2771,10 @@ function WrapUp({ m, set, ctx, act, save, saved, keepSaved }) {
     setWorking('signed');
     // Named for what it is, whatever the file was called
     const named = new File([file], `Signed minutes, ${meetingName(m)}${(String(file.name).match(/\.[a-z0-9]{2,5}$/i) || [''])[0]}`, { type: file.type });
-    const up = await upload(named, { ownerType: 'meeting', ownerId: m.id, kind: 'signed' });
+    const up = await sendUp(ctx, named, { ownerType: 'meeting', ownerId: m.id, kind: 'signed' });
     setWorking('');
     if (!up.ok) { addToast(up.error, 'error'); return; }
-    keepSaved((x) => ({ ...x, files: [...x.files, up.file] }));
+    keepSaved((x) => withFile(x, up.file));
     addToast('The signed copy is kept with the meeting', 'info');
   };
   const vf = viewerFiles([signed].filter(Boolean));
@@ -2722,20 +2787,20 @@ function WrapUp({ m, set, ctx, act, save, saved, keepSaved }) {
         : data.meetings.some((x) => x.date > m.date) ? 'At the next meeting: its agenda asks for this approval.' : 'The next meeting isn’t in Board yet. Its agenda asks for this approval once it’s added.';
   const nextVote = apDay ? '' : ' The board approves them at the next meeting.';
   return html`<div class="card bm-check bm-wrap">
-    <div class="bd-card-head"><h3 tabindex="-1">After the meeting</h3><p>${approved ? (m.shared ? 'Done: the minutes are approved.' : 'The minutes are approved. Share them with the board next.') : hasMinutes ? (apDay ? 'They aren’t marked approved yet.' : nextVote.trim()) : `Drop the minutes in and Board does the rest.${nextVote}`}</p></div>
+    <div class="bd-card-head"><h3 tabindex="-1">After the meeting</h3><p>${approved ? (m.shared ? 'Done: the minutes are approved.' : 'The minutes are approved. Share them with the board next.') : hasMinutes || staffOnly ? (apDay ? 'They aren’t marked approved yet.' : nextVote.trim()) : `Drop the minutes in and Board does the rest.${nextVote}`}</p></div>
     <ol class="bm-tasks">
-      <${Task} state=${sIn} title=${hasMinutes ? 'The minutes are in' : 'The minutes'} sub=${m.minutesFrom?.typed ? `${typedWords(m, data)}.` : m.minutesFrom ? `Read from ${fileTitle(m.minutesFrom.name)}.` : hasMinutes ? '' : ahead ? 'After the meeting, drop them in: a PDF or Word file.' : 'Drop them in: a PDF or Word file.'} />
-      <${Task} state=${sShared} title=${m.shared ? 'On the board page' : 'Share them with the board'} sub=${m.shared ? (m.minutesSentAt ? `The board was told ${ago(m.minutesSentAt)}.` : hasMinutes ? (ap && !apDay && !ap.packetSentAt && !approved && minutesToRead(ap, data.meetings)?.id === m.id ? 'The board can read them now, and the next agenda email asks them to before the vote.' : 'The board can read them now.') : 'The minutes show there once they’re in.') : approved ? `They’re approved, and only ${few} can see them until they’re shared.` : 'As draft minutes until they’re approved.'}>
+      <${Task} state=${sIn} title=${hasMinutes ? 'The minutes are in' : staffOnly ? 'The minutes are staff only' : 'The minutes'} sub=${m.minutesFrom?.typed ? `${typedWords(m, data)}.` : m.minutesFrom ? `Read from ${fileTitle(m.minutesFrom.name)}.` : hasMinutes ? '' : staffOnly ? staffOnlyWords(staffOnly) : ahead ? 'After the meeting, drop them in: a PDF or Word file.' : 'Drop them in: a PDF or Word file.'} />
+      <${Task} state=${sShared} title=${m.shared ? 'On the board page' : 'Share them with the board'} sub=${m.shared ? (m.minutesSentAt ? `The board was told ${ago(m.minutesSentAt)}.` : hasMinutes ? (ap && !apDay && !ap.packetSentAt && !approved && minutesToRead(ap, data.meetings)?.id === m.id ? 'The board can read them now, and the next agenda email asks them to before the vote.' : 'The board can read them now.') : staffOnly ? 'The board can’t read them while their file is staff only.' : 'The minutes show there once they’re in.') : approved ? `They’re approved, and only ${few} can see them until they’re shared.` : 'As draft minutes until they’re approved.'}>
         ${m.shared || ahead || heldBack ? null : html`<button class=${btn(sShared)} onClick=${() => share(true)}>Share with the board</button>`}
         <button class="btn btn-ghost btn-sm" disabled=${!!working || !data.setup.email || !hasMinutes} onClick=${() => send(true)}>${working === 'preview' ? 'Sending…' : 'Send me the email'}</button>
         <button class="btn btn-ghost btn-sm" disabled=${!!working || !m.shared || !data.packetTo || !data.setup.email || !hasMinutes} onClick=${() => send(false)}>${working === 'send' ? 'Sending…' : looking ? CHECKING : m.minutesSentAt ? 'Email the board again' : 'Email the board'}</button>
         ${ahead && !m.shared ? html`<span class="bd-muted">After the meeting.</span>`
           : heldBack ? html`<span class="bd-muted">${meetingOver(m) ? 'Its agenda was never approved, so it can go on the board page from tomorrow.' : 'Once its agenda is approved, in Getting ready.'}</span>`
-          : !hasMinutes ? html`<span class="bd-muted">Once the minutes are in.</span>` : !m.shared ? html`<span class="bd-muted">Share them first, so the email has something to open.</span>` : null}
+          : staffOnly ? html`<span class="bd-muted">Once their file isn’t staff only.</span>` : !hasMinutes ? html`<span class="bd-muted">Once the minutes are in.</span>` : !m.shared ? html`<span class="bd-muted">Share them first, so the email has something to open.</span>` : null}
       </${Task}>
       <${Task} state=${sApproved} title=${approved ? `Approved${m.approvedOn ? ` ${shortDate(m.approvedOn)}` : ''}` : 'The board approves them'} sub=${approvesWhere}>
-        ${approved ? html`<button class="btn btn-ghost btn-sm" onClick=${() => approve(false)}>Mark as draft</button>` : html`<button class="btn btn-ghost btn-sm" disabled=${ahead || !hasMinutes} onClick=${() => approve(true)}>Mark them approved</button>`}
-        ${!approved && ahead ? html`<span class="bd-muted">The meeting hasn’t happened yet.</span>` : !approved && !hasMinutes ? html`<span class="bd-muted">Once the minutes are in.</span>` : null}
+        ${approved ? html`<button class="btn btn-ghost btn-sm" onClick=${() => approve(false)}>Mark as draft</button>` : html`<button class="btn btn-ghost btn-sm" disabled=${ahead || !(hasMinutes || staffOnly)} onClick=${() => approve(true)}>Mark them approved</button>`}
+        ${!approved && ahead ? html`<span class="bd-muted">The meeting hasn’t happened yet.</span>` : !approved && !hasMinutes && !staffOnly ? html`<span class="bd-muted">Once the minutes are in.</span>` : null}
       </${Task}>
       ${fixing || fixed ? html`<${Task} state=${fixing ? 'todo' : 'done'} title=${fixing ? `${plural(fixing, 'correction')} waiting` : `${plural(fixed, 'correction')} made`} sub=${fixing ? `${fixing === 1 ? 'A board member suggested it' : 'Board members suggested them'} on the board page. Decide ${fixing === 1 ? 'it' : 'them'} there.` : 'Suggested on the board page, and on the minutes now.'}>
         ${fixing ? html`<a class="btn btn-ghost btn-sm" href=${`/admin/board/#/meetings/${m.id}`}>Open the board page</a>` : null}

@@ -40,6 +40,12 @@ const dayOf = (iso) => (iso ? shortDate(todayEastern(Date.parse(iso))) : '');
 const fileUrl = (f) => `/api/advisory-file?id=${encodeURIComponent(f.id)}`;
 const viewerFiles = (files) => files.map((f) => ({ name: f.name, type: f.type, size: f.size, at: f.at, url: fileUrl(f) }));
 const introNew = (i) => i.status === 'thanks' && !i.updatedBy;
+/**
+ * A new ask's, wish's or paper's id, made once for its form (Advisory Board QA round 25: a save whose answer was lost,
+ * pressed again, made a second): pressed again, it's the same record, which the server answers with as saved
+ * (functions/api/_advisory.js newOnce). The server's own shape: a word, then letters and 2 to 7
+ */
+export const makeId = (prefix) => `${prefix}_${[...crypto.getRandomValues(new Uint8Array(14))].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b % 32]).join('')}`;
 const TODAY = () => todayEastern();
 /** A signature that still counts: this term's, on the words as they are now (the page asks the advisor again otherwise) */
 const signedNow = (sig, doc, term = null) => !!sig && sig.version === (doc.version || 1) && String(sig.at).slice(0, 10) >= (term?.renewedOn || term?.started || '');
@@ -98,8 +104,10 @@ export function AdvisoryArea({ tab = 'meetings', onTab = null, embedded = false,
     document.addEventListener('visibilitychange', back);
     return () => { removeEventListener('focus', back); document.removeEventListener('visibilitychange', back); };
   }, []);
-  // A change, then the page as it is now. Says so only when `done` is given; a refusal always says why.
-  // The same change pressed twice goes once (a double click, a slow connection)
+  // A change, then the page as it is now. Says so only when `done` is given (words, or words from the answer: done(j));
+  // a refusal always says why. The same change pressed twice goes once (a double click, a slow connection).
+  // A press that fails reads the page again, quietly, whatever the failure: what's on the screen is what's true, never
+  // the row as it was before a change that landed with its answer lost (Advisory Board QA round 25)
   const act = async (body, done = '', { raw = false } = {}) => {
     const key = JSON.stringify(body);
     if (running.current.has(key)) return null;
@@ -108,12 +116,13 @@ export function AdvisoryArea({ tab = 'meetings', onTab = null, embedded = false,
     try {
       const j = await call(body);
       if (!j.ok) {
+        // (quietly: a read that fails now leaves the page as it is, and never says a second thing)
+        if (!j.signedOut) await call().then((x) => { if (x.ok) setData(x); }, () => {});
         if (raw) return j;
         tell(j.error || 'That didn’t save. Try again.', true);
-        if (j.status === 404 || j.status === 409) await load();
         return null;
       }
-      if (done) tell(done);
+      if (done) tell(typeof done === 'function' ? done(j) : done);
       await load();
       return j;
     } finally {
@@ -229,7 +238,8 @@ function IntroRow({ i, ctx }) {
   // Pressing a status moves the focus out of the note first: the press says both, so the note doesn't save on its own
   const choosing = useRef(false);
   useDirty(ctx, `intro-${i.id}`, typed ? `the note on ${i.name}` : '');
-  const set = (status) => { choosing.current = false; return act({ action: 'intro-status', id: i.id, status, note }, status === i.status && !undecided ? 'Saved' : `Marked ${statusWord(data.introStatuses.find((x) => x.id === status) || {})}`); };
+  // (the server's words after it: whether the update email went, or goes in a few minutes)
+  const set = (status) => { choosing.current = false; const done = status === i.status && !undecided ? 'Saved' : `Marked ${statusWord(data.introStatuses.find((x) => x.id === status) || {})}`; return act({ action: 'intro-status', id: i.id, status, note }, (j) => [`${done}.`, j.said].filter(Boolean).join(' ')); };
   return html`<div class="ar-row">
     <div class="ar-row__t"><strong>${i.name}</strong>${i.company ? html`<span class="ar-muted">${i.company}</span>` : null}</div>
     <p class="ar-muted">From ${i.by || 'an Advisory Board member'}, ${dayOf(i.at)}</p>
@@ -242,8 +252,38 @@ function IntroRow({ i, ctx }) {
     <div class="ar-seg" role="group" aria-label=${`Where ${i.name} stands`} onPointerDown=${() => { choosing.current = true; }}>
       ${data.introStatuses.map((st) => html`<button type="button" key=${st.id} aria-pressed=${i.status === st.id && !undecided} onClick=${() => set(st.id)}>${statusWord(st)}</button>`)}
     </div>
-    ${data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(i.by) || 'the Advisory Board member'}.</p>` : null}
+    ${data.settings.emails ? html`<p class="ar-muted ar-small">${emailsLine(data, i)}</p>` : null}
   </div>`;
+}
+/**
+ * Who the Advisory Board's emails reach: each member's own address, as the server's one rule says it (emailWhy, from
+ * functions/api/_advisory-mail.js addressWhy, which every send to a member takes: Advisory Board QA round 26). The count
+ * and the words are who it really goes to, and who it skips is named, with why
+ */
+const reach = (list) => ({ to: list.filter((a) => !a.emailWhy), not: list.filter((a) => a.emailWhy) });
+const whyNot = (a) => {
+  const n = first(a.name) || a.name;
+  return a.emailWhy === 'group' ? `${n}’s email on file is a SOARD group inbox` : a.emailWhy === 'staff' ? `${n}’s email on file is a SOARD staff address`
+    : a.emailWhy === 'bad' ? `${n}’s email on file isn’t a whole address` : `${n} has no email of their own on file`;
+};
+const andList = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+/** " Hal has no email of their own on file, so they won't get it." ('' when everyone will) */
+const notEmailed = (not) => (not.length ? ` ${andList(not.map(whyNot))}, so they won’t get it.` : '');
+const membersN = (n) => (n === 1 ? '1 Advisory Board member' : `${n} Advisory Board members`);
+/** "all 3 Advisory Board members", "2 of the 3 Advisory Board members" */
+const reachWords = (r) => {
+  const all = r.to.length + r.not.length;
+  return r.to.length === all ? (all === 1 ? 'the 1 Advisory Board member' : `all ${membersN(all)}`) : `${r.to.length} of the ${membersN(all)}`;
+};
+/**
+ * "Changing this emails Nell.", only when it can (Advisory Board QA round 25: every promise from the same facts as what
+ * the press does): with no email on file, or off the Advisory Board now, it says nobody is emailed
+ */
+function emailsLine(data, x) {
+  const who = first(x.by) || 'the Advisory Board member';
+  const a = data.advisors.find((m) => m.slug === x.slug);
+  return !a ? `${x.by || 'They'} isn’t on the Advisory Board now, so changing this emails nobody.`
+    : a.emailWhy ? `${whyNot(a)}, so changing this emails nobody.` : `Changing this emails ${who}.`;
 }
 
 function HostedRow({ x, ctx }) {
@@ -258,7 +298,7 @@ function HostedRow({ x, ctx }) {
     // A page picked now that won't do stops it; one saved earlier never stops Approve, Not now or Held (the field warns)
     const wrong = fieldState(giveUrl, { forms, saved: x.giveUrl || '' }).problem;
     if (wrong) { ctx.tell(`Its Zeffy page: ${wrong}`, true); return; }
-    const j = await act({ action: 'hosted-status', id: x.id, status, note, date, giveUrl }, done);
+    const j = await act({ action: 'hosted-status', id: x.id, status, note, date, giveUrl }, (r) => [`${done}.`, r.said].filter(Boolean).join(' '));
     if (j?.hosted) setGiveUrl(j.hosted.giveUrl || '');
   };
   const approve = async () => {
@@ -285,7 +325,7 @@ function HostedRow({ x, ctx }) {
           : html`<button type="button" class="ar-btn ar-btn--go" disabled=${busy} onClick=${approve}>Approve</button>`}
         ${x.status !== 'not-now' ? html`<button type="button" class="ar-btn" disabled=${busy} onClick=${() => send('not-now', 'Marked not now')}>Not now</button>` : null}
       </div>
-      ${ctx.data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(x.by) || 'the Advisory Board member'}.</p>` : null}`}
+      ${ctx.data.settings.emails ? html`<p class="ar-muted ar-small">${emailsLine(ctx.data, x)}</p>` : null}`}
   </div>`;
 }
 
@@ -308,25 +348,26 @@ function AskCard({ ctx }) {
   const out = data.asks.find((a) => a.sentAt && !a.closedAt) || null;
   const drafts = data.asks.filter((a) => !a.sentAt);
   const past = data.asks.filter((a) => a.sentAt && a.closedAt);
-  const blank = { title: '', body: '', link: '' };
+  // (a new ask's id, made once for this form: makeId)
+  const blank = () => ({ id: makeId('ask'), title: '', body: '', link: '' });
   const [draft, setDraft] = useState(blank);
   const up = (k) => (e) => setDraft({ ...draft, [k]: e.currentTarget.value });
   useDirty(ctx, 'ask', draft.title || draft.body || draft.link ? 'the ask you’re writing' : '');
   // With the emails on, this reaches every advisor's inbox at once: it asks first
-  const agree = ({ text = 'This puts the ask on the page and emails every Advisory Board member now.', yes = 'Put it out and email them' } = {}) => ask({ title: `Email all ${data.advisors.length} Advisory Board members?`, text, yes, no: 'Not yet', careful: true });
-  // What really happened, from the server's answer
-  const sentWords = (r) => (r?.off ? 'It’s on the page. Emails are off, so nothing was sent.'
-    : r?.already ? 'It’s on the page. The Advisory Board already had this email.'
-      : r?.sent ? `It’s out, and emailed to ${r.sent === 1 ? '1 Advisory Board member' : `${r.sent} Advisory Board members`}${r.failed ? `. ${r.failed} didn’t go` : ''}`
-        : 'It’s on the page, but no email went out.');
-  // Out already and never emailed (the switch was off, or the send failed)
+  // (the count and the words are who it really goes to, from the same rule as the send: Advisory Board QA round 26)
+  const r = reach(data.advisors);
+  const toWords = r.not.length ? membersN(r.to.length) : 'every Advisory Board member';
+  const agree = ({ text = `This puts the ask on the page and emails ${toWords} now.${notEmailed(r.not)}`, yes = 'Put it out and email them' } = {}) => ask({ title: r.to.length ? `Email ${reachWords(r)}?` : 'Put it on the page?', text: r.to.length ? text : `No Advisory Board member has an email of their own on file, so nobody is emailed.${notEmailed(r.not)}`, yes: r.to.length ? yes : 'Put it on the page', no: 'Not yet', careful: true });
+  // What really happened, in the server's words (functions/api/_advisory-mail.js askWords): emailed, or the rest going
+  // by themselves in a few minutes, once each
+  const sentWords = (j) => j?.said || 'It’s on the page.';
+  // Out already and never emailed (the switch was off)
   const emailIt = async (id) => {
-    if (!(await agree({ text: 'This emails every Advisory Board member now.', yes: 'Email them' }))) return;
+    if (!(await agree({ text: `This emails ${toWords} now.${notEmailed(r.not)}`, yes: 'Email them' }))) return;
     const j = await act({ action: 'email-ask', id }, '', { raw: true });
     if (!j) return;
     if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); return; }
-    const r = j.sent && typeof j.sent === 'object' ? j.sent : j;
-    ctx.tell(r.off ? 'Nothing went out: emails are off.' : r.already ? 'The Advisory Board already had this email.' : r.sent ? `Emailed to ${r.sent === 1 ? '1 Advisory Board member' : `${r.sent} Advisory Board members`}${r.failed ? `. ${r.failed} didn’t go` : ''}` : 'No email went out. Try again in a while.', !r.sent || !!r.failed);
+    ctx.tell(sentWords(j), !j.sent?.sent && !j.sent?.owed && !j.sent?.already);
   };
   // agreed: they said yes to emailing everyone. The server holds the real switch: if it was turned on since this
   // screen last looked, it says so, and this asks before anything goes
@@ -338,8 +379,8 @@ function AskCard({ ctx }) {
       j = await act({ action: 'send-ask', id, emailsOk: true }, '', { raw: true });
     }
     if (!j) return false;
-    if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); await ctx.load(); return false; }
-    ctx.tell(sentWords(j.sent), !!j.sent?.failed);
+    if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); return false; }
+    ctx.tell(sentWords(j));
     return true;
   };
   const save = async (thenOut) => {
@@ -347,7 +388,7 @@ function AskCard({ ctx }) {
     if (emailing && !(await agree())) return;
     const j = await act({ action: 'save-ask', ask: draft }, thenOut ? '' : 'Saved for later');
     if (j && thenOut) await putOut(j.ask.id, emailing);
-    if (j) setDraft(blank);
+    if (j) setDraft(blank());
   };
   return html`<${Card} title="This month’s ask" sub="One clear ask at a time. It sits on every Advisory Board member’s Home page.">
     ${out ? html`<${AskOut} a=${out} ctx=${ctx} emailIt=${emailIt} />` : html`<p class="ar-muted">Nothing is out right now.</p>`}
@@ -360,7 +401,7 @@ function AskCard({ ctx }) {
         <button type="button" class="ar-btn ar-btn--go" disabled=${busy || !draft.title.trim()} onClick=${() => save(true)}>${data.settings.emails ? 'Put it out and email the Advisory Board' : 'Put it on the page'}</button>
         <button type="button" class="ar-btn" disabled=${busy || !draft.title.trim()} onClick=${() => save(false)}>Save for later</button>
       </div>
-      <p class="ar-muted ar-small">${data.settings.emails ? `This emails all ${data.advisors.length} Advisory Board members.` : 'Emails are off, so this only goes on the page.'}${out ? ' A new one closes the one that’s out now.' : ''}</p>
+      <p class="ar-muted ar-small">${data.settings.emails ? (r.to.length ? `This emails ${reachWords(r)}.${notEmailed(r.not)}` : `No Advisory Board member has an email of their own on file, so this only goes on the page.${notEmailed(r.not)}`) : 'Emails are off, so this only goes on the page.'}${out ? ' A new one closes the one that’s out now.' : ''}</p>
     </div>
     ${drafts.length ? html`<${Fold} summary=${`Saved for later (${drafts.length})`}><ul class="ar-list">${drafts.map((a) => html`<li key=${a.id}><${DraftAsk} a=${a} ctx=${ctx} agree=${agree} putOut=${putOut} /></li>`)}</ul><//>` : null}
     ${past.length ? html`<${Fold} summary=${`Past asks (${past.length})`}><ul class="ar-list">${past.map((a) => html`<li key=${a.id}><${AskOut} a=${a} ctx=${ctx} past=${true} /></li>`)}</ul><//>` : null}
@@ -413,9 +454,10 @@ function AskOut({ a, ctx, past = false, emailIt = null }) {
 // ─── Who we're looking for ──────────────────────────────────────────
 function Wishes({ ctx }) {
   const { data, act } = ctx;
-  const blank = { title: '', detail: '' };
+  // (a new one's id, made once for this form: makeId)
+  const blank = () => ({ id: makeId('w'), title: '', detail: '' });
   const [w, setW] = useState(blank);
-  const add = async () => { if (await act({ action: 'save-wish', wish: w }, 'Added')) setW(blank); };
+  const add = async () => { if (await act({ action: 'save-wish', wish: w }, 'Added')) setW(blank()); };
   useDirty(ctx, 'wish', w.title || w.detail ? 'the person you’re adding' : '');
   return html`<${Card} title="Who we’re looking for" sub="On every Advisory Board member’s Introductions page. Be specific: a name or a trade gets answers.">
     ${data.wishes.length ? html`<ul class="ar-list">${data.wishes.map((x) => html`<li key=${x.id}><${WishRow} w=${x} ctx=${ctx} /></li>`)}</ul>` : html`<p class="ar-muted">The list is empty. Advisory Board members told us they know vendors, contractors, event people, and corporate partners, so that’s a good place to start.</p>`}
@@ -569,12 +611,14 @@ function GroupCard({ ctx }) {
         : g.syncedAt ? `Matches People → Advisory, as of ${dayOf(g.syncedAt)}.` : 'The site will fill the group on its next look.';
   // (only those it can go to: an email on file that signs them in, never a SOARD address or a group inbox, which the
   // send skips, so the count and the names are who it goes to: Advisory Board QA round 24)
-  const unsent = data.advisors.filter((a) => !a.lastSeen && a.email && !a.emailWhy && !data.welcomed?.[a.slug]);
+  // (and one on its way now isn't counted: Advisory Board QA round 26)
+  const unsent = data.advisors.filter((a) => !a.lastSeen && a.email && !a.emailWhy && !data.welcomed?.[a.slug] && !a.welcome?.going);
+  // What happened to each, in the server's words (functions/api/_advisory-mail.js welcomesSaid): "they've all had it
+  // already" only when they have. A press that fails reads the page again (act)
   const welcome = async () => {
     const j = await act({ action: 'send-welcome', slugs: unsent.map((a) => a.slug) });
     if (!j) return;
-    if (j.sent) ctx.tell(`Sent to ${j.sent === 1 ? '1 Advisory Board member' : `${j.sent} Advisory Board members`}${j.failed ? `. ${j.failed} didn’t go` : ''}`, !!j.failed);
-    else ctx.tell(j.off ? 'Nothing went out: emails are off.' : j.failed ? `Nothing went out: ${j.failed === 1 ? 'the email' : `all ${j.failed} emails`} failed. Try again in a while.` : 'Nothing went out: they’ve all had it already.', true);
+    ctx.tell(j.said || 'Done.', !j.sent && !j.owed);
   };
   return html`<${Card} title="Reaching the group">
     <p class="ar-addr">${data.groupEmail}</p>
@@ -598,8 +642,11 @@ const timeOf = (t) => new Date(t).toLocaleTimeString('en-US', { hour: 'numeric',
 const notSignIn = (why) => (why === 'none' ? 'No email on file' : why === 'staff' ? 'Their email is a SOARD address, which signs in as staff'
   : why === 'group' ? 'Their email is a SOARD group inbox' : why === 'bad' ? 'Their email isn’t a whole address' : '');
 /** What a press of Send the sign-in email did, from the server's answer */
-const sentWords = (j, a, me) => (j.sent && j.unsure ? `The email service didn’t answer, so ${a.name}’s sign-in email may have gone. It’s counted as sent: wait ten minutes before sending it again.`
-  : j.sent ? `Sign-in email sent to ${a.name}${j.again ? ' again' : ''}.`
+const sentWords = (j, a, me) => (j.sent ? `Sign-in email sent to ${a.name}${j.again ? ' again' : ''}.`
+  // (Advisory Board QA round 26: only the email service's yes is "sent". No answer that says either way: it's owed, and
+  // goes by itself under the same key, which never sends a second. Its own no: said as one)
+  : j.owed ? `${a.name}’s sign-in email goes in a few minutes.`
+  : j.refused ? `The email service refused ${a.name}’s sign-in email, so it didn’t go. Check their email on their People page, then try again.`
   : j.signedIn ? `${a.name} has signed in already, so they weren’t emailed.`
     : j.going ? `The sign-in email is going out to ${a.name} right now.`
       : j.tooSoon ? `${a.name} was sent it at ${timeOf(j.at)}. It can go again at ${timeOf(Date.parse(j.at) + AGAIN_MS)}.`
@@ -625,7 +672,7 @@ function People({ ctx }) {
   // One going out from somewhere else (another tab, Add, the site): its row looked at again until it's gone, a light look
   // at the sign-in emails alone (nothing else on the page reloads, so nothing being typed is touched). The server stops
   // calling one "going" ten minutes on, so this stops by itself
-  const going = data.advisors.some((a) => a.welcome?.going);
+  const going = data.advisors.some((a) => a.welcome?.going || a.welcome?.owed);
   useEffect(() => {
     if (!going || sending) return undefined;
     const t = setTimeout(async () => {
@@ -643,7 +690,7 @@ function People({ ctx }) {
       const j = await act({ action: 'send-welcome-to', slug: a.slug }, '', { raw: true });
       if (!j) return;
       if (!j.ok) { tell(j.error || 'That didn’t go. Try again in a moment.', true); await load(); return; }
-      tell(sentWords(j, a, data.me), !j.sent || !!j.unsure);
+      tell(sentWords(j, a, data.me), !j.sent && !j.owed);
       setNow(Date.now());
     } finally {
       setSending('');
@@ -674,7 +721,8 @@ function SignIn({ a, now, sending, onSend }) {
   return html`<span class="ar-signin" data-slug=${a.slug} tabindex="-1" role="group" aria-label=${`${a.name}’s sign-in email`}>
     <span class="ar-muted">Not yet</span>
     ${w.going ? html`<span class="ar-muted ar-small">Sign-in email going out now</span>`
-      : w.at ? html`<span class="ar-muted ar-small">Sign-in email sent ${dayOf(w.at)}${w.unconfirmed ? ' (not confirmed)' : ''}</span>`
+      : w.owed && !w.at ? html`<span class="ar-muted ar-small">Sign-in email goes in a few minutes</span>`
+      : w.at ? html`<span class="ar-muted ar-small">Sign-in email sent ${dayOf(w.at)}${w.unconfirmed ? ' (not confirmed)' : ''}${w.owed ? '. It goes again in a few minutes' : ''}</span>`
         : a.emailWhy ? html`<span class="ar-muted ar-small">${notSignIn(a.emailWhy)}</span>` : null}
     ${!a.emailWhy && !w.going && !soon ? html`<button type="button" class="ar-btn ar-btn--small" aria-disabled=${sending ? 'true' : null} aria-label=${`${label}, ${a.name}`}
       onClick=${() => { if (!sending) onSend(a); }}>${label}</button>` : null}
@@ -812,6 +860,8 @@ function DocEditor({ doc, kind, ctx, onDone, track }) {
   const [saved, setSaved] = useState(doc.id ? { title: doc.title, body: doc.body || '', shared: doc.shared !== false, url: doc.url || '', note: doc.note || '', shelf: doc.shelf || '' } : null);
   const [saving, setSaving] = useState(false);
   const [id, setId] = useState(doc.id || '');
+  // (a new paper's id, made once for this editor: pressed again after an answer that was lost, it's the same paper)
+  const [newId] = useState(() => (doc.id ? '' : makeId('ad')));
   // Which saved copy these words started from: the server refuses if someone has saved since (conflict: theirs)
   const [base, setBase] = useState(doc.updatedAt || '');
   const [conflict, setConflict] = useState(null);
@@ -833,7 +883,7 @@ function DocEditor({ doc, kind, ctx, onDone, track }) {
     }
     setSaving(true);
     const onPage = shared && !hide;
-    const j = await act({ action: 'save-doc', ...(base ? { base } : {}), doc: { id: id || undefined, kind: doc.kind, title, body, shared: onPage, ...(base ? { base } : {}), ...(doc.kind === 'overview' || library ? { url } : {}), ...(library ? { note, shelf } : {}) } }, hide ? '' : 'Saved', { raw: true });
+    const j = await act({ action: 'save-doc', ...(base ? { base } : {}), doc: { id: id || newId || undefined, kind: doc.kind, title, body, shared: onPage, ...(base ? { base } : {}), ...(doc.kind === 'overview' || library ? { url } : {}), ...(library ? { note, shelf } : {}) } }, hide ? '' : 'Saved', { raw: true });
     setSaving(false);
     if (!j) return null;
     if (!j.ok) {

@@ -21,7 +21,7 @@
 
 import { whoIs, answerAsk, addIntro, requestHost, signDoc, renew, getSettings } from './_advisory.js';
 import { advisoryPortalData } from './_advisory-portal.js';
-import { noticeLead } from './_advisory-mail.js';
+import { leadNotice, answerNotice, sendNotice } from './_advisory-mail.js';
 import { noteGet, noteEvents } from './_board-activity.js';
 import { PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
 
@@ -61,27 +61,35 @@ export async function onRequestPost(context) {
       return Response.json({ ok: true });
     }
     if (!w.answers) return fail('Only an Advisory Board member can do this', 403);
+    // The notice to whoever runs the group is owed in the member's own write (./_advisory-mail.js leadNotice), naming them
+    // as that write found them; it's sent once the write is done, and the heartbeat sends it if that send can't
+    // (Advisory Board QA round 25: sent after the write, a send that failed lost it)
     switch (body.action) {
       case 'answer': {
-        const { slug, name, ...mine } = await answerAsk(env.DB, String(body.askId || ''), w, { answer: body.answer, note: body.note });
-        if (mine.answer === 'yes') await later(context, noticeLead(env, { kind: 'answer', who: { ...w, slug, name }, askId: body.askId, note: mine.note }));
+        const { slug, name, notice, ...mine } = await answerAsk(env.DB, String(body.askId || ''), w, { answer: body.answer, note: body.note }, {
+          // (keyed by the ask, the member and the answer, never the moment of the press: the same answer again sends
+          // nothing; a changed one sends one notice saying where it stands now: Advisory Board QA round 26)
+          notice: (me, a) => answerNotice({ askId: a.askId, slug: me.slug, name: me.person.name, answer: a.answer, note: a.note }) });
+        if (notice) await later(context, sendNotice(env, notice));
         return Response.json({ ok: true, mine });
       }
       case 'intro': {
-        const intro = await addIntro(env.DB, w, body);
-        await later(context, noticeLead(env, { kind: 'intro', who: { ...w, ...intro.landedOn }, intro }));
+        // (its id is the page's, made once for the form: pressed again, the one made, never a second, ./_advisory.js)
+        const intro = await addIntro(env.DB, w, body, { notice: (me, x) => leadNotice('intro', { name: me.person.name, intro: x, ref: x.id }) });
+        await later(context, sendNotice(env, `notice:intro:${intro.id}`));
         return Response.json({ ok: true, intro: { id: intro.id, name: intro.name, company: intro.company, status: intro.status, at: intro.at, updatedAt: intro.updatedAt } });
       }
       case 'host': {
-        const hosted = await requestHost(env.DB, w, body);
-        await later(context, noticeLead(env, { kind: 'host', who: { ...w, ...hosted.landedOn }, hosted }));
+        const hosted = await requestHost(env.DB, w, body, { notice: (me, x) => leadNotice('host', { name: me.person.name, hosted: x, ref: x.id }) });
+        await later(context, sendNotice(env, `notice:host:${hosted.id}`));
         return Response.json({ ok: true, hosted: { id: hosted.id, title: hosted.title, status: hosted.status, when: hosted.when, note: '' } });
       }
       case 'sign':
         return Response.json({ ok: true, signed: await signDoc(env.DB, String(body.docId || ''), w, body.name, { version: body.version }) });
       case 'renew': {
-        const { landedOn, ...term } = await renew(env.DB, w, await getSettings(env.DB));
-        await later(context, noticeLead(env, { kind: 'renew', who: { ...w, ...landedOn }, term }));
+        const { landedOn, notice, ...term } = await renew(env.DB, w, await getSettings(env.DB), {
+          notice: (me, t) => leadNotice('renew', { name: me.person.name, term: t, ref: `${me.slug}:${t.ends}` }) });
+        if (notice) await later(context, sendNotice(env, notice));
         return Response.json({ ok: true, term });
       }
       default: return fail('Unknown action');

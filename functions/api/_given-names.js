@@ -548,6 +548,79 @@ Tie:Tit Weng:Yung Xi:Chik,Hai Xiu:Sau Xuan:Suen You:Yau Zang:Chong Zhuo:Cheuk Zo
 Quan:Kuen,Chuen Shou:Sau Bu:Pok Mi:Mai Gou:Kau Na:Na Nan:Nam Chu:Chu,Chor Xing:Ying Mou:Mau Ba:Pa Bei:Pui Huan:Woon Lao:Lo
 Le:Lok Mai:Mak Nian:Nin Xian:Sin Zha:Cha Zu:Cho Chao:Chau Chong:Sung Da:Tat Dang:Tong Di:Tik,Tai E:Ngok Luan:Luen Yi:Yik,Yee
 Situ:Szeto Ouyang:Auyeung,Au-Yeung Sima:Szema Zhuge:Chukot Shangguan:Sheungkoon`;
+// Round 25 (finding 3: "Soo Wei Ming" was greeted "Soo", Soo being how Malaysia and Singapore write 苏, Su, as Hakka says
+// it): Singapore's and Malaysia's spellings made by rule, as the Wade-Giles ones are. Each pinyin family name's readings, as
+// Hokkien, Teochew, Cantonese, Hakka and Hainanese say it (pinyin:hokkien/teochew/cantonese/hakka/hainanese, each written
+// plainly, a reading of more than one a comma between: 苏 is so in Hokkien, su in Hakka), and straitsSpellings writes each
+// reading the ways Singapore and Malaysia spell it (a last u as u or oo, "Su", "Soo"; a last i as i or ee, "Li", "Lee"; a
+// last o as o or oh, "Go", "Goh"...). No spelling is picked by hand: the readings are written, the rule spells them. A
+// test fails if a family name common there has none
+const STRAITS_OF = `Chen:tan,tng/tang,tan/chan/chin/tan Lin:lim/lim/lam,lum/lim/lim Huang:ng,ooi,wee,ung/ng,ung,wee/wong/wong,vong/wee,ng
+Li:li/li/li,lei/li/li Zhang:teo,tiu,chang/teo,tio/cheung,cheong/chong,chang,jong/chong,tiong Wu:go,ngo/ng,go/ng/ng/ng,go
+Wang:ong/heng,ong/wong/wong,vong/ong Liu:lau/lau/lau/liu/lau Yang:yeo,iu,yong/yeo,yong/yeung,yong/yong,yeong/yeo
+Guo:kwek,kuek,koay/kwek,kuek/kwok/kok,kwok/ko Xu:kho,khaw,chi,ser/kho,chi/hui,tsui,chui/hi,hee,chi,chooi/kho,chi
+Zeng:chan,cheng/chang/tsang,chang/chen,tsen/chang Cai:chua/chua/choi,choy/chai,choy/chua
+Xie:chia,sia/chia,sia/tse/chia,cha/chia Liang:neo,nio,leong/neo,nio/leung,leong/liong,leong/leong
+Zheng:tay,te,ti/tay,te/cheng,chang/chang,cheng/te Su:so,saw/so/so/su/so He:ho,hoe/ho/ho/ho/ho Luo:lo/lo/law,lo,lok/lo/lo
+Ye:yap,yeap,iap/yap/ip,yip/yap,yip/yap Qiu:khu,khoo/khu/yau/hiu,khiu/khu Hu:o,oh,aw/o,hu/wu/fu,voo/fu
+Zhu:chu/chu/chu,chue/chu/chu Gao:ko/kao,ko/ko,kou/ko,kow/ko Ke:kua,kwa/kua/or/ko/kua Fu:po,hu/po/fu/fu/phu,hu
+Pan:phua,phoa/phua/poon,pun/phan,pan/phua Zhong:cheng,chiong/cheng/chung,cheong/chong/chong Lai:lua,lai/lua,nai/lai/lai/lai
+Sun:sng,soon/sng/suen,sun/soon,sun/sun Ma:be/be/ma/ma/ma Fang:png,hong/png,hng/fong/fong/fong Hong:ang/ang/hung/fung/ang
+Zhuang:chng/chng/chong/chong/chng Yu:ee,u/ee/yu,yee,yue/yee,ee/ee Lu:lo,loo,liok/lo,liok/lo,lou,luk/lu,liuk/lu,liok
+Shen:sim/sim/shum,sum,sam/sim,shim/sim Shi:si,chioh/si/shek,sze/si/si Wei:gwee,gui/ngui/ngai/ngui/gwee
+Yao:yeo,iau/iau/yiu/yau/iau Liao:liau/liau/liu/liau/liau Jiang:kang,chiang/kang,chiang/kong,cheung/kong,chiong/kang,chiang
+Yan:gan,giam,ngiam/ngan,giam/ngan,yim/ngan/gan Peng:phe,phee/phe/pang/phang/phe Feng:pang/pang/fung/fung/pang
+Song:song/song/sung/sung/song Deng:teng,tng/teng/tang/then,tang/teng Han:han/han/hon/hon/han Gu:ko/ko/ku/ku/ko
+Wen:bun,woon/bun/wan,man,mun/voon,vun,woon/bun Tian:tian,chan/tian/tin/thien/tian Ou:au,ow,aw/au/au/au/au
+Mo:bok,mok/bok/mok/mok/mok Dai:te,tay/te/tai/tai/tai Dong:tang,tong/tang/tung/tung,thung/tang Xiao:siau/siau/siu/siau/siau
+Zhou:chiu/chiu/chow,chau/chiu/chiu Jin:kim/kim/kam,kum/kim/kim Gan:kam/kam/kam,kum/kam/kam Kong:khong/khong/hung/khung/khong
+Bai:peh,pek/peh/pak/phak/peh Fan:huan/huam/fan/fam/huan Tang:tng,thng,tong/tng/tong/thong/tong
+Tan:tham/tham/tam/tham,thum/tham Yuan:oan,wan/oan/yuen/yen/oan Weng:ang,ong/ang/yung/vung/ang Tu:too/too/to/tu/too
+You:iu,yu/iu/yau/yu/iu Du:to,too/to/to,tou/tu/to Zhuo:toh,tok,to/toh,to/cheuk/chok/tok,to Xian://sin/sien/
+Jian:kan/kan/kan/kan/kan Xue:sih,sit/sih/sit/siet/sih Cao:cho,chow/cho/cho,tso/tsho/cho Lian:lian/lian/lin/lien/lian
+Che:chia/chia/che/cha/chia Lan:lam/lam/lam/lam/lam Lei:lui/lui/lui,loi/lui/lui Kuang:khong/khong/kwong/khong/khong
+Yun:hun/hun/wan/yun/hoon,woon Zhan:chiam/chiam/chim/cham/chiam Mei:boey,moey,mui/mui/mui/moi/mui Hou:hau,kau/hau/hau/heu/hau
+Cheng:teng,thia/theng/ching/chang/teng Qian:chee,chian/chian/chin/chien/chian Zou:chau/chau/chau/cheu/chau
+Ruan:ng/ng/yuen/ngion/ng Lv:lu,ler/lu/lui/li/lu Ding:teng,ting/teng/ting/ten/teng Ren://yam/yim/
+Kang:khng,kang/khang/hong/khong/khang Yi:ek/ek/yik/yit/ek Xing:heng/heng/ying/hin/hing Ning:leng/leng/ning/nen/leng
+Gong:keng,kiong/keng/kung/kiung/keng Mai:beh/beh/mak/mak/beh Mao:mo,mau/mo/mo/mau/mo Tao:to/to/to/thau/to
+Pang:pang/pang/pong/pong/pang Xia:he/he/ha/ha/he Jia:ka/ka/ka/ka/ka Huo:hok/hok/fok/fok/hok Qi:chee,ki/chee/chai,chik/chi/chee
+Rao:jiau/jiau/yiu/ngiau/jiau Shao:sio/sio/shiu/seu/sio Xiong:him/him/hung/hiung/him Ni:geh,ngee/ngee/ngai/ngi/geh
+Tong:tang/tang/tung/thung/tang Situ:suto/suto/szeto/sutu/suto Ouyang:auyong/auyong/auyeung/euyong/auyong Guan:kuan/kuan/kwan/kuan/kuan Rong:eng/eng/wing,yung/yung/eng Ji:ki/ki/kei,kat/ki/ki`;
+// (the ways Singapore and Malaysia spell a reading, by the spelling's own rules: a last u, u or oo, "Soo", "Khoo", "Foo";
+// a last i, i or ee, "Lee", "Chee", "Tee"; a last o, o or oh, and or after h, k or l, "Goh", "Teoh", "Hor", "Lor"; a last
+// e, e, eh or ey, "Teh", "Beh", "Tey"; a last ia, ia or eah, "Cheah", "Seah"; a last iu, iu, iew or ew, "Liew", "Chew"; a last
+// iau, iau, iaw, eow or iow, "Liaw", "Seow"; a last au or ou, ow too, "Low", "Chow", "Tow"; a last a, ah too, "Mah"; a last
+// ua, uah too, "Chuah"; a last ong after ch, f, l, t or y, oong too, "Choong", "Foong"; a last ok, oke too, "Loke"; a first
+// kw, qu too, "Quek"; a first ph or kh, its h dropped too, "Pua", "Kiew")
+// (its first letters' rules first, then its last letters', each once: "khiu" is "kiu", and so "Kiew"; written as plain
+// string steps, so the few hundred readings are spelt at once)
+const straitsSpellings = (r) => {
+  const firsts = [r];
+  if (r.startsWith('kw')) firsts.push(`qu${r.slice(2)}`);
+  else if (r.startsWith('ph') || r.startsWith('kh')) firsts.push(r[0] + r.slice(2));
+  const out = new Set(firsts);
+  for (const f of firsts) {
+    const n = f.length;
+    const [x, y, z] = [f[n - 3] || '', f[n - 2] || '', f[n - 1]];
+    const cut = (k, ...tos) => { for (const t of tos) out.add(f.slice(0, n - k) + t); };
+    const after = (k) => !!f[n - 1 - k] && !'aeiou'.includes(f[n - 1 - k]);
+    if (z === 'u' && after(1)) cut(1, 'oo');
+    if (z === 'i' && after(1)) cut(1, 'ee');
+    if (z === 'o' && y && y !== 'o') { cut(0, 'h'); if ('hkl'.includes(y)) cut(1, 'or'); }
+    if (z === 'e' && /^(?:b|p|t|ch|h|k|l|m|n|s|g)e$/.test(f)) { cut(0, 'h'); cut(1, 'ey'); }
+    if (z === 'a' && after(1)) cut(0, 'h');
+    if (y + z === 'ia' && after(2)) cut(2, 'eah');
+    if (y + z === 'iu' && after(2)) cut(2, 'iew', 'ew');
+    if (x + y + z === 'iau') cut(3, 'iaw', 'iow', 'eow');
+    else if (y + z === 'au') cut(2, 'ow');
+    if (y + z === 'ou') cut(2, 'ow');
+    if (y + z === 'ua' && after(2)) cut(0, 'h');
+    if (/(?:ch|f|l|t|y)ong$/.test(f)) cut(3, 'oong');
+    if (y + z === 'ok') cut(0, 'e');
+  }
+  return [...out];
+};
 const FAMILY_NAMES_OF = [
   // (Chinese: pinyin, PINYIN_FAMILY above, its Wade-Giles and Hong Kong forms made from it in build; Taiwan's usual
   // Wade-Giles spellings; Cantonese, as Hong Kong and Macau write them; Hokkien and Teochew, as Singapore, Malaysia and the
@@ -583,11 +656,16 @@ const FAMILY_NAMES_OF = [
   Kieu Thai Quach Luu Doan Vuong Trieu La Tong Diep Banh Thach Phung Mac Bach Giang Kha Nghiem Lieu Tieu Ton Chau Tang Lam
   Quan Dao Au Vi Ung Lac Kim Hua Lai Han Ninh Khuc Chu Mach Lu Hau Ong Dam Tat To Tham Than Nong Luc Thanh Vinh Hoa Quang
   Trang Tien Hong Phi Nhan Giap Manh Cu Long Lang Mau Thieu Uong Khong Lo`],
-  // (Cambodian)
+  // (Cambodian. Round 25, finding 3: "Lon Sokha" was greeted "Lon", the family name Lon missing: written out more
+  // completely, the last lines)
   [KHMER, `Sam Chea Sok Keo Kim Chan Heng Meas Chhim Pen Hun Sar Tep Chhay Prak Ouk Mao Seng Yim Ly Hor Lim Tan Phan Long
   Nhem Kong Kang Ung Pich Phal Em Nou Chhun Kheang Mam Nuon Sim Som Sun Uy Var Voeun Ros Mey Sin San Seang Touch Ek Kheng
   Pok Nhim Thach Chhin Ngin Chum Om Hang Cheng Chhuon Chhem Huot Oum Prum Chhoeun Sou Duong Yin Mak Lay Hok Tith Sorn Meng
-  Thong Nget Phon Chen Vann Vong Chhorn Khim Sem`],
+  Thong Nget Phon Chen Vann Vong Chhorn Khim Sem
+  Lon Nhek Hem Ngov Ngoun Nuth Pang Phy Rath Roth Sao Soth Suon Thy Yos Dy Hak Ith Khiev Leng Lun Pech Pov Chuon Hean Sath
+  Teng Tong Vuth Hing Chhit Neang Oung Kao Eang Ear Aun Chhuy Ieng Kann Kea Khun Leang Muth Neth Noun Path Pheng Prom Reth
+  Roeun Seak Soun Thim Toch Tuy Yem Iv Khem Khuon Moeun Kuy Hul Nhean Chann Chim Svay Tuon Yoeun Dith Kheav Chhoun Mech
+  Nob Phat Mom Seak Lok Sak Sen Tat`],
   // (Hmong, as written in the US and in Hmong)
   [HMONG, `Vang Xiong Thao Lee Yang Her Moua Lor Hang Khang Kue Pha Lo Thor Chue Chang Vue Cha Fang Hawj Muas Vaj Xyooj Yaj
   Lis Tsab Thoj Kong Kha Koua`],
@@ -641,6 +719,23 @@ const HOKKIEN_FINALS = `a ah ai ak an ang ap at au e eh ek eng ee i ia iah iak i
 const HOKKIEN_ALONE = `a ah ai an ang au eng ing ong oon oo ooi oh ew ee hwa jeou sen yat`;
 // Korean given names: the syllables they're made of, in the spellings Korean Americans use (Revised Romanization, the older
 // spellings and the usual ones: Seong, Sung and Song; Jun and Joon). Two of them, joined or hyphenated, are a name's shape
+//   Round 25 (finding 1: "Ann Hye-kyo", "Joe Bum-soo", "Ann Jun-pyo" fit no shape, 48 of the tester's 234 syllables being
+// missing): every syllable the romanizations make, by their own rules (KO_INITIALS, KO_VOWELS and KO_FINALS below: Revised
+// Romanization's and McCune-Reischauer's initials, vowels and finals, McCune-Reischauer's marks and apostrophes dropped as
+// nameKey drops them, and the spellings Korean Americans use for a vowel: eo as o or u, "Song", "Bum"; yeo as yo, yu or you,
+// "Byul", "Young"; u as oo, "Joong"; eu as u, "Un"; i as ee), so kyo, pyo, seol, geun, byul, bi and sub are there by rule.
+// The written list below is kept, every one of its spellings made by the rule too but for a few of its own ("wook", "shik")
+const KO_INITIALS = `- g k kk n d t tt r l m b p pp s ss sh j ch jj tch h`;
+const KO_VOWELS = `a ae ya yae eo e yeo ye o wa wae oe yo u wo we wi yu eu ui i|eo:o u|yeo:yo yu you|u:oo|eu:u|i:ee|ui:eui|yu:yoo|oe:we`;
+const KO_FINALS = `- k g n t d l m p b ng`;
+// (the initials, vowels with the spellings people use for them, and finals, '-' none)
+const koreanParts = () => {
+  const [plainVowels, ...spelt] = KO_VOWELS.split('|');
+  const vowels = new Set(words(plainVowels));
+  for (const v of spelt) { const [from, to] = v.split(':'); if (vowels.has(from)) for (const t of words(to)) vowels.add(t); }
+  const none = (xs) => words(xs).map((x) => (x === '-' ? '' : x));
+  return { initials: none(KO_INITIALS), vowels, finals: none(KO_FINALS) };
+};
 const KOREAN_SYLLABLES = `a ah ae an bae beom bin bit bo bok bom bong byeol byeong byung cha chae chan chang cheol chul chol cheon chun
   cheong chung chi chil da dae dam dan do dong doo du deok duk eon eun eui ui ga gang geon gun gi gil gwang gyu gyeong gook guk geum ha
   hae hak han hee hui heon heung ho hong hoon hun hwa hwan hwi hye hyang hyeok hyuk hyeon hyun hyon hyo il in ja jae jang je jeong jung
@@ -671,7 +766,8 @@ const SURNAMES = [
   weber welch lucas fields little banks day walsh bowman schultz fowler brewer may holland newman pearson curtis douglas
   schneider joseph barrett hopkins barnett bates chambers caldwell beck lambert byrd craig lowe frazier powers neal leonard
   pratt barker mann hale moran dale kane tate pace gage shea bale hanna wade stanley bowen`,
-  // (the next most common in the US, after the first few hundred)
+  // (the next most common in the US, after the first few hundred. Round 25: Tran and Wong, common here too, are left out,
+  // being family names of peoples who write the family name first, never evidence of the order: familyFirstUnsure)
   `abbott acker adkins aldridge allison ambrose andrade ashby atkins atwood ayers babcock bader bagley baird baldwin ballard
   banner barber barlow barr barton bass battle baxter beard beasley benson bentley berger bernard best bird blackburn blackwell
   blair blake blankenship blevins bolton bond booker boone booth bowers boyer boyle bradford bradshaw brady brandt bray bridges
@@ -694,8 +790,8 @@ const SURNAMES = [
   pruitt quinn rankin ratliff reese reeves rhodes rich riddle roach robbins rocha rollins roman rosario roth rowe rowland
   rush sampson saunders savage sawyer schroeder sexton sharp shelton shepherd sheppard short skinner slater sloan small
   solomon sparks stafford stark steele stephenson stokes stout strickland summers sutton swanson sweeney talley tanner
-  terrell terry todd toro townsend tran travis tyler underwood vance vaughan vaughn velazquez vincent walls walter walton
-  ware waters watts weeks whitaker whitehead whitley wiggins wilcox wilder wiley wilkerson wilkins winters wise wolfe wong
+  terrell terry todd toro townsend travis tyler underwood vance vaughan vaughn velazquez vincent walls walter walton
+  ware waters watts weeks whitaker whitehead whitley wiggins wilcox wilder wiley wilkerson wilkins winters wise wolfe
   workman wyatt yates york zimmer zimmerman`,
   // (Hispanic and Latino, Portuguese and Brazilian, Filipino)
   `garcia rodriguez martinez hernandez lopez gonzalez perez sanchez ramirez torres flores rivera gomez diaz cruz reyes morales
@@ -728,6 +824,167 @@ const SURNAMES = [
   sahin celik yildiz aydin ozturk okafor okeke okonkwo eze nwosu adeyemi adebayo ogunleye balogun mensah asante owusu boateng
   appiah osei acheampong tesfaye bekele girma haile alemu kebede wolde diallo traore ndiaye diop toure kamara jean pierre
   joseph louis charles baptiste etienne francois laguerre desir saintil campbell brown`,
+  // (round 25, finding 1's rule: the lists grown from their own sources, written out by hand. More US, English, Scottish,
+  // Irish and Welsh; Lee, an English family name too; the countries that are common family names, England,
+  // Israel, Ireland, Wales, Portugal, Montenegro, Trinidad; and family names ending in -ne after a man's given name, never a
+  // Hungarian wife's name by her husband's, finding 4: Thorne, Rayne, Wynne)
+  `lee england israel ireland wales portugal montenegro trinidad starbuck thorne rayne raine wynne browne milne bourne ronne ames quill doe henry george anthony arthur francis abernathy ackerman adair adcock adler agnew aiken akin akins albright
+  alcorn alder aldrich alford allard allred alston amos anders andersen andrus appleby arden armour arnett ashford ashley
+  ashworth atherton atkinson avery aycock ayres bachman backus bagwell bales ballew bancroft barclay barfield barnhart
+  barnhill barksdale barlowe barnard barnum barron barrow barry bartholomew barnwell bassett batchelor bauman baumgartner
+  beale beals beane beaty beaver beckett beckman beckwith bedford beebe belcher belk bellamy belton benefield benjamin
+  bennet berg bergman berman bertram betts bevins bickford biggs billings bingham birch bivens blackman blackmon blackwood
+  blaine blakely blalock blanchard bland bledsoe bloom blount blue blum boatwright bobo boggs bolden boles bolin bolling
+  bonds borden boswell bourne bowden bowie bowles bowling bowser boyce boykin bracken bradberry bradbury bragg branch brand
+  brandon brannon branson brantley brashear braswell brewster brice bridgewater bright brinkley briscoe britt britton
+  broadus brody bronson brookins broome broussard browder browning broyles bruce brumfield bryson buckner buford bullard
+  bumgarner bundy bunting burdette burkett burkhart burleson burley burnham burr burrell burris burroughs burrows burt
+  bussey butcher byers bynum cabe cagle cahill callaway calloway calvert camp candler canty caraway carden cardwell carlisle
+  carlton carmack carrington carrol cartwright casey cassidy castle cates causey cavanaugh chaffin chalmers chamberlain
+  chambliss champion chancellor chapin chappell chase cheek cheney cherry chesser chester childress childs chisholm
+  christian christie christopher churchill clancy clapp clardy clarke claxton cleary clem clement clements clemmons clemons
+  clinton cloud coates coats coble cockrell cody coffman cogburn coggins coker colby coley colvin comer conklin connell
+  connelly connolly connor conyers coogan cooke cooley coomer corbin corcoran corley cornelius cornett cornish corwin
+  cottrell couch coulter council counts courtney covington cowart coy crabtree craddock craft crain cramer crandall crawley
+  creech crenshaw crews crisp crittenden crocker crockett cromer cromwell crook crouch crow crowder crowe crowell crowley
+  crum crump cullen culpepper culver currie cushman custer cutler dabney dailey daly dandridge danforth darden darling
+  daughtry davies dawkins deal deaton dees dehart delaney dellinger dempsey denham denney denning dennison denson denton
+  devine dewitt dick dickens dickinson dickson dill dinkins dobbins dobbs dobson dodd dodge dolan donahue donnelly dooley
+  doss dotson doty dougherty douglass dowd dowdy dowell downey downing draper drew driscoll driver drummond dubose duckett
+  duggan dukes dunaway dunbar dunham dunlap dunning durant durden dutton duvall dwyer dye dykes eagle earl early earnest
+  easley eason easter easton echols eddy edgar edmonds edmondson elder eldridge elkins ellington elliot ellison elmore elrod
+  ely emery epps erwin etheridge eubanks ewing ezell fagan faircloth fairley falk fannin farr farrar farris faulk fears
+  felton fenton ferrell finney fite fitzpatrick fletcher flood flora flowers fogle foley folsom forrest forsyth fortner
+  fortune foss fountain frady fraley franks freeland friend fulcher fulton funderburk furr gable gaddis gaddy gainey
+  galbraith gale gann gant garland garvey gaskins gatlin gay gibbons gibbs giddens gifford gilchrist giles gillespie gilley
+  gilliam gillis gilmore gilreath gladney gleason goad goddard godfrey godwin goff goforth golding goode goodrich goodson
+  gore gorman goss grace grady grainger greer gregg gresham grice grier griggs grimm grissom groves grubbs guest guinn gunn
+  gunter guthrie hackett hadley hagan hager haggard haley hallman halsey hamby hamer hamlin hammer hammock hammonds hampton
+  hand hankins hanks hanley hannon hardaway hardee harding hardison hardwick hargrove harkins harlan harley harlow
+  harrington hartley haskins hassell hatch hatfield hathaway hawley haywood head heard hearn heath heaton hedrick heller
+  helms hemphill hendricks henley hennessy herndon herring hewitt hickey hickman higgins high hightower hilliard hilton
+  hines hinson hitchcock hobson hogg holbrook holcomb holden holley holliday hollingsworth hollis holly holman honeycutt
+  hood hooker hooks hope horner hoskins hough houghton houser howe howland hubbard huddleston hudgins huggins hull hulsey
+  humphreys hunnicutt huntley hurd hutchins hutto hyatt inman ingle irby irvin irving isaacs isbell ivey ivy jacks jameson
+  jamison jarrell jarrett jeffcoat jefferies jeffers jeffries jernigan jessup jett jewell jobe jolly joiner joyner judd
+  justice justus kaiser kearney keaton keel keen keene kellogg kendall kenney kessler keyes kilgore killian kimball kimble
+  kincaid kinder kinney kinsey kirkland kirkpatrick kitchens kittrell knowles kyle lacey lackey ladd laird lamar lancaster
+  landers laney langford lanier lankford lanham larkin lassiter latham lauderdale lawler layton lea leake leblanc ledbetter
+  ledford lemon lemons lester lightfoot liles lilly lindley link linton lipscomb lively lloyd locke lockhart lockwood loftin
+  lomax london loper lord lott lovelace lovell lovett lowry loy luck lumpkin lunsford lusk lyle lyles lyman lynn lyon mabry
+  mackey madison magee mahaffey mahan maloney manley manning mansfield maples marcum marlow marlowe marr martindale mashburn
+  masters mathis mattingly mauldin maxey mayberry mayes mayfield mayhew mayo mcabee mcadams mcafee mcallister mcalpine
+  mccabe mccain mccallum mccarter mccartney mcclellan mcclendon mcclure mccollum mccord mccracken mccrary mccray mccurdy
+  mccutcheon mcdermott mcdonough mcdougal mcdowell mcelroy mcfadden mcfarland mcghee mcgill mcgovern mcgowan mcgrath mcgraw
+  mcgregor mchugh mcintyre mckenna mckenzie mckinley mcknight mcleod mcmanus mcmillan mcmillen mcmullen mcnair mcnally
+  mcneal mcneil mcneill mcqueen mcrae mcwilliams meade means mears medley meeks meredith merrill messer metcalf milam
+  millard millen milligan milner mims minor mixon moffett mohr monk montague moorman morehead moreland morrell morse morton
+  moseley mosley mott motley moultrie mount mowery moyer mullen mundy murdock musgrove myrick nall nance napier neely neff
+  nelms nesbitt nettles newberry newby newcomb newell newkirk newsome nicholson nix nixon noel nolen northcutt norwood
+  nowell nugent nunn nunnally oakes oakley odell ogden ogle oldham olsen omalley oneil oquinn orr osborn otis overby
+  overstreet overton owen owensby padgett page painter pannell pardue parham parish parks parnell parr parrish parrott
+  parsons partain partridge paulk peacock peebles pegram pendergrass pendleton penn penny pepper perdue person petty phelps
+  philips pickens pickett pike pilgrim pinckney pinkston pinson piper pitman pitts plummer poe poindexter polk pool posey
+  potts powe prather prescott presley prewitt prince pritchard pritchett proctor prosser puckett pugh pullen purcell purdy
+  purvis putnam quarles queen radford ragland ragsdale rainey raines ralston ramsey randall randolph ransom rasmussen
+  rawlings rawls rayburn raymond read reagan reaves redd redden redding redmond reece register renfro richey rickman ridley
+  rigsby rinehart ritchie ritter rivers robb roberson robinette robins rodgers roe roper rountree rouse rowan rowell roy
+  royal royster rucker rudd ruff russ rutherford rutledge ryals sadler sales salter sanborn sanderson sandlin sands sanford
+  sapp sasser satterfield saxon sayers scales scarborough schofield scroggins scruggs seals searcy sears seay segars self
+  sellers sessions settle sewell seymour shackelford shaffer shank shanks sharpe shaver shearer sheffield shelby shell
+  shelley shepard sheridan sherman sherrill shields shipley shipman shirley shoemaker shuler shumate sides sikes simms
+  simons singletary singleton sisk skaggs skelton slade slaughter smalley smallwood smart snead sneed snipes snow snowden
+  sommers sorrell southerland southern sowell spain spear spears speed speer spence spicer spikes spivey spradlin spratt
+  spring sprouse spruill stacy staley stallings stamey stamper stancil standley stanfield stanford stanton staples stapleton
+  starling starnes starr steadman stedman steed stegall sterling stevenson steward stiles stillwell stinson stoner storey
+  stovall strange stratton street stringer strong stroud stuart stubbs stuckey sturgeon sturgis styles suggs summerlin
+  sumner sumter sutherland swain swann sweat swift swinney sykes talbot tallman tapp tarver tatum teague temple templeton
+  thacker tharp thigpen thomason thornton thorpe thrasher threatt thurman thurmond tibbs tidwell tillery tilley tillman
+  timmons tindall tinsley tipton tolbert toler tolliver tomlinson toney tooley tracy trammell treadwell tremblay trent
+  trimble triplett trotter trout truitt tubbs tuck tuggle turnbull turney tuttle twitty tyner tyson upchurch upshaw upton
+  usher utley varner veal venable vernon vick vickers vines vinson waddell wadsworth waggoner waite wakefield walden waldron
+  wall waller walling walters warden warner warrick washburn watt waugh weathers weatherford webster welborn weldon welsh
+  wentworth westbrook weston whalen whaley wharton whatley wheat wheaton whitcomb whitehurst whitfield whitlock whitman
+  whitmore whitney whitt whittaker whitten whittington wicker wilburn wilkes wilkinson willard willey willingham willoughby
+  wills wimberly winchester windham wingate winn winslow winstead winston witt womack woodall woodard woodruff woodson
+  woodward woody wooten word worley worrell worthington worthy wray wren wylie wynn yancey yarborough yarbrough yeager
+  youngblood yount`,
+  // (more Hispanic and Latino, Portuguese and Brazilian, Filipino)
+  `abreu acuna aguirre alarcon alcala alfaro almanza almonte alonso altamirano amador anaya angulo aranda araya arce arenas
+  arevalo arias arredondo arriaga arroyo avalos baca balderas banuelos barba barragan barraza barrera barrientos barrios
+  becerra benavides benitez bermudez bernal blanco bravo briones bustamante bustos caballero cabello cadena calvo camacho
+  camarillo canales candelaria cano cantu carbajal cardenas cardona carmona carranza carrasco casas casillas castellanos
+  cazares ceballos cedillo celis cerda chacon chapa chavarria coronado corral corrales correa cortes cuellar cuevas curiel
+  davila dejesus delacruz delarosa delatorre delossantos duarte enriquez escalante escobedo esparza espinosa esquivel
+  fajardo felix fierro frias gallardo gamboa garay garza gaytan godinez granados guajardo guardado guerra guevara guillen
+  haro hidalgo hinojosa huerta hurtado iglesias jaramillo jasso leal ledesma leyva limon loera longoria lugo macias madrid
+  madrigal magana mancilla manzano marin marrero marroquin mata mateo matos medrano melendez mena meraz meza miramontes
+  mireles mondragon montalvo montanez montano montemayor montenegro muniz murillo najera naranjo narvaez navarrete nieto
+  nieves noriega ocampo ojeda olivares olivas olivo olvera ornelas orta osorio otero padron palacios palomino pantoja
+  paredes parra pastrana paz pedraza peralta perales perea pichardo pizarro plascencia polanco ponce portillo puente quezada
+  quintana quintanilla quintero quiroz rangel razo renteria reyna rico rincon rivas rodarte roldan rolon romo rosado rosas
+  ruelas saavedra saenz salas salcedo salgado samaniego sanabria santana santillan sauceda saucedo segovia segura sepulveda
+  serna solano solorzano soria sotelo suarez tafoya tamayo tapia tellez tijerina toledo tovar trejo trevino ulloa urbina
+  uribe urias valadez valdivia valle vallejo valverde vanegas varela vela velasco venegas vera verdugo vergara vidal viera
+  villa villagomez villalobos villasenor villegas zapata zaragoza zarate zavala zepeda abrantes alves amaral antunes azevedo
+  barros bastos batista bezerra borges braga brandao cabral caldeira carneiro castilho coelho cordeiro coutinho cunha dantas
+  esteves falcao farias figueiredo freitas furtado gaspar goulart guimaraes lacerda lemos lopes macedo magalhaes maia
+  marques martins meireles melo moraes morais moreira mota nogueira novaes nunes paiva peixoto pimentel pinheiro queiroz
+  rabelo reis resende rezende sampaio seixas siqueira soares tavares valente vasconcelos veloso viana xavier abad abalos
+  agbayani alcantara andaya arcilla bacani balagtas belmonte bernardo buenaventura capistrano catapang concepcion custodio
+  dacanay dalisay delmundo delosreyes dimaculangan domingo esguerra estrella evangelista francisco galang gatchalian gonzaga
+  ilagan javier lacson lagman laurel legaspi macaraeg magbanua magsaysay malabanan mangubat marcos mariano nepomuceno
+  pangilinan panganiban pascual quiambao salvador samson sarmiento soriano`,
+  // (more European: German, Jewish, Dutch, Scandinavian, Italian, French, Polish, Czech, Russian, Ukrainian, Greek,
+  // Armenian)
+  `albrecht bachmann barth baumann bergmann bischoff bohm brenner busch dietrich dorn ebert eckert engel ernst franke
+  friedrich fuchs gerber graf gunther haas hauser heinrich herrmann hesse hofmann kirchner konig kraft kraus kuhn lorenz
+  ludwig maier meier moller otto pohl sauer schaefer schmid scholz schreiber schroder schubert schulte schumacher schuster
+  schwab seidel sommer steiner thiel vogel vogt wolff einstein goldstein bernstein rubinstein epstein feinstein finkelstein
+  lowenstein rothstein silverstein weinstein wasserman silverman goldman lieberman schulman altman fishman glickman kleinman
+  lehman perlman rosenberg weinberg steinberg ginsberg rosenthal blumenthal lowenthal lieber levin levitt lerner kahn
+  rosenfeld sachs segal siegel singer sternberg strauss weinberger wexler bosch brouwer dijkstra hendriks jansen koster
+  postma timmermans vermeulen wouters vandam vanderberg vandijk andersson berglund bergstrom carlsson dahl engstrom eriksson
+  forsberg gustafsson hagen hakansson halvorsen haugen holm isaksen jakobsen johansen johansson karlsson larsen larsson
+  lindberg lindgren lindqvist lindstrom lund lundberg lundgren magnusson nielsen nilsen nilsson nordstrom pedersen persson
+  petersen sandberg sorensen strand sundberg svensson thorsen wahl amato barone basile bellini benedetti bernardi bianco
+  bonanno caputo carbone cardinale castelli cattaneo conte damico deangelis derosa desimone falcone farina ferraro ferri
+  fiore gatti genovese grasso lombardo lucchese macchi marchetti mazza messina monti morelli napoli negri palumbo parisi
+  pellegrini piazza pirelli porcelli puccini rizzi rossetti sala salerno sanna sartori silvestri sorrentino testa tedesco
+  valenti volpe zanetti arnaud aubert benoit bertrand boucher bouchard bourgeois brun caron carpentier colin denis dufour
+  dumas dupuis fabre fleury gagnon gauthier gerard gillet guillaume joly lacroix leclerc lefevre legrand lemaire leroux
+  marchand martel masson mathieu mercier meunier michaud morel olivier paris perrin petit picard poirier renard renaud rey
+  richard robert roche roussel roux simon thibault adamczyk baran bielski borkowski czarnecki dudek gorski grabowski
+  jablonski jasinski kaczmarek kalinowski kowalewski kozak krol kubiak majewski malinowski marciniak michalski nowakowski
+  olszewski pawlak pawlowski piotrowski sadowski sikora sobczak stepien szewczyk tomaszewski urbanski walczak wieczorek wilk
+  wojciechowski wrobel wysocki zajac zawadzki dvorak horak kovar kral kucera marek novak novotny pokorny prochazka svoboda
+  vesely abramov alekseev andreev antonov baranov belov bogdanov borisov chernov dmitriev egorov fedorov frolov gusev
+  ignatov ilyin kiselev komarov korolev kovalev krylov kuzmin lebedev makarov medvedev mikhailov nikitin orlov osipov
+  pavlenko romanov semenov sergeev sidorov solovyov stepanov tarasov titov vasiliev vinogradov vorobyov yakovlev zaitsev
+  zakharov boyko hrytsenko kovalchuk kravets lysenko marchenko melnyk moroz oliynyk polishchuk savchenko shevchuk tkachenko
+  tkachuk yurchenko antonopoulos christodoulou dimitriou georgiadis karagiannis konstantinou makris nikolaidis oikonomou
+  pappas papadakis papageorgiou stavropoulos vlahos abrahamian avetisyan babayan grigoryan hakobyan harutyunyan karapetyan
+  khachatryan manukyan mkrtchyan petrosyan sargsyan`,
+  // (more South Asian, Pakistani, Arabic, Persian, Turkish, Nigerian, Ghanaian, Ethiopian, Kenyan, Haitian, Jamaican)
+  `agarwal ahuja arora bajaj bansal bhatia bhatt chakraborty chandra chauhan chawla chopra dutta dubey gandhi garg goel goyal
+  iyengar jain jha kapoor kaur khanna kohli krishnan kulkarni malhotra mishra mittal modi naidu narayan pandey pandit parekh
+  prasad rajan ramachandran raman saxena sethi shetty shukla sinha srinivasan subramanian tiwari trivedi varma verma yadav
+  abbasi akbar alam ali anwar ashraf aziz baig bashir butt chaudhry farooq ghani hameed haq hashmi iqbal jamil javed kazmi
+  mahmood masood mughal nawaz qadir rashid raza riaz saeed shafi sharif siddique syed tariq usman zaidi abdullah abdelrahman
+  alhassan amin aoun asfour awad azar bakr barakat bitar daher farah fares ghanem habib hadid hakim halabi hamad hamdi
+  hassan hussein issa jaber jabbour kassem khalil khalifa kouri maalouf maroun masri mouawad nassar nasr nassif qasim rizk
+  sabbagh saad sabra said salem salib sayegh shaheen shammas suleiman tannous wakim yassin younes zayed afshar alavi amini
+  bahrami ebrahimi esfahani farahani ghasemi hashemi jafari kazemi khani mousavi moradi nouri rezaei sadeghi salehi shirazi
+  tehrani zamani acar arslan aslan aksoy bulut cakir dogan erdogan guler gunes kara karaca kilic koc korkmaz kurt ozdemir
+  ozkan polat simsek tekin tas turan yavuz yildirim abiodun adeleke adeniyi adewale adeyemo afolabi agbaje ajayi akande
+  akinola akinyemi alade babatunde bello chukwu egwu ekwueme emenike ibekwe ihejirika ilori iwu nnamdi nwachukwu nwankwo obi
+  odukoya ogbonna ogunbiyi ojo okoro okonjo okoye oladipo olawale oyelaran addo adjei agyeman amoah ampofo ansah antwi
+  asamoah boakye danquah darko donkor frimpong gyamfi kuffour kyei nkrumah ofori oppong quaye sarpong tetteh abebe alemayehu
+  assefa ayele berhane demissie desta gebre gebremariam getachew hailu kassa mekonnen mengistu negash tadesse tefera tekle
+  wondimu worku yohannes kamau kariuki kimani kiplagat koech maina mutua mwangi njoroge njuguna ochieng odhiambo omondi
+  onyango otieno wafula wanjiru alexis augustin bastien beauvoir belizaire bellegarde cadet celestin charlemagne desrosiers
+  dorvil florestal jeanbaptiste jeanlouis lafontant lamothe louissaint metellus pierrelouis saintfleur toussaint valcourt
+  brissett dacosta gayle hylton mcfarlane nembhard sinclair walcott whyte`,
 ];
 
 // Given names of Hungary, where the family name comes first (round 21): a full name whose last word is one ("Simon
@@ -907,8 +1164,11 @@ const ANY_HYPHEN = /[-\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/gu;
 // lists and as typed alike: Wade-Giles writes one in "Ch'un-hui" that people leave out; "O'Neil" and "Oneil", "De'Andre"
 // and "DeAndre" are one name each
 const ANY_APOSTROPHE = /['`´ʹʻʼʽʾʿˈ՚׳᾿`‘’‛′‵Ꞌꞌ＇]/gu;
-export const nameKey = (w) => String(w).replace(ANY_APOSTROPHE, '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
-  .replace(/[øłđðæœßþıħŋ]/g, (c) => PLAIN_LETTERS[c]).replace(ANY_APOSTROPHE, '').replace(ANY_HYPHEN, '');
+// (round 25: a word of plain a to z alone is its own key in small letters, as the rest would make it, at once: the lists'
+// thousands of words are keyed when a greeting first asks, inside its time)
+const PLAIN_AZ = /^[A-Za-z]+$/;
+export const nameKey = (w) => (PLAIN_AZ.test(w) ? w.toLowerCase() : String(w).replace(ANY_APOSTROPHE, '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+  .replace(/[øłđðæœßþıħŋ]/g, (c) => PLAIN_LETTERS[c]).replace(ANY_APOSTROPHE, '').replace(ANY_HYPHEN, ''));
 // (the same with its hyphens and apostrophes kept: which of the list's spellings is the one typed, "Jo-Ann" or "Joann",
 // "De'Andre" or "DeAndre")
 const shapeKey = (w) => String(w).replace(ANY_APOSTROPHE, "'").normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase().replace(ANY_APOSTROPHE, "'").replace(ANY_HYPHEN, '-');
@@ -923,6 +1183,7 @@ let TITLED = null;
 let BEFORE = null;
 let GIVEN_OF = null;
 let FAMILY_ANY = null;
+let FAMILY_OF = null;
 let SHAPES = null;
 let SURNAME = null;
 let HU = null;
@@ -949,12 +1210,20 @@ const chinese = () => {
     for (let i = 1; i < k.length; i++) if (syl.py.has(k.slice(0, i)) && syl.py.has(k.slice(i))) return wgSyllable(k.slice(0, i)) + wgSyllable(k.slice(i));
     return '';
   };
-  FORMS = [...new Set(words(PINYIN_FAMILY))].map((py) => [py, wg(py), hk.get(nameKey(py)) || []]);
+  // (round 25: and Singapore's and Malaysia's, spelt by rule from each reading, STRAITS_OF)
+  const straits = new Map();
+  for (const e of words(STRAITS_OF)) {
+    const [py, readings] = e.split(':');
+    const all = straits.get(nameKey(py)) || new Set();
+    for (const r of readings.split(/[/,]/).filter(Boolean)) for (const f of straitsSpellings(r)) all.add(f.charAt(0).toUpperCase() + f.slice(1));
+    straits.set(nameKey(py), all);
+  }
+  FORMS = [...new Set(words(PINYIN_FAMILY))].map((py) => [py, wg(py), hk.get(nameKey(py)) || [], [...(straits.get(nameKey(py)) || [])]]);
   return FORMS;
 };
 // (a people's family names, as FAMILY_NAMES_OF writes them; the Chinese with pinyin's Wade-Giles and Hong Kong forms)
 const familiesOf = (k) => (k ? words(FAMILY_NAMES_OF[k][1])
-  : [...chinese().flatMap(([py, wg, hk]) => [py, ...(wg ? [wg] : []), ...hk]), ...words(FAMILY_NAMES_OF[0][1])]);
+  : [...chinese().flatMap(([py, wg, hk, st]) => [py, ...(wg ? [wg] : []), ...hk, ...st]), ...words(FAMILY_NAMES_OF[0][1])]);
 // The syllables, as nameKey keys them: pinyin's, Wade-Giles's (made from pinyin's), Hong Kong's, Korean names', Hepburn's morae
 let SYL = null;
 const syllables = () => {
@@ -973,7 +1242,14 @@ const syllables = () => {
   }
   const hok = new Set(words(HOKKIEN_ALONE));
   for (const i of words(HOKKIEN_INITIALS)) for (const f of words(HOKKIEN_FINALS)) hok.add(i + f);
-  SYL = { py, wg: new Set([...py].map(wgSyllable)), hk, hok, ko: new Set(words(KOREAN_SYLLABLES)), ja };
+  // (round 25: Korean's every syllable by its romanizations' rules, an initial, a vowel and a final as the rules write them
+  // (koreanParts), with the written list: asked of a syllable, never written out, so it's made at once)
+  const hand = new Set(words(KOREAN_SYLLABLES));
+  const { initials, vowels, finals } = koreanParts();
+  const alt = (xs) => [...xs].filter(Boolean).sort((a, b) => b.length - a.length).join('|');
+  const re = new RegExp(`^(?:${alt(initials)})?(?:${alt(vowels)})(?:${alt(finals)})?$`);
+  const ko = { has: (x) => hand.has(x) || re.test(x) };
+  SYL = { py, wg: new Set([...py].map(wgSyllable)), hk, hok, ko, ja };
   return SYL;
 };
 // (two syllables of one set: written apart by a hyphen, or joined, any place the word splits; `joined` false: only apart)
@@ -1040,9 +1316,11 @@ const build = () => {
   BEFORE = new Map();
   GIVEN_OF = FAMILY_NAMES_OF.map(([people]) => new Set(words(people).map(nameKey)));
   FAMILY_ANY = new Set();
+  FAMILY_OF = FAMILY_NAMES_OF.map(() => new Set());
   FAMILY_NAMES_OF.forEach((_, k) => {
     for (const f of new Set(familiesOf(k).map(nameKey))) {
       FAMILY_ANY.add(f);
+      FAMILY_OF[k].add(f);
       if (!GIVEN.has(f) || FIRST.has(f)) continue;
       BEFORE.set(f, (BEFORE.get(f) || new Set()).add(k));
     }
@@ -1147,8 +1425,94 @@ export function familyFirstBefore(a, b) {
   const parts = syllablesTyped(b);
   return parts.length <= 2 && [...peoples].some((p) => !!SHAPES[p]?.(parts));
 }
+/**
+ * Round 25 (findings 1 to 3, the lead's rule, the root: "Ann Hye-kyo", "Sam Thida" and "Soo Wei Ming" were greeted by
+ * their family name, the given names missing from the lists and from the shapes): after a family name some people write
+ * first (any of the tables: Chinese in every romanization, Japanese, Korean, Vietnamese, Khmer, Hmong, Hungarian), the
+ * first word is greeted only on positive evidence that the name is written given name first here, so the given-name
+ * lists and the shapes are never what stands between a family name and a greeting. The evidence: the last word is a
+ * family name of a people who write the given name first (SURNAMES, or two of them joined by a hyphen, "Smith-Jones"),
+ * no word after the first is a given name of that people's own (or of Hungary's, or a married name by a husband's), and
+ * any word between is a given name on the lists, an initial or another such family name ("Sam David Johnson", "Juan
+ * Lopez Garcia"); or a family name in parts follows, its first word a particle that's none of that people's own syllables
+ * or family names ("Jan de Vries", "Juan Dela Cruz"). Anything else, a word the lists don't know or one hyphenated as
+ * those peoples write a given name ("Hye-kyo", "Joong-ki"), gets no name: a missed name is fine. → true: no name
+ */
+export function familyFirstUnsure(ws, { pair = false } = {}) {
+  if (!BEFORE) build();
+  if (!ws || ws.length < 2) return false;
+  const peoples = [...(BEFORE.get(nameKey(ws[0])) || [])];
+  const hu = hungarianFamily(ws[0]);
+  if (!peoples.length && !hu) return false;
+  const rest = ws.slice(1);
+  // Round 26 (finding 1: "Ann Da Young", "Ann Bo Young", "Seung Da Bin" were greeted by the Korean family name, Da-young,
+  // Bo-young and Da-bin written as two words): a given name written in parts. After a family name of a people whose given
+  // names are made of syllables (inParts, below), the two words after it, each one syllable of that people's given names
+  // and the two together their given name's shape, are their given name written in parts: never evidence for a greeting,
+  // whatever other list the last is on ("Young" is on SURNAMES too), and read before the pair, the particle reading and
+  // the middle-word check below, so none of them takes either word ("Ann Da Young Smith" gets no name either)
+  if (rest.length >= 2 && peoples.some((p) => inParts(p, rest[0], rest[1]))) return true;
+  // (two given names people go by together, then a family name: that family name the evidence, "Thanh Huong Ames")
+  if (pair) return !givenFirstFamily(ws[ws.length - 1]);
+  const cased = /\p{Lu}/u.test(ws.join('')) && /\p{Ll}/u.test(ws.join(''));
+  const theirs = (w) => peoples.some((p) => GIVEN_OF[p].has(nameKey(w))) || (hu && (givenFamilyFirst(w) || marriedName(w)));
+  if (rest.some(theirs)) return true;
+  // (a word of that people's own: a given name, a family name, or one of their syllables or a given name's shape; round
+  // 26: a single syllable of their given names too, so the particle reading never takes "Da" before "Young", "Jan de Vries"
+  // being read as before, Vries being no syllable of anyone's)
+  const own = (w) => peoples.some((p) => GIVEN_OF[p].has(nameKey(w)) || FAMILY_OF[p].has(nameKey(w)) || !!SHAPES[p]?.(syllablesTyped(w)) || oneSyllable(p, w));
+  // (a particle starting a family name in parts: never one of that people's family names, nor Vietnamese Văn or Thị; one
+  // of their syllables only before a word that's none of theirs, "Jan de Vries" but never "Kai De Hua")
+  const particle = (w, next) => {
+    const k = nameKey(w);
+    // (Văn and Thị, the middle words of most Vietnamese names: "van" a particle only as Dutch writes it, in small letters
+    // in a name with capitals, "Jan van Dijk"; never "Sam Van An")
+    if (k === 'thi' || (k === 'van' && !(cased && w === 'van'))) return false;
+    if (!PARTICLE_KEY.test(k) || peoples.some((p) => FAMILY_OF[p].has(k))) return false;
+    return !peoples.some((p) => ownSyllable(p, k)) || (!!next && !own(next));
+  };
+  if (rest.length >= 2 && particle(rest[0], rest[1])) return false;
+  // (two given names people go by together, "Juan Carlos": the first is a given name, written first)
+  if (rest.length === 1 && givenPair(ws[0], rest[0])) return false;
+  if (!givenFirstFamily(rest[rest.length - 1])) return true;
+  return !rest.slice(0, -1).every((w, i) => /^\p{L}\.?$/u.test(w) || particle(w, rest[i + 1]) || PARTICLE_KEY.test(nameKey(w)) && !peoples.some((p) => FAMILY_OF[p].has(nameKey(w)))
+    || !!givenName(w) || givenFirstFamily(w));
+}
+/**
+ * Round 26 (finding 1): a family name some people write first, then their given name written in parts ("Ann Da Young",
+ * "Ann Young Ra": Da-young and Young-ra of the Ann family). The greeting asks it of the name as typed too, before letters
+ * are set apart, since a syllable can be a degree's letters as well ("Ra", "Ma", "Do", ALSO_A_NAME's)
+ */
+export function givenInParts(ws) {
+  if (!BEFORE) build();
+  if (!ws || ws.length < 3) return false;
+  return [...(BEFORE.get(nameKey(ws[0])) || [])].some((p) => inParts(p, ws[1], ws[2]));
+}
+// (a family name of a people who write the given name first: SURNAMES', or two of them joined by a hyphen)
+const givenFirstFamily = (w) => {
+  if (!SURNAME) SURNAME = new Set(SURNAMES.flatMap(words).map(nameKey));
+  const parts = String(w).split(ANY_HYPHEN).map(nameKey).filter(Boolean);
+  return parts.length >= 1 && parts.length <= 2 && parts.every((k) => SURNAME.has(k));
+};
+// (a word that's one of a people's own syllables, as their romanizations write them: Chinese, Japanese, Korean; and
+// Vietnamese Văn, the middle word of most men's names, the Vietnamese having no syllables here)
+const ownSyllable = (p, k) => {
+  const s = syllables();
+  return p === 0 ? [s.py, s.wg, s.hk, s.hok].some((x) => x.has(k)) : p === 1 ? s.ja.has(k) : p === 2 ? s.ko.has(k) : p === 3 && k === 'van';
+};
+// Round 26 (finding 1): the peoples whose given names are written in syllables that may be typed apart, by their place in
+// FAMILY_NAMES_OF: Korean ("Da Young" for Da-young), and Chinese in each of its romanizations ("Jin Long", "Mei Ling").
+// Japanese given names aren't written in parts (a mora is no name's part people type apart), nor the others', which have
+// no syllable table here
+const SYLLABLE_PEOPLES = [2, 0];
+// (one word, typed without a hyphen, that's one syllable of that people's given names)
+const oneSyllable = (p, w) => SYLLABLE_PEOPLES.includes(p) && syllablesTyped(w).length === 1 && ownSyllable(p, nameKey(w));
+// (two words, each one syllable of that people's given names, the two together their given name's shape: written in parts)
+const inParts = (p, a, b) => oneSyllable(p, a) && oneSyllable(p, b) && !!SHAPES[p]?.([nameKey(a), nameKey(b)]);
 /** (for the tests: each Chinese family name in pinyin, its Wade-Giles form made from it, its Hong Kong forms) */
-export function chineseForms() { return chinese().map(([py, wg, hk]) => ({ pinyin: py, wadeGiles: wg, hongKong: [...hk] })); }
+export function chineseForms() { return chinese().map(([py, wg, hk, st]) => ({ pinyin: py, wadeGiles: wg, hongKong: [...hk], straits: [...st] })); }
+/** (for the tests: the ways Singapore and Malaysia spell a reading, round 25) */
+export const straitsSpelt = (r) => straitsSpellings(nameKey(r));
 /** (for the tests: whether a word has a people's given-name shape, "chinese", "japanese" or "korean") */
 export function givenShape(people, w) {
   if (!BEFORE) build();
@@ -1168,8 +1532,9 @@ export function givenFamilyFirst(w) {
 const hungarianOwn = (w) => HU.has(nameKey(w)) || HU_ACC.has(accented(w));
 /**
  * A married Hungarian woman's name by her husband's (round 23, finding 3): his given name and "-né", "Zoltánné" (Mrs. Zoltán
- * ...), "Péterné", "Lászlóné". Without the accent only after one of Hungary's own men's names, by the spelling-neutral
- * key (round 24: "Zoltanne", "Péterne", "Peterne"), never "Jeanne", "Joanne" or "Marianne"
+ * ...), "Péterné", "Lászlóné". Without the accent after one of Hungary's own men's names, by the spelling-neutral key (round
+ * 24: "Zoltanne", "Péterne", "Peterne"), and round 25 after any man's given name ("Martinne"), never "Jeanne", "Joanne",
+ * "Marianne" or "Thorne"
  */
 export function marriedName(w) {
   if (!HU) build();
@@ -1180,8 +1545,12 @@ export function marriedName(w) {
   // now any of Hungary's own men's names, accented ones too, by the spelling-neutral key, "Péterne", "Peterne", "Gáborne".
   // Never a woman's name, a husband's being the name it's made from: "Juliane", "Mariane" are names of their own)
   if (!a.endsWith('ne')) return false;
+  // (round 25, finding 4, round 24's rule: after any man's given name, Hungary's own or one Hungarians share with everyone,
+  // "Martinne", "Albertne", "Viktorne", "Norbertne", "Ádámne", by the spelling-neutral key; never a word that's a given name
+  // itself, "Joanne", "Jeanne", "Lynne", nor a family name of a people who write it last, "Thorne", "Browne", "Payne", "Leone")
+  if (GIVEN.has(nameKey(a)) || givenFirstFamily(a)) return false;
   const base = nameKey(a.slice(0, -2));
-  return (HU.has(base) || HU_ACC_KEY.has(base)) && !WOMAN.has(base);
+  return (HU.has(base) || HU_ACC_KEY.has(base) || HU_SHARED.has(base) || GIVEN.has(base)) && !WOMAN.has(base);
 }
 /** One of Hungary's family names that's a given name too, as typed ("Simon", "Albert", "Ádám", "Balazs"; never "Adam") */
 export function hungarianFamily(w) {
@@ -1200,6 +1569,13 @@ export function hungarianOrder(ws) {
   const rest = ws.slice(1);
   return rest.some((w) => hungarianOwn(w) || marriedName(w)) || (hungarianFamily(ws[0]) && rest.some(givenFamilyFirst));
 }
+// (how many Korean syllables the rules and the written list make, for the tests and the report)
+const koreanCount = () => {
+  const { initials, vowels, finals } = koreanParts();
+  const all = new Set(words(KOREAN_SYLLABLES));
+  for (const i of initials) for (const v of vowels) for (const f of finals) all.add(i + v + f);
+  return all.size;
+};
 /** How many names the lists hold (for the tests and the report) */
 export function listSizes() {
   if (!GIVEN) build();
@@ -1209,7 +1585,7 @@ export function listSizes() {
     hungarianOwn: HU.size + HU_ACC.size, hungarianShared: HU_SHARED.size, hungarianFamily: words(HUNGARIAN_FAMILY).length,
     chinese: keys(CHINESE), japanese: keys(JAPANESE), korean: keys(KOREAN), vietnamese: keys(VIETNAMESE), khmer: keys(KHMER), hmong: keys(HMONG),
     // (round 24: the syllables the shapes are made of, and the Chinese family names with their made forms)
-    pinyin: syllables().py.size, wadeGiles: syllables().wg.size, hongKong: syllables().hk.size, koreanSyllables: syllables().ko.size, morae: syllables().ja.size, hokkien: syllables().hok.size,
+    pinyin: syllables().py.size, wadeGiles: syllables().wg.size, hongKong: syllables().hk.size, koreanSyllables: koreanCount(), morae: syllables().ja.size, hokkien: syllables().hok.size,
     chineseFamily: new Set(familiesOf(0).map(nameKey)).size };
 }
 /** (for the tests: every name rounds 21 to 23's lists mark, as written, so each can be checked to be a given name on the lists) */

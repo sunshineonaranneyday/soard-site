@@ -23,20 +23,31 @@
  * nothing typed into an agenda can turn into markup.
  */
 
-import { meetingName, longDate, timeRange, agendaItems, sectionPlan, clock, quorumFor, nextMeeting, isDate, isFilled, presentersOf, namesText } from './board-shared.js';
+import { meetingName, longDate, timeRange, agendaItems, sectionPlan, clock, quorumOf, nextMeeting, isDate, isFilled, presentersOf, namesText } from './board-shared.js';
+
+/**
+ * The meeting after this one, as the template names it: { name, when } ("Q1 2027 Board Meeting", "Thursday, March 4,
+ * 2027, 8:00 AM"), or null. `meetings`: Board's meetings as they are now. Typed minutes keep the one their send named
+ * (../../functions/api/_board-notes.js factsNow), so a meeting moved later never changes what their file says
+ */
+export function nextLine(m, meetings = []) {
+  const next = nextMeeting((meetings || []).filter((x) => x.id !== m.id && !x.practice && !x.notBoard && isDate(x.date) && x.date > (m.date || '')), m.date || undefined);
+  return next ? { name: meetingName(next), when: [longDate(next.date), next.start ? clock(next.start) : ''].filter(Boolean).join(', ') } : null;
+}
 
 /**
  * What the template holds, for both ways of having it: the meeting, the roll (board, then staff), the quorum, each
  * part with its planned time and its items, and the next meeting. `meetings`: Board's meetings (for the next one);
- * `quorum`: Settings' number, when the bylaws set one; `people` [{ slug, name }]: who presents an item picked from
- * People (its `who`), by name.
+ * `next`: the next meeting as the minutes state it ({ name, when } or null: nextLine), in its place; `quorum`: Settings'
+ * number, when the bylaws set one; `quorumLost`: the board's settings couldn't be read just now, so the quorum isn't
+ * said (../board-shared.js quorumOf, as the board page and Print say it); `people` [{ slug, name }]: who presents an
+ * item picked from People (its `who`), by name.
  */
-export function minutesOutline(m, { meetings = [], quorum = 0, people = [] } = {}) {
+export function minutesOutline(m, { meetings = [], next, quorum = 0, quorumLost = false, people = [] } = {}) {
   // Each item numbered and named the way the board page and the screen do (a live list with no title by what it shows)
   const listed = new Map(agendaItems(m).map((x) => [x.id, x]));
   const plan = sectionPlan(m);
   const roll = [...m.attendance.filter((p) => p.kind === 'board'), ...m.attendance.filter((p) => p.kind === 'staff')].map((p) => ({ key: p.key, slug: p.slug || '', name: p.name, kind: p.kind, status: p.status || '' }));
-  const next = nextMeeting((meetings || []).filter((x) => x.id !== m.id && !x.practice && !x.notBoard && isDate(x.date) && x.date > (m.date || '')), m.date || undefined);
   return {
     name: meetingName(m),
     date: isDate(m.date) ? longDate(m.date) : '',
@@ -44,7 +55,9 @@ export function minutesOutline(m, { meetings = [], quorum = 0, people = [] } = {
     place: [m.location, m.address].filter(Boolean).join(', '),
     roll,
     board: roll.filter((p) => p.kind === 'board').length,
-    quorum: quorumFor(m, quorum),
+    // (null with the settings not read: never a majority guessed, ../board-shared.js quorumOf)
+    quorum: quorumOf(m, { quorum, lost: quorumLost }).need,
+    quorumUnsaid: quorumOf(m, { quorum, lost: quorumLost }).unsaid,
     parts: m.sections.filter((s) => s.title || s.items.some(isFilled)).map((s) => {
       const t = plan.get(s.id);
       return {
@@ -63,7 +76,7 @@ export function minutesOutline(m, { meetings = [], quorum = 0, people = [] } = {
         })),
       };
     }),
-    next: next ? { name: meetingName(next), when: [longDate(next.date), next.start ? clock(next.start) : ''].filter(Boolean).join(', ') } : null,
+    next: next === undefined ? nextLine(m, meetings) : next?.name ? { name: String(next.name), when: String(next.when || '') } : null,
   };
 }
 
@@ -122,7 +135,7 @@ function documentXml(o, filled = null) {
   body.push(para(run('Who was there'), { style: 'Head' }));
   body.push(rollTable(o.roll, !!filled));
   body.push(para(`${run('Guests: ', { b: true })}${run((filled?.guests || []).join(', '))}`, { style: 'Gap' }));
-  if (o.board) body.push(para(run(`Quorum: ${o.quorum} of ${o.board} board members, here or on video.`, { color: MUTED }), { style: 'Fact' }));
+  if (o.board) body.push(para(run(o.quorum ? `Quorum: ${o.quorum} of ${o.board} board members, here or on video.` : o.quorumUnsaid, { color: MUTED }), { style: 'Fact' }));
   // The agenda: each part in capitals (how the reader knows a part from an item), each item under it, a bullet to type on
   for (const part of o.parts) {
     body.push(para(run(part.title.toUpperCase()), { style: 'Part', level: 0 }));
@@ -355,7 +368,7 @@ export async function printMinutesTemplate(m, opts = {}) {
   roll.append(thead, tbody);
   root.append(roll);
   root.append(blank('Guests', 'mt-guests'));
-  if (o.board) root.append(el('p', 'mt-quorum', `Quorum: ${o.quorum} of ${o.board} board members, here or on video.`));
+  if (o.board) root.append(el('p', 'mt-quorum', o.quorum ? `Quorum: ${o.quorum} of ${o.board} board members, here or on video.` : o.quorumUnsaid));
 
   // The agenda, each item with room to write
   o.parts.forEach((part, pi) => {

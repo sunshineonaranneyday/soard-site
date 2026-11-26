@@ -12,6 +12,7 @@ import { h, htm, useState, useRef, useEffect } from '../vendor.js';
 import { minutesIn, meetingName } from '../board-shared.js';
 import { More, dayText } from './parts.js';
 import { noteLines } from '../board-minutes-template.js';
+import { failed, unreadWords } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -133,8 +134,9 @@ function Box({ m, ctx, target, was, label, kind, onClose, onSent, kept, shut }) 
       return;
     }
     await load({ keep: true });
-    // (the email about it waits for People when it couldn't be read: said, never as gone)
-    say(`Sent. ${secretary ? `${secretary.name.split(/\s+/)[0]} will see it.` : 'SOARD will see it.'}${j.later ? ` ${j.later}` : ''}`);
+    // (the email about it waits for People when it couldn't be read: said, never as gone; their own waiting one on the
+    // same words replaced by this one, the answer says so, and so does the page: Board QA round 14)
+    say(`Sent. ${secretary ? `${secretary.name.split(/\s+/)[0]} will see it.` : 'SOARD will see it.'}${j.replaced ? ` This replaced your waiting correction on ${j.where || 'these words'}.` : ''}${j.later ? ` ${j.later}` : ''}`);
     onSent(j.correction?.id);
   };
   const useNew = () => { setRead(was); setText(was); requestAnimationFrame(() => { box.current?.focus({ preventScroll: true }); grow(); }); };
@@ -240,6 +242,10 @@ export function Correct({ m, ctx, Icon, target, was = '', label = 'What needs co
   const decider = !readOnly && (d.me?.seat === 'secretary' || !!data.me.admin) && correctable(m);
   // (their own correction on these words is already waiting: changing it is taking it back and saying it again)
   const mineWaiting = kind === 'words' && list.some((c) => c.mine && c.state === 'waiting');
+  // The corrections not read just now: whether one of theirs is waiting here isn't known, so a new one could replace it
+  // unseen. The press waits in place, saying why, never offered from an empty list (Board QA round 14: Sam's waiting
+  // correction on Roll call was replaced by one he typed while the list couldn't load, and nothing said so)
+  const lost = failed(data, 'corrections');
   if (!list.length && !open && (shut || !offer)) return null;
   const toOpener = () => requestAnimationFrame(() => opener.current?.focus({ preventScroll: true }));
   const close = () => { setOpen(false); toOpener(); };
@@ -247,7 +253,7 @@ export function Correct({ m, ctx, Icon, target, was = '', label = 'What needs co
   return html`<div class="mfix bp-noprint">
     ${list.length ? html`<div class="mfix-list">${list.map((c) => html`<${Row} key=${c.id} c=${c} m=${m} ctx=${ctx} Icon=${Icon} decider=${decider} onBack=${toOpener} />`)}</div>` : null}
     ${open ? html`<${Box} m=${m} ctx=${ctx} target=${target} was=${was} label=${label} kind=${kind} kept=${kept} shut=${shut} onClose=${close} onSent=${sent} />`
-      : shut || !offer || mineWaiting ? null : html`<button type="button" class="mfix-open" ref=${opener} aria-label=${about ? `${cue}: ${about}` : null} onClick=${() => setOpen(true)}><${Icon} name="edit" size=${14} />${cue}</button>`}
+      : shut || !offer || mineWaiting ? null : lost ? html`<p class="mfix-note mfix-lost" role="status" data-unread="corrections">${unreadWords('corrections', 'suggest')}</p>` : html`<button type="button" class="mfix-open" ref=${opener} aria-label=${about ? `${cue}: ${about}` : null} onClick=${() => setOpen(true)}><${Icon} name="edit" size=${14} />${cue}</button>`}
   </div>`;
 }
 
@@ -260,7 +266,7 @@ export function ReadFirst({ m, ctx, readOnly = false }) {
   const written = minutesOnPage(m) && (m.sections || []).some((s) => s.notes || s.items.some((it) => it.notes));
   return html`<div class="bp-minutes bp-noprint" role="group" aria-labelledby=${`rf-${m.id}`}>
     <p class="bp-minutes__q" id=${`rf-${m.id}`}>Read before the vote</p>
-    <p class="bp-minutes__said">${next ? `The board votes on these at the ${meetingName(next)}, ${day(next.date)}.` : 'The board votes on these at its next meeting.'}${readOnly ? '' : written ? ' See something wrong? Suggest a correction right under it.' : ' See something wrong? Suggest a correction under Anything else, below.'}</p>
+    <p class="bp-minutes__said">${next ? `The board votes on these at the ${meetingName(next)}, ${day(next.date)}.` : 'The board votes on these at its next meeting.'}${readOnly ? '' : failed(data, 'corrections') ? ` ${unreadWords('corrections', 'suggest')}` : written ? ' See something wrong? Suggest a correction right under it.' : ' See something wrong? Suggest a correction under Anything else, below.'}</p>
     <${Counts} m=${m} data=${data} />
   </div>`;
 }

@@ -923,6 +923,8 @@ mark { background: var(--yellow-soft); color: inherit; border-radius: 3px; paddi
 .bp-accounts__rest .bp-accounts__name { grid-column: 1 / 3; }
 .bp-accounts__rest .bp-accounts__name { color: var(--muted); font-size: 0.9rem; }
 .bp-accounts__rest .bp-accounts__note { display: block; font-size: 0.84rem; }
+/* (an account below zero says so under its name: Board QA round 13) */
+.bp-accounts__name > .bp-accounts__note { display: block; font-size: 0.84rem; }
 /* A part whose read failed just now: its place says so in plain words (./unread.js), never a zero or "none" */
 .bp-unloaded { margin: 0.6rem 0 0; color: var(--ink-2); font-size: 0.95rem; line-height: 1.5; max-width: 42rem; }
 .bp-impact .bp-unloaded { margin-top: 0.5rem; }
@@ -2902,7 +2904,10 @@ a.bc-fam__name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .bc-face.bc-face--initials, .bf-face.bf-face--initials { display: grid; place-items: center; width: var(--s); height: var(--s); border-radius: 50%; background: hsl(var(--hue) 70% 88%); color: hsl(var(--hue) 45% 26%); font-weight: 750; font-size: calc(var(--s) * 0.36); }
 .bc-what { display: grid; gap: 0.7rem; padding-top: 0.25rem; }
 .bc-what__head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; }
-.bc-seg { flex: none; display: inline-flex; flex-wrap: wrap; padding: 3px; border-radius: 999px; background: var(--warm); }
+/* (one style for this switch wherever it's drawn, What makeovers cost's seasons, the families' and the makeovers' filters:
+   never wider than its card, its choices to a second row when they don't fit one. Board QA round 13: at 320 the seasons
+   ran 21px past their card and widened the page) */
+.bc-seg { flex: 0 1 auto; max-width: 100%; display: inline-flex; flex-wrap: wrap; padding: 3px; border-radius: 18px; background: var(--warm); }
 .bc-seg button, .bc-seg a { flex: none; white-space: nowrap; min-height: 34px; padding: 0 0.85rem; border: none; border-radius: 999px; background: none; font: inherit; font-size: 0.86rem; font-weight: 650; color: var(--muted); cursor: pointer; transition: background 0.2s, color 0.2s, box-shadow 0.2s; }
 .bc-seg button[aria-pressed="true"], .bc-seg a[aria-current="true"] { background: #fff; color: var(--ink); box-shadow: var(--shadow-1); }
 .bc-seg a { display: inline-flex; align-items: center; text-decoration: none; }
@@ -3003,7 +3008,6 @@ a.bc-fam__name:hover { text-decoration: underline; text-underline-offset: 3px; }
 .bf-err { margin: 0; color: var(--warn); font-weight: 600; }
 .bf-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem 1rem; }
 /* Many seasons on a phone: the switch wraps onto a second line inside its own shape, never past the page's edge */
-.bf-filters .bc-seg { flex: 0 1 auto; max-width: 100%; border-radius: 18px; }
 .bf-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
 .bf-chips button { min-height: 36px; padding: 0.3rem 0.85rem; border-radius: 999px; border: 1px solid var(--line); background: #fff; font: inherit; font-size: 0.9rem; font-weight: 600; color: var(--ink-2); cursor: pointer; }
 .bf-chips button span { color: var(--muted); font-variant-numeric: tabular-nums; margin-left: 0.15rem; }
@@ -3170,7 +3174,6 @@ select.bn-in:disabled { background-color: var(--warm); opacity: 1; }
 /* ── Makeovers, from application to reveal (./lifecycle.js): Home's card, the page's board, a family's way ── */
 .bp-home #makeovers { scroll-margin-top: calc(var(--head) + 0.75rem); }
 .lc-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.6rem 1rem; margin: 0 0 0.85rem; }
-.lc-bar .lc-seasons, .bf-filters .lc-seasons { flex: 0 1 auto; max-width: 100%; border-radius: 18px; }
 .lc-sum { margin: 0 0 1.1rem; color: var(--muted); font-size: 0.92rem; }
 .lc-note { margin: 0.9rem 0 0; color: var(--muted); font-size: 0.86rem; }
 .lc-none { margin: 0; color: var(--muted); }
@@ -3253,7 +3256,6 @@ a.lc-row:focus-visible { outline: 2px solid var(--ink); outline-offset: 0; }
   .lc-bar { align-items: flex-start; }
 }
 .fm-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1rem; margin: 0 0 0.8rem; }
-.fm-filters .bc-seg { flex: 0 1 auto; max-width: 100%; border-radius: 18px; }
 .fm { display: grid; grid-template-columns: minmax(0, 1fr) 20.5rem; gap: 1rem; height: clamp(480px, 68vh, 640px); }
 .fm--tall { height: clamp(540px, 76vh, 860px); }
 .fm-stage { position: relative; isolation: isolate; min-width: 0; overflow: hidden; border: 1px solid rgba(45, 47, 44, 0.09); border-radius: var(--r); background: #EEF0EC; }

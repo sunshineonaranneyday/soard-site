@@ -362,7 +362,8 @@ test('documents go with agenda items: the board sees only theirs, on the page an
   const sections = m.sections.map((s) => ({ ...s, items: s.items.map((it) => (it.id === fin.id ? { ...it, docs: [shown.id, hidden.id, 'f_gone1'], who: ['sam-ortiz', 'sam-ortiz', 'Not A Slug!'] } : it)) }));
   const saved = (await adminApi(FOUNDER, { action: 'save-meeting', meeting: { ...m, sections }, base: m.updatedAt })).body.meeting;
   const item = saved.sections.flatMap((s) => s.items).find((it) => it.id === fin.id);
-  assert.deepEqual(item.docs, [shown.id, hidden.id, 'f_gone1'], 'kept as written (a file deleted later just drops off)');
+  /* r13: nothing can name a file that's gone (Board QA round 13, admin 3): a save keeps only the meeting's own files on an item */
+  assert.deepEqual(item.docs, [shown.id, hidden.id], 'only files the meeting has (one that’s gone is never named)');
   assert.deepEqual(item.who, ['sam-ortiz'], 'People slugs, each once');
   assert.deepEqual(itemFiles(saved, item).map((f) => f.id), [shown.id, hidden.id], 'only files the meeting has');
 

@@ -258,7 +258,7 @@ export function MakeoversCard({ n }) {
     ${err ? html`<p class="bf-err" role="alert">${err} The makeovers from JobTread are below.</p>` : null}
     <p class="lc-sum">${fam ? nbw(sumLine(list, season, app)) || 'Nobody here.' : nbw('Opening the families…')}</p>
     ${fam ? html`<${Track} list=${list} application=${season === 'now' || season === app?.year ? app : null} onStep=${view === 'board' ? toStep : null} />` : null}
-    ${fam && !fam.jobs ? html`<p class="lc-note">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
+    ${fam && !fam.jobs ? html`<p class="lc-note" role="status" data-unread="projects">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
     ${view === 'map' && fam
       ? html`<${FamilyMap} key="lc-map" families=${families} boundary=${fam.boundary} scheme=${STAGE_SCHEME} away=${away} />`
       : html`<${LifeBoard} key=${`${fam ? 'all' : 'jobs'}-${season}`} list=${list} application=${season === 'now' || season === app?.year ? app : null} reveals=${n.reveals || []} limit=${true} />`}
@@ -269,7 +269,7 @@ export function MakeoversCard({ n }) {
  * One family's way: each step, those behind them ticked, theirs lit, the dates that are known (applied; the reveal).
  * Not chosen: their two application steps, then that. No status: nothing to draw
  */
-export function Journey({ f, reveals = [] }) {
+export function Journey({ f, reveals = [], known = true }) {
   const ref = useRef(null);
   // (a phone's strip scrolls: it opens on where they are, the page itself left where it is)
   useEffect(() => {
@@ -292,7 +292,7 @@ export function Journey({ f, reveals = [] }) {
       const w = when(s);
       return html`<li class=${`lc-j is-${state} is-${s.phase}`} key=${s.key} aria-current=${state === 'now' ? 'step' : null}>
         <i aria-hidden="true">${state === 'done' ? CHECK : null}</i><span>${s.label}</span>${w ? html`<small>${nbw(w)}</small>` : null}
-        <span class="sr-only">${state === 'done' ? ', done' : state === 'now' ? ', where they are' : ''}</span>
+        <span class="sr-only">${state === 'done' ? ', done' : state === 'now' ? (known ? ', where they are' : ', their application’s step') : ''}</span>
       </li>`;
     })}
   </ol>`;

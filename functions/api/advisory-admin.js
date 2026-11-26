@@ -14,14 +14,14 @@
  */
 
 import {
-  whoIs, getSettings, saveSettings, leadNamed, listAsks, saveAsk, putAskOut, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros, setIntroStatus,
-  listHosted, setHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES } from './_advisory.js';
-import { activeAdvisors, peopleRows, readState, signInWhy, asSend, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
+  whoIs, getSettings, saveSettings, leadNamed, listAsks, saveAsk, closeAsk, deleteAsk, answersTo, listWishes, saveWish, deleteWish, listIntros,
+  listHosted, setHostedLink, allTerms, setTerm, listDocs, saveDoc, deleteDoc, signatures, missingEmails, isId, webLink, DOC_KINDS, INTRO_STATUSES, INTRO_HELP, HOSTED_STATUSES, GROUP_ADDRESS, SHELVES, CHANGE_DOWN } from './_advisory.js';
+import { activeAdvisors, peopleRows, readState, asSend, PEOPLE_DOWN, PEOPLE_DOWN_SENT, SIGN_IN_DOWN } from './_board-roles.js';
 import { putFile, deleteFile, boardFileProblem } from './_board.js';
 import { logAudit } from './_audit.js';
 import { moneyView, goalNow, creditGift, uncreditGift, matchPage, findGifts, campaignFromUrl, campaignExists, sameLink } from './_advisory-money.js';
 import { pickableKids, pickKid, clearKid, kidCard } from './_advisory-sponsor.js';
-import { sendAsk, sendIntroUpdate, sendHostUpdate, sendWelcome, sendWelcomeTo, mailLog, welcomedSlugs, welcomeRecords, welcomeOf } from './_advisory-mail.js';
+import { askPress, statusPress, sendWelcome, sendWelcomeTo, welcomesSaid, mailLog, welcomedSlugs, welcomeLog, welcomeOf, addressWhy } from './_advisory-mail.js';
 import { adminMeetings, meetingAction } from './_advisory-meetings.js';
 import { advisoryBits, sharableBoardDocs } from './_board.js';
 import { boardPapers } from './_advisory-portal.js';
@@ -38,6 +38,7 @@ const fromError = (e) => {
   return Response.json({ ok: false, error: 'That didn’t go through. Try again in a moment.' }, { status: 500 });
 };
 const REFUSED = 'Only the people who run the Advisory Board can open this';
+const NOTHING_SENT = 'The site’s database didn’t answer just now, so nothing was sent. Please try again in a moment.';
 const OVERVIEW_KEY = 'advisory/SOARD_Advisory Board Overview.docx.pdf';
 const OVERVIEW_URL = 'https://files.sunshineonaranneyday.com/advisory/SOARD_Advisory%20Board%20Overview.docx.pdf';
 
@@ -65,8 +66,8 @@ export async function onRequestGet(context) {
     if (new URL(context.request.url).searchParams.get('zeffyForms')) return Response.json({ ok: true, forms: await zeffyForms(env) });
     // Each member's sign-in email alone, for a row showing one going out (a light look, every few seconds while it goes)
     if (new URL(context.request.url).searchParams.get('welcomes')) {
-      const [advisors, welcomes] = await Promise.all([activeAdvisors(env.DB), welcomeRecords(env.DB)]);
-      return Response.json({ ok: true, welcomes: Object.fromEntries(advisors.map((a) => [a.slug, welcomeOf(welcomes[a.slug], a.email)])) }, { headers: { 'Cache-Control': 'no-store' } });
+      const [advisors, w, s] = await Promise.all([activeAdvisors(env.DB), welcomeLog(env.DB), getSettings(env.DB)]);
+      return Response.json({ ok: true, welcomes: Object.fromEntries(advisors.map((a) => [a.slug, welcomeOf(w.welcomed[a.slug], a.email, Date.now(), w.waiting[a.slug], s.emails)])) }, { headers: { 'Cache-Control': 'no-store' } });
     }
     // Admin → Site Config → Zeffy: the group's campaign and each approved fundraiser's Zeffy page, nothing else
     if (new URL(context.request.url).searchParams.get('zeffyLinks')) {
@@ -88,10 +89,12 @@ export async function onRequestGet(context) {
     const [advisors, people, term, seen, sigs, missing, docs, asks, wishes, intros, hosted, money, bits, group, meetings, kids, log, welcomes] = await Promise.all([
       activeAdvisors(env.DB), peopleRows(env.DB), allTerms(env.DB, settings), lastSeen(env.DB), signatures(env.DB), missingEmails(env.DB), listDocs(env.DB), listAsks(env.DB),
       listWishes(env.DB), listIntros(env.DB), listHosted(env.DB), moneyView(env, settings), advisoryBits(env), advisoryGroupStatus(env).catch(() => null),
-      adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []), welcomeRecords(env.DB),
+      adminMeetings(env), pickableKids(env), mailLog(env.DB).catch(() => []), welcomeLog(env.DB),
     ]);
     const nameOf = (slug) => people.find((p) => p.slug === slug)?.name || '';
-    const withAnswers = await Promise.all(asks.map(async (a) => ({ ...a, mailed: log.some((l) => l.kind === 'ask' && l.id === a.id && l.sent > 0), answers: (await answersTo(env.DB, a.id)).map((r) => ({ ...r, name: nameOf(r.slug) })) })));
+    // (mailed: its emails claimed, by the write that marked it emailed, whether they've all gone yet or not: the card
+    // never offers to email an ask that went or is owed. An ask emailed before that mark was kept: its log line)
+    const withAnswers = await Promise.all(asks.map(async (a) => ({ ...a, mailed: !!a.mailed || log.some((l) => l.kind === 'ask' && l.id === a.id && l.sent > 0), answers: (await answersTo(env.DB, a.id)).map((r) => ({ ...r, name: nameOf(r.slug) })) })));
     return Response.json({
       ok: true,
       me: { kind: w.kind, name: w.name || '' },
@@ -101,7 +104,7 @@ export async function onRequestGet(context) {
       group,
       // welcome: their sign-in email ({ at } | { going } | {}); emailWhy: why their email can't be their sign-in ('' when it can)
       advisors: advisors.map((a) => ({ slug: a.slug, name: a.name, email: a.email, photo: a.photo || '', organization: a.organization || '', term: term(a.slug), lastSeen: seen[a.slug] || '', signed: Object.fromEntries(Object.entries(sigs).map(([id, by]) => [id, by[a.slug] || null])),
-        welcome: welcomeOf(welcomes[a.slug], a.email), emailWhy: a.email ? signInWhy(a.email) : 'none' })),
+        welcome: welcomeOf(welcomes.welcomed[a.slug], a.email, Date.now(), welcomes.waiting[a.slug], settings.emails), emailWhy: addressWhy(a.email) })),
       missing,
       board: people.filter((p) => p.group === 'board' && p.status === 'active').map((p) => ({ slug: p.slug, name: p.name, committees: p.committees || [] })),
       docs, docKinds: DOC_KINDS, shelves: SHELVES, boardDocs: await sharableBoardDocs(env.DB),
@@ -125,10 +128,14 @@ export async function onRequestGet(context) {
 export async function onRequestPost(context) {
   const { env, request } = context;
   let sending = false;
+  // (until a press's own work begins, nothing of it is done: the database failing in who's asking, its tables or the
+  // settings is said as nothing changed (503), in words: Advisory Board QA round 26)
+  let began = false;
   try {
     const { w, by, refused } = await gate(context);
     if (refused) return refused;
     if ((request.headers.get('Content-Type') || '').includes('multipart/form-data')) {
+      began = true;
       const form = await request.formData();
       const upload = form.get('file');
       const why = await boardFileProblem(upload);
@@ -157,6 +164,7 @@ export async function onRequestPost(context) {
     sending = /^(send|email)-/.test(String(body.action || ''));
     const id = String(body.id || '');
     const settings = await getSettings(env.DB);
+    began = true;
     switch (body.action) {
       case 'save-settings': {
         const s = body.settings || {};
@@ -208,31 +216,32 @@ export async function onRequestPost(context) {
       case 'send-ask': {
         // The switch as it stands now, not as this screen last saw it: nobody emails the group by surprise
         if (settings.emails && body.emailsOk !== true) return Response.json({ ok: false, emails: true, error: 'Emails are on, so this will email every Advisory Board member.' }, { status: 409 });
-        const ask = await putAskOut(env.DB, id);
-        const sent = settings.emails ? await sendAsk(env, ask) : { off: true };
-        await audit(context, by, 'updated', `Advisory ask out: ${ask.title}`);
-        return Response.json({ ok: true, ask, sent });
+        // Put out, and with the emails on its email owed to each member, in one write; then they go, each once
+        // (./_advisory-mail.js askPress): a failure after that write is said as what was done, never as a refusal
+        const r = await askPress(env, id, { emails: settings.emails });
+        await audit(context, by, 'updated', `Advisory ask out: ${r.ask.title}`);
+        return Response.json({ ok: true, ask: r.ask, sent: r.sent, said: r.said });
       }
       case 'email-ask': {
-        // One that went out while emails were off, or whose send failed
-        const ask = (await listAsks(env.DB)).find((a) => a.id === id);
-        if (!ask?.sentAt || ask.closedAt) return fail('That ask isn’t out', 409);
-        return Response.json({ ok: true, sent: await sendAsk(env, ask) });
+        // One that went out while emails were off: the same write and sends, the ask left out as it is
+        // (the switch as it stands now: off, nothing goes)
+        const r = await askPress(env, id, { emails: settings.emails, out: false });
+        return Response.json({ ok: true, sent: r.sent, said: r.said });
       }
       case 'close-ask': await closeAsk(env.DB, id); return Response.json({ ok: true });
       case 'delete-ask': await deleteAsk(env.DB, id); await audit(context, by, 'deleted', 'Advisory ask'); return Response.json({ ok: true });
       case 'save-wish': return Response.json({ ok: true, wish: await saveWish(env.DB, body.wish || {}, { by }) });
       case 'delete-wish': await deleteWish(env.DB, id); return Response.json({ ok: true });
       case 'intro-status': {
-        const { intro, changed } = await setIntroStatus(env.DB, id, body, { by });
-        const sent = changed && settings.emails ? await sendIntroUpdate(env, intro) : null;
-        return Response.json({ ok: true, intro, sent });
+        // The status and the member's update email owed with it, in one write, its reads before (./_advisory-mail.js
+        // statusPress): a failure after the write is said as what was done, and the email goes once
+        const r = await statusPress(env, 'intro', id, body, { by, settings });
+        return Response.json({ ok: true, intro: r.record, sent: r.sent, said: r.said });
       }
       case 'hosted-status': {
-        const { hosted, changed } = await setHosted(env.DB, id, body, { by });
-        const sent = changed && settings.emails ? await sendHostUpdate(env, hosted) : null;
-        await audit(context, by, 'updated', `Advisory fundraiser ${hosted.status}: ${hosted.title}`);
-        return Response.json({ ok: true, hosted, sent });
+        const r = await statusPress(env, 'hosted', id, body, { by, settings });
+        await audit(context, by, 'updated', `Advisory fundraiser ${r.record.status}: ${r.record.title}`);
+        return Response.json({ ok: true, hosted: r.record, sent: r.sent, said: r.said });
       }
       case 'hosted-link': {
         // Only its Zeffy page (Site Config → Zeffy): no status change, so no email to the member who hosts it
@@ -286,7 +295,11 @@ export async function onRequestPost(context) {
         await audit(context, by, 'updated', 'Advisory Board makeover cleared');
         return Response.json({ ok: true, ...out });
       }
-      case 'send-welcome': return Response.json({ ok: true, ...(await sendWelcome(env, { by, slugs: body.slugs })) });
+      case 'send-welcome': {
+        // (its words from what happened to each: ./_advisory-mail.js welcomesSaid)
+        const r = await sendWelcome(env, { by, slugs: Array.isArray(body.slugs) ? body.slugs.map(String) : null });
+        return Response.json({ ok: true, ...r, said: welcomesSaid(r) });
+      }
       case 'send-welcome-to': {
         // One member's, from their row: emails on or off (./_advisory-mail.js sendWelcomeTo)
         const slug = String(body.slug || '');
@@ -298,5 +311,8 @@ export async function onRequestPost(context) {
       default:
         return await meetingAction(context, { action: body.action, body, by, w });
     }
-  } catch (e) { return fromError(sending ? asSend(e) : e); }
+  } catch (e) {
+    if (!began && !e?.status) { console.error('[advisory] before a press began', e?.message || e); return fail(sending ? NOTHING_SENT : CHANGE_DOWN, 503); }
+    return fromError(sending ? asSend(e) : e);
+  }
 }

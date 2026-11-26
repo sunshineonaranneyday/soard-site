@@ -42,6 +42,19 @@ const PAGES = [...NAV.map(([p]) => p), 'run', 'papers'];
 const call = (body) => api(API, body);
 // What's half typed in a form, kept while the page is open: going to another tab and back doesn't lose it
 const drafts = new Map();
+/**
+ * A new record's id for what's in its form, made once for those words (Advisory Board QA round 25): pressed again after
+ * an answer that was lost, it's the same introduction or request, never a second (functions/api/_advisory.js madeOnce).
+ * New words, a new one. The server's own shape: a word, then letters and 2 to 7
+ */
+function useOnceId(prefix) {
+  const ref = useRef({ words: null, id: '' });
+  return (words) => {
+    const w = JSON.stringify(words);
+    if (ref.current.words !== w) ref.current = { words: w, id: `${prefix}_${[...crypto.getRandomValues(new Uint8Array(14))].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b % 32]).join('')}` };
+    return ref.current.id;
+  };
+}
 function useDraft(key, blank) {
   const [v, setV] = useState(() => drafts.get(key) ?? blank);
   const set = (x) => { drafts.set(key, x); setV(x); };
@@ -150,8 +163,9 @@ function App() {
     const j = await call(body);
     if (!j.ok) {
       say(j.error || 'That didn’t save. Try again.', 'warn', j.signedOut ? { label: 'Reload', fn: () => location.reload() } : null);
-      // Something moved on underneath them (the ask closed, the paper went): the page catches up, what they typed stays
-      if (j.status === 404 || j.status === 409) await load({ keep: true });
+      // The page catches up after any press that fails, what they typed staying: something moved on underneath them (the
+      // ask closed, the paper went), or a change that landed with its answer lost shows as made (Advisory Board QA round 25)
+      if (!j.signedOut) await load({ keep: true });
       refused?.(j);
       return null;
     }
@@ -465,13 +479,15 @@ const blankIntro = { name: '', company: '', email: '', phone: '', how: '', help:
 function IntroForm({ ctx, wish, clearWish }) {
   const { data, post } = ctx;
   const [f, setF, clear] = useDraft('intro', blankIntro);
+  const idFor = useOnceId('in');
   const [busy, setBusy] = useState(false);
   const up = (k) => (e) => setF({ ...f, [k]: e.currentTarget.value });
   const flip = (id) => setF({ ...f, help: f.help.includes(id) ? f.help.filter((x) => x !== id) : [...f.help, id] });
   const send = async (e) => {
     e.preventDefault();
     setBusy(true);
-    const j = await post({ action: 'intro', ...f, wish: wish?.id || '' }, 'Thank you. We’ll let you know how it goes.');
+    const body = { ...f, wish: wish?.id || '' };
+    const j = await post({ action: 'intro', ...body, id: idFor(body) }, 'Thank you. We’ll let you know how it goes.');
     setBusy(false);
     if (j) { clear(); clearWish(); }
   };
@@ -586,13 +602,14 @@ const HOST_WORDS = { new: 'Waiting for an answer', approved: 'Approved', 'not-no
 function HostCard({ ctx, guide }) {
   const { data, post } = ctx;
   const [f, setF, clear] = useDraft('host', blankHost);
+  const idFor = useOnceId('h');
   const [open, setOpen] = useState(Object.values(f).some(Boolean));
   const [busy, setBusy] = useState(false);
   const up = (k) => (e) => setF({ ...f, [k]: e.currentTarget.value });
   const send = async (e) => {
     e.preventDefault();
     setBusy(true);
-    const j = await post({ action: 'host', ...f }, 'Got it. You’ll hear back soon.');
+    const j = await post({ action: 'host', ...f, id: idFor(f) }, 'Got it. You’ll hear back soon.');
     setBusy(false);
     if (j) { clear(); setOpen(false); }
   };

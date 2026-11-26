@@ -32,10 +32,10 @@ import { cfId as imageIdOf } from '../../public/admin/team-shared.js';
 import { checkImage, imageSize, imageWhole } from './_image-types.js';
 import { SLUG_RE } from './_content-history.js';
 import { personStatus } from './_team.js';
-import { sendEmails, SITE_ORIGIN, slackPost } from './_broadcast-notify.js';
+import { sendEmailItems, SITE_ORIGIN, slackPost } from './_broadcast-notify.js';
 import { slackCard } from './_slack-cards.js';
 import * as mail from './_email-shell.js';
-import { readDown, PEOPLE_DOWN } from './_board-roles.js';
+import { readDown, PEOPLE_DOWN, signInWhy } from './_board-roles.js';
 
 export const STATUSES = [
   { id: 'new', label: 'New' },
@@ -93,6 +93,8 @@ function fromRow(r, { full = false } = {}) {
   const hs = parse(r.headshot, null);
   const out = {
     id: r.id, source: r.source, name: r.name, email: r.email, phone: r.phone, company: r.company, jobTitle: r.job_title,
+    // (why this email can't sign them in: 'group', 'staff', 'bad', or '' when it can, as Add reads it: the panel's lines)
+    emailWhy: r.email ? signInWhy(r.email) : '',
     status: STATUS_IDS.has(r.status) ? r.status : 'new', statusAt: r.status_at, statusBy: r.status_by,
     personSlug: r.person_slug, createdAt: r.created_at, updatedAt: r.updated_at,
     link: answers.link || null, preferredName: answers.preferredName || null,
@@ -202,10 +204,30 @@ export async function saveAdvisorySettings(DB, { staffEmails, committee }, { by 
   if (!list.length && !(await committeeMembers(DB, keepCommittee)).some((m) => m.email)) {
     return { problems: { staffEmails: `Nobody on the ${keepCommittee} committee has an email on People → Board yet, so nobody would hear about new applications. Add an email here too.` } };
   }
-  const put = (key, value) => DB.prepare('INSERT INTO advisory_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by')
+  // What the answer says beside what's written, read before the write (Advisory Board QA round 25: the settings read
+  // again after it, not answering, said a save that had landed hadn't): who's on the committee, and which committees there are
+  const [members, committees] = await Promise.all([committeeMembers(DB, keepCommittee), committeeNames(DB)]);
+  const put = (key, value) => DB.prepare('INSERT INTO advisory_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by RETURNING key, value, updated_at, updated_by')
     .bind(key, JSON.stringify(value), iso(now), by);
-  await DB.batch([put('staffEmails', list), ...(c === undefined ? [] : [put('committee', c)])]);
-  return { settings: await getAdvisorySettings(DB) };
+  let rows;
+  try {
+    rows = (await DB.batch([put('staffEmails', list), ...(c === undefined ? [] : [put('committee', c)])])).map((r) => r?.results?.[0]).filter(Boolean);
+  } catch (e) {
+    // (its answer lost, or it never ran: looked for. Saved, it's answered as saved; not, nothing changed)
+    console.error('[advisory] who hears: the save', e?.message || e);
+    const now2 = await getAdvisorySettings(DB).catch(() => null);
+    if (!now2) throw Object.assign(new Error('The site’s database didn’t answer just now, so we can’t tell yet whether that saved. Open this again to see.'), { status: 503 });
+    if (JSON.stringify(now2.staffEmails) === JSON.stringify(list) && now2.committee === keepCommittee) return { settings: now2 };
+    throw Object.assign(new Error('The site’s database didn’t answer just now, so nothing was saved. Please try again in a moment.'), { status: 503 });
+  }
+  // The answer, from that write itself (RETURNING)
+  const at = rows.map((r) => r.updated_at).sort().at(-1) || iso(now);
+  return {
+    settings: {
+      staffEmails: list, committee: keepCommittee, committeeMembers: members.map((m) => ({ name: m.name, hasEmail: !!m.email })), committees,
+      updatedAt: at, updatedBy: rows.find((r) => r.updated_at === at)?.updated_by ?? by, isDefault: false,
+    },
+  };
 }
 
 // ─── A new application ──────────────────────────────────────────────
@@ -509,21 +531,26 @@ export function staffSlack(app) {
  */
 export async function notifyNew(env, app, { now = Date.now(), prev = null } = {}) {
   const out = { applicant: !!prev?.applicant, staff: Number(prev?.staff) || 0, slack: !!prev?.slack };
-  if (!out.applicant) {
+  // Each email under its own idempotency key (Advisory Board QA round 25: sent, then noted, a note that didn't save had
+  // the heartbeat send the applicant a second copy): asked again within Resend's day, it sends nothing twice. Past that
+  // day, an email that may have gone is never sent again (counted as gone, unconfirmed)
+  const inDay = Date.parse(app.createdAt || '') > now - NOTICE_KEY_DAY_MS || !app.createdAt;
+  if (!out.applicant && inDay) {
     try {
       const mine = applicantEmail(app);
       // A reply reaches SOARD, not the sending address
-      const r = await sendEmails(env, { to: [app.answers.email], ...mine, replyTo: 'info@soardcharity.com', tags: [{ name: 'kind', value: 'advisory-application' }] });
-      out.applicant = r.sent > 0;
+      const r = await sendEmailItems(env, [{ to: app.answers.email, ...mine }], { replyTo: 'info@soardcharity.com', tags: [{ name: 'kind', value: 'advisory-application' }], idempotencyKey: `advisory-application:${app.id}:applicant` });
+      out.applicant = r.sent + (r.already || 0) > 0;
     } catch { /* recorded below */ }
   }
-  if (!out.staff) {
+  if (!out.staff && inDay) {
     try {
       // A test's staff email goes to the tester, never the staff list
       const to = isTestApplication(app.answers) ? [app.answers.email] : await staffRecipients(env.DB);
       // Staff answering the heads-up write straight to the applicant
-      const r = await sendEmails(env, { to, ...staffEmail(app), replyTo: app.answers.email, tags: [{ name: 'kind', value: 'advisory-application-staff' }] });
-      out.staff = r.sent;
+      const mail = staffEmail(app);
+      const r = await sendEmailItems(env, to.map((addr) => ({ to: addr, ...mail })), { replyTo: app.answers.email, tags: [{ name: 'kind', value: 'advisory-application-staff' }], idempotencyKey: `advisory-application:${app.id}:staff` });
+      out.staff = r.sent + (r.already || 0);
     } catch { /* recorded below */ }
   }
   if (!out.slack) {
@@ -540,6 +567,7 @@ export async function notifyNew(env, app, { now = Date.now(), prev = null } = {}
 }
 
 const NOTICE_TRIES = 5;
+const NOTICE_KEY_DAY_MS = 23 * 60 * 60 * 1000; // Resend keeps an idempotency key a day
 const NOTICE_DAYS = 3;
 /**
  * The heartbeat: an application whose notices didn't all go (the email service or Slack down, or a request cut off
@@ -582,11 +610,29 @@ export async function countNew(DB) {
 export async function setAdvisoryStatus(DB, id, status, { by = null, now = Date.now() } = {}) {
   if (!STATUS_IDS.has(status)) throw Object.assign(new Error('Unknown status'), { status: 400 });
   await ensureAdvisorySchema(DB);
-  return asWritten(DB.prepare('UPDATE advisory_applications SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE id = ? RETURNING *').bind(status, iso(now), by, iso(now), id));
+  // The answer comes from the write itself (RETURNING). One whose answer was lost is looked at, by what this write alone
+  // wrote (its status, its moment, who pressed): there, it's answered as saved; not, nothing was changed (503); the look
+  // failing too, it can't be told (503). Advisory Board QA round 26: Not now had saved and the toast said it hadn't
+  // (Board's landedOr is the model, as the note's save below)
+  try {
+    return await asWritten(DB.prepare('UPDATE advisory_applications SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE id = ? RETURNING *').bind(status, iso(now), by, iso(now), id));
+  } catch (e) {
+    if (e?.status) throw e;
+    console.error('[advisory] an application’s status', e?.message || e);
+    const now2 = await DB.prepare('SELECT * FROM advisory_applications WHERE id = ?').bind(id).first().catch(() => undefined);
+    if (now2 === undefined) throw Object.assign(new Error('The site’s database didn’t answer just now, so we can’t tell yet whether that saved. This shows the application as it is now.'), { status: 503 });
+    if (now2 && now2.status === status && now2.status_at === iso(now) && (now2.status_by ?? null) === (by ?? null)) return fromRow(now2, { full: true });
+    throw Object.assign(new Error('The site’s database didn’t answer just now, so nothing was changed. Please try again in a moment.'), { status: 503 });
+  }
 }
 
 export const NOTE_MAX = 4000;
-export async function addAdvisoryNote(DB, id, text, { by = null, now = Date.now() } = {}) {
+/**
+ * A note, added. `key`: the page's own for this note (made once for what's in the box: Advisory Board QA round 25, a save
+ * whose answer was lost, pressed again, added it twice): a note with that key already there is that note, answered as
+ * saved, never a second
+ */
+export async function addAdvisoryNote(DB, id, text, { by = null, now = Date.now(), key = '' } = {}) {
   const t = String(text || '').trim();
   if (!t) throw Object.assign(new Error('Write the note first'), { status: 400 });
   // (never cut mid-word without a word said: too long is said, and the note stays in its box)
@@ -596,8 +642,25 @@ export async function addAdvisoryNote(DB, id, text, { by = null, now = Date.now(
   // (added to the list in the one statement, never the list read, added to and written back: two notes saved at the
   // same moment are both kept)
   // (deleted elsewhere while the note was saving: said as gone, never "saved" with no application to show)
-  return asWritten(DB.prepare("UPDATE advisory_applications SET notes = json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)), updated_at = ? WHERE id = ? RETURNING *")
-    .bind(JSON.stringify({ at: iso(now), by, text: t }), iso(now), id));
+  const k = /^[a-z0-9_-]{8,40}$/i.test(String(key || '')) ? String(key) : '';
+  if (!k) {
+    return asWritten(DB.prepare("UPDATE advisory_applications SET notes = json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)), updated_at = ? WHERE id = ? RETURNING *")
+      .bind(JSON.stringify({ at: iso(now), by, text: t }), iso(now), id));
+  }
+  // (the note with its key, once: there already, the application as it is, in the same one statement)
+  const had = "EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END) WHERE json_extract(value, '$.key') = ?)";
+  try {
+    return await asWritten(DB.prepare(`UPDATE advisory_applications SET notes = CASE WHEN ${had} THEN notes ELSE json_insert(CASE WHEN json_valid(notes) THEN notes ELSE '[]' END, '$[#]', json(?)) END, updated_at = CASE WHEN ${had} THEN updated_at ELSE ? END WHERE id = ? RETURNING *`)
+      .bind(k, JSON.stringify({ at: iso(now), by, text: t, key: k }), k, iso(now), id));
+  } catch (e) {
+    if (e?.status) throw e;
+    // (its answer lost, or it never ran: looked for by its key. There, it's answered as saved; not, nothing was saved)
+    console.error('[advisory] a note', e?.message || e);
+    const now2 = await getAdvisoryApplication(DB, id).catch(() => undefined);
+    if (now2 === undefined) throw Object.assign(new Error('The site’s database didn’t answer just now, so we can’t tell yet whether the note saved. This shows the application as it is now.'), { status: 503 });
+    if (now2 && (now2.notes || []).some((x) => x?.key === k)) return now2;
+    throw Object.assign(new Error('The site’s database didn’t answer just now, so the note wasn’t saved. Please try again in a moment.'), { status: 503 });
+  }
 }
 /**
  * The application as a change to it wrote it, from that statement itself (RETURNING *), never read again afterwards: a
@@ -688,6 +751,8 @@ export async function deleteAdvisoryApplication(env, id, { fetchImpl = fetch } =
     const r = await DB.prepare('DELETE FROM advisory_applications WHERE id = ?').bind(id).run();
     return !!r?.meta?.changes;
   } catch (e) {
+    // (its answer lost: gone is deleted, never said as stopped: Advisory Board QA round 26)
+    if (await DB.prepare('SELECT 1 AS x FROM advisory_applications WHERE id = ?').bind(id).first().then((x) => !x, () => false)) return true;
     if (!gone && await unmark()) throw e;
     console.error('[advisory] delete stopped partway', e?.message || e);
     throw Object.assign(new Error(UNFINISHED), { status: 500 });

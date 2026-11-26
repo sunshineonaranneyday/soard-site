@@ -19,10 +19,11 @@
  */
 
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
-import { meetingName, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew } from '../board-shared.js';
+import { meetingName, timeRange, clock, presentersOf, sectionPlan, agendaItems, itemFiles, reportsOn, isNothingNew, approvedAlready } from '../board-shared.js';
 import { longDate, dayText } from './parts.js';
 import { Report, Motion } from '../board-report.js';
 import { dueText } from './review.js';
+import { failed, CouldntLoad } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -224,8 +225,9 @@ function Approve({ r, ctx, founders }) {
     if (!j.ok && j.over) { setData((dd) => withReview(dd, { over: true })); say(j.error); return; }
     if (!j.ok) { say(j.error || 'It wasn’t approved. Try again.', 'warn'); return; }
     setData((dd) => withReview(dd, { approvedAt: j.approvedAt, approvedBy: j.approvedBy }));
-    // Someone else approved it first: theirs stands, and nothing goes twice
-    if (j.already) { say(`${first(j.approvedBy) || 'Someone'} already approved it.`); return; }
+    // Approved first, in another tab of theirs or by someone else: that stands, nothing goes twice, and it's said as Board
+    // says it ("You approved it already, maybe in another tab." to themselves: board-shared.js. Board QA round 13)
+    if (j.already) { say(approvedAlready({ by: j.approvedBy, at: j.approvedAt, mine: !!j.mine })); return; }
     // Approved, but the agenda's email to the board didn't go (Resend said no): the server's own words, what happens next
     if (j.agenda === 'failed') { say(j.agendaError || 'The agenda is approved, but its email to the board didn’t go.', 'warn'); return; }
     say(j.agenda === 'sent' ? 'The agenda is approved and on its way to the board.'
@@ -292,7 +294,13 @@ function ReviewShut({ id, ctx, Icon }) {
   const say = (title, line) => html`<a class="bp-back" href="#/"><${Icon} name="back" size=${18} />Home</a>
     <div class="bp-card bp-empty"><h1 class="bp-h2">${title}</h1><p class="bp-muted">${line}</p>
       ${m ? html`<p class="cr-shut__go"><a class="bp-btn" href=${`#/meetings/${encodeURIComponent(m.id)}`}>See the meeting</a></p>` : html`<p class="cr-shut__go"><a class="bp-btn" href="#/meetings">See the meetings</a></p>`}</div>`;
+  // (the meetings, or the chair's review, not read just now: it didn't open, said so, never a reason worked out from what
+  // didn't load, "isn't on the board page": Board QA round 14, as a meeting's page and a paper's say it)
+  const didntOpen = (part) => html`<a class="bp-back" href="#/"><${Icon} name="back" size=${18} />Home</a>
+    <div class="bp-card bp-empty"><h1 class="bp-h2">The chair’s review didn’t open</h1><${CouldntLoad} part=${part} /></div>`;
+  if (failed(data, 'meetings')) return didntOpen('meetings');
   if (!data.me.admin && d.me?.seat !== 'chair') return say('This is the chair’s review', 'Only the board’s chair reviews an agenda before the board sees it.');
+  if (failed(data, 'review')) return didntOpen('review');
   // (nothing ahead reaches the board page before its agenda is approved: one there is approved)
   const held = m && (m.date < data.today || m.live?.endedAt);
   if (shut?.why === 'approved' || (m && !held && !shut)) {

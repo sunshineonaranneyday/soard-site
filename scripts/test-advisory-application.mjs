@@ -188,7 +188,7 @@ const server = createServer(async (req, res) => {
   }
   res.writeHead(404); res.end('not found');
 });
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
+await new Promise((r) => server.listen(Number(process.env.PORT || 0), '127.0.0.1', r)); /* r26: a port of the runner's own (PORT), else any */
 const SITE = `http://127.0.0.1:${server.address().port}`;
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==', 'base64');
 const revealEmails = [];

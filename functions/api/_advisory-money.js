@@ -21,7 +21,7 @@
 
 import { zeffyGet } from './_zeffy.js';
 import { readState, writeState, activeAdvisors, normEmail } from './_board-roles.js';
-import { ensureAdvisory, saveSettings, listHosted, getSettings } from './_advisory.js';
+import { ensureAdvisory, saveSettings, listHosted, getSettings, staffLanded } from './_advisory.js';
 import { writeAsMember, stillTheirs, GONE_STAFF, MOVING_STAFF } from './_member-write.js';
 import { nameKey } from '../../public/admin/partners-shared.js';
 import { sameForm } from '../../public/admin/zeffy-links.js';
@@ -92,6 +92,14 @@ export function tally({ campaignId, payments, pages, credits, hostedIds = {}, ad
   return { cents, byAdvisor, gifts };
 }
 
+/** The money's record written, with what's owed beside it (`also`: statements), in one write: both land or neither */
+async function writeWith(DB, key, value, also = []) {
+  if (!also.length) return writeState(DB, key, value);
+  await readState(DB, key); // (the table)
+  await DB.batch([DB.prepare('INSERT OR REPLACE INTO board_state (key, data, updated_at) VALUES (?, ?, ?)').bind(key, JSON.stringify(value), new Date().toISOString()), ...also]);
+  return value;
+}
+
 /** Read Zeffy and keep the sum. → the saved state. A read that fails keeps the last sum and says so */
 export async function readMoney(env, settings, { fetchImpl = fetch, now = Date.now() } = {}) {
   const prev = await readState(env.DB, KEY);
@@ -131,14 +139,21 @@ export async function readMoney(env, settings, { fetchImpl = fetch, now = Date.n
     });
     const before = new Set(prev.seen || []);
     const fresh = {};
-    for (const [slug, gifts] of Object.entries(sum.gifts)) { const n = gifts.filter((id) => !before.has(id)).length; if (n && prev.at) fresh[slug] = n; }
+    const freshIds = {};
+    for (const [slug, gifts] of Object.entries(sum.gifts)) {
+      const ids = gifts.filter((id) => !before.has(id));
+      if (ids.length && prev.at) { fresh[slug] = ids.length; freshIds[slug] = { n: ids.length, ids }; }
+    }
     const state = {
       at: new Date(now).toISOString(), cents: sum.cents, byAdvisor: sum.byAdvisor, counts: Object.fromEntries(Object.entries(sum.gifts).map(([k, v]) => [k, v.length])),
       pages, seen: Object.values(sum.gifts).flat(), error: null, goalTerm: prev.goalTerm || null, hostedMissing: missing,
       // What each credited gift comes to now, from Zeffy
       credited: Object.fromEntries(credits.map((c) => [c.payment_id, centsOf(list.find((p) => p.id === c.payment_id))])),
     };
-    return { state: await writeState(env.DB, KEY, state), fresh };
+    // Each member's note of a gift on their page owed in the same write that keeps the gifts as seen (Advisory Board QA
+    // round 25: noted after it went, a note that didn't go was lost): the heartbeat sends it, once (./_advisory-mail.js)
+    const { giftOwed } = await import('./_advisory-mail.js');
+    return { state: await writeWith(env.DB, KEY, state, await giftOwed(env, freshIds, { now, settings, members: advisors })), fresh };
   } catch (e) {
     console.error('[advisory-money]', e.message);
     return { state: await writeState(env.DB, KEY, { ...prev, error: e.message, failedAt: new Date(now).toISOString() }), fresh: {} };
@@ -239,8 +254,14 @@ export async function creditGift(env, settings, { paymentId, slug = '', note = '
   const id = String(paymentId || '').trim();
   if (!/^[\w-]{6,80}$/.test(id)) throw err('Which gift?');
   const who = String(slug || '').slice(0, 120);
-  const write = (to, guard = '', g = []) => env.DB.prepare(`INSERT OR REPLACE INTO advisory_credits (payment_id, slug, note, at, by) SELECT ?, ?, ?, ?, ?${guard}`)
-    .bind(id, to, String(note || '').slice(0, 300), new Date(now).toISOString(), by, ...g).run();
+  const at = new Date(now).toISOString();
+  const text = String(note || '').slice(0, 300);
+  // The answer comes from the write itself. One whose answer was lost is looked at, by what this write alone wrote (its
+  // moment and who pressed): there, it's answered as done (./_advisory.js staffLanded). Advisory Board QA round 26: a
+  // credit that had saved was said as "That didn't go through"
+  const write = (to, guard = '', g = []) => staffLanded(() => env.DB.prepare(`INSERT OR REPLACE INTO advisory_credits (payment_id, slug, note, at, by) SELECT ?, ?, ?, ?, ?${guard}`)
+    .bind(id, to, text, at, by, ...g).run(),
+  () => env.DB.prepare('SELECT 1 AS x FROM advisory_credits WHERE payment_id = ? AND at = ? AND by IS ? AND slug IS ?').bind(id, at, by, to).first());
   // Credited to a member: at the address they have as it's written, only while they're on the Advisory Board there and no
   // rename is moving records off it (./_member-write.js; Advisory Board QA round 21). To the group: nobody's
   if (who) await writeAsMember(env.DB, who, (me) => write(me.slug, ` FROM team t WHERE ${stillTheirs('t')}`, [me.slug, me.data]), { fits: (p) => p.group === 'advisory', gone: GONE_STAFF, moving: MOVING_STAFF });
@@ -287,7 +308,8 @@ export async function maybeReadMoney(env, { fetchImpl = fetch, now = Date.now() 
     const raised = Math.floor((state.cents || 0) / 100) + carriedOf(settings);
     // Once a term: the next term has its own goal to reach
     const reachedGoal = !state.error && raised >= settings.goal && state.goalTerm !== settings.termStart;
-    if (reachedGoal) await writeState(env.DB, KEY, { ...state, goalTerm: settings.termStart });
+    // (its emails, everyone's thank-you and the notice to whoever runs the group, owed in the write that marks it told)
+    if (reachedGoal) await writeWith(env.DB, KEY, { ...state, goalTerm: settings.termStart }, await (await import('./_advisory-mail.js')).goalOwed(env, settings, { raised, now }));
     return { fresh, reachedGoal, raised, settings };
   } catch (e) {
     console.error('[advisory-money]', e.message);

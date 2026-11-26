@@ -36,6 +36,12 @@ const BY_KEY = new Map(STAGES.map((s, i) => [s.key, { ...s, i }]));
 export const stageInfo = (key) => BY_KEY.get(key) || null;
 export const stageLabel = (key) => BY_KEY.get(key)?.label || (key === 'denied' ? 'Not chosen' : 'No status');
 export const phaseOf = (key) => BY_KEY.get(key)?.phase || '';
+/**
+ * Whether a family's step is known: JobTread was read (`jobs`, the families' answer's), or their step never rests on it
+ * (no job, or revealed by their kid page). Else it's their application's, said so, never said as where they are
+ * (Board QA round 13)
+ */
+export const stageKnown = (f, jobs) => jobs !== false || !f?.jobId || f?.stage === 'revealed';
 
 // The map's key, a color to a step of the way: the application's two (as Applicants colors them), approved and
 // awaiting funding each their own, one for being built, one for revealed. Never red; brand yellow is the service area's

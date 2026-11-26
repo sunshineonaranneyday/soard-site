@@ -78,6 +78,32 @@ export const DOC_KINDS = [
 export const LINKS_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_links (hash TEXT PRIMARY KEY, ask_id TEXT NOT NULL, slug TEXT NOT NULL, expires TEXT NOT NULL)';
 /** The Advisory Board's meetings, each kept as JSON (./_advisory-meetings.js) */
 export const MEETINGS_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_meetings (id TEXT PRIMARY KEY, date TEXT, data TEXT NOT NULL, updated_at TEXT, updated_by TEXT)';
+/**
+ * The Advisory Board's emails, owed and had, one row per email (./_advisory-mail.js sendOwed; Advisory Board QA round 25:
+ * the monthly ask went, its note after it didn't save, and the card offered to email everyone again; an update email was
+ * lost when a read after its status's write failed). A row is written in the same write as what makes the email owed (the
+ * ask put out, a status changed), before it goes; it goes under its own idempotency key (`idem`), and is marked had with
+ * its send; whatever is still owed the heartbeat sends, once. key: the one email ('ask:<ask id>:<address>',
+ * 'update:intro:<id>', 'update:hosted:<id>', ...); email: the address it goes to as the write read it; msg: what it says,
+ * as JSON, when that's settled by the write (an update's words); tried_at: when it first went to Resend; sent_at: had it;
+ * outcome: 'sent', 'unsure' (it went to Resend a day ago and was never marked: asked again it could make a second), or
+ * why it never went ('skipped:<why>', 'refused')
+ */
+export const OUTBOX_TABLE = 'CREATE TABLE IF NOT EXISTS advisory_outbox (key TEXT PRIMARY KEY, kind TEXT NOT NULL, ref TEXT, email TEXT NOT NULL, msg TEXT, idem TEXT NOT NULL, owed_at TEXT NOT NULL, tried_at TEXT, sent_at TEXT, tries INTEGER NOT NULL DEFAULT 0, outcome TEXT)';
+/**
+ * An owed email's row, as a statement for the write that makes it owed: `row` { key, kind, ref, email, msg, idem },
+ * written only when `guard` (SQL, with its `binds`) holds as that write runs (the change it belongs to landed). replace: a
+ * newer one in its place, unless it's the same (a status changed again before its update went: only the newest goes);
+ * else one already there, owed or had, stays as it is (nobody gets an ask twice)
+ */
+export function oweStatement(DB, row, { now = Date.now(), guard = '1', binds = [], replace = false } = {}) {
+  const sql = `INSERT INTO advisory_outbox (key, kind, ref, email, msg, idem, owed_at) SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${guard}`
+    + (replace ? ' ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, ref = excluded.ref, email = excluded.email, msg = excluded.msg, idem = excluded.idem, owed_at = excluded.owed_at, tried_at = NULL, sent_at = NULL, tries = 0, outcome = NULL WHERE advisory_outbox.idem != excluded.idem'
+      : ' ON CONFLICT(key) DO NOTHING');
+  return DB.prepare(sql).bind(row.key, row.kind, row.ref ?? null, row.email, row.msg == null ? null : JSON.stringify(row.msg), row.idem, nowIso(now), ...binds);
+}
+/** An owed email that hasn't gone, taken back in the same write as the change that makes it not owed any more */
+export const unoweStatement = (DB, key, { guard = '1', binds = [] } = {}) => DB.prepare(`DELETE FROM advisory_outbox WHERE key = ? AND sent_at IS NULL AND tried_at IS NULL AND ${guard}`).bind(key, ...binds);
 
 const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS advisory_asks (id TEXT PRIMARY KEY, data TEXT NOT NULL, sent_at TEXT, closed_at TEXT, at TEXT NOT NULL, by TEXT)',
@@ -97,6 +123,7 @@ const SCHEMA = [
   // with the rest, so a rename's move never meets a table not made yet (Advisory Board QA round 20)
   LINKS_TABLE,
   MEETINGS_TABLE,
+  OUTBOX_TABLE,
 ];
 const ready = new WeakSet();
 export async function ensureAdvisory(DB) {
@@ -121,6 +148,23 @@ export function webLink(v) {
 const plusYear = (date) => `${Number(date.slice(0, 4)) + 1}${date.slice(4)}`;
 export const newId = (prefix) => `${prefix}_${[...crypto.getRandomValues(new Uint8Array(9))].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b % 32]).join('')}`;
 const err = (message, status = 400) => Object.assign(new Error(message), { status });
+/**
+ * A staff save's one write (`write()`), with its answer lost looked at (`look()` → what that write alone wrote, when
+ * it's there): there, it's answered as done (→ { meta: { changes: 1 }, saved, lost }), never "That didn't go through"
+ * of a save the site has; not there, nothing was changed (503, CHANGE_DOWN); the look failing too, it can't be told yet
+ * (503, CHANGE_UNSURE). Board's landedOr (./_board.js), in the Advisory Board's words: Advisory Board QA round 26 (a gift
+ * credit, the settings, a term and a deleted ask had landed and were said as not)
+ */
+export async function staffLanded(write, look) {
+  try { return await write(); } catch (e) {
+    if (e?.status) throw e;
+    console.error('[advisory] a staff save: its answer lost, or it never ran (looked at)', e?.message || e);
+    let saved;
+    try { saved = await look(); } catch { throw err(CHANGE_UNSURE, 503); }
+    if (saved) return { meta: { changes: 1 }, saved, lost: true };
+    throw err(CHANGE_DOWN, 503);
+  }
+}
 const ID = /^[a-z]+_[a-z2-7]{6,24}$/;
 export const isId = (s) => ID.test(String(s || ''));
 
@@ -222,9 +266,11 @@ export async function saveSettings(DB, patch0, { naming = '', as = 'page' } = {}
     const me = naming ? await namedNow(DB, naming, as) : null;
     const guard = me ? ` AND EXISTS (SELECT 1 FROM team t WHERE ${stillTheirs('t', { into: false })})` : '';
     const g = me ? [me.slug, me.data] : [];
-    const r = row
-      ? await DB.prepare(`UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?${guard}`).bind(JSON.stringify(next), at, STATE, row.data, ...g).run()
-      : await DB.prepare(`INSERT OR IGNORE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1${guard}`).bind(STATE, JSON.stringify(next), at, ...g).run();
+    // (its answer lost: the settings as this write wrote them there, saved: staffLanded)
+    const r = await staffLanded(() => (row
+      ? DB.prepare(`UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND data = ?${guard}`).bind(JSON.stringify(next), at, STATE, row.data, ...g).run()
+      : DB.prepare(`INSERT OR IGNORE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1${guard}`).bind(STATE, JSON.stringify(next), at, ...g).run()),
+    async () => (await DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(STATE).first())?.data === JSON.stringify(next));
     if (Number(r?.meta?.changes) > 0) return next;
   }
   throw err('The settings kept changing. Try again in a moment.', 409);
@@ -307,8 +353,18 @@ const askOf = (r) => ({ id: r.id, ...parse(r.data), sentAt: r.sent_at || '', clo
  * paper (Advisory Board QA round 24, as Add's Joined and the members' own writes: rowWritten). No row: it was deleted
  * in the moment since (another tab), said in `gone`'s words
  */
-const staffWritten = async (stmt, gone) => {
-  const row = await stmt.first();
+const staffWritten = async (stmt, gone, { recheck = null, landed = null } = {}) => {
+  let row;
+  try { row = await stmt.first(); } catch (e) {
+    // (a new record's write whose answer was lost: looked for at its id, Advisory Board QA round 25. Landed, it's
+    // answered as saved; not, nothing changed, said so; couldn't be looked for, said so)
+    if (!recheck) throw e;
+    console.error('[advisory] a staff save', e?.message || e);
+    const now = await recheck.first().catch(() => undefined);
+    if (now === undefined) throw err(CHANGE_UNSURE, 503);
+    if (now && landed(now)) return now;
+    throw err(CHANGE_DOWN, 503);
+  }
   if (!row) throw err(gone, 404);
   return row;
 };
@@ -318,26 +374,82 @@ export async function listAsks(DB) {
   const rows = (await DB.prepare('SELECT * FROM advisory_asks ORDER BY at DESC').all()).results || [];
   return rows.map(askOf);
 }
+/**
+ * A new ask, wish or paper's id (Advisory Board QA round 25: its write landed, its answer was lost, and pressing again
+ * saved a second): the page's own, made once for the form, so a press made again is the same record, never a second;
+ * one already at that id is answered with as saved. A new one sent with no id (a tab opened before the page made them)
+ * whose words are exactly those of one the same person saved in the last ten minutes is that one (`same`: its id, else
+ * null); else one made here
+ */
+const SAME_NEW_MS = 10 * 60 * 1000;
+async function newOnce(DB, raw, prefix, same) {
+  if (isId(raw.id)) return raw.id;
+  return (await same()) || newId(prefix);
+}
+// (an ask's words saved over keep its mark of having been emailed: putAskOut's `mailed`)
+const KEEP_MAILED = "CASE WHEN json_extract(advisory_asks.data, '$.mailed') IS NULL THEN excluded.data ELSE json_set(excluded.data, '$.mailed', json(json_extract(advisory_asks.data, '$.mailed'))) END";
 /** Written, not yet out: `out` puts it on the page (and in the monthly email when that's on) */
 export async function saveAsk(DB, raw, { by = '', now = Date.now() } = {}) {
   await ensureAdvisory(DB);
   const title = clean(raw.title, 140);
   if (!title) throw err('What’s the ask?');
-  const data = { title, body: cleanText(raw.body, 1500), link: webLink(raw.link) };
-  const id = isId(raw.id) ? raw.id : newId('ask');
-  const had = await DB.prepare('SELECT id FROM advisory_asks WHERE id = ?').bind(id).first();
-  return askOf(await staffWritten(had
-    ? DB.prepare('UPDATE advisory_asks SET data = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), id)
-    : DB.prepare('INSERT INTO advisory_asks (id, data, at, by) VALUES (?, ?, ?, ?) RETURNING *').bind(id, JSON.stringify(data), nowIso(now), by), 'That ask is gone'));
+  const json = JSON.stringify({ title, body: cleanText(raw.body, 1500), link: webLink(raw.link) });
+  const id = await newOnce(DB, raw, 'ask', async () => (await DB.prepare("SELECT id FROM advisory_asks WHERE json_extract(data, '$.title') = ? AND json_extract(data, '$.body') = ? AND json_extract(data, '$.link') = ? AND by = ? AND at > ? ORDER BY at DESC LIMIT 1")
+    .bind(...Object.values(JSON.parse(json)), by, nowIso(now - SAME_NEW_MS)).first())?.id);
+  // (made, or the words of the one at that id, in the one statement: never a read of whether it's there, then a write)
+  const same = (r) => { const d = parse(r.data); return ['title', 'body', 'link'].every((k) => d[k] === JSON.parse(json)[k]); };
+  return askOf(await staffWritten(DB.prepare(`INSERT INTO advisory_asks (id, data, at, by) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = ${KEEP_MAILED} RETURNING *`)
+    .bind(id, json, nowIso(now), by), 'That ask is gone', { recheck: DB.prepare('SELECT * FROM advisory_asks WHERE id = ?').bind(id), landed: same }));
 }
-/** Only one ask is out at a time: the page has one thing on it, and the last one closes when the next goes out */
-export async function putAskOut(DB, id, { now = Date.now() } = {}) {
+/** Said when the write that puts an ask out (and claims its emails) didn't go: nothing changed, nothing went */
+export const ASK_NOT_OUT = (mailing, out = true) => `The site’s database didn’t answer just now, so ${!out ? 'nothing was sent' : mailing ? 'the ask isn’t out and nothing was sent' : 'the ask isn’t out'}. Please try again in a moment.`;
+/** …and when its answer was lost and whether it landed couldn't be looked at either */
+export const ASK_UNSURE = (mailing) => `The site’s database didn’t answer just now, so we can’t tell yet whether that went through. This page shows the ask as it is now${mailing ? ': if it’s out, its emails go by themselves in a few minutes, once to each Advisory Board member.' : '.'}`;
+/**
+ * Only one ask is out at a time: the page has one thing on it, and the last one closes when the next goes out. One write,
+ * all of it or none (Advisory Board QA round 25): the one out now closed, this one out, and with `mail`, its email owed to
+ * each Advisory Board member it goes to: `mail.owe(guard, binds)` → the claims, as statements (./_advisory-mail.js
+ * askPress), written only by the write that marks it emailed (`mailed`, kept on the ask: the card's "Email it" comes from
+ * it, never from a log written after the emails went). `out: false`: an ask already out, emailed now (Email it).
+ * A write whose answer was lost is looked for: landed, it's answered as landed (the emails go); not, nothing changed (503,
+ * ASK_NOT_OUT); couldn't be looked for, ASK_UNSURE (503).
+ * → { ask: as that write saved it, mailing: this write claimed its emails, already: it had been emailed before }
+ */
+export async function askOut(DB, id, { now = Date.now(), mail = null, out = true } = {}) {
   await ensureAdvisory(DB);
-  const row = await DB.prepare('SELECT id, sent_at FROM advisory_asks WHERE id = ?').bind(id).first();
+  // (a read before the write that fails: nothing changed, said so)
+  const row = await DB.prepare('SELECT id, sent_at, closed_at FROM advisory_asks WHERE id = ?').bind(id).first().catch((e) => { throw Object.assign(err(ASK_NOT_OUT(!!mail, out), 503), { cause: e }); });
   if (!row) throw err('That ask is gone', 404);
-  await DB.prepare('UPDATE advisory_asks SET closed_at = ? WHERE sent_at IS NOT NULL AND closed_at IS NULL AND id != ?').bind(nowIso(now), id).run();
-  return askOf(await staffWritten(DB.prepare('UPDATE advisory_asks SET sent_at = COALESCE(sent_at, ?), closed_at = NULL WHERE id = ? RETURNING *').bind(nowIso(now), id), 'That ask is gone'));
+  if (!out && (!row.sent_at || row.closed_at)) throw err('That ask isn’t out', 409);
+  const at = nowIso(now);
+  const mailed = mail ? { at, key: newId('m') } : null;
+  const setMailed = mail ? ", data = CASE WHEN json_extract(data, '$.mailed') IS NULL THEN json_set(data, '$.mailed', json(?)) ELSE data END" : '';
+  const stmts = [
+    ...(out ? [DB.prepare('UPDATE advisory_asks SET closed_at = ? WHERE sent_at IS NOT NULL AND closed_at IS NULL AND id != ? AND EXISTS (SELECT 1 FROM advisory_asks WHERE id = ?)').bind(at, id, id)] : []),
+    out ? DB.prepare(`UPDATE advisory_asks SET sent_at = COALESCE(sent_at, ?), closed_at = NULL${setMailed} WHERE id = ? RETURNING *`).bind(at, ...(mail ? [JSON.stringify(mailed)] : []), id)
+      : DB.prepare(`UPDATE advisory_asks SET closed_at = NULL${setMailed} WHERE id = ? AND sent_at IS NOT NULL AND closed_at IS NULL RETURNING *`).bind(...(mail ? [JSON.stringify(mailed)] : []), id),
+    // (each claim only by the write that marked it emailed: one emailed before claims nobody again)
+    ...(mail ? mail.owe("EXISTS (SELECT 1 FROM advisory_asks WHERE id = ? AND json_extract(data, '$.mailed.key') = ?)", [id, mailed.key]) : []),
+  ];
+  let saved;
+  try {
+    saved = (await DB.batch(stmts))[out ? 1 : 0]?.results?.[0] || null;
+  } catch (e) {
+    // (its answer lost, or it never ran: looked for, by what this write alone writes)
+    console.error('[advisory] putting the ask out', e?.message || e);
+    const now2 = await DB.prepare('SELECT * FROM advisory_asks WHERE id = ?').bind(id).first().catch(() => undefined);
+    if (now2 === undefined) throw err(ASK_UNSURE(!!mail), 503);
+    // (out and open, and with `mail` marked emailed: by this write, or by one before it, said as had)
+    if (!now2?.sent_at || now2.closed_at || (mail && !parse(now2.data).mailed)) throw err(ASK_NOT_OUT(!!mail, out), 503);
+    saved = now2;
+  }
+  if (!saved) throw err(out ? 'That ask is gone' : 'That ask isn’t out', out ? 404 : 409);
+  const ask = askOf(saved);
+  const mailing = !!mail && ask.mailed?.key === mailed.key;
+  return { ask, mailing, already: !!mail && !mailing };
 }
+/** The ask put out, as askOut's write saved it (emails, if any, are ./_advisory-mail.js askPress's) */
+export const putAskOut = async (DB, id, opts = {}) => (await askOut(DB, id, opts)).ask;
 export async function closeAsk(DB, id, { now = Date.now() } = {}) {
   await ensureAdvisory(DB);
   await DB.prepare('UPDATE advisory_asks SET closed_at = ? WHERE id = ?').bind(nowIso(now), id).run();
@@ -348,7 +460,9 @@ export async function deleteAsk(DB, id) {
   const row = await DB.prepare('SELECT sent_at FROM advisory_asks WHERE id = ?').bind(id).first();
   if (row?.sent_at) throw err('That ask has gone out, so it stays on the record. Close it instead.', 409);
   await DB.prepare('DELETE FROM advisory_answers WHERE ask_id = ?').bind(id).run();
-  await DB.prepare('DELETE FROM advisory_asks WHERE id = ?').bind(id).run();
+  // (its answer lost: gone is deleted, staffLanded)
+  await staffLanded(() => DB.prepare('DELETE FROM advisory_asks WHERE id = ?').bind(id).run(),
+    async () => !(await DB.prepare('SELECT 1 AS x FROM advisory_asks WHERE id = ?').bind(id).first()));
 }
 export async function currentAsk(DB) {
   await ensureAdvisory(DB);
@@ -368,16 +482,27 @@ const OPEN_ASK = 'EXISTS (SELECT 1 FROM advisory_asks a WHERE a.id = ? AND a.sen
  * Their answer to an ask, at the address they have as it's written (./_member-write.js: `who` is the member as their
  * sign-in found them, { slug, email }, or an address). → { answer, note, slug, name }: whose record it landed on
  */
-export async function answerAsk(DB, askId, who, { answer, note = '', via = 'page' }, { now = Date.now() } = {}) {
+export async function answerAsk(DB, askId, who, { answer, note = '', via = 'page' }, { now = Date.now(), notice = null } = {}) {
   await ensureAdvisory(DB);
   if (!['yes', 'no'].includes(answer)) throw err('Choose an answer');
   const text = cleanText(note, 800);
+  const at = nowIso(now);
+  let owed = null;
   const { me } = await writeAsMember(DB, who, async (me) => {
     await askOpen(DB, askId);
-    return DB.prepare(`INSERT OR REPLACE INTO advisory_answers (ask_id, slug, answer, note, at, via) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} AND ${OPEN_ASK}`)
-      .bind(askId, answer, text, nowIso(now), via, me.slug, me.data, askId).run();
+    const stmt = DB.prepare(`INSERT OR REPLACE INTO advisory_answers (ask_id, slug, answer, note, at, via) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} AND ${OPEN_ASK}`)
+      .bind(askId, answer, text, at, via, me.slug, me.data, askId);
+    // (whoever runs the group told, owed in this same write, so it's never lost: Advisory Board QA round 25. A notice
+    // keyed by the ask, the member and the answer brings its own statements, for a yes and a no alike: the same answer
+    // again sends nothing, a changed one says where it stands now, round 26: ./_advisory-mail.js answerNotice)
+    owed = notice ? notice(me, { askId, answer, note: text, at }) : null;
+    if (owed && !owed.statements && answer !== 'yes') owed = null;
+    const guard = { now, guard: 'EXISTS (SELECT 1 FROM advisory_answers WHERE ask_id = ? AND slug = ? AND at = ? AND answer = ?)', binds: [askId, me.slug, at, answer] };
+    const also = !owed ? [] : owed.statements ? owed.statements(DB, guard) : [oweStatement(DB, owed, guard)];
+    return memberWritten(DB, stmt, also, {
+      recheck: DB.prepare('SELECT ask_id FROM advisory_answers WHERE ask_id = ? AND slug = ? AND at = ? AND answer = ?').bind(askId, me.slug, at, answer), returns: false });
   });
-  return { answer, note: text, slug: me.slug, name: me.person.name };
+  return { answer, note: text, slug: me.slug, name: me.person.name, ...(owed ? { notice: owed.key } : {}) };
 }
 export async function answersTo(DB, askId) {
   await ensureAdvisory(DB);
@@ -396,12 +521,12 @@ export async function saveWish(DB, raw, { by = '', now = Date.now() } = {}) {
   const title = clean(raw.title, 140);
   if (!title) throw err('Who are we looking for?');
   const data = { title, detail: clean(raw.detail, 400) };
-  const id = isId(raw.id) ? raw.id : newId('w');
-  const had = await DB.prepare('SELECT id FROM advisory_wishlist WHERE id = ?').bind(id).first();
-  const last = had ? null : await DB.prepare('SELECT MAX(sort) AS n FROM advisory_wishlist').first();
-  const r = await staffWritten(had
-    ? DB.prepare('UPDATE advisory_wishlist SET data = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), id)
-    : DB.prepare('INSERT INTO advisory_wishlist (id, data, sort, at, by) VALUES (?, ?, ?, ?, ?) RETURNING *').bind(id, JSON.stringify(data), (Number(last?.n) || 0) + 1, nowIso(now), by), 'That one is gone');
+  // (the page's id for a new one: newOnce)
+  const id = await newOnce(DB, raw, 'w', async () => (await DB.prepare('SELECT id FROM advisory_wishlist WHERE data = ? AND by = ? AND at > ? ORDER BY at DESC LIMIT 1')
+    .bind(JSON.stringify(data), by, nowIso(now - SAME_NEW_MS)).first())?.id);
+  // (made at the end of the list, or the words of the one at that id, in the one statement)
+  const r = await staffWritten(DB.prepare('INSERT INTO advisory_wishlist (id, data, sort, at, by) VALUES (?, ?, (SELECT COALESCE(MAX(sort), 0) + 1 FROM advisory_wishlist), ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data RETURNING *')
+    .bind(id, JSON.stringify(data), nowIso(now), by), 'That one is gone', { recheck: DB.prepare('SELECT * FROM advisory_wishlist WHERE id = ?').bind(id), landed: (x) => x.data === JSON.stringify(data) });
   return { id: r.id, ...parse(r.data), sort: r.sort };
 }
 export async function deleteWish(DB, id) {
@@ -430,9 +555,49 @@ const rowWritten = async (stmt) => {
   const saved = await stmt.first();
   return { meta: { changes: saved ? 1 : 0 }, saved };
 };
+/**
+ * A member's guarded write with what goes with it (`also`: the notice to whoever runs the group, owed in this same write,
+ * guarded so it lands only with it: Advisory Board QA round 25), as writeAsMember's result, { meta, saved }. `returns`:
+ * the write's own RETURNING row is its answer (else its changes). A write whose answer was lost is looked for
+ * (`recheck`, by what this write alone wrote): landed, it's answered as landed; not, or couldn't be looked for, the
+ * failure as it was
+ */
+async function memberWritten(DB, stmt, also = [], { recheck = null, returns = true } = {}) {
+  try {
+    if (!also.length) return returns ? await rowWritten(stmt) : await stmt.run();
+    const r = await DB.batch([stmt, ...also]);
+    if (!returns) return r[0];
+    const saved = r[0]?.results?.[0] || null;
+    return { meta: { changes: saved ? 1 : 0 }, saved };
+  } catch (e) {
+    if (e?.status || !recheck) throw e;
+    const now = await recheck.first().catch(() => null);
+    if (!now) throw e;
+    console.error('[advisory] a member’s write landed, its answer lost: answered as landed', e?.message || e);
+    return { meta: { changes: 1 }, saved: now, lost: true };
+  }
+}
 
-/** "I know someone", at the address they have as it's written (./_member-write.js). `landedOn`: whose it is */
-export async function addIntro(DB, who, raw, { now = Date.now() } = {}) {
+/**
+ * A member's new record (an introduction, a request to host), made once (Advisory Board QA round 25, as staff's new ask,
+ * wish and paper: _advisory.js newOnce): its id is the page's, made once for the form; one already at that id is theirs
+ * and answered as done, never a second (someone else's: refused); a new one with no id whose words are exactly those of
+ * one they sent in the last ten minutes is that one. → the row there, or null to make it
+ */
+async function madeOnce(DB, table, id, me, json, now) {
+  const had = await DB.prepare(`SELECT * FROM ${table} WHERE id = ? OR (slug = ? AND data = ? AND at > ?) ORDER BY id = ? DESC LIMIT 1`)
+    .bind(id, me.slug, json, nowIso(now - SAME_NEW_MS), id).first();
+  if (had && had.slug !== me.slug) throw err('That one is already on the record. Reload the page.', 409);
+  return had;
+}
+/** A page's own id for a new record of this kind (its prefix), else one made here */
+const pageId = (raw, prefix) => (isId(raw.id) && String(raw.id).startsWith(`${prefix}_`) ? String(raw.id) : newId(prefix));
+/**
+ * "I know someone", at the address they have as it's written (./_member-write.js). `landedOn`: whose it is. notice(me,
+ * intro): the notice to whoever runs the group, owed in the same write (./_advisory-mail.js leadNotice). `already`: it
+ * was there (pressed again), answered as done
+ */
+export async function addIntro(DB, who, raw, { now = Date.now(), notice = null } = {}) {
   await ensureAdvisory(DB);
   const name = clean(raw.name, 120);
   if (!name) throw err('Who are you introducing?');
@@ -443,10 +608,18 @@ export async function addIntro(DB, who, raw, { now = Date.now() } = {}) {
     name, company: clean(raw.company, 120), email, phone: clean(raw.phone, 40), how: cleanText(raw.how, 800), help,
     wish: isId(raw.wish) ? raw.wish : '',
   };
-  const id = newId('in');
-  const { me, result } = await writeAsMember(DB, who, (me) => rowWritten(DB.prepare(`INSERT INTO advisory_intros (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} RETURNING *`)
-    .bind(id, 'thanks', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data)));
-  return { ...introOf(result.saved), landedOn: landedOn(me) };
+  const id = pageId(raw, 'in');
+  const json = JSON.stringify(data);
+  const { me, result } = await writeAsMember(DB, who, async (me) => {
+    const had = await madeOnce(DB, 'advisory_intros', id, me, json, now);
+    if (had) return { meta: { changes: 1 }, saved: had, already: true };
+    const owed = notice ? notice(me, { id, ...data }) : null;
+    return memberWritten(DB, DB.prepare(`INSERT INTO advisory_intros (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} RETURNING *`)
+      .bind(id, 'thanks', json, nowIso(now), nowIso(now), me.slug, me.data),
+    owed ? [oweStatement(DB, owed, { now, guard: 'EXISTS (SELECT 1 FROM advisory_intros WHERE id = ?)', binds: [id] })] : [],
+    { recheck: DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id) });
+  });
+  return { ...introOf(result.saved), landedOn: landedOn(me), ...(result.already ? { already: true } : {}) };
 }
 /** Only their own: what an advisor sees of the introductions */
 export async function introsBy(DB, slug) {
@@ -457,39 +630,87 @@ export async function listIntros(DB) {
   await ensureAdvisory(DB);
   return ((await DB.prepare('SELECT * FROM advisory_intros ORDER BY at DESC').all()).results || []).map(introOf);
 }
-export async function setIntroStatus(DB, id, { status, note }, { by = '', now = Date.now() } = {}) {
+/** Said when a staff change's write didn't go: nothing changed */
+export const CHANGE_DOWN = 'The site’s database didn’t answer just now, so nothing was changed. Please try again in a moment.';
+/** …and when its answer was lost and whether it landed couldn't be looked at either */
+export const CHANGE_UNSURE = 'The site’s database didn’t answer just now, so we can’t tell yet whether that saved. This page shows it as it is now.';
+/**
+ * A staff change written, with what goes with it (`also`: the member's update email owed, or one owed before taken back,
+ * each landing only with the change: Advisory Board QA round 25), all in one write, and answered from that write itself
+ * (RETURNING). One whose answer was lost is looked for (`recheck`), by what this write alone wrote (`landed`): landed, it's
+ * answered as landed; not, nothing changed (503, CHANGE_DOWN); couldn't be looked for, CHANGE_UNSURE (503). No row: it
+ * was deleted in the moment since, in `gone`'s words (404)
+ */
+/** A read a change needs, before its write, that failed: People's own words when it was People (503), else CHANGE_DOWN */
+const beforeWrite = (e) => { throw e?.status ? e : Object.assign(err(CHANGE_DOWN, 503), { cause: e }); };
+async function changeWritten(DB, stmt, also, { recheck, landed, gone }) {
+  let saved;
+  try {
+    saved = also.length ? (await DB.batch([stmt, ...also]))[0]?.results?.[0] || null : await stmt.first();
+  } catch (e) {
+    console.error('[advisory] a staff change', e?.message || e);
+    const now = await recheck.first().catch(() => undefined);
+    if (now === undefined) throw err(CHANGE_UNSURE, 503);
+    if (now && landed(now)) return now;
+    throw err(CHANGE_DOWN, 503);
+  }
+  if (!saved) throw err(gone, 404);
+  return saved;
+}
+/**
+ * Where an introduction stands, set by staff. mail({ was, next, changed, guard, binds }): what goes with it, as statements
+ * made from reads done before the write (./_advisory-mail.js statusPress), each guarded by `guard` so it lands only with
+ * the change. → { intro: as the write saved it, changed }
+ */
+export async function setIntroStatus(DB, id, { status, note }, { by = '', now = Date.now(), mail = null } = {}) {
   await ensureAdvisory(DB);
   if (!INTRO_STATUSES.some((s) => s.id === status)) throw err('Choose where it stands');
-  const row = await DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id).first();
+  // (a read before the write that fails: nothing changed, said so)
+  const row = await DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id).first().catch((e) => { throw Object.assign(err(CHANGE_DOWN, 503), { cause: e }); });
   if (!row) throw err('That introduction is gone', 404);
   const data = { ...parse(row.data), ...(note !== undefined ? { note: cleanText(note, 800) } : {}) };
-  const saved = await staffWritten(DB.prepare('UPDATE advisory_intros SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(status, JSON.stringify(data), nowIso(now), by, id), 'That introduction is gone');
-  return { intro: introOf(saved), changed: row.status !== status };
+  const at = nowIso(now);
+  const changed = row.status !== status;
+  const next = introOf({ ...row, status, data: JSON.stringify(data), updated_at: at, updated_by: by });
+  const also = mail ? await mail({ was: introOf(row), next, changed, guard: 'EXISTS (SELECT 1 FROM advisory_intros WHERE id = ? AND status = ? AND updated_at = ?)', binds: [id, status, at] }).catch(beforeWrite) : [];
+  const saved = await changeWritten(DB, DB.prepare('UPDATE advisory_intros SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(status, JSON.stringify(data), at, by, id), also, {
+    recheck: DB.prepare('SELECT * FROM advisory_intros WHERE id = ?').bind(id), landed: (r) => r.status === status && r.updated_at === at && (r.updated_by || '') === by, gone: 'That introduction is gone' });
+  return { intro: introOf(saved), changed };
 }
 
 // ─── Hosting a fundraiser ───────────────────────────────────────────
 
 const hostedOf = (r) => ({ id: r.id, slug: r.slug, status: r.status, ...parse(r.data), at: r.at, updatedAt: r.updated_at, updatedBy: r.updated_by || '' });
 
-/** A request to host a fundraiser, at the address they have as it's written (./_member-write.js). `landedOn`: whose it is */
-export async function requestHost(DB, who, raw, { now = Date.now() } = {}) {
+/** A request to host a fundraiser, at the address they have as it's written (./_member-write.js), made once as addIntro's is */
+export async function requestHost(DB, who, raw, { now = Date.now(), notice = null } = {}) {
   await ensureAdvisory(DB);
   const title = clean(raw.title, 140);
   if (!title) throw err('What’s the idea?');
   const data = { title, when: clean(raw.when, 120), where: clean(raw.where, 200), expected: clean(raw.expected, 120), notes: cleanText(raw.notes, 1500) };
-  const id = newId('h');
-  const { me, result } = await writeAsMember(DB, who, (me) => rowWritten(DB.prepare(`INSERT INTO advisory_hosted (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} RETURNING *`)
-    .bind(id, 'new', JSON.stringify(data), nowIso(now), nowIso(now), me.slug, me.data)));
-  return { ...hostedOf(result.saved), landedOn: landedOn(me) };
+  const id = pageId(raw, 'h');
+  const json = JSON.stringify(data);
+  const { me, result } = await writeAsMember(DB, who, async (me) => {
+    const had = await madeOnce(DB, 'advisory_hosted', id, me, json, now);
+    if (had) return { meta: { changes: 1 }, saved: had, already: true };
+    const owed = notice ? notice(me, { id, ...data }) : null;
+    return memberWritten(DB, DB.prepare(`INSERT INTO advisory_hosted (id, slug, status, data, at, updated_at) SELECT ?, t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} RETURNING *`)
+      .bind(id, 'new', json, nowIso(now), nowIso(now), me.slug, me.data),
+    owed ? [oweStatement(DB, owed, { now, guard: 'EXISTS (SELECT 1 FROM advisory_hosted WHERE id = ?)', binds: [id] })] : [],
+    { recheck: DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id) });
+  });
+  return { ...hostedOf(result.saved), landedOn: landedOn(me), ...(result.already ? { already: true } : {}) };
 }
 export async function listHosted(DB) {
   await ensureAdvisory(DB);
   return ((await DB.prepare('SELECT * FROM advisory_hosted ORDER BY at DESC').all()).results || []).map(hostedOf);
 }
-export async function setHosted(DB, id, { status, note, date, giveUrl }, { by = '', now = Date.now() } = {}) {
+/** Where a fundraiser request stands, set by staff; `mail` as setIntroStatus's. → { hosted: as the write saved it, changed } */
+export async function setHosted(DB, id, { status, note, date, giveUrl }, { by = '', now = Date.now(), mail = null } = {}) {
   await ensureAdvisory(DB);
   if (!HOSTED_STATUSES.some((s) => s.id === status)) throw err('Choose where it stands');
-  const row = await DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id).first();
+  // (a read before the write that fails: nothing changed, said so)
+  const row = await DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id).first().catch((e) => { throw Object.assign(err(CHANGE_DOWN, 503), { cause: e }); });
   if (!row) throw err('That request is gone', 404);
   if (date && !isDate(date)) throw err('Pick a date');
   const data = {
@@ -497,8 +718,13 @@ export async function setHosted(DB, id, { status, note, date, giveUrl }, { by = 
     // Its own Zeffy page, so the money it raises counts toward the goal
     ...(giveUrl !== undefined ? { giveUrl: webLink(giveUrl) } : {}),
   };
-  const saved = await staffWritten(DB.prepare('UPDATE advisory_hosted SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(status, JSON.stringify(data), nowIso(now), by, id), 'That request is gone');
-  return { hosted: hostedOf(saved), changed: row.status !== status };
+  const at = nowIso(now);
+  const changed = row.status !== status;
+  const next = hostedOf({ ...row, status, data: JSON.stringify(data), updated_at: at, updated_by: by });
+  const also = mail ? await mail({ was: hostedOf(row), next, changed, guard: 'EXISTS (SELECT 1 FROM advisory_hosted WHERE id = ? AND status = ? AND updated_at = ?)', binds: [id, status, at] }).catch(beforeWrite) : [];
+  const saved = await changeWritten(DB, DB.prepare('UPDATE advisory_hosted SET status = ?, data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(status, JSON.stringify(data), at, by, id), also, {
+    recheck: DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id), landed: (r) => r.status === status && r.updated_at === at && (r.updated_by || '') === by, gone: 'That request is gone' });
+  return { hosted: hostedOf(saved), changed };
 }
 
 /** An approved fundraiser's Zeffy page, by itself (Admin → Site Config → Zeffy): its status, date and note stay */
@@ -508,7 +734,9 @@ export async function setHostedLink(DB, id, giveUrl, { by = '', now = Date.now()
   if (!row) throw err('That request is gone', 404);
   if (row.status !== 'approved') throw err('Only an approved fundraiser has a Zeffy page here', 409);
   const data = { ...parse(row.data), giveUrl: webLink(giveUrl) };
-  return hostedOf(await staffWritten(DB.prepare('UPDATE advisory_hosted SET data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), nowIso(now), by, id), 'That request is gone'));
+  // (its answer lost: looked for, by what this write alone wrote, Advisory Board QA round 26)
+  return hostedOf(await staffWritten(DB.prepare('UPDATE advisory_hosted SET data = ?, updated_at = ?, updated_by = ? WHERE id = ? RETURNING *').bind(JSON.stringify(data), nowIso(now), by, id), 'That request is gone',
+    { recheck: DB.prepare('SELECT * FROM advisory_hosted WHERE id = ?').bind(id), landed: (r) => r.data === JSON.stringify(data) && r.updated_at === nowIso(now) && (r.updated_by || '') === by }));
 }
 
 // ─── Terms ──────────────────────────────────────────────────────────
@@ -546,8 +774,9 @@ export const canRenew = (term, today) => {
  * Another year, at the address they have as it's written (./_member-write.js: their term read there, each try). → their
  * term as that write saved it (termWritten), and `landedOn`: whose it is, as the write found them
  */
-export async function renew(DB, who, settings, { now = Date.now() } = {}) {
+export async function renew(DB, who, settings, { now = Date.now(), notice = null } = {}) {
   const today = todayEastern(now);
+  let owed = null;
   const { me, result } = await writeAsMember(DB, who, async (me) => {
     // (their term read with their record, in one statement: renamed since, it's read again at their new address, never
     // taken for no term at all and refused)
@@ -557,10 +786,14 @@ export async function renew(DB, who, settings, { now = Date.now() } = {}) {
     const term = { started: row.started_on || settings.termStart, ends: row.ends_on || settings.termEnd, renewedOn: row.renewed_on || '', left: row.left_on || '' };
     if (!canRenew(term, today)) throw err('Renewing opens closer to the end of your term', 409);
     const ends = plusYear(term.ends > today ? term.ends : today);
-    return termWritten(DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on) SELECT t.slug, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, renewed_on = excluded.renewed_on, left_on = NULL${TERM_SAVED}`)
-      .bind(term.started, ends, today, me.slug, me.data));
+    // (whoever runs the group told, owed in this same write: Advisory Board QA round 25)
+    owed = notice ? notice(me, { ends }) : null;
+    return memberWritten(DB, DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on) SELECT t.slug, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, renewed_on = excluded.renewed_on, left_on = NULL${TERM_SAVED}`)
+      .bind(term.started, ends, today, me.slug, me.data),
+    owed ? [oweStatement(DB, owed, { now, guard: 'EXISTS (SELECT 1 FROM advisory_terms WHERE slug = ? AND ends_on = ? AND renewed_on = ?)', binds: [me.slug, ends, today] })] : [],
+    { recheck: DB.prepare('SELECT started_on, ends_on, renewed_on, left_on FROM advisory_terms WHERE slug = ? AND ends_on = ? AND renewed_on = ?').bind(me.slug, ends, today) });
   });
-  return { ...termFrom(result.saved, settings), landedOn: landedOn(me) };
+  return { ...termFrom(result.saved, settings), landedOn: landedOn(me), ...(owed ? { notice: owed.key } : {}) };
 }
 /**
  * Staff set a member's term (Members). Written only while the address is an Advisory Board member's and no rename is
@@ -573,8 +806,11 @@ export async function setTerm(DB, slug, { ends, left }, settings) {
   // (someone who left keeps their term row: a staff change to it still lands, at their address now)
   const { result } = await writeAsMember(DB, slug, async (me) => {
     const term = await termOf(DB, me.slug, settings);
-    return termWritten(DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) SELECT t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on${TERM_SAVED}`)
-      .bind(term.started, ends ?? term.ends, term.renewedOn || null, left === undefined ? term.left || null : left || null, me.slug, me.data));
+    const to = { ends: ends ?? term.ends, left: left === undefined ? term.left || null : left || null };
+    // (its answer lost: their term as this write wrote it there, saved: staffLanded)
+    return staffLanded(() => termWritten(DB.prepare(`INSERT INTO advisory_terms (slug, started_on, ends_on, renewed_on, left_on) SELECT t.slug, ?, ?, ?, ? FROM team t WHERE ${stillTheirs('t')} ON CONFLICT(slug) DO UPDATE SET ends_on = excluded.ends_on, left_on = excluded.left_on${TERM_SAVED}`)
+      .bind(term.started, to.ends, term.renewedOn || null, to.left, me.slug, me.data)),
+    () => DB.prepare('SELECT started_on, ends_on, renewed_on, left_on FROM advisory_terms WHERE slug = ? AND ends_on IS ? AND left_on IS ?').bind(me.slug, to.ends, to.left).first());
   }, { fits: (p) => p.group === 'advisory', gone: GONE_STAFF, moving: MOVING_STAFF });
   return termFrom(result.saved, settings);
 }
@@ -602,7 +838,9 @@ export async function saveDoc(DB, raw, { by = '', now = Date.now(), base = null 
   if (!DOC_KINDS.some((k) => k.id === raw.kind)) throw err('Which kind of paper is it?');
   const title = clean(raw.title, 160);
   if (!title) throw err('Give it a title');
-  const id = isId(raw.id) ? raw.id : newId('ad');
+  // (the page's id for a new one: newOnce. One opened from a saved copy, `base`, is that one)
+  const id = base ? (isId(raw.id) ? raw.id : newId('ad')) : await newOnce(DB, raw, 'ad', async () => (await DB.prepare("SELECT id FROM advisory_docs WHERE json_extract(data, '$.kind') = ? AND json_extract(data, '$.title') = ? AND json_extract(data, '$.body') = ? AND updated_by = ? AND updated_at > ? ORDER BY updated_at DESC LIMIT 1")
+    .bind(raw.kind, title, cleanText(raw.body, 20000), by, nowIso(now - SAME_NEW_MS)).first())?.id);
   const row = await DB.prepare('SELECT * FROM advisory_docs WHERE id = ?').bind(id).first();
   const cur = row ? parse(row.data) : {};
   // Someone deleted it while this was open: saving doesn't bring it back, or the file that went with it
@@ -622,7 +860,8 @@ export async function saveDoc(DB, raw, { by = '', now = Date.now(), base = null 
   // (its files, which a save doesn't change, read before the save: a read that fails saves nothing and says so)
   const files = row ? (await DB.prepare("SELECT id, name, type, size, at FROM board_files WHERE owner_type = 'advisory-doc' AND owner_id = ?").bind(id).all()
     .catch((e) => { if (/no such table/i.test(e?.message || '')) return { results: [] }; throw e; })).results || [] : [];
-  const saved = await staffWritten(DB.prepare('INSERT OR REPLACE INTO advisory_docs (id, data, updated_at, updated_by) VALUES (?, ?, ?, ?) RETURNING *').bind(id, JSON.stringify(data), nowIso(now), by), 'That paper is gone');
+  const saved = await staffWritten(DB.prepare('INSERT OR REPLACE INTO advisory_docs (id, data, updated_at, updated_by) VALUES (?, ?, ?, ?) RETURNING *').bind(id, JSON.stringify(data), nowIso(now), by), 'That paper is gone',
+    { recheck: DB.prepare('SELECT * FROM advisory_docs WHERE id = ?').bind(id), landed: (x) => x.data === JSON.stringify(data) && x.updated_at === nowIso(now) });
   return { ...docOf(saved), files };
 }
 /** A first-day paper. Only into an empty place: never over one someone has since edited */

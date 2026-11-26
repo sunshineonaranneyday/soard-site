@@ -79,9 +79,9 @@ test('finding 3: a word with a family-first people\'s given-name shape after one
 ]));
 
 test('finding 3: written given name first, before a family name the lists know (one that always comes first, or one of these peoples\' that\'s nobody\'s given name), they\'re greeted, as decided', () => say([
-  ['Yuki Kato', '', 'Yuki'], ['Yuki Kato', 'Kato', 'Yuki'], ['Kai Chen', '', 'Kai'], ['Ken Masuda', '', 'Ken'], ['Ken Watanabe', '', 'Ken'], ['Ken Iida', '', 'Ken'], ['Rin Tanaka', '', 'Rin'],
-  ['Ken Smith', '', 'Ken'], ['Kai Jones', '', 'Kai'], ['Sam Rowe', '', 'Sam'], ['Joe Rowe', '', 'Joe'], ['Ann Taylor', '', 'Ann'], ['Tien Smith', '', 'Tien'], ['Ming Yao', '', 'Ming'],
-  ['Jen Smith', '', 'Jen'], ['Pat Lee', '', 'Pat'], ['Lou Ames', '', 'Lou'], ['Joe Park', '', 'Joe'], ['Ann Kim', '', 'Ann'], ['Sam Lee', '', 'Sam'], ['Soo-jin Myung', '', 'Soo-jin'],
+  ['Yuki Kato', '', ''] /* r25: Yuki is a family name some people write first and Kato no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Yuki Kato', 'Kato', ''] /* r25: Yuki is a family name some people write first and Kato no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Kai Chen', '', ''] /* r25: Kai is a family name some people write first and Chen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Ken Masuda', '', ''] /* r25: Ken is a family name some people write first and Masuda no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Ken Watanabe', '', ''] /* r25: Ken is a family name some people write first and Watanabe no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Ken Iida', '', ''] /* r25: Ken is a family name some people write first and Iida no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Rin Tanaka', '', ''] /* r25: Rin is a family name some people write first and Tanaka no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */,
+  ['Ken Smith', '', 'Ken'], ['Kai Jones', '', 'Kai'], ['Sam Rowe', '', 'Sam'], ['Joe Rowe', '', 'Joe'], ['Ann Taylor', '', 'Ann'], ['Tien Smith', '', 'Tien'], ['Ming Yao', '', ''] /* r25: Ming is a family name some people write first and Yao no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */,
+  ['Jen Smith', '', 'Jen'], ['Pat Lee', '', 'Pat'], ['Lou Ames', '', 'Lou'], ['Joe Park', '', ''] /* r25: Joe is a family name some people write first and Park no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Ann Kim', '', ''] /* r25: Ann is a family name some people write first and Kim no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Sam Lee', '', 'Sam'], ['Soo-jin Myung', '', 'Soo-jin'],
 ]));
 
 test('finding 3: each shape is built from its romanization\'s syllables, the lists carry none of them by hand, and Khmer is a written list of a few hundred', () => {
@@ -89,7 +89,7 @@ test('finding 3: each shape is built from its romanization\'s syllables, the lis
   for (const w of ['Daisuke', 'Hiroyuki', 'Takahiro', 'Kosuke', 'Akemi', 'Hinata', 'Junnosuke', 'Shintaro', 'Ohno']) assert.ok(G.givenShape('japanese', w), w);
   for (const w of ['Woo-jin', 'Seung-hyun', 'Ji-sung', 'Ye-won', 'Na-yeon', 'Su-bin', 'Young-hee', 'Minjun', 'Ji-an']) assert.ok(G.givenShape('korean', w), w);
   for (const w of ['Xiaohua', 'Xiao-ping', 'Shu-chuan', 'Hsiu-chin', 'Kwok-wing', 'Wai-keung', 'Pui-shan', 'Wei', 'Chunyi']) assert.ok(G.givenShape('chinese', w), w);
-  for (const [p, w] of [['japanese', 'Smith'], ['japanese', 'Lisa'], ['korean', 'Jones'], ['korean', 'Mason'], ['chinese', 'Martinez'], ['chinese', 'Kowalski']]) assert.ok(!G.givenShape(p, w), `${p} ${w}`);
+  for (const [p, w] of [['japanese', 'Smith'], ['japanese', 'Lisa'], ['korean', 'Jones'], /* r25: ['korean', 'Mason'] left out: by the romanizations' own rules Ma-son is two Korean syllables (round 25, finding 1); a known family name beats a shape, so "Ann Mason" is still greeted (advisory-round25-names) */ ['chinese', 'Martinez'], ['chinese', 'Kowalski']]) assert.ok(!G.givenShape(p, w), `${p} ${w}`);
   const s = G.listSizes();
   assert.ok(s.khmer >= 300, `${s.khmer} Khmer given names`);
   assert.ok(s.pinyin >= 400 && s.wadeGiles >= 300 && s.hongKong >= 400 && s.morae >= 100, JSON.stringify(s));
@@ -220,7 +220,7 @@ test('refinement 1: a known family name beats a shape: a common family name of a
     ['Juan Luna', '', 'Juan'], ['Ken Johnson', '', 'Ken'], ['Aida Romero', '', 'Aida'], ['Kai Mason', '', 'Kai'], ['Jan Hansen', '', 'Jan'], ['Juan Soto', '', 'Juan'],
     ['Ken Moore', '', 'Ken'], ['Pat Hanna', '', 'Pat'], ['Yuki Rose', '', 'Yuki'], ['Jen Wade', '', 'Jen'], ['Bo Jackson', '', 'Bo'], ['Lou Moran', '', 'Lou'],
     // (Lin always comes first and isn't on the Chinese list: the family name, so Pat is greeted)
-    ['Pat Lin', '', 'Pat'], ['Kai Chen', '', 'Kai'], ['Yuki Kato', '', 'Yuki'],
+    ['Pat Lin', '', ''] /* r25: Pat is a family name some people write first and Lin no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Kai Chen', '', ''] /* r25: Kai is a family name some people write first and Chen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Yuki Kato', '', ''] /* r25: Yuki is a family name some people write first and Kato no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */,
     // (their people's given names, by the list or the shape: still none, and one on their own list beats a surname)
     ['Juan Yu-ting', '', ''], ['Kai Daisuke', '', ''], ['Ann Woo-jin', '', ''], ['Bo Xiaohua', '', ''], ['Tung Wai-keung', '', ''], ['Bo Bowen', '', ''],
   ]);
@@ -232,7 +232,7 @@ test('refinement 2: Hokkien, Teochew and Hakka as Singapore and Malaysia write t
     ['Tan Boon Hock', '', ''], ['Lim Chee-hwa', '', ''], ['Bo Boon Hock', '', ''], ['Ming Chee-hwa', '', ''], ['Bo Kiat', '', ''], ['Jian Siew Ling', '', ''],
     ['Tung Yat-sen', '', ''], ['Shan Ing-wen', '', ''], ['Ming Ying-jeou', '', ''], ['Kai Hwee', '', ''], ['Ping Fook', '', ''], ['Juan Teck', '', ''],
     // (given name first, before a family name the lists know: theirs)
-    ['Ming Tsai', '', 'Ming'], ['Bo Tan', '', 'Bo'], ['Kai Goh', '', 'Kai'],
+    ['Ming Tsai', '', ''] /* r25: Ming is a family name some people write first and Tsai no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Bo Tan', '', ''] /* r25: Bo is a family name some people write first and Tan no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Kai Goh', '', ''] /* r25: Kai is a family name some people write first and Goh no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */,
   ]);
   for (const w of ['Boon', 'Hock', 'Huat', 'Chye', 'Teck', 'Siew', 'Hwee', 'Kiat', 'Keng', 'Seng', 'Chee-hwa', 'Yat-sen', 'Ying-jeou', 'Ing-wen']) assert.ok(G.givenShape('chinese', w), w);
   assert.ok(G.listSizes().hokkien >= 500, `${G.listSizes().hokkien} Hokkien, Teochew and Hakka syllables`);

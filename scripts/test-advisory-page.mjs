@@ -174,9 +174,11 @@ function adminPost(w, b, res) {
   if (b.action === 'intro-status') { a.intros = a.intros.map((i) => (i.id === b.id ? { ...i, status: b.status, note: b.note, updatedBy: 'them' } : i)); return json(res, 200, { ok: true }); }
   if (b.action === 'save-ask') { const ask = { id: `ask_${Date.now()}`, ...b.ask, sentAt: '', closedAt: '', answers: [] }; a.asks = [ask, ...a.asks]; return json(res, 200, { ok: true, ask }); }
   if (b.action === 'send-ask' && w.switched && b.emailsOk !== true) { a.settings = { ...a.settings, emails: true }; return json(res, 409, { ok: false, emails: true, error: 'Emails are on, so this will email every Advisory Board member.' }); }
-  if (b.action === 'send-ask') { w.lastSent = a.settings.emails ? { sent: a.advisors.length, failed: 0 } : { off: true }; a.asks = a.asks.map((x) => (x.id === b.id ? { ...x, sentAt: new Date().toISOString() } : x.sentAt && !x.closedAt ? { ...x, closedAt: new Date().toISOString() } : x)); return json(res, 200, { ok: true, sent: w.lastSent }); }
+  /* r25: what a press of the ask did is said in the server's own words (functions/api/_advisory-mail.js askWords),
+     from what its write claimed and what went, so this stand-in for the server says them as it does */
+  if (b.action === 'send-ask') { w.lastSent = a.settings.emails ? { sent: a.advisors.length, owed: 0 } : { off: true }; a.asks = a.asks.map((x) => (x.id === b.id ? { ...x, sentAt: new Date().toISOString() } : x.sentAt && !x.closedAt ? { ...x, closedAt: new Date().toISOString() } : x)); return json(res, 200, { ok: true, sent: w.lastSent, said: a.settings.emails ? `It’s out, and emailed to ${a.advisors.length} Advisory Board members.` : 'It’s on the page. Emails are off, so nothing was sent.' }); }
   if (b.action === 'save-wish') { const wish = { id: `w_${Date.now()}`, ...b.wish }; a.wishes = [...a.wishes, wish]; return json(res, 200, { ok: true, wish }); }
-  if (b.action === 'email-ask') return json(res, 200, { ok: true, sent: a.advisors.length, failed: 0 });
+  if (b.action === 'email-ask') return json(res, 200, { ok: true, sent: { sent: a.advisors.length, owed: 0 }, said: `Emailed to ${a.advisors.length} Advisory Board members.` }); /* r25: as send-ask's */
   if (b.action === 'save-doc' && b.base && a.docs.find((d) => d.id === b.doc.id)?.updatedAt !== b.base) return json(res, 409, { ok: false, current: a.docs.find((d) => d.id === b.doc.id), error: 'Someone saved this since you opened it.' });
   if (b.action === 'save-doc') { const had = a.docs.find((d) => d.id === b.doc.id); const doc = { id: b.doc.id || `ad_${Date.now()}`, files: [], updatedAt: new Date().toISOString(), version: 1, ...had, ...b.doc, ...(b.doc.url ? { url: /^https:/.test(b.doc.url) ? b.doc.url : `https://${b.doc.url}` } : {}) }; a.docs = [...a.docs.filter((d) => d.id !== doc.id), doc]; return json(res, 200, { ok: true, doc }); }
   if (b.action === 'send-welcome-to') {
@@ -188,7 +190,7 @@ function adminPost(w, b, res) {
     a.welcomed = { ...a.welcomed, [x.slug]: at };
     return json(res, 200, { ok: true, sent: 1, again: !!had, at });
   }
-  if (b.action === 'send-welcome') { const fresh = (b.slugs || []).filter((x) => !a.welcomed?.[x]); a.welcomed = { ...a.welcomed, ...Object.fromEntries(fresh.map((x) => [x, new Date().toISOString()])) }; return json(res, 200, { ok: true, sent: fresh.length, failed: 0 }); }
+  if (b.action === 'send-welcome') { const fresh = (b.slugs || []).filter((x) => !a.welcomed?.[x]); a.welcomed = { ...a.welcomed, ...Object.fromEntries(fresh.map((x) => [x, new Date().toISOString()])) }; return json(res, 200, { ok: true, sent: fresh.length, failed: 0, said: fresh.length ? `Sent to ${fresh.length === 1 ? '1 Advisory Board member' : `${fresh.length} Advisory Board members`}.` : 'Nothing went out: they’ve all had it already.' }); } /* r26: the server says what happened (./_advisory-mail.js welcomesSaid), and the page says its words */
   if (b.action === 'set-term') { w.terms = [...(w.terms || []), b]; return json(res, 200, { ok: true }); }
   if (b.action === 'save-settings') { if (b.settings.campaignUrl && !/^https:/.test(b.settings.campaignUrl)) b.settings.campaignUrl = `https://${b.settings.campaignUrl}`; a.settings = { ...a.settings, ...b.settings }; return json(res, 200, { ok: true, settings: a.settings }); }
   if (b.action === 'hosted-status') { a.hosted = a.hosted.map((x) => (x.id === b.id ? { ...x, status: b.status, date: b.date, giveUrl: b.giveUrl } : x)); return json(res, 200, { ok: true, hosted: a.hosted.find((x) => x.id === b.id) }); }
@@ -231,7 +233,7 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(200, { 'Content-Type': TYPES[extname(file)] || 'application/octet-stream', ...(file.endsWith('.html') ? { 'Content-Security-Policy': CSP } : {}) });
   res.end(servesPage(file, readFileSync(file)));
 });
-await new Promise((r) => server.listen(0, '127.0.0.1', r));
+await new Promise((r) => server.listen(Number(process.env.PORT || 0), '127.0.0.1', r)); /* r26: a port of the runner's own (PORT), else any */
 const ORIGIN = `http://127.0.0.1:${server.address().port}`;
 
 // The top bar holds six tabs, seven for whoever runs the group, at every width between a phone and a wide screen
@@ -806,7 +808,9 @@ for (const width of [390, 1280]) {
       [{ signedIn: true }, 'has signed in already, so they weren’t emailed'],
       [{ notReady: true, why: 'sign-in' }, 'Cloudflare usually takes a new one within a few minutes'],
       [{ notReady: true, why: 'setup' }, 'Peter or Holly can see what’s left on Board → Members'],
-      [{ sent: 1, again: true, unsure: true, at: new Date(Date.now() - 11 * 60 * 1000).toISOString() }, 'may have gone. It’s counted as sent'],
+      /* r26: only the email service's yes is "sent": no answer that says either way is owed (it goes by itself under its key), and its own no is a refusal */
+      [{ owed: 1 }, 'sign-in email goes in a few minutes'],
+      [{ refused: 1 }, 'The email service refused'],
       [{ failed: 1 }, 'the email service didn’t take it'],
       [{ tooSoon: true, at: new Date().toISOString() }, 'It can go again at'],
     ]) {

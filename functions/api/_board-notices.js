@@ -4,10 +4,13 @@
  * Three of the board's emails go once, after a person's press, and had no record of their own: a member told their
  * signature was taken off (Board → Who's signed: Take it off, or a signed copy SOARD put in its place), the secretary
  * and the founders told a correction to the minutes was suggested, and whoever suggested one told what was decided.
- * A read of People that failed, or a send Resend didn't take, lost them for good (Board QA round 10, Nov 22 2026).
+ * A read of People that failed, or a send Resend didn't take, lost them for good (Board QA round 10, Nov 22 2026). A
+ * fourth since: who runs Board told a member can't sign a paper as written (Decline), which went after the answer with
+ * nothing to try again (Board QA round 13, Nov 24 2026).
  *
  * Now each is written down as due before anything is asked of People or Resend (board_state 'notice-due:<id>', one row
- * per notice, holding what it needs to send itself later), and comes off in the step that sends it. A read of People
+ * per notice, holding what it needs to send itself later), in the same write as the press's own work (dueStmt: the
+ * correction, the decline, the signature taken off or replaced), and comes off in the step that sends it. A read of People
  * that fails, or a send that doesn't go, leaves it due, and the signing look (./_board-sign.js maybeRunSigning) sends it
  * on its next clean look. The press itself always stands: the person is told the email follows, never that it went.
  * Never twice: one send of a notice at a time holds it (a claim, let go of after two minutes should a send never
@@ -40,18 +43,33 @@ export async function noticeReads(DB) {
 /**
  * A notice a press owes, written down as due, then sent if People can be read now (the send itself after the answer,
  * with `waitUntil`). → {} or { later: the words the person is told } when it waits for People. Nothing when email
- * isn't set up (as before: there's nothing to send it with)
+ * isn't set up (as before: there's nothing to send it with). Only for a press whose own work is already written: a press
+ * that writes something with its notice writes the notice in that same write (dueStmt) and then sends it (sendNotice),
+ * never in a step after it (Board QA round 13, Nov 24 2026: a correction kept, its notice's write failing, and the
+ * secretary and the founders never told)
  */
-export async function oweNotice(env, id, notice, { waitUntil = null, who = '', now = Date.now() } = {}) {
+export async function oweNotice(env, id, notice, opts = {}) {
   if (!emailConfigured(env)) return {};
   await readState(env.DB, `${PREFIX}${id}`); // (makes board_state)
-  const due = dueRow(id, notice, now);
-  await env.DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING')
-    .bind(due.key, due.data, due.at).run();
+  await dueStmt(env.DB, id, notice, opts.now ?? Date.now()).run();
+  return sendNotice(env, id, opts);
+}
+
+/**
+ * A notice written down as due in a press's own write (dueStmt), sent now if People can be read: after the answer with
+ * `waitUntil`, or before it (`wait`: the press says whether it went). → {} | { sent: true } (`wait`, it went) |
+ * { later } (it waits for People, or (`wait`) for the next look). Nothing when email isn't set up
+ */
+export async function sendNotice(env, id, { waitUntil = null, who = '', now = Date.now(), wait = false } = {}) {
+  if (!emailConfigured(env)) return {};
   let reads;
   try { reads = await noticeReads(env.DB); } catch (err) {
     if (!err?.unread) throw err;
     return { later: laterWords(who) };
+  }
+  if (wait) {
+    const r = await deliver(env, id, reads, { now });
+    return r.sent ? { sent: true } : { later: laterWords(who) };
   }
   const going = deliver(env, id, reads, { now }).catch((err) => console.error('[board-notices]', id, err?.message || err));
   if (waitUntil) waitUntil(going); else await going;
@@ -60,9 +78,20 @@ export async function oweNotice(env, id, notice, { waitUntil = null, who = '', n
 
 /**
  * The row a notice is kept due in, as oweNotice writes it: { key, data, at }. A press that writes it in the same step as
- * its own work (./_board-corrections.js decideCorrection) uses this, then oweNotice, which finds it there
+ * its own work (./_board-corrections.js decideCorrection) uses this, then sendNotice
  */
 export const dueRow = (id, notice, now = Date.now()) => ({ key: `${PREFIX}${id}`, data: JSON.stringify({ ...notice, id, queuedAt: iso(now), tries: 0 }), at: iso(now) });
+/**
+ * The statement that writes a notice down as due, for a press's own one write (board_state made first: readState or
+ * stateReady). Written once: a press made again keeps the first (ON CONFLICT), never two of one notice. `only` ({ sql,
+ * bind }): written only while that holds, as the press's own statement in the same batch is
+ */
+export const dueStmt = (DB, id, notice, now = Date.now(), only = null) => {
+  const d = dueRow(id, notice, now);
+  return only
+    ? DB.prepare(`INSERT INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE ${only.sql} ON CONFLICT(key) DO NOTHING`).bind(d.key, d.data, d.at, ...only.bind)
+    : DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(d.key, d.data, d.at);
+};
 
 /** The notices due, oldest first: [{ id, ...notice }] */
 export async function dueNotices(DB) {
@@ -116,6 +145,8 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
   try { who = await forNow(DB, n, reads.board); } catch (err) { await release().catch(() => {}); throw err; }
   // (one whose rename couldn't finish waits for the person who settles it: nothing is sent or written)
   if (who.wait) { await release(); return { busy: true }; }
+  // (who has had it: kept through anything that stops this send, so nobody gets it twice)
+  const had = new Set(n.sent || []);
   try {
     // (a signature's notice the chain already has went: off the list, never again)
     if (n.kind === 'void' && await voidInChain(DB, n, who.slug)) { await close(); return { none: true }; }
@@ -125,8 +156,15 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
       await close(n.kind === 'void' ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { for: n.at, skipped: 'not on the board' } }] : []);
       return { none: true };
     }
+    // What it's about no longer stands (a correction taken back or decided, a paper signed since its decline): not
+    // needed, closed with a true record of why, nothing sent
+    const gone = await noLonger(DB, n, who.slug);
+    if (gone) {
+      console.log('[board-notices] not needed', id, gone);
+      await close(n.kind === 'void' ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { for: n.at, skipped: gone } }] : []);
+      return { none: true };
+    }
     const mails = await mailsFor(env, n, reads, who.member);
-    const had = new Set(n.sent || []);
     let failed = 0;
     let why = '';
     for (const m of mails) {
@@ -136,12 +174,49 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
       else { failed += 1; why = r.errors?.[0] || 'the email didn’t go'; }
     }
     if (failed) { await keep([...had], why); return { failed }; }
-    await close(n.kind === 'void' && mails.length ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { to: mails[0].to, for: n.at, ...(n.replacedByCopy ? { replacedByCopy: true } : {}) } }] : []);
+    // (all of it went: off the list. Its record not closing leaves who had it kept, so the next look only closes it, and
+    // the answer is what went. Board QA round 13)
+    try {
+      await close(n.kind === 'void' && mails.length ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { to: mails[0].to, for: n.at, ...(n.replacedByCopy ? { replacedByCopy: true } : {}) } }] : []);
+    } catch (err) {
+      console.error('[board-notices] closing', id, err?.message || err);
+      await keep([...had], 'sent; its record not closed yet').catch(() => {});
+    }
     return mails.length ? { sent: true } : { none: true };
   } catch (err) {
-    await keep(n.sent || [], err?.message).catch(() => {});
+    await keep([...had], err?.message).catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Why a notice owed isn't needed any more, checked as it goes, in one place for every kind ('' while what it's about still
+ * stands). Each kind names what it's about: a correction (`cid`), a decision on one (`cid`, `made`), a decline (`docId`,
+ * `slug`, `year`, `at`), a signature taken off or replaced by a copy (`docId`, `slug`, `year`, `at`). Board QA round 14
+ * (Nov 24 2026): a notice that had to wait went after what it was about was undone, in words no longer true: the
+ * secretary told of a correction Sam had taken back, or one she'd decided; SOARD told Sam can't sign a paper he had
+ * signed since. A read that fails throws: never taken for "not needed"
+ */
+async function noLonger(DB, n, at = '') {
+  // (whose: the address they have now as well as the one the press kept; a decline's is followed here, forNow follows the rest)
+  const now = n.kind === 'declined' ? (await slugNow(DB, n.slug, n.queuedAt || '')).slug : at;
+  const slugs = [...new Set([n.slug, n.toSlug, now].filter(Boolean))];
+  if (n.kind === 'correction' || n.kind === 'correction-decided') {
+    const c = await DB.prepare('SELECT state FROM board_minutes_corrections WHERE id = ?').bind(String(n.cid || '')).first();
+    if (!c) return 'the correction is gone';
+    if (n.kind === 'correction') return c.state === 'waiting' || c.state === 'making' ? '' : c.state === 'withdrawn' ? 'taken back' : 'decided already';
+    return c.state === (n.made ? 'made' : 'declined') ? '' : 'decided otherwise';
+  }
+  if (n.kind === 'declined' || n.kind === 'void') {
+    const sig = await DB.prepare(`SELECT how, at FROM board_signatures WHERE doc_id = ? AND year = ? AND slug IN (${slugs.map(() => '?').join(', ')}) ORDER BY at DESC LIMIT 1`).bind(n.docId, n.year, ...slugs).first();
+    // (a decline: signed since, there's nothing they can't sign)
+    if (n.kind === 'declined') return sig && String(sig.at || '') >= String(n.at || '') ? 'signed it since' : '';
+    // (a copy SOARD put in place of theirs: told only while that copy is their signature; one taken off: told unless
+    // they've signed it again since, which the email would ask them to do)
+    if (n.replacedByCopy) return sig?.how === 'staff' ? '' : 'the copy isn’t their signature now';
+    return sig && ['typed', 'drawn', 'copy'].includes(sig.how) && String(sig.at || '') > String(n.at || '') ? 'signed it again' : '';
+  }
+  return '';
 }
 
 /**
@@ -196,6 +271,16 @@ async function mailsFor(env, n, { board, admins }, member = null) {
     if (!isEmail(to) || !doc) return [];
     const { voidEmail } = await import('./_board-sign.js');
     return [{ to, from: fromBoard(), replyTo: admins, tags: [{ name: 'kind', value: 'board-void' }], idempotencyKey: `void:${n.docId}:${n.slug}:${n.year}:${n.at}`, ...voidEmail({ doc, year: n.year, reason: n.reason || '', replacedByCopy: !!n.replacedByCopy }) }];
+  }
+  if (n.kind === 'declined') {
+    // To who runs Board: a member who can't sign a paper as written, and why (the decline itself is in the chain, kept
+    // in the same write as this notice: ./_board-sign.js declineDoc)
+    const { listDocs } = await import('./_board.js');
+    const doc = (await listDocs(DB)).find((d) => d.id === n.docId);
+    if (!doc) return [];
+    const { declineEmail } = await import('./_board-sign.js');
+    const mail = declineEmail({ doc, name: n.name || '', reason: n.reason || '', year: n.year });
+    return [...new Set((admins || []).map(normEmail))].filter(isEmail).map((to) => ({ to, from: fromBoard(), replyTo: isEmail(n.email) ? [n.email] : [], tags: [{ name: 'kind', value: 'board-declined' }], idempotencyKey: `declined:${n.docId}:${n.slug}:${n.year}:${n.at}:${to}`, ...mail }));
   }
   const { getMeeting } = await import('./_board.js');
   const m = await getMeeting(DB, n.meetingId);

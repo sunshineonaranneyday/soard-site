@@ -4,6 +4,7 @@
  */
 import { h, htm, useState, useEffect, useRef } from '../vendor.js';
 import { Icon, useKept, nbw, mapsHref } from './parts.js';
+import { failed, unreadWords } from './unread.js';
 
 const html = htm.bind(h);
 const rise = (i) => `--i:${i}`;
@@ -15,11 +16,23 @@ const firstName = (n) => String(n || '').trim().split(/\s+/)[0];
 export const lineOf = (a) => (a?.street ? [a.street, a.city, [a.state, a.zip].filter(Boolean).join(' ')].filter(Boolean).join(', ') : '');
 /** Two names that are the same letters and digits ("SOARD" isn't "Sunshine on a Ranney Day") */
 const sameNameish = (a, b) => String(a || '').toLowerCase().replace(/[^a-z0-9]+/g, '') === String(b || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-/** The facts in the order a form asks for them: { id, label, value, copy, href, ext, note, wide, list } */
+/**
+ * What of SOARD's facts couldn't load just now (`org.unread`, ../../functions/api/_org-facts.js; the kids served,
+ * `numbers.unread.kids`, as Home says it), in words → ['SOARD’s name, EIN, addresses, phone and email', …] ([] when all
+ * of them did). Board QA round 13: a failed read emptied the card, and the Impact went, without a word
+ */
+export function factsMissing(org, numbers) {
+  const u = org?.unread || {};
+  return [u.settings ? 'SOARD’s name, EIN, addresses, phone and email' : '', u.media ? 'when it was founded, its mission and its few lines' : '', u.irs ? 'its tax status' : '', numbers?.unread?.kids ? 'the kids served' : ''].filter(Boolean);
+}
+const and = (l) => (l.length > 1 ? `${l.slice(0, -1).join(', ')} and ${l.at(-1)}` : l[0] || '');
+/** The facts in the order a form asks for them: { id, label, value, copy, href, ext, note, wide, list, unloaded } */
 export function factsOf(org, numbers) {
   if (!org) return [];
   const irs = org.irs?.exempt ? org.irs : null;
   const imp = numbers?.impact?.kids ? numbers.impact : null;
+  // (the kids served not read: its place says so, never a fact left out without a word, as Home says it)
+  const impLost = !imp && !!numbers?.unread?.kids;
   const since = imp?.byYear?.[0]?.year;
   const phone = String(org.phone || '').replace(/\D/g, '');
   return [
@@ -36,7 +49,8 @@ export function factsOf(org, numbers) {
     { id: 'email', label: 'Email', value: org.email, href: org.email ? `mailto:${org.email}` : null },
     { id: 'website', label: 'Website', value: org.website, href: org.website ? `https://${org.website.replace(/^https?:\/\//, '')}` : null, ext: true },
     org.founded ? { id: 'founded', label: 'Founded', value: [org.founded, org.founders && `by ${org.founders}`].filter(Boolean).join(', ') } : null,
-    imp ? { id: 'impact', label: 'Impact', value: nbw(`${imp.kids.toLocaleString()} kids served · ${imp.rooms.toLocaleString()} rooms built`), copy: `${imp.kids.toLocaleString()} kids served and ${imp.rooms.toLocaleString()} rooms built${since ? ` since ${since}` : ''}`, note: 'Counted the way the website counts' } : null,
+    imp ? { id: 'impact', label: 'Impact', value: nbw(`${imp.kids.toLocaleString()} kids served · ${imp.rooms.toLocaleString()} rooms built`), copy: `${imp.kids.toLocaleString()} kids served and ${imp.rooms.toLocaleString()} rooms built${since ? ` since ${since}` : ''}`, note: 'Counted the way the website counts' }
+      : impLost ? { id: 'impact', label: 'Impact', value: 'Couldn’t load just now', note: 'Reload in a moment', unloaded: true } : null,
     org.tagline ? { id: 'tagline', label: 'Tagline', value: org.tagline } : null,
     org.mission ? { id: 'mission', label: 'Mission', value: org.mission, wide: true } : null,
     org.vision ? { id: 'vision', label: 'Vision', value: org.vision, wide: true } : null,
@@ -46,8 +60,12 @@ export function factsOf(org, numbers) {
 }
 /** A fact's small print as words (the tax status's parts, joined) */
 const factNote = (x) => (Array.isArray(x.note) ? x.note.join(' · ') : x.note || '');
-/** Every fact as one block of text, the way a form asks: "EIN: 45-…" */
-export const factsText = (facts) => facts.filter((x) => x.id !== 'bio').map((x) => (x.id === 'name' ? `${x.value}${x.note ? ` (${factNote(x).replace(/^Also /, '')})` : ''}` : `${x.label}: ${x.list ? `\n${x.copy}` : x.copy}`)).join('\n');
+/**
+ * Every fact as one block of text, the way a form asks: "EIN: 45-…". With some that couldn't load (`missing`,
+ * ./factsMissing), its last line says which, so what's copied is never taken for all of them
+ */
+export const factsText = (facts, missing = []) => [...facts.filter((x) => x.id !== 'bio' && !x.unloaded).map((x) => (x.id === 'name' ? `${x.value}${x.note ? ` (${factNote(x).replace(/^Also /, '')})` : ''}` : `${x.label}: ${x.list ? `\n${x.copy}` : x.copy}`)),
+  ...(missing.length ? [`Not included, as it couldn’t load just now: ${and(missing)}.`] : [])].join('\n');
 export const factHay = (x) => `${x.label} ${x.value} ${factNote(x)} ${{ ein: 'tax id taxpayer federal employer identification number', duns: 'd-u-n-s dun bradstreet d&b number', status: '501c3 501(c)(3) tax exempt deductible irs', office: 'address street location map', mailing: 'address mail po box', phone: 'telephone call number', email: 'contact', website: 'url web site', mission: 'mission statement', bio: 'boilerplate about elevator pitch', name: 'organization', legal: 'organization' }[x.id] || ''}`;
 /** The papers forms ask for next, by their titles on Documents */
 export const FORM_PAPERS = [[/w-?9/i, 'W-9'], [/501|determination|irs letter/i, 'IRS letter'], [/\bein\b/i, 'EIN letter'], [/permit|registration/i, 'Charity permit']];
@@ -70,7 +88,7 @@ const FactValue = ({ x }) => (x.list ? html`<ul class="bp-org__values">${x.list.
 /** One fact: its label, its words, its copy button (its own component, so the tick outlives the page's next render) */
 const FactRow = ({ x, ctx }) => html`<div class=${`bp-org__fact ${x.wide ? 'is-wide' : ''}`} id=${`fact-${x.id}`}>
   <dt>${x.label}</dt>
-  <dd><span class="bp-org__v"><${FactValue} x=${x} />${Array.isArray(x.note) ? html`<span class="bp-org__note">${x.note.map((n, i) => html`${i ? ' · ' : ''}<span class="bp-nowrap" key=${n}>${n}</span>`)}</span>` : x.note ? html`<span class="bp-org__note">${x.note}</span>` : null}</span><${CopyBtn} text=${x.copy} label=${x.label} ctx=${ctx} /></dd>
+  <dd><span class="bp-org__v" role=${x.unloaded ? 'status' : null} data-unread=${x.unloaded ? 'kids' : null}><${FactValue} x=${x} />${Array.isArray(x.note) ? html`<span class="bp-org__note">${x.note.map((n, i) => html`${i ? ' · ' : ''}<span class="bp-nowrap" key=${n}>${n}</span>`)}</span>` : x.note ? html`<span class="bp-org__note">${x.note}</span>` : null}</span>${x.unloaded ? null : html`<${CopyBtn} text=${x.copy} label=${x.label} ctx=${ctx} />`}</dd>
 </div>`;
 
 /** The six a form asks for first, in that order; the rest are a click away */
@@ -87,12 +105,14 @@ function keyFacts(all) {
 export function OrgFacts({ ctx, terms = [], match = () => true, focus = null, papers: forms = [] }) {
   const { data } = ctx;
   const all = factsOf(data.org, data.numbers);
+  // (what couldn't load just now, said in the card, and in what Copy all copies: ./factsMissing)
+  const missing = factsMissing(data.org, data.numbers);
   const key = keyFacts(all);
   const rest = all.filter((x) => !key.includes(x));
   const [open, setOpen] = useKept('org-all', false);
   const [landed] = useState(() => typeof focus === 'string' && rest.some((x) => focus === `fact-${x.id}`));
-  if (!all.length) return null;
-  const found = terms.length ? all.filter((x) => match(factHay(x), terms)) : null;
+  if (!all.length && !missing.length) return null;
+  const found = terms.length ? all.filter((x) => !x.unloaded && match(factHay(x), terms)) : null;
   if (found && !found.length) return null;
   const shown = open || landed;
   const papers = found ? [] : forms;
@@ -111,16 +131,19 @@ export function OrgFacts({ ctx, terms = [], match = () => true, focus = null, pa
     <div class="bp-org__head">
       <h2 class="bp-h2" id="org-h">SOARD’s facts</h2>
       ${found ? null : html`<p class="bp-org__acts bp-noprint">
-        <button type="button" class="bp-btn bp-btn--sm bp-btn--quiet" onClick=${() => copyText(ctx, factsText(all), 'Copied all of SOARD’s facts')}><${Icon} name="copy" size=${16} />Copy all</button>
+        <button type="button" class="bp-btn bp-btn--sm bp-btn--quiet" onClick=${() => copyText(ctx, factsText(all, missing), missing.length ? `Copied the facts that loaded. ${and(missing).replace(/^./, (c) => c.toUpperCase())} couldn’t load just now.` : 'Copied all of SOARD’s facts')}><${Icon} name="copy" size=${16} />${missing.length ? 'Copy what loaded' : 'Copy all'}</button>
         <button type="button" class="bp-btn bp-btn--sm bp-btn--quiet" onClick=${print}><${Icon} name="print" size=${16} />Print</button>
       </p>`}
     </div>
-    <p class="bp-printonly bp-org__printhead" aria-hidden="true">${data.org.name}</p>
+    ${!found && (Object.keys(data.org?.unread || {}).length || (missing.length && !all.some((x) => !x.unloaded))) ? html`<p class="bp-unloaded" role="status" data-unread="facts">${all.some((x) => !x.unloaded) ? `Some of SOARD’s facts couldn’t load just now: ${and(missing)}.` : 'SOARD’s facts couldn’t load just now.'} Reload in a moment.</p>` : null}
+    <p class="bp-printonly bp-org__printhead" aria-hidden="true">${data.org?.name || ''}</p>
     ${found ? rows(found) : html`${rows(key)}<div class=${`bp-org__rest ${shown ? '' : 'is-folded'}`} id="org-rest">${rows(rest)}</div>`}
     ${found ? null : html`<div class="bp-org__foot bp-noprint">
       ${rest.length ? html`<button type="button" class="bp-org__toggle" aria-expanded=${shown} aria-controls="org-rest" onClick=${() => setOpen(!shown)}>${shown ? 'Fewer facts' : 'All of SOARD’s facts'}<${Icon} name="chevron" size=${16} cls=${shown ? 'is-up' : ''} /></button>` : null}
       ${papers.length ? html`<p class="bp-org__papers">${papers.map((p) => html`<a class="bp-chip bp-chip--link" ...${p.link} key=${p.x.id}><${Icon} name="documents" size=${14} />${p.word}</a>`)}</p>` : null}
-      <p class="bp-org__more"><a class="bp-link" href="/branding/" target="_blank" rel="noopener">Logos, colors and fonts<${Icon} name="external" size=${13} /></a>${who?.email ? html`<span aria-hidden="true">·</span><span>Something out of date? <a class="bp-link" href=${`mailto:${who.email}?subject=${encodeURIComponent('SOARD’s facts')}`}>Tell ${firstName(who.name)}</a></span>` : null}</p>
+      <p class="bp-org__more"><a class="bp-link" href="/branding/" target="_blank" rel="noopener">Logos, colors and fonts<${Icon} name="external" size=${13} /></a>${who?.email ? html`<span aria-hidden="true">·</span><span>Something out of date? <a class="bp-link" href=${`mailto:${who.email}?subject=${encodeURIComponent('SOARD’s facts')}`}>Tell ${firstName(who.name)}</a></span>`
+        // (the board's settings not read just now: who to tell isn't known, said so, never just gone: Board QA round 14)
+        : failed(data, 'settings') ? html`<span aria-hidden="true">·</span><span role="status" data-unread="settings">${unreadWords('settings', 'contact')}</span>` : null}</p>
     </div>`}
   </section>`;
 }

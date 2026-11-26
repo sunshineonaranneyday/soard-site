@@ -29,7 +29,7 @@ import { pdfLines, docxLines, wordsFromLines } from './board-words.js';
 import { BoardActivity, signDocsOf, unsignedOf } from './board-activity.js';
 import {
   isHeic, asJpeg, DOC_KINDS, meetingName, quarterOf, longDate, shortDate, timeRange, plural, todayEastern,
-  attendanceCounts, openActions, nextMeeting, parseAgendaText, isDate, docxText, fileTitle, answerOf, repliesOf, agendaIsDraft, majority, agendaItems, isLive, heldEarly, minutesIn, meetingOver,
+  attendanceCounts, openActions, nextMeeting, parseAgendaText, isDate, docxText, fileTitle, answerOf, repliesOf, agendaIsDraft, majority, agendaItems, isLive, heldEarly, minutesIn, meetingOver, minutesStaffOnly,
 } from './board-shared.js';
 import { welcomeHad, usableEmail, PROCESS_TEXT, dueOn, dueWords } from './board-shared.js';
 
@@ -247,9 +247,13 @@ function PracticeMeeting({ ctx }) {
  * agenda and its reports, the invite, the approval, the board page and the email; done, next or still to come
  */
 const prepOf = (m, data) => pathOf(m, data, 'ahead').filter((x) => x.id !== 'day' && x.id !== 'minutes');
-/** Where a past meeting's minutes stand, as a tag */
+/**
+ * Where a past meeting's minutes stand, as a tag: whether they're in is one fact (minutesIn), as its own page says it
+ * (Board QA round 13); in only as a file kept Staff only, said as that (minutesStaffOnly, round 14)
+ */
 const minutesTag = (m) => (m.minutes === 'approved' ? html`<span class="tag tag--success">Minutes approved</span>`
-  : m.files.some((f) => f.kind === 'minutes') || m.sections.some((s) => s.items.some((it) => it.notes)) ? html`<span class="tag tag--warn">Draft minutes</span>`
+  : minutesIn(m) ? html`<span class="tag tag--warn">Draft minutes</span>`
+  : minutesStaffOnly(m) ? html`<span class="tag tag--warn">Minutes staff only</span>`
   : html`<span class="tag">No minutes yet</span>`);
 const sharedTag = (m) => (m.shared ? html`<span class="tag tag--success">On the board page</span>` : html`<span class="tag">Not shared</span>`);
 const MONTHS = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -416,7 +420,7 @@ function NextCard({ m, ctx }) {
       </div>
       <button class="btn btn-primary" onClick=${() => go({ meetingId: m.id })}>${today && !held ? 'Open for the meeting' : 'Open the meeting'}</button>
     </div>
-    ${held ? html`<p class="bh-nextline">${m.minutes === 'approved' ? html`<strong>The minutes are approved.</strong>` : minutesIn(m) ? html`<strong>The minutes are in.</strong> The board votes on them at the next meeting.` : html`<strong>Next:</strong> its minutes.`}</p>` : today ? html`<p class="bh-nextline">${now ? null : html`<strong>Today.</strong> `}Open it to present the agenda and its documents on the screen.</p>` : html`
+    ${held ? html`<p class="bh-nextline">${m.minutes === 'approved' ? html`<strong>The minutes are approved.</strong>` : minutesIn(m) ? html`<strong>The minutes are in.</strong> The board votes on them at the next meeting.` : minutesStaffOnly(m) ? html`<strong>Next:</strong> share its minutes. Their file is staff only, so the board can’t read them.` : html`<strong>Next:</strong> its minutes.`}</p>` : today ? html`<p class="bh-nextline">${now ? null : html`<strong>Today.</strong> `}Open it to present the agenda and its documents on the screen.</p>` : html`
       <ol class="bh-prep" aria-label="Getting ready">${prep.map((x) => html`<li class=${`is-${x.state}`} title=${x.sub} aria-current=${x === up ? 'step' : null}><span class="bh-prep__mark" aria-hidden="true">${x.done ? CHECK : null}</span>${x.title}</li>`)}</ol>
       <p class="bh-nextline">${up ? html`<strong>Next:</strong> ${up.todo}.` : html`<strong>Ready.</strong> The board was emailed the link ${ago(m.packetSentAt)}.`}</p>`}
     ${held ? (here.boardHere ? html`<p class="bh-rsvp"><strong>Who was there:</strong> ${here.boardHere} of ${plural(here.board, 'board member')}</p>` : null)
@@ -706,6 +710,8 @@ async function addSignedCopy({ d, p, picked, addToast, setBusy = () => {}, repla
   addToast(`${j.signed.name}’s signed copy is in: signed for ${todayEastern().slice(0, 4)}`, 'info');
   // (the email telling them waits for People: said, never as sent)
   if (j.later) addToast(j.later, 'info');
+  // (in; the paper not read back with it: read again here. Board QA round 14)
+  if (!j.doc && j.reread) return (await call()).docs?.find((x) => x.id === d.id) || null;
   return j.doc;
 }
 
@@ -748,7 +754,8 @@ function Signers({ d, ctx, onDoc }) {
     const j = await call({ action: 'unsign', docId: d.id, slug: p.slug });
     setBusy('');
     if (!j.ok) { addToast(j.error, 'error'); return; }
-    onDoc(j.doc);
+    // (taken off; the paper not read back: the page looks again by itself. Board QA round 14)
+    if (j.doc) onDoc(j.doc); else if (j.reread) ctx.load({ quick: true });
     // (taken off; the email telling them waits for People: said, never as sent)
     if (j.later) addToast(j.later, 'info');
     // The focus stays on their row (its button is "Add their signed copy" now)

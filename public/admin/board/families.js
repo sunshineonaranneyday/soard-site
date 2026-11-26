@@ -30,7 +30,7 @@ import { Blank } from './money.js';
 import { useKept, More } from './parts.js';
 import { Face, Score, asked, place, areaWords, byScore, day, read, cache, seasonsOf, Media } from './family-parts.js';
 import { FamilyMap } from './family-map.js';
-import { STAGES, stageLabel, byStage, isFamily } from './stages.js';
+import { STAGES, stageLabel, byStage, isFamily, stageKnown } from './stages.js';
 import { itemsOf, inSeason, sumLine, Track, LifeBoard, SeasonSwitch, StageChip, STAGE_SCHEME, Journey, toStep } from './lifecycle.js';
 
 const html = htm.bind(h);
@@ -83,7 +83,7 @@ export function FamiliesPage({ view = 'board', open = '', projects = null, revea
       </div>
       <p class="bf-sum">${nbw(sumLine(list, shownSeason, app)) || 'Nobody here.'}</p>
       <${Track} list=${list} application=${windowed} onStep=${view === 'board' ? toStep : view === 'list' ? (k) => setStage(k) : null} />
-      ${!data.jobs ? html`<p class="lc-note">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
+      ${!data.jobs ? html`<p class="lc-note" role="status" data-unread="projects">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
       ${view === 'map' ? html`<${FamilyMap} key="map" families=${families} boundary=${data.boundary} open=${open} tall=${true} scheme=${STAGE_SCHEME} level=${2} away=${list.filter((x) => !isFamily(x))} />`
       : view === 'board' ? html`<${LifeBoard} key=${shownSeason} list=${list} application=${windowed} reveals=${reveals} />
         ${aside ? html`<p class="lc-note">${nbw(`${plural(aside, 'family', 'families')} not chosen or with no status ${aside === 1 ? 'isn’t' : 'aren’t'} on the board.`)} <a class="bp-link" href="#/families/list">See them in the list</a></p>` : null}`
@@ -169,7 +169,8 @@ export function FamilyPage({ id, reveals = [] }) {
       <div><h1 class="bp-h1">${f.name}</h1><p class="bf-head__meta"><${StageChip} f=${f} /> <span>${nbw([f.season ? `${f.season} season` : '', f.kind === 'organization' ? 'Community project' : ''].filter(Boolean).join(' · '))}</span>${f.page ? html` <a class="bp-link" href=${f.page} target="_blank" rel="noopener">Their page</a>` : null}</p></div>
       <div class="bf-head__score"><${Score} s=${f.score} big=${true} /></div>
     </header>
-    <${Journey} f=${f} reveals=${reveals} />
+    <${Journey} f=${f} reveals=${reveals} known=${stageKnown(f, f.jobs)} />
+    ${stageKnown(f, f.jobs) ? null : html`<p class="lc-note" role="status" data-unread="projects">JobTread can’t be reached right now, so their step is their application’s.</p>`}
     <${Media} f=${f} />
     <div class="bf-split">
       <section class="bp-card" aria-labelledby="bf-facts-h">

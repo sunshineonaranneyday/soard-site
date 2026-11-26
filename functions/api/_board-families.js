@@ -289,7 +289,11 @@ function mediaOf(id, a, app, files) {
   };
 }
 
-/** One family, read-only, with what their score rests on → { family } (404 for none, an archived one or a test) */
+/**
+ * One family, read-only, with what their score rests on → { family } (404 for none, an archived one or a test).
+ * `family.jobs`: false when JobTread couldn't be read, so their step is their application's alone, as the list says it
+ * (./familiesList `jobs`: Board QA round 13, a family's page and search gave the application's step as where they were)
+ */
 export async function familyOne(env, id, { now = Date.now(), fetchImpl = fetch } = {}) {
   const found = await readable(env, id);
   if (!found) throw Object.assign(new Error('That family isn’t on the board page'), { status: 404 });
@@ -309,6 +313,7 @@ export async function familyOne(env, id, { now = Date.now(), fetchImpl = fetch }
       cards: (sc?.cards || []).map((c) => ({ name: c.name || nameFromEmail(c.evaluator), scores: c.scores, total: c.total, complete: !!c.complete, done: c.done, rubric: c.rubric, at: c.completedAt || c.updatedAt || null })),
       visited: !!sc?.visited,
       media: mediaOf(id, a, app, files),
+      jobs: !!projects?.open,
     },
   };
 }

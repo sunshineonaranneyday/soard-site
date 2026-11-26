@@ -38,7 +38,7 @@ test('rules 1 and 2: a word is greeted only when it is on the given-names list (
     ['Rowe PC', '', ''], ['Rowe Law Firm', '', ''], ['Law Offices of Jordan Rowe', '', ''], ['Rowe Real Estate', '', ''], ['Rowe Bros.', '', ''],
     // (given names on the list are greeted, a title the short list has set apart)
     ['Jordan Ames', '', 'Jordan'], ['Revd Jordan Ames', '', 'Jordan'], ['Shri Ravi Kumar', '', 'Ravi'], ['Don José García', '', 'José'], ['Amartya Sen', '', 'Amartya'],
-    ['Chioma Okafor', '', 'Chioma'], ['Kwame Mensah', '', 'Kwame'], ['Priya Patel', '', 'Priya'], ['Thanh Nguyen', '', 'Thanh'], ['Yusuf Ali', '', 'Yusuf'],
+    ['Chioma Okafor', '', 'Chioma'], ['Kwame Mensah', '', 'Kwame'], ['Priya Patel', '', 'Priya'], ['Thanh Nguyen', '', ''] /* r25: Thanh is a family name some people write first and Nguyen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Yusuf Ali', '', 'Yusuf'],
     // (a given name that's a title or an office as often, before a name: nothing says which)
     ['Tuan Jordan Ames', '', ''], ['Hakim Ames', '', ''], ['Tito Jordan Ames', '', ''], ['ADA Jordan Ames', '', ''], ['ada jordan ames', '', ''], ['Ada Lovelace', '', 'Ada'],
   ]);

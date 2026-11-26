@@ -21,7 +21,7 @@
 import { openDoc, fileUrl } from './docs.js';
 import {
   meetingName, timeRange, liveLines, noteBlocks, agendaItems, presentersOf, itemFiles, looseFiles, fileTitle, isDate, clock, sectionPlan, MORE,
-  showsOf, booksDraw, isStatement, attendanceCounts, quorumFor, tallyText, minutesFileOf, docxText, heldEarly, todayEastern,
+  showsOf, booksDraw, isStatement, attendanceCounts, quorumOf, tallyText, minutesFileOf, docxText, heldEarly, todayEastern,
 } from '../board-shared.js';
 import { shortDate, longDate, dayText } from './parts.js';
 import { moneyFor, moneyTiles, mixOf, mixLeftOut, mixLessWords, changeOf, ptsOf, storeOf, storeChange, budgetMonthsText, stepText, readChangeAs, changeIn, overIn, budgetName } from './money.js';
@@ -135,11 +135,13 @@ const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${n.toLocal
  * The statements from QuickBooks on paper, every line (numbers.books.statements), beside the same day a year before,
  * and QuickBooks' budget against them; the presenter's notes (./review.js) each under its line
  */
-function statementsBox(s, budget = null, notes = null) {
+function statementsBox(s, budget = null, notes = null, lostNotes = false) {
   const said = notesByKey(notes);
   if (!s?.position?.length && !s?.activity?.length) return null;
   const box = el('div', 'bpp-stmts');
   box.append(el('p', 'bpp-stmts__when', `From QuickBooks, as of ${fullDate(s.asOf)}, beside ${fullDate(s.priorAsOf)}.`));
+  // (the notes on the lines not read just now: said so on paper, never the lines as if nobody had noted them: Board QA round 13)
+  if (lostNotes) box.append(el('p', 'bpp-live', UNREAD_WORDS.lineNotes));
   const short = shortDay(s.asOf).replace(/, \d{4}$/, '');
   // QuickBooks' budget (the board's) against the activities, to the same day: the actual, the budget, over (under)
   const bud = budget?.rows?.length && budget.asOf === s.asOf ? budget : null;
@@ -231,16 +233,16 @@ function storeBox(books) {
 }
 
 /** An item's live facts on paper, drawn for what they are */
-function liveBox(kind, n, m, money, notes = null, books = n?.books) {
+function liveBox(kind, n, m, money, notes = null, books = n?.books, lostNotes = false) {
   if (!n || !kind || kind === 'minutes') return null;
   // (today's numbers whose read failed just now: said so on paper too, never a zero or an empty list: ./unread.js)
-  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events' }[kind];
+  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events', meetings: 'meetings' }[kind];
   if (part && n.unread?.[part]) return el('p', 'bpp-live', UNREAD_WORDS[part]);
   if (kind === 'projects') return makeoversBox(n);
   if (kind === 'cash') {
     // The figures, the year against last year, where the revenue came from, the store, then the statements the packet
     // holds (QuickBooks', as of the books' close)
-    const parts = [moneyBox(n, money), yearBox(books), revenueBox(books), storeBox(books), statementsBox(books?.statements, books?.budget, notes)].filter(Boolean);
+    const parts = [moneyBox(n, money), yearBox(books), revenueBox(books), storeBox(books), statementsBox(books?.statements, books?.budget, notes, lostNotes)].filter(Boolean);
     if (parts.length < 2) return parts[0] || null;
     const box = el('div', 'bpp-money');
     box.append(...parts);
@@ -267,7 +269,7 @@ function recordBox(title, cls) {
  * Who was there, as the meeting's page says it: how many of the board and the quorum, then each board member by how
  * they came; staff and guests who were there after them, never among the board members counted
  */
-function whoBox(m, quorum = 0) {
+function whoBox(m, quorum = 0, quorumLost = false) {
   const board = m.attendance.filter((p) => p.kind === 'board');
   const by = (st) => board.filter((p) => p.status === st).map((p) => p.name).filter(Boolean);
   const also = m.attendance.filter((p) => p.kind !== 'board' && (p.status === 'present' || p.status === 'remote') && p.name).map((p) => `${p.name}${p.status === 'remote' ? ' (by video)' : ''}`);
@@ -275,9 +277,12 @@ function whoBox(m, quorum = 0) {
   if (!rows.length) return null;
   const box = recordBox('Who was there', 'bpp-rec--who');
   const c = attendanceCounts(m);
-  const need = quorumFor(m, quorum);
+  // (the quorum as the page says it, one function: with the settings not read, not said, never a majority guessed:
+  // ../board-shared.js quorumOf, Board QA round 14)
+  const q = quorumOf(m, { quorum, lost: quorumLost });
   const onVideo = by('remote').length;
-  if (c.boardHere) box.append(el('p', 'bpp-rec__lead', `${c.boardHere} of ${c.board} board members${need ? (c.boardHere >= need ? ', a quorum' : `, short of a quorum (${need})`) : ''}${onVideo ? `, ${onVideo} by video` : ''}.`));
+  if (c.boardHere) box.append(el('p', 'bpp-rec__lead', `${c.boardHere} of ${c.board} board members${q.after}${onVideo ? `, ${onVideo} by video` : ''}.`));
+  if (c.boardHere && q.unsaid) box.append(el('p', 'bpp-live', q.unsaid));
   const dl = el('dl', 'bpp-rec__who');
   for (const [k, names] of rows) { const d = el('div'); d.append(el('dt', '', k), el('dd', '', names.join(', '))); dl.append(d); }
   box.append(dl);
@@ -319,7 +324,7 @@ const minutesLine = (m) => (minutesState(m) === 'approved' && isDate(m.approvedO
  * (`held`) as its record: where its minutes are and who was there first, each part with the notes under it (no
  * planned times: they were the plan), then the decisions; the action items whenever it has any, as its page shows them
  */
-function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, books = numbers?.books, costsNumbers = numbers, held = false, quorum = 0 }) {
+function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, lostNotes = false, books = numbers?.books, costsNumbers = numbers, held = false, quorum = 0, quorumLost = false }) {
   let booked = false;
   // The statements QuickBooks draws on the money item aren't printed again as files
   const drawsSt = booksDraw(books).some((b) => b === 'act' || b === 'pos');
@@ -333,7 +338,7 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
   if (place) head.append(el('p', 'bpp-muted', place));
   if (held) head.append(el('p', 'bpp-status', minutesLine(m)));
   sheet.append(head);
-  if (held) { const who = whoBox(m, quorum); if (who) sheet.append(who); }
+  if (held) { const who = whoBox(m, quorum, quorumLost); if (who) sheet.append(who); }
   const items = agendaItems(m);
   const plan = held ? new Map() : sectionPlan(m);
   const ol = el('ol', 'bpp-secs');
@@ -377,7 +382,7 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
       // QuickBooks' year and statements under the first item showing the money; another shows its figures (as the screen)
       const bk = booked ? null : books;
       if (showsOf(it).includes('cash')) booked = true;
-      for (const k of showsOf(it)) { const facts = liveBox(k, k === 'costs' ? costsNumbers : numbers, m, money, k === 'cash' ? lineNotes[it.id] : null, bk); if (facts) row.append(facts); }
+      for (const k of showsOf(it)) { const facts = liveBox(k, k === 'costs' ? costsNumbers : numbers, m, money, k === 'cash' ? lineNotes[it.id] : null, bk, k === 'cash' && lostNotes); if (facts) row.append(facts); }
       const files = docFiles(it);
       if (files.length) row.append(el('p', 'bpp-docs', `With it: ${files.map((f) => fileTitle(f.name)).join(', ')}`));
       li.append(row);
@@ -391,11 +396,11 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
 
 /** The minutes as a document: the signed copy once there is one (the minutes as approved, signed), else the file they're kept in */
 function minutesDoc(m) {
-  const onItem = new Set(m.sections.flatMap((s) => s.items.flatMap((it) => it.docs || [])));
   const signed = m.files.filter((f) => f.kind === 'signed').at(-1);
   if (signed) return { f: signed, label: 'The minutes, signed' };
-  // (the one the page's "The minutes as written" opens: ../board-shared.js minutesFileOf; never last meeting's on an item)
-  const kept = minutesFileOf({ ...m, files: m.files.filter((f) => !onItem.has(f.id)) });
+  // (the one the page's "The minutes as written" opens, by the one rule: ../board-shared.js minutesFileOf, which never
+  // takes last meeting's on an item, and keeps the secretary's Word file wherever it's put. Board QA round 14)
+  const kept = minutesFileOf(m);
   return kept ? { f: kept, label: 'The minutes as written' } : null;
 }
 const isDocx = (f) => /\.docx$/i.test(String(f?.name || '')) || /wordprocessingml/i.test(String(f?.type || ''));
@@ -446,7 +451,7 @@ export async function printAll(m, { people = [], numbers = null, meetings = [], 
   // What makeovers cost follows the money's date rule too: today's for a meeting today or ahead (./costs.js useCosts)
   const live = data && m.date >= data.today ? data.numbers : null;
   const costsNumbers = live ? { ...numbers, costs: live.costs ?? numbers?.costs, operating: live.operating ?? numbers?.operating, cash: live.cash ?? numbers?.cash, books: live.books ?? numbers?.books } : numbers;
-  root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, books, costsNumbers, held, quorum: data?.quorum || 0 }));
+  root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, lostNotes: !!data?.unread?.lineNotes, books, costsNumbers, held, quorum: data?.quorum || 0, quorumLost: !!data?.unread?.settings }));
   // How many pages, so the progress can say "12 of 40"
   const docs = [];
   for (const g of groups) for (const f of g.files) {
