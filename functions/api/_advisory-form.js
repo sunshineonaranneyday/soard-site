@@ -20,7 +20,7 @@
 
 import { isWebAddress } from './_application-constants.js';
 import { PHOTO_MIN, PHOTO_GOOD } from '../../public/admin/team-shared.js';
-import { givenName, givenPair, familyFirst, titleToo, lettersToo, nameKey, womansName, titleBeforeNames, titlePair, familyFirstBefore, familyFirstUnsure, givenInParts, hungarianOrder, onTheLists } from './_given-names.js';
+import { givenName, givenPair, familyFirst, titleToo, lettersToo, nameKey, womansName, titleBeforeNames, titlePair, familyFirstBefore, familyFirstUnsure, givenInParts, hungarianOrder, onTheLists, familyNameLast } from './_given-names.js';
 
 export const OVERVIEW_PDF = 'https://files.sunshineonaranneyday.com/advisory/SOARD_Advisory%20Board%20Overview.docx.pdf';
 
@@ -153,9 +153,68 @@ const RANK = /^(?:pastor|father|rabbi|bishop|deacon|elder|minister|chaplain|imam
 const GREET_TITLE = /^(?:(?:cpt|cmdr|cdr|adm|cdre|brig|cpl|pvt|pfc|spc|ens|lcpl|ltc|ltg|ltjg|ssg|sfc|msg|sgm|csm|ssgt|msgt|tsgt|smsgt|cmsgt|gysgt|cwo|lcdr|radm|vadm|cllr|insp|tpr)\.?|(?:comm|commr|ald|del|dep|pres|sec|dir|evang|abp|mons|dcn|pr|br|ven|frl|dña|dott|avv|arch|geom|rag|sig|mtro|mtra|lcda|lcdo|profa|eng|engr|mag|mevr|dhr|smt|mme|mlle)\.|mme|mlle|dott\.ssa|dr\.ssa|prof\.ssa|sig\.ra|sig\.na|dr\.?-ing\.?|dipl\.?-ing\.?|univ\.?-prof\.?|priv\.?-doz\.?|co-?pastor|commissioner|councilman|councilwoman|councilmember|councilperson|councillor|councilor|alderman|alderwoman|alderperson|selectman|selectwoman|assemblyman|assemblywoman|assemblymember|congressman|congresswoman|congressperson|congressmember|delegate|speaker|sheriff|marshal|constable|trooper|deputy|inspector|superintendent|commander|commodore|general|brigadier|corporal|private|specialist|ensign|airman|seaman|chief|ambassador|consul|president|premier|provost|principal|director|secretary|magistrate|attorney|agent|nurse|apostle|evangelist|prophet|prophetess|archbishop|cardinal|monsignor|vicar|rector|curate|parson|abbot|abbess|prior|prioress|deaconess|pastora|venerable|pope|swami|guru|pandit|acharya|lama|sheikh|shaikh|shaykh|sheik|mufti|hajji|haji|hajjah|ustadh|ustaz|ustadha|maulana|mullah|mother|uncle|aunt|auntie|lady|lord|baroness|countess|count|duchess|viscount|viscountess|marchioness|emperor|empress|maharaja|mister|missus|madam|madame|mademoiselle|monsieur|herr|frau|fräulein|señor|senor|señora|senora|señorita|senorita|doña|signor|signora|signorina|mevrouw|meneer|pani)$/iu;
 // (titles that are first names as often: never a family name after a first name in a greeting, "Jordan Major")
 const EITHER_TITLE = /^(?:don|major|master)$/i;
+// Round 27 (finding 4, the lead's rule: "Adm. Jordan Ames" was greeted "Jordan" but planned as new at adm-jordan-ames, and
+// "Major Jordan Ames", "General Jordan Ames", "Commander Jordan Ames" were never offered): one list of the US military's ranks
+// and their abbreviations, every branch's (the Army, Navy, Air Force, Marine Corps, Coast Guard and Space Force), read the
+// same way by the greeting (the courtesy title it sets apart, rule 5) and by Add (the titles set apart before a name, and
+// after one before the military, "Jordan Ames Col. USAF Ret."). Written without their dots; "=" before one: a given or
+// family name too, a title only with its dot ("Gen.", "Brig.") and, in capitals, a name too ("MG", "BG", initials as often);
+// "~" before one, and any the names lists have: a name too ("Major", "Seaman"), a title only before a whole name, as RANK's
+// are, never the greeting's. Plain strings, split when a name is first read
+const RANKS = `adm admiral cmdr cdr commander cdre commodore capt cpt captain col colonel ltc ltcol lt lieutenant ltjg lcdr
+  maj ~major =gen general =brig brigadier bgen majgen ltgen ltg radm rdml vadm fadm sgt sergeant ssg ssgt sfc msg msgt
+  gysgt mgysgt tsgt smsgt cmsgt cmsaf cmssf sgm sgtmaj csm sma cpl corporal lcpl pfc pvt private spc specialist ens ensign
+  cwo wo1 cw2 cw3 cw4 cw5 1lt 2lt 1stlt 2ndlt 1sg 1stsgt amn airman a1c sra seaman po1 po2 po3 cpo scpo mcpo mcpon =mg =bg`;
+// (and of more words, a space between, each typed with its dots or without: "Lt. Col.", "Rear Admiral", "Master Sgt.")
+const RANK_PHRASES = `lt_col lt_cmdr lt_cdr lt_gen lt_jg maj_gen brig_gen rear_adm vice_adm fleet_adm sgt_maj sgt_major 1st_lt 2nd_lt
+  1st_sgt master_sgt staff_sgt gunnery_sgt gy_sgt tech_sgt first_sgt command_sgt_maj chief_master_sgt senior_master_sgt
+  lieutenant_colonel lieutenant_commander lieutenant_general lieutenant_junior_grade major_general brigadier_general
+  rear_admiral vice_admiral fleet_admiral sergeant_major command_sergeant_major first_sergeant master_sergeant staff_sergeant
+  sergeant_first_class gunnery_sergeant master_gunnery_sergeant technical_sergeant senior_master_sergeant chief_master_sergeant
+  lance_corporal private_first_class petty_officer petty_officer_first_class petty_officer_second_class petty_officer_third_class
+  chief_petty_officer senior_chief_petty_officer master_chief_petty_officer senior_chief master_chief warrant_officer
+  chief_warrant_officer first_lieutenant second_lieutenant senior_airman airman_first_class airman_basic seaman_apprentice
+  seaman_recruit first_lt second_lt general_of_the_army chief_of_staff sgt_1st_class sgt_first_class lance_cpl cmd_sgt_maj
+  command_sgt_maj staff_sgt_maj master_gunnery_sgt senior_chief_po master_chief_po chief_po 1st_sgt_maj sergeant_1st_class
+  petty_officer_1st_class petty_officer_2nd_class petty_officer_3rd_class airman_1st_class private_1st_class pfc_2
+  chief_warrant_officer_2 chief_warrant_officer_3 chief_warrant_officer_4 chief_warrant_officer_5 warrant_officer_1`;
+let RANK_KIND = null;
+let RANK_SEQ = null;
+const ranksBuild = () => {
+  RANK_KIND = new Map();
+  for (const r of splitWords(RANKS)) {
+    const k = r.replace(/^=/, '');
+    // (a given or family name too, on the lists: a title only before a whole name, never the greeting's)
+    const k2 = k.replace(/^~/, '');
+    RANK_KIND.set(k2, r.startsWith('=') ? 'marked' : (r.startsWith('~') || onTheLists(k2) || familyNameLast(k2) || familyFirst(k2)) ? 'named' : 'title');
+  }
+  RANK_SEQ = new Set(splitWords(RANK_PHRASES).map((p) => p.replace(/_/g, ' ')));
+};
+// (a word that's one of the ranks, as typed: 'title', a title wherever it's typed; 'named', a name too, a title only before
+// a whole name and never the greeting's; '' for none. A marked one is a title with its dot ("Gen.", "Brig."), and in
+// capitals a name too ("MG", "BG", being initials as often); without either, nothing)
+const rankOf = (raw) => {
+  if (!RANK_KIND) ranksBuild();
+  const kind = RANK_KIND.get(bare(raw));
+  if (kind !== 'marked') return kind || '';
+  return /\.$/u.test(raw) ? 'title' : /^\p{Lu}{2,3}$/u.test(raw) ? 'named' : '';
+};
+/** (for the tests: the ranks, as RANKS writes them, and those of more words) */
+export const rankLists = () => ({ ranks: splitWords(RANKS), phrases: splitWords(RANK_PHRASES).map((p) => p.replace(/_/g, ' ')) });
+// (a title before a name, TITLE's or a rank's; one that's a name too, RANK's or a rank's)
+const titleWord = (w) => TITLE.test(w) || !!rankOf(w);
+const rankName = (w) => RANK.test(w) || rankOf(w) === 'named';
+// (a rank typed as letters are after a name, with its dot or in capitals: "Jordan Ames LTC", "Ames, Jordan Col.")
+const rankAfter = (raw) => rankOf(raw) === 'title' && (/\.$/u.test(raw) || /^[\p{Lu}\d]{2,6}$/u.test(raw));
+// (how many words at i are a rank of more than one word, as typed with their dots or without, the longest: 0 for none)
+const rankRun = (ws, i = 0) => {
+  if (!RANK_SEQ) ranksBuild();
+  for (let m = Math.min(5, ws.length - i); m >= 2; m--) if (RANK_SEQ.has(ws.slice(i, i + m).map(bare).join(' '))) return m;
+  return 0;
+};
 // After a name, never part of it: a generation, or letters for a degree or credential ("Jordan Ames Jr", "Pat Lee
 // PhD", "Dana Price CCIM", "Sam Roe SHRM-CP", "Dana Quill, DrPH")
-export const AFTER_NAME = /^(jr|sr|ii|iii|iv|esquire|ret|retired|cpa|phd|pharmd|thd|eds|dds|dmd|dvm|jd|esq|mpa|mph|mha|msw|lcsw|lmsw|lpc|lcpc|lmft|psyd|edd|med|msc|bsc|bba|dba|dnp|rn|bsn|msn|np|pt|dpt|ot|otr|otrl|rd|ld|dc|od|rph|drph|scd|dsc|dmin|dma|mpp|mhs|msed|macc|mtax|pac|crna|cnm|fnp|aprn|lpn|lvn|emt|facs|facp|faap|fache|bcba|cccslp|atc|cscs|aia|faia|ncarb|ncidq|asid|ifma|cfp|cfa|cfe|cfre|cae|caia|frm|cia|chfc|clu|cdfa|ricp|cltc|aif|cpwa|crps|pmp|shrm|shrmcp|shrmscp|sphr|phr|cpcu|leed|cgma|ccim|sior|gri|crs|abr|srs|sres|cips|cma|cisa|cissp|mfa|llm|mdiv)$/;
+export const AFTER_NAME = /^(jr|sr|ii|iii|iv|esquire|ret|retd|retired|cpa|phd|pharmd|thd|eds|dds|dmd|dvm|jd|esq|mpa|mph|mha|msw|lcsw|lmsw|lpc|lcpc|lmft|psyd|edd|med|msc|bsc|bba|dba|dnp|rn|bsn|msn|np|pt|dpt|ot|otr|otrl|rd|ld|dc|od|rph|drph|scd|dsc|dmin|dma|mpp|mhs|msed|macc|mtax|pac|crna|cnm|fnp|aprn|lpn|lvn|emt|facs|facp|faap|fache|bcba|cccslp|atc|cscs|aia|faia|ncarb|ncidq|asid|ifma|cfp|cfa|cfe|cfre|cae|caia|frm|cia|chfc|clu|cdfa|ricp|cltc|aif|cpwa|crps|pmp|shrm|shrmcp|shrmscp|sphr|phr|cpcu|leed|cgma|ccim|sior|gri|crs|abr|srs|sres|cips|cma|cisa|cissp|mfa|llm|mdiv)$/;
 // Letters for a degree, or a generation, that are also family names (Chioma Mba, Jack Ma, Minh Do, Ken Iida, Annalisa
 // Cima, Olive Senior): letters only as written for one, after a comma, with dots, or in capitals in a name written in
 // small letters ("Dana Price, MA", "Jordan Ames M.D.", "Dana Price MBA", "Jordan Quill, Senior"), and never the only
@@ -181,6 +240,8 @@ const afterName = (raw, { comma = false, caps = false } = {}) => {
   if (/^(jr|sr)$/.test(w) && /^\p{L}\.\p{L}/u.test(raw)) return false;
   if (AFTER_NAME.test(w)) return true;
   if (CAMEL_DEGREE.test(raw)) return true;
+  // (round 27: a rank written as letters are, "LTC", "Col.")
+  if (rankAfter(raw)) return true;
   // (a degree written with dots inside and none at the end: a letter or two, then more, a part of two letters or more
   // among them: "M.Ed", "M.Eng", "B.Pharm", "M.Sc.Ed", "M.Ed.S", "Dr.PH"; never all single letters, initials "J.R."; never
   // a family name in parts typed together, "St.James")
@@ -238,8 +299,9 @@ const joinPieces = (ws, singles) => {
  * person or of a couple who share it (rule 8, below)
  */
 export function readName(full) {
-  const isTitle = (w) => TITLE.test(w);
-  const isRank = (w) => RANK.test(w);
+  // (round 27: and the military's ranks, the one list the greeting reads too)
+  const isTitle = (w) => titleWord(w);
+  const isRank = (w) => rankName(w);
   // (a title typed against the name, "Dr.Jordan Ames", "Rev.Dr.Jordan Ames", "Dr.jordan Ames", is still a title; and
   // initials typed against it are initials, "J.K.Rowling", "F.Scott Fitzgerald")
   // (with a comma typed against it too, "J.K.Rowling, PhD"; and before a name with an apostrophe, "T.J.O'Brien"). Only
@@ -308,7 +370,15 @@ export function readName(full) {
     // degree, as "Lee, MD" is Lee, and "Mrs. Quill, MS" Mrs. Quill)
     const asLetters = (x) => !shouting && !x.includes('.') && bare(x).length > 1 && x === x.toUpperCase() && knownLetters(bare(x));
     const lone = () => loneOk && tail && w.length === 1 && isTitle(w[0]) && !isRank(w[0]) && !asLetters(w[0]);
-    while ((w.length > 1 || lone()) && (titleAt(0) || lone() || (/^the$/i.test(w[0]) && isTitle(w[1])) || (t.length && /^(and|&)$/i.test(w[0]) && isTitle(w[1])))) {
+    // (round 27: a rank of more words before a whole name, "Rear Admiral Jordan Ames", "Master Sgt. Jordan Ames"; or all of
+    // what's after a family name's comma, as a title alone is, "Ames, Staff Sgt.")
+    // (one before a family name alone stays whole when a word of it is no title on its own, "Airman 1st Class Ames", "Staff
+    // Sgt. Ames"; its words are read one by one as before when each is one, "Lt. Col. Ames")
+    const run = rankRun(w);
+    const whole = run && (nameAfter(run - 1) >= 2 || (tail && loneOk && run === w.length));
+    if (whole) t.push(...w.splice(0, run));
+    const keep = !!run && !whole && !w.slice(0, run).every(isTitle);
+    while (!keep && (w.length > 1 || lone()) && (titleAt(0) || lone() || (/^the$/i.test(w[0]) && isTitle(w[1])) || (t.length && /^(and|&)$/i.test(w[0]) && isTitle(w[1])))) {
       t.push(w.shift());
     }
     // ("and family" after a name is no one else: "Jordan Rowe and family" is Jordan Rowe)
@@ -387,7 +457,10 @@ export function readName(full) {
     // (a first name after a comma has no family name to keep: "Quill, Amy MD" is Amy, MD set apart)
     for (;;) {
       const n = piecesAtEnd(out, !first);
+      // (round 27: and a rank of more words written after the name, "Jordan Ames 1st Lt.", "Ames, Jordan Lt. Col.")
+      const r = [3, 2].find((m) => out.length - m >= (first ? 1 : 2) && rankRun(out.slice(-m)) === m) || 0;
       if (n) off.unshift(...out.splice(-n));
+      else if (r) off.unshift(...out.splice(-r));
       else if (out.length > 1 && afterName(end(), { caps }) && (out.length > 2 || first || titled || !alsoAName(end()))) {
         if (!could && alsoAName(end())) could = [...out];
         off.unshift(out.pop());
@@ -488,7 +561,9 @@ export function readName(full) {
   // Hospital", "Atlanta") is never a first name, whatever is before it ("Ames, Grace Church" is never Grace Church Ames).
   // (More after another comma is rule 8's, below: "Ames, Jordan, Atlanta" is Jordan Ames, kept in the order typed)
   // (round 23: or pronouns, "Ames, she/her", never "she/her Ames")
-  const placeAfter = !!after && (placeOrOrg(parts[1]) || pronouns(parts[1]));
+  // (round 27: or what the own-words reading left whole because nothing said whose its first word is, an organisation's or a
+  // place's join still in it, "Ames, Hope for Children", "Ames, Jordan The Arc of Georgia")
+  const placeAfter = !!after && (placeOrOrg(parts[1]) || pronouns(parts[1]) || parts[1].split(' ').some((x, k) => k > 0 && /^(?:of|for)$/iu.test(x)));
   // Last name first only after one word ("Ames, Jordan"). After more than one, nothing can say whether it's a family
   // name in parts and a first name ("Van Buren, Martin", "Garcia Lopez, Maria") or a name and a company or place ("Del
   // Taylor, Compass", "Jordan Quill, McKinsey"): kept as written, matched both ways, and greeted with no first name
@@ -646,7 +721,7 @@ const NAMED_CITY = `austin houston dallas denver washington jackson lincoln madi
   birmingham montgomery lancaster salem reno irvine stockton fremont toledo mesa orlando dayton raleigh burbank lafayette decatur
   dunwoody norcross covington conyers calhoun dalton cumming milton macon rome boston`;
 let NAMED_CITIES = null;
-const nameCount = (ts) => ts.filter((t) => /\p{L}/u.test(t) && !TITLE.test(t) && !/^(?:the|&|and)$/iu.test(t)).length;
+const nameCount = (ts) => ts.filter((t) => /\p{L}/u.test(t) && !titleWord(t) && !/^(?:the|&|and)$/iu.test(t)).length;
 // (how many of the name's words come before each place: one look at each word, so a long name reads at once)
 const countsBefore = (ts) => { const out = [0]; for (const t of ts) out.push(out[out.length - 1] + (nameCount([t]) ? 1 : 0)); return out; };
 // Round 25 (finding 5, the lead's rule): what's after a name, read as the places, organizations and jobs it's made of, each
@@ -658,31 +733,37 @@ const countsBefore = (ts) => { const out = [0]; for (const t of ts) out.push(out
 // ("County", "City", "University") never starts it on its own. `headEnd`: the last word, an OF_HEADS word, is one too, its
 // "of" past the end (cutAfter)
 const placeUnits = (ts, keys, i, cased, { headEnd = false } = {}) => {
-  if (!NAMED_CITIES) NAMED_CITIES = new Set(splitWords(NAMED_CITY));
   if (!PHRASES) buildPlaces();
   const k = keys[i];
   const out = [];
   if (!k) return out;
   for (const n of phraseLens(keys, i)) out.push([n, true]);
-  if (HEADS.has(k) && keys[i + 1] === 'of' && i + 2 < keys.length) out.push([keys.length - i, true]);
-  if (headEnd && i === keys.length - 1 && HEADS.has(k)) out.push([1, true]);
+  // (round 27, finding 4: a base, by rule, "Fort Bragg", "Naval Station Norfolk", "Robins AFB"; and a rank before the
+  // military after a name, "Jordan Ames Col. USAF Ret.", "Jordan Ames LTC US Army")
+  const base = baseLen(ts, keys, i);
+  if (base) out.push([base, true]);
+  const rank = rankRun(ts, i) || (rankOf(ts[i]) ? 1 : 0);
+  if (rank && i + rank < keys.length && militaryAt(keys, i + rank)) out.push([rank, true]);
+  // (round 27: an organisation's units marked 'org', what's before one read more strictly, cutAfter)
+  if (HEADS.has(k) && keys[i + 1] === 'of' && i + 2 < keys.length) out.push([keys.length - i, true, 'org']);
+  if (headEnd && i === keys.length - 1 && HEADS.has(k)) out.push([1, true, 'org']);
   // (round 26, finding 2: an organization or an official country name read whole from its first word, its words before the
   // head among it, "Metro Atlanta Chamber of Commerce", "Habitat for Humanity", "Islamic Republic of Iran"; a Spanish one
   // by its head, "Banco de México", "Agencia Hispana de Seguros")
   const org = orgFrom(keys, i, headEnd) || esFrom(keys, i);
-  if (org) out.push([org, true]);
+  if (org) out.push([org, true, 'org']);
   // (round 26, finding 3: a country's name only as written, accents and all, "Ísland"; and letters that are a family name
   // too only in capitals in a name with small letters, "Jordan Ames ANG")
   if (ACCENT_ONLY.has(plain(ts[i])) || capsLetters(ts[i], cased)) out.push([1, true]);
   const pre = k === 'the' || k === 'us' ? 1 : (k === 'united' && keys[i + 1] === 'states' ? 2 : 0);
-  if (pre && i + pre < keys.length) for (const [n] of placeUnits(ts, keys, i + pre, cased, { headEnd })) out.push([pre + n, true]);
+  if (pre && i + pre < keys.length) for (const [n, , kind] of placeUnits(ts, keys, i + pre, cased, { headEnd })) out.push([pre + n, true, kind]);
   // (a state's name before an organization, "Georgia Department of Education", "Virginia Tech": never before a word that
   // isn't one, "Georgia Power" being a given name and a family name a person could have)
   const st = STATE_PHRASES.has(`${k} ${keys[i + 1] || ''}`) ? 2 : STATE_PHRASES.has(k) ? 1 : 0;
   if (st && i + st < keys.length) {
     const j = i + st;
     const org = (HEADS.has(keys[j]) && keys[j + 1] === 'of' && j + 2 < keys.length) || (headEnd && j === keys.length - 1 && HEADS.has(keys[j])) || (ORG.test(keys[j]) && !ORG_AS_NAME.test(keys[j]));
-    if (org) for (const [n] of placeUnits(ts, keys, j, cased, { headEnd })) out.push([st + n, true]);
+    if (org) for (const [n, , kind] of placeUnits(ts, keys, j, cased, { headEnd })) out.push([st + n, true, kind]);
   }
   if (/^(?:county|city|district|township|borough|parish)$/u.test(keys[i + 1] || '') && keys[i + 2] !== 'of' && !(headEnd && i + 2 === keys.length) && /\p{L}/u.test(k)) out.push([2, true]);
   if (NAMED_CITIES.has(k) && i + 1 < ts.length && stateAt(ts, i + 1, cased)) out.push([1, true]);
@@ -747,24 +828,45 @@ const orgStarts = (keys, headEnd) => {
 // "Constructora del Sur", "Agencia Hispana de Seguros", "Iglesia Bautista")
 // (round 26: and "y" or "e" with another head, "Contabilidad y Impuestos"; or the business's own name after "El", "La", "Los"
 // or "Las", "Restaurante El Rey", "Panadería La Espiga")
+// (round 27: Portuguese ones too, ES_HEADS' last line, "Igreja de Deus", "Câmara dos Deputados")
+// Round 27 (finding 1, the lead's rule): only on positive evidence. After its join ("de", "del", Portuguese "do", "da", "dos",
+// "das", an article between, "de la"), a word of an organisation's or a place the lists know, never a family name written
+// last ("Cámara de Comercio", "Banco de Chile", "Junta de Andalucía"; "Câmara de Oliveira", "Cámara del Río", "Capilla de la
+// Torre" are family names). A head that's a family name too ("Cámara", "Capilla", "Banco") takes no word after it that's one
+// ("Cámara Bautista"), nor a business's own name after "El" or "La"
+const ES_JOIN = /^(?:de|del|do|da|dos|das)$/u;
+const ES_ARTICLE = /^(?:la|las|los|el|lo|a|o|as|os)$/u;
 const esFrom = (keys, i) => {
   if (!ES_HEADS_SET.has(keys[i])) return 0;
   const n = keys.length;
+  const named = familyNameLast(keys[i]);
   let j = i + 1;
   for (;;) {
-    if (j < n && ES_AFTER_SET.has(keys[j])) j++;
+    if (j < n && ES_AFTER_SET.has(keys[j]) && !(named && familyNameLast(keys[j]))) j++;
     else if ((keys[j] === 'y' || keys[j] === 'e') && ES_HEADS_SET.has(keys[j + 1] || '')) j += 2;
     else break;
   }
-  if (/^(?:de|del|el|la|los|las)$/u.test(keys[j] || '') && j + 1 < n) return n - i;
+  if (ES_JOIN.test(keys[j] || '')) {
+    const k = ES_ARTICLE.test(keys[j + 1] || '') && j + 2 < n ? j + 2 : j + 1;
+    return k < n && esOrgWord(keys[k]) ? n - i : 0;
+  }
+  if (!named && /^(?:el|la|los|las)$/u.test(keys[j] || '') && j + 1 < n) return n - i;
   return j === n && j > i + 1 ? n - i : 0;
 };
+// (a word after a Spanish head's join that makes it an organisation: ES_OF's, a head or a business word, a place word, a city
+// or a state the lists know, Spain's and Latin America's regions; never a family name written last)
+const esOrgWord = (k) => !familyNameLast(k) && (ES_OF_SET.has(k) || PLACES.has(k) || WHERES.has(k) || WHERES_NAMED.has(k) || STATE_PHRASES.has(k));
 // (letters that are a family name too, CAPS_ONLY's, typed in capitals in a name with small letters: "ANG")
-const capsLetters = (raw, cased) => { if (!PHRASES) buildPlaces(); return cased && CAPS_ONLY_SET.has(placeKey(raw)) && !/\p{Ll}/u.test(raw) && /\p{Lu}{2}/u.test(raw); };
+// (round 27: their plural with a small s too, "SEALs")
+const capsLetters = (raw, cased) => { if (!PHRASES) buildPlaces(); return cased && CAPS_ONLY_SET.has(placeKey(raw)) && /^\p{Lu}{2,}s?$/u.test(raw.replace(/[^\p{L}]/gu, '')); };
 // (the word at which what's after a whole name, all of it, is places, organizations or jobs: k, or -1 when it isn't. Round
 // 25: read as units from the end, so each is one look at each word; never a cut inside a place or an organization of more
 // words, "Jordan Ames Ben Hill County" being Jordan Ames, never Jordan Ames Ben, and "Charlotte North Carolina" as typed;
 // what can't be read, as typed: "Jordan Ames Edward Jones", "Jordan Lee Church")
+// Round 27 (finding 2): `info` (optional) says whether the cut is at an organisation (`org`), and whether an organisation's
+// first word is among the name's first `least` words (`unsure`: "Ames, Grace Church of God", nothing to say whose the given
+// name is). An organisation read from such a word, a given name too ("Jordan Grace Church of God"), is cut at its head as
+// before, the word kept for the name, when the name is read in its natural order; any other is all of what's after the name
 const placeTail = (ts, least = 2, opts = {}) => {
   const n = ts.length;
   const cased = /\p{Lu}/u.test(ts.join(' ')) && /\p{Ll}/u.test(ts.join(' '));
@@ -773,6 +875,7 @@ const placeTail = (ts, least = 2, opts = {}) => {
   const all = new Array(n + 1).fill(false);
   const start = new Array(n + 1).fill(false);
   const units = [];
+  const info = opts.info || {};
   all[n] = true;
   for (let i = n - 1; i >= 0; i--) {
     units[i] = placeUnits(ts, keys, i, cased, opts);
@@ -785,19 +888,85 @@ const placeTail = (ts, least = 2, opts = {}) => {
   for (let i = 1; i < n && k < 0; i++) if (before[i] >= least && start[i] && !PARTICLE_BEFORE.test(keys[i - 1])) k = i;
   if (k < 0) return -1;
   // (round 26: from the first word, an organization read from its first word being as long as it is)
-  for (let j = 0; j < k; j++) if (units[j].some(([m]) => m > 1 && j + m > k)) return -1;
+  for (let j = 0; j < k; j++) {
+    if (!units[j].some(([m]) => m > 1 && j + m > k)) continue;
+    if (before[j] >= least || !ORG_NAMES_SET.has(keys[j])) return -1;
+    info.unsure = true;
+  }
+  info.org = units[k].some(([m, s, kind]) => s && kind === 'org' && all[k + m]);
   // (a word that joins people goes with what's after it, "Jordan Rowe and Co." being Jordan Rowe)
   while (k > 1 && /^(?:and|&|y|e|et|und|n)$/iu.test(ts[k - 1]) && before[k - 1] >= least) k--;
   return k;
 };
 const PARTICLE_BEFORE = /^(?:de|di|da|du|des|del|della|delle|degli|dei|dos|das|do|von|van|vander|der|den|ter|ten|la|las|los|le|lo)$/u;
 // (the military and work words that stand on their own after a name)
-const ON_ITS_OWN = `army navy marines usmc usaf usn uscg military veterans veteran selfemployed freelance freelancer unemployed retired`;
+// (round 27: the military's of one word besides, the Seabees, the Citadel, the Pentagon, Quantico, the Airborne and the Rangers,
+// a reservist, a vet)
+const ON_ITS_OWN = `army navy marines usmc usaf usn uscg military veterans veteran selfemployed freelance freelancer unemployed retired
+  seabees seabee citadel pentagon quantico airborne rangers reservist reservists reserves vet vets`;
+// Round 27 (finding 4, the lead's rule: "Hope Fort Bragg" was greeted, "Jordan Ames Fort Liberty" kept it): the bases, by
+// rule. A kind of base before its name takes the word after it, or a place of more words ("Fort Bragg", "Ft. Liberty",
+// "Naval Station Norfolk", "Joint Base San Antonio", "MCAS Miramar", "Naval Air Station Pensacola"; never "JB" or "NAS",
+// initials and a name as often); "Camp", a family name
+// too, only before a camp's name (CAMPS: "Camp Lejeune", "Camp Pendleton"); a kind written after its name takes the word
+// before it only when it's a base's name (BASES: "Robins AFB", "Moody Air Force Base", "Dobbins ARB"), never a word that
+// may be the person's own
+const BASE_BEFORE = `fort ft naval_station naval_air_station joint_base mcas marine_corps_air_station marine_corps_base mcb
+  naval_base naval_submarine_base naval_support_activity naval_weapons_station naval_air_facility army_garrison usag
+  coast_guard_station coast_guard_base coast_guard_air_station air_station marine_corps_logistics_base
+  marine_corps_recruit_depot mcrd`;
+const BASE_AFTER = `air_force_base afb arb air_reserve_base space_force_base sfb army_airfield aaf air_national_guard_base angb
+  army_air_field`;
+const CAMPS = `lejeune pendleton humphreys zama casey blanding shelby atterbury ripley grayling mabry lemonnier arifjan buehring
+  kinser hansen schwab courtney gonsalves merrill bullis dodge beauregard navajo grafton santiago guernsey rilea swift bowie
+  gruber mccain withycombe keyes mackall geiger upshur peary bonifas red_cloud hovey stanley foster butler`;
+const BASES = `robins moody dobbins andrews bolling langley eglin hurlburt tyndall macdill patrick shaw pope seymour_johnson
+  keesler columbus maxwell gunter barksdale little_rock tinker vance altus sheppard dyess goodfellow laughlin randolph lackland
+  kirtland holloman cannon luke davis-monthan davis_monthan nellis creech hill mountain_home fairchild mcchord travis beale
+  edwards vandenberg peterson schriever buckley cheyenne_mountain warren fe_warren minot grand_forks ellsworth offutt
+  whiteman mcconnell scott wright-patterson wright_patterson grissom selfridge dover mcguire hanscom westover eielson
+  elmendorf hickam andersen kadena misawa yokota osan kunsan ramstein spangdahlem aviano incirlik lakenheath mildenhall
+  hunter wheeler-sack simmons lewis-mcchord jbsa march`;
 let STANDALONE = null;
 let ON_ITS_OWN_SET = null;
+let MILITARY_SET = null;
+let BASE_BEFORE_SET = null;
+let BASE_AFTER_SET = null;
+let CAMPS_SET = null;
+let BASES_SET = null;
+// (the military at word j: one of its words or letters, after "US", "U.S.", "The" or "United States" too)
+const militaryAt = (keys, j) => {
+  if (!MILITARY_SET) buildPlaces();
+  const pre = keys[j] === 'us' || keys[j] === 'the' ? 1 : keys[j] === 'united' && keys[j + 1] === 'states' ? 2 : 0;
+  return MILITARY_SET.has(keys[j + pre] || '');
+};
+// (how many words from i are a base: its kind and its name, by rule, 0 for none. `ts`: the words as typed)
+const baseLen = (ts, keys, i) => {
+  if (!BASE_BEFORE_SET) buildPlaces();
+  const n = keys.length;
+  const asName = (t) => !!t && /^\p{Lu}/u.test(t);
+  // (a kind before its name: the longest kind, then a place of the lists or one word written as a name is)
+  for (let m = Math.min(4, n - i - 1); m >= 1; m--) {
+    if (!BASE_BEFORE_SET.has(keys.slice(i, i + m).join(' '))) continue;
+    const j = i + m;
+    const len = phraseLens(keys, j)[0] || 0;
+    if (len) return m + len;
+    if (asName(ts[j]) || !/\p{Ll}/u.test(ts.join(' '))) return m + 1;
+  }
+  // ("Camp" before a camp's name)
+  if (keys[i] === 'camp' && i + 1 < n) for (let m = Math.min(2, n - i - 1); m >= 1; m--) if (CAMPS_SET.has(keys.slice(i + 1, i + 1 + m).join(' '))) return 1 + m;
+  // (a base's name before its kind, "Robins AFB", "Seymour Johnson Air Force Base")
+  for (let a = Math.min(2, n - i - 1); a >= 1; a--) {
+    if (!BASES_SET.has(keys.slice(i, i + a).join(' '))) continue;
+    for (let m = Math.min(4, n - i - a); m >= 1; m--) if (BASE_AFTER_SET.has(keys.slice(i + a, i + a + m).join(' '))) return a + m;
+  }
+  return 0;
+};
 // (a part of the name with what follows a spaced dash, "of", "at", "from", "with" or "@", and a place, a company or a job at its
 // end set apart, after `least` words of the name)
-const cutAfter = (part, least, tail = true) => {
+// (round 27: `info`, optional, says whether the cut is at an organisation, `org`, and whether nothing can say whose the
+// name's first words are, `unsure`)
+const cutAfter = (part, least, tail = true, info = {}) => {
   let p = part;
   const d = p.match(SPACED_DASH);
   // (what's after the dash a place, a company, a job or more than one word: one word alone may be a family name of two
@@ -810,17 +979,28 @@ const cutAfter = (part, least, tail = true) => {
   const j = ts.findIndex((x, k) => k > 0 && k < ts.length - 1 && JOINS_A_PLACE.test(x) && counts[k] >= least);
   // (round 25: a place or an organization with "of" inside it, read whole before any "of" is: "Jordan Ames Democratic
   // Republic of the Congo", "Jordan Ames Isle of Man")
-  const whole = tail ? placeTail(ts, least) : -1;
-  if (whole > 0 && (j < 0 || whole < j)) return ts.slice(0, whole).join(' ');
+  const read = {};
+  const whole = tail ? placeTail(ts, least, { info: read }) : -1;
+  if (whole > 0 && (j < 0 || whole < j)) { Object.assign(info, read); return ts.slice(0, whole).join(' '); }
   if (j > 0) {
     // (round 25, finding 5: an organization or a place of the "X of Y" kind is all of it, its first words before the "of"
     // too, "Jordan Ames City of Atlanta", "Jordan Ames Federal Reserve Bank of Atlanta" being Jordan Ames)
     // (round 26, finding 2: "for" as "of", "Habitat for Humanity", "Community Foundation for Greater Atlanta")
-    const h = tail && /^(?:of|for)$/iu.test(ts[j]) ? placeTail(ts.slice(0, j), least, { headEnd: true }) : -1;
-    if (h > 0) return ts.slice(0, h).join(' ');
+    const atHead = {};
+    const h = tail && /^(?:of|for)$/iu.test(ts[j]) ? placeTail(ts.slice(0, j), least, { headEnd: true, info: atHead }) : -1;
+    if (h > 0) { Object.assign(info, atHead, { org: true }); return ts.slice(0, h).join(' '); }
+    // (round 27, finding 2: "for" with no head before it, "Hope for Children": a word that names organisations, ORG_NAMES', a
+    // given name too, is the organisation's own; among the name's first words, nothing says whose it is)
+    if (tail && /^for$/iu.test(ts[j]) && ORG_NAMES_SET.has(placeKey(ts[j - 1]))) {
+      if (counts[j - 1] >= least) { info.org = true; return ts.slice(0, j - 1).join(' '); }
+      info.unsure = true;
+    }
+    if (atHead.unsure) info.unsure = true;
     ts = ts.slice(0, j);
   }
-  const k = tail ? placeTail(ts, least) : -1;
+  const at = {};
+  const k = tail ? placeTail(ts, least, { info: at }) : -1;
+  if (k > 0) { info.org = !!at.org; if (at.unsure) info.unsure = true; }
   return (k > 0 ? ts.slice(0, k) : ts).join(' ');
 };
 export function ownWordsOf(full) {
@@ -849,15 +1029,27 @@ export function ownWordsOf(full) {
     }
     // (only after a person's name, starting with a given name the lists have or initials: "Law Offices of Jordan Nguyen"
     // stays as typed)
-    if (i === 0) { const first = p.trim().split(/\s+/).find((x) => !TITLE.test(x) && !/^the$/iu.test(x)) || ''; if (listedGiven(first) || /^(?:\p{L}\.)+$/u.test(first)) p = cutAfter(p, 2); }
+    // (round 27: past a rank of more words too, "1st Lt. Jordan Ames USA")
+    if (i === 0) { const lead = p.trim().split(/\s+/); const first = lead.slice(rankRun(lead)).find((x) => !titleWord(x) && !/^the$/iu.test(x)) || ''; if (listedGiven(first) || /^(?:\p{L}\.)+$/u.test(first)) p = cutAfter(p, 2); }
     // (right after a lone family name and its comma, only when what's left starts with a given name the lists have:
     // "Ames, Jordan - Realtor" is Jordan Ames; "Ames, Fulton County" is never "Fulton")
     // (round 25, finding 7: a place, a company, a job or the military written straight after the given name too, "Ames, Jordan
     // Realtor", "Ames, Jordan US Navy", "Ames, Jordan Department of Labor", as after a whole name)
+    // (round 27, finding 2, the lead's rule: People's name is never a mix. A word goes into the name only when it's surely a
+    // name: every word kept after the given name a given name on the lists, an initial, or, before a place, a job or a join
+    // that isn't an organisation's, a family name the lists know ("Ames, Jordan Ann Realtor", "Ames, Jordan Smith of
+    // Atlanta"). When one isn't, or nothing can say whose the given name is ("Ames, Grace Church of God", "Ames, Art
+    // Institute of Atlanta", "Ames, Jordan Down Syndrome Association of Atlanta"), the name stays exactly as typed, as on the
+    // live site; "Ames, Jordan Mercy Hospital of Atlanta" is Jordan Ames, Mercy being the hospital's own word)
     else if (i === 1) {
-      const cut = cutAfter(p, 1);
-      const first = cut.split(' ').find((x) => !TITLE.test(x)) || '';
-      if (cut !== p.replace(/\s+/g, ' ').trim() && listedGiven(first)) p = cut;
+      const how = {};
+      const cut = cutAfter(p, 1, true, how);
+      const ws = cut.split(' ');
+      const at = ws.findIndex((x) => !titleWord(x));
+      const first = ws[at] || '';
+      const sure = (x, k) => !!listedGiven(x) || /^\p{L}\.?$/u.test(x) || /^(?:&|and)$/iu.test(x) || titleWord(x) || afterName(x)
+        || (!how.org && (familyNameLast(x) || (FAMILY_START.test(bare(x)) && k < ws.length - 1)));
+      if (cut !== p.replace(/\s+/g, ' ').trim() && listedGiven(first) && !how.unsure && ws.slice(at + 1).every((x, k) => sure(x, at + 1 + k))) p = cut;
     }
     return p.replace(/\s+/g, ' ').trim();
   });
@@ -931,7 +1123,7 @@ const greeted = (typed, listed) => {
 // Words that show a full name isn't one person's plain name, after its first word (rule 5): a business, a family or an
 // office (the lists below and the titles above, reused for this check only, never to find a name), and words that join
 // people ("and", "y", "et", "und", "or", "with", "plus")
-const STOP = /^(?:prefer|preferred|preference|preferably|not|say|no|none|nope|nah|name|names|named|nickname|nicknames|call|called|calls|me|my|mine|myself|i'm|im|i'd|please|pls|plz|just|only|simply|fine|ok|okay|good|great|is|are|am|was|be|or|either|neither|nor|but|matter|matters|doesn't|doesnt|don't|dont|does|did|first|last|middle|full|legal|given|real|actual|birth|go|goes|going|by|needed|need|necessary|required|same|any|anything|anyone|anybody|whatever|whichever|both|all|it|its|it's|this|that|these|those|here|there|above|below|see|as|to|too|also|the|of|for|with|from|in|on|at|up|you|your|yours|choice|thanks|thank|thx|yes|yeah|yep|sure|nothing|nobody|null|undefined|unknown|anonymous|anon|test|testing|tbd|tba|applicable|use|used|usual|usually|regular|normal|default|etc|et|wife|wives|husband|husbands|hubby|kids|kiddos|kid|children|child|son|sons|daughter|daughters|spouse|spouses|partner|partners|fiance|fiancé|fiancee|fiancée|boyfriend|girlfriend|fam|family|families|household|households|folks|parents|parent|mom|mum|mommy|dad|daddy|grandma|grandpa|granny|baby|friend|friends|team|crew|gang|clan|guest|guests|plus|other|others|foundation|fdn|group|realty|inc|incorporated|llc|llp|pllc|plc|ltd|limited|co|company|companies|corp|corporation|church|churches|ministries|ministry|association|assn|society|club|fund|enterprises|holdings|industries|services|solutions|consulting|properties|investments|ventures|agency|insurance|bank|school|academy|university|college|institute|committee|coalition|alliance|network|collective|cooperative|organization|organisation|nonprofit|charity|charities|temple|synagogue|mosque|parish|chapel|fellowship|congregation|diocese|pta|pto|chamber|dba|center|centre|studio|studios|associates|advisors|advisers|construction|builders|roofing|plumbing|landscaping|realtors|marketing|clinic|pharmacy|bakery|restaurant|salon|logistics|technologies|software|trust|wealth|financial|management|state|former|retired|acting|interim|vice|assistant|associate|executive|most|very|right|rt|council|councilmember|member|members|lady|second|pro|tem|tempore|elect|honorable|honourable|excellency|eminence|holiness|majesty|highness|worshipful|presiding|superior|emeritus|emerita|county|city|district|federal|national|congressional|petty|warrant|command|gunnery|rear|flight|squadron|staff|grand|past|youth|head|lead|police|fire|special|supervisory|us|u\.s|med|dent|rer|jur|iur|theol|habil|pronoun|pronouns)$/u;
+const STOP = /^(?:ret|retd|prefer|preferred|preference|preferably|not|say|no|none|nope|nah|name|names|named|nickname|nicknames|call|called|calls|me|my|mine|myself|i'm|im|i'd|please|pls|plz|just|only|simply|fine|ok|okay|good|great|is|are|am|was|be|or|either|neither|nor|but|matter|matters|doesn't|doesnt|don't|dont|does|did|first|last|middle|full|legal|given|real|actual|birth|go|goes|going|by|needed|need|necessary|required|same|any|anything|anyone|anybody|whatever|whichever|both|all|it|its|it's|this|that|these|those|here|there|above|below|see|as|to|too|also|the|of|for|with|from|in|on|at|up|you|your|yours|choice|thanks|thank|thx|yes|yeah|yep|sure|nothing|nobody|null|undefined|unknown|anonymous|anon|test|testing|tbd|tba|applicable|use|used|usual|usually|regular|normal|default|etc|et|wife|wives|husband|husbands|hubby|kids|kiddos|kid|children|child|son|sons|daughter|daughters|spouse|spouses|partner|partners|fiance|fiancé|fiancee|fiancée|boyfriend|girlfriend|fam|family|families|household|households|folks|parents|parent|mom|mum|mommy|dad|daddy|grandma|grandpa|granny|baby|friend|friends|team|crew|gang|clan|guest|guests|plus|other|others|foundation|fdn|group|realty|inc|incorporated|llc|llp|pllc|plc|ltd|limited|co|company|companies|corp|corporation|church|churches|ministries|ministry|association|assn|society|club|fund|enterprises|holdings|industries|services|solutions|consulting|properties|investments|ventures|agency|insurance|bank|school|academy|university|college|institute|committee|coalition|alliance|network|collective|cooperative|organization|organisation|nonprofit|charity|charities|temple|synagogue|mosque|parish|chapel|fellowship|congregation|diocese|pta|pto|chamber|dba|center|centre|studio|studios|associates|advisors|advisers|construction|builders|roofing|plumbing|landscaping|realtors|marketing|clinic|pharmacy|bakery|restaurant|salon|logistics|technologies|software|trust|wealth|financial|management|state|former|retired|acting|interim|vice|assistant|associate|executive|most|very|right|rt|council|councilmember|member|members|lady|second|pro|tem|tempore|elect|honorable|honourable|excellency|eminence|holiness|majesty|highness|worshipful|presiding|superior|emeritus|emerita|county|city|district|federal|national|congressional|petty|warrant|command|gunnery|rear|flight|squadron|staff|grand|past|youth|head|lead|police|fire|special|supervisory|us|u\.s|med|dent|rer|jur|iur|theol|habil|pronoun|pronouns)$/u;
 const COMMON = /^(?:new|old|own|good|bad|big|small|long|short|high|low|next|other|same|well|way|day|days|time|year|years|week|today|now|then|here|there|where|when|what|which|who|whom|whose|why|how|some|such|each|every|again|once|about|after|before|below|between|into|through|during|without|within|along|across|behind|beyond|near|far|over|under|down|out|off|we|us|they|them|their|his|her|him|she|he|have|has|had|having|doing|done|get|gets|got|make|makes|made|went|gone|come|comes|came|take|takes|took|see|sees|saw|seen|know|knows|knew|think|thinks|thought|says|said|tell|tells|told|give|gives|gave|find|finds|found|uses|work|works|worked|try|tries|tried|ask|asks|asked|needs|feel|feels|felt|leave|leaves|left|put|puts|keep|keeps|kept|let|lets|begin|seem|seems|help|helps|show|shows|shown|hear|play|run|runs|move|moves|live|lives|believe|hold|holds|bring|happen|write|writes|sit|stand|lose|pay|meet|include|continue|set|learn|change|understand|watch|follow|stop|create|speak|read|allow|add|spend|grow|open|walk|win|offer|remember|consider|appear|buy|wait|serve|send|expect|build|stay|fall|cut|reach|remain|suggest|raise|pass|sell|report|decide|pull|fit|fits|box|boxes|thing|things|man|woman|world|life|hand|place|case|point|number|problem|fact|room|area|money|story|lot|book|eye|job|word|words|business|issue|side|kind|house|service|hour|game|line|end|law|car|idea|body|information|face|level|office|door|result|morning|reason|research|girl|moment|air|teacher|force|education|foot|boy|age|policy|everything|process|music|market|sense|nation|plan|interest|death|experience|effect|class|control|care|development|role|effort|rate|heart|drug|light|voice|mind|price|decision|view|relationship|town|road|arm|difference|value|building|action|model|season|tax|position|player|record|paper|space|ground|form|event|official|couple|site|project|activity|table|court|situation|cost|industry|figure|street|image|phone|data|picture|practice|piece|land|product|wall|patient|worker|news|movie|north|south|east|west|support|technology|step|computer|type|attention|film|tree|source|hair|window|evidence|population|truth|email|address|note|photo|large|young|important|public|hard|free|able|better|best|easy|clear|recent|certain|personal|difficult|available|likely|single|current|wrong|private|foreign|common|poor|natural|significant|similar|hot|dead|happy|serious|ready|simple|physical|cold|final|nice|huge|popular|never|always|often|sometimes|maybe|perhaps|really|sorry|hello|hi|dear|isn|aren|wasn|can't|cant|won't|wont|didn't|didnt|isn't|aren't|wasn't|again|less|least|many|much|few|very|lots)$/u;
 const STOP_END = /(?:woman|women|person|persons|member|members)$/u;
 const ORG = /^(?:family|families|household|households|foundation|fdn|group|realty|inc|incorporated|llc|llp|pllc|plc|ltd|limited|co|company|companies|corp|corporation|church|churches|ministries|ministry|association|assn|society|club|fund|enterprises|holdings|industries|services|solutions|consulting|properties|investments|ventures|agency|insurance|bank|school|academy|university|college|institute|committee|coalition|alliance|network|collective|cooperative|organization|organisation|nonprofit|charity|charities|temple|synagogue|mosque|parish|chapel|fellowship|congregation|diocese|pta|pto|chamber|dba|center|centre|studio|studios|team|partners|sons|associates|advisors|advisers|construction|builders|homes|roofing|plumbing|electric|landscaping|realtors|design|designs|media|marketing|capital|clinic|dental|medical|health|pharmacy|bakery|cafe|restaurant|salon|motors|auto|logistics|technologies|tech|systems|software|labs|trust|wealth|financial|management)$/u;
@@ -1210,7 +1402,8 @@ const PLACE_PHRASES = `antigua_and_barbuda bosnia_and_herzegovina bosnia_herzego
   delta_air_lines public_schools us_postal_service postal_service social_security_administration armed_forces dr_congo
   jpmorgan_chase lockheed_martin coldwell_banker northwestern_mutual inspire_brands united_way big_brothers_big_sisters
   fort_moore fort_eisenhower fort_gordon fort_benning fort_stewart hunter_army_airfield robins_afb robins_air_force_base
-  moody_afb moody_air_force_base dobbins_arb dobbins_air_reserve_base kings_bay naval_submarine_base air_force_base`;
+  moody_afb moody_air_force_base dobbins_arb dobbins_air_reserve_base kings_bay naval_submarine_base air_force_base
+  down_syndrome sickle_cell`;
 // (the US military, every branch and its Reserve, written with "US", "U.S." or "United States" before it or without)
 // (round 26, finding 3: the military whole. The Reserves by their former names, "US Naval Reserve" being the Navy
 // Reserve's until 2005; the uniformed services besides, the Public Health Service, the NOAA Corps and the Merchant Marine;
@@ -1222,13 +1415,34 @@ const MILITARY = `army navy marines air_force coast_guard marine_corps space_for
   naval_reserve naval_air_reserve marine_corps_womens_reserve army_air_forces army_air_corps naval_militia
   public_health_service public_health_service_commissioned_corps commissioned_corps noaa_corps noaa_commissioned_officer_corps
   merchant_marine merchant_marines merchant_navy navy_seals navy_seal army_rangers army_special_forces special_forces
-  green_berets marine_raiders naval_academy military_academy air_force_academy coast_guard_academy merchant_marine_academy`;
+  green_berets marine_raiders naval_academy military_academy air_force_academy coast_guard_academy merchant_marine_academy
+  united_states_military_academy united_states_naval_academy united_states_air_force_academy united_states_coast_guard_academy
+  united_states_merchant_marine_academy west_point the_citadel virginia_military_institute norwich_university
+  university_of_north_georgia naval_postgraduate_school army_war_college naval_war_college air_war_college national_war_college
+  air_university uniformed_services_university command_and_general_staff_college
+  army_rotc navy_rotc air_force_rotc marine_corps_rotc army_jrotc navy_jrotc air_force_jrotc marine_corps_jrotc
+  navy_seabees army_corps_of_engineers corps_of_engineers army_nurse_corps navy_nurse_corps nurse_corps army_medical_corps
+  medical_corps army_medical_department navy_medical_corps jag_corps army_jag navy_jag air_force_jag marine_corps_jag
+  coast_guard_jag judge_advocate_general judge_advocate_generals judge_advocate_generals_corps judge_advocate_general_corps
+  civil_air_patrol coast_guard_auxiliary delta_force air_guard army_guard navy_reserves army_reserves air_force_reserves
+  marine_corps_reserves coast_guard_reserves marine_reserves
+  veterans_affairs department_of_veterans_affairs veterans_administration veterans_health_administration va_medical_center
+  american_legion veterans_of_foreign_wars disabled_american_veterans vietnam_veterans_of_america
+  paralyzed_veterans_of_america military_order_of_the_purple_heart marine_corps_league fleet_reserve_association
+  military_officers_association wounded_warrior wounded_warriors wounded_warrior_project gold_star gold_star_mother
+  gold_star_mothers gold_star_family gold_star_families gold_star_wife gold_star_wives gold_star_spouse blue_star
+  blue_star_mother blue_star_mothers blue_star_family blue_star_families purple_heart team_rubicon
+  marine disabled combat military war`;
 // (their letters: the Army, Navy, Air Force, Marine Corps, Coast Guard and Space Force, each Reserve, the Army and Air
 // National Guard, the Public Health Service, the NOAA Corps. Each stands on its own after a name, "Jordan Ames USSF", and
 // takes "Ret." after it, "USN Ret."; CAPS_ONLY's are a family name too, Ang being Chinese, so they're letters only typed in
 // capitals in a name with small letters, "Jordan Ames ANG", never "Jordan Ang")
-const MILITARY_LETTERS = `usa usn usaf usmc uscg ussf usar usnr usafr usmcr uscgr usmcwr arng ang usphs noaa`;
-const CAPS_ONLY = `ang`;
+// (round 27, finding 4: the service academies', ROTC's and JROTC's, the veterans' groups', the JAG's, the Virginia Military
+// Institute's; one that's a given or family name too only in capitals, as ANG is, by rule, buildPlaces)
+const MILITARY_LETTERS = `usa usn usaf usmc uscg ussf usar usnr usafr usmcr uscgr usmcwr arng ang usphs noaa usna usma usafa uscga usmma
+  rotc jrotc nrotc afrotc arotc njrotc afjrotc mcjrotc ajrotc vfw dav amvets vva uso moaa ncoa jag vmi`;
+// (round 27: and the Navy's SEALs, "SEAL", "SEALs", Seal and Seals being family names)
+const CAPS_ONLY = `ang seal seals`;
 // (the Guard, after a state's name or its short form: the National Guard, its Army and Air Guard, and a state's own Guard,
 // "Georgia Guard" being the Georgia National Guard's own short name, "Texas State Guard")
 const GUARDS = `national_guard army_national_guard air_national_guard guard army_guard air_guard state_guard state_defense_force`;
@@ -1283,7 +1497,22 @@ const ORG_BEFORE = `united federal federated federative national international i
   first big brothers girl boy scout economic development education educational environmental transit transportation water
   power electric energy airport port recreation library police fire sheriffs emergency management labor workforce
   corrections revenue treasury defense homeland security investigation disease control prevention commerce trade
-  industry agriculture interior state`;
+  industry agriculture interior state
+  autism autistic syndrome spina bifida cerebral palsy epilepsy diabetes cancer leukemia lupus alzheimers dementia
+  parkinsons cystic fibrosis muscular dystrophy sickle hemophilia arthritis kidney blind deaf disability disabilities
+  rotary kiwanis lions optimist civitan sertoma ruritan elks masonic shriners jaycees fraternal benevolent`;
+// Round 27 (finding 2, the lead's rule: "Ames, Jordan Mercy Hospital of Atlanta" was read as "Jordan Mercy Ames", "Ames, Grace
+// Church of God" as "Grace Ames"): a word that starts an organisation belongs to it even when it's a given name too. These are
+// the given names that are words organisations are named by, written by kind (a virtue or a blessing, a word of faith or a
+// Bible place, a quality, a flower or a stone, a generation's word, the Marines'), read back from a head as ORG_BEFORE's are
+// ("Mercy Hospital", "Grace Church", "Faith Temple", "Trinity Church", "Joy Center", "Junior League", "Art Institute"), and
+// before "for" with no head ("Hope for Children"). A given name that isn't one, "Jordan", is the name's ("Ames, Jordan YMCA of
+// Metro Atlanta" is Jordan Ames); one that's only a family name, "McDonald", or a word the lists don't know stops it, as before
+const ORG_NAMES = `grace mercy hope faith trinity joy charity liberty victory unity harmony destiny providence glory haven promise
+  serenity legacy honor honour justice peace bliss blessing spirit truth valor valour freedom independence patriot
+  zion eden bethel bethany shiloh genesis christian heaven angel angels emmanuel immanuel calvary carmel sharon hebron canaan
+  goshen jericho galilee nazareth bethesda gethsemane star sky sunshine summit cedar magnolia rose lily olive pearl golden
+  noble royal sterling legend eagle junior senior marine marines art arts`;
 // Spanish organizations: their head word first, its words after it, then "de" or "del" (round 26, finding 2: "Jordan Ames
 // Banco de México", "Ciudad de Atlanta", "Iglesia de Dios" were read word by word). Only after one of these heads is "de" a
 // join, so a Spanish name with "de" stays a name ("Juan de la Cruz", "María de los Ángeles"). The Spanish business words
@@ -1291,7 +1520,8 @@ const ORG_BEFORE = `united federal federated federative national international i
 const ES_HEADS = `banco ciudad consulado embajada iglesia agencia cámara universidad ministerio secretaría municipio colegio escuela
   hospital clínica instituto asociación fundación centro departamento oficina gobierno alcaldía ayuntamiento comisión comité
   consejo junta sociedad compañía empresa grupo cooperativa sindicato federación confederación unión alianza parroquia
-  capilla misión templo academia estado república reino condado distrito salón`;
+  capilla misión templo academia estado república reino condado distrito salón
+  igreja assembleia prefeitura universidade faculdade escola fundação associação sociedade conselho comissão câmara`;
 // (and the words after a Spanish head, before its "de": "Agencia Hispana de Seguros", "Iglesia Bautista", "Cámara de
 // Comercio Hispana". After a head that's never a name they're the head's, a family name too among them, "Bautista")
 const ES_AFTER = `nacional internacional general central federal municipal estatal regional metropolitana metropolitano mexicana
@@ -1300,6 +1530,25 @@ const ES_AFTER = `nacional internacional general central federal municipal estat
   unido unidas unidos popular autónoma autónomo nueva nuevo primera primero mundial comunitaria comunitario familiar legal
   médica médico dental automotriz comercial industrial financiera financiero inmobiliaria dominical cultural deportiva
   deportivo educativa educativo social rural urbana urbano local integral hispanoamericana panamericana cristiana cristiano`;
+// Round 27 (finding 1): the words after a head's join that make it an organisation, as round 26 read any word there ("Cámara de
+// Comercio", "Iglesia de Dios", "Constructora del Sur", "Câmara dos Deputados", "Igreja de Deus"): what an organisation is of,
+// by kind (trade, faith, government's work, who it serves, a direction). The Spanish business words and the heads count too,
+// and any place the lists know; ES_PLACES' are Spain's and Latin America's regions and capitals. Never a family name written
+// last (buildPlaces leaves them out): "Câmara de Oliveira", "Cámara del Río", "Capilla de la Torre" are family names
+const ES_OF = `comercio comerciantes industria industrias industriales negocios empresarios exportadores importadores dios deus
+  cristo jesucristo vivo oración justicia educación cultura trabajo trabajadores fomento
+  desarrollo ahorro ahorros crédito agricultura agricultores ganadería ganaderos minería energía turismo deporte deportes
+  transporte vivienda seguridad defensa economía finanzas hacienda gobernación policía bomberos ciencia ciencias tecnología
+  investigación estadística agua aguas obras públicas comunicaciones salud sanidad medicina médicos enfermeras abogados
+  ingenieros arquitectos contadores maestros profesores estudiantes padres familia familias mujer mujeres niños niñez
+  juventud jóvenes ancianos inmigrantes migrantes refugiados hispanos latinos mexicanos cubanos colombianos dominicanos
+  diputados senadores representantes deputados vereadores comércio indústria norte sur este oeste noreste noroeste sureste
+  suroeste pacífico atlántico caribe golfo occidente oriente américa américas nación república estado municipio`;
+const ES_PLACES = `andalucía aragón asturias baleares canarias cantabria cataluña catalunya extremadura galicia murcia navarra rioja
+  euskadi madrid barcelona sevilla málaga bilbao zaragoza aguascalientes campeche chiapas chihuahua coahuila colima durango
+  guanajuato jalisco michoacán nayarit oaxaca puebla querétaro sinaloa sonora tabasco tamaulipas tlaxcala veracruz yucatán
+  zacatecas cdmx monterrey guadalajara tijuana bogotá caracas quito asunción montevideo managua tegucigalpa havana habana
+  medellín cali barranquilla cartagena valparaíso guayaquil arequipa cusco cuzco ciudad juárez acapulco cancún`;
 // Round 26 (finding 3: "Hope Belgique", "Hope Hellenic Republic", "Jordan Suomi", "Jordan Saint Helena" were greeted, and
 // Add kept "Jordan Ames St. Maarten" and "Jordan Ames Bosnia-Herzegovina" whole): the lists complete by rule, not by
 // additions picked by hand. Every UN member and observer state, and the territories people come from, one line each: its
@@ -1311,207 +1560,207 @@ const ES_AFTER = `nacional internacional general central federal municipal estat
 // ("Bosnia-Herzegovina", "Congo-Brazzaville"), and a "Saint" or "Sint" one with "St." (buildPlaces). "=" before a form:
 // only as written, accents and all ("Ísland": plain "Island" is an everyday word). A test fails if one of the UN's official
 // names, or one of the round 26 tester's forms, isn't known
-const COUNTRIES = `Afghanistan|Islamic Republic of Afghanistan|Islamic Emirate of Afghanistan|Afghanestan
+const COUNTRIES = `Afghanistan|Islamic Republic of Afghanistan|Islamic Emirate of Afghanistan|Afghanestan|Jomhuri-ye Eslami-ye Afghanestan|Da Afghanistan Islami Jumhoriyat|Imarat-i Islami-yi Afghanistan|Da Afghanistan Islami Emarat
   Albania|Republic of Albania|Shqipëria|Shqipëri|Republika e Shqipërisë
-  Algeria|People's Democratic Republic of Algeria|Algérie|Al Jazair|Al-Jazair|Dzayer
+  Algeria|People's Democratic Republic of Algeria|Algérie|Al Jazair|Al-Jazair|Dzayer|Al-Jumhuriyah al-Jaza'iriyah ad-Dimuqratiyah ash-Sha'biyah|République algérienne démocratique et populaire|Tagduda Tamegdayt Taɣerfant Tazzayrit
   Andorra|Principality of Andorra|Principat d'Andorra
   Angola|Republic of Angola|República de Angola
   Antigua and Barbuda|Antigua|Barbuda
-  Argentina|Argentine Republic|República Argentina
-  Armenia|Republic of Armenia|Hayastan
+  Argentina|Argentine Republic|República Argentina|Nación Argentina
+  Armenia|Republic of Armenia|Hayastan|Hayastani Hanrapetutyun
   Australia|Commonwealth of Australia
   Austria|Republic of Austria|Österreich|Republik Österreich
-  Azerbaijan|Republic of Azerbaijan|Azərbaycan
+  Azerbaijan|Republic of Azerbaijan|Azərbaycan|Azərbaycan Respublikası
   Bahamas|The Bahamas|Commonwealth of The Bahamas
-  Bahrain|Kingdom of Bahrain|Al Bahrain
-  Bangladesh|People's Republic of Bangladesh|East Pakistan
+  Bahrain|Kingdom of Bahrain|Al Bahrain|Mamlakat al-Bahrayn|Al-Bahrayn
+  Bangladesh|People's Republic of Bangladesh|East Pakistan|Gônoprojatontri Bangladesh|Gana Prajatantri Bangladesh|Ganaprajatantri Bangladesh
   Barbados
-  Belarus|Republic of Belarus|Byelorussia|Belorussia|Bielorussia|Belarus'|Bielarus
-  Belgium|Kingdom of Belgium|België|Belgique|Belgien
+  Belarus|Republic of Belarus|Byelorussia|Belorussia|Bielorussia|Belarus'|Bielarus|Respublika Bielarus|Respublika Belarus
+  Belgium|Kingdom of Belgium|België|Belgique|Belgien|Koninkrijk België|Royaume de Belgique|Königreich Belgien
   Belize|British Honduras
   Benin|Republic of Benin|Bénin|République du Bénin|Dahomey
-  Bhutan|Kingdom of Bhutan|Druk Yul
-  Bolivia|Plurinational State of Bolivia|Estado Plurinacional de Bolivia|Republic of Bolivia
+  Bhutan|Kingdom of Bhutan|Druk Yul|Druk Gyal Khap
+  Bolivia|Plurinational State of Bolivia|Estado Plurinacional de Bolivia|Republic of Bolivia|Buliwya Mamallaqta|Wuliwya Suyu|Tetã Volívia
   Bosnia and Herzegovina|Bosnia Herzegovina|Bosnia|Herzegovina|Bosna i Hercegovina|BiH
-  Botswana|Republic of Botswana|Bechuanaland
+  Botswana|Republic of Botswana|Bechuanaland|Lefatshe la Botswana
   Brazil|Federative Republic of Brazil|Brasil|República Federativa do Brasil
   Brunei|Brunei Darussalam|Nation of Brunei|Negara Brunei Darussalam
-  Bulgaria|Republic of Bulgaria|Bulgariya|Balgariya
+  Bulgaria|Republic of Bulgaria|Bulgariya|Balgariya|Republika Bulgaria|Republika Balgariya|Republika Bulgariya
   Burkina Faso|Burkina|Upper Volta
-  Burundi|Republic of Burundi|Uburundi
-  Cabo Verde|Cape Verde|Republic of Cabo Verde|Republic of Cape Verde
-  Cambodia|Kingdom of Cambodia|Kampuchea|Cambodge
+  Burundi|Republic of Burundi|Uburundi|Repuburika y'Uburundi|République du Burundi
+  Cabo Verde|Cape Verde|Republic of Cabo Verde|Republic of Cape Verde|República de Cabo Verde
+  Cambodia|Kingdom of Cambodia|Kampuchea|Cambodge|Preăh Réachéanachâk Kâmpŭchéa|Royaume du Cambodge
   Cameroon|Republic of Cameroon|Cameroun|République du Cameroun
   Canada
-  Central African Republic|CAR|Centrafrique|République centrafricaine
-  Chad|Republic of Chad|Tchad|République du Tchad
+  Central African Republic|CAR|Centrafrique|République centrafricaine|Ködörösêse tî Bêafrîka|Bêafrîka
+  Chad|Republic of Chad|Tchad|République du Tchad|Jumhuriyat Tshad
   Chile|Republic of Chile|República de Chile
-  China|People's Republic of China|PRC|Mainland China|Zhongguo
+  China|People's Republic of China|PRC|Mainland China|Zhongguo|Zhonghua Renmin Gongheguo
   Colombia|Republic of Colombia|República de Colombia
-  Comoros|Union of the Comoros|The Comoros|Comores
-  Congo|Republic of the Congo|Republic of Congo|Congo Brazzaville|Congo Republic
+  Comoros|Union of the Comoros|The Comoros|Comores|Union des Comores|Udzima wa Komori|Al-Ittihad al-Qumuri
+  Congo|Republic of the Congo|Republic of Congo|Congo Brazzaville|Congo Republic|République du Congo
   Costa Rica|Republic of Costa Rica|República de Costa Rica
-  Côte d'Ivoire|Republic of Côte d'Ivoire|Ivory Coast|Cote dIvoire
+  Côte d'Ivoire|Republic of Côte d'Ivoire|Ivory Coast|Cote dIvoire|Côte d Ivoire|République de Côte d'Ivoire
   Croatia|Republic of Croatia|Hrvatska|Republika Hrvatska
   Cuba|Republic of Cuba|República de Cuba
-  Cyprus|Republic of Cyprus|Kypros|Kıbrıs
+  Cyprus|Republic of Cyprus|Kypros|Kıbrıs|Kypriaki Dimokratia|Kıbrıs Cumhuriyeti
   Czechia|Czech Republic|Česko|Česká republika|Czechoslovakia
-  North Korea|Democratic People's Republic of Korea|DPRK|DPR Korea
+  North Korea|Democratic People's Republic of Korea|DPRK|DPR Korea|Choson Minjujuui Inmin Konghwaguk|Choson|Joseon
   Democratic Republic of the Congo|Democratic Republic of Congo|DR Congo|DRC|DR of the Congo|DR of Congo|Congo Kinshasa|RDC|République démocratique du Congo|Zaire
-  Denmark|Kingdom of Denmark|Danmark
-  Djibouti|Republic of Djibouti
+  Denmark|Kingdom of Denmark|Danmark|Kongeriget Danmark
+  Djibouti|Republic of Djibouti|République de Djibouti|Jumhuriyat Jibuti
   Dominica|Commonwealth of Dominica
-  Dominican Republic|The Dominican Republic|República Dominicana
+  Dominican Republic|The Dominican Republic|República Dominicana|Quisqueya
   Ecuador|Republic of Ecuador|República del Ecuador
-  Egypt|Arab Republic of Egypt|Misr|Masr
+  Egypt|Arab Republic of Egypt|Misr|Masr|Jumhuriyat Misr al-Arabiyah|Gumhuriyyat Masr al-Arabiyya
   El Salvador|Republic of El Salvador|República de El Salvador
-  Equatorial Guinea|Republic of Equatorial Guinea|Guinea Ecuatorial
-  Eritrea|State of Eritrea|Ertra
-  Estonia|Republic of Estonia|Eesti
-  Eswatini|Kingdom of Eswatini|Swaziland|Kingdom of Swaziland
-  Ethiopia|Federal Democratic Republic of Ethiopia|Ityopya|Abyssinia
-  Fiji|Republic of Fiji
-  Finland|Republic of Finland|Suomi
+  Equatorial Guinea|Republic of Equatorial Guinea|Guinea Ecuatorial|República de Guinea Ecuatorial|République de Guinée équatoriale|República da Guiné Equatorial
+  Eritrea|State of Eritrea|Ertra|Hagere Ertra|Dawlat Iritriya
+  Estonia|Republic of Estonia|Eesti|Eesti Vabariik
+  Eswatini|Kingdom of Eswatini|Swaziland|Kingdom of Swaziland|Umbuso weSwatini
+  Ethiopia|Federal Democratic Republic of Ethiopia|Ityopya|Abyssinia|Ityop'iya Federalawi Demokrasiyawi Ripeblik
+  Fiji|Republic of Fiji|Matanitu Tugalala o Viti
+  Finland|Republic of Finland|Suomi|Suomen tasavalta|Republiken Finland
   France|French Republic|République française
   Gabon|Gabonese Republic|République gabonaise
   Gambia|The Gambia|Republic of The Gambia
   Georgia|Sakartvelo
   Germany|Federal Republic of Germany|Deutschland|Bundesrepublik Deutschland|West Germany|East Germany
   Ghana|Republic of Ghana|Gold Coast
-  Greece|Hellenic Republic|Hellas|Ellada
+  Greece|Hellenic Republic|Hellas|Ellada|Elliniki Dimokratia|Ellas
   Grenada
   Guatemala|Republic of Guatemala|República de Guatemala
   Guinea|Republic of Guinea|Guinée|Guinea Conakry|République de Guinée
-  Guinea-Bissau|Guinea Bissau|Republic of Guinea-Bissau|Guiné-Bissau
+  Guinea-Bissau|Guinea Bissau|Republic of Guinea-Bissau|Guiné-Bissau|República da Guiné-Bissau
   Guyana|Co-operative Republic of Guyana|Cooperative Republic of Guyana|British Guiana
-  Haiti|Republic of Haiti|Haïti|Ayiti|République d'Haïti
+  Haiti|Republic of Haiti|Haïti|Ayiti|République d'Haïti|Repiblik Ayiti
   Honduras|Republic of Honduras|República de Honduras
   Hungary|Magyarország
-  Iceland|Republic of Iceland|=Ísland
-  India|Republic of India|Bharat|Hindustan
+  Iceland|Republic of Iceland|=Ísland|Lýðveldið Ísland
+  India|Republic of India|Bharat|Hindustan|Bharat Ganarajya
   Indonesia|Republic of Indonesia|Republik Indonesia
-  Iran|Islamic Republic of Iran|Persia
-  Iraq|Republic of Iraq
-  Ireland|Republic of Ireland|Éire
-  Israel|State of Israel
+  Iran|Islamic Republic of Iran|Persia|Jomhuri-ye Eslami-ye Iran
+  Iraq|Republic of Iraq|Jumhuriyat al-Iraq|Komari Eraq|Al-Iraq|Irak
+  Ireland|Republic of Ireland|Éire|Poblacht na hÉireann
+  Israel|State of Israel|Medinat Yisrael|Dawlat Isra'il
   Italy|Italian Republic|Italia|Repubblica Italiana
   Jamaica
-  Japan|Nippon|Nihon|State of Japan
-  Jordan|Hashemite Kingdom of Jordan
-  Kazakhstan|Republic of Kazakhstan|Qazaqstan
-  Kenya|Republic of Kenya
-  Kiribati|Republic of Kiribati|Gilbert Islands
-  Kuwait|State of Kuwait
-  Kyrgyzstan|Kyrgyz Republic|Kirghizia|Kyrgyzia
-  Laos|Lao People's Democratic Republic|Lao PDR|Lao
-  Latvia|Republic of Latvia|Latvija
-  Lebanon|Lebanese Republic|Liban|Lubnan
-  Lesotho|Kingdom of Lesotho|Basutoland
+  Japan|Nippon|Nihon|State of Japan|Nippon-koku|Nihon-koku
+  Jordan|Hashemite Kingdom of Jordan|Al-Mamlakah al-Urduniyah al-Hashimiyah|Al-Urdun
+  Kazakhstan|Republic of Kazakhstan|Qazaqstan|Qazaqstan Respublikasy|Respublika Kazakhstan
+  Kenya|Republic of Kenya|Jamhuri ya Kenya
+  Kiribati|Republic of Kiribati|Gilbert Islands|Ribaberiki Kiribati
+  Kuwait|State of Kuwait|Dawlat al-Kuwayt|Al-Kuwayt
+  Kyrgyzstan|Kyrgyz Republic|Kirghizia|Kyrgyzia|Kyrgyz Respublikasy|Kyrgyzskaya Respublika
+  Laos|Lao People's Democratic Republic|Lao PDR|Lao|Sathalanalat Paxathipatai Paxaxon Lao|Muang Lao
+  Latvia|Republic of Latvia|Latvija|Latvijas Republika
+  Lebanon|Lebanese Republic|Liban|Lubnan|Al-Jumhuriyah al-Lubnaniyah|République libanaise
+  Lesotho|Kingdom of Lesotho|Basutoland|Muso oa Lesotho
   Liberia|Republic of Liberia
-  Libya|State of Libya|Libyan Arab Jamahiriya
-  Liechtenstein|Principality of Liechtenstein
-  Lithuania|Republic of Lithuania|Lietuva
-  Luxembourg|Grand Duchy of Luxembourg|Lëtzebuerg|Luxemburg
-  Madagascar|Republic of Madagascar|Madagasikara
-  Malawi|Republic of Malawi|Nyasaland
-  Malaysia|Malaya
-  Maldives|Republic of Maldives|Maldive Islands
-  Mali|Republic of Mali
-  Malta|Republic of Malta
-  Marshall Islands|Republic of the Marshall Islands
-  Mauritania|Islamic Republic of Mauritania|Mauritanie
-  Mauritius|Republic of Mauritius
+  Libya|State of Libya|Libyan Arab Jamahiriya|Dawlat Libya|Libiya
+  Liechtenstein|Principality of Liechtenstein|Fürstentum Liechtenstein
+  Lithuania|Republic of Lithuania|Lietuva|Lietuvos Respublika
+  Luxembourg|Grand Duchy of Luxembourg|Lëtzebuerg|Luxemburg|Groussherzogtum Lëtzebuerg|Grand-Duché de Luxembourg|Großherzogtum Luxemburg
+  Madagascar|Republic of Madagascar|Madagasikara|Repoblikan'i Madagasikara|République de Madagascar
+  Malawi|Republic of Malawi|Nyasaland|Dziko la Malaŵi
+  Malaysia|Malaya|Persekutuan Malaysia
+  Maldives|Republic of Maldives|Maldive Islands|Dhivehi Raajjeyge Jumhooriyya|Dhivehi Raajje
+  Mali|Republic of Mali|République du Mali
+  Malta|Republic of Malta|Repubblika ta' Malta
+  Marshall Islands|Republic of the Marshall Islands|Aolepān Aorōkin Ṃajeḷ|Aorōkin Ṃajeḷ
+  Mauritania|Islamic Republic of Mauritania|Mauritanie|Al-Jumhuriyah al-Islamiyah al-Muritaniyah|République islamique de Mauritanie|Muritaniya
+  Mauritius|Republic of Mauritius|République de Maurice|Republik Moris
   Mexico|United Mexican States|Estados Unidos Mexicanos|México
   Micronesia|Federated States of Micronesia
-  Moldova|Republic of Moldova|Moldavia
-  Monaco|Principality of Monaco
+  Moldova|Republic of Moldova|Moldavia|Republica Moldova
+  Monaco|Principality of Monaco|Principauté de Monaco
   Mongolia|Mongol Uls
   Montenegro|Crna Gora|Republic of Montenegro
-  Morocco|Kingdom of Morocco|Maroc|Al Maghrib
-  Mozambique|Republic of Mozambique|Moçambique
-  Myanmar|Republic of the Union of Myanmar|Burma
+  Morocco|Kingdom of Morocco|Maroc|Al Maghrib|Al-Mamlakah al-Maghribiyah|Royaume du Maroc|Tageldit n Lmeɣrib
+  Mozambique|Republic of Mozambique|Moçambique|República de Moçambique
+  Myanmar|Republic of the Union of Myanmar|Burma|Pyidaunzu Thanmăda Myăma Nainngandaw|Myanma
   Namibia|Republic of Namibia|South West Africa
-  Nauru|Republic of Nauru
-  Nepal|Federal Democratic Republic of Nepal
-  Netherlands|The Netherlands|Kingdom of the Netherlands|Nederland|Holland
+  Nauru|Republic of Nauru|Repubrikin Naoero|Naoero
+  Nepal|Federal Democratic Republic of Nepal|Sanghiya Loktantrik Ganatantra Nepal
+  Netherlands|The Netherlands|Kingdom of the Netherlands|Nederland|Holland|Koninkrijk der Nederlanden
   New Zealand|Aotearoa
   Nicaragua|Republic of Nicaragua|República de Nicaragua
-  Niger|Republic of the Niger|Republic of Niger
+  Niger|Republic of the Niger|Republic of Niger|République du Niger
   Nigeria|Federal Republic of Nigeria
-  North Macedonia|Republic of North Macedonia|Macedonia|Severna Makedonija|FYROM
-  Norway|Kingdom of Norway|Norge|Noreg
-  Oman|Sultanate of Oman
-  Pakistan|Islamic Republic of Pakistan
-  Palau|Republic of Palau|Belau
+  North Macedonia|Republic of North Macedonia|Macedonia|Severna Makedonija|FYROM|Republika Severna Makedonija
+  Norway|Kingdom of Norway|Norge|Noreg|Kongeriket Norge|Kongeriket Noreg
+  Oman|Sultanate of Oman|Saltanat Uman
+  Pakistan|Islamic Republic of Pakistan|Islami Jumhuriya Pakistan|Islami Jamhuriya-e-Pakistan
+  Palau|Republic of Palau|Belau|Beluu er a Belau
   Panama|Republic of Panama|Panamá|República de Panamá
-  Papua New Guinea|Independent State of Papua New Guinea|PNG
-  Paraguay|Republic of Paraguay|República del Paraguay
-  Peru|Republic of Peru|Perú|República del Perú
-  Philippines|The Philippines|Republic of the Philippines|Pilipinas
-  Poland|Republic of Poland|Polska
+  Papua New Guinea|Independent State of Papua New Guinea|PNG|Independen Stet bilong Papua Niugini|Papua Niu Gini|Papua Niugini
+  Paraguay|Republic of Paraguay|República del Paraguay|Tetã Paraguái|Paraguái
+  Peru|Republic of Peru|Perú|República del Perú|Piruw Ripuwlika|Piruw
+  Philippines|The Philippines|Republic of the Philippines|Pilipinas|Republika ng Pilipinas
+  Poland|Republic of Poland|Polska|Rzeczpospolita Polska
   Portugal|Portuguese Republic|República Portuguesa
-  Qatar|State of Qatar
-  South Korea|Republic of Korea|ROK|Hanguk|Daehan Minguk
+  Qatar|State of Qatar|Dawlat Qatar
+  South Korea|Republic of Korea|ROK|Hanguk|Daehan Minguk|Taehan Min'guk
   Romania|România|Rumania|Roumania
   Russia|Russian Federation|Rossiya|Rossiyskaya Federatsiya|Soviet Union|USSR
-  Rwanda|Republic of Rwanda
+  Rwanda|Republic of Rwanda|Repubulika y'u Rwanda|République du Rwanda
   Saint Kitts and Nevis|Federation of Saint Kitts and Nevis|Saint Kitts|Saint Christopher and Nevis
   Saint Lucia
   Saint Vincent and the Grenadines|Saint Vincent
-  Samoa|Independent State of Samoa|Western Samoa
-  San Marino|Republic of San Marino
-  Sao Tome and Principe|Democratic Republic of São Tomé and Príncipe|São Tomé|São Tomé e Príncipe
-  Saudi Arabia|Kingdom of Saudi Arabia|KSA
-  Senegal|Republic of Senegal|Sénégal
-  Serbia|Republic of Serbia|Srbija
-  Seychelles|Republic of Seychelles
+  Samoa|Independent State of Samoa|Western Samoa|Malo Saʻoloto Tutoʻatasi o Sāmoa
+  San Marino|Republic of San Marino|Repubblica di San Marino
+  Sao Tome and Principe|Democratic Republic of São Tomé and Príncipe|São Tomé|São Tomé e Príncipe|República Democrática de São Tomé e Príncipe
+  Saudi Arabia|Kingdom of Saudi Arabia|KSA|Al-Mamlakah al-Arabiyah as-Saudiyah|As-Saudiyah
+  Senegal|Republic of Senegal|Sénégal|République du Sénégal
+  Serbia|Republic of Serbia|Srbija|Republika Srbija
+  Seychelles|Republic of Seychelles|Repiblik Sesel|République des Seychelles|Sesel
   Sierra Leone|Republic of Sierra Leone
-  Singapore|Republic of Singapore|Singapura
+  Singapore|Republic of Singapore|Singapura|Republik Singapura|Xinjiapo Gongheguo|Singapur Kudiyarasu|Xinjiapo|Singapur
   Slovakia|Slovak Republic|Slovensko|Slovenská republika
-  Slovenia|Republic of Slovenia|Slovenija
+  Slovenia|Republic of Slovenia|Slovenija|Republika Slovenija
   Solomon Islands|Solomons
-  Somalia|Federal Republic of Somalia|Soomaaliya
-  South Africa|Republic of South Africa|RSA|Suid-Afrika
+  Somalia|Federal Republic of Somalia|Soomaaliya|Jamhuuriyadda Federaalka Soomaaliya|Jumhuriyat as-Sumal al-Fideraliya|As-Sumal
+  South Africa|Republic of South Africa|RSA|Suid-Afrika|Republiek van Suid-Afrika|IRiphabhulikhi yaseNingizimu Afrika|Ningizimu Afrika|uMzantsi Afrika
   South Sudan|Republic of South Sudan
   Spain|Kingdom of Spain|España|Reino de España
-  Sri Lanka|Democratic Socialist Republic of Sri Lanka|Ceylon
-  Sudan|Republic of the Sudan|The Sudan
-  Suriname|Republic of Suriname|Surinam|Dutch Guiana
-  Sweden|Kingdom of Sweden|Sverige
-  Switzerland|Swiss Confederation|Schweiz|Suisse|Svizzera|Svizra|Helvetia|Confoederatio Helvetica
-  Syria|Syrian Arab Republic
-  Tajikistan|Republic of Tajikistan|Tojikiston|Tadzhikistan
-  Thailand|Kingdom of Thailand|Siam|Prathet Thai
-  Timor-Leste|Democratic Republic of Timor-Leste|East Timor
+  Sri Lanka|Democratic Socialist Republic of Sri Lanka|Ceylon|Sri Lanka Prajathanthrika Samajavadi Janarajaya|Ilankai Jananayaka Socialisa Kudiyarasu|Ilankai|Lanka
+  Sudan|Republic of the Sudan|The Sudan|Jumhuriyat as-Sudan|As-Sudan
+  Suriname|Republic of Suriname|Surinam|Dutch Guiana|Republiek Suriname
+  Sweden|Kingdom of Sweden|Sverige|Konungariket Sverige
+  Switzerland|Swiss Confederation|Schweiz|Suisse|Svizzera|Svizra|Helvetia|Confoederatio Helvetica|Schweizerische Eidgenossenschaft|Confédération suisse|Confederazione Svizzera|Confederaziun svizra
+  Syria|Syrian Arab Republic|Al-Jumhuriyah al-Arabiyah as-Suriyah
+  Tajikistan|Republic of Tajikistan|Tojikiston|Tadzhikistan|Jumhurii Tojikiston
+  Thailand|Kingdom of Thailand|Siam|Prathet Thai|Ratcha Anachak Thai|Ratchaanachak Thai|Muang Thai|Mueang Thai
+  Timor-Leste|Democratic Republic of Timor-Leste|East Timor|Repúblika Demokrátika Timór-Leste|República Democrática de Timor-Leste|Timór Lorosa'e
   Togo|Togolese Republic|République togolaise
-  Tonga|Kingdom of Tonga
+  Tonga|Kingdom of Tonga|Puleʻanga Fakatuʻi ʻo Tonga
   Trinidad and Tobago|Republic of Trinidad and Tobago
-  Tunisia|Tunisian Republic|Republic of Tunisia|Tunisie
-  Türkiye|Republic of Türkiye|Turkey|Republic of Turkey
+  Tunisia|Tunisian Republic|Republic of Tunisia|Tunisie|Al-Jumhuriyah at-Tunisiyah|République tunisienne
+  Türkiye|Republic of Türkiye|Turkey|Republic of Turkey|Türkiye Cumhuriyeti
   Turkmenistan|Türkmenistan|Turkmenia
   Tuvalu|Ellice Islands
-  Uganda|Republic of Uganda
+  Uganda|Republic of Uganda|Jamhuri ya Uganda
   Ukraine|Ukraina|Ukrayina
-  United Arab Emirates|UAE|The Emirates
-  United Kingdom|United Kingdom of Great Britain and Northern Ireland|UK|Great Britain|Britain
-  Tanzania|United Republic of Tanzania|Tanganyika|Zanzibar
-  United States|United States of America|USA|America
+  United Arab Emirates|UAE|The Emirates|Al-Imarat al-Arabiyah al-Muttahidah|Al-Imarat
+  United Kingdom|United Kingdom of Great Britain and Northern Ireland|UK|Great Britain|Britain|Reino Unido|Royaume-Uni|Vereinigtes Königreich|Großbritannien|Grande-Bretagne|Gran Bretaña|Regno Unito|=G.B.|Teyrnas Unedig|Rìoghachd Aonaichte
+  Tanzania|United Republic of Tanzania|Tanganyika|Zanzibar|Jamhuri ya Muungano wa Tanzania
+  United States|United States of America|USA|America|Estados Unidos|Estados Unidos de América|EE. UU.|EE.UU.|États-Unis|États-Unis d'Amérique|Vereinigte Staaten|Vereinigte Staaten von Amerika|Estados Unidos da América|Stati Uniti|Stati Uniti d'America|=U.S.
   Uruguay|Oriental Republic of Uruguay|República Oriental del Uruguay
-  Uzbekistan|Republic of Uzbekistan|O'zbekiston
-  Vanuatu|Republic of Vanuatu|New Hebrides
+  Uzbekistan|Republic of Uzbekistan|O'zbekiston|O'zbekiston Respublikasi
+  Vanuatu|Republic of Vanuatu|New Hebrides|Ripablik blong Vanuatu|République de Vanuatu
   Venezuela|Bolivarian Republic of Venezuela|República Bolivariana de Venezuela
-  Viet Nam|Vietnam|Socialist Republic of Viet Nam|Socialist Republic of Vietnam|Việt Nam
-  Yemen|Republic of Yemen
+  Viet Nam|Vietnam|Socialist Republic of Viet Nam|Socialist Republic of Vietnam|Việt Nam|Cộng hòa Xã hội chủ nghĩa Việt Nam
+  Yemen|Republic of Yemen|Al-Jumhuriyah al-Yamaniyah|Al-Yaman
   Zambia|Republic of Zambia|Northern Rhodesia
   Zimbabwe|Republic of Zimbabwe|Rhodesia|Southern Rhodesia
-  Holy See|Vatican City|Vatican City State|State of the Vatican City|Vatican
-  Palestine|State of Palestine|Palestinian Territories|West Bank|Gaza|Gaza Strip
-  Taiwan|Republic of China|ROC|Formosa|Chinese Taipei
-  Kosovo|Republic of Kosovo|Kosova
-  Puerto Rico|Commonwealth of Puerto Rico|Borinquen
+  Holy See|Vatican City|Vatican City State|State of the Vatican City|Vatican|Santa Sede|Sancta Sedes|Stato della Città del Vaticano|Status Civitatis Vaticanae|Città del Vaticano
+  Palestine|State of Palestine|Palestinian Territories|West Bank|Gaza|Gaza Strip|Dawlat Filastin|Filastin
+  Taiwan|Republic of China|ROC|Formosa|Chinese Taipei|Zhonghua Minguo
+  Kosovo|Republic of Kosovo|Kosova|Republika e Kosovës|Republika Kosovo
+  Puerto Rico|Commonwealth of Puerto Rico|Borinquen|Boricua|Estado Libre Asociado de Puerto Rico
   Guam|Guåhan
   US Virgin Islands|United States Virgin Islands|Virgin Islands|USVI
-  American Samoa
+  American Samoa|Amerika Sāmoa
   Northern Mariana Islands|Commonwealth of the Northern Mariana Islands|CNMI|Saipan
   British Virgin Islands|BVI|Tortola
   Cayman Islands|Caymans|Grand Cayman
@@ -1524,7 +1773,7 @@ const COUNTRIES = `Afghanistan|Islamic Republic of Afghanistan|Islamic Emirate o
   Saint Helena|Saint Helena Ascension and Tristan da Cunha|Ascension Island
   Pitcairn Islands|Pitcairn
   Aruba
-  Curaçao
+  Curaçao|Kòrsou
   Sint Maarten|Saint Martin|Saint Maarten
   Bonaire|Sint Eustatius|Statia|Caribbean Netherlands|Netherlands Antilles
   Greenland|Kalaallit Nunaat|Grønland
@@ -1536,11 +1785,11 @@ const COUNTRIES = `Afghanistan|Islamic Republic of Afghanistan|Islamic Emirate o
   Mayotte
   Saint Barthélemy|Saint Barts|Saint Barths|Saint Barth
   Saint Pierre and Miquelon
-  French Polynesia|Tahiti
+  French Polynesia|Tahiti|Polynésie française
   New Caledonia|Nouvelle-Calédonie
   Wallis and Futuna
-  Hong Kong|Hong Kong SAR|HKSAR
-  Macau|Macao|Macau SAR|Macao SAR
+  Hong Kong|Hong Kong SAR|HKSAR|Heung Gong|Xianggang
+  Macau|Macao|Macau SAR|Macao SAR|Ou Mun|Aomen
   Cook Islands
   Niue
   Tokelau
@@ -1548,9 +1797,11 @@ const COUNTRIES = `Afghanistan|Islamic Republic of Afghanistan|Islamic Emirate o
   Christmas Island
   Isle of Man
   Åland|Aland Islands
-  Western Sahara|Sahrawi Arab Democratic Republic
+  Western Sahara|Sahrawi Arab Democratic Republic|Al-Jumhuriyah al-Arabiyah as-Sahrawiyah ad-Dimuqratiyah
   Somaliland|Republic of Somaliland
-  Northern Cyprus
+  Northern Cyprus|Kuzey Kıbrıs Türk Cumhuriyeti|Kuzey Kıbrıs
+  Tibet|Kurdistan|Transnistria|Abkhazia|South Ossetia|Puntland|Biafra|Kernow|Sápmi
+  Navajo Nation|Cherokee Nation|Muscogee Nation|Muscogee Creek Nation|Creek Nation|Choctaw Nation|Chickasaw Nation|Seminole Nation|Osage Nation|Oneida Nation|Seneca Nation|Hopi Tribe|Eastern Band of Cherokee Indians
   England|Scotland|Wales|Northern Ireland`;
 // (company forms written after a name, Mexico's and Spain's: "S.A. de C.V.", "S. de R.L.")
 const COMPANY_FORMS = `sa_de_cv s_de_rl s_de_rl_de_cv sab_de_cv sapi_de_cv s_a_de_c_v`;
@@ -1568,6 +1819,9 @@ let CAPS_ONLY_SET = null;
 let ORG_BEFORE_SET = null;
 let ES_HEADS_SET = null;
 let ES_AFTER_SET = null;
+let ES_OF_SET = null;
+let ORG_NAMES_SET = null;
+let FAMILY_PLACES = null;
 let ROUND26 = null;
 const splitWords = (s) => s.split(/\s+/).filter(Boolean);
 // Round 24 (finding 6: "Jordan Taquería" was greeted while "Jordan Taqueria" wasn't): place and business words, as listed and
@@ -1578,26 +1832,45 @@ const placeKey = (w) => (/^[A-Za-z]+$/.test(w) ? w.toLowerCase() : nameKey(plain
 const keyed = (s) => splitWords(s).map(placeKey);
 const buildPlaces = () => {
   ROUND26 = [];
-  PLACES = new Set(PLACE_WORDS.flatMap(keyed));
+  // Round 27 (finding 1, the lead's rule: a family name is never taken for a place or an organisation; "Mohamed Lamine Camara",
+  // "Ana Paula Câmara de Oliveira" and "Mary Beth Kinder" lost theirs): a word that can be a family name of a people who write
+  // it last (_given-names.js familyNameLast: SURNAMES' and FAMILY_LAST's) ends a name only on positive evidence of an
+  // organisation, never on its own. FAMILY_LAST's, names more than words after a given name, are never a place word at all,
+  // so the greeting reads them as the live site did; SURNAMES' that are English place words too ("Spring", "Council") stay
+  // places for the greeting's safety but never start what's after a name; a country that's one follows Georgia's rule,
+  // as a country that's a given name does; a city that's one is a place only before its state's letters ("Moultrie GA").
+  // The round 27 test checks every word that ends a name on its own against these lists and a list written apart
+  const lastName = (w) => familyNameLast(w);
+  const moreName = (w) => familyNameLast(w, { more: true });
+  PLACES = new Set(PLACE_WORDS.flatMap(keyed).filter((w) => !moreName(w)));
   const not = new Set([...keyed(NOT_PLACES), ...keyed(PLACE_NEVER)]);
-  WHERES = new Set(keyed(WHERE));
+  NAMED_CITIES = new Set(splitWords(NAMED_CITY));
+  WHERES = new Set();
+  for (const w of keyed(WHERE)) if (lastName(w)) NAMED_CITIES.add(w); else WHERES.add(w);
   WHERES_NAMED = new Set([...keyed(WHERE_NAMED), ...keyed(PLACE_NAMED)]);
+  // (round 27: and of those, the countries that are a family name, never a given name: after a comma a place still, "Ames,
+  // Spain" being as typed, as a given name's isn't, "Ames, Georgia" being Georgia Ames)
+  FAMILY_PLACES = new Set();
   // (round 24: government, the military, every country, large employers, Spanish business words: anywhere after a name's
   // first word, as PLACE_WORDS' are; one that's a given name on the lists, or Georgia's kind, only last, as WHERE_NAMED's
   // are; one that's a common family name there, never: PLACE_NEVER)
   // (round 26: the Spanish business words keyed once, heads of Spanish organizations too, ES_HEADS_SET)
+  // (round 27: a country that's a family name written last only last, as Georgia; FAMILY_LAST's never, "Kinder", "Carnes")
   const spanish = keyed(PLACE_MORE[PLACE_MORE.length - 1]);
+  const countries = new Set(keyed(PLACE_MORE[1]));
   for (const w of [...PLACE_MORE.slice(0, -1).flatMap(keyed), ...spanish]) {
-    if (not.has(w) || WHERES_NAMED.has(w)) continue;
-    if (onTheLists(w) || familyFirst(w)) WHERES_NAMED.add(w); else PLACES.add(w);
+    if (not.has(w) || WHERES_NAMED.has(w) || moreName(w)) continue;
+    if (onTheLists(w) || familyFirst(w)) WHERES_NAMED.add(w);
+    else if (countries.has(w) && lastName(w)) { WHERES_NAMED.add(w); FAMILY_PLACES.add(w); } else PLACES.add(w);
   }
   // (and each word's other number, the lists' and ORG's, unless it's a given name, a family name that comes first, a
   // family name here, letters after a name, or shorter than three letters)
   // (round 26: each one kept, word and other number, so a standalone word's other number is one too, below)
+  // (round 27: nor any family name written last, "Carne" from "carnes")
   const others = new Map();
   for (const w of [...PLACES, ...orgWords()]) {
     const o = w.length >= 4 ? otherNumber(w) : null;
-    if (o && o.length >= 3 && !PLACES.has(o) && !ORG.test(o) && !not.has(o) && !onTheLists(o) && !familyFirst(o) && !knownLetters(o)) { PLACES.add(o); others.set(w, o); }
+    if (o && o.length >= 3 && !PLACES.has(o) && !ORG.test(o) && !not.has(o) && !onTheLists(o) && !familyFirst(o) && !lastName(o) && !knownLetters(o)) { PLACES.add(o); others.set(w, o); }
   }
   TWOS = new Set(splitWords(`${PLACE_TWO} ${PLACE_TWO_MORE}`).map((p) => p.split('_').map(placeKey).join(' ')));
   STATES = new Set(splitWords(STATE_CODES));
@@ -1612,9 +1885,13 @@ const buildPlaces = () => {
   // the military's letters, and each one's other number, "Bodega" with "Bodegas", "Lao" with "Laos")
   STANDALONE = new Set([...keyed(PLACE_WORDS[PLACE_WORDS.length - 1]), ...PLACE_MORE.slice(1).flatMap(keyed), ...keyed(ON_ITS_OWN)]);
   ON_ITS_OWN_SET = new Set(keyed(ON_ITS_OWN));
+  // (round 27: and each a place word, as the branches are, so a greeting never takes one: "Hope Seabees")
+  for (const w of ON_ITS_OWN_SET) if (!not.has(w) && !lastName(w) && !named(w)) PLACES.add(w);
   CAPS_ONLY_SET = new Set(keyed(CAPS_ONLY));
   for (const w of keyed(MILITARY_LETTERS)) {
-    if (CAPS_ONLY_SET.has(w) || named(w)) continue;
+    // (round 27: letters that are a given or family name too, "Jag", "Dav", only in capitals, as ANG)
+    if (!CAPS_ONLY_SET.has(w) && (named(w) || lastName(w))) CAPS_ONLY_SET.add(w);
+    if (CAPS_ONLY_SET.has(w)) continue;
     if (!PLACES.has(w)) ROUND26.push(w);
     PLACES.add(w); STANDALONE.add(w); ON_ITS_OWN_SET.add(w);
   }
@@ -1622,9 +1899,11 @@ const buildPlaces = () => {
   // as a phrase, each typed with hyphens too, and "=" ones only as written)
   ACCENT_ONLY = new Set();
   // (never one of ORG's words, which never start what's after a name on their own: "Jordan Ames Nail Salon" stays as typed)
+  // (round 27: one that's a family name written last, as one that's a given name, only last; FAMILY_LAST's never)
   const single = (w) => {
-    if (!w || not.has(w) || WHERES_NAMED.has(w) || PLACES.has(w) || ORG.test(w)) return;
-    if (onTheLists(w) || familyFirst(w)) WHERES_NAMED.add(w); else { PLACES.add(w); STANDALONE.add(w); ROUND26.push(w); }
+    if (!w || not.has(w) || WHERES_NAMED.has(w) || PLACES.has(w) || ORG.test(w) || moreName(w)) return;
+    if (onTheLists(w) || familyFirst(w)) WHERES_NAMED.add(w);
+    else if (lastName(w)) { WHERES_NAMED.add(w); FAMILY_PLACES.add(w); } else { PLACES.add(w); STANDALONE.add(w); ROUND26.push(w); }
   };
   // (each word keyed once: "Republic", "of" and "the" come back often)
   const seen = new Map();
@@ -1641,12 +1920,18 @@ const buildPlaces = () => {
     } else if (ks.length > 1) {
       PHRASES.add(ks.join(' '));
       if (ks.length <= 3) single(ks.join(''));
+      // (round 27: its words typed with hyphens spaced too, "Islami Jamhuriya-e-Pakistan" as "Islami Jamhuriya e Pakistan")
+      if (ws.some((w) => w.includes('-'))) PHRASES.add(ws.flatMap((w) => w.split('-')).map(key).filter(Boolean).join(' '));
     }
   }
-  // (and the Spanish heads, place words wherever they are, as the Spanish business words are)
-  for (const w of keyed(ES_HEADS)) single(w);
+  // (round 27, finding 1: the Spanish and Portuguese heads are no longer place words on their own, as round 26 made them:
+  // "Cámara", "Capilla", "Condado", "Reino", "Junta" and "Banco" are family names too. A head starts an organisation only with
+  // its join and an organisation's word or a known place after it, esFrom)
   // (each standalone word's other number, when the lists took it: PLACES has it)
   for (const [w, o] of others) if (STANDALONE.has(w)) STANDALONE.add(o);
+  // (round 27: and none that's a family name written last starts what's after a name on its own, whatever list it's on)
+  for (const w of [...STANDALONE]) if (lastName(w)) STANDALONE.delete(w);
+  for (const w of [...ON_ITS_OWN_SET]) if (lastName(w)) ON_ITS_OWN_SET.delete(w);
   for (const st of of(STATE_NAMES)) for (const g of ['national guard', 'army national guard', 'air national guard']) PHRASES.add(`${st} ${g}`);
   // (round 26: every Guard after a state's name or short form; the one of two words, "<State> Guard", never after a short
   // form that's a word or a name too, "Del.", "La.", "Me")
@@ -1655,8 +1940,19 @@ const buildPlaces = () => {
   for (const st of of(STATE_NAMES)) for (const g of guards) PHRASES.add(`${st} ${g}`);
   // (a short form before the National Guard, its Army and Air Guard, and "Guard": "Ga. Air National Guard", "GA Guard")
   for (const st of keyed(STATE_SHORT)) for (const g of guards.slice(0, 4)) if (g !== 'guard' || !plainWordToo(st)) PHRASES.add(`${st} ${g}`);
+  // (round 27: and the Guard's letters after a state's name or short form, "Ga. ARNG", "Georgia ANG")
+  for (const st of [...keyed(STATE_SHORT), ...of(STATE_NAMES)]) for (const g of ['arng', 'ang']) PHRASES.add(`${st} ${g}`);
   // (round 26: "Ret." with the rest, and after every branch's letters, "USN Ret.", "USMC Retired")
-  for (const b of [...of(MILITARY), ...keyed(MILITARY_LETTERS).filter((w) => !CAPS_ONLY_SET.has(w))]) for (const w of ['veteran', 'veterans', 'retired', 'ret']) PHRASES.add(`${b} ${w}`);
+  // (round 27: "Retd", "Ret'd" and "Vet" too, and the Reserves after a branch, "Marine Veteran", "Navy Vet", "Navy Reserves")
+  for (const b of [...of(MILITARY), ...keyed(MILITARY_LETTERS).filter((w) => !CAPS_ONLY_SET.has(w))]) for (const w of ['veteran', 'veterans', 'retired', 'ret', 'retd', 'vet', 'vets', 'reserve', 'reserves']) PHRASES.add(`${b} ${w}`);
+  // (the first word of each of the military's, for a rank before it after a name, militaryAt; "Marine", "Disabled" and
+  // "Combat" among MILITARY's only for their "Veteran", "Vet", "Retired" after them)
+  MILITARY_SET = new Set([...of(MILITARY), ...keyed(MILITARY_LETTERS), ...ON_ITS_OWN_SET].map((p) => p.split(' ')[0]));
+  // (round 27: the bases, the kinds before their name and after it, the camps' and the bases' names)
+  BASE_BEFORE_SET = new Set(of(BASE_BEFORE));
+  BASE_AFTER_SET = new Set(of(BASE_AFTER));
+  CAMPS_SET = new Set(of(CAMPS));
+  BASES_SET = new Set(of(BASES));
   STATE_PHRASES = new Set(of(STATE_NAMES));
   for (const c of of(GA_COUNTIES)) PHRASES.add(`${c} county`);
   // (a "Saint" one with "St." too; round 26: anywhere in it, and Dutch "Sint" too, "St. Maarten", "Federation of St. Kitts")
@@ -1669,8 +1965,14 @@ const buildPlaces = () => {
   // (never a word for one person, "Son", "Sister", "Brother", "Daughter", "Friend")
   for (const w of [...HEADS]) { const o = w.length >= 4 ? otherNumber(w) : null; if (o && !named(o) && !/^(?:son|sister|brother|daughter|friend)$/u.test(o)) HEADS.add(o); }
   ORG_BEFORE_SET = new Set(keyed(ORG_BEFORE).filter((w) => !named(w)));
+  // (round 27: and the given names that are words organisations are named by, given names as they are)
+  ORG_NAMES_SET = new Set(keyed(ORG_NAMES));
+  for (const w of ORG_NAMES_SET) ORG_BEFORE_SET.add(w);
   ES_HEADS_SET = new Set([...keyed(ES_HEADS), ...spanish].filter((w) => !named(w) && !WHERES_NAMED.has(w)));
   ES_AFTER_SET = new Set(keyed(ES_AFTER).filter((w) => !named(w)));
+  // (round 27: the words after a head's join that make it an organisation: ES_OF's, the heads and business words, a place the
+  // lists know, Spain's and Latin America's regions; never a family name written last, below)
+  ES_OF_SET = new Set([...[...keyed(ES_OF), ...keyed(ES_PLACES)].filter((w) => !named(w)), ...ES_HEADS_SET].filter((w) => !lastName(w)));
 };
 /** A word (as `plain` has it) that marks a place or an organization wherever it is after a name's first word */
 export const placeWord = (w) => { if (!PLACES) buildPlaces(); return PLACES.has(placeKey(w)); };
@@ -1681,7 +1983,10 @@ export const placeLists = () => {
   return { anywhere: [...PLACES], last: splitWords(WHERE), lastNamed: splitWords(WHERE_NAMED), two: [...TWOS], phrases: [...PHRASES], named: [...WHERES_NAMED], never: keyed(PLACE_NEVER),
     // (round 26: the words its lists added that count anywhere, every country's, the military's letters, the Spanish heads;
     // and the words before an organization's head)
-    round26: [...ROUND26], orgWords: [...ORG_BEFORE_SET] };
+    round26: [...ROUND26], orgWords: [...ORG_BEFORE_SET],
+    // (round 27: the given names that are words organisations are named by, read back as ORG_BEFORE's; the words that start
+    // what's after a name on their own, and the cities that are a place only before their state's letters)
+    orgNames: [...ORG_NAMES_SET], standalone: [...STANDALONE], onItsOwn: [...ON_ITS_OWN_SET], namedCities: [...NAMED_CITIES], wheres: [...WHERES] };
 };
 /** Two words (as `plain` has them) that are a place together ("ann arbor", "villa rica") */
 const placeTwo = (a, b) => { if (!TWOS) buildPlaces(); return TWOS.has(`${placeKey(a)} ${placeKey(b)}`); };
@@ -1708,12 +2013,14 @@ const placeOrOrg = (p) => {
   const raw = String(p || '').split(/\s+/).filter((x) => plain(x));
   const ws = raw.map(plain);
   const cased = /\p{Lu}/u.test(String(p || '')) && /\p{Ll}/u.test(String(p || ''));
-  if (ws.some((w, k) => placeWord(w) || (ORG.test(w) && !NOT_NAMED.test(w) && !/^households?$/u.test(w)) || whereWord(w, { named: false })
+  if (ws.some((w, k) => placeWord(w) || (ORG.test(w) && !NOT_NAMED.test(w) && !/^households?$/u.test(w)) || whereWord(w, { named: false }) || FAMILY_PLACES.has(placeKey(w)) || capsLetters(raw[k], cased)
     || (k > 0 && placeTwo(ws[k - 1], w) && !(k > 1 && /^(?:de|del)$/u.test(ws[k - 2]))) || stateAt(raw, k, cased))) return true;
-  const keys = keysOf(String(p || '').split(/\s+/).filter((x) => plain(x) || /^(?:&|\+)$/u.test(x)));
+  const typed = String(p || '').split(/\s+/).filter((x) => plain(x) || /^(?:&|\+)$/u.test(x));
+  const keys = keysOf(typed);
   if (!PHRASES) buildPlaces();
   // (round 26: and an organization read from its first word, "Habitat for Humanity", "Banco de México")
-  const many = (i) => phraseLens(keys, i).length > 0 || (HEADS.has(keys[i]) && keys[i + 1] === 'of' && i + 2 < keys.length) || orgFrom(keys, i) > 0 || esFrom(keys, i) > 0;
+  // (round 27: and a base, "Fort Bragg", "Camp Lejeune")
+  const many = (i) => phraseLens(keys, i).length > 0 || (HEADS.has(keys[i]) && keys[i + 1] === 'of' && i + 2 < keys.length) || orgFrom(keys, i) > 0 || esFrom(keys, i) > 0 || baseLen(typed, keys, i) > 0;
   const one = (i) => !!keys[i] && (many(i) || STANDALONE_MILITARY.test(keys[i]) || placeWord(keys[i]) || whereWord(keys[i]));
   return keys.some((k, i) => !(i > 1 && /^(?:de|del)$/u.test(keys[i - 1])) && (many(i) || ((k === 'us' || k === 'the') && one(i + 1)) || (k === 'united' && keys[i + 1] === 'states' && one(i + 2))));
 };
@@ -1744,7 +2051,7 @@ const plain = (w) => {
 const notOnePersonsName = (w) => [w, ...w.split(/['\-\u00B7]/u)].some((x) => {
   const p = plain(x);
   return !!p && (STOP.test(p) || STOP_END.test(p) || ORG.test(p) || placeWord(p) || NOT_A_FIRST_NAME.test(p) || NOT_NAMED.test(p) || JOINS_PEOPLE.test(p)
-    || TITLE.test(p) || GREET_TITLE.test(p) || RANK.test(p) || EITHER_TITLE.test(p) || COURTESY.test(p));
+    || TITLE.test(p) || GREET_TITLE.test(p) || RANK.test(p) || EITHER_TITLE.test(p) || COURTESY.test(p) || !!rankOf(p));
 });
 // (in a name with capitals and small letters, a word after the first is written as a name is: a capital first, or a
 // family name's small first word, "Jordan de la Rosa" being too long anyway, "Ana da Silva", "Omar al-Masri", "Gina
@@ -1796,8 +2103,12 @@ const plainParts = (raw) => {
   const [head, ...tails] = plainMarks(raw).split(',').map((x) => x.trim());
   if (tails.some((x) => !x || !onlyLetters(x.split(' ')))) return null;
   let ws = head.split(' ').filter(Boolean);
-  const title = ws.length && COURTESY.test(ws[0]) ? ws[0] : '';
-  if (title) ws = ws.slice(1);
+  // (round 27: a rank set apart as Add sets it apart, one of the list's, or one of more words before at least two:
+  // "Adm. Jordan Ames", "LTC Jordan Ames", "Rear Admiral Jordan Ames"; one that's a name too never, "Major Lee Smith"
+  // being read as round 21 read it)
+  const run = rankRun(ws);
+  const title = run && ws.length - run >= 2 ? ws.slice(0, run).join(' ') : ws.length && (COURTESY.test(ws[0]) || rankOf(ws[0]) === 'title') ? ws[0] : '';
+  if (title) ws = ws.slice(title.split(' ').length);
   // (round 26: the words as typed too, before letters are set apart: a syllable of a given name written in parts can be a
   // degree's letters as well, "Ann Young Ra", firstIsFamily below)
   const typed = ws;
@@ -1853,7 +2164,7 @@ const familyWords = (raw) => {
   const bits = plainMarks(raw).split(PART_BREAK);
   for (let i = 0; i < bits.length; i += 2) {
     let ws = bits[i].split(' ').filter(Boolean);
-    const titled = ws.length > 0 && COURTESY.test(ws[0]);
+    const titled = ws.length > 0 && (COURTESY.test(ws[0]) || rankOf(ws[0]) === 'title');
     if (titled) ws = ws.slice(1);
     ws = ws.filter((w) => LETTER_WORD.test(w));
     const typed = [...ws];
@@ -1923,7 +2234,8 @@ function fullGreeting(raw) {
   // (round 25: and a phrase of the lists anywhere in it, "Jordan Côte d'Ivoire", "Hope Sierra Leone", "Grace Ben Hill County")
   const keys = keysOf(ws);
   // (round 26: and the military's letters that are a family name too, typed in capitals, "Hope ANG")
-  if (ws.some((w, k) => (k > 0 && placeTwo(plain(ws[k - 1]), plain(w))) || phraseLens(keys, k).length || (k > 0 && capsLetters(w, cased))) || whereWord(plain(ws[ws.length - 1])) || stateAt(ws, ws.length - 1, cased)) return '';
+  // (round 27: and a base, "Hope Fort Bragg", "Grace Camp Lejeune")
+  if (ws.some((w, k) => (k > 0 && placeTwo(plain(ws[k - 1]), plain(w))) || phraseLens(keys, k).length || (k > 0 && (capsLetters(w, cased) || baseLen(ws, keys, k) > 0))) || whereWord(plain(ws[ws.length - 1])) || stateAt(ws, ws.length - 1, cased)) return '';
   // ("y" and "e" join two people in Spanish and Portuguese, "José y María Cruz": in small letters, or in a name with no
   // small letters at all, never an initial)
   if (rest.some((w) => /^[ye]$/u.test(w) || (!cased && /^[YE]$/u.test(w)))) return '';

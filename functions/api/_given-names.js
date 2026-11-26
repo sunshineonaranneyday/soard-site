@@ -621,6 +621,55 @@ const straitsSpellings = (r) => {
   }
   return [...out];
 };
+// Round 27 (finding 3: "Tom Mei-Ling", "Louie Mei Ling" and "Louis Wai Man" were greeted "Tom", "Louie" and "Louis", the
+// Taishanese spellings Chinese Americans use, Tom and Hom for 譚, Louie and Louis for 雷, Lew for 劉, being missing): the
+// Chinese American spellings made by rule, as Singapore's are. Each pinyin family name's readings as the families who came
+// from Taishan and the Pearl River Delta say them (pinyin:readings, a comma between, each written plainly: 譚 is tam and ham,
+// 雷 lui and loi, 劉 lau and liu), and taishanSpellings writes each reading the ways they're spelt in the US (a last am, om
+// or um too, "Tom", "Hom", "Lum", "Gum"; a last au, ow or ew, "Low", "Lew", "Jow", "Jew"; a last ui after a consonant,
+// ouie and ouis, "Louie", "Louis"; a last oi, oy, "Moy", "Toy"; a last ai, ay, "Day"; a last i after a consonant, ee, "Yee",
+// "Gee"; a last a after a consonant, ah and ar, "Mah", "Mar"; a last in, inn, "Chinn"; a last u after a consonant, oo,
+// "Woo", "Goo"; a last ok or ak, ock or ack, "Mock", "Mack"; a last uk, ook, "Look"; a last ung, oong, "Joong"; a last eng,
+// eong, "Jeong"; a first j
+// before e or i, g too, "Gee", "Gin"; a first kw, qu too, "Quan"). No spelling is picked by hand: the readings are written,
+// the rule spells them. A test fails if one of the common ones has none
+const TAISHAN_OF = `Tan:tam,ham Lei:lui,loi Liu:lau,liu Lu:lo,lu,lui,luk Huang:wong,vong Wu:ng,eng,ung,ing,wu Zhou:chau,jau
+Zhu:chu,ji,jue Yu:yu,yi,ue Fang:fong Deng:tang,dang,dong,ong Guan:kwan,gwan Zheng:cheng,jeng,jung,chang Chen:chan,chin,chun
+Lin:lam,lim Mei:mui,moi Ma:ma Zhen:yan,jan,jin Cai:choi,toi Situ:szeto,seto,soohoo Ouyang:auyeung,owyang Xie:tse,der,dea
+Xu:tsui,chui,hui Zhao:chiu,jiu He:ho,hoe Zhang:cheung,jang,jung Yang:yeung,yong Li:li,lai Hu:wu,fu Cao:cho,tso Zou:chau,jau
+Cen:sum,shum Guo:kwok,gok,kok Ye:yip,yep,ip Luo:law,lo,lor Jiang:kong,gong,keung Gan:kam,gam Xue:sit Long:lung Ruan:yuen
+Tang:tong,hong Jian:kan,gan Xia:ha Sun:suen,sun,soon Song:sung Hou:hau Ou:au Wen:man,mun,wan Yun:wan Yao:yiu Qiu:yau,hiu
+Zhong:chung,jung Mo:mok Mai:mak Huo:fok Dai:dai,tai Du:to,du Kuang:kwong,fong Gong:kung,gung Hong:hung,hong Shan:sin
+Qian:chin Wei:wai Yuan:yuen Feng:fung,fong Pan:poon,pun Bao:pau Fu:fu Gu:ku,gu Kong:hung,kung Shen:shum,sum Shi:shek
+Shao:shiu Tian:tin Wang:wong Yin:wan Qin:chun Lian:lin Lao:lo Weng:yung Xian:sin Ning:ning Hua:wah Rong:yung,wing`;
+// (the ways a Taishanese reading is spelt in the US, by those spellings' own rules, above: its first letters' rules first,
+// then its last letters', each once)
+const taishanSpellings = (r) => {
+  const firsts = [r];
+  if (/^j[ei]/.test(r)) firsts.push(`g${r.slice(1)}`);
+  if (r.startsWith('kw')) firsts.push(`qu${r.slice(2)}`);
+  const out = new Set(firsts);
+  for (const f of firsts) {
+    const n = f.length;
+    const cut = (k, ...tos) => { for (const t of tos) out.add(f.slice(0, n - k) + t); };
+    const consonant = (k) => !!f[n - 1 - k] && !'aeiou'.includes(f[n - 1 - k]);
+    if (/am$/.test(f)) cut(2, 'om', 'um');
+    if (/au$/.test(f)) cut(2, 'ow', 'ew');
+    if (/ui$/.test(f) && consonant(2)) cut(2, 'ouie', 'ouis');
+    if (/oi$/.test(f)) cut(2, 'oy');
+    if (/ai$/.test(f)) cut(2, 'ay');
+    if (/i$/.test(f) && consonant(1)) cut(1, 'ee');
+    if (/a$/.test(f) && consonant(1)) cut(0, 'h', 'r');
+    if (/in$/.test(f)) cut(0, 'n');
+    if (/u$/.test(f) && consonant(1)) cut(1, 'oo');
+    if (/ok$/.test(f)) cut(1, 'ck');
+    if (/uk$/.test(f)) cut(2, 'ook');
+    if (/ak$/.test(f)) cut(1, 'ck');
+    if (/ung$/.test(f)) cut(3, 'oong');
+    if (/eng$/.test(f)) cut(3, 'eong');
+  }
+  return [...out];
+};
 const FAMILY_NAMES_OF = [
   // (Chinese: pinyin, PINYIN_FAMILY above, its Wade-Giles and Hong Kong forms made from it in build; Taiwan's usual
   // Wade-Giles spellings; Cantonese, as Hong Kong and Macau write them; Hokkien and Teochew, as Singapore, Malaysia and the
@@ -986,6 +1035,129 @@ const SURNAMES = [
   dorvil florestal jeanbaptiste jeanlouis lafontant lamothe louissaint metellus pierrelouis saintfleur toussaint valcourt
   brissett dacosta gayle hylton mcfarlane nembhard sinclair walcott whyte`,
 ];
+// Round 27 (finding 1, the lead's rule: "Mohamed Lamine Camara", "Ana Paula Câmara de Oliveira" and "Mary Beth Kinder" lost
+// their family name to the place lists, Camara, Câmara and Kinder being a Spanish head and a Spanish business word too): more
+// family names of the peoples who write them last, written out by people, the ones that are words in some language among
+// them (Cámara, Capilla, Condado, Reino, Junta, Banco, Carne, Torre, Kinder, Kröger, Kirch, Chiesa, Porta, Król). With
+// SURNAMES they're the family names that never end a name on their own (_advisory-form.js buildPlaces, familyNameLast below);
+// these are names more than words after a given name, so they're never a place word at all and the greeting reads them as
+// the live site did ("Mohamed Lamine Camara" is Mohamed), while SURNAMES' that are English place words too, "Spring",
+// "Council", stay places for the greeting's safety. Never evidence for a greeting (SURNAMES alone is that,
+// familyFirstUnsure), so no name is greeted because one is here. A test checks every word the place lists count on its own
+// against these and against a list written apart
+const FAMILY_LAST = [
+  // (West African: Guinea, Senegal, Mali, the Gambia, Sierra Leone, Côte d'Ivoire, Burkina Faso, Liberia, Mauritania, Niger)
+  `camara câmara cámara kamara diallo jalloh jallow bah barry sow ba touré traoré keïta koné coulibaly kouyaté cissé sylla
+  condé kanté doumbia diakité sangaré fofana bangoura soumah soumaoro sacko diop ndiaye fall gueye faye sarr mbaye seck ndour
+  thiam sène diouf kane sy ly wade dia niang mendy gomis sagna ceesay jammeh darboe touray sanneh bojang sowe njie drammeh
+  saidy manneh jobe jatta badjie sesay kargbo bangura conteh koroma turay mansaray kanu kallon sankoh diarra dembélé konaté
+  sissoko doucouré dramé niakaté tounkara soumaré sakho badji diatta sané tall dieng diagne samb wane kébé cissokho baldé
+  sidibé haidara maïga cissoko tamboura sanogo ouattara ouédraogo sawadogo kaboré compaoré zongo nikiema yaméogo kambou
+  diabaté bamba kourouma fadiga doumbouya dabo gassama magassa diaby diaw ndoye sall ndao thioune kourouma kaba kaké keita
+  savané fomba dansoko kamissoko konaré coulibali kamate kamaté sylla toure traore kone cisse kante diakite sangare`,
+  // (Nigerian, Ghanaian, Ethiopian and Eritrean, Somali, Kenyan, Ugandan, Congolese, Cameroonian, South African)
+  `okafor okoye eze nwosu okonkwo adeyemi adebayo ogunleye olawale mensah owusu boateng asante osei appiah agyeman danso addo
+  ansah amoah kuffour acheampong yeboah ofori sarpong bello abubakar musa yusuf aliyu garba danjuma okeke obi nwankwo chukwu
+  okoro afolabi ogunbiyi olaniyan adewale babatunde oladipo ojo bankole akinola akande adeleke ekwueme anyanwu ugwu onyeka
+  achebe asamoah darko amponsah opoku frimpong antwi gyamfi badu bonsu tetteh quaye quarshie nkrumah annan mahama tesfaye
+  haile bekele girma alemu tadesse mengistu assefa kebede gebre wolde desta abebe getachew tefera mekonnen berhane tekle
+  habte woldemariam warsame jama farah abdi aden egal hersi duale abdullahi elmi gedi ochieng kamau otieno mwangi wanjiku
+  mukasa ssempala lumumba kabila tshisekedi mbeki zuma dlamini nkosi ndlovu khumalo mokoena sithole mahlangu ngcobo`,
+  // (Spanish and Latin American, Portuguese and Brazilian: the ones that are words too, Cámara, Capilla, Condado, Reino, Junta,
+  // Banco, Carne, Torre, Río, Puerto, Plaza, Contador; and more of the common ones)
+  `capilla condado reino junta banco carne carnes torre torres río ríos villa villar plaza puerto prado pozo campos
+  montes fuentes cuevas castillo palacio palacios iglesias mercado molino molina granja viveros casas casa
+  hacienda ermita capellán cortés corral vega peña cerro cerda lago arroyo ribera valle valles llano llanos sierra
+  monte cuesta fuente paz luz sol bosque cabello caballero calle calles camino campo cano cañas casado castaño castellano
+  collado colina corona cuadrado cueva escobar espino galera garrido huerta huertas infante lagos lomas lozano manzano marín
+  mariscal mata mateo montaña montero muro navas nieto olmo olmos palma pardo parra paredes peral peralta pino platero
+  portillo poza prieto puente quintero real rey robles roca rosales rueda salas salinas sanz serrano soler tejada toro
+  torrente velasco vera vergara zamora zapata contador notario
+  igreja capela paço paços fazenda quinta rocha ribeiro fonseca oliveira sousa souza santos silva pereira costa ferreira
+  rodrigues almeida carvalho gomes martins araújo lopes barbosa dias nascimento moreira cardoso teixeira correia mendes pinto
+  cunha monteiro moura batista freitas reis vieira castro nunes machado lima brandão guimarães junqueira madureira bastos
+  barros camargo coelho cordeiro duarte faria figueiredo leite lobo magalhães marques matos medeiros miranda moraes morais
+  neves nogueira paiva pacheco peixoto pires queiroz rezende resende sá sales sampaio siqueira soares tavares valente
+  vasconcelos xavier azevedo aguiar albuquerque amaral antunes assis assunção barreto bezerra borges cabral calado campelo
+  carneiro coutinho couto domingues esteves falcão feitosa fontes franco freire furtado godinho gouveia guerra henriques
+  jardim lacerda leal leão lemos lessa loureiro macedo maia mattos meireles melo mello mesquita moniz mota mourão neto
+  novais pedrosa pimenta pimentel pinheiro porto prates rangel rebelo rego ribas sardinha seixas serra simões teles toledo
+  valadares vaz veloso ventura viana vidal capela casal estrela lagoa mata moinho outeiro pedreira ponte portela quintas
+  romeiro salgado santiago seabra sobral sobrinho teles torres vilela`,
+  // (German, Austrian and Swiss, Dutch and Flemish, Scandinavian, Finnish: Kinder, Kirch, Kirchner, Kaiser, König, Haus and
+  // the like among them)
+  `kinder kirch kirchner kirchhoff kirchberg kaiser könig koenig bauer haus hof hoff hoffmann hofmann burg berg berger stein
+  bach brunner schmid schmidt kaufmann kroger kröger krüger fischer müller weber wagner becker schulz koch richter klein wolf
+  schröder neumann schwarz zimmermann braun hartmann lange werner krause meier lehmann schulze maier köhler herrmann walter
+  mayer huber fuchs lang scholz möller weiß weiss jung hahn schubert vogel friedrich keller günther frank winkler roth beck
+  lorenz baumann franke albrecht schuster ludwig böhm winter kraus schumacher krämer vogt jäger otto sommer groß gross
+  seidel heinrich brandt haas schreiber graf schulte dietrich ziegler kuhn kühn pohl engel horn busch bergmann voigt sauer
+  wolff pfeiffer kirsch kohl kopp kranz kunz lindner marx martens metzger mohr moser nagel peters pfeifer reuter rieger
+  ritter sander schäfer schaefer schiller schlegel schmitz schneider schott schwab seiler stark steiner stolz strauss thiel
+  vetter vollmer walther weigel wendt wenzel westphal wiese wirth witt wolter zeller kapell kloster schuler schul markt
+  dejong jansen devries vandenberg vandijk bakker janssen visser smit meijer deboer mulder degroot bos vos hendriks
+  vanleeuwen dekker brouwer dewit dijkstra smits degraaf vandermeer vanderlinden kok jacobs dehaan vermeulen vandenheuvel
+  vanderveen vandenbroek debruijn debruin vanderheijden schouten vanbeek willems vanvliet vandeven hoekstra maas verhoeven
+  koster vandam vanderwal prins blom huisman peeters kerkhof kerkhoff vanderkerk kerk kapel hoven
+  hansen johansen olsen larsen andersen pedersen nilsen kristiansen jensen karlsen nielsen christensen rasmussen jørgensen
+  madsen johansson andersson karlsson nilsson eriksson larsson olsson persson svensson gustafsson pettersson jonsson
+  lindberg lindqvist lindgren bergström lundqvist lund holm strand sand dahl nyberg kirke virtanen korhonen mäkinen
+  nieminen mäkelä hämäläinen laine heikkinen koskinen järvinen`,
+  // (Italian, French and French Canadian, Haitian: Chiesa, Porta, Ponte, Castello, Chapelle and the like among them)
+  `chiesa banca casale castello ponte porta fontana monti piazza pozzo bosco campi palazzo mulino cappella cappelli rossi
+  russo ferrari esposito bianchi romano colombo ricci marino greco bruno gallo conti deluca giordano mancini rizzo lombardi
+  moretti barbieri santoro mariani rinaldi caruso ferrara galli martini leone longo gentile martinelli vitale lombardo
+  coppola desantis dangelo marchetti parisi conte ferraro ferri fabbri bianco marini grasso valentini messina sala
+  deangelis gatti pellegrini palumbo sanna farina rizzi cattaneo morelli amato silvestri mazza testa grassi pellegrino
+  carbone giuliani benedetti barone rossetti caputo montanari palmieri bernardi martino fiore derosa ferretti bellini
+  basile riva donati piras vitali battaglia sartori neri costantini milani pagano ruggiero sorrentino damico orlando negri
+  chapelle lachapelle delachapelle maison lamaison château chateau pont dupont dupuis fontaine lafontaine laporte porte
+  ville laville boucher boulanger charpentier bernard dubois petit durand leroy moreau laurent lefebvre michel bertrand roux
+  vincent fournier morel girard andré lefèvre mercier lambert bonnet legrand garnier faure rousseau blanc guérin roussel
+  perrin morin mathieu clément gauthier dumont chevalier robin masson gérard boyer denis lemaire duval joly gautier roche
+  roy noël meunier marchand dufour blanchard barbier brun dumas brunet leroux colin renard arnaud rolland caron aubert
+  giraud leclerc bourgeois renaud lemoine picard gaillard leclercq lacroix fabre olivier hubert guillot rivière legall
+  moulin lecomte ménard fleury deschamps carpentier benoit maillard marchal aubry vasseur renault jacquet collet prévost
+  poirier royer huet baron dupuy pons carré breton rémy perrot guyot barre marty cousin tremblay gagnon roy côté bouchard
+  gauthier morin lavoie fortin gagné ouellet pelletier bélanger lévesque bergeron leblanc paquette girard simard boucher
+  jeanbaptiste baptiste etienne desir exantus lafortune bienaimé destin filsaimé merilus petitfrère saintlouis lindor
+  mompremier`,
+  // (Polish, Czech and Slovak, Hungarian, Romanian, the Balkans, Greek, Russian and Ukrainian, Armenian, Georgian, Turkish:
+  // Król, Král and the like among them)
+  `nowak kowalski wiśniewski wójcik kowalczyk kamiński lewandowski zieliński szymański woźniak dąbrowski kozłowski
+  jankowski mazur wojciechowski kwiatkowski krawczyk kaczmarek piotrowski grabowski zając pawłowski michalski król
+  wieczorek jabłoński wróbel nowakowski majewski olszewski stępień malinowski jaworski adamczyk dudek nowicki pawlak górski
+  witkowski walczak sikora baran rutkowski michalak szewczyk ostrowski tomaszewski pietrzak zalewski wróblewski kościelny
+  novák svoboda novotný dvořák černý procházka kučera veselý horák němec marek pospíšil hájek jelínek král růžička beneš
+  fiala sedláček doležal zeman kolář navrátil čermák popescu ionescu popa pop radu dumitru stan stoica gheorghe matei
+  ciobanu rusu munteanu constantin moldovan mihai lazăr florea dinu toma horvat kovačević babić marić jurić kovačić
+  knežević vuković marković petrović jovanović nikolić ilić đorđević pavlović milošević stanković lukić popović hodžić
+  begić delić hadžić papadopoulos papadakis georgiou nikolaou pappas papageorgiou oikonomou vlachos karagiannis dimitriou
+  konstantinou ioannou christodoulou antoniou alexiou panagiotou makris kyriakou angelopoulos ivanov smirnov kuznetsov popov
+  vasiliev petrov sokolov mikhailov novikov fedorov morozov volkov alekseev lebedev semenov egorov pavlov kozlov stepanov
+  nikolaev orlov andreev makarov nikitin zakharov shevchenko kovalenko bondarenko tkachenko kravchenko kovalchuk oliynyk
+  shevchuk polishchuk melnyk boyko tkachuk moroz lysenko savchenko rudenko marchenko petrenko klymenko pavlenko petrosyan
+  harutyunyan grigoryan sargsyan hovhannisyan khachatryan vardanyan gevorgyan karapetyan hakobyan avetisyan mkrtchyan
+  ghazaryan manukyan martirosyan kazarian kardashian sarkisian beridze kapanadze gelashvili maisuradze yılmaz kaya demir
+  şahin çelik yıldız yıldırım öztürk aydın özdemir arslan doğan kılıç aslan çetin kara koç kurt özkan şimşek polat özcan
+  korkmaz çakır erdoğan yavuz acar şen aktaş güler yalçın güneş bozkurt bulut keskin ünal turan gül özer işık kaplan avcı
+  sarı tekin taş köse yüksel ateş aksoy`,
+  // (Arabic, Persian, Afghan, Pakistani, Indian, Sri Lankan, Nepali, Bangladeshi)
+  `haddad khoury nasser saleh hamdan mansour khalil darwish aziz hussein mahmoud mustafa abdullah rahman karim habib said
+  salem saad farouk ghazi kassem qasim najjar hakim halabi masri shami tamimi barakat odeh khalaf issa jaber hijazi awad
+  sabbagh shalhoub nassar bishara haddadin hosseini mohammadi ahmadi rezaei moradi karimi jafari rahimi hashemi mousavi
+  sadeghi ghasemi hosseinzadeh alavi ebrahimi kazemi rostami tehrani shirazi esfahani tabrizi kermani popal durrani
+  barakzai qureshi siddiqui chaudhry chaudhary butt malik awan raja bhatti iyer iyengar naidu shetty kulkarni deshpande
+  patil jadhav pawar shinde gaikwad chavan bhosale kamble thakur yadav verma mishra tiwari pandey dubey tripathi shukla
+  srivastava saxena mathur kapoor khanna malhotra sethi grover ahluwalia sandhu gill dhillon sidhu brar grewal bains
+  randhawa bajwa cheema perera fernando silva desilva jayasuriya wickramasinghe bandara dissanayake rajapaksa shrestha
+  thapa gurung tamang rai magar adhikari karki hossain islam uddin chowdhury begum akter rahim`,
+  // (Filipino, Jewish and Israeli)
+  `bautista ocampo tomas villanueva aquino delacruz deleon delrosario dizon manalo soriano domingo sison macapagal
+  magsaysay estrada roxas laurel quezon osmeña tolentino agustin mariano cabrera concepcion sarmiento cohen levi levy katz
+  friedman goldberg rosenberg goldstein shapiro schwartz rosen stern mizrahi peretz biton dahan avraham azoulay malka ohana
+  amar shalom`,
+];
 
 // Given names of Hungary, where the family name comes first (round 21): a full name whose last word is one ("Simon
 // Zoltán", "Balázs Péter", "Gáspár Katalin", "Bogdán Eszter") is written family name first, so its first word is their
@@ -1218,12 +1390,21 @@ const chinese = () => {
     for (const r of readings.split(/[/,]/).filter(Boolean)) for (const f of straitsSpellings(r)) all.add(f.charAt(0).toUpperCase() + f.slice(1));
     straits.set(nameKey(py), all);
   }
-  FORMS = [...new Set(words(PINYIN_FAMILY))].map((py) => [py, wg(py), hk.get(nameKey(py)) || [], [...(straits.get(nameKey(py)) || [])]]);
+  // (round 27: and the Chinese American ones, spelt by rule from each Taishanese reading, TAISHAN_OF)
+  const us = new Map();
+  for (const e of words(TAISHAN_OF)) {
+    const [py, readings] = e.split(':');
+    const all = us.get(nameKey(py)) || new Set();
+    for (const r of readings.split(',').filter(Boolean)) for (const f of taishanSpellings(r)) all.add(f.charAt(0).toUpperCase() + f.slice(1));
+    us.set(nameKey(py), all);
+  }
+  FORMS = [...new Set(words(PINYIN_FAMILY))].map((py) => [py, wg(py), hk.get(nameKey(py)) || [], [...(straits.get(nameKey(py)) || [])], [...(us.get(nameKey(py)) || [])]]);
   return FORMS;
 };
 // (a people's family names, as FAMILY_NAMES_OF writes them; the Chinese with pinyin's Wade-Giles and Hong Kong forms)
-const familiesOf = (k) => (k ? words(FAMILY_NAMES_OF[k][1])
-  : [...chinese().flatMap(([py, wg, hk, st]) => [py, ...(wg ? [wg] : []), ...hk, ...st]), ...words(FAMILY_NAMES_OF[0][1])]);
+// (round 27: `us` false, without the Chinese American spellings)
+const familiesOf = (k, { us: withUs = true } = {}) => (k ? words(FAMILY_NAMES_OF[k][1])
+  : [...chinese().flatMap(([py, wg, hk, st, us]) => [py, ...(wg ? [wg] : []), ...hk, ...st, ...(withUs ? us : [])]), ...words(FAMILY_NAMES_OF[0][1])]);
 // The syllables, as nameKey keys them: pinyin's, Wade-Giles's (made from pinyin's), Hong Kong's, Korean names', Hepburn's morae
 let SYL = null;
 const syllables = () => {
@@ -1317,9 +1498,14 @@ const build = () => {
   GIVEN_OF = FAMILY_NAMES_OF.map(([people]) => new Set(words(people).map(nameKey)));
   FAMILY_ANY = new Set();
   FAMILY_OF = FAMILY_NAMES_OF.map(() => new Set());
+  // (round 27: the Chinese American spellings, made by rule and syllables of given names as often, "Jiu", "Jue", "Man", are
+  // that people's family names and, given names too, family names first before their given names ("Tom Mei-Ling"); never a
+  // known family name that beats a given name's shape (familyFirstBefore): "Tung Do Jiu" stays ungreeted, as before)
+  const usOnly = new Set(chinese().flatMap(([, , , , us]) => us).map(nameKey));
+  for (const f of familiesOf(0, { us: false })) usOnly.delete(nameKey(f));
   FAMILY_NAMES_OF.forEach((_, k) => {
     for (const f of new Set(familiesOf(k).map(nameKey))) {
-      FAMILY_ANY.add(f);
+      if (!(k === 0 && usOnly.has(f))) FAMILY_ANY.add(f);
       FAMILY_OF[k].add(f);
       if (!GIVEN.has(f) || FIRST.has(f)) continue;
       BEFORE.set(f, (BEFORE.get(f) || new Set()).add(k));
@@ -1363,6 +1549,21 @@ export function givenName(w) {
 export function onTheLists(w) {
   if (!ANYWHERE) build();
   return ANYWHERE.has(nameKey(w));
+}
+/**
+ * Round 27 (finding 1): a family name of a people who write it last, SURNAMES' or FAMILY_LAST's ("Smith", "Camara", "Kinder"):
+ * never a word that ends a name on its own (_advisory-form.js buildPlaces). `more`: FAMILY_LAST's alone, the ones never a
+ * place word at all
+ */
+let LAST = null;
+let LAST_MORE = null;
+export function familyNameLast(w, { more = false } = {}) {
+  if (!LAST_MORE) {
+    LAST_MORE = new Set(FAMILY_LAST.flatMap(words).map(nameKey));
+    if (!SURNAME) SURNAME = new Set(SURNAMES.flatMap(words).map(nameKey));
+    LAST = new Set([...SURNAME, ...LAST_MORE]);
+  }
+  return (more ? LAST_MORE : LAST).has(nameKey(w));
 }
 /** A family name that comes first ("Nguyen", "Kim", "Lee"): a full name starting with it is greeted by no name */
 export function familyFirst(w) {
@@ -1510,7 +1711,9 @@ const oneSyllable = (p, w) => SYLLABLE_PEOPLES.includes(p) && syllablesTyped(w).
 // (two words, each one syllable of that people's given names, the two together their given name's shape: written in parts)
 const inParts = (p, a, b) => oneSyllable(p, a) && oneSyllable(p, b) && !!SHAPES[p]?.([nameKey(a), nameKey(b)]);
 /** (for the tests: each Chinese family name in pinyin, its Wade-Giles form made from it, its Hong Kong forms) */
-export function chineseForms() { return chinese().map(([py, wg, hk, st]) => ({ pinyin: py, wadeGiles: wg, hongKong: [...hk], straits: [...st] })); }
+export function chineseForms() { return chinese().map(([py, wg, hk, st, us]) => ({ pinyin: py, wadeGiles: wg, hongKong: [...hk], straits: [...st], taishan: [...us] })); }
+/** (for the tests: the ways a Taishanese reading is spelt in the US, round 27) */
+export const taishanSpelt = (r) => taishanSpellings(nameKey(r));
 /** (for the tests: the ways Singapore and Malaysia spell a reading, round 25) */
 export const straitsSpelt = (r) => straitsSpellings(nameKey(r));
 /** (for the tests: whether a word has a people's given-name shape, "chinese", "japanese" or "korean") */
@@ -1602,5 +1805,7 @@ export function markedNames() {
     hungarian: [...words(HUNGARIAN), ...words(HUNGARIAN_MORE)], hungarianAccented: words(HUNGARIAN_ACCENTED),
     hungarianShared: words(HUNGARIAN_SHARED), hungarianFamily: words(HUNGARIAN_FAMILY),
     // (round 24: the common family names of every people's, that beat a shape)
-    commonFamilyNames: [...new Set(SURNAMES.flatMap(words))] };
+    commonFamilyNames: [...new Set(SURNAMES.flatMap(words))],
+    // (round 27: the family names written last that are never a place word, FAMILY_LAST's)
+    moreFamilyNames: [...new Set(FAMILY_LAST.flatMap(words))] };
 }
