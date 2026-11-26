@@ -45,7 +45,28 @@ export const UNREAD_WORDS = {
   presenting: 'The meetings you present in before they’re shared couldn’t load just now. Reload in a moment.',
   review: 'The chair’s review couldn’t load just now. Reload in a moment.',
   facts: 'Some of SOARD’s facts couldn’t load just now. Reload in a moment.',
+  // Board QA round 15: a read named for what it feeds, marking only that (functions/api/_board.js liveNumbers,
+  // portalData): what makeovers cost (its figures from JobTread, or the operating balance it rests on), never all the
+  // money; the meetings on the calendar (an agenda item's list of the meetings ahead, the screen's year of them), never
+  // the page's meetings, read apart; the year at a glance from the latest tax return, never the tax returns and audits
+  costs: 'What makeovers cost couldn’t load just now. Reload in a moment.',
+  meetingDates: 'The board meetings on the calendar couldn’t load just now. Reload in a moment.',
+  glance: 'The year at a glance, from the latest tax return, couldn’t load just now. Reload in a moment.',
 };
+/**
+ * The parts of today's numbers (functions/api/_board.js liveNumbers `unread`, and the month-end balances portalData adds
+ * to them): named apart from every part of the page's own read, so one never stands for the other (Board QA round 15:
+ * the numbers' list of the meetings failing was marked as the page's meetings)
+ */
+export const NUMBERS_PARTS = ['money', 'costs', 'projects', 'kids', 'events', 'meetingDates', 'history'];
+/**
+ * Which parts of a meeting's numbers each live item draws from (an item's `live` kind): its place says the first of
+ * them that failed, and draws nothing of it. The meeting's page, Print it all and the screen all go by this one list
+ * (./portal.js LiveBlock, ./print.js liveBox, ./screen.js liveSlide)
+ */
+export const LIVE_PARTS = { cash: ['money'], costs: ['money', 'costs'], projects: ['projects'], reveals: ['projects'], events: ['events'], meetings: ['meetingDates'] };
+/** The part a live item of `kind` can't draw from in `n` (a meeting's numbers: today's have their flags), or '' */
+export const liveLost = (kind, n) => (LIVE_PARTS[kind] || []).find((p) => n?.unread?.[p]) || '';
 /**
  * Which parts failed in the page's data, or in a meeting's numbers (`n`: a meeting today or ahead has today's, and its
  * flags; a past meeting's locked numbers have none) → { money?: true, projects?: true, ... }
@@ -68,9 +89,32 @@ export const UNREAD_PLACE = {
   'money:order': 'The money couldn’t load just now, so the order of these slides can’t be changed here.',
   'settings:invite': 'The board’s settings couldn’t load just now, so who sends the invite isn’t said here.',
   'settings:contact': 'The board’s settings couldn’t load just now, so who to tell isn’t said here.',
+  // (Home's For you: the to-dos from the meetings and the reports to write for them, Board QA round 15)
+  'meetings:todo': 'Your to-dos and reports couldn’t load just now. Reload in a moment.',
 };
 /** The words a place says for a part that failed (`of`: the place, ./UNREAD_PLACE) */
 export const unreadWords = (part, of = '') => UNREAD_PLACE[`${part}:${of}`] || UNREAD_WORDS[part] || '';
+/**
+ * Home's For you is built from parts of the page's read: what couldn't load of it just now, each part said in its place
+ * (`of`: the place's words, ./UNREAD_PLACE), and how many it holds only while every part was read, never a count of what's
+ * left (Board QA round 15: with the meetings not read, "For you 2" dropped the member's to-dos and reports without a word).
+ * Their to-dos and the reports they write come from the meetings (and a meeting not shared yet they present in); the
+ * papers to sign, from SOARD's papers; the corrections to decide (the secretary's or a founder's, `canFix`); the minutes
+ * to sign and the notes not sent (the secretary's); the chair's review. `listed`: how many it lists
+ * → { lost: [{ part, of }], count }
+ */
+export function forYou(data, { seat = '', canFix = false, member = false } = {}, listed = 0) {
+  const lost = [
+    failed(data, 'meetings') ? { part: 'meetings', of: 'todo' } : null,
+    member && failed(data, 'docs') ? { part: 'docs' } : null,
+    member && failed(data, 'presenting') ? { part: 'presenting' } : null,
+    canFix && failed(data, 'corrections') ? { part: 'corrections' } : null,
+    seat === 'secretary' && failed(data, 'minutesSigned') ? { part: 'minutesSigned' } : null,
+    seat === 'secretary' && failed(data, 'notesWaiting') ? { part: 'notesWaiting' } : null,
+    seat === 'chair' && failed(data, 'review') ? { part: 'review' } : null,
+  ].filter(Boolean).map((x) => ({ of: '', ...x }));
+  return { lost, count: lost.length ? 0 : listed };
+}
 /** The words for a part that failed, in its place: plain, said once to a screen reader as it appears */
 export const CouldntLoad = ({ part, of = '', cls = '' }) => html`<p class=${`bp-unloaded ${cls}`} role="status" data-unread=${part}>${unreadWords(part, of)}</p>`;
 const sizeOf = (x) => (Array.isArray(x) || typeof x === 'string' ? x.length : x instanceof Map || x instanceof Set ? x.size : typeof x === 'number' ? x : x && typeof x === 'object' ? Object.keys(x).length : x ? 1 : 0);
@@ -94,10 +138,10 @@ export const emptyRead = (data, part, list = null, n = null) => !failed(data, pa
 export const ROUTE_PARTS = {
   home: ['money', 'projects', 'kids', 'gifts', 'givers', 'history', 'meetings', 'docs', 'settings', 'presenting', 'corrections', 'minutesSigned', 'notesWaiting', 'review'],
   meetings: ['meetings', 'presenting', 'settings'],
-  meeting: ['meetings', 'presenting', 'money', 'projects', 'events', 'settings', 'lineNotes', 'corrections', 'minutesSigned', 'notesWaiting'],
+  meeting: ['meetings', 'presenting', 'money', 'costs', 'projects', 'events', 'meetingDates', 'settings', 'lineNotes', 'corrections', 'minutesSigned', 'notesWaiting'],
   report: ['meetings', 'presenting', 'money', 'lineNotes', 'myAsks', 'ownFiles'],
   review: ['meetings', 'review'],
-  financials: ['money', 'history', 'gifts', 'givers', 'sources', 'meetings', 'docs'],
+  financials: ['money', 'costs', 'history', 'gifts', 'givers', 'sources', 'glance', 'meetings', 'docs'],
   people: [],
   documents: ['docs', 'meetings', 'facts', 'kids', 'settings', 'paperWords'],
   paper: ['docs', 'mark', 'copies', 'signedBodies'],

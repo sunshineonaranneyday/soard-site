@@ -134,8 +134,8 @@ export function Track({ list, application = null, onStep = null }) {
   </div>`;
 }
 
-/** A makeover on its page's photo: their name and their reveal */
-function PhotoCard({ x, reveals }) {
+/** A makeover on its page's photo: their name and their reveal (`lost`: the reveals not read, ./kanban.js revealTag) */
+function PhotoCard({ x, reveals, lost = false }) {
   const c = x.card || {};
   const name = nameOf(x);
   const href = hrefOf(x);
@@ -143,7 +143,7 @@ function PhotoCard({ x, reveals }) {
   const inner = html`<span class="bk-card__photo">${c.photo && !broken
     ? html`<img src=${sized(c.photo, 'w=560,h=380,fit=cover,gravity=face')} alt="" loading="lazy" decoding="async" width="280" height="190" onError=${() => setBroken(true)} />`
     : html`<span class="bk-card__initials" style=${`--hue:${hueOf(name)}`} aria-hidden="true">${initialsOf(name)}</span>`}</span>
-    <span class="bk-card__body"><span class="bk-card__name" title=${name}>${name}</span>${revealTag({ slug: c.slug, kind: c.kind, status: c.status || (x.stage === 'funding' ? 'Awaiting Funding' : '') }, reveals)}</span>`;
+    <span class="bk-card__body"><span class="bk-card__name" title=${name}>${name}</span>${revealTag({ slug: c.slug, kind: c.kind, status: c.status || (x.stage === 'funding' ? 'Awaiting Funding' : '') }, reveals, lost)}</span>`;
   // (an id a search for them lands on: Home's board brought round to their card)
   return html`<li id=${c.slug || c.name ? cardId({ slug: c.slug, name: c.name }) : null}>${href
     ? html`<a class="bk-card" href=${href} ...${external(href) ? { target: '_blank', rel: 'noopener' } : {}}>${inner}</a>`
@@ -172,9 +172,10 @@ function ordered(list, phase, reveals) {
 /**
  * The board: a column for each step someone is at (Applied too while applications are open, so an open application
  * with nobody yet says so), the application's two in one (each row says which: the track counts them apart), so
- * the makeovers being built and revealed fit beside it. `limit`: Home's, a few to a column and "+N more" to the page
+ * the makeovers being built and revealed fit beside it. `limit`: Home's, a few to a column and "+N more" to the page.
+ * `revealsLost`: the makeovers' part not read just now, so no card says a reveal it doesn't know (./kanban.js revealTag)
  */
-export function LifeBoard({ list, application = null, reveals = [], limit = false, more = '#/families' }) {
+export function LifeBoard({ list, application = null, reveals = [], revealsLost = false, limit = false, more = '#/families' }) {
   const counts = countsOf(list);
   const steps = shownStages(counts, application);
   const applying = steps.filter((s) => s.phase === 'applying');
@@ -193,7 +194,7 @@ export function LifeBoard({ list, application = null, reveals = [], limit = fals
       const rest = named.length - shown.length;
       return html`<div class=${`bk-col lc-col is-${phase} ${all.length ? '' : 'is-empty'}`} key=${s.key} id=${`lc-col-${s.key}`} data-steps=${s.keys ? s.keys.join(' ') : null} style=${`--c:${colorOf({ stage: s.keys ? s.keys[0] : s.key })}`}>
         <p class="bk-col__head"><span title=${s.label}>${s.label}</span><span class="bk-col__n">${all.length}</span></p>
-        ${all.length ? html`<ul class=${cards ? 'bk-col__cards' : 'lc-rows'}>${shown.map((x) => (cards ? html`<${PhotoCard} key=${x.id} x=${x} reveals=${reveals} />` : html`<${Row} key=${x.id} x=${x} step=${!!s.keys} />`))}
+        ${all.length ? html`<ul class=${cards ? 'bk-col__cards' : 'lc-rows'}>${shown.map((x) => (cards ? html`<${PhotoCard} key=${x.id} x=${x} reveals=${reveals} lost=${revealsLost} />` : html`<${Row} key=${x.id} x=${x} step=${!!s.keys} />`))}
           ${families ? html`<li><span class="bk-card is-quiet"><span class="bk-card__body"><span class="bk-card__name">${nbw(named.length ? `+${families} more ${families === 1 ? 'family' : 'families'}` : plural(families, 'family', 'families'))}</span><span class="bk-card__reveal is-quiet">Named once their page is up</span></span></span></li>` : null}
           ${orgs ? html`<li><span class="bk-card is-quiet"><span class="bk-card__body"><span class="bk-card__name">${nbw(plural(orgs, 'community project'))}</span><span class="bk-card__reveal is-quiet">Not on Community yet</span></span></span></li>` : null}</ul>`
           : html`<p class="bk-col__none">${s.key === 'applied' || s.keys ? 'No applications yet' : 'None now'}</p>`}
@@ -246,7 +247,7 @@ export function MakeoversCard({ n }) {
   return html`<section class="bp-card lc" id="makeovers" aria-labelledby="lc-h">
     <div class="bp-cardhead">
       <h2 class="bp-h2" id="lc-h">Makeovers</h2>
-      <span class="bp-cardhead__end"><span class="bp-muted">From the applications and JobTread</span>${n.costs ? html`<a class="bp-cardhead__go" href="#/financials/costs">What they cost${ARROW}</a>` : null}<a class="bp-cardhead__go" href="#/families">Every family${ARROW}</a></span>
+      <span class="bp-cardhead__end"><span class="bp-muted">From the applications and JobTread</span>${n.costs || n.unread?.costs ? html`<a class="bp-cardhead__go" href="#/financials/costs">What they cost${ARROW}</a>` : null}<a class="bp-cardhead__go" href="#/families">Every family${ARROW}</a></span>
     </div>
     <div class="lc-bar">
       ${fam ? html`<${SeasonSwitch} seasons=${seasons} season=${season} setSeason=${setSeason} />` : html`<span></span>`}

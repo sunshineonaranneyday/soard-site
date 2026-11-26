@@ -298,7 +298,8 @@ test('r12 8: the server marks each part whose read failed, and draws none of it 
   assert.deepEqual(sources.filings, []);
   const env = await world();
   const settings = await board.liveNumbers({ ...env, DB: failing(env.DB, (sql, args) => /FROM board_state/.test(sql) && args[0] === 'settings') });
-  assert.equal(settings.unread?.money, true, 'the operating balance not read: What makeovers cost would rest on a guessed one');
+  /* r15: the operating balance not read marks What makeovers cost, its only user, never all the money */
+  assert.deepEqual(settings.unread, { costs: true }, 'the operating balance not read: What makeovers cost would rest on a guessed one');
 });
 test('r12 8: a copy the page keeps that fails to save never loses what was just read: Mercury’s record and the makeovers stand', async () => {
   const env = await world();
