@@ -971,17 +971,13 @@ test('board meeting invites Board didn’t send: another on a meeting’s day is
   assert.equal(data.calendar.strays[0].date, other);
 });
 
-test('deleting a meeting in Board takes its invite off the calendar, and Google tells the guests; a held one’s stays; should Google refuse, nothing is deleted', async () => {
+/* r15: the invite's cancel is owed by the delete's own write and goes once after it, a send like any other (Board QA
+   round 15, F4, decided): Google refusing just now no longer keeps the meeting. It's deleted, the answer says the
+   cancel goes by itself, and the heartbeat sends it once Google answers, once */
+test('deleting a meeting in Board takes its invite off the calendar, and Google tells the guests; a held one’s stays; should Google refuse, the meeting goes and its invite’s cancel goes once, by itself', async () => {
   const g = fakeGoogleWriter();
   let m = (await adminApi(FOUNDER, { action: 'new-meeting', date: inDays(30) })).body.meeting;
   m = (await adminApi(FOUNDER, { action: 'send-invite', id: m.id })).body.meeting;
-  const google = answer;
-  answer = (url, init) => (init.method === 'DELETE' ? Response.json({ error: { message: 'Backend Error' } }, { status: 503 }) : google(url, init));
-  const no = await adminApi(FOUNDER, { action: 'delete-meeting', id: m.id });
-  assert.notEqual(no.status, 200);
-  assert.match(no.body.error, /Backend Error/);
-  assert.ok(await getMeeting(env.DB, m.id), 'nothing deleted');
-  answer = google;
   g.calls = [];
   const yes = await adminApi(FOUNDER, { action: 'delete-meeting', id: m.id });
   assert.deepEqual([yes.status, yes.body.cancelled], [200, true]);
@@ -990,6 +986,25 @@ test('deleting a meeting in Board takes its invite off the calendar, and Google 
   assert.equal(del.method, 'DELETE');
   assert.match(del.url, new RegExp(`/events/${m.invite.eventId}\\?sendUpdates=all$`));
   assert.equal(await getMeeting(env.DB, m.id), null);
+  // Google refusing the cancel just now
+  let n = (await adminApi(FOUNDER, { action: 'new-meeting', date: inDays(31) })).body.meeting;
+  n = (await adminApi(FOUNDER, { action: 'send-invite', id: n.id })).body.meeting;
+  const google = answer;
+  answer = (url, init) => (init.method === 'DELETE' ? Response.json({ error: { message: 'Backend Error' } }, { status: 503 }) : google(url, init));
+  const no = await adminApi(FOUNDER, { action: 'delete-meeting', id: n.id });
+  assert.deepEqual([no.status, no.body.cancelled], [200, false], JSON.stringify(no.body));
+  assert.match(no.body.later, /tries again by itself/);
+  assert.equal(await getMeeting(env.DB, n.id), null, 'the meeting is deleted');
+  answer = google;
+  g.calls = [];
+  await maybeRefreshInvites(env, { now: Date.now() + 6 * 60 * 1000 });
+  const [owed, ...again] = calWrites(g);
+  assert.deepEqual(again, [], 'once');
+  assert.equal(owed.method, 'DELETE');
+  assert.match(owed.url, new RegExp(`/events/${n.invite.eventId}\\?sendUpdates=all$`));
+  g.calls = [];
+  await maybeRefreshInvites(env, { now: Date.now() + 60 * 60 * 1000 });
+  assert.deepEqual(calWrites(g), [], 'nothing owed once it went');
   // One already held keeps its event as a record
   const held = await patchMeeting(env.DB, (await adminApi(FOUNDER, { action: 'new-meeting', date: inDays(-3) })).body.meeting.id, (cur) => ({ ...cur, invite: { eventId: 'boardold', organizer: FOUNDER, sentAt: new Date().toISOString() } }));
   g.calls = [];

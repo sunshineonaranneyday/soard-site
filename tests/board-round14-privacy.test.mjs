@@ -516,11 +516,9 @@ const getSettingsNow = async () => { const was = fault; fault = null; try { retu
  * honestly: never "Something went wrong", never "nothing was changed" over a change; where the exact answer would need
  * that one write, it says the site can't tell yet (UNSURE_SAVED). Each with why
  */
+/* r15: save-doc, delete-doc, form:saveDoc and delete-meeting each land in one write now (Board QA round 15, F1 and F4),
+   so they're judged as every whole press is: tests/board-round15-privacy.test.mjs sweeps them further */
 const NOT_WHOLE_YET = {
-  'save-doc': 'a paper’s wording and the paper are two writes (saveDoc)',
-  'delete-doc': 'its signatures, wordings, files and the paper are taken off one by one (deleteDoc)',
-  'form:saveDoc': 'a paper, its file, its wording’s file and its words are four steps',
-  'delete-meeting': 'the invite comes off Google first, then the meeting and what’s kept beside it, one by one',
   'practice-reset': 'the old practice meeting is cleared, then a new one made',
   'undo-minutes': 'a read put back, its file and the last meeting’s approval are steps of their own',
   'sync-group': 'its only writes are the sync’s own status record, kept after Google answers',

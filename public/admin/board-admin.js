@@ -1016,6 +1016,8 @@ function DocumentsTab({ ctx }) {
     const d = j.doc;
     setSaving(false);
     putDoc(d);
+    // (saved; the paper not read back with it: as written here, and read again. Board QA round 15)
+    if (j.reread) call().then((r) => { if (r.ok) setData(r); });
     opened.current = snap(null);
     setDraft(null);
     setRead(null);
@@ -1042,6 +1044,7 @@ function DocumentsTab({ ctx }) {
     const j = await call({ action: 'save-doc', doc: { ...d, ...patch, body: undefined }, base: d.version || 0 });
     if (!j.ok) { addToast(j.error, 'error'); if (j.deleted) call().then((r) => { if (r.ok) setData(r); }); return; }
     putDoc(j.doc);
+    if (j.reread) call().then((r) => { if (r.ok) setData(r); });
   };
   // The file to read words from: one just chosen, else the paper's own
   const source = draft && readable(draft.file) ? draft.file : draft && readable(draft.existing) ? draft.existing : null;

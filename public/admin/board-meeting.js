@@ -683,6 +683,8 @@ export function MeetingEditor({ meeting, ctx, step: asked }) {
     markDirty(false);
     ctx.setData((d) => ({ ...d, meetings: d.meetings.filter((x) => x.id !== m.id) }));
     addToast(`Deleted the ${meetingName(m)}${m.date ? ` (${shortDate(m.date)})` : ''}`, 'info');
+    // (its invite's cancel still to go, by itself: said. Board QA round 15)
+    if (j.later) addToast(j.later, 'info');
     // (back on the list, the focus goes to its heading: ./board-admin.js BoardArea)
     go({});
   };
