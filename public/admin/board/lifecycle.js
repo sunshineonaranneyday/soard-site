@@ -258,7 +258,7 @@ export function MakeoversCard({ n }) {
     ${err ? html`<p class="bf-err" role="alert">${err} The makeovers from JobTread are below.</p>` : null}
     <p class="lc-sum">${fam ? nbw(sumLine(list, season, app)) || 'Nobody here.' : nbw('Opening the families…')}</p>
     ${fam ? html`<${Track} list=${list} application=${season === 'now' || season === app?.year ? app : null} onStep=${view === 'board' ? toStep : null} />` : null}
-    ${fam && !fam.jobs ? html`<p class="lc-note">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
+    ${fam && !fam.jobs ? html`<p class="lc-note" role="status" data-unread="projects">JobTread can’t be reached right now, so each family’s step is their application’s.</p>` : null}
     ${view === 'map' && fam
       ? html`<${FamilyMap} key="lc-map" families=${families} boundary=${fam.boundary} scheme=${STAGE_SCHEME} away=${away} />`
       : html`<${LifeBoard} key=${`${fam ? 'all' : 'jobs'}-${season}`} list=${list} application=${season === 'now' || season === app?.year ? app : null} reveals=${n.reveals || []} limit=${true} />`}

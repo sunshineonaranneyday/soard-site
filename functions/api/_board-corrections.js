@@ -122,8 +122,8 @@ export async function waitingOn(DB, id) {
 
 /**
  * POST { action: 'correction', meetingId, target, words, was }: a correction, while the minutes are in, on the board page
- * and not approved. Their own waiting one on the same words is replaced. `was`: what their page showed (changed since:
- * 409 { changed }). → { correction }
+ * and not approved. Their own waiting one on the same words is replaced, and the answer says so (`replaced`, `where`).
+ * `was`: what their page showed (changed since: 409 { changed }). → { correction, replaced?, where? }
  * The correction and the email it owes the secretary and the founders are one write (its notice due), every read before
  * it: the database failing anywhere kept nothing, said so. Pressed again, the notice is owed if the record doesn't have
  * it yet (told_at), never skipped (Board QA round 13, Nov 24 2026: kept, its notice's write failing, and pressed again as
@@ -188,7 +188,9 @@ async function suggesting(env, { meetingId, target, words, was = null } = {}, w,
       later = laterWords('the secretary and the founders');
     }
   }
-  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' }, ...(later ? { later } : {}) };
+  // (their own waiting one replaced, the answer says so, and where: Board QA round 14, a correction typed while the page
+  // couldn't read the corrections replaced Sam's waiting one on Roll call without a word)
+  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' }, ...(had ? { replaced: true, where: t.where } : {}), ...(later ? { later } : {}) };
 }
 
 /** POST { action: 'correction-withdraw', id }: theirs, while it's waiting (one write: the database failing changed nothing) */

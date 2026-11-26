@@ -37,13 +37,52 @@ const numbers = (t) => t.replace(/(\d)\.00(?!\d)/g, '$1').replace(/(\d),(?=\d{3}
  */
 const NEGATIVE = /(?<![a-z0-9])(?:[−-]\$?(\d+(?:d\d+)?[kmb]?)(?![a-z0-9])|\(\$?(\d+(?:d\d+)?[kmb]?)\))/g;
 /**
- * A fiscal year however it's written, as the year it ends in: "FY2026", "FY 2026", "FY26", "FY'26", "2025-26", "2025/26",
- * "2025-2026", "2025/2026", "FY 2025-26" and "FY25-26" are all 2026, as ./money.js sheetYear reads a budget sheet's (a
- * span's two years one after the other). Board QA round 13: a budget's figures were found only as the page spelt their
- * year ("FY2026"), never as the sheet did ("FY 2026", "FY26", "2025/2026")
+ * The word for a fiscal year before its year, every way it's written: "FY", "F.Y.", "Fiscal" and "Fiscal Year", a word
+ * of its own (never the end of another, never "fyi"), then what may stand between it and the year: a space, an
+ * underscore, a dash, a dot, an apostrophe ("FY 2026", "FY_26", "FY-2026", "FY-26", "FY.26", "F.Y. 2026", "Fiscal Year
+ * 2026", "Fiscal 2026", "FY'26"). One pattern, for ./money.js sheetYear's reading of a budget sheet and for search's
+ * reading of words, typed or written (Board QA round 14: "Fiscal Year 2026" and "FY-2026" read as calendar 2026, "FY-26"
+ * as no year, and no fiscal spelling found them)
  */
-const FISCAL = /(?<![a-z0-9])fy[\s_]?['‘’]?(\d{4}|\d{2})(?:\s*[-‐‑–—/]\s*['‘’]?(\d{4}|\d{2}))?(?!\d)|(?<!\d)(20\d{2})\s*[-‐‑–—/]\s*(20\d{2}|\d{2})(?!\d)/g;
-const fullYear = (y, of = '2000') => (y.length === 2 ? `${of.slice(0, 2)}${y}` : y);
+export const FY_WORD = String.raw`(?<![a-z0-9])(?:f(?:\.\s?)?y\.?|fiscal(?:[\s_]+year)?)(?![a-z])[\s_.\-‐‑–—]*['‘’]?`;
+/** A year after it, or a span's first year ("FY 2025-26" is 2025's then 26) */
+const SPAN_TO = String.raw`\s*[-‐‑–—/]\s*['‘’]?(\d{4}|\d{2})(?!\d)`;
+/**
+ * A fiscal year however it's written, as the year it ends in: "FY2026", "FY 2026", "FY26", "FY'26", "FY-2026", "Fiscal
+ * Year 2026", "2025-26", "2025/26", "2025-2026", "2025/2026", "FY 2025-26", "FY25-26" and "Fiscal Year 2025-26" are all
+ * 2026, as ./money.js sheetYear reads a budget sheet's (a span's two years one after the other). Board QA round 13: a
+ * budget's figures were found only as the page spelt their year ("FY2026"), never as the sheet did ("FY 2026", "FY26",
+ * "2025/2026"); round 14, ./FY_WORD
+ */
+const FISCAL = new RegExp(String.raw`${FY_WORD}(\d{4}|\d{2})(?:${SPAN_TO})?(?!\d)|(?<!\d)(20\d{2})\s*[-‐‑–—/]\s*(20\d{2}|\d{2})(?!\d)`, 'gi');
+/**
+ * A text's fiscal year as a budget sheet names it, first found first (`texts` in order: the heading, the title rows,
+ * the file's name): a span before any single year in it, "FY" and its kin before a plain year, a plain year last. →
+ * { year: the year it ends in, label: "2025-26" for a span, "FY2026" for one fiscal year, '' for a calendar year }, both
+ * '' when there's none (./money.js sheetYear)
+ */
+const FY_SPAN = new RegExp(String.raw`${FY_WORD}(\d{4}|\d{2})${SPAN_TO}`, 'i');
+const FY_ONE = new RegExp(String.raw`${FY_WORD}(\d{4}|\d{2})(?!\d)`, 'i');
+/** What's typed: the fiscal year's word before a year, one word with it ("Fiscal Year 2026" is "fy2026") */
+const FY_TYPED = new RegExp(`${FY_WORD}(?=\\d)`, 'g');
+export function fiscalNamed(...texts) {
+  for (const t of texts) {
+    const s = String(t ?? '');
+    for (const re of [FY_SPAN, /(?<!\d)(20\d{2})\s*[-‐‑–—/]\s*(20\d{2}|\d{2})(?!\d)/]) {
+      const span = s.match(re);
+      if (!span) continue;
+      const start = fullYear(span[1]);
+      const end = fullYear(span[2], start);
+      if (Number(end) === Number(start) + 1) return { year: end, label: `${start}-${end.slice(2)}` };
+    }
+    const fy = s.match(FY_ONE);
+    if (fy) { const y = fullYear(fy[1]); return { year: y, label: `FY${y}` }; }
+    const one = s.match(/(?<!\d)(20\d{2})(?!\d)/);
+    if (one) return { year: one[1], label: '' };
+  }
+  return { year: '', label: '' };
+}
+function fullYear(y, of = '2000') { return y.length === 2 ? `${of.slice(0, 2)}${y}` : y; }
 export function fiscalYearsIn(t) {
   const out = new Set();
   if (!/\d/.test(t)) return out;
@@ -63,7 +102,7 @@ export function fiscalYearsIn(t) {
  * each fiscal year it says as that word too (./prep), so one finds the other whichever way each writes it
  */
 export function fiscalTyped(w) {
-  const m = /^(?:fy['‘’]?(\d{4}|\d{2})(?:[-‐‑–—/]['‘’]?(\d{4}|\d{2}))?|(20\d{2})[-‐‑–—/](20\d{2}|\d{2}))$/.exec(String(w || ''));
+  const m = /^(?:f\.?y\.?[-‐‑–—._]?['‘’]?(\d{4}|\d{2})(?:[-‐‑–—/]['‘’]?(\d{4}|\d{2}))?|(20\d{2})[-‐‑–—/](20\d{2}|\d{2}))$/.exec(String(w || ''));
   if (!m) return '';
   const start = fullYear(m[1] || m[3]);
   const two = m[2] || m[4];
@@ -106,7 +145,7 @@ const digitsRe = (d) => [...d].join(',?');
 /** The fiscal year a term says ("fy2026": ./fiscalTyped), '' for none */
 const fiscalOf = (t) => (/^fy\d{4}$/.test(t) ? t.slice(2) : '');
 // (that year, every way it's written: "FY2026", "FY 2026", "FY26", "FY'26", "2025-26", "2025/2026", "FY 2025-26")
-const fiscalRe = (y) => { const s = String(Number(y) - 1); const yy = y.slice(2); const ss = s.slice(2); const sep = '\\s*[-\u2010\u2011\u2013\u2014/]\\s*'; return `(?<![a-z0-9])(?:fy[\\s_]?['\u2018\u2019]?(?:(?:${s}|${ss})${sep}['\u2018\u2019]?)?(?:${y}|${yy})|${s}${sep}(?:${y}|${yy}))(?!\\d)`; };
+const fiscalRe = (y) => { const s = String(Number(y) - 1); const yy = y.slice(2); const ss = s.slice(2); const sep = '\\s*[-\u2010\u2011\u2013\u2014/]\\s*'; return `(?:${FY_WORD}(?:(?:${s}|${ss})${sep}['\u2018\u2019]?)?(?:${y}|${yy})|(?<![a-z0-9])${s}${sep}(?:${y}|${yy}))(?!\\d)`; };
 // (an amount below zero, "minus12000": its sign before it or its bracket, "\u2212$12,000", "-12,000", "(12,000)", then the
 // amount as it's written; never the same amount without one)
 export const termRe = (t) => (fiscalOf(t) ? fiscalRe(fiscalOf(t)) : /^minus\d/.test(t) ? `(?<![a-z0-9])(?:[\u2212-]\\$?|\\(\\$?)${termRe(t.slice(5)).replace(/^\(\?<![^)]*\)/, '')}\\)?`
@@ -159,8 +198,9 @@ function before(t, year = new Date().getFullYear()) {
     .replace(/(?<![\w.,])(\$?\d[\d,]*(?:\.\d+)?)\s+([kmb])\b/g, '$1$2')
     .replace(/\blast year'?s?\b/g, String(year - 1)).replace(/\bthis year'?s?\b/g, String(year)).replace(/\bnext year'?s?\b/g, String(year + 1))
     .replace(new RegExp(`\\b${MONTH_RE}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, 'g'), (all, mon, d, y) => (+d >= 1 && +d <= 31 ? (y ? `${y}-${pad(monthOf(mon))}-${pad(d)}` : `${monthOf(mon)}/${+d}`) : all))
-    // ("FY 2026", "FY '26", "FY 2025-26" as one word, the fiscal year as it’s found however it’s written: ./fiscalTyped)
-    .replace(/(?<![a-z0-9])fy\s+(?=['‘’]?\d)/g, 'fy')
+    // ("FY 2026", "FY '26", "FY-26", "F.Y. 2026", "Fiscal Year 2026", "Fiscal 2025-26" as one word, the fiscal year as
+    // it’s found however it’s written: ./FY_WORD, ./fiscalTyped)
+    .replace(FY_TYPED, 'fy')
     .replace(/\b([a-z]{3,})-([a-z]{3,})\b/g, (all, a, b) => (`${a}${b}` === 'bylaws' ? all : `${a} ${b}`))
     .replace(/\b([a-z]{3,})(\d+)\b/g, '$1 $2');
 }

@@ -3999,14 +3999,24 @@ export const filingsOf = (doc) => (doc?.documents || []).map((d) => ({ title: d.
  */
 export async function portalWords(env, { member = null } = {}) {
   await ensureSchema(env.DB);
-  const [meetings, docs, financials] = await Promise.all([listMeetings(env.DB), listDocs(env.DB), siteDoc(env.DB, 'financials').catch(() => null)]);
+  // Each read its own part, as the page's own read has them: the meetings or the papers not read just now leave their
+  // files' words out and say so (`unread`), the page already saying that part couldn't load; the words' own reads not
+  // answering are a 503 in words, never "Something went wrong … Reload the page to see what was saved" for a look
+  // (Board QA round 14: with the meetings' read failing, ?words answered 500)
+  const unread = {};
+  const lost = (part, also) => (err) => { if (err?.setup) throw err; console.error(`[board] words: ${part}`, err?.message || err); unread[part] = true; return also; };
+  const [meetings, docs, financials] = await Promise.all([listMeetings(env.DB).catch(lost('meetings', [])), listDocs(env.DB).catch(lost('docs', [])), siteDoc(env.DB, 'financials').catch(lost('sources', null))]);
   const ids = [
     ...meetings.map(boardCopy).filter(Boolean).flatMap((m) => m.files.map((f) => f.id)),
     ...docs.filter((d) => (d.shared || !member) && d.file && !d.file.staffOnly).map((d) => d.file.id),
   ];
   const { wordsFor, filingWordsFor, stillToRead } = await import('./_board-file-words.js');
-  return { files: await wordsFor(env.DB, ids), filings: await filingWordsFor(env.DB, filingsOf(financials).map((f) => f.url)), reading: await stillToRead(env.DB) };
+  const down = (e) => { throw e?.setup || !dbFailed(e) ? e : readDown(WORDS_DOWN, e); };
+  const [files, filings, reading] = await Promise.all([wordsFor(env.DB, ids), filingWordsFor(env.DB, filingsOf(financials).map((f) => f.url)), stillToRead(env.DB)]).catch(down);
+  return { files, filings, reading, ...(Object.keys(unread).length ? { unread } : {}) };
 }
+/** The words inside the files not read just now (the page finds the files by their names, and says so) */
+export const WORDS_DOWN = 'The words inside the files couldn’t load just now, so search finds the files by their names. Please try again in a moment.';
 
 /**
  * A member on the board page at `t` (ms): the page read (portalData), or something they did on it (./_board-activity.js:

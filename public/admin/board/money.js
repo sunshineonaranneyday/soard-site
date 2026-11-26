@@ -10,6 +10,8 @@
 import { h, htm, useState, useEffect } from '../vendor.js';
 import { money, todayEastern, unzip } from '../board-shared.js';
 import { nbw, shortDate } from './parts.js';
+import { failed } from './unread.js';
+import { fiscalNamed } from './find.js';
 
 const html = htm.bind(h);
 
@@ -124,32 +126,17 @@ export function throughWords(through, today = todayEastern()) {
   return d.slice(0, 7) === String(today || '').slice(0, 7) && /^\d{4}-\d{2}-\d{2}/.test(d) ? `through ${month} ${Number(d.slice(8, 10))}` : `through ${month}`;
 }
 /**
- * A budget sheet's year, from its heading or its name: "FY2026", "FY 2026", "FY26" and "FY'26" (the fiscal year ending
- * in 2026, said "FY2026"), a two-year span, "2025-26", "2025/2026", "2025–2026", "FY 2025-26" and "FY25-26" (said
- * "2025-26"), or a calendar year ("2026 Budget"). A span is read as that span before any single year in it is tried
- * (Board QA round 13: "FY 2025-26 Budget" and "FY25-26" read as FY2025, the "FY 2025" in them). → { year: the year it
- * ends in, label: its fiscal name ('' for a calendar year) }, both '' when none can be read (Board QA round 12: "FY2026
- * Budget" read as no year, the tiles' year blank and the heading "against its budget")
+ * A budget sheet's year, from its heading or its name: "FY2026", "FY 2026", "FY26", "FY'26", "FY-2026", "FY-26",
+ * "FY.26", "F.Y. 2026", "Fiscal 2026" and "Fiscal Year 2026" (the fiscal year ending in 2026, said "FY2026"), a two-year
+ * span, "2025-26", "2025/2026", "2025–2026", "FY 2025-26", "FY25-26" and "Fiscal Year 2025-26" (said "2025-26"), or a
+ * calendar year ("2026 Budget"). A span is read as that span before any single year in it is tried (Board QA round 13:
+ * "FY 2025-26 Budget" and "FY25-26" read as FY2025, the "FY 2025" in them); every way of writing the fiscal year is
+ * search's too, one pattern (./find.js FY_WORD, fiscalNamed: Board QA round 14, "Fiscal Year 2026 Budget" and
+ * "FY-2026" read as calendar 2026, "FY-26" as no year). → { year: the year it ends in, label: its fiscal name ('' for a
+ * calendar year) }, both '' when none can be read (Board QA round 12: "FY2026 Budget" read as no year, the tiles' year
+ * blank and the heading "against its budget")
  */
-export function sheetYear(...texts) {
-  for (const t of texts) {
-    const s = String(t ?? '');
-    // (a span: its two years one after the other, the second written in full or by its last two digits; after "FY" the
-    // first can be two digits too, "FY25-26". "FY" as a word of its own, a file's name's underscores apart: "Budget_FY26")
-    for (const re of [/(?<![a-z0-9])FY[\s_]?['‘’]?(\d{4}|\d{2})\s*[-‐‑–—/]\s*['‘’]?(\d{4}|\d{2})(?!\d)/i, /(?<!\d)(20\d{2})\s*[-‐‑–—/]\s*(20\d{2}|\d{2})(?!\d)/]) {
-      const span = s.match(re);
-      if (!span) continue;
-      const start = span[1].length === 2 ? `20${span[1]}` : span[1];
-      const end = span[2].length === 2 ? `${start.slice(0, 2)}${span[2]}` : span[2];
-      if (Number(end) === Number(start) + 1) return { year: end, label: `${start}-${end.slice(2)}` };
-    }
-    const fy = s.match(/(?<![a-z0-9])FY[\s_]?['‘’]?(\d{4}|\d{2})(?!\d)/i);
-    if (fy) { const y = fy[1].length === 2 ? `20${fy[1]}` : fy[1]; return { year: y, label: `FY${y}` }; }
-    const one = s.match(/(?<!\d)(20\d{2})(?!\d)/);
-    if (one) return { year: one[1], label: '' };
-  }
-  return { year: '', label: '' };
-}
+export const sheetYear = (...texts) => fiscalNamed(...texts);
 /**
  * The budget card's heading: "2026 against its budget", "FY2026 against its budget"; with no year the sheet says, a
  * whole sentence in its own case, never a fragment or a year guessed (Board QA round 12: "against its budget")
@@ -220,6 +207,15 @@ function bankNames(list, banks) {
   });
   return named.map((a, i) => (named.filter((b) => b.name === a.name).length > 1 ? { ...a, name: list[i].name } : a));
 }
+/**
+ * The cash a year back, from the month-end balances: its row, and `lost` when they couldn't be read just now (the
+ * change on a year then says it couldn't load where it's drawn, never just gone: Board QA round 14)
+ */
+function yearBack(data, day) {
+  const ym = day.slice(0, 7);
+  const then = ym ? (data.cashHistory || []).find((r) => r.month === `${Number(ym.slice(0, 4)) - 1}${ym.slice(4)}`) : null;
+  return { then, lost: !then && failed(data, 'history') };
+}
 /** The banks' own numbers (numbers.cash) in the balance sheet's shape, with the month a year back from the history */
 export function liveCash(data) {
   const c = data.numbers.cash;
@@ -227,11 +223,10 @@ export function liveCash(data) {
   // As of the oldest read among them: Plaid's refresh of Chase can be hours older than Mercury's live answer
   const at = String(c.banksAt && c.banksAt < c.at ? c.banksAt : c.at || '');
   const day = at ? todayEastern(Date.parse(at)) : '';
-  const ym = day.slice(0, 7);
-  const then = ym ? (data.cashHistory || []).find((r) => r.month === `${Number(ym.slice(0, 4)) - 1}${ym.slice(4)}`) : null;
+  const { then, lost } = yearBack(data, day);
   const banks = [...new Set((c.accounts || []).map((a) => a.bank || 'Mercury'))];
   return {
-    live: true, total: c.total, asOf: day ? shortDate(day) : '', today: day === todayEastern(), at, prior: then ? then.total : null, priorAsOf: then ? monthOf(then.month) : '',
+    live: true, total: c.total, asOf: day ? shortDate(day) : '', today: day === todayEastern(), at, prior: then ? then.total : null, priorAsOf: then ? monthOf(then.month) : '', priorLost: lost,
     accounts: bankNames(c.accounts || [], banks), owed: bankNames((c.owed || []).filter((o) => o.balance > 0), banks), banks, stale: c.stale || [],
   };
 }
@@ -244,10 +239,9 @@ export function booksCash(data, b) {
   if (!c || typeof c.total !== 'number') return null;
   const at = String(c.at || b.at || '');
   const day = at ? todayEastern(Date.parse(at)) : '';
-  const ym = day.slice(0, 7);
-  const then = ym ? (data.cashHistory || []).find((r) => r.month === `${Number(ym.slice(0, 4)) - 1}${ym.slice(4)}`) : null;
+  const { then, lost } = yearBack(data, day);
   return {
-    live: true, total: c.total, asOf: day ? shortDate(day) : '', today: day === todayEastern(), at, prior: then ? then.total : null, priorAsOf: then ? monthOf(then.month) : '',
+    live: true, total: c.total, asOf: day ? shortDate(day) : '', today: day === todayEastern(), at, prior: then ? then.total : null, priorAsOf: then ? monthOf(then.month) : '', priorLost: lost,
     accounts: c.accounts || [], owed: (c.owed || []).filter((o) => o.balance > 0), banks: ['QuickBooks'], stale: b.stale ? ['QuickBooks'] : [],
     months: typeof b.monthsOfCash === 'number' ? b.monthsOfCash : null, perMonth: b.perMonth || null,
   };
@@ -261,6 +255,17 @@ export function booksCash(data, b) {
  */
 export const accountsSaid = (cash) => addingUp((cash?.accounts || []).map((a) => (typeof a.balance === 'number' && Number.isFinite(a.balance) ? a.balance : 0)), { total: cash?.total ?? null });
 /**
+ * The bank accounts, one list wherever accounts are drawn: Financials' cash card and search (./cashLines), the meeting's
+ * money tile, its slide and Print (./moneyTiles). Every account with a balance is on it, one whose written figure is $0
+ * (or rounds to it, as −$0.30 does) too, listed as "$0" and found by its name; only a written figure below zero is
+ * overdrawn (Board QA round 14: an account at $0 was drawn on the meeting's tile and never on Financials, and one that
+ * rounded to $0 was drawn and never found) → [{ a, i (its place among the accounts), name, said, over }]
+ */
+export function accountsListed(cash) {
+  const each = accountsSaid(cash);
+  return (cash?.accounts || []).map((a, i) => ({ a, i, name: a.name || 'Account', said: each[i], over: each[i] < 0 })).filter(({ a }) => typeof a.balance === 'number' && Number.isFinite(a.balance));
+}
+/**
  * The cash card's lines, one list for the card (./portal.js CashCard) and the search (./figures.js): with two or more
  * accounts, each one holding at least 1% of the cash by its name (#cash-a<its place among the accounts>), and beside
  * five or more the smaller ones together on one line (#cash-a-rest), each account as it's written everywhere
@@ -271,14 +276,14 @@ export const accountsSaid = (cash) => addingUp((cash?.accounts || []).map((a) =>
  * search sent "the smaller accounts together" to a line never drawn → [{ id, k, name, names, balance, said, rest, over }]
  */
 export function cashLines(cash) {
-  const each = accountsSaid(cash);
-  const held = (cash?.accounts || []).map((a, i) => ({ a, i, said: each[i] })).filter(({ a }) => typeof a.balance === 'number' && Math.abs(a.balance) >= 0.005);
+  // (the one list of accounts, a $0 account on it as the meeting's tile has it: ./accountsListed)
+  const held = accountsListed(cash);
   if (held.length < 2) return [];
   const small = held.length > 4 ? held.filter(({ a }) => a.balance > 0 && a.balance < cash.total * 0.01) : [];
   // (a single small one is a line of its own, by its name: "together" takes two)
   const together = small.length > 1 ? small : [];
   return [
-    ...held.filter((x) => !together.includes(x)).map(({ a, i, said }) => ({ id: `cash-a${i}`, k: `cash:${a.bank || ''}:${a.name}`, name: a.name || 'Account', names: [a.name || 'Account'], balance: a.balance, said, rest: false, over: said < 0 })),
+    ...held.filter((x) => !together.includes(x)).map(({ a, i, said, over }) => ({ id: `cash-a${i}`, k: `cash:${a.bank || ''}:${a.name}`, name: a.name || 'Account', names: [a.name || 'Account'], balance: a.balance, said, rest: false, over })),
     ...(together.length ? [{ id: 'cash-a-rest', k: 'cash:small', name: andText(together.map(({ a }) => a.name || 'Account')), names: together.map(({ a }) => a.name || 'Account'), balance: together.reduce((t, { a }) => t + a.balance, 0), said: together.reduce((t, x) => t + x.said, 0), rest: true, over: false }] : []),
   ];
 }
@@ -601,7 +606,8 @@ export function moneyTiles({ cash, budget, n, due = false, as = '' }) {
         sub: !cash ? 'From the balance sheet' : fromBooks(cash) || (cash.live
           // (each account as it's written everywhere, the cash card's own figure, ./accountsSaid; said in short from that
           // figure, rounded so they add up to the cash beside them, ./partsAddingUp: Board QA round 13)
-          ? [(cash.accounts || []).length > 1 ? ((each) => partsAddingUp(each, { total: cash.total }).map((w, i) => `${cash.accounts[i].name} ${$(`cash:${cash.accounts[i].bank || ''}:${cash.accounts[i].name}`, each[i], () => w)}`).join(' · '))(accountsSaid(cash)) : '', cash.asOf ? `as of ${shortAsOf(cash.asOf)}` : ''].filter(Boolean).join(', ')
+          // (the one list of accounts, as Financials and search have it: ./accountsListed)
+          ? [((list) => (list.length > 1 ? partsAddingUp(list.map((x) => x.said), { total: cash.total }).map((w, j) => `${list[j].name} ${$(`cash:${list[j].a.bank || ''}:${list[j].a.name}`, list[j].said, () => w)}`).join(' · ') : ''))(accountsListed(cash)), cash.asOf ? `as of ${shortAsOf(cash.asOf)}` : ''].filter(Boolean).join(', ')
           : `${cash.asOf ? `As of ${shortAsOf(cash.asOf)}` : 'From the balance sheet'}${cash.prior != null ? ` · ${((c) => (c === 'Even' ? 'Even with a year before' : `${c} on a year`))(year())}` : ''}`),
       };
     });

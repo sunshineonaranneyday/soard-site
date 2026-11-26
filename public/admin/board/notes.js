@@ -23,6 +23,7 @@ import { uid, clock, endedClock } from '../board-shared.js';
 import { dayText } from './parts.js';
 import { minutesOutline, approveWords, noteLines } from '../board-minutes-template.js';
 import { findToDos } from '../board-todos.js';
+import { failed } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -538,7 +539,9 @@ export function NotesPanel({ m, ctx, Icon, onClose, thanks, mine }) {
     };
   }, []);
 
-  const o = useMemo(() => minutesOutline(m, { meetings: data.meetings, quorum: data.quorum, people: d.people }), [m, data.meetings, data.quorum, d.people]);
+  // (the board's settings not read just now: the quorum isn't said, never a majority guessed: ../board-shared.js quorumOf)
+  const quorumLost = failed(data, 'settings');
+  const o = useMemo(() => minutesOutline(m, { meetings: data.meetings, quorum: data.quorum, quorumLost, people: d.people }), [m, data.meetings, data.quorum, quorumLost, d.people]);
   // No list on the meeting yet: the board as People has it
   const roll = o.roll.length ? o.roll : data.people.board.map((p) => ({ key: p.slug, slug: p.slug, name: p.name, kind: 'board' }));
   const everyone = useMemo(() => {
