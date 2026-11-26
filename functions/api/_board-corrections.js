@@ -25,8 +25,8 @@
  *   state    waiting → made | declined | withdrawn (making: claimed, for the moment it's being made)
  */
 
-import { getMeeting, listMeetings, patchTogether, roster, ensureSchema, ID, SITE, nothingDone, landedOr, NOTHING_SAVED } from './_board.js';
-import { claimSending, releaseSending, boxPath, withBox, anythingIn, keptFile, mergePatch, fileInputs, stageMinutesFile, AGAIN } from './_board-notes.js';
+import { getMeeting, listMeetings, patchTogether, roster, ensureSchema, ID, SITE, nothingDone, landedOr, NOTHING_SAVED, claimOwn, claimToken } from './_board.js';
+import { claimSending, releaseSending, boxPath, withBox, anythingIn, keptFile, mergePatch, stageMinutesFile, AGAIN } from './_board-notes.js';
 import { minutesIn, meetingName, uid } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
 import { limit } from './_rate-limit.js';
@@ -122,8 +122,8 @@ export async function waitingOn(DB, id) {
 
 /**
  * POST { action: 'correction', meetingId, target, words, was }: a correction, while the minutes are in, on the board page
- * and not approved. Their own waiting one on the same words is replaced. `was`: what their page showed (changed since:
- * 409 { changed }). → { correction }
+ * and not approved. Their own waiting one on the same words is replaced, and the answer says so (`replaced`, `where`).
+ * `was`: what their page showed (changed since: 409 { changed }). → { correction, replaced?, where? }
  * The correction and the email it owes the secretary and the founders are one write (its notice due), every read before
  * it: the database failing anywhere kept nothing, said so. Pressed again, the notice is owed if the record doesn't have
  * it yet (told_at), never skipped (Board QA round 13, Nov 24 2026: kept, its notice's write failing, and pressed again as
@@ -188,7 +188,9 @@ async function suggesting(env, { meetingId, target, words, was = null } = {}, w,
       later = laterWords('the secretary and the founders');
     }
   }
-  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' }, ...(later ? { later } : {}) };
+  // (their own waiting one replaced, the answer says so, and where: Board QA round 14, a correction typed while the page
+  // couldn't read the corrections replaced Sam's waiting one on Roll call without a word)
+  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' }, ...(had ? { replaced: true, where: t.where } : {}), ...(later ? { later } : {}) };
 }
 
 /** POST { action: 'correction-withdraw', id }: theirs, while it's waiting (one write: the database failing changed nothing) */
@@ -297,9 +299,10 @@ function correctionPlan(m, c, { typed, draft, last, now }) {
  * very copy of the meeting the step writes over and every read they go by, so a file that can't be made leaves nothing
  * made (Board QA round 12, Nov 23 2026: its rewrite came after the step and failed quietly, and the file kept the old words)
  */
-async function makeIt(env, id, c, w, { now, also = [] }) {
+async function makeIt(env, id, c, w, { now, also = [], landed = null }) {
   const typed = !!(await getMeeting(env.DB, id))?.minutesFrom?.typed;
-  if (typed && !await claimSending(env.DB, id, now)) throw no('These are being sent right now. Give it a moment.', 409);
+  const held = typed ? await claimSending(env.DB, id, now) : '';
+  if (typed && !held) throw no('These are being sent right now. Give it a moment.', 409);
   try {
     for (let tries = 1; ; tries++) {
       // (read with the claim held: nothing can have been sent since)
@@ -313,17 +316,20 @@ async function makeIt(env, id, c, w, { now, also = [] }) {
           // (as the step will leave them: the minutes with it on, and what the last send kept with it in)
           const p = correctionPlan(m0, c, ctx);
           from = m0.updatedAt || '';
-          fresh = await stageMinutesFile(env, p.next || m0, mergePatch(ctx.last, p.kept || {}), await fileInputs(env.DB, id), now);
+          // (`was`: approved minutes' file is their record, never made again: ./_board-notes.js fileMayChange)
+          fresh = await stageMinutesFile(env, p.next || m0, { was: m0, last: mergePatch(ctx.last, p.kept || {}), now });
         }
       }
       try {
         await patchTogether(env.DB, [id], ([m]) => {
           if (!m) throw no('That meeting is gone', 404);
+          // (approved since the decision read them: approved minutes change only once the approval is taken back. Board QA round 14)
+          if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409, { reload: true });
           // (changed since its Word file was made from it: made again)
           if (fresh && (m.updatedAt || '') !== from) throw AGAIN;
           const p = correctionPlan(m, c, ctx);
           return { writes: p.next ? [[m, p.next]] : [], also: [...p.notes, ...(fresh?.also || []), ...also] };
-        }, { by: w?.member?.email || w?.adminEmail || '' });
+        }, { by: w?.member?.email || w?.adminEmail || '', landed });
       } catch (err) {
         await fresh?.drop();
         if (err === AGAIN && tries < 3) continue;
@@ -334,7 +340,7 @@ async function makeIt(env, id, c, w, { now, also = [] }) {
       return typed ? {} : { fileKeeps: true };
     }
   } finally {
-    if (typed) await releaseSending(env.DB, id).catch((err) => console.error('[board-corrections] the notes claim', id, err?.message || err));
+    if (held) await releaseSending(env.DB, id, held).catch((err) => console.error('[board-corrections] the notes claim', id, err?.message || err));
   }
 }
 
@@ -356,14 +362,18 @@ export async function decideCorrection(env, { id, make = false, reason = '', saw
   await ensureSchema(env.DB).catch((err) => { throw unsaid(err); });
   const me = await authorOf(env, w).catch((err) => { throw unsaid(err); });
   const cid = String(id || '');
-  const claim = await env.DB.prepare("UPDATE board_minutes_corrections SET state = 'making', decided_at = ?1 WHERE id = ?2 AND (state = 'waiting' OR (state = 'making' AND decided_at < ?3))").bind(iso(now), cid, iso(now - MAKING_MS)).run()
+  // The claim carries this press's own token (claimOwn): written with its answer lost, the press finds it and decides,
+  // never "That one is being made right now" to the person deciding it (Board QA round 14)
+  const token = claimToken();
+  const claimed = await claimOwn(() => env.DB.prepare("UPDATE board_minutes_corrections SET state = 'making', decided_at = ?1, claim = ?4 WHERE id = ?2 AND (state = 'waiting' OR (state = 'making' AND decided_at < ?3))").bind(iso(now), cid, iso(now - MAKING_MS), token).run(),
+    async () => (await env.DB.prepare('SELECT state, claim FROM board_minutes_corrections WHERE id = ?').bind(cid).first())?.claim === token)
     .catch((err) => { throw unsaid(err); });
-  if (!((claim?.meta?.changes ?? claim?.changes ?? 0) > 0)) {
+  if (!claimed) {
     const was = await env.DB.prepare('SELECT state FROM board_minutes_corrections WHERE id = ?').bind(cid).first().catch((err) => { throw unsaid(err); });
     throw no(was?.state === 'making' ? 'That one is being made right now. Give it a moment.' : 'That one has already been decided', 409, { reload: was?.state !== 'making' });
   }
-  // (only a claim still being made goes back: never one this press decided)
-  const back = () => env.DB.prepare("UPDATE board_minutes_corrections SET state = 'waiting', decided_at = NULL WHERE id = ? AND state = 'making'").bind(cid).run();
+  // (only this press's own claim goes back, still being made: never one this press decided, nor another's that took over)
+  const back = () => env.DB.prepare("UPDATE board_minutes_corrections SET state = 'waiting', decided_at = NULL, claim = NULL WHERE id = ? AND state = 'making' AND claim = ?").bind(cid, token).run();
   let c = null;
   let made = {};
   let doing = !!make;
@@ -380,15 +390,20 @@ export async function decideCorrection(env, { id, make = false, reason = '', saw
     if (doing && !minutesIn(m)) throw no('These minutes aren’t on the meeting any more.', 409, { reload: true });
     // The decision, and (to whoever suggested it, through the list of notices due: ./_board-notices.js) its notice, in
     // the same step as the minutes
-    const decided = { sql: 'UPDATE board_minutes_corrections SET state = ?, decided_by = ?, decided_at = ?, reason = ? WHERE id = ?', bind: [doing ? 'made' : 'declined', me.name, iso(now), doing ? '' : cleanWords(reason).slice(0, 1000), cid] };
+    const decided = { sql: 'UPDATE board_minutes_corrections SET state = ?, decided_by = ?, decided_at = ?, reason = ?, claim = NULL WHERE id = ?', bind: [doing ? 'made' : 'declined', me.name, iso(now), doing ? '' : cleanWords(reason).slice(0, 1000), cid] };
+    // (whether this decision is there: the look for a step whose answer was lost, whichever way it was decided)
+    const isDecided = async () => !!(await env.DB.prepare('SELECT 1 AS y FROM board_minutes_corrections WHERE id = ? AND state = ? AND decided_by = ? AND decided_at = ?').bind(cid, doing ? 'made' : 'declined', me.name, iso(now)).first());
     if (c.by_slug !== me.slug && emailConfigured(env)) {
       owed = { id: `correction-decided:${cid}`, notice: { kind: 'correction-decided', meetingId: m.id, cid, made: doing, byName: me.name, toEmail: c.by_email || '', toSlug: c.by_slug } };
       await readState(env.DB, `notice-due:${owed.id}`); // (makes board_state)
     }
     const due = owed ? dueRow(owed.id, owed.notice, now) : null;
     const also = [decided, ...(due ? [{ sql: 'INSERT OR IGNORE INTO board_state (key, data, updated_at) SELECT ?, ?, ? WHERE 1', bind: [due.key, due.data, due.at] }] : [])];
-    if (doing && c.kind !== 'other') made = await makeIt(env, c.meeting_id, c, w, { now, also });
-    else await env.DB.batch(also.map((x) => env.DB.prepare(x.sql).bind(...x.bind)));
+    // Every decision lands through the same lost-answer look: made on the meeting (patchTogether looks at the meeting, or
+    // at this decision when the meeting says it already), or kept as they are, one batch looked at (Board QA round 14,
+    // Nov 24 2026: Keep them as they are, its answer lost, said nothing was changed while it was decided and Sam emailed)
+    if (doing && c.kind !== 'other') made = await makeIt(env, c.meeting_id, c, w, { now, also, landed: isDecided });
+    else await landedOr(() => env.DB.batch(also.map((x) => env.DB.prepare(x.sql).bind(...x.bind))), isDecided);
   } catch (err) {
     await back().catch((e) => console.error('[board-corrections] putting it back', cid, e?.message || e));
     throw unsaid(err);

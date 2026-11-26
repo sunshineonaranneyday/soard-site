@@ -20,9 +20,9 @@
  * (./unread.js). DOM-free: it runs in node too (tests/board-round9-member.test.mjs to board-round12-member.test.mjs)
  */
 
-import { money, todayEastern, plural, showsOf, meetingName } from '../board-shared.js';
+import { money, plural, showsOf, meetingName } from '../board-shared.js';
 import { compact, writer, moneyTiles, yearFigures, mixOf, storeOf, storeChange, pctOf, paceOf, growthText, monthsPhrase, spentOf, budgetDue, shortAsOf, andText, monthSoFar, cashLines, nonCashName, nonCashOf, yearLabel, lessWritten, asWritten, ioOf, wentParts } from './money.js';
-import { unreadOf } from './unread.js';
+import { unreadOf, unreadWords } from './unread.js';
 import { yearEnds } from './books.js';
 import { planOf, typicalLately, statsOf, operatingOf, recentSeasons, rowsOf } from '../makeover-costs-shared.js';
 import { answerText, screenText, toComeText, answerSub } from './costs.js';
@@ -109,7 +109,10 @@ export function figureTiles({ data, cash, budget, variant = 'home' }) {
     tile({ key: 'cash', label: 'Cash in the bank', words: cash === null, href: '#/financials', tone: cash && cash.prior != null && Math.round(cash.total) !== Math.round(cash.prior) ? (cash.total > cash.prior ? 'up' : 'down') : '' }, ($) => ({
       value: cash ? $('cash', cash.total) : cash === null ? 'Not in yet' : '…',
       sub: cash ? (cash.months != null ? `${monthsPhrase(cash.months)} of spending` : cash.asOf ? `As of ${shortAsOf(cash.asOf)}` : '') : 'From the balance sheet',
-      note: cash && cash.prior != null ? moved($, 'cash:chg', cash.total, cash.prior, 'from a year ago', 'Even with a year ago') : '',
+      // (the month-end balances not read just now: the change on a year says so where it would be, never just gone:
+      // Board QA round 14)
+      note: cash && cash.prior != null ? moved($, 'cash:chg', cash.total, cash.prior, 'from a year ago', 'Even with a year ago') : cash?.priorLost ? unreadWords('history', 'change') : '',
+      noteUnread: cash && cash.prior == null && cash.priorLost ? 'history' : '',
     })),
     rev ? tile({ key: 'rev', label: yearLabel(yr, 'revenue'), meter: rev, note: pace(rev), href: '#/financials', focus: rev.budget ? 'budget' : '' }, ($) => ({
       value: rev.actual == null ? '…' : $('rev', rev.actual), sub: against($, 'rev', rev), aside: rev.inKind ? `Not counting ${$('inkind', rev.inKind)} in kind` : '',
@@ -155,12 +158,14 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   const byId = new Map();
   const FIN = '#/financials';
   const books = data.numbers?.books || null;
-  const Y = books?.year || budget?.year || todayEastern().slice(0, 4);
-  // (the year a figure from the budget sheet is said in, as its tile says it: none when the sheet says none)
+  // The year every figure is said in, the one the tiles use: QuickBooks', else the budget sheet's, never one guessed
+  // (Board QA round 14: with no year in the sheet, search said "2026 revenue budget", today's year, where the tile said
+  // "Revenue")
   const YB = books?.year || budget?.year || '';
+  const Y = YB;
   const ly = books?.lastYear || null;
-  const LY = ly?.year || String(Number(Y) - 1);
-  const span = books?.through ? `January 1 to ${dayMonth(books.through)}` : `${Y} so far`;
+  const LY = ly?.year || (Y ? String(Number(Y) - 1) : '');
+  const span = books?.through ? `January 1 to ${dayMonth(books.through)}` : Y ? `${Y} so far` : 'the year so far';
   const mercY = data.numbers?.finance?.ytd?.year || Y;
   /**
    * A figure (`k`, what it is; `v`, its amount): its title, the words before and after its amount in its line (`head`, a
@@ -170,8 +175,9 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
    * its other amounts in the same line (a statement's last year and change), each with its own head and tail, found and
    * marked each by itself
    */
+  // (`zero`: a figure drawn as "$0" that's found all the same, a bank account by its name: ./money.js accountsListed)
   const put = (k, v, o = {}) => {
-    if (typeof v !== 'number' || !Number.isFinite(v) || (Math.abs(v) < 0.5 && !o.cols?.length)) return;
+    if (typeof v !== 'number' || !Number.isFinite(v) || (Math.abs(v) < 0.5 && !o.cols?.length && !o.zero)) return;
     const id = `${k}|${Math.round(v)}`;
     let e = byId.get(id);
     if (!e) {
@@ -215,8 +221,9 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   /** What each figure is, by its `k`: its title, the words before and after its amount, the words it's found by */
   function WHAT(k, v) {
     const acct = k.match(/^cash:([^:]*):(.+)$/);
-    // (one below zero said so, as the card and the meeting's tile say it: Board QA round 13)
-    if (acct) return { title: acct[2], tail: `, ${v < 0 ? 'overdrawn, ' : ''}a bank account in Cash in the bank${cashAsOf}`, words: `${acct[2]} ${acct[1]} bank account cash balance${v < 0 ? ' overdrawn' : ''}`, focus: 'cash' };
+    // (one below zero said so, as the card and the meeting's tile say it: Board QA round 13; one at $0, or rounding to it,
+    // drawn as "$0" and found by its name, never overdrawn: round 14, ./money.js accountsListed)
+    if (acct) return { title: acct[2], tail: `, ${v < 0 ? 'overdrawn, ' : ''}a bank account in Cash in the bank${cashAsOf}`, words: `${acct[2]} ${acct[1]} bank account cash balance${v < 0 ? ' overdrawn' : ''}`, focus: 'cash', zero: true };
     return ({
       cash: { title: 'Cash in the bank', tail: ` in the bank${cashAsOf}`, words: 'cash in the bank bank accounts balance total', focus: 'cash' },
       'cash:chg': { title: 'Cash in the bank, against a year ago', head: dirOf(cash?.total, cash?.prior), tail: ` from a year ago${cash?.priorAsOf ? `, ${cash.priorAsOf}` : ''}`, words: 'cash in the bank change a year ago earlier up down', focus: 'cash' },
@@ -224,15 +231,16 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
       rev: { key: 'yr:rev', title: yearLabel(YB, 'revenue'), tail: `, ${span}${y?.inKind?.given > 0 && v === y?.revenue ? `, not counting ${money(y.inKind.given)} in kind` : ''}`, words: 'revenue income raised came in year so far', focus: 'year' },
       exp: { key: 'yr:exp', title: yearLabel(YB, 'expenses'), tail: `, ${span}${y?.inKind && v === y?.expenses ? `, not counting ${nc0}` : ''}`, words: 'expenses spending spent costs went out year so far', focus: 'year' },
       net: { key: 'yr:net', title: `${Y} net`, tail: `, ${span}, revenue less expenses`, words: 'net income surplus deficit result bottom line year so far', short: (x) => `${x < 0 ? '−' : '+'}${compact(Math.abs(x))}`, focus: 'year' },
-      'rev:bud': { title: `${Y} revenue budget`, tail: `, the budget for ${Y}’s revenue`, words: 'budget budgeted plan planned revenue income', focus: 'budget' },
-      'exp:bud': { title: `${Y} expenses budget`, tail: `, the budget for ${Y}’s expenses`, words: 'budget budgeted plan planned expenses spending', focus: 'budget' },
+      // (no year read: "the revenue budget", as its tile says "Revenue", never a year)
+      'rev:bud': { title: Y ? `${Y} revenue budget` : 'The revenue budget', tail: Y ? `, the budget for ${Y}’s revenue` : ', the budget for the revenue', words: 'budget budgeted plan planned revenue income', focus: 'budget' },
+      'exp:bud': { title: Y ? `${Y} expenses budget` : 'The expenses budget', tail: Y ? `, the budget for ${Y}’s expenses` : ', the budget for the expenses', words: 'budget budgeted plan planned expenses spending', focus: 'budget' },
       inkind: { key: 'mix:inkind', title: 'In kind', tail: ` given in kind, ${Y} so far, not counted in the revenue`, words: 'in kind in-kind donated gifts goods services', focus: 'year' },
       'exp:nc': { title: `${nc0.replace(/^./, (c) => c.toUpperCase())} in ${Y}’s expenses`, tail: `, ${Y} so far, not counted in the expenses`, words: 'in kind in-kind depreciation non cash expenses', focus: 'year' },
       'net:chg': { title: `${Y} net, against ${LY}’s same days`, head: dirOf(y?.net, y?.last?.net), tail: ` on ${LY}’s same days${leftExp}`, words: 'net change last year same days up down', focus: 'year' },
       'rev:chg': { title: `${Y} revenue, against ${LY}’s same days`, head: dirOf(y?.revenue, y?.last?.revenue), tail: ` on ${LY}’s same days${leftRev}`, words: 'revenue change last year same days up down', focus: 'year' },
       'exp:chg': { title: `${Y} expenses, against ${LY}’s same days`, head: dirOf(y?.expenses, y?.last?.expenses), tail: ` on ${LY}’s same days${leftExp}`, words: 'expenses change last year same days up down', focus: 'year' },
-      'rev:chgly': { title: `${Y} revenue, against last year by now`, head: dirOf(budget?.revenue?.actual, budget?.revenue?.last), tail: ' on last year by now', words: 'revenue change last year by now up down', focus: 'year' },
-      'exp:chgly': { title: `${Y} expenses, against last year by now`, head: dirOf(budget?.expenses?.actual, budget?.expenses?.last), tail: ' on last year by now', words: 'expenses change last year by now up down', focus: 'year' },
+      'rev:chgly': { title: `${yearLabel(Y, 'revenue')}, against last year by now`, head: dirOf(budget?.revenue?.actual, budget?.revenue?.last), tail: ' on last year by now', words: 'revenue change last year by now up down', focus: 'year' },
+      'exp:chgly': { title: `${yearLabel(Y, 'expenses')}, against last year by now`, head: dirOf(budget?.expenses?.actual, budget?.expenses?.last), tail: ' on last year by now', words: 'expenses change last year by now up down', focus: 'year' },
       'rev:books': { title: `${Y} revenue, in kind included`, tail: `, ${span}, as QuickBooks has it`, words: 'revenue income quickbooks books in kind included so far chart', focus: 'year' },
       'exp:books': { title: `${Y} expenses, ${nc0} included`, tail: `, ${span}, as QuickBooks has them`, words: 'expenses spending quickbooks books in kind depreciation included so far', focus: 'year' },
       'net:books': { title: `${Y} net, as QuickBooks has it`, tail: `, ${span}, ${nc0} in`, words: 'net income quickbooks books', focus: 'year' },

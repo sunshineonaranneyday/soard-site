@@ -327,6 +327,12 @@ test('F3: one who truly left the board is recorded so (the true entry), and nobo
 async function waitingNotices() {
   const m = await kept({ date: inDays(-30), title: 'Q3 Board Meeting', minutes: 'draft' });
   const d = await board.saveDoc(env.DB, { title: 'Conflict of Interest Policy', kind: 'policy', sign: true, shared: true, body: 'Each member tells the board of any conflict.' }, { by: FOUNDER });
+  /* r14: a notice goes only while what it's about still stands (./_board-notices.js noLonger), so the corrections these two
+     tell of are on record, decided as their notices say (round 11 owed notices for corrections that weren't there) */
+  for (const [cid, slug, name, email, state] of [['c_sam', 'sam-ortiz', 'Sam Ortiz', SAM, 'made'], ['c_taylor', 'taylor-nguyen', 'Taylor Nguyen', TAYLOR, 'declined']]) {
+    await env.DB.prepare('INSERT INTO board_minutes_corrections (id, meeting_id, target, kind, was, words, by_slug, by_name, by_email, at, state, decided_by, decided_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(cid, m.id, 'general', 'other', '', 'Kim joined by phone', slug, name, email, new Date().toISOString(), state, 'Jane Doe', new Date().toISOString()).run();
+  }
   await owe('correction-decided:c_sam', { kind: 'correction-decided', meetingId: m.id, cid: 'c_sam', made: true, byName: 'Jane Doe', toEmail: SAM, toSlug: 'sam-ortiz' });
   await owe(`void:${d.id}:sam-ortiz:${YEAR}:x`, { kind: 'void', docId: d.id, slug: 'sam-ortiz', year: YEAR, at: '2026-01-05T15:00:00.000Z', reason: 'Signed the wrong paper', by: FOUNDER, to: SAM });
   await owe('correction-decided:c_taylor', { kind: 'correction-decided', meetingId: m.id, cid: 'c_taylor', made: false, byName: 'Jane Doe', toEmail: TAYLOR, toSlug: 'taylor-nguyen' });

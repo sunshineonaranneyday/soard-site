@@ -156,6 +156,14 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
       await close(n.kind === 'void' ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { for: n.at, skipped: 'not on the board' } }] : []);
       return { none: true };
     }
+    // What it's about no longer stands (a correction taken back or decided, a paper signed since its decline): not
+    // needed, closed with a true record of why, nothing sent
+    const gone = await noLonger(DB, n, who.slug);
+    if (gone) {
+      console.log('[board-notices] not needed', id, gone);
+      await close(n.kind === 'void' ? [{ kind: 'void-sent', docId: n.docId, slug: who.slug, year: n.year, by: n.by || 'SOARD board page', detail: { for: n.at, skipped: gone } }] : []);
+      return { none: true };
+    }
     const mails = await mailsFor(env, n, reads, who.member);
     let failed = 0;
     let why = '';
@@ -179,6 +187,36 @@ async function deliver(env, id, reads, { now = Date.now() } = {}) {
     await keep([...had], err?.message).catch(() => {});
     throw err;
   }
+}
+
+/**
+ * Why a notice owed isn't needed any more, checked as it goes, in one place for every kind ('' while what it's about still
+ * stands). Each kind names what it's about: a correction (`cid`), a decision on one (`cid`, `made`), a decline (`docId`,
+ * `slug`, `year`, `at`), a signature taken off or replaced by a copy (`docId`, `slug`, `year`, `at`). Board QA round 14
+ * (Nov 24 2026): a notice that had to wait went after what it was about was undone, in words no longer true: the
+ * secretary told of a correction Sam had taken back, or one she'd decided; SOARD told Sam can't sign a paper he had
+ * signed since. A read that fails throws: never taken for "not needed"
+ */
+async function noLonger(DB, n, at = '') {
+  // (whose: the address they have now as well as the one the press kept; a decline's is followed here, forNow follows the rest)
+  const now = n.kind === 'declined' ? (await slugNow(DB, n.slug, n.queuedAt || '')).slug : at;
+  const slugs = [...new Set([n.slug, n.toSlug, now].filter(Boolean))];
+  if (n.kind === 'correction' || n.kind === 'correction-decided') {
+    const c = await DB.prepare('SELECT state FROM board_minutes_corrections WHERE id = ?').bind(String(n.cid || '')).first();
+    if (!c) return 'the correction is gone';
+    if (n.kind === 'correction') return c.state === 'waiting' || c.state === 'making' ? '' : c.state === 'withdrawn' ? 'taken back' : 'decided already';
+    return c.state === (n.made ? 'made' : 'declined') ? '' : 'decided otherwise';
+  }
+  if (n.kind === 'declined' || n.kind === 'void') {
+    const sig = await DB.prepare(`SELECT how, at FROM board_signatures WHERE doc_id = ? AND year = ? AND slug IN (${slugs.map(() => '?').join(', ')}) ORDER BY at DESC LIMIT 1`).bind(n.docId, n.year, ...slugs).first();
+    // (a decline: signed since, there's nothing they can't sign)
+    if (n.kind === 'declined') return sig && String(sig.at || '') >= String(n.at || '') ? 'signed it since' : '';
+    // (a copy SOARD put in place of theirs: told only while that copy is their signature; one taken off: told unless
+    // they've signed it again since, which the email would ask them to do)
+    if (n.replacedByCopy) return sig?.how === 'staff' ? '' : 'the copy isn’t their signature now';
+    return sig && ['typed', 'drawn', 'copy'].includes(sig.how) && String(sig.at || '') > String(n.at || '') ? 'signed it again' : '';
+  }
+  return '';
 }
 
 /**

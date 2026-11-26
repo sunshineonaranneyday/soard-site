@@ -706,6 +706,8 @@ async function addSignedCopy({ d, p, picked, addToast, setBusy = () => {}, repla
   addToast(`${j.signed.name}’s signed copy is in: signed for ${todayEastern().slice(0, 4)}`, 'info');
   // (the email telling them waits for People: said, never as sent)
   if (j.later) addToast(j.later, 'info');
+  // (in; the paper not read back with it: read again here. Board QA round 14)
+  if (!j.doc && j.reread) return (await call()).docs?.find((x) => x.id === d.id) || null;
   return j.doc;
 }
 
@@ -748,7 +750,8 @@ function Signers({ d, ctx, onDoc }) {
     const j = await call({ action: 'unsign', docId: d.id, slug: p.slug });
     setBusy('');
     if (!j.ok) { addToast(j.error, 'error'); return; }
-    onDoc(j.doc);
+    // (taken off; the paper not read back: the page looks again by itself. Board QA round 14)
+    if (j.doc) onDoc(j.doc); else if (j.reread) ctx.load({ quick: true });
     // (taken off; the email telling them waits for People: said, never as sent)
     if (j.later) addToast(j.later, 'info');
     // The focus stays on their row (its button is "Add their signed copy" now)

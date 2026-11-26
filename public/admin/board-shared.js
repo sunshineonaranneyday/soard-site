@@ -2012,6 +2012,24 @@ export const majority = (n) => (n > 0 ? Math.floor(n / 2) + 1 : 0);
  * that say otherwise). Board members present or on video count toward it.
  */
 export const quorumFor = (m, set = 0) => (Number(set) > 0 ? Number(set) : majority(attendanceCounts(m).board));
+/** What a meeting's quorum line says when the board's settings couldn't be read just now */
+export const QUORUM_UNSAID = 'The board’s settings couldn’t load just now, so the quorum isn’t said here.';
+/**
+ * A meeting's quorum, said one way wherever it's said: the meeting's page, Home's last meeting, Print it all and the
+ * secretary's minutes outline (the form, the Word file, the notes). `quorum`: Settings' number (0: a majority of the
+ * board); `lost`: the board's settings couldn't be read just now, so the quorum isn't said at all, never a majority
+ * guessed in its place (Board QA round 14: with the settings unread, Print said "short of a quorum (4)" where the page
+ * rightly said nothing, Settings having 3). → { need: the number, or null; met: true | false | null (nobody here yet, or
+ * not said); after: the words after "N of M board members" ("" | ", a quorum" | ", short of a quorum (4)"); unsaid: the
+ * words for its place when it isn't said ('' when it is) }
+ */
+export function quorumOf(m, { quorum = 0, lost = false } = {}) {
+  if (lost) return { need: null, met: null, after: '', unsaid: QUORUM_UNSAID };
+  const need = quorumFor(m, quorum);
+  const here = attendanceCounts(m).boardHere;
+  const met = need && here ? here >= need : null;
+  return { need: need || null, met, after: met === true ? ', a quorum' : met === false ? `, short of a quorum (${need})` : '', unsaid: '' };
+}
 /** { present, remote, absent, excused, board } counts; board members present or by video count toward a quorum */
 export function attendanceCounts(m) {
   const out = { present: 0, remote: 0, absent: 0, excused: 0, board: 0, boardHere: 0 };

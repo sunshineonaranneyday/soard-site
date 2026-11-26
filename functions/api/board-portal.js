@@ -59,7 +59,7 @@
  * (theirs alone, simulated members) they check in and vote as themselves.
  */
 
-import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings, errorAnswer } from './_board.js';
+import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings, errorAnswer, watchPress } from './_board.js';
 import { readBoardWords } from './_board-file-words.js';
 import { isBoardAdmin } from './_board-roles.js';
 import { secretarySends } from './_board-minutes.js';
@@ -94,6 +94,9 @@ const later = async (context, p) => { if (context.waitUntil) context.waitUntil(p
 // press says the database not answering in its own words, a program's own error is "Something went wrong": the same
 // answer as Board's, from one place, ./_board.js errorAnswer. Board QA round 13)
 const fromError = (err) => errorAnswer(err);
+// (a press: the database failing in it said in its words by default, never "Something went wrong", so no press is left
+// out. Board QA round 14)
+const pressError = (err) => errorAnswer(err, { press: true });
 // The page's read of People that didn't answer: the sign-in's words with Try again, never a board page with an empty
 // directory or members missing their emails (Board QA round 10)
 const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));
@@ -199,13 +202,16 @@ export async function onRequestPost(context) {
   }
   // An admin looking at the page isn't recorded: their tracker's reports are let go, and it stops sending
   if (body?.action === 'activity') {
-    try {
-      return Response.json({ ok: true, ...(member ? await noteEvents(context.env, member, context.request, body) : { kept: 0, stop: true }) });
-    } catch (err) {
-      return fromError(err);
-    }
+    return watchPress(context.env, async (env) => {
+      try {
+        return Response.json({ ok: true, ...(member ? await noteEvents(env, member, context.request, body) : { kept: 0, stop: true }) });
+      } catch (err) {
+        return pressError(err);
+      }
+    });
   }
-  const res = await post(context);
+  // (its database watched while it runs: what of it landed is what the answer to a failure says, ./_board.js errorAnswer)
+  const res = await watchPress(context.env, (env) => post(context, env));
   if (member && res.status === 200) {
     // An answer that kept nothing isn't something they did: an agenda someone else had approved first, a test
     const said = (res.headers.get('Content-Type') || '').includes('json') ? await res.clone().json().catch(() => null) : null;
@@ -214,8 +220,8 @@ export async function onRequestPost(context) {
   return res;
 }
 
-async function post(context) {
-  const { env, request } = context;
+async function post(context, env) {
+  const { request } = context;
   try {
     const w = await who(context);
     if (!w) return fail('The board page is for SOARD’s board members', 403);
@@ -362,6 +368,6 @@ async function post(context) {
         return fail('Unknown action');
     }
   } catch (err) {
-    return fromError(err);
+    return pressError(err);
   }
 }
