@@ -14,7 +14,7 @@
  * minutes reopened and changed afterwards say the signature is on the old words.
  */
 
-import { getMeeting, listMeetings, roster, putFile, boardFiles, ensureSchema, keepMark, ID, boardCopy } from './_board.js';
+import { getMeeting, listMeetings, roster, putFile, boardFiles, ensureSchema, markPlan, agreedOnRecord, nothingDone, NOTHING_SIGNED, ID, boardCopy } from './_board.js';
 import { sha256Hex, canonical, cleanMark, appendEvents, recordHtml, printPdf, finishPdf, fontFaces, CONSENT_TEXT } from './_board-sign.js';
 import { minutesFileOf, meetingName, signsAs, longDate, shortDate, timeRange, MINUTES_SIGN_FROM, docxText } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
@@ -83,8 +83,15 @@ export function minutesPage(m, { corrections = [], onlyCorrections = false } = {
 /**
  * POST { action: 'sign-minutes', meetingId, mark, consent }: the secretary's signature on minutes the board approved.
  * Signing again means something changed (the same words: nothing new). → { name, at, how, mark }
+ * The signature, its event (and that event's hash on it), their adopted mark and (when the record hasn't got it) their
+ * agreement to sign electronically and its event: one write, every read before it, as a paper's (./_board.js signDoc):
+ * the database failing anywhere signed nothing, said so. Board QA round 13, Nov 24 2026: the event's hash and the
+ * agreement were steps after the signature
  */
-export async function signMinutes(env, id, member, { mark: rawMark = null, consent = false, evidence = {} } = {}, { now = Date.now() } = {}) {
+export async function signMinutes(env, id, member, opts = {}, more = {}) {
+  return signingMinutes(env, id, member, opts, more).catch(nothingDone(NOTHING_SIGNED));
+}
+async function signingMinutes(env, id, member, { mark: rawMark = null, consent = false, evidence = {} } = {}, { now = Date.now() } = {}) {
   await ensureSchema(env.DB);
   const { DB } = env;
   if (member?.seat !== 'secretary') throw no('Only the board’s secretary signs the minutes', 403);
@@ -99,10 +106,8 @@ export async function signMinutes(env, id, member, { mark: rawMark = null, conse
   if (!typed) throw no(`Sign with your own name, as the board has it: ${member.name}`, 400);
   const marks = await DB.prepare('SELECT * FROM board_member_marks WHERE slug = ?').bind(member.slug).first();
   const consentHash = marks?.consent_hash || await sha256Hex(CONSENT_TEXT);
-  if (!marks?.consent_at && !consent) throw no('Tick that you agree to sign electronically, then sign', 409, { consent: true });
+  if (!consent && !(await agreedOnRecord(DB, member.slug, marks))) throw no('Tick that you agree to sign electronically, then sign', 409, { consent: true });
   const hash = await minutesHash(m);
-  const had = await DB.prepare('SELECT * FROM board_minutes_signed WHERE meeting_id = ?').bind(id).first();
-  if (had?.hash === hash) return { name: had.name, at: had.at, how: had.how };
   const at = iso(now);
   const how = mark.type === 'drawn' ? 'drawn' : 'typed';
   const year = yearOf(m);
@@ -110,18 +115,19 @@ export async function signMinutes(env, id, member, { mark: rawMark = null, conse
   const done = await appendEvents(DB, async () => {
     // (asked again if another device got to the chain first: its signature is the signature)
     const now2 = await DB.prepare('SELECT hash, name, at, how FROM board_minutes_signed WHERE meeting_id = ?').bind(id).first();
-    if (now2?.hash === hash) return { result: { name: now2.name, at: now2.at, how: now2.how, same: true } };
+    const agreeing = await markPlan(DB, member, { mark, typed, at, evidence, consentHash, docId: docIdOf(id), year, version: 0 });
+    // (the same words signed already: the signature stands; an agreement the record hasn't got is written, never skipped)
+    if (now2?.hash === hash) return { ...(agreeing.need ? { stmts: agreeing.stmts, events: agreeing.events } : {}), result: { name: now2.name, at: now2.at, how: now2.how, same: true } };
     return {
-    stmts: [DB.prepare(`INSERT OR REPLACE INTO board_minutes_signed (meeting_id, slug, name, title, at, how, mark, hash, signer_email, ip, device, signin_at, consent_hash, event_hash, file_id, record_tries, record_claim_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, NULL)`).bind(id, member.slug, typed, member.title || 'Board Secretary', at, how, JSON.stringify(kept), hash, evidence.signerEmail || member.email || '', evidence.ip || '', evidence.device || '', evidence.signinAt || '', consentHash)],
-    events: [{ kind: 'signed', docId: docIdOf(id), slug: member.slug, year, version: 0, at, by: member.email || '', ip: evidence.ip, device: evidence.device, detail: { hash, mark: { type: mark.type, style: mark.style }, consentHash } }],
-    result: {},
+      stmts: [DB.prepare(`INSERT OR REPLACE INTO board_minutes_signed (meeting_id, slug, name, title, at, how, mark, hash, signer_email, ip, device, signin_at, consent_hash, event_hash, file_id, record_tries, record_claim_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 0, NULL)`).bind(id, member.slug, typed, member.title || 'Board Secretary', at, how, JSON.stringify(kept), hash, evidence.signerEmail || member.email || '', evidence.ip || '', evidence.device || '', evidence.signinAt || '', consentHash), ...agreeing.stmts],
+      events: [{ kind: 'signed', docId: docIdOf(id), slug: member.slug, year, version: 0, at, by: member.email || '', ip: evidence.ip, device: evidence.device, detail: { hash, mark: { type: mark.type, style: mark.style }, consentHash } }, ...agreeing.events],
+      // (its event's hash on it, in the same write: the 'signed' event is the first)
+      last: (hashes) => [DB.prepare('UPDATE board_minutes_signed SET event_hash = ? WHERE meeting_id = ? AND at = ?').bind(hashes[0], id, at)],
+      result: {},
     };
   });
   if (done?.same) return { name: done.name, at: done.at, how: done.how };
-  const ev = await DB.prepare("SELECT hash FROM board_sign_events WHERE doc_id = ? AND kind = 'signed' ORDER BY seq DESC LIMIT 1").bind(docIdOf(id)).first();
-  await DB.prepare('UPDATE board_minutes_signed SET event_hash = ? WHERE meeting_id = ?').bind(ev?.hash || '', id).run();
-  await keepMark(DB, member, { mark, typed, at, first: !marks?.consent_at, evidence, consentHash, docId: docIdOf(id), year, version: 0 });
   return { name: typed, at, how, mark: kept };
 }
 

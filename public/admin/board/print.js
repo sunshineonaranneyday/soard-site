@@ -135,11 +135,13 @@ const signed = (n) => (typeof n === 'number' ? `${n < 0 ? '−' : ''}${n.toLocal
  * The statements from QuickBooks on paper, every line (numbers.books.statements), beside the same day a year before,
  * and QuickBooks' budget against them; the presenter's notes (./review.js) each under its line
  */
-function statementsBox(s, budget = null, notes = null) {
+function statementsBox(s, budget = null, notes = null, lostNotes = false) {
   const said = notesByKey(notes);
   if (!s?.position?.length && !s?.activity?.length) return null;
   const box = el('div', 'bpp-stmts');
   box.append(el('p', 'bpp-stmts__when', `From QuickBooks, as of ${fullDate(s.asOf)}, beside ${fullDate(s.priorAsOf)}.`));
+  // (the notes on the lines not read just now: said so on paper, never the lines as if nobody had noted them: Board QA round 13)
+  if (lostNotes) box.append(el('p', 'bpp-live', UNREAD_WORDS.lineNotes));
   const short = shortDay(s.asOf).replace(/, \d{4}$/, '');
   // QuickBooks' budget (the board's) against the activities, to the same day: the actual, the budget, over (under)
   const bud = budget?.rows?.length && budget.asOf === s.asOf ? budget : null;
@@ -231,16 +233,16 @@ function storeBox(books) {
 }
 
 /** An item's live facts on paper, drawn for what they are */
-function liveBox(kind, n, m, money, notes = null, books = n?.books) {
+function liveBox(kind, n, m, money, notes = null, books = n?.books, lostNotes = false) {
   if (!n || !kind || kind === 'minutes') return null;
   // (today's numbers whose read failed just now: said so on paper too, never a zero or an empty list: ./unread.js)
-  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events' }[kind];
+  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events', meetings: 'meetings' }[kind];
   if (part && n.unread?.[part]) return el('p', 'bpp-live', UNREAD_WORDS[part]);
   if (kind === 'projects') return makeoversBox(n);
   if (kind === 'cash') {
     // The figures, the year against last year, where the revenue came from, the store, then the statements the packet
     // holds (QuickBooks', as of the books' close)
-    const parts = [moneyBox(n, money), yearBox(books), revenueBox(books), storeBox(books), statementsBox(books?.statements, books?.budget, notes)].filter(Boolean);
+    const parts = [moneyBox(n, money), yearBox(books), revenueBox(books), storeBox(books), statementsBox(books?.statements, books?.budget, notes, lostNotes)].filter(Boolean);
     if (parts.length < 2) return parts[0] || null;
     const box = el('div', 'bpp-money');
     box.append(...parts);
@@ -319,7 +321,7 @@ const minutesLine = (m) => (minutesState(m) === 'approved' && isDate(m.approvedO
  * (`held`) as its record: where its minutes are and who was there first, each part with the notes under it (no
  * planned times: they were the plan), then the decisions; the action items whenever it has any, as its page shows them
  */
-function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, books = numbers?.books, costsNumbers = numbers, held = false, quorum = 0 }) {
+function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, lostNotes = false, books = numbers?.books, costsNumbers = numbers, held = false, quorum = 0 }) {
   let booked = false;
   // The statements QuickBooks draws on the money item aren't printed again as files
   const drawsSt = booksDraw(books).some((b) => b === 'act' || b === 'pos');
@@ -377,7 +379,7 @@ function agendaPages(m, { people, numbers, meetings, money, lineNotes = {}, book
       // QuickBooks' year and statements under the first item showing the money; another shows its figures (as the screen)
       const bk = booked ? null : books;
       if (showsOf(it).includes('cash')) booked = true;
-      for (const k of showsOf(it)) { const facts = liveBox(k, k === 'costs' ? costsNumbers : numbers, m, money, k === 'cash' ? lineNotes[it.id] : null, bk); if (facts) row.append(facts); }
+      for (const k of showsOf(it)) { const facts = liveBox(k, k === 'costs' ? costsNumbers : numbers, m, money, k === 'cash' ? lineNotes[it.id] : null, bk, k === 'cash' && lostNotes); if (facts) row.append(facts); }
       const files = docFiles(it);
       if (files.length) row.append(el('p', 'bpp-docs', `With it: ${files.map((f) => fileTitle(f.name)).join(', ')}`));
       li.append(row);
@@ -446,7 +448,7 @@ export async function printAll(m, { people = [], numbers = null, meetings = [], 
   // What makeovers cost follows the money's date rule too: today's for a meeting today or ahead (./costs.js useCosts)
   const live = data && m.date >= data.today ? data.numbers : null;
   const costsNumbers = live ? { ...numbers, costs: live.costs ?? numbers?.costs, operating: live.operating ?? numbers?.operating, cash: live.cash ?? numbers?.cash, books: live.books ?? numbers?.books } : numbers;
-  root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, books, costsNumbers, held, quorum: data?.quorum || 0 }));
+  root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, lostNotes: !!data?.unread?.lineNotes, books, costsNumbers, held, quorum: data?.quorum || 0 }));
   // How many pages, so the progress can say "12 of 40"
   const docs = [];
   for (const g of groups) for (const f of g.files) {

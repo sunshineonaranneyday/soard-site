@@ -215,7 +215,8 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   /** What each figure is, by its `k`: its title, the words before and after its amount, the words it's found by */
   function WHAT(k, v) {
     const acct = k.match(/^cash:([^:]*):(.+)$/);
-    if (acct) return { title: acct[2], tail: `, a bank account in Cash in the bank${cashAsOf}`, words: `${acct[2]} ${acct[1]} bank account cash balance`, focus: 'cash' };
+    // (one below zero said so, as the card and the meeting's tile say it: Board QA round 13)
+    if (acct) return { title: acct[2], tail: `, ${v < 0 ? 'overdrawn, ' : ''}a bank account in Cash in the bank${cashAsOf}`, words: `${acct[2]} ${acct[1]} bank account cash balance${v < 0 ? ' overdrawn' : ''}`, focus: 'cash' };
     return ({
       cash: { title: 'Cash in the bank', tail: ` in the bank${cashAsOf}`, words: 'cash in the bank bank accounts balance total', focus: 'cash' },
       'cash:chg': { title: 'Cash in the bank, against a year ago', head: dirOf(cash?.total, cash?.prior), tail: ` from a year ago${cash?.priorAsOf ? `, ${cash.priorAsOf}` : ''}`, words: 'cash in the bank change a year ago earlier up down', focus: 'cash' },
@@ -267,7 +268,7 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
     // each as it's written there; one account alone is the total, drawn as that. Board QA round 12)
     for (const l of cashLines(cash)) {
       if (l.rest) put('cash:small', l.said, { title: l.name, tail: `, the smaller accounts together, in Cash in the bank${cashAsOf}`, words: 'bank accounts cash smaller together', focus: l.id });
-      else put(l.k, l.said, { ...WHAT(l.k), focus: l.id });
+      else put(l.k, l.said, { ...WHAT(l.k, l.said), focus: l.id });
     }
     (cash.owed || []).forEach((o, i) => put(`owed:${o.name}`, o.balance, { title: o.name, tail: ', owed on the card', words: `${o.name} owed card credit card`, focus: `cash-owed${i}`, cols: o.limit ? [{ v: o.limit, tail: `, the card’s limit, ${o.name}` }] : [] }));
   }

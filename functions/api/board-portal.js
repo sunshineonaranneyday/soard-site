@@ -59,7 +59,7 @@
  * (theirs alone, simulated members) they check in and vote as themselves.
  */
 
-import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings, sayable } from './_board.js';
+import { portalData, portalWords, setActionDone, signDoc, signWithCopy, noteOpened, boardFiles, ensureSchema, boardIcs, ID, liveView, liveCheckIn, liveVote, saveReport, saveSlideOrder, saveMotion, attachToItem, detachFromItem, listMeetings, saveSettings, errorAnswer } from './_board.js';
 import { readBoardWords } from './_board-file-words.js';
 import { isBoardAdmin } from './_board-roles.js';
 import { secretarySends } from './_board-minutes.js';
@@ -67,7 +67,7 @@ import { notesFor, saveNotes, sendNotes, notesState } from './_board-notes.js';
 import { correctionsForPage, suggestCorrection, withdrawCorrection, decideCorrection } from './_board-corrections.js';
 import { signMinutes, buildMinutesRecord, signedMinutes } from './_board-minutes-sign.js';
 import { noteGet, noteLook, noteAnswer, noteEvents, answerOf, deviceOf, accessIat } from './_board-activity.js';
-import { evidenceOf, afterSigning, buildRecord, declineDoc, tellDeclined } from './_board-sign.js';
+import { evidenceOf, afterSigning, buildRecord, declineDoc } from './_board-sign.js';
 // Where a signing request came from (its IP, device, this sign-in's start, the address Access checked): its evidence
 const evidence = (context) => evidenceOf(context, { deviceOf, accessIat });
 import { portalExtras, saveLineNote, chairApprove, chairNote, askPresenter } from './_board-asks.js';
@@ -90,8 +90,10 @@ async function who(context) {
 // After the answer when the platform allows (waitUntil), else before it (tests)
 const later = async (context, p) => { if (context.waitUntil) context.waitUntil(p); else await p; };
 // (a 503 is ours and in words: a read that decides something didn't answer, so nothing was done, and the page offers Try
-// again: a founder whose check of who runs Board failed is never told the page is for the board. Board QA round 9)
-const fromError = (err) => (err?.setup ? fail(err.message, 503) : err.status && (err.status < 500 || (err.status === 503 && err.unread)) ? fail(err.message, err.status, err.extra || {}) : Response.json({ ok: false, error: sayable(err) }, { status: 500 }));
+// again: a founder whose check of who runs Board failed is never told the page is for the board. Board QA round 9. Each
+// press says the database not answering in its own words, a program's own error is "Something went wrong": the same
+// answer as Board's, from one place, ./_board.js errorAnswer. Board QA round 13)
+const fromError = (err) => errorAnswer(err);
 // The page's read of People that didn't answer: the sign-in's words with Try again, never a board page with an empty
 // directory or members missing their emails (Board QA round 10)
 const pageError = (err) => (err?.unread && [PEOPLE_DOWN, PEOPLE_DOWN_SENT].includes(err.message) ? fail(SIGN_IN_DOWN, 503) : fromError(err));
@@ -141,16 +143,30 @@ export async function onRequestGet(context) {
     // not shared yet that they present in (their items only), so the ask's link opens (_board-asks.js)
     // and SOARD's facts for Documents, as the site has them saved (_org-facts.js)
     // (who Email all reaches, read for certain: a read that fails sends nothing, never a list shrunk to whoever came back)
-    const [data, extras, org, group] = await Promise.all([portalData(context.env, w), listMeetings(context.env.DB).then((meetings) => portalExtras(context.env, { ...w, meetings })), orgFacts(context.env), groupWanted(context.env.DB).catch((e) => { console.error('[board-portal] email all', e?.message || e); return null; })]);
+    // (the meetings read once, for the page and what's beside it; each part that fails is marked, and the rest of the page
+    // opens: Board QA round 13)
+    // (Board's tables first: not set up, the page's 503 in words before anything else is read)
+    await ensureSchema(context.env.DB);
+    const meetingsRead = listMeetings(context.env.DB);
+    meetingsRead.catch(() => {});
+    const unread = {};
+    // (People not answering, or Board's tables not set up, are the page's own words with Try again, never a part)
+    const lost = (part, also) => (e) => { if (e?.unread || e?.setup) throw e; console.error(`[board-portal] ${part}`, e?.message || e); unread[part] = true; return also; };
+    const [data, extras, org, group] = await Promise.all([portalData(context.env, { ...w, meetingsRead }), meetingsRead.then((meetings) => portalExtras(context.env, { ...w, meetings }), (e) => { if (e?.unread || e?.setup) throw e; return { review: null, reviewShut: null, lineNotes: {}, myAsks: [], presenting: [], unread: { lineNotes: true, myAsks: true, presenting: true, review: true } }; }), orgFacts(context.env), groupWanted(context.env.DB).catch((e) => { console.error('[board-portal] email all', e?.message || e); return null; })]);
     // Notes typed that never went on their meeting: only theirs to know, and how they stay reachable once it's approved
-    const typed = w.admin || w.member?.seat === 'secretary' ? await notesState(context.env.DB) : { waiting: [], typedBy: {} };
+    const typed = w.admin || w.member?.seat === 'secretary' ? await notesState(context.env.DB).catch(lost('notesWaiting', { waiting: [], typedBy: {} })) : { waiting: [], typedBy: {} };
     // People's Email all: the same people Board → Members writes to, each by their own address, less whoever's looking
     const viewer = normEmail(context.data?.userEmail);
     const emailAll = group ? { to: group.members.map((p) => p.email).filter((e) => e !== viewer), missing: group.missing.map((p) => p.name) } : { to: [], missing: [], unread: EMAILS_DOWN };
     // Corrections suggested to minutes not approved yet, and who signed the ones that were: for a board member, only
     // meetings on the board page, as everything else here (a founder looking sees what Board admin shows them)
-    const [corrections, minutesSigned] = await Promise.all([correctionsForPage(context.env.DB, w), signedMinutes(context.env.DB, null, { boardOnly: !w.admin })]);
-    return Response.json({ ok: true, ...data, ...extras, org, notesWaiting: typed.waiting, minutesTypedBy: typed.typedBy, emailAll, corrections, minutesSigned }, { headers: { 'Cache-Control': 'private, no-store' } });
+    const meetings = await meetingsRead.catch(() => null);
+    const [corrections, minutesSigned] = meetings ? await Promise.all([correctionsForPage(context.env.DB, w, meetings).catch(lost('corrections', {})), signedMinutes(context.env.DB, meetings, { boardOnly: !w.admin }).catch(lost('minutesSigned', {}))])
+      : (Object.assign(unread, { corrections: true, minutesSigned: true }), [{}, {}]);
+    const { unread: extrasUnread = {}, ...beside } = extras;
+    return Response.json({ ok: true, ...data, ...beside, org, notesWaiting: typed.waiting, minutesTypedBy: typed.typedBy, emailAll, corrections, minutesSigned,
+      // (each part whose read failed: the page's, and what's beside it, ../../public/admin/board/unread.js)
+      unread: { ...(data.unread || {}), ...extrasUnread, ...(org?.unread ? { facts: true } : {}), ...unread } }, { headers: { 'Cache-Control': 'private, no-store' } });
   } catch (err) {
     return pageError(err);
   }
@@ -235,9 +251,11 @@ async function post(context) {
     }
     // A document with an item they present (attachToItem checks), as the form's "file"
     if (q.has('attach')) {
-      let file = null;
-      try { file = (await request.formData()).get('file'); } catch { return fail('Send the document as a file'); }
-      return Response.json({ ok: true, ...(await attachToItem(env, q.get('attach'), String(q.get('item') || ''), file, w)) });
+      let form = null;
+      try { form = await request.formData(); } catch { return fail('Send the document as a file'); }
+      // (`fileId`: the page's own id for the file it chose: sent again after its answer was lost, it's the file already
+      // kept, on its item, never a second copy. Board QA round 13)
+      return Response.json({ ok: true, ...(await attachToItem(env, q.get('attach'), String(q.get('item') || ''), form.get('file'), { ...w, fileId: String(form.get('fileId') || '') })) });
     }
     let body = {};
     try { body = await request.json(); } catch { return fail('Expected JSON'); }
@@ -327,13 +345,14 @@ async function post(context) {
           context.waitUntil?.(afterSigning(env, { docId: body.docId, slug: member.slug, year: signed.year }));
           return Response.json({ ok: true, ...signed });
         }
-      // Can't sign it as written: why, kept, and the admins told (they can still sign it later)
+      // Can't sign it as written: why, kept, and the admins told (they can still sign it later). Kept with the email it
+      // owes them in one write, that email sent with the press: `sent` says whether it went, or goes on the next look
+      // (./_board-sign.js declineDoc. Board QA round 13)
       case 'decline': {
         if (!ID.test(String(body.docId || ''))) return fail('Which document?');
         if (await notMe(env, body.as, member)) return fail(`This browser is signed in as ${member.name} now. Reload the page.`, 409, { who: true });
-        const d = await declineDoc(env.DB, body.docId, member, { reason: body.reason, evidence: evidence(context), year: Number.isInteger(body.year) ? body.year : null });
-        if (d.tell) context.waitUntil?.(tellDeclined(env, { doc: d.doc, member, reason: d.reason, year: d.year }).catch(() => {}));
-        return Response.json({ ok: true, declined: { at: d.at, reason: d.reason }, told: d.tell });
+        const d = await declineDoc(env, body.docId, member, { reason: body.reason, evidence: evidence(context), year: Number.isInteger(body.year) ? body.year : null });
+        return Response.json({ ok: true, declined: { at: d.at, reason: d.reason }, told: d.tell, sent: d.sent });
       }
       // A paper they sign, opened (once a year: evidence they had it in front of them)
       case 'opened':

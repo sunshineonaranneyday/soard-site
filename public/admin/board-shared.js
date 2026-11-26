@@ -408,6 +408,19 @@ export const usableEmail = (e) => /^(?!\.)(?!.*\.\.)(?!.*\.@)[^\s@<>()[\],;:"]+@
 export const VISIT_GAP_MS = 30 * 60_000;
 /** Today in Atlanta (YYYY-MM-DD) */
 export const todayEastern = (now = Date.now()) => new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(now));
+/**
+ * An agenda approved already, said to whoever presses Approve, in Board and on the chair's review alike: their own other
+ * tab is "you"; someone else by name, with when ("at 4:12 PM" today, else its day too). Board QA round 12, Nov 23 2026:
+ * "Jane Doe already approved it", to Jane; round 13, Nov 24: the chair's review said "Alex already approved it." to Alex
+ */
+export function approvedAlready({ by = '', at = '', mine = false } = {}, now = Date.now()) {
+  if (mine) return 'You approved it already, maybe in another tab.';
+  const t = Date.parse(at || '');
+  if (!Number.isFinite(t)) return `${by || 'Someone'} approved it already.`;
+  const clockAt = new Date(t).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' }).replace(/\s+/g, ' ');
+  const day = todayEastern(t) === todayEastern(now) ? '' : `on ${new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'America/New_York' })} `;
+  return `${by || 'Someone'} approved it already, ${day}at ${clockAt}.`;
+}
 
 // ─── A clean meeting ────────────────────────────────────────────────
 
@@ -1735,7 +1748,14 @@ export function spreadsOf(count, of) {
 }
 /** The agenda asks to approve the last meeting's minutes, so the presentation can open with "Since we last met" */
 export const hasSince = (m) => m.sections.some((s) => s.items.some((it) => it.live === 'minutes' && it.about));
-export function deckOf(m, { pages = {}, parts = {}, meetings = [], books = null } = {}) {
+/**
+ * The meeting's slides, stop by stop. `books`: QuickBooks' as the money item draws them (today's for a meeting today or
+ * ahead, the locked ones for a past one); `unread`: those numbers' parts whose read failed just now (./board/unread.js),
+ * the same flags the meeting's page and Print go by, so with the money not loaded no slide of QuickBooks' figures
+ * follows the money's own slide, which says it couldn't load (Board QA round 13: the page and Print said the money
+ * couldn't load while the screen went on to five slides of QuickBooks' year)
+ */
+export function deckOf(m, { pages = {}, parts = {}, meetings = [], books = null, unread = null } = {}) {
   const drawn = booksDraw(books);
   // A statement as a file stays off the screen only once QuickBooks draws the statements themselves
   const drawsStatements = drawn.includes('act') || drawn.includes('pos');
@@ -1759,7 +1779,7 @@ export function deckOf(m, { pages = {}, parts = {}, meetings = [], books = null 
     for (let p = reportAlone(it) ? 0 : 1; p < slides.length; p++) push(reportAlone(it) ? 'report' : 'item', { key: `${it.id}:report${p ? `:${p}` : ''}`, kind: 'report', itemId: it.id, fileId: 'report', page: p, of: slides.length, n, sectionId });
     // Each live list after the first, a slide of its own; after the money, QuickBooks' slides (the year against last
     // year, then each statement, as many slides as its lines take at a size a room reads)
-    for (const x of slidesOf(it, booked ? null : books)) {
+    for (const x of slidesOf(it, booked || unread?.money ? null : books)) {
       const pages = x.kind === 'books' && ['act', 'budget', 'pos'].includes(x.k) ? statementBreaks(statementRows(books, x.k)).length : 1;
       for (let p = 0; p < pages; p++) push(x.id, { key: `${it.id}:${x.id}${p ? `:${p}` : ''}`, kind: x.kind, itemId: it.id, fileId: x.id, page: p, n, sectionId });
     }

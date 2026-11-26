@@ -63,7 +63,14 @@ export async function createD1({ schemaFiles = [], schemaSql = [], bytes = null 
         for (const s of stmts) {
           // (D1 refuses anything in a batch that isn't one of its statements)
           if (typeof s?._sql !== 'string') throw new Error('D1_ERROR: batch: not a prepared statement');
-          db.run(s._sql, s._params); out.push({ success: true, meta: { changes: db.getRowsModified() } });
+          // (each statement's rows too, as D1's batch gives them: a write's RETURNING is its answer)
+          const st = db.prepare(s._sql);
+          const results = [];
+          try {
+            st.bind(s._params || []);
+            while (st.step()) results.push(st.getAsObject());
+          } finally { st.free(); }
+          out.push({ results, success: true, meta: { changes: db.getRowsModified() } });
         }
         db.run('COMMIT');
       } catch (err) {

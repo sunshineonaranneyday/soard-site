@@ -1599,7 +1599,7 @@ test('names, round thirteen: van, de, la only start a family name written first;
   }
   // Names that look like a title or letters: their whole name, their own address
   // (r20: "Deacon" and "Bishop" are titles before a family name, never on the given-names list: no name)
-  for (const [n, slug, greet] of [['Deacon Phillippe', 'deacon-phillippe', ''], ['Bishop Briggs', 'bishop-briggs', ''], ['Ken Iida', 'ken-iida', 'Ken'], ['Annalisa Cima', 'annalisa-cima', 'Annalisa'], ['Olive Senior', 'olive-senior', 'Olive']]) {
+  for (const [n, slug, greet] of [['Deacon Phillippe', 'deacon-phillippe', ''], ['Bishop Briggs', 'bishop-briggs', ''], ['Ken Iida', 'ken-iida', ''] /* r25: Ken is a family name some people write first and Iida no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Annalisa Cima', 'annalisa-cima', 'Annalisa'], ['Olive Senior', 'olive-senior', 'Olive']]) {
     assert.equal(greetName({ fullName: n }), greet, n);
     assert.equal((await plan((await applied(n, `${slug}@y.org`)).id)).slug, slug, n);
   }

@@ -19,6 +19,7 @@ import { money, mainLines, statementBreaks, linePlaces } from '../board-shared.j
 import { More, shortDate, dayText } from './parts.js';
 import { compact, storeOf, storeChange, budgetMonthsText, marginText, changeIn, overIn, Both, Blank, budgetName, yearFigures, spentOf, nonCashName, nonCashOf, lessWritten } from './money.js';
 import { lineKeysOf, notesByKey, NoteLine } from './review.js';
+import { UNREAD_WORDS } from './unread.js';
 
 const html = htm.bind(h);
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -366,8 +367,10 @@ export const BOOKS_TITLES = { year: 'The year against last year', store: 'The st
 export const booksTitle = (stop) => `${BOOKS_TITLES[String(stop?.fileId || '').slice(6)] || ''}${stop?.page ? ', continued' : ''}`;
 
 /** One of QuickBooks' slides after the money, at the size of a room (the screen is dark: its colors are its own) */
-export function BooksSlide({ books, kind, page = 0, notes = null, as = 'pct' }) {
+export function BooksSlide({ books, kind, page = 0, notes = null, as = 'pct', lostNotes = false }) {
   const s = books?.statements;
+  // (the notes on the lines not read just now: the slide says so, never its lines as if nobody had noted them: Board QA round 13)
+  const lost = lostNotes ? html`<p class="bs-quiet by-slide__lost" role="status">${UNREAD_WORDS.lineNotes}</p>` : null;
   if (kind === 'store') {
     // Its sales on yellow, its cost of goods, the profit before the staff and rent the books keep with SOARD's
     const st = storeOf(books);
@@ -398,6 +401,7 @@ export function BooksSlide({ books, kind, page = 0, notes = null, as = 'pct' }) 
     return html`<div class="by-slide">
       <p class="bs-eyebrow">${budgetName(b, books?.year)}, January 1 to ${dayMonth(b?.asOf)}${b ? `: ${budgetMonthsText(b.months)} of ${b.of} months` : ''}</p>
       <h1 class="bs-display by-slide__title">Budget against actual${page ? ', continued' : ''}</h1>
+      ${lost}
       <${FitLines} rows=${(b?.rows || []).map((r) => ({ ...r, p: r.b }))} heads=${['Actual', 'Budget', 'Over (under)']} which="bud" notes=${notes} as=${as} page=${page} />
     </div>`;
   }
@@ -406,6 +410,7 @@ export function BooksSlide({ books, kind, page = 0, notes = null, as = 'pct' }) 
   return html`<div class="by-slide">
     <p class="bs-eyebrow">${act ? `From QuickBooks, January 1 to ${dayMonth(s?.asOf)}, beside the same days a year before` : `From QuickBooks, as of ${dayMonth(s?.asOf)}, beside the same day a year before`}</p>
     <h1 class="bs-display by-slide__title">${act ? 'Statement of activities' : 'Statement of financial position'}${page ? ', continued' : ''}</h1>
+    ${lost}
     <${FitLines} rows=${rows} asOf=${s?.asOf} priorAsOf=${s?.priorAsOf} which=${act ? 'act' : 'pos'} notes=${notes} as=${as} page=${page} />
   </div>`;
 }
