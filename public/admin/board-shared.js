@@ -1050,6 +1050,25 @@ export function approvedFileAfter(cur, next) {
   const onItem = new Set((cur?.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
   return (minutesFileOf({ ...cur, files: (cur?.files || []).filter((f) => !onItem.has(f.id)) }) || ownMinutesFile(cur || {}))?.id || '';
 }
+
+// ─── What approved minutes state ────────────────────────────────────
+//
+// Board QA round 15, Nov 26 2026: approved typed minutes changed with a plain save of Board's agenda editor ("forty
+// thousand" made "fifty" under an item, a decision's result, who was there), the board page then said what their approved
+// Word file ("The minutes as written") didn't, and nothing told anyone. Approved minutes are the record (rounds 8, 11 and
+// 14): what they state changes only once the approval is taken back (Mark as draft). What they state is everything their
+// Word file prints from the meeting but its to-dos, so the rule lives with the template that prints it (./board-minutes-template.js
+// minutesStated, minutesStay); the site refuses every write of a meeting that breaks it (functions/api/_board.js
+// keepStated), and Board's editor shows what it covers as it is (./board-meeting.js)
+
+/** What's said when a step would change what approved minutes state: refused whole, nothing changed */
+export const MINUTES_STAY = 'These minutes are approved, so they can’t change here. Mark them as draft first to change them.';
+/**
+ * Minutes whose statement stays: approved, and in Board (minutesHeld: read in, typed, or a file of theirs on the
+ * approval's record). Minutes approved with nothing in Board yet still take theirs when they come (the email reader, a
+ * drop), as minutesNotReady asks. A practice meeting is never the record
+ */
+export const minutesKept = (m) => !m?.practice && minutesHeld(m);
 /** A copy of an item, called so until it has a name of its own (nobody's asked for a report on one: _board-asks.js wanted) */
 const COPY_MARK = ' (copy)';
 export const isCopyName = (title) => String(title || '').trim().endsWith(COPY_MARK);

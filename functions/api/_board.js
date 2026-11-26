@@ -41,8 +41,10 @@ import {
   longDate, timeRange, shortDate, DOC_KINDS, FILE_KINDS, RSVP, DEFAULT_TEMPLATE, newMeeting, LIMITS, repliesOf, inviteOut,
   agendaIsDraft, draftAgenda, templateAgenda, previousMeeting, draftName, callName, readAgain, AGENDA_READER, isLive, cleanLive, majority, guessItem, orgName, signsAs,
   isFilled, LIVE_TITLES, agendaItems, presentersOf, reportsOn, namesText, sectionPlan, clock, docTitle, videoOf, packetDocs, partName, minutesIn,
-  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS,
+  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS, minutesKept,
 } from '../../public/admin/board-shared.js';
+// (what approved minutes state is what their Word file prints, so the rule lives with the template: keepStated)
+import { minutesStay } from '../../public/admin/board-minutes-template.js';
 import { welcomeHad, REPORT_LOOKS, SLIDE_PIECE, VISIT_GAP_MS, waitsForApproval, shareWaits, cleanTemplate, meetingHeld, heldNoSend } from '../../public/admin/board-shared.js';
 import { comparePeople, photoUrl } from '../../public/admin/team-shared.js';
 import { reachedCount } from '../../public/admin/community-shared.js';
@@ -652,9 +654,11 @@ const readBack = (DB, id, cur, next) => getMeeting(DB, id).catch((err) => {
  * `prev`, the meeting it went over, so a write that changed nothing a person edits keeps nothing to compare; named as
  * the meeting names who saved it last). → whether it was written
  */
-async function writeOver(DB, m, was, { prev = null, also = [] } = {}) {
+async function writeOver(DB, m, was, { prev = null, also = [], takesBack = false, follows = null } = {}) {
   // Practice meetings live in their own table (see SCHEMA): getMeeting, and every action built on it, never finds one
   const table = m.practice ? 'board_practice' : 'board_meetings';
+  // (approved minutes state what they stated: refused before anything is written. keepStated)
+  keepStated(prev, m, { takesBack, follows });
   const data = stored(m);
   const write = was === null
     ? DB.prepare(`INSERT OR IGNORE INTO ${table} (id, date, data, updated_at, updated_by) VALUES (?, ?, ?, ?, ?)`).bind(m.id, m.date || '', data, m.updatedAt, m.updatedBy || '')
@@ -671,6 +675,31 @@ async function writeOver(DB, m, was, { prev = null, also = [] } = {}) {
   const wrote = !!r?.lost || (r?.meta?.changes ?? r?.changes ?? 0) > 0;
   if (wrote) await keepSave(DB, `${table}:${m.id}`, { at: m.updatedAt, was: was || '', by: m.updatedBy, data: editedOf(m), prev: prev && editedOf(prev) });
   return wrote;
+}
+/**
+ * Approved minutes are the record (rounds 8, 11 and 14): what they state (../../public/admin/board-minutes-template.js
+ * minutesStated: everything their Word file prints from the meeting but its to-dos, its words, decisions, roll, its
+ * name, day, time and place, and each part and item printed, in order, with its name, time and who presents it) never
+ * changes while they're approved, by any route. The one guard every write of a whole meeting goes through (writeOver: a person's
+ * save and patchMeeting, so every step of the server's; patchTogether), on the meeting as the write found it (`cur`) and
+ * as it leaves it (`next`), before anything is written: refused (409) in MINUTES_STAY's words with nothing changed, the
+ * whole write (a to-do, a report, a document, the board page with it, never half of it). `refused: ['stated']` names it, so Board's editor puts back only that, as the site has it, and
+ * saves the rest. Taking the approval back (Mark as draft) is how they change. Board QA round 15, Nov 26 2026: a plain
+ * save of Board's agenda editor changed approved minutes' words, a decision and the roll, and their approved Word file
+ * didn't say any of it
+ */
+function keepStated(cur, next, { takesBack = false, follows = null } = {}) {
+  if (!cur || next?.practice) return;
+  // (a rename on People moving addresses, { old: new }: ./_board-rename.js moveBoardSlug. Judged with them followed first,
+  // so a person at a new address is the same person, and nothing else the step changes goes by)
+  if (follows && Object.keys(follows).length) cur = followAddresses(cur, follows);
+  // The one opt-out: Undo of the read that put minutes approved with none in Board into it (./_board-minutes.js
+  // undoMinutes, only when they were approved before that read: undoRefused). It takes them out of Board as they came,
+  // with none read in left (`minutesFrom` gone), never other words in their place: "minutes approved with none in Board
+  // take the first that comes, and Undo of its read leaves them with none again, truthfully" (Board QA round 11)
+  if (takesBack && !next?.minutesFrom) return;
+  const no = minutesStay(cur, next);
+  if (no) throw Object.assign(new Error(no), { status: 409, extra: { refused: ['stated'] } });
 }
 /**
  * Whether a write whose answer didn't come back landed all the same: each meeting it wrote has the time it wrote (every
@@ -800,7 +829,7 @@ export async function todayPractice(DB, now = Date.now()) {
  * kept: written only if no one saved in between, else read again and redone.
  * A newer updatedAt, so a copy open in an editor merges (`by`: the person, when one made the change). → the meeting
  */
-export async function patchMeeting(DB, id, fn, { by = '' } = {}) {
+export async function patchMeeting(DB, id, fn, { by = '', takesBack = false, follows = null } = {}) {
   for (let i = 0; i < 5; i++) {
     const cur = await getMeeting(DB, id);
     if (!cur) return null;
@@ -808,8 +837,9 @@ export async function patchMeeting(DB, id, fn, { by = '' } = {}) {
     // (which file approved minutes are: the server's, never the function's copy. Board QA round 10)
     const next = { ...out, id, practice: false, approvedFile: approvedFileAfter(cur, out), updatedAt: stampAfter(cur.updatedAt), updatedBy: by || cur.updatedBy || '' };
     // (written: its answer is the meeting it wrote, even when the read back fails. Board QA round 11. Written only over
-    // exactly `cur`, so `next` is the row as written: asWritten may stand in for the read back. Round 12)
-    if (await writeOver(DB, next, cur.updatedAt || '', { prev: cur })) return readBack(DB, id, cur, next);
+    // exactly `cur`, so `next` is the row as written: asWritten may stand in for the read back. Round 12. `takesBack`:
+    // keepStated's one opt-out, Undo of the read that put approved minutes into Board. `follows`: a rename's addresses)
+    if (await writeOver(DB, next, cur.updatedAt || '', { prev: cur, takesBack, follows })) return readBack(DB, id, cur, next);
   }
   throw new Error(KEPT_CHANGING);
 }
@@ -830,6 +860,8 @@ export async function patchTogether(DB, ids, plan, { by = '', landed = null } = 
     const curs = await Promise.all(ids.map((id) => (id ? getMeeting(DB, id) : null)));
     const { writes = [], also = [], ...rest } = plan(curs);
     const nexts = writes.map(([cur, out]) => ({ ...out, id: cur.id, practice: false, approvedFile: approvedFileAfter(cur, out), updatedAt: stampAfter(cur.updatedAt), updatedBy: by || cur.updatedBy || '' }));
+    // (approved minutes state what they stated, each meeting of the step, before any of it is written: keepStated)
+    for (const [k, m] of nexts.entries()) keepStated(writes[k][0], m);
     // Each statement goes only while every meeting is as this step has it by then: the ones before it written, the rest
     // as they were read. One meeting overtaken, and none of it goes (one batch, nothing in between)
     const as = (k) => writes.map(([cur], j) => [cur.id, j < k ? nexts[j].updatedAt : cur.updatedAt || '']).filter((_, j) => j !== k);
@@ -891,6 +923,8 @@ export async function setOnMeeting(DB, id, fields, { by = '', was = null } = {})
   if (after && keys.some((k) => EDITED.includes(k))) await DB.prepare('UPDATE board_saves SET data = ? WHERE record = ? AND at = ?').bind(editedOf(fromRow(row, after)), record, row.updated_at).run().catch(() => {});
   return after;
 }
+/** What setOnMeeting may write: fields only the server sets, none of them what minutes state (an invite, a send's record, the share) */
+const NOT_STATED = new Set(['snapshot', 'shared', 'notBoard', 'invite', 'inviteGone', 'video', 'packetSentAt', 'packetSentTo', 'minutesSentAt']);
 /** setOnMeeting's time for a write: now, or a millisecond after the row's last one when that's now or later (stampAfter, in SQL) */
 const STAMP = "COALESCE(CASE WHEN COALESCE(updated_at, '') < ? THEN ? ELSE strftime('%Y-%m-%dT%H:%M:%fZ', updated_at, '+0.001 seconds') END, ?)";
 /**
@@ -899,6 +933,10 @@ const STAMP = "COALESCE(CASE WHEN COALESCE(updated_at, '') < ? THEN ? ELSE strft
  */
 function onMeetingStmt(DB, id, fields, { by = '', now = nowIso(), returning = false, also = null } = {}) {
   const keys = Object.keys(fields).filter((k) => /^[a-zA-Z]+$/.test(k));
+  // Written unread onto the meeting as it is, so never a field minutes state (keepStated can't judge a write it doesn't
+  // read): those are patchMeeting's, which reads the meeting and goes by the rule. Board QA round 15
+  const stated = keys.filter((k) => !NOT_STATED.has(k));
+  if (stated.length) throw new Error(`setOnMeeting writes only what minutes never state, not ${stated.join(', ')}: use patchMeeting`);
   const sets = [...keys.map((k) => [`$.${k}`, JSON.stringify(fields[k] ?? null)]), ...(by ? [['$.updatedBy', JSON.stringify(by)]] : [])];
   return DB.prepare(`UPDATE board_meetings SET data = json_set(data, ${sets.map(() => '?, json(?)').join(', ')}, '$.updatedAt', ${STAMP}),
     updated_at = ${STAMP}${by ? ', updated_by = ?' : ''} WHERE id = ?${also ? ` AND ${also.sql}` : ''}${returning ? ' RETURNING data, updated_at' : ''}`)
@@ -4566,12 +4604,13 @@ export async function maybeTemplateAgendas(env, { now = Date.now(), force = fals
     const today = todayEastern(now);
     const changed = [];
     const real = meetings.filter((x) => !x.notBoard);
-    for (const m of real.filter((x) => x.date >= today && agendaIsDraft(x, settings.template))) {
+    // (never approved minutes' meeting, held earlier today: its parts carry what they state. minutesKept, round 15)
+    for (const m of real.filter((x) => x.date >= today && agendaIsDraft(x, settings.template) && !minutesKept(x))) {
       const prev = previousMeeting(m, real);
       const name = prev ? draftName(prev) : '';
       const fresh = keepDocs(m.sections, templateAgenda(prev, { template: settings.template, date: m.date }));
       if (m.agendaFrom?.kind === 'template' && m.agendaFrom.name === name && agendaSkeleton({ sections: fresh }) === agendaSkeleton(m)) continue;
-      const done = await patchMeeting(env.DB, m.id, (cur) => (agendaIsDraft(cur, settings.template)
+      const done = await patchMeeting(env.DB, m.id, (cur) => (agendaIsDraft(cur, settings.template) && !minutesKept(cur)
         ? { ...cur, sections: keepDocs(cur.sections, templateAgenda(prev, { template: settings.template, date: cur.date })), agendaFrom: { kind: 'template', name, at: new Date(now).toISOString() } }
         : cur));
       if (done) changed.push(m.id);
@@ -4596,12 +4635,15 @@ export async function maybeRereadEmailAgendas(env, { now = Date.now() } = {}) {
       const f = m.files.find((x) => x.name === m.agendaFrom.name);
       let parsed = null;
       // (People not answering: nothing is marked read again, and the next heartbeat reads it: never an agenda read
-      // against nobody, nor one that's done with for want of a read. Round 10)
-      if (f) { try { parsed = await readFileAsAgenda(env, f.id); } catch (err) { if (err?.unread) throw err; console.error('[board] reading again', f.name, err.message); } }
-      const better = !!parsed?.sections.some((s) => s.items.length);
-      await patchMeeting(env.DB, m.id, (cur) => (cur.agendaFrom?.kind === 'email' && readAgain(cur) && !cur.minutesFrom?.typed
-        ? { ...cur, ...(better ? { sections: parsed.sections } : {}), agendaFrom: { ...cur.agendaFrom, ...(better ? { at: new Date(now).toISOString() } : {}), v: AGENDA_READER } }
-        : cur));
+      // against nobody, nor one that's done with for want of a read. Round 10. Approved minutes' meeting is never read
+      // again: its parts carry what they state, minutesKept, round 15. It's marked read all the same)
+      if (f && !minutesKept(m)) { try { parsed = await readFileAsAgenda(env, f.id); } catch (err) { if (err?.unread) throw err; console.error('[board] reading again', f.name, err.message); } }
+      let better = false;
+      await patchMeeting(env.DB, m.id, (cur) => {
+        if (!(cur.agendaFrom?.kind === 'email' && readAgain(cur) && !cur.minutesFrom?.typed)) return cur;
+        better = !!parsed?.sections.some((s) => s.items.length) && !minutesKept(cur);
+        return { ...cur, ...(better ? { sections: parsed.sections } : {}), agendaFrom: { ...cur.agendaFrom, ...(better ? { at: new Date(now).toISOString() } : {}), v: AGENDA_READER } };
+      });
       if (better) done.push(m.id);
     }
   } catch (err) {
