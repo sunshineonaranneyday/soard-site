@@ -769,15 +769,17 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
    * them with an email that signs them in, the one on their People page, or, with none there, this application's
    * (app.emailWhy: why it can't, '' when it can, as the server reads it)
    */
-  // (with Advisory Board emails off, as the box and the toast after it say: their sign-in and welcome wait for those
-  // too, Advisory Board QA round 26. boardEmails: the switch as the list read it, the box's own fact before its plan)
+  // (with Advisory Board emails off, only what's true of each, as the box and the toast after it say: their sign-in comes
+  // with the add, whatever the switch, and only their welcome email waits for it (Advisory Board QA round 27: the panel
+  // said their sign-in waited too, round 26's fix gone too far). boardEmails: the switch as the list read it, the box's
+  // own fact before its plan)
   const partwayLine = (x) => {
     const appOk = !!app?.email && !app.emailWhy;
     const why = x.emailWhy ? 'their email on file can’t sign them in' : !app?.email ? 'this application has no email' : !appOk ? (app.emailWhy === 'group' ? 'this application’s email is a SOARD group inbox' : app.emailWhy === 'staff' ? 'this application’s email is a SOARD address, which signs in as staff' : 'this application’s email can’t be used to sign in') : '';
     return x.hasEmail || (!x.emailWhy && appOk)
       ? (boardEmails ? 'This application isn’t marked Joined: Add to Advisory Board below finishes adding them (their sign-in and welcome) and marks it Joined'
-        : 'This application isn’t marked Joined: Add to Advisory Board below finishes adding them and marks it Joined. Their sign-in and welcome wait until Advisory Board emails are turned on (they’re off now)')
-      : `This application isn’t marked Joined: Add to Advisory Board below marks it Joined. ${why.charAt(0).toUpperCase()}${why.slice(1)}, so they get their sign-in and welcome once their own email is on their People page${boardEmails ? '' : ' and Advisory Board emails are turned on'}`;
+        : 'This application isn’t marked Joined: Add to Advisory Board below finishes adding them and marks it Joined. That lets them sign in; only their welcome email waits until Advisory Board emails are turned on (they’re off now)')
+      : `This application isn’t marked Joined: Add to Advisory Board below marks it Joined. ${why.charAt(0).toUpperCase()}${why.slice(1)}, ${boardEmails ? 'so they get their sign-in and welcome once their own email is on their People page' : 'so they can sign in once their own email is on their People page, and their welcome email goes once it’s there and Advisory Board emails are turned on (they’re off now)'}`;
   };
   // Linked once, but that person's record was deleted, or they're not on the Advisory Board now: Add again, as the
   // server plans it (it brings back someone who left)
@@ -848,6 +850,8 @@ function Drawer({ id, statuses, kit, addToast, onClose, onPrev, onNext, onChange
   const welcomeWords = (w) => (!w ? '' : w.sent ? 'They’ve been emailed how to sign in.'
     : w.waiting && w.why === 'owed' ? 'Their sign-in email goes in a few minutes.'
     : w.refused ? 'The email service refused their sign-in email, so it didn’t go. Check their email on their People page, then press Send the sign-in email on their row under Run it → Members.'
+    // (one tried a day ago whose answer was lost: it may have gone, and the site never sends it again by itself)
+    : w.unsure ? 'Their sign-in email may not have gone, and the site won’t send it again by itself. Their row under Run it → Members can send it again.'
     : w.waiting && w.why === 'send' ? 'Their sign-in email didn’t go just now. The site sends it again in a few minutes.'
     // (People or their email couldn't be read for it just now: never "add a working email", which they may have)
     : w.waiting && w.why === 'check' ? 'The site couldn’t check their email just now, so their sign-in email goes by itself in a few minutes.'

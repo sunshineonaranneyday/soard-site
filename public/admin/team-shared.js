@@ -403,3 +403,28 @@ export function planPeopleList(rows, team, group, emails) {
     return { ...base, act: 'email', note: had ? `Already here: replaces ${had}` : 'Already here: adds their email' };
   });
 }
+
+// ── A person's private email (their sign-in and invites) ──
+
+/**
+ * A person's private email saved: People's one save for it, which every People save path takes (the one-person editor
+ * and Paste a list). → { ok: true, note? } | { ok: false, error }. note: the server's word when what was saved isn't an
+ * Advisory Board member's own address (a SOARD group inbox, a staff address: their Advisory Board emails won't go there),
+ * which every caller shows (Advisory Board QA round 27: Paste a list saved advisory@ and a staff address for members and
+ * dropped the note)
+ */
+export async function savePersonEmail(slug, email, { fetchImpl = globalThis.fetch } = {}) {
+  const r = await fetchImpl('/api/reveal-invites-admin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ boardEmail: { slug, email } }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok || !d.ok) return { ok: false, error: d.error || `status ${r.status}` };
+  return { ok: true, ...(d.note ? { note: String(d.note) } : {}) };
+}
+/**
+ * What a list of saves says at the end: the summary, then each note the server gave (savePersonEmail), never dropped.
+ * → { words, tone } (tone 'info' when there's a note, so it reads as something to act on, else 'success')
+ */
+export function savedWords(said, notes = []) {
+  // (each note as the server words it, less its own "Saved.", which the summary already says)
+  const kept = notes.filter(Boolean).map((n) => String(n).replace(/^Saved\.\s*/, ''));
+  return { words: [said, ...kept].filter(Boolean).join(' '), tone: kept.length ? 'info' : 'success' };
+}

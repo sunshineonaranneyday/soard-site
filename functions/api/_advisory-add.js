@@ -92,6 +92,8 @@ const card = (p, emails, welcomedAt = () => false) => ({
   slug: p.slug, name: personName(p) || p.slug, group: p.group || 'team', where: GROUPS[p.group] || 'People',
   status: personStatus(p), hidden: p.publishStatus === 'draft', organization: p.organization || '',
   email: emails[p.slug] || '', hasPhoto: !!p.photo, photo: p.photo ? photoUrl(p, 96) : '', welcomed: !!welcomedAt(p),
+  // (where it went from, while it's going or once it went: 'run-it' (a press on Run it), 'add', 'site' (by itself))
+  ...(welcomedAt(p) && welcomedAt.via?.(p) ? { welcomedVia: welcomedAt.via(p) } : {}),
   // (their email on file can't sign them in as themselves: a SOARD address, a group inbox. Said, never "kept as their sign-in")
   ...(emails[p.slug] && signInWhy(emails[p.slug]) ? { emailOk: false, emailWhy: signInWhy(emails[p.slug]) } : {}),
 });
@@ -217,15 +219,18 @@ export async function addPlan(env, id, { now = Date.now() } = {}) {
   const shot = !!app.headshot?.url;
   // (the application's part as the box says it: marked Not now, and by whom, or added since; any other status the box
   // doesn't mention, so it never makes a press out of date)
+  // (whether each has had their sign-in email is a part of its own, never "who it matches on People": it going from Run
+  // it while the box was open is said as that, Advisory Board QA round 27)
   plan.key = [
     app.status === 'not-now' ? `not-now|${app.statusBy || ''}|${app.statusAt || ''}` : app.status === 'joined' ? 'joined' : '',
     shotSaid(plan) ? app.headshot?.url || '' : '',
     switchSaid(plan) ? (plan.emailsOn ? 'on' : 'off') : '',
-    [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.organization || '', shot && p.hasPhoto ? 1 : 0, p.welcomed ? 1 : 0,
+    [plan.kind, plan.why || '', p.slug || '', p.status || '', p.email || '', p.organization || '', shot && p.hasPhoto ? 1 : 0,
       plan.asName || '', plan.emailUsable ? 1 : 0, plan.emailWhy || '', plan.namesake?.name || '', plan.namesake?.where || '',
       plan.namesake?.status === 'memorial' ? 1 : 0, plan.namesake?.addressOnly ? 1 : 0, plan.byAddress ? 1 : 0,
       plan.namesakeToo?.name || '', plan.namesakeToo?.where || '', plan.namesakeToo?.status === 'memorial' ? 1 : 0,
-      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.organization || ''}:${o.welcomed ? 1 : 0}:${shot && o.hasPhoto ? 1 : 0}:${o.addressOnly ? 1 : 0}`).join(',')].join('|'),
+      (plan.others || []).map((o) => `${o.slug}:${o.status}:${o.email}:${o.organization || ''}:${shot && o.hasPhoto ? 1 : 0}:${o.addressOnly ? 1 : 0}`).join(',')].join('|'),
+    [p, ...(plan.others || [])].map((x) => `${x?.slug || ''}:${x?.welcomed ? 1 : 0}`).join(','),
   ].join('#');
   return plan;
 }
@@ -310,7 +315,8 @@ async function planOf(env, id, now = Date.now()) {
   const staffAddress = !!email && !groupInbox && isStaffEmail(email);
   const emailUsable = !email || (isEmail(email) && !groupInbox && !staffAddress);
   // (had their welcome, or it's going now, at the address Add leaves them with: theirs on file, else this one)
-  const show = (p) => card(p, emails, (x) => hasOrGoing(welcomes[x.slug], now, emails[x.slug] || (emailUsable ? email : '')));
+  const welcomedAt = Object.assign((x) => hasOrGoing(welcomes[x.slug], now, emails[x.slug] || (emailUsable ? email : '')), { via: (x) => welcomes[x.slug]?.via || '' });
+  const show = (p) => card(p, emails, welcomedAt);
   // (emailsOn: the Advisory Board's emails switch as it is now; emailAs: the address it signs in as, when that's
   // another of theirs, as peter@ranneyblair.com is peter@soardcharity.com)
   const typed = String(app.email || '').trim().toLowerCase();
@@ -589,6 +595,15 @@ function outOfDate(seen, plan) {
   }
   if (was.length === now.length && was[3] === now[3]) {
     if (was[1] !== now[1]) return err('They sent a newer headshot since the box opened. Look at the box again before pressing: it shows the one that’s used.');
+    // (only whether someone has had their sign-in email changed: said as that, never as People changing, nor as the
+    // emails switch, whose part of the box changes with it ("emails X how to sign in" goes). Round 27)
+    if (was[4] !== now[4]) {
+      const had = Object.fromEntries(String(was[4] || '').split(',').map((x) => x.split(':')));
+      const x = [plan.person, ...(plan.others || [])].find((y) => y?.slug && y.welcomed && had[y.slug] !== '1') || null;
+      const name = x?.name || plan.person?.name || app.name;
+      if (!x) return err(`Where ${name}’s sign-in email stands changed since the box opened. Read it again and press Add.`);
+      return err(`${name} was sent their sign-in email${x.welcomedVia === 'run-it' ? ' from Run it' : ''} a moment ago. Read it again and press Add.`);
+    }
     if (was[2] !== now[2]) return err(`Advisory Board emails were turned ${plan.emailsOn ? 'on' : 'off'} since the box opened. Look at the box again before pressing: it says what’s emailed now.`);
   }
   return err('Who this matches on People changed since the box opened. Look at the box again before pressing.');
