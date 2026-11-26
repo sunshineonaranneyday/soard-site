@@ -302,6 +302,46 @@ export function uid(prefix = '') {
   crypto.getRandomValues(bytes);
   return prefix + [...bytes].map((b) => 'abcdefghijkmnpqrstuvwxyz23456789'[b % 32]).join('');
 }
+/**
+ * What's said when a change's answer was lost and the page couldn't find out whether the site has it (the same words as
+ * functions/api/_board.js UNSURE_SAVED): never "Try again" for something the site may have. Board QA rounds 13 and 14
+ */
+export const UNSURE_SAVED = 'The site didn’t answer, so we can’t tell yet whether that was saved. Reload the page in a moment to see.';
+/** How long an upload whose answers keep being lost waits before each send again (about two minutes in all) */
+export const UPLOAD_WAITS = [500, 1000, 2000, 4000, 8000, 15000, 15000, 15000, 15000, 15000, 15000];
+/**
+ * A file a page chose, sent under the page's own id for it (made once, `send`) until the site answers. An answer lost on
+ * the way back (`lost(j)`) may have kept it all the same: the page looks first (`look` → the file the site has under that
+ * id, null when it isn't there, undefined when the look itself failed), and not there, or not known, sends again under
+ * the same id (which never keeps a second copy), however many answers are lost, a little later each time. Only the site's
+ * answer ends it: the file kept (the send's answer, or the look's), or a refusal in its words. Still no answer once the
+ * waits are over: `unsure` (said as UNSURE_SAVED, never "Try again"). Board QA round 14, Nov 24 2026: two answers lost
+ * and the look between them failing said "Try again", and pressed again the file was kept twice. → the answer
+ */
+export async function sendUntilAnswered(send, { lost, look = null, waits = UPLOAD_WAITS, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  let j = await send();
+  for (const ms of waits) {
+    if (!lost(j)) return j;
+    const there = look ? await look().catch(() => undefined) : undefined;
+    if (there) return { ok: true, file: there, looked: true };
+    await sleep(ms);
+    j = await send();
+  }
+  return lost(j) ? { ...j, ok: false, unsure: true, error: UNSURE_SAVED } : j;
+}
+/**
+ * The page's own id for a file it's sending, by `key` (uploadKey: where it goes, and the file itself): a new one, unless
+ * the last send of that very file there ended with no answer, when it's that one again, so choosing it again is the same
+ * upload, never a second copy. `ids`: the page's memory of those (a Map). `ended` { id, unsure }: how a send ended, kept
+ * (unsure) or forgotten (answered). → the id
+ */
+export function uploadId(ids, key, ended = null) {
+  if (!ended) return ids.get(key) || uid('f_');
+  if (ended.unsure) ids.set(key, ended.id); else ids.delete(key);
+  return ended.id;
+}
+/** Where a file goes and which file it is, for uploadId */
+export const uploadKey = (f, where) => `${where}|${f?.name || ''}|${f?.size || 0}|${f?.lastModified || 0}`;
 const str = (v, max = LIMITS.text) => String(v ?? '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').trim().slice(0, max);
 const one = (v, max = LIMITS.text) => str(v, max).replace(/\s+/g, ' ');
 const pick = (v, list, fallback = '') => (list.some((x) => x.id === v) ? v : fallback);
@@ -575,6 +615,8 @@ export function cleanMeeting(raw = {}) {
       ? { kind: raw.agendaFrom.kind, name: one(raw.agendaFrom.name, 200), at: one(raw.agendaFrom.at, 40), ...(Number(raw.agendaFrom.v) > 0 ? { v: Math.round(Number(raw.agendaFrom.v)) } : {}) } : null,
     // The minutes file that filled in who was there, the notes, the motions and the action items (functions/api/_board-minutes.js)
     minutesFrom: raw.minutesFrom && typeof raw.minutesFrom === 'object' && one(raw.minutesFrom.name, 200) ? { name: one(raw.minutesFrom.name, 200), at: one(raw.minutesFrom.at, 40), ai: bool(raw.minutesFrom.ai), tries: Math.min(9, Math.max(0, Math.round(Number(raw.minutesFrom.tries) || 0))), typed: bool(raw.minutesFrom.typed), ...(one(raw.minutesFrom.first, 40) ? { first: one(raw.minutesFrom.first, 40) } : {}),
+      // The Word file the secretary's send kept as typed minutes, by its id (sentMinutesFile): server-set. Board QA round 14
+      ...(raw.minutesFrom.typed && ID.test(String(raw.minutesFrom.file || '')) ? { file: String(raw.minutesFrom.file) } : {}),
       // A read that marks what it puts on (readMark): Replace can take it off with no Undo record of it
       ...(raw.minutesFrom.marks ? { marks: 1 } : {}),
       // What the heartbeat's read would have added after they were approved, and didn't (functions/api/_board-minutes.js
@@ -965,11 +1007,49 @@ export function presentersOf(it, people = []) {
 /** "Traci Lee & Holly Ranney", "Ann, Bo & Cy" */
 export const namesText = (names) => (names.length > 2 ? `${names.slice(0, -1).join(', ')} & ${names.at(-1)}` : names.join(' & '));
 
-/** The meeting whose minutes an item asks the board to approve, and its minutes (the PDF before the Word copy) */
-export function minutesFileOf(prev) {
-  const approved = approvedMinutesFile(prev, { board: true });
+/**
+ * A meeting's minutes file, the one rule every page and press goes by: Board's status line, the minutes card, Home and
+ * Email the board (minutesIn), the editor's link, the board page's "The minutes as written", the next meeting's
+ * approve-the-minutes item, approving (approvedFileAfter), the secretary's Send and taking them back, corrections and
+ * the heartbeat (functions/api/_board-notes.js keptFile). Approved: the one their approval says. Typed: the Word file the
+ * secretary sent as the minutes (sentMinutesFile), wherever a founder has put it. Else, of the meeting's minutes files
+ * (minutesFilesOf), the latest of the file they were read from, else the PDF before the Word copy. `staff`: as the
+ * founders see it, a staff-only file included (Board says it's staff only); the board's is never one. Board QA round 14,
+ * Nov 24 2026: Board, the board page, approving and corrections each had a rule of their own, and the board read a
+ * withdrawn or stale Word file as the minutes while Board said there were none. → the file, or null
+ */
+export function minutesFileOf(prev, { staff = false } = {}) {
+  const approved = approvedMinutesFile(prev, { board: !staff });
   if (approved !== undefined) return approved;
-  return draftPick(prev, (prev?.files || []).filter((f) => f.kind === 'minutes' && !f.staffOnly));
+  const list = minutesFilesOf(prev, { staff });
+  const sent = sentMinutesFile(prev);
+  return (sent && list.some((f) => f.id === sent.id) ? sent : null) || draftPick(prev, list);
+}
+/** The ids of the files on a meeting's agenda items */
+const onItems = (m) => new Set((m?.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
+/**
+ * The Word file the secretary's send kept as typed minutes (functions/api/_board-notes.js sendNotes keeps its id on the
+ * minutes, minutesFrom.file), while it's still filed as the minutes, wherever a founder has put it (on an agenda item
+ * too). Sent before the minutes kept its id: the file `keptId` names (the send's own record, on the server), else the
+ * latest under the name the send gave it. → the file, or null
+ */
+export function sentMinutesFile(m, keptId = '') {
+  if (!m?.minutesFrom?.typed) return null;
+  const files = (m.files || []).filter((f) => f.kind === 'minutes');
+  const id = m.minutesFrom.file || keptId;
+  if (id) return files.find((f) => f.id === id) || null;
+  return files.filter((f) => f.name === m.minutesFrom.name).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))[0] || null;
+}
+/**
+ * Which of a meeting's files can be its minutes: filed as the minutes; never one on an agenda item (a minutes file a
+ * founder put with an item is theirs, for that item: the last meeting's up for approval, say), unless it's the Word file
+ * the secretary sent as these minutes (sentMinutesFile); and for the board (`staff` false), never a staff-only one, which
+ * the board can't read
+ */
+export function minutesFilesOf(m, { staff = false } = {}) {
+  const placed = onItems(m);
+  const sent = sentMinutesFile(m);
+  return (m?.files || []).filter((f) => f.kind === 'minutes' && (staff || !f.staffOnly) && (!placed.has(f.id) || f.id === sent?.id));
 }
 /** Of minutes files (`list`), the one the board reads: the latest of the file they were read from or typed into, else the PDF before the Word copy */
 function draftPick(m, list) {
@@ -1001,8 +1081,8 @@ function approvedMinutesFile(m, { board = false } = {}) {
  * nothing done to the files after makes another one theirs. → the file, or null
  */
 function approvedBefore(m) {
-  const onItem = new Set((m.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
-  const own = (m.files || []).filter((f) => f.kind === 'minutes' && !onItem.has(f.id));
+  // (the meeting's own minutes files, by the one rule: minutesFilesOf)
+  const own = minutesFilesOf(m, { staff: true });
   const by = own.filter((f) => Number.isFinite(Date.parse(f.at || '')) && todayEastern(Date.parse(f.at)) <= String(m.approvedOn || ''));
   if (by.length) return draftPick(m, by);
   return own.filter((f) => f.name === m.minutesFrom?.name).sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')))[0]
@@ -1047,8 +1127,8 @@ export function minutesHeld(m, fileId = '') {
 export function approvedFileAfter(cur, next) {
   if (next?.minutes !== 'approved') return '';
   if (cur?.minutes === 'approved') { const id = approvedFileOf(cur); return id === APPROVED_HIDDEN ? '' : id; }
-  const onItem = new Set((cur?.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
-  return (minutesFileOf({ ...cur, files: (cur?.files || []).filter((f) => !onItem.has(f.id)) }) || ownMinutesFile(cur || {}))?.id || '';
+  // (the minutes file by the one rule, the secretary's Word file on an item too; else a staff-only one. Board QA round 14)
+  return ownMinutesFile(cur)?.id || '';
 }
 /** A copy of an item, called so until it has a name of its own (nobody's asked for a report on one: _board-asks.js wanted) */
 const COPY_MARK = ' (copy)';
@@ -1062,20 +1142,23 @@ export function copyOfItem(it, id) {
     title: !title || isCopyName(title) ? title : `${title.slice(0, LIMITS.title - COPY_MARK.length).trim()}${COPY_MARK}`,
   };
 }
-/** This meeting's own minutes file, if any: a minutes file on an agenda item is the last meeting's, up for approval */
-export const ownMinutesFile = (m) => {
-  // (approved: the file their approval says, as minutesFileOf has it, wherever it is. Board QA rounds 10 and 11)
-  const approved = approvedMinutesFile(m);
-  if (approved !== undefined) return approved;
-  const onItem = new Set((m.sections || []).flatMap((x) => x.items.flatMap((it) => it.docs || [])));
-  return (m.files || []).filter((f) => f.kind === 'minutes' && !onItem.has(f.id)).at(-1) || null;
-};
-/** The meeting an agenda's "approve the minutes" item is about: the one it names, else the last one the board had */
 /**
- * Whether a meeting has its minutes: typed or read from a file, or a file of them kept with it. Approved, by the
- * approval (minutesHeld), never by which files still carry Minutes
+ * This meeting's own minutes file as the founders see it: the one the board reads (minutesFileOf), never another; else a
+ * staff-only one, which Board names as that (Board QA round 14, Nov 24 2026: the editor named the newest file while the
+ * board read the PDF)
  */
-export const minutesIn = (m) => (m?.minutes === 'approved' ? minutesHeld(m) : !!m?.minutesFrom || !!ownMinutesFile(m));
+export const ownMinutesFile = (m) => minutesFileOf(m) || minutesFileOf(m || {}, { staff: true });
+/**
+ * Whether a meeting has its minutes: typed or read from a file, or a file of them the board can read (minutesFileOf).
+ * Approved, by the approval (minutesHeld), never by which files still carry Minutes. A file kept Staff only is never the
+ * minutes in (minutesStaffOnly). Board QA round 14, Nov 24 2026: Board said the board could read them and Email the
+ * board told the board they were up, while the board page had none
+ */
+export const minutesIn = (m) => (m?.minutes === 'approved' ? minutesHeld(m) : !!m?.minutesFrom || !!minutesFileOf(m));
+/** Draft minutes that are in only as a file kept Staff only, which the board can't read until it's shared. → that file, or null */
+export const minutesStaffOnly = (m) => (!m || m.minutes === 'approved' || minutesIn(m) ? null : ownMinutesFile(m));
+/** What Board says of minutes kept Staff only, and what to do to share them (`f`: their file) */
+export const staffOnlyWords = (f) => `${fileTitle(f?.name || '') || 'Their file'} is staff only, so the board can’t read these minutes. To share them, switch it to Board sees it in Every file.`;
 /** Signing on the board page starts with the minutes approved from here on: the secretary is never asked for years gone by */
 export const MINUTES_SIGN_FROM = '2026-11-01';
 /**
@@ -1087,6 +1170,7 @@ export const MINUTES_SIGN_FROM = '2026-11-01';
 export const minutesToSign = (m, signature = null) => m?.minutes === 'approved' && String(m.approvedOn || '') >= MINUTES_SIGN_FROM
   && (signature ? !!signature.changed : !(m.files || []).some((f) => f.kind === 'signed'));
 
+/** The meeting an agenda's "approve the minutes" item is about: the one it names, else the last one the board had */
 export function minutesTarget(m, meetings) {
   const it = (m.sections || []).flatMap((s) => s.items).find((x) => x.live === 'minutes');
   const named = it?.about ? meetings.find((x) => x.id === it.about) : null;
@@ -1115,8 +1199,8 @@ export function minutesToRead(m, meetings) {
   const it = (m.sections || []).flatMap((s) => s.items).find((x) => x.live === 'minutes');
   if (!it || it.confidential) return null;
   const prev = minutesTarget(m, (meetings || []).filter((x) => !x.practice));
-  // (a staff-only file beside the minutes isn't theirs to read, and doesn't hide the minutes that are)
-  const file = prev ? ownMinutesFile({ ...prev, files: (prev.files || []).filter((f) => !f.staffOnly) }) : null;
+  // (a staff-only file beside the minutes isn't theirs to read, and doesn't hide the minutes that are: the board's own)
+  const file = prev ? minutesFileOf(prev) : null;
   return prev?.shared && prev.minutes !== 'approved' && (prev.minutesFrom || file) ? prev : null;
 }
 /** An item's files, in order: its documents, and for "approve the minutes" the last meeting's minutes (from `meetings`) */

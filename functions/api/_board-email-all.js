@@ -36,6 +36,7 @@ import { header } from './_mailbox.js';
 import { groupWanted } from './_board-group.js';
 import { readState, normEmail, EMAILS_DOWN } from './_board-roles.js';
 import { GMAIL_SEND_SCOPE, mimeOf, gmailCall, esc, P } from './_board-asks.js';
+import { claimOwn, claimToken } from './_board.js';
 
 export const SUBJECT_MAX = 200;
 export const MESSAGE_MAX = 20000;
@@ -124,11 +125,15 @@ async function claim(env, key, { by, n, subject, fetchImpl, now }) {
   const DB = env.DB;
   await readState(DB, key);
   const at = new Date(now).toISOString();
-  const data = JSON.stringify({ at, by, subject });
+  // (a token of this press's own in its claim: written with its answer lost, the press finds it there and sends, never
+  // "That email may still be going out" to the press that claimed it. Board QA round 14)
+  const token = claimToken();
+  const data = JSON.stringify({ at, by, subject, claim: token });
+  const ours = async () => { try { return JSON.parse((await DB.prepare('SELECT data FROM board_state WHERE key = ?').bind(key).first())?.data || '{}').claim === token; } catch (e) { if (e instanceof SyntaxError) return false; throw e; } };
   const row = await DB.prepare('SELECT data, updated_at FROM board_state WHERE key = ?').bind(key).first();
   if (!row) {
-    const got = await DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(key, data, at).run();
-    return got?.meta?.changes ? { mine: true } : { held: true };
+    const got = await claimOwn(() => DB.prepare('INSERT INTO board_state (key, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(key) DO NOTHING').bind(key, data, at).run(), ours);
+    return got ? { mine: true } : { held: true };
   }
   let had = {};
   try { had = JSON.parse(row.data) || {}; } catch { /* taken over below */ }
@@ -147,8 +152,8 @@ async function claim(env, key, { by, n, subject, fetchImpl, now }) {
       return { had: went };
     }
   }
-  const got = await DB.prepare('UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND updated_at = ?').bind(data, at, key, row.updated_at).run();
-  return got?.meta?.changes ? { mine: true } : { held: true };
+  const got = await claimOwn(() => DB.prepare('UPDATE board_state SET data = ?, updated_at = ? WHERE key = ? AND updated_at = ?').bind(data, at, key, row.updated_at).run(), ours);
+  return got ? { mine: true } : { held: true };
 }
 
 /**

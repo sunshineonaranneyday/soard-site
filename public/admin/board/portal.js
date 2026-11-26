@@ -36,7 +36,7 @@ import {
   videoOf, isHeic, asJpeg, isLive, agendaItems, tallyText, unzip, quorumFor, itemFiles, minutesFileOf, presentersOf, sectionPlan, sectionClock, clockText, formatOf, docTitle, itemDocs, signsAs, initialsOf, CONSENT_TEXT, SIGN_STYLES, styleFont, MEMBER_HOW, dueOn, dueWords,
   reportsOn, namesText, showsOf, booksDraw, isStatement, mainLines, forBoard, cleanMeeting, heldEarly, minutesToSign,
   NOTHING_NEW, isNothingNew, LIMITS, slidesOfItem, reportAlone, decidesAlone, facesOf, hasReport, LIVE_TITLES, orderUnits,
-  uid,
+  sendUntilAnswered, uploadId, uploadKey,
 } from '../board-shared.js';
 import { YearCompare, booksTitle } from './books.js';
 import { FinanceReview, NoteLine, notesByKey, lineKeysOf, withLineNotes, dueText } from './review.js';
@@ -59,6 +59,8 @@ import { failed, CouldntLoad, UNREAD_WORDS } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
+/** The page's own ids for files whose last send got no answer, so choosing one again is the same upload (../board-shared.js uploadId) */
+const UNSURE_IDS = new Map();
 const LOGO = '/cdn-cgi/imagedelivery/ROYFuPmfN2vPS6mt5sCkZQ/brand-logo-admin/w=128';
 
 // A meeting's link on its calendar invite, or a paper's in an email (/board/<id>, public/_redirects), arrives as
@@ -2356,9 +2358,11 @@ function ReportPage({ id, itemId, ctx }) {
     for (const f of [...(list || [])]) {
       setAdding(f.name);
       // (the page's own id for the file, made once: sent again, the site answers with the file it kept, on its item, never
-      // a second copy. An answer lost on the way back goes once more under it before anything says to try again. Board QA
-      // round 13)
-      const fileId = uid('f_');
+      // a second copy. An answer lost on the way back goes again under it, however many are lost, before anything is said:
+      // only the site's own no says to try again, and one that never answers says it can't tell yet, with the same file
+      // chosen again going under the same id. Board QA rounds 13 and 14)
+      const key = uploadKey(f, `${id}:${itemId}`);
+      const fileId = uploadId(UNSURE_IDS, key);
       const send = async () => {
         const fd = new FormData();
         fd.append('file', f);
@@ -2368,8 +2372,8 @@ function ReportPage({ id, itemId, ctx }) {
           return await r.json().catch(() => ({ ok: false, lost: true, error: 'The site didn’t answer. Try again in a moment.' }));
         } catch { return { ok: false, lost: navigator.onLine !== false, error: navigator.onLine === false ? 'No connection. Check your internet and try again.' : 'No answer came back from the site. Try again in a moment.' }; }
       };
-      let j = await send();
-      if (!j.ok && j.lost) j = await send();
+      const j = await sendUntilAnswered(send, { lost: (x) => !x.ok && !!x.lost });
+      uploadId(UNSURE_IDS, key, { id: fileId, unsure: !!j.unsure });
       if (!j.ok) { ctx.say(`${f.name}: ${j.error}`, 'warn'); continue; }
       setData((dd) => withDocs(dd, id, itemId, j.docs, { add: { ...j.file, mine: true } }));
     }
