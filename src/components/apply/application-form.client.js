@@ -2580,6 +2580,8 @@ function init(root, cfg, mode) {
       if (r.ok) { finished(); return; }
       if (r.code === 'no-draft') { await expired(); readNotice(); return; } // its note says what happened (a new one: Submit again)
       if (r.code === 'submitted') { finished(true); return; }
+      // That child's application is already in this season (sent from another draft): said by Submit, in their language
+      if (r.code === 'already-applied') { navNote({ raw: r.error }); return; }
       if (r.error === 'stopped' && r.stop) { showStop({ key: r.stop, page: stopFor(form, readAnswers())?.page }); return; }
       if (r.errors && Object.keys(r.errors).length) {
         const ids = Object.keys(r.errors);

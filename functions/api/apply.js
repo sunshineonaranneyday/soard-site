@@ -15,7 +15,8 @@
  *   video-done { token }                            → marks the video uploaded once Stream has it
  *   remove-file{ token, field }                     → clears a photo or the video
  *   thumb      { token, field }                     → that photo's small preview (a JPEG), to show it again
- *   submit     { token }                            → { id } and loads it into JobTread
+ *   submit     { token }                            → { id } and loads it into JobTread (409 code 'already-applied':
+ *                                                     that child's application is already in this season)
  *   test-status{ token }                            → a staff test run's intake, step by step
  * POST multipart (action=photo, token, field, file, thumb?) → stores a photo
  *
@@ -281,6 +282,8 @@ export async function onRequestPost(context) {
     case 'remove-file': return handleRemoveFile(context, draft, body);
     case 'submit': {
       const out = await submitDraft(env, draft);
+      // That child's application is already in this season: said by Submit, in their language (the form shows it as is)
+      if (out.error === 'already-applied') return fail(out.message, 409, { code: 'already-applied' });
       if (!out.ok) return fail(out.error === 'stopped' ? 'stopped' : 'Some answers need attention.', 422, out);
       if (!out.duplicate) {
         context.waitUntil(processApplication(env, out.id));
