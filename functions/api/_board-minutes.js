@@ -1213,7 +1213,9 @@ export async function undoMinutes(env, id, fileId, { by = '' } = {}) {
   const why = undoRefused(rec, cur, fileId);
   if (why) throw Object.assign(new Error(why), { status: 409, extra: { meeting: cur } });
   let took = null;
-  const put = await patchMeeting(env.DB, id, (now) => { took = takenOff(rec, now, rec.found || rec.before); return took.next; }, { by });
+  // (minutes approved before the read, with none in Board: the read taken back leaves them with none again, the one
+  // write approved minutes' words may go by: ./_board.js keepStated `takesBack`. Board QA rounds 11 and 15)
+  const put = await patchMeeting(env.DB, id, (now) => { took = takenOff(rec, now, rec.found || rec.before); return took.next; }, { by, takesBack: rec.before?.minutes === 'approved' && !minutesHeld(rec.before) });
   const r = await afterTakenOff(env, rec, cur, put, took, { by, undo: true });
   return { meeting: await getMeeting(env.DB, id), ...r };
 }

@@ -9,7 +9,7 @@
  *   ?t=<token>&do=no    Not this time
  */
 
-import { linkState, answerFromLink, noticeLead, LINK_STATUS } from './_advisory-mail.js';
+import { linkState, answerFromLink, sendNotice, LINK_STATUS } from './_advisory-mail.js';
 import { escapeHtml, SITE_ORIGIN } from './_broadcast-notify.js';
 import { ensureAdvisory } from './_advisory.js';
 
@@ -102,9 +102,9 @@ export async function onRequestPost(context) {
   try {
     await ensureAdvisory(env.DB);
     const r = await answerFromLink(env.DB, t, { answer, note });
-    if (answer === 'yes') {
-      // (named as the person whose record the answer landed on: the one that very write was guarded on)
-      const told = noticeLead(env, { kind: 'answer', who: { name: r.name || '' }, note: r.note });
+    if (r.notice) {
+      // (owed in the answer's own write, naming the person that very write was guarded on: sent now, else by the heartbeat)
+      const told = sendNotice(env, r.notice);
       if (context.waitUntil) context.waitUntil(told); else await told;
     }
     return page('Thank you', `<h1>Thank you</h1><p>${answer === 'yes' ? 'We’ll be in touch.' : 'Thanks for letting us know.'}</p>`);

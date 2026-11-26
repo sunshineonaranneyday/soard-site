@@ -25,12 +25,12 @@
  *   state    waiting → made | declined | withdrawn (making: claimed, for the moment it's being made)
  */
 
-import { getMeeting, listMeetings, patchTogether, roster, ensureSchema, ID, SITE } from './_board.js';
-import { claimSending, releaseSending, boxPath, withBox, anythingIn, keptFile, mergePatch, fileInputs, stageMinutesFile, AGAIN } from './_board-notes.js';
+import { getMeeting, listMeetings, patchTogether, roster, ensureSchema, ID, SITE, nothingDone, landedOr, NOTHING_SAVED } from './_board.js';
+import { claimSending, releaseSending, boxPath, withBox, anythingIn, keptFile, mergePatch, stageMinutesFile, AGAIN } from './_board-notes.js';
 import { minutesIn, meetingName, uid } from '../../public/admin/board-shared.js';
 import { noteLines } from '../../public/admin/board-minutes-template.js';
 import { limit } from './_rate-limit.js';
-import { oweNotice, noticeName, dueRow, laterWords } from './_board-notices.js';
+import { noticeName, dueRow, dueStmt, sendNotice, laterWords } from './_board-notices.js';
 import { readState, readDown } from './_board-roles.js';
 import { emailConfigured } from './_broadcast-notify.js';
 import { emailShell, button, esc } from './_email-shell.js';
@@ -124,8 +124,15 @@ export async function waitingOn(DB, id) {
  * POST { action: 'correction', meetingId, target, words, was }: a correction, while the minutes are in, on the board page
  * and not approved. Their own waiting one on the same words is replaced. `was`: what their page showed (changed since:
  * 409 { changed }). → { correction }
+ * The correction and the email it owes the secretary and the founders are one write (its notice due), every read before
+ * it: the database failing anywhere kept nothing, said so. Pressed again, the notice is owed if the record doesn't have
+ * it yet (told_at), never skipped (Board QA round 13, Nov 24 2026: kept, its notice's write failing, and pressed again as
+ * told, nobody was ever emailed)
  */
-export async function suggestCorrection(env, { meetingId, target, words, was = null } = {}, w, { now = Date.now(), waitUntil = null } = {}) {
+export async function suggestCorrection(env, args, w, opts = {}) {
+  return suggesting(env, args, w, opts).catch(nothingDone());
+}
+async function suggesting(env, { meetingId, target, words, was = null } = {}, w, { now = Date.now(), waitUntil = null } = {}) {
   await ensureSchema(env.DB);
   const id = String(meetingId || '');
   if (!ID.test(id)) throw no('Which meeting?', 400);
@@ -153,23 +160,48 @@ export async function suggestCorrection(env, { meetingId, target, words, was = n
   const at = iso(now);
   const before = t.kind === 'other' ? '' : t.now;
   // (saying it again in other words: theirs is replaced, never a second one to decide)
-  const had = t.kind === 'other' ? null : await env.DB.prepare("SELECT id FROM board_minutes_corrections WHERE meeting_id = ? AND target = ? AND by_slug = ? AND state = 'waiting'").bind(id, String(target), me.slug).first();
+  const had = t.kind === 'other' ? null : await env.DB.prepare("SELECT id, told_at FROM board_minutes_corrections WHERE meeting_id = ? AND target = ? AND by_slug = ? AND state = 'waiting'").bind(id, String(target), me.slug).first();
   const cid = had?.id || uid('c_');
-  if (had) await env.DB.prepare('UPDATE board_minutes_corrections SET was = ?, words = ?, at = ? WHERE id = ?').bind(before, said, at, cid).run();
-  else await env.DB.prepare('INSERT INTO board_minutes_corrections (id, meeting_id, target, kind, was, words, by_slug, by_name, by_email, at, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(cid, id, String(target), t.kind, before, said, me.slug, me.name, me.email, at, 'waiting').run();
-  // (a word changed in one already sent isn't news: the email said to open the page). Written down as due before People
-  // is read, so a read that fails or a send that doesn't go is sent by the signing look, and the correction stands
-  // either way: they're told the email follows (Board QA round 10: ./_board-notices.js)
-  const owed = had ? {} : await oweNotice(env, `correction:${cid}`, { kind: 'correction', meetingId: id, cid, by: { name: me.name, email: me.email || '' }, where: whereOf(t) }, { waitUntil, who: 'the secretary and the founders', now });
-  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' }, ...(owed.later ? { later: owed.later } : {}) };
+  // Its email, to the secretary and the founders, written down as due in the same write: a new one owes it; one reworded
+  // owes it only if the record has none yet (a word changed in one already told isn't news: the email said to open the
+  // page). Due before People is read, so a read that fails or a send that doesn't go is sent by the signing look, once
+  // (ON CONFLICT keeps the first; each address its own key: ./_board-notices.js)
+  const owes = emailConfigured(env) && !had?.told_at;
+  const noticeId = `correction:${cid}`;
+  if (owes) await readState(env.DB, `notice-due:${noticeId}`); // (makes board_state)
+  const waiting = { sql: "EXISTS (SELECT 1 FROM board_minutes_corrections WHERE id = ? AND state = 'waiting')", bind: [cid] };
+  // (only with the correction as written: one decided a moment ago owes nothing new)
+  const due = owes ? dueStmt(env.DB, noticeId, { kind: 'correction', meetingId: id, cid, by: { name: me.name, email: me.email || '' }, where: whereOf(t) }, now, had ? waiting : null) : null;
+  // (its answer lost: written if the correction there is this one, words and time; its notice with it, one batch)
+  const done = await landedOr(() => env.DB.batch([
+    had
+      ? env.DB.prepare("UPDATE board_minutes_corrections SET was = ?, words = ?, at = ?, told_at = COALESCE(told_at, ?) WHERE id = ? AND state = 'waiting'").bind(before, said, at, owes ? at : null, cid)
+      : env.DB.prepare('INSERT INTO board_minutes_corrections (id, meeting_id, target, kind, was, words, by_slug, by_name, by_email, at, state, told_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(cid, id, String(target), t.kind, before, said, me.slug, me.name, me.email, at, 'waiting', owes ? at : null),
+    ...(due ? [due] : []),
+  ]), async () => !!(await env.DB.prepare("SELECT 1 AS y FROM board_minutes_corrections WHERE id = ? AND words = ? AND at = ? AND state = 'waiting'").bind(cid, said, at).first()));
+  if (had && !done.lost && !((done[0]?.meta?.changes ?? done[0]?.changes ?? 0) > 0)) throw no('That correction was decided a moment ago. Reload the page to see it.', 409, { reload: true });
+  // Written: its email is due, and goes now if People can be read (else the signing look sends it)
+  let later = '';
+  if (owes) {
+    try { later = (await sendNotice(env, noticeId, { waitUntil, who: 'the secretary and the founders', now })).later || ''; } catch (err) {
+      console.error('[board-corrections] the notice', cid, err?.message || err);
+      later = laterWords('the secretary and the founders');
+    }
+  }
+  return { correction: { id: cid, target: String(target), kind: t.kind, was: before, words: said, by: me.name, mine: true, at, state: 'waiting', decidedBy: '', decidedAt: '' }, ...(later ? { later } : {}) };
 }
 
-/** POST { action: 'correction-withdraw', id }: theirs, while it's waiting */
+/** POST { action: 'correction-withdraw', id }: theirs, while it's waiting (one write: the database failing changed nothing) */
 export async function withdrawCorrection(env, id, w) {
+  return withdrawing(env, id, w).catch(nothingDone());
+}
+async function withdrawing(env, id, w) {
   await ensureSchema(env.DB);
   const me = await authorOf(env, w);
-  const r = await env.DB.prepare("UPDATE board_minutes_corrections SET state = 'withdrawn' WHERE id = ? AND by_slug = ? AND state = 'waiting'").bind(String(id || ''), me.slug).run();
-  if (!((r?.meta?.changes ?? r?.changes ?? 0) > 0)) {
+  // (its answer lost: taken back if the site has it so, which is what they asked)
+  const r = await landedOr(() => env.DB.prepare("UPDATE board_minutes_corrections SET state = 'withdrawn' WHERE id = ? AND by_slug = ? AND state = 'waiting'").bind(String(id || ''), me.slug).run(),
+    async () => (await env.DB.prepare('SELECT state FROM board_minutes_corrections WHERE id = ? AND by_slug = ?').bind(String(id || ''), me.slug).first())?.state === 'withdrawn');
+  if (!r?.lost && !((r?.meta?.changes ?? r?.changes ?? 0) > 0)) {
     // (already taken back, in another tab: that's what they asked for)
     const c = await env.DB.prepare('SELECT state FROM board_minutes_corrections WHERE id = ? AND by_slug = ?').bind(String(id || ''), me.slug).first();
     if (c?.state !== 'withdrawn') throw no('That correction has already been decided', 409, { reload: true });
@@ -182,7 +214,7 @@ const boxOf = (notes, key) => { const v = notes?.[key]; return v === undefined |
 
 const STALE = 'The minutes changed there after this was suggested, so it can’t go over them. Read them, then change them in the notes or keep them as they are.';
 /** A decision that didn't land (one step: nothing of it was done), in round 11's words */
-const NOT_DECIDED = 'We couldn’t save that just now, so nothing was changed. Please try again in a moment.';
+const NOT_DECIDED = NOTHING_SAVED;
 /** Whether the meeting no longer says what the correction was suggested against */
 const changedSince = (m, c) => { const t = targetOf(m, c.target); return !t || (c.kind === 'roll' ? (t.now || '') !== (c.was || '') : !sameNote(t.now, c.was)); };
 
@@ -281,12 +313,15 @@ async function makeIt(env, id, c, w, { now, also = [] }) {
           // (as the step will leave them: the minutes with it on, and what the last send kept with it in)
           const p = correctionPlan(m0, c, ctx);
           from = m0.updatedAt || '';
-          fresh = await stageMinutesFile(env, p.next || m0, mergePatch(ctx.last, p.kept || {}), await fileInputs(env.DB, id), now);
+          // (`was`: approved minutes' file is their record, never made again: ./_board-notes.js fileMayChange)
+          fresh = await stageMinutesFile(env, p.next || m0, { was: m0, last: mergePatch(ctx.last, p.kept || {}), now });
         }
       }
       try {
         await patchTogether(env.DB, [id], ([m]) => {
           if (!m) throw no('That meeting is gone', 404);
+          // (approved since the decision read them: approved minutes change only once the approval is taken back. Board QA round 14)
+          if (m.minutes === 'approved') throw no('These minutes are approved, so they can’t change here', 409, { reload: true });
           // (changed since its Word file was made from it: made again)
           if (fresh && (m.updatedAt || '') !== from) throw AGAIN;
           const p = correctionPlan(m, c, ctx);
@@ -364,7 +399,7 @@ export async function decideCorrection(env, { id, make = false, reason = '', saw
   // Decided: its notice is due already, and goes now if People can be read (else the signing look sends it)
   let later = '';
   if (owed) {
-    try { later = (await oweNotice(env, owed.id, owed.notice, { waitUntil, who: noticeName(c.by_name), now })).later || ''; } catch (err) {
+    try { later = (await sendNotice(env, owed.id, { waitUntil, who: noticeName(c.by_name), now })).later || ''; } catch (err) {
       console.error('[board-corrections] the notice', cid, err?.message || err);
       later = laterWords(noticeName(c.by_name));
     }

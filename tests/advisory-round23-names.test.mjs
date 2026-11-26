@@ -38,7 +38,7 @@ test('finding 1: Wade-Giles and Cantonese family names that are given names else
   // (and the others the lists find the same way: Cantonese Kei and Lou, Korean Seung, Japanese Ken, Rin, Hiro and Ike)
   ['Kei Ka-ming', '', ''], ['Lou Ka-ming', '', ''], ['Seung Min-jun', '', ''], ['Ken Yuki', '', ''], ['Rin Hiroshi', '', ''], ['Hiro Keiko', '', ''], ['Ike Haruto', '', ''],
   // (given name first, before a family name that isn't one of their people's given names: theirs)
-  ['Tung Nguyen', '', 'Tung'], ['Pao Vang', '', 'Pao'], ['Ken Smith', '', 'Ken'], ['Ike Turner', '', 'Ike'], ['Lou Ames', '', 'Lou'], ['Rin Okafor', '', 'Rin'],
+  ['Tung Nguyen', '', ''] /* r25: Tung is a family name some people write first and Nguyen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Pao Vang', '', ''] /* r25: Pao is a family name some people write first and Vang no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Ken Smith', '', 'Ken'], ['Ike Turner', '', 'Ike'], ['Lou Ames', '', 'Lou'], ['Rin Okafor', '', 'Rin'],
 ]));
 
 // The tester's family names by people (qa23-public/n01-family-first.mjs, written apart from the site's lists), and given
@@ -138,7 +138,7 @@ test('finding 3: a Hungarian wife written by her husband\'s name ("Simon Zoltán
     ['Simon Zoltánné', 'Simon', ''], ['Dr. Simon Zoltánné', 'Simon', ''], ['Albert Istvánné', 'Albert', ''],
     // (names that end the same way and are no husband's are theirs)
     ['Jeanne Ames', '', 'Jeanne'], ['Joanne Ames', '', 'Joanne'], ['Marianne Ames', '', 'Marianne'], ['Adrienne Ames', '', 'Adrienne'], ['Suzanne Ames', '', 'Suzanne'],
-    ['Yvonne Ames', '', 'Yvonne'], ['René Dupont', '', 'René'], ['Simon Jeanne', '', 'Simon'], ['Simon Joanne', '', 'Simon'],
+    ['Yvonne Ames', '', 'Yvonne'], ['René Dupont', '', 'René'], ['Simon Jeanne', '', ''] /* r25: Simon is one of Hungary's family names and Jeanne no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Simon Joanne', '', ''] /* r25: Simon is one of Hungary's family names and Joanne no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */,
   ]);
   assert.equal(typeof G.marriedName, 'function', 'a married name by the husband\'s, read (round 23)');
   for (const w of ['Zoltánné', 'Péterné', 'Lászlóné', 'Istvánné', 'Zoltanne']) assert.ok(G.marriedName(w), w);
@@ -154,7 +154,7 @@ test('finding 4: family-first evidence comes from every given word after the fam
   // (and the same for a family name that comes first before its own people's given names)
   ['Tien Van Minh', '', ''], ['Tien Thi Lan', '', ''], ['Thanh Van Minh', '', ''],
   // (a given name first, a middle name and a family name are still the given name's: "Văn" and "Thị" are middle names)
-  ['Thanh Van Nguyen', '', 'Thanh'], ['Hai Van Nguyen', '', 'Hai'], ['Linh Thi Nguyen', '', 'Linh'], ['Mary Beth Rowe', '', 'Mary Beth'], ['Thanh Huong Ames', '', 'Thanh Huong'],
+  ['Thanh Van Nguyen', '', ''] /* r25: Thanh is a family name some people write first and Nguyen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Hai Van Nguyen', '', ''] /* r25: Hai is a family name some people write first, Van is Văn, no particle, and Nguyen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Linh Thi Nguyen', '', 'Linh'], ['Mary Beth Rowe', '', 'Mary Beth'], ['Thanh Huong Ames', '', 'Thanh Huong'],
   ['Jordan Taylor Ames', '', 'Jordan'],
 ]));
 
@@ -190,7 +190,7 @@ test('finding 5: Hungary\'s given names cover the tester\'s 265 common ones and 
     // (a shared name after a first word that isn't one of Hungary's family names, or a plain spelling of an accented one,
     // is anyone's: greeted, as round 22 had it)
     ['Jordan Martin', '', 'Jordan'], ['Steve Martin', '', 'Steve'], ['Eddie Albert', '', 'Eddie'], ['Jordan Kevin', '', 'Jordan'], ['Adam Rita', '', 'Adam'],
-    ['Simon Peter', '', 'Simon'], ['Simon Robert', '', 'Simon'], ['Eva Simon', '', 'Eva'], ['Grace Lukacs', '', 'Grace'],
+    ['Simon Peter', '', ''] /* r25: Simon is one of Hungary's family names and Peter no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Simon Robert', '', 'Simon'], ['Eva Simon', '', 'Eva'], ['Grace Lukacs', '', 'Grace'],
   ]);
   // (no name counted however typed is another people's given name; every accents-only one has an accent)
   const m = markedNames();

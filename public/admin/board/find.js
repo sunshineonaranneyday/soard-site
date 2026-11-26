@@ -9,6 +9,9 @@
  *     whatever the punctuation ("w9" finds W-9, "501c3" 501(c)(3), "7500" 7,500, "obrien" O’Brien), and a
  *     word run together ("BudgetvsActuals") as its parts. A long word typed whole is found run on across a
  *     space too ("boardmeeting"), never from inside another word ("elected" isn't in "selected")
+ *   - letters and the number after them joined or apart ("Q4" and "Q 4", "Level10" and "level 10"), and a fiscal year
+ *     however it's written or typed ("FY2026", "FY 2026", "FY26", "2025-26", "2025/2026", "FY 2025-26" are one year:
+ *     ./fiscalTyped, Board QA round 13)
  *   - the small words ("of", "vs", "the") never have to be there: "budget vs actual" finds "Budget & Actual"
  *   - a plural or a word's other endings find it ("budgets" Budget, "policies" Policy, "elected" Election)
  *   - a word nothing has, misspelled, is read as the nearest word that's there ("bugdet" is budget,
@@ -33,6 +36,41 @@ const numbers = (t) => t.replace(/(\d)\.00(?!\d)/g, '$1').replace(/(\d),(?=\d{3}
  * round 9: "−$12,000" found the $12,000 prepaid too)
  */
 const NEGATIVE = /(?<![a-z0-9])(?:[−-]\$?(\d+(?:d\d+)?[kmb]?)(?![a-z0-9])|\(\$?(\d+(?:d\d+)?[kmb]?)\))/g;
+/**
+ * A fiscal year however it's written, as the year it ends in: "FY2026", "FY 2026", "FY26", "FY'26", "2025-26", "2025/26",
+ * "2025-2026", "2025/2026", "FY 2025-26" and "FY25-26" are all 2026, as ./money.js sheetYear reads a budget sheet's (a
+ * span's two years one after the other). Board QA round 13: a budget's figures were found only as the page spelt their
+ * year ("FY2026"), never as the sheet did ("FY 2026", "FY26", "2025/2026")
+ */
+const FISCAL = /(?<![a-z0-9])fy[\s_]?['‘’]?(\d{4}|\d{2})(?:\s*[-‐‑–—/]\s*['‘’]?(\d{4}|\d{2}))?(?!\d)|(?<!\d)(20\d{2})\s*[-‐‑–—/]\s*(20\d{2}|\d{2})(?!\d)/g;
+const fullYear = (y, of = '2000') => (y.length === 2 ? `${of.slice(0, 2)}${y}` : y);
+export function fiscalYearsIn(t) {
+  const out = new Set();
+  if (!/\d/.test(t)) return out;
+  for (const m of String(t).toLowerCase().matchAll(FISCAL)) {
+    const start = fullYear(m[1] || m[3]);
+    const two = m[2] || m[4];
+    if (!two) { out.add(start); continue; }
+    const end = fullYear(two, start);
+    if (Number(end) === Number(start) + 1) out.add(end);
+    else if (m[1]) out.add(start);
+  }
+  return out;
+}
+/**
+ * The fiscal year a word typed says, however it's typed ("fy2026", "fy26", "fy'26", "fy2025-26", "fy25/26", "2025-26",
+ * "2025/2026", "2025–2026"): the year it ends in, '' for none. A search reads each that way, "fy<year>", and text has
+ * each fiscal year it says as that word too (./prep), so one finds the other whichever way each writes it
+ */
+export function fiscalTyped(w) {
+  const m = /^(?:fy['‘’]?(\d{4}|\d{2})(?:[-‐‑–—/]['‘’]?(\d{4}|\d{2}))?|(20\d{2})[-‐‑–—/](20\d{2}|\d{2}))$/.exec(String(w || ''));
+  if (!m) return '';
+  const start = fullYear(m[1] || m[3]);
+  const two = m[2] || m[4];
+  if (!two) return start;
+  const end = fullYear(two, start);
+  return Number(end) === Number(start) + 1 ? end : '';
+}
 export function prep(text) {
   const raw = String(text || '');
   const t = numbers(norm(raw));
@@ -43,6 +81,12 @@ export function prep(text) {
   for (const w of t.replace(/([a-z0-9])[&.'’\-/()]+(?=[a-z0-9])/g, '$1').replace(/[^a-z0-9]+/g, ' ').split(' ')) if (w && !have.has(w)) extra.add(w);
   // (a number's plural is the number too: "the 990s" has the 990)
   for (const w of have) if (/^\d+s$/.test(w)) extra.add(w.slice(0, -1));
+  // (letters and the number after them, joined or apart: "Q4" is "q 4" too, "Q 4" "q4", "Level10" "level 10"; a fiscal
+  // year as the one word below, never "fy2025" out of "FY 2025-26")
+  for (const w of have) { const m = /^([a-z]+)(\d+)$/.exec(w); if (m) extra.add(`${m[1]} ${m[2]}`); }
+  if (/(?:^| )[a-z]{1,2} \d/.test(plain)) for (const m of plain.matchAll(/(?<![a-z0-9])([a-z]{1,2}) (\d+)(?![a-z0-9])/g)) if (!SMALL.has(m[1]) && m[1] !== 'fy' && !have.has(`${m[1]}${m[2]}`)) extra.add(`${m[1]}${m[2]}`);
+  // (a fiscal year, however it's written, as the word a search reads it as, "fy2026", and the year it ends in: ./fiscalYearsIn)
+  for (const y of fiscalYearsIn(t)) for (const f of [`fy${y}`, `fy ${y}`, `fiscal year ${y}`]) if (!have.has(f)) extra.add(f);
   // ("BudgetvsActuals": "budgetvs" and "actuals" too; "PartlySunny" "partly" and "sunny")
   for (const run of (/[a-z][A-Z]/.test(raw) ? (/[^\x00-\x7f]/.test(raw) ? raw.normalize('NFKD') : raw).match(/[A-Za-z]*[a-z][A-Z][A-Za-z]*/g) : null) || []) for (const w of run.split(/(?<=[a-z])(?=[A-Z])/)) { const x = norm(w).replace(/[^a-z0-9]/g, ''); if (x && !have.has(x)) extra.add(x); }
   return ` ${plain} ${extra.size ? `${[...extra].join(' ')} ` : ''}`;
@@ -59,9 +103,13 @@ export function prep(text) {
  */
 const reEsc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const digitsRe = (d) => [...d].join(',?');
+/** The fiscal year a term says ("fy2026": ./fiscalTyped), '' for none */
+const fiscalOf = (t) => (/^fy\d{4}$/.test(t) ? t.slice(2) : '');
+// (that year, every way it's written: "FY2026", "FY 2026", "FY26", "FY'26", "2025-26", "2025/2026", "FY 2025-26")
+const fiscalRe = (y) => { const s = String(Number(y) - 1); const yy = y.slice(2); const ss = s.slice(2); const sep = '\\s*[-\u2010\u2011\u2013\u2014/]\\s*'; return `(?<![a-z0-9])(?:fy[\\s_]?['\u2018\u2019]?(?:(?:${s}|${ss})${sep}['\u2018\u2019]?)?(?:${y}|${yy})|${s}${sep}(?:${y}|${yy}))(?!\\d)`; };
 // (an amount below zero, "minus12000": its sign before it or its bracket, "\u2212$12,000", "-12,000", "(12,000)", then the
 // amount as it's written; never the same amount without one)
-export const termRe = (t) => (/^minus\d/.test(t) ? `(?<![a-z0-9])(?:[\u2212-]\\$?|\\(\\$?)${termRe(t.slice(5)).replace(/^\(\?<![^)]*\)/, '')}\\)?`
+export const termRe = (t) => (fiscalOf(t) ? fiscalRe(fiscalOf(t)) : /^minus\d/.test(t) ? `(?<![a-z0-9])(?:[\u2212-]\\$?|\\(\\$?)${termRe(t.slice(5)).replace(/^\(\?<![^)]*\)/, '')}\\)?`
   : /^\d+ \d+$/.test(t) ? `(?<![a-z0-9])${t.replace(' ', '[/\u2044]')}(?![0-9])`
   : t.includes(' ') ? `(?<![a-z0-9])${t.split(' ').map((x) => (/^\d+[dh]\d+$/.test(x) ? x.replace(/[dh]/, (c) => (c === 'd' ? '\\.' : ':')) : reEsc(x))).join('[^a-z0-9]{1,3}')}(?![a-z0-9])`
     : /^\d+d\d+$/.test(t) ? `(?<![a-z0-9]|\\d[,.:])${digitsRe(t.split('d')[0])}\\.${t.split('d')[1]}(?![0-9]|[,.:]\\d)`
@@ -111,11 +159,17 @@ function before(t, year = new Date().getFullYear()) {
     .replace(/(?<![\w.,])(\$?\d[\d,]*(?:\.\d+)?)\s+([kmb])\b/g, '$1$2')
     .replace(/\blast year'?s?\b/g, String(year - 1)).replace(/\bthis year'?s?\b/g, String(year)).replace(/\bnext year'?s?\b/g, String(year + 1))
     .replace(new RegExp(`\\b${MONTH_RE}\\s+(\\d{1,2})(?:st|nd|rd|th)?\\b(?:,?\\s+(\\d{4}))?`, 'g'), (all, mon, d, y) => (+d >= 1 && +d <= 31 ? (y ? `${y}-${pad(monthOf(mon))}-${pad(d)}` : `${monthOf(mon)}/${+d}`) : all))
+    // ("FY 2026", "FY '26", "FY 2025-26" as one word, the fiscal year as it’s found however it’s written: ./fiscalTyped)
+    .replace(/(?<![a-z0-9])fy\s+(?=['‘’]?\d)/g, 'fy')
     .replace(/\b([a-z]{3,})-([a-z]{3,})\b/g, (all, a, b) => (`${a}${b}` === 'bylaws' ? all : `${a} ${b}`))
     .replace(/\b([a-z]{3,})(\d+)\b/g, '$1 $2');
 }
 // (what's typed is read to its first 12 words, each to 40 letters: a pasted page is searched by how it starts)
 export const termsOf = (q) => before(norm(String(q || '').slice(0, 600))).replace(/(\d)\u2044(\d)/g, '$1/$2').split(/\s+/).filter(Boolean).slice(0, 12).map((w) => {
+  // A fiscal year, however it's typed ("FY 2026", "FY26", "2025-26", "2025/2026", "FY 2025-26"): "fy" and the year it ends
+  // in, as text has it however it's written there (./fiscalTyped, ./prep: Board QA round 13)
+  const fy = fiscalTyped(w);
+  if (fy) return `fy${fy}`;
   let m = w.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2}|\d{4})$/);
   if (m && +m[1] >= 1 && +m[1] <= 12 && +m[2] >= 1 && +m[2] <= 31) return `${m[3].length === 2 ? `20${m[3]}` : m[3]} ${pad(m[1])} ${pad(m[2])}`;
   m = w.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})$/);
@@ -194,7 +248,8 @@ function shortsOf(whole) {
 export function termIn(sp, w) {
   if (!w) return false;
   // (an amount whole, in short or below zero too: "676k" is never 676 kids, "minus12000" never −$120,000)
-  if (w.includes(' ') || /^(?:minus)?\d+(?:[dh]\d+)?$/.test(w) || /^(?:minus)?\d+(?:d\d+)?[kmb]$/.test(w)) return sp.includes(` ${w} `);
+  // (a fiscal year whole too: "fy2025" is never the start of another word)
+  if (w.includes(' ') || /^(?:minus)?\d+(?:[dh]\d+)?$/.test(w) || /^(?:minus)?\d+(?:d\d+)?[kmb]$/.test(w) || /^fy\d{4}$/.test(w)) return sp.includes(` ${w} `);
   if (sp.includes(` ${w}`)) return true;
   if (sp.length > 4000 || w.length < 5) return false;
   // (two words, each of two letters or more: "gala s(ponsors)" isn't "galas")

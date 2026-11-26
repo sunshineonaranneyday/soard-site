@@ -214,7 +214,8 @@ export async function moveBoardSlug(DB, from, to, { strict = false, by = '', rep
       // what's kept still names the old address, and the address stayed held. Board QA round 9)
       if (!m || !(movedIn(m, from, to) || movedIn(readJson(data, {}), from, to))) continue;
       let todos = 0;
-      await patchMeeting(DB, id, (cur) => { todos = todosIn(cur, from); return movedIn(cur, from, to) || cur; }, { by: byRename });
+      // (`follows`: approved minutes name the same person at the new address, ./_board.js keepStated. Board QA round 15)
+      await patchMeeting(DB, id, (cur) => { todos = todosIn(cur, from); return movedIn(cur, from, to) || cur; }, { by: byRename, follows: { [from]: to } });
       moved += 1;
       meetingsMoved += 1;
       todosMoved += todos;

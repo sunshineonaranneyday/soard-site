@@ -50,7 +50,7 @@ import { logAudit } from './_audit.js';
 import { generateSha } from './_collections.js';
 import { slugOf, PLAIN, ADVISORY_TITLE, normalizeLinkedIn, photoUrl } from '../../public/admin/team-shared.js';
 import { personStatus, personName } from './_team.js';
-import { isGroupInbox, isStaffEmail, signInWhy } from './_board-roles.js';
+import { isGroupInbox, isStaffEmail, signInWhy, memberSignIn } from './_board-roles.js';
 import { readName, greetName, ALSO_A_NAME, AFTER_NAME } from './_advisory-form.js';
 import { getSettings as advisorySettings } from './_advisory.js';
 import { queueWelcome } from './_advisory-mail.js';
@@ -332,7 +332,10 @@ async function planOf(env, id, now = Date.now()) {
     const done = app.status === 'joined' && onBoard && (!email || !emailUsable || !!emails[pointed.slug]);
     // (done: whether their sign-in email is written down as waiting for the heartbeat, so the box can say what a press
     // that finished says of it, never "stopped partway" beside nothing to press: public/admin/advisory-applications.js)
-    return { kind: done ? 'joined' : 'same', why: 'linked', ...base, person: show(pointed), ...(done ? { welcomeWaiting: !!waiting[pointed.slug] } : {}) };
+    // ("a welcome will go" is one fact everywhere, Advisory Board QA round 25: an email on file that signs them in, and
+    // their welcome owed. Owed with none that does, it waits for their own on People, and goes once it's there: the
+    // heartbeat's sendWaitingWelcomes. The box says that instead, never "goes by itself in a few minutes")
+    return { kind: done ? 'joined' : 'same', why: 'linked', ...base, person: show(pointed), ...(done ? { welcomeWaiting: !!waiting[pointed.slug] && memberSignIn(emails[pointed.slug] || '') } : {}) };
   }
   // Their email: each person signs in with their own (a group inbox is nobody's own)
   // (a SOARD address someone on People has is theirs too: blocked, or the same person)

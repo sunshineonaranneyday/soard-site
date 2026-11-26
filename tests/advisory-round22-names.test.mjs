@@ -39,7 +39,7 @@ test('finding 1: a name ending in one of Hungary\'s common given names is writte
   ['Simon Lukács', '', ''], ['Simon Olivér', '', ''], ['Simon Zita', '', ''],
   // (a plain spelling that's a common given name elsewhere says nothing, as round 21 had it; nor do names Hungarians share
   // with everyone: the first word is still theirs)
-  ['Simon Robert', '', 'Simon'], ['Simon Peter', '', 'Simon'], ['Simon Maria', '', 'Simon'], ['Simon Nora', '', 'Simon'], ['Simon Julia', '', 'Simon'],
+  ['Simon Robert', '', 'Simon'], ['Simon Peter', '', ''] /* r25: Simon is one of Hungary's family names and Peter no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Simon Maria', '', ''] /* r25: Simon is one of Hungary's family names and Maria no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Simon Nora', '', ''] /* r25: Simon is one of Hungary's family names and Nora no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Simon Julia', '', ''] /* r25: Simon is one of Hungary's family names and Julia no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */,
   ['Simon Anna', '', ''] /* r23: Anna, Rita and Viktor are Hungary's given names too (the lead's rule 5, all 72 of the tester's), so after Simon, a Hungarian family name, the name is written family name first: no name */, ['Simon Rita', '', ''] /* r23: as Simon Anna */, ['Simon Viktor', '', ''] /* r23: as Simon Anna */, ['Eva Simon', '', 'Eva'], ['Grace Lukacs', '', 'Grace'],
 ]));
 
@@ -69,9 +69,9 @@ test('finding 2: a given name that\'s a family name where family names come firs
 });
 
 test('finding 2: written given name first, before a family name of anyone\'s, they\'re greeted; two given names people go by together before a family name are still the pair', () => say([
-  ['Tien Smith', '', 'Tien'], ['Shan Rowe', '', 'Shan'], ['Ming Yao', '', 'Ming'], ['Kai Jones', '', 'Kai'], ['Yong Smith', '', 'Yong'], ['Bo Jackson', '', 'Bo'],
-  ['Jen Smith', '', 'Jen'], ['Yuki Kato', '', 'Yuki'], ['Sam Rowe', '', 'Sam'], ['Joe Rowe', '', 'Joe'], ['Kai Chen', '', 'Kai'], ['Ming Wei Lee', '', ''],
-  ['Thanh Huong Ames', '', 'Thanh Huong'], ['Thanh Huong Le', '', 'Thanh Huong'], ['Soo Jin Park', '', 'Soo Jin'], ['Thanh Nguyen', '', 'Thanh'],
+  ['Tien Smith', '', 'Tien'], ['Shan Rowe', '', 'Shan'], ['Ming Yao', '', ''] /* r25: Ming is a family name some people write first and Yao no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Kai Jones', '', 'Kai'], ['Yong Smith', '', 'Yong'], ['Bo Jackson', '', 'Bo'],
+  ['Jen Smith', '', 'Jen'], ['Yuki Kato', '', ''] /* r25: Yuki is a family name some people write first and Kato no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Sam Rowe', '', 'Sam'], ['Joe Rowe', '', 'Joe'], ['Kai Chen', '', ''] /* r25: Kai is a family name some people write first and Chen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Ming Wei Lee', '', ''],
+  ['Thanh Huong Ames', '', 'Thanh Huong'], ['Thanh Huong Le', '', ''] /* r25: Thanh is a family name some people write first and Le no family name of a people who write it last: no evidence the pair is given names first, no name (finding 1's rule) */, ['Soo Jin Park', '', ''] /* r25: Soo is a family name some people write first (Singapore's and Malaysia's 苏, finding 3) and Park no family name of a people who write it last: no evidence the pair is given names first, no name (finding 1's rule) */, ['Thanh Nguyen', '', ''] /* r25: Thanh is a family name some people write first and Nguyen no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */,
 ]));
 
 test('finding 2: every name marked as a family name first before its people\'s given names is a given name on the lists, and none is a family name that always comes first', () => {
@@ -94,7 +94,7 @@ test('finding 3: the name they go by is set aside when it\'s the full name\'s fa
   ['Tien Yu-ting', 'Tien', ''], ['Yong Min-jun', 'Yong', ''], ['Simon András', 'Simon', ''], ['Dr. Simon András PhD', 'Simon', ''], ['Simon András, PhD', 'Simon', ''],
   ['KATO YUKI', 'kato', ''], ['Kim-Lee Park', 'Kim', ''], ['Nguyễn Văn An', 'Nguyen', ''],
   // (their given name, or a first word that's no family name there, is theirs)
-  ['Sam Rowe', 'Sam', 'Sam'], ['Tien Smith', 'Tien', 'Tien'], ['Ming Yao', 'Ming', 'Ming'], ['Jordan Ames', 'Jordan', 'Jordan'], ['Simon Robert', 'Simon', 'Simon'],
+  ['Sam Rowe', 'Sam', 'Sam'], ['Tien Smith', 'Tien', 'Tien'], ['Ming Yao', 'Ming', ''] /* r25: Ming is a family name some people write first and Yao no family name of a people who write it last: no evidence of the order, no name (finding 1's rule) */, ['Jordan Ames', 'Jordan', 'Jordan'], ['Simon Robert', 'Simon', 'Simon'],
   ['Thanh Huong Ames', 'Thanh', 'Thanh'],
 ]));
 

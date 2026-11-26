@@ -92,6 +92,14 @@ export function tally({ campaignId, payments, pages, credits, hostedIds = {}, ad
   return { cents, byAdvisor, gifts };
 }
 
+/** The money's record written, with what's owed beside it (`also`: statements), in one write: both land or neither */
+async function writeWith(DB, key, value, also = []) {
+  if (!also.length) return writeState(DB, key, value);
+  await readState(DB, key); // (the table)
+  await DB.batch([DB.prepare('INSERT OR REPLACE INTO board_state (key, data, updated_at) VALUES (?, ?, ?)').bind(key, JSON.stringify(value), new Date().toISOString()), ...also]);
+  return value;
+}
+
 /** Read Zeffy and keep the sum. → the saved state. A read that fails keeps the last sum and says so */
 export async function readMoney(env, settings, { fetchImpl = fetch, now = Date.now() } = {}) {
   const prev = await readState(env.DB, KEY);
@@ -131,14 +139,21 @@ export async function readMoney(env, settings, { fetchImpl = fetch, now = Date.n
     });
     const before = new Set(prev.seen || []);
     const fresh = {};
-    for (const [slug, gifts] of Object.entries(sum.gifts)) { const n = gifts.filter((id) => !before.has(id)).length; if (n && prev.at) fresh[slug] = n; }
+    const freshIds = {};
+    for (const [slug, gifts] of Object.entries(sum.gifts)) {
+      const ids = gifts.filter((id) => !before.has(id));
+      if (ids.length && prev.at) { fresh[slug] = ids.length; freshIds[slug] = { n: ids.length, ids }; }
+    }
     const state = {
       at: new Date(now).toISOString(), cents: sum.cents, byAdvisor: sum.byAdvisor, counts: Object.fromEntries(Object.entries(sum.gifts).map(([k, v]) => [k, v.length])),
       pages, seen: Object.values(sum.gifts).flat(), error: null, goalTerm: prev.goalTerm || null, hostedMissing: missing,
       // What each credited gift comes to now, from Zeffy
       credited: Object.fromEntries(credits.map((c) => [c.payment_id, centsOf(list.find((p) => p.id === c.payment_id))])),
     };
-    return { state: await writeState(env.DB, KEY, state), fresh };
+    // Each member's note of a gift on their page owed in the same write that keeps the gifts as seen (Advisory Board QA
+    // round 25: noted after it went, a note that didn't go was lost): the heartbeat sends it, once (./_advisory-mail.js)
+    const { giftOwed } = await import('./_advisory-mail.js');
+    return { state: await writeWith(env.DB, KEY, state, await giftOwed(env, freshIds, { now, settings, members: advisors })), fresh };
   } catch (e) {
     console.error('[advisory-money]', e.message);
     return { state: await writeState(env.DB, KEY, { ...prev, error: e.message, failedAt: new Date(now).toISOString() }), fresh: {} };
@@ -287,7 +302,8 @@ export async function maybeReadMoney(env, { fetchImpl = fetch, now = Date.now() 
     const raised = Math.floor((state.cents || 0) / 100) + carriedOf(settings);
     // Once a term: the next term has its own goal to reach
     const reachedGoal = !state.error && raised >= settings.goal && state.goalTerm !== settings.termStart;
-    if (reachedGoal) await writeState(env.DB, KEY, { ...state, goalTerm: settings.termStart });
+    // (its emails, everyone's thank-you and the notice to whoever runs the group, owed in the write that marks it told)
+    if (reachedGoal) await writeWith(env.DB, KEY, { ...state, goalTerm: settings.termStart }, await (await import('./_advisory-mail.js')).goalOwed(env, settings, { raised, now }));
     return { fresh, reachedGoal, raised, settings };
   } catch (e) {
     console.error('[advisory-money]', e.message);

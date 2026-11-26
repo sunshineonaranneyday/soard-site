@@ -25,6 +25,26 @@ export const UNREAD_WORDS = {
   givers: 'The givers’ names couldn’t load just now. Reload in a moment.',
   sources: 'The tax returns and audits couldn’t load just now. Reload in a moment.',
   events: 'The events couldn’t load just now. Reload in a moment.',
+  // Board QA round 13: every part of the page's read its own part (functions/api/_board.js portalData, board-portal.js,
+  // _board-asks.js portalExtras), each said in its place, the rest of the page open
+  history: 'The month-end balances couldn’t load just now. Reload in a moment.',
+  meetings: 'The meetings couldn’t load just now. Reload in a moment.',
+  docs: 'The documents couldn’t load just now. Reload in a moment.',
+  settings: 'The board’s settings couldn’t load just now, so the quorum isn’t said here. Reload in a moment.',
+  ownFiles: 'Which of these files are yours couldn’t load just now, so they can’t be taken off here. Reload in a moment.',
+  paperWords: 'The words inside SOARD’s papers couldn’t load just now, so those were found by their names only. Reload in a moment.',
+  mark: 'Your adopted signature couldn’t load just now. Reload in a moment.',
+  copies: 'Your signed copies couldn’t load just now. Reload in a moment.',
+  signedBodies: 'What you signed before couldn’t load just now, so what changed isn’t shown. Reload in a moment.',
+  practice: 'Today’s practice meeting couldn’t load just now. Reload in a moment.',
+  notesWaiting: 'The notes typed for the minutes couldn’t load just now. Reload in a moment.',
+  corrections: 'The corrections suggested to the minutes couldn’t load just now. Reload in a moment.',
+  minutesSigned: 'Who has signed the minutes couldn’t load just now. Reload in a moment.',
+  lineNotes: 'The notes on these lines couldn’t load just now. Reload in a moment.',
+  myAsks: 'When your reports are due couldn’t load just now. Reload in a moment.',
+  presenting: 'The meetings you present in before they’re shared couldn’t load just now. Reload in a moment.',
+  review: 'The chair’s review couldn’t load just now. Reload in a moment.',
+  facts: 'Some of SOARD’s facts couldn’t load just now. Reload in a moment.',
 };
 /**
  * Which parts failed in the page's data, or in a meeting's numbers (`n`: a meeting today or ahead has today's, and its

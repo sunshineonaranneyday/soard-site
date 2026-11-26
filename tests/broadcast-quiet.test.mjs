@@ -346,7 +346,9 @@ test('the phone stopping ends it 45 seconds later even while Stream\'s public st
   assert.equal(r.state.phase, 'live');
   assert.ok(Date.parse((await b.readState(env.DB)).segmentAt) > Date.parse(segment), 'a gap breaks the unbroken stretch: the Kit list email\'s 3 minutes start again');
   // The phone really stops; the lifecycle keeps saying live
-  stop(); const stoppedAt = Date.now();
+  // (the stop's own time, as the phone's status gives it: never a second look at the clock, a millisecond later on a busy
+  // machine. Found in Board QA round 13's full check, Nov 24 2026)
+  stop(); const stoppedAt = Date.parse(sim.inputSince);
   travel(5 * S);
   r = await tick();
   assert.equal(r.state.phase, 'live', 'not yet: could still be a blip');

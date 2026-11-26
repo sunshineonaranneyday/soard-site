@@ -40,6 +40,12 @@ const dayOf = (iso) => (iso ? shortDate(todayEastern(Date.parse(iso))) : '');
 const fileUrl = (f) => `/api/advisory-file?id=${encodeURIComponent(f.id)}`;
 const viewerFiles = (files) => files.map((f) => ({ name: f.name, type: f.type, size: f.size, at: f.at, url: fileUrl(f) }));
 const introNew = (i) => i.status === 'thanks' && !i.updatedBy;
+/**
+ * A new ask's, wish's or paper's id, made once for its form (Advisory Board QA round 25: a save whose answer was lost,
+ * pressed again, made a second): pressed again, it's the same record, which the server answers with as saved
+ * (functions/api/_advisory.js newOnce). The server's own shape: a word, then letters and 2 to 7
+ */
+export const makeId = (prefix) => `${prefix}_${[...crypto.getRandomValues(new Uint8Array(14))].map((b) => 'abcdefghijklmnopqrstuvwxyz234567'[b % 32]).join('')}`;
 const TODAY = () => todayEastern();
 /** A signature that still counts: this term's, on the words as they are now (the page asks the advisor again otherwise) */
 const signedNow = (sig, doc, term = null) => !!sig && sig.version === (doc.version || 1) && String(sig.at).slice(0, 10) >= (term?.renewedOn || term?.started || '');
@@ -98,8 +104,10 @@ export function AdvisoryArea({ tab = 'meetings', onTab = null, embedded = false,
     document.addEventListener('visibilitychange', back);
     return () => { removeEventListener('focus', back); document.removeEventListener('visibilitychange', back); };
   }, []);
-  // A change, then the page as it is now. Says so only when `done` is given; a refusal always says why.
-  // The same change pressed twice goes once (a double click, a slow connection)
+  // A change, then the page as it is now. Says so only when `done` is given (words, or words from the answer: done(j));
+  // a refusal always says why. The same change pressed twice goes once (a double click, a slow connection).
+  // A press that fails reads the page again, quietly, whatever the failure: what's on the screen is what's true, never
+  // the row as it was before a change that landed with its answer lost (Advisory Board QA round 25)
   const act = async (body, done = '', { raw = false } = {}) => {
     const key = JSON.stringify(body);
     if (running.current.has(key)) return null;
@@ -108,12 +116,13 @@ export function AdvisoryArea({ tab = 'meetings', onTab = null, embedded = false,
     try {
       const j = await call(body);
       if (!j.ok) {
+        // (quietly: a read that fails now leaves the page as it is, and never says a second thing)
+        if (!j.signedOut) await call().then((x) => { if (x.ok) setData(x); }, () => {});
         if (raw) return j;
         tell(j.error || 'That didn’t save. Try again.', true);
-        if (j.status === 404 || j.status === 409) await load();
         return null;
       }
-      if (done) tell(done);
+      if (done) tell(typeof done === 'function' ? done(j) : done);
       await load();
       return j;
     } finally {
@@ -229,7 +238,8 @@ function IntroRow({ i, ctx }) {
   // Pressing a status moves the focus out of the note first: the press says both, so the note doesn't save on its own
   const choosing = useRef(false);
   useDirty(ctx, `intro-${i.id}`, typed ? `the note on ${i.name}` : '');
-  const set = (status) => { choosing.current = false; return act({ action: 'intro-status', id: i.id, status, note }, status === i.status && !undecided ? 'Saved' : `Marked ${statusWord(data.introStatuses.find((x) => x.id === status) || {})}`); };
+  // (the server's words after it: whether the update email went, or goes in a few minutes)
+  const set = (status) => { choosing.current = false; const done = status === i.status && !undecided ? 'Saved' : `Marked ${statusWord(data.introStatuses.find((x) => x.id === status) || {})}`; return act({ action: 'intro-status', id: i.id, status, note }, (j) => [`${done}.`, j.said].filter(Boolean).join(' ')); };
   return html`<div class="ar-row">
     <div class="ar-row__t"><strong>${i.name}</strong>${i.company ? html`<span class="ar-muted">${i.company}</span>` : null}</div>
     <p class="ar-muted">From ${i.by || 'an Advisory Board member'}, ${dayOf(i.at)}</p>
@@ -242,8 +252,18 @@ function IntroRow({ i, ctx }) {
     <div class="ar-seg" role="group" aria-label=${`Where ${i.name} stands`} onPointerDown=${() => { choosing.current = true; }}>
       ${data.introStatuses.map((st) => html`<button type="button" key=${st.id} aria-pressed=${i.status === st.id && !undecided} onClick=${() => set(st.id)}>${statusWord(st)}</button>`)}
     </div>
-    ${data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(i.by) || 'the Advisory Board member'}.</p>` : null}
+    ${data.settings.emails ? html`<p class="ar-muted ar-small">${emailsLine(data, i)}</p>` : null}
   </div>`;
+}
+/**
+ * "Changing this emails Nell.", only when it can (Advisory Board QA round 25: every promise from the same facts as what
+ * the press does): with no email on file, or off the Advisory Board now, it says nobody is emailed
+ */
+function emailsLine(data, x) {
+  const who = first(x.by) || 'the Advisory Board member';
+  const a = data.advisors.find((m) => m.slug === x.slug);
+  return !a ? `${x.by || 'They'} isn’t on the Advisory Board now, so changing this emails nobody.`
+    : !a.email ? `${who} has no email on file, so changing this emails nobody.` : `Changing this emails ${who}.`;
 }
 
 function HostedRow({ x, ctx }) {
@@ -258,7 +278,7 @@ function HostedRow({ x, ctx }) {
     // A page picked now that won't do stops it; one saved earlier never stops Approve, Not now or Held (the field warns)
     const wrong = fieldState(giveUrl, { forms, saved: x.giveUrl || '' }).problem;
     if (wrong) { ctx.tell(`Its Zeffy page: ${wrong}`, true); return; }
-    const j = await act({ action: 'hosted-status', id: x.id, status, note, date, giveUrl }, done);
+    const j = await act({ action: 'hosted-status', id: x.id, status, note, date, giveUrl }, (r) => [`${done}.`, r.said].filter(Boolean).join(' '));
     if (j?.hosted) setGiveUrl(j.hosted.giveUrl || '');
   };
   const approve = async () => {
@@ -285,7 +305,7 @@ function HostedRow({ x, ctx }) {
           : html`<button type="button" class="ar-btn ar-btn--go" disabled=${busy} onClick=${approve}>Approve</button>`}
         ${x.status !== 'not-now' ? html`<button type="button" class="ar-btn" disabled=${busy} onClick=${() => send('not-now', 'Marked not now')}>Not now</button>` : null}
       </div>
-      ${ctx.data.settings.emails ? html`<p class="ar-muted ar-small">Changing this emails ${first(x.by) || 'the Advisory Board member'}.</p>` : null}`}
+      ${ctx.data.settings.emails ? html`<p class="ar-muted ar-small">${emailsLine(ctx.data, x)}</p>` : null}`}
   </div>`;
 }
 
@@ -308,25 +328,23 @@ function AskCard({ ctx }) {
   const out = data.asks.find((a) => a.sentAt && !a.closedAt) || null;
   const drafts = data.asks.filter((a) => !a.sentAt);
   const past = data.asks.filter((a) => a.sentAt && a.closedAt);
-  const blank = { title: '', body: '', link: '' };
+  // (a new ask's id, made once for this form: makeId)
+  const blank = () => ({ id: makeId('ask'), title: '', body: '', link: '' });
   const [draft, setDraft] = useState(blank);
   const up = (k) => (e) => setDraft({ ...draft, [k]: e.currentTarget.value });
   useDirty(ctx, 'ask', draft.title || draft.body || draft.link ? 'the ask you’re writing' : '');
   // With the emails on, this reaches every advisor's inbox at once: it asks first
   const agree = ({ text = 'This puts the ask on the page and emails every Advisory Board member now.', yes = 'Put it out and email them' } = {}) => ask({ title: `Email all ${data.advisors.length} Advisory Board members?`, text, yes, no: 'Not yet', careful: true });
-  // What really happened, from the server's answer
-  const sentWords = (r) => (r?.off ? 'It’s on the page. Emails are off, so nothing was sent.'
-    : r?.already ? 'It’s on the page. The Advisory Board already had this email.'
-      : r?.sent ? `It’s out, and emailed to ${r.sent === 1 ? '1 Advisory Board member' : `${r.sent} Advisory Board members`}${r.failed ? `. ${r.failed} didn’t go` : ''}`
-        : 'It’s on the page, but no email went out.');
-  // Out already and never emailed (the switch was off, or the send failed)
+  // What really happened, in the server's words (functions/api/_advisory-mail.js askWords): emailed, or the rest going
+  // by themselves in a few minutes, once each
+  const sentWords = (j) => j?.said || 'It’s on the page.';
+  // Out already and never emailed (the switch was off)
   const emailIt = async (id) => {
     if (!(await agree({ text: 'This emails every Advisory Board member now.', yes: 'Email them' }))) return;
     const j = await act({ action: 'email-ask', id }, '', { raw: true });
     if (!j) return;
     if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); return; }
-    const r = j.sent && typeof j.sent === 'object' ? j.sent : j;
-    ctx.tell(r.off ? 'Nothing went out: emails are off.' : r.already ? 'The Advisory Board already had this email.' : r.sent ? `Emailed to ${r.sent === 1 ? '1 Advisory Board member' : `${r.sent} Advisory Board members`}${r.failed ? `. ${r.failed} didn’t go` : ''}` : 'No email went out. Try again in a while.', !r.sent || !!r.failed);
+    ctx.tell(sentWords(j), !j.sent?.sent && !j.sent?.owed && !j.sent?.already);
   };
   // agreed: they said yes to emailing everyone. The server holds the real switch: if it was turned on since this
   // screen last looked, it says so, and this asks before anything goes
@@ -338,8 +356,8 @@ function AskCard({ ctx }) {
       j = await act({ action: 'send-ask', id, emailsOk: true }, '', { raw: true });
     }
     if (!j) return false;
-    if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); await ctx.load(); return false; }
-    ctx.tell(sentWords(j.sent), !!j.sent?.failed);
+    if (!j.ok) { ctx.tell(j.error || 'That didn’t go out. Try again.', true); return false; }
+    ctx.tell(sentWords(j));
     return true;
   };
   const save = async (thenOut) => {
@@ -347,7 +365,7 @@ function AskCard({ ctx }) {
     if (emailing && !(await agree())) return;
     const j = await act({ action: 'save-ask', ask: draft }, thenOut ? '' : 'Saved for later');
     if (j && thenOut) await putOut(j.ask.id, emailing);
-    if (j) setDraft(blank);
+    if (j) setDraft(blank());
   };
   return html`<${Card} title="This month’s ask" sub="One clear ask at a time. It sits on every Advisory Board member’s Home page.">
     ${out ? html`<${AskOut} a=${out} ctx=${ctx} emailIt=${emailIt} />` : html`<p class="ar-muted">Nothing is out right now.</p>`}
@@ -413,9 +431,10 @@ function AskOut({ a, ctx, past = false, emailIt = null }) {
 // ─── Who we're looking for ──────────────────────────────────────────
 function Wishes({ ctx }) {
   const { data, act } = ctx;
-  const blank = { title: '', detail: '' };
+  // (a new one's id, made once for this form: makeId)
+  const blank = () => ({ id: makeId('w'), title: '', detail: '' });
   const [w, setW] = useState(blank);
-  const add = async () => { if (await act({ action: 'save-wish', wish: w }, 'Added')) setW(blank); };
+  const add = async () => { if (await act({ action: 'save-wish', wish: w }, 'Added')) setW(blank()); };
   useDirty(ctx, 'wish', w.title || w.detail ? 'the person you’re adding' : '');
   return html`<${Card} title="Who we’re looking for" sub="On every Advisory Board member’s Introductions page. Be specific: a name or a trade gets answers.">
     ${data.wishes.length ? html`<ul class="ar-list">${data.wishes.map((x) => html`<li key=${x.id}><${WishRow} w=${x} ctx=${ctx} /></li>`)}</ul>` : html`<p class="ar-muted">The list is empty. Advisory Board members told us they know vendors, contractors, event people, and corporate partners, so that’s a good place to start.</p>`}
@@ -812,6 +831,8 @@ function DocEditor({ doc, kind, ctx, onDone, track }) {
   const [saved, setSaved] = useState(doc.id ? { title: doc.title, body: doc.body || '', shared: doc.shared !== false, url: doc.url || '', note: doc.note || '', shelf: doc.shelf || '' } : null);
   const [saving, setSaving] = useState(false);
   const [id, setId] = useState(doc.id || '');
+  // (a new paper's id, made once for this editor: pressed again after an answer that was lost, it's the same paper)
+  const [newId] = useState(() => (doc.id ? '' : makeId('ad')));
   // Which saved copy these words started from: the server refuses if someone has saved since (conflict: theirs)
   const [base, setBase] = useState(doc.updatedAt || '');
   const [conflict, setConflict] = useState(null);
@@ -833,7 +854,7 @@ function DocEditor({ doc, kind, ctx, onDone, track }) {
     }
     setSaving(true);
     const onPage = shared && !hide;
-    const j = await act({ action: 'save-doc', ...(base ? { base } : {}), doc: { id: id || undefined, kind: doc.kind, title, body, shared: onPage, ...(base ? { base } : {}), ...(doc.kind === 'overview' || library ? { url } : {}), ...(library ? { note, shelf } : {}) } }, hide ? '' : 'Saved', { raw: true });
+    const j = await act({ action: 'save-doc', ...(base ? { base } : {}), doc: { id: id || newId || undefined, kind: doc.kind, title, body, shared: onPage, ...(base ? { base } : {}), ...(doc.kind === 'overview' || library ? { url } : {}), ...(library ? { note, shelf } : {}) } }, hide ? '' : 'Saved', { raw: true });
     setSaving(false);
     if (!j) return null;
     if (!j.ok) {
