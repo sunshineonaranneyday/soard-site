@@ -1165,9 +1165,12 @@ export const MINUTES_SIGN_FROM = '2026-11-01';
  * Approved minutes still to be signed, the one rule every place that asks goes by (Home's For you, the meeting's Sign
  * the minutes): the signature on record ends the asking (`signature`: the page's minutesSigned[m.id], the moment it's
  * given, never waiting on the signed copy made from it), unless the minutes changed after it was given. With no
- * signature, a signed copy kept with them (one put in by hand) ends it
+ * signature, a signed copy kept with them (one put in by hand) ends it. Never minutes the board can't read: held in
+ * Board (minutesHeld) but not in for the board (minutesIn, the one rule: their only file kept Staff only), the secretary
+ * would sign what the board can't see (Board QA round 15). Approved with none in Board yet, they're asked as before
  */
 export const minutesToSign = (m, signature = null) => m?.minutes === 'approved' && String(m.approvedOn || '') >= MINUTES_SIGN_FROM
+  && !(minutesHeld(m) && !minutesIn(m))
   && (signature ? !!signature.changed : !(m.files || []).some((f) => f.kind === 'signed'));
 
 /** The meeting an agenda's "approve the minutes" item is about: the one it names, else the last one the board had */

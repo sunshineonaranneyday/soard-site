@@ -31,6 +31,7 @@ import { reportDom, motionDom } from '../board-report.js';
 import { h, render } from '../vendor.js';
 import { YearCompare } from './books.js';
 import { lineKeysOf, notesByKey, noteText } from './review.js';
+import { liveLost } from './unread.js';
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined && text !== null) e.textContent = String(text); return e; };
 
@@ -236,8 +237,9 @@ function storeBox(books) {
 function liveBox(kind, n, m, money, notes = null, books = n?.books, lostNotes = false) {
   if (!n || !kind || kind === 'minutes') return null;
   // (today's numbers whose read failed just now: said so on paper too, never a zero or an empty list: ./unread.js)
-  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events', meetings: 'meetings' }[kind];
-  if (part && n.unread?.[part]) return el('p', 'bpp-live', UNREAD_WORDS[part]);
+  // (./unread.js LIVE_PARTS: the parts each item draws from, the meeting's page's and the screen's list too)
+  const part = liveLost(kind, n);
+  if (part) return el('p', 'bpp-live', UNREAD_WORDS[part]);
   if (kind === 'projects') return makeoversBox(n);
   if (kind === 'cash') {
     // The figures, the year against last year, where the revenue came from, the store, then the statements the packet
@@ -450,7 +452,9 @@ export async function printAll(m, { people = [], numbers = null, meetings = [], 
   const money = data && m.sections.some((sec) => sec.items.some((it) => showsOf(it).includes('cash'))) ? await moneyFor(data, m.date < data.today ? m.date : '', numbers).catch(() => null) : null;
   // What makeovers cost follows the money's date rule too: today's for a meeting today or ahead (./costs.js useCosts)
   const live = data && m.date >= data.today ? data.numbers : null;
-  const costsNumbers = live ? { ...numbers, costs: live.costs ?? numbers?.costs, operating: live.operating ?? numbers?.operating, cash: live.cash ?? numbers?.cash, books: live.books ?? numbers?.books } : numbers;
+  // (and today's flags with them: what makeovers cost not read just now says so on paper, never a packet's copy or a
+  // balance guessed in its place. Board QA round 15)
+  const costsNumbers = live ? { ...numbers, costs: live.costs ?? numbers?.costs, operating: live.operating ?? numbers?.operating, cash: live.cash ?? numbers?.cash, books: live.books ?? numbers?.books, unread: live.unread } : numbers;
   root.append(agendaPages(m, { people, numbers, meetings, money, lineNotes: data?.lineNotes?.[m.id] || {}, lostNotes: !!data?.unread?.lineNotes, books, costsNumbers, held, quorum: data?.quorum || 0, quorumLost: !!data?.unread?.settings }));
   // How many pages, so the progress can say "12 of 40"
   const docs = [];

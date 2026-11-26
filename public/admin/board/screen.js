@@ -35,7 +35,7 @@ import { mdWords, mdPoints, mdFigures, mdNumber, mdPlain } from '../board-md.js'
 import { Pipeline, sized, nameFit, useFitted } from './kanban.js';
 import { CostsSlide } from './costs.js';
 import { useCashNow, useBudget, moneyTiles, mixOf, RevenueMix, MixHead, budgetDue, readChangeAs, keepChangeAs, Both } from './money.js';
-import { UNREAD_WORDS } from './unread.js';
+import { UNREAD_WORDS, liveLost } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -1083,8 +1083,9 @@ function liveSlide(kind, n, id, data, date, as = 'pct') {
   if (!n || !kind || kind === 'minutes') return null;
   // (today's numbers whose read failed just now: the slide says so in plain words, never a zero or an empty list. Board
   // QA round 12; a past meeting's locked numbers have no such flags: ./unread.js)
-  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events', meetings: 'meetings' }[kind];
-  if (part && n.unread?.[part]) return html`<div class="bs-numbers"><p class="bs-quiet" role="status">${UNREAD_WORDS[part]}</p></div>`;
+  // (./unread.js LIVE_PARTS: the parts each item draws from, the meeting's page's and Print's list too)
+  const part = liveLost(kind, n);
+  if (part) return html`<div class="bs-numbers"><p class="bs-quiet" role="status">${UNREAD_WORDS[part]}</p></div>`;
   // (JobTread not answering: the pipeline says so, never a slide with nothing on it)
   if (kind === 'projects') return html`<${Pipeline} projects=${n.projects} reveals=${n.reveals || []} />`;
   if (kind === 'cash') return html`<${CashSlide} n=${n} data=${data} date=${date} as=${as} />`;

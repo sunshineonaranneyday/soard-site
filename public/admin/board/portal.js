@@ -55,7 +55,7 @@ import { MakeoversCard, itemsOf } from './lifecycle.js';
 import { read as readFamilies, cache as familyCache } from './family-parts.js';
 import { useCashNow, cashKnown, budgetKnown, useBudget, liveCash, Both, compact, shortAsOf, pctOf, andText, moneyTiles, fromBooks, monthsPhrase, paceText, paceOf, monthSoFar, mixOf, RevenueMix, MixHead, mixLeftOut, storeOf, StoreFigures, StoreTable, budgetDue, budgetMonthsText as budgetMonths, stepText, useChangeAs, changeIn, overIn, yearFigures, inKindWords, budgetName, Blank, cashLines, lessWritten, nonCashName, nonCashOf, ioOf, throughWords, wentParts, budgetHeading } from './money.js';
 import { figureTiles, moneyFigures, giftWho, giftAbout, giftKind, moneyTileId } from './figures.js';
-import { failed, CouldntLoad, UNREAD_WORDS, unreadWords, emptyRead, lostOn, routeName } from './unread.js';
+import { failed, CouldntLoad, UNREAD_WORDS, unreadWords, emptyRead, lostOn, routeName, liveLost, forYou } from './unread.js';
 
 const html = htm.bind(h);
 const API = '/api/board-portal';
@@ -699,8 +699,9 @@ function App() {
     : route.page === 'people' ? html`<${PeoplePage} ctx=${ctx} />`
     : route.page === 'documents' && route.id ? html`<${DocPage} id=${route.id} ctx=${ctx} key=${route.id} />`
     : route.page === 'documents' ? html`<${DocumentsPage} ctx=${ctx} />`
-    : route.page === 'families' && route.id ? html`<${FamilyPage} id=${route.id} reveals=${ctx.data?.numbers?.reveals || []} key=${route.id} />`
-    : route.page === 'families' ? html`<${FamiliesPage} view=${route.sub || 'board'} open=${route.item} projects=${ctx.data?.numbers?.projects || null} reveals=${ctx.data?.numbers?.reveals || []} key=${`${route.sub}/${route.item}`} />`
+    // (the makeovers' part with them, so Makeovers says in its place when it couldn't load, as Home does: Board QA round 15)
+    : route.page === 'families' && route.id ? html`<${FamilyPage} id=${route.id} reveals=${ctx.data?.numbers?.reveals || []} lost=${failed(ctx.data, 'projects')} key=${route.id} />`
+    : route.page === 'families' ? html`<${FamiliesPage} view=${route.sub || 'board'} open=${route.item} projects=${ctx.data?.numbers?.projects || null} reveals=${ctx.data?.numbers?.reveals || []} lost=${failed(ctx.data, 'projects')} key=${`${route.sub}/${route.item}`} />`
     : html`<${HomePage} ctx=${ctx} />`;
   return html`
     <a class="bp-skip" href="#main" onClick=${(e) => { e.preventDefault(); document.getElementById('main')?.focus(); }}>Skip to the page</a>
@@ -1090,15 +1091,11 @@ function HomePage({ ctx }) {
   const who = useAdminWho(data);
   const name = data.me.name || who?.name || '';
   const m = d.featured;
-  // What couldn't load just now of what's theirs to do, each said in its place, never a shorter list taken for all of it
-  // (./unread.js, Board QA round 13): the papers to sign, the reports on a meeting not shared yet, the corrections to
-  // decide, the minutes to sign and the notes not sent (the secretary's), the chair's review
-  const lostTodo = [
-    failed(data, 'docs') && data.me.slug ? 'docs' : '', failed(data, 'presenting') && data.me.slug ? 'presenting' : '', canFix && failed(data, 'corrections') ? 'corrections' : '',
-    d.me?.seat === 'secretary' && failed(data, 'minutesSigned') ? 'minutesSigned' : '', d.me?.seat === 'secretary' && failed(data, 'notesWaiting') ? 'notesWaiting' : '', d.me?.seat === 'chair' && failed(data, 'review') ? 'review' : '',
-  ].filter(Boolean);
+  // What couldn't load just now of what's theirs to do, each said in its place, never a shorter list taken for all of it,
+  // and no count while one of its parts wasn't read (./unread.js forYou, Board QA rounds 13 and 15)
+  const { lost: lostTodo, count: todoCount } = forYou(data, { seat: d.me?.seat || '', canFix, member: !!data.me.slug }, mine.length + toSign.length + toWrite.length + toSend.length + (toReview ? 1 : 0) + toFix.length + toSignMinutes.length);
   const todos = mine.length || toSign.length || toWrite.length || toSend.length || toReview || toFix.length || toSignMinutes.length || lostTodo.length ? html`<section class="bp-card bp-forme" aria-labelledby="todo-h">
-      <div class="bp-cardhead"><h2 class="bp-h2" id="todo-h" tabindex="-1">For you${((n) => (n ? html`<span class="bp-count">${n}</span>` : null))(mine.length + toSign.length + toWrite.length + toSend.length + (toReview ? 1 : 0) + toFix.length + toSignMinutes.length)}</h2></div>
+      <div class="bp-cardhead"><h2 class="bp-h2" id="todo-h" tabindex="-1">For you${todoCount ? html`<span class="bp-count">${todoCount}</span>` : null}</h2></div>
       <ul class="bp-todos">
         ${toFix.map(({ m: x, list }) => html`<li class="bp-todo-card" key=${`f-${x.id}`}><a class="bp-todo bp-todo--link" href=${`#/meetings/${x.id}`} onClick=${() => { focusNext = `c-${list[0].id}`; }}>
           <span class="bp-todo__icon"><${Icon} name="edit" size=${20} /></span>
@@ -1131,7 +1128,7 @@ function HomePage({ ctx }) {
           <${Icon} name="arrow" size=${18} cls="bp-go" />
         </a></li>`)}
       </ul>
-      ${lostTodo.map((k) => html`<${CouldntLoad} part=${k} key=${k} />`)}
+      ${lostTodo.map((x) => html`<${CouldntLoad} part=${x.part} of=${x.of} key=${x.part} />`)}
     </section>` : null;
   return html`<div class="bp-home">
     <header class="bp-brief bp-rise" style=${rise(0)}>
@@ -3050,9 +3047,9 @@ function LiveBlock({ kind, n, m, data, asFiles = [], notes = null, again = false
   const stamp = kind === 'cash' || kind === 'costs' ? null : html`<p class="bp-aglive__when">${m.snapshot ? `As of ${shortDate(m.snapshot.at)}, locked for this meeting` : 'As of today'}</p>`;
   let body = null;
   // (today's numbers whose read failed just now: that part says so, never a zero or an empty list. A past meeting's
-  // locked numbers have no such flags: ./unread.js)
-  const part = { cash: 'money', costs: 'money', projects: 'projects', reveals: 'projects', events: 'events', meetings: 'meetings' }[kind];
-  if (part && n.unread?.[part]) body = html`<${CouldntLoad} part=${part} />`;
+  // locked numbers have no such flags: ./unread.js LIVE_PARTS, the one list Print and the screen go by too)
+  const part = liveLost(kind, n);
+  if (part) body = html`<${CouldntLoad} part=${part} />`;
   else if (kind === 'projects') body = html`<${Kanban} projects=${n.projects} reveals=${n.reveals} variant="agenda" />`;
   else if (kind === 'cash') body = html`<${CashBlock} n=${n} data=${data} m=${m} asFiles=${asFiles} notes=${notes} again=${again} />`;
   else if (kind === 'reveals') body = html`<${RevealsBlock} n=${n} />`;
@@ -3623,15 +3620,16 @@ function FinancialsPage({ ctx }) {
   const [allYears, setAllYears] = useKept('tax-all', false);
   const [allEarlier, setAllEarlier] = useKept('earlier-all', false);
   // A part whose read failed says so in its place and nothing of it is drawn (./unread.js): the money (the cash, the
-  // books, Mercury's record, what makeovers cost), the major gifts, the tax returns
-  const lost = { money: failed(data, 'money'), gifts: failed(data, 'gifts'), sources: failed(data, 'sources'), meetings: failed(data, 'meetings'), docs: failed(data, 'docs') };
+  // books, Mercury's record), what makeovers cost, the major gifts, the tax returns, the year at a glance. Each its own:
+  // one not read never takes another with it (Board QA round 15: the year at a glance not read hid every tax return)
+  const lost = { money: failed(data, 'money'), costs: failed(data, 'costs'), gifts: failed(data, 'gifts'), sources: failed(data, 'sources'), glance: failed(data, 'glance'), meetings: failed(data, 'meetings'), docs: failed(data, 'docs') };
   // QuickBooks is the books once it's connected. Until then, Mercury's own record speaks for SOARD only once it holds the money
   const books = lost.money ? null : data.numbers.books;
   const funded = !!data.numbers.mercury && !data.numbers.mercury.empty;
   const f = funded && !books && !lost.money ? data.numbers.finance : null;
   // Month-end cash, newest first (the table reads down from this month)
   const history = lost.money ? [] : [...(data.cashHistory || [])].sort((a, b) => b.month.localeCompare(a.month));
-  const s = lost.sources ? null : data.snapshot;
+  const s = lost.glance ? null : data.snapshot;
   const withStatements = [...data.meetings].filter((m) => m.files.some((x) => x.kind === 'financials')).sort((a, b) => b.date.localeCompare(a.date));
   const latest = withStatements[0] || null;
   const earlier = withStatements.slice(1);
@@ -3662,7 +3660,7 @@ function FinancialsPage({ ctx }) {
     lost.money ? 'The money' : 'The cash',
     !lost.money && (books || f?.ytd || budgetRows(budget).length || (budget === undefined && budgetDue(data))) ? 'the year in numbers' : '',
     data.gifts || lost.gifts ? 'its major gifts' : '',
-    data.numbers.costs && !lost.money ? 'what makeovers cost' : '',
+    (data.numbers.costs || lost.costs) && !lost.money ? 'what makeovers cost' : '',
     books?.statements ? 'QuickBooks’ latest statements' : '',
     latest || lost.meetings ? 'the statements from each meeting' : '',
     years.length || lost.sources ? 'every tax return and audit' : '',
@@ -3715,19 +3713,25 @@ function FinancialsPage({ ctx }) {
   const statements = books?.statements ? html`<section class="bp-card bp-latest" aria-labelledby="st-h">
       <${SecHead} id="st-h" title="The statements" sub="The latest from QuickBooks" />
       <${Statements} s=${books.statements} books=${books} />
-      ${latest ? html`<${More} k="packet" summary=${`The statements in the ${meetingName(latest)} packet, ${shortDate(latest.date)}`}><${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} /><//>` : lost.meetings ? html`<${CouldntLoad} part="meetings" of="statements" />` : null}
+      ${latest ? html`<${More} k="packet" summary=${`The statements in the ${meetingName(latest)} packet, ${shortDate(latest.date)}`}><${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} /><//>` : null}
+      ${lost.meetings ? html`<${CouldntLoad} part="meetings" of="statements" />` : null}
     </section>`
-    : lost.meetings ? html`<section class="bp-card bp-latest" aria-labelledby="st-h"><h2 class="bp-h2" id="st-h">Financial statements</h2><${CouldntLoad} part="meetings" of="statements" /></section>`
+    // (what loaded is drawn, and the meetings not read are said beside it, as Meetings and Documents do: Board QA round 15)
     : latest ? html`<section class="bp-card bp-latest" aria-labelledby="st-h">
       <${SecHead} id="st-h" title="The latest statements" sub=${html`From the <a class="bp-link" href=${`#/meetings/${latest.id}`} onClick=${claimMorph}>${meetingName(latest)}</a>, ${longDate(latest.date)}`} />
       <${FileList} files=${latest.files.filter((x) => x.kind === 'financials')} labels=${false} />
-    </section>` : emptyRead(data, 'meetings', withStatements) ? html`<section class="bp-card"><h2 class="bp-h2">Financial statements</h2><p class="bp-muted">The income statement and balance sheet from each meeting show here.</p></section>` : null;
+      ${lost.meetings ? html`<${CouldntLoad} part="meetings" of="statements" />` : null}
+    </section>`
+    : lost.meetings ? html`<section class="bp-card bp-latest" aria-labelledby="st-h"><h2 class="bp-h2" id="st-h">Financial statements</h2><${CouldntLoad} part="meetings" of="statements" /></section>`
+    : emptyRead(data, 'meetings', withStatements) ? html`<section class="bp-card"><h2 class="bp-h2">Financial statements</h2><p class="bp-muted">The income statement and balance sheet from each meeting show here.</p></section>` : null;
   const papers = [
     lost.sources ? html`<section class="bp-card" aria-labelledby="tx-h" key="tx"><h2 class="bp-h2" id="tx-h">Tax returns and audits</h2><${CouldntLoad} part="sources" /></section>` : null,
     s ? html`<section class="bp-card" aria-labelledby="yr-h" key="yr" id="glance">
         <${SecHead} id="yr-h" title=${`${s.year} at a glance`} sub=${`From the ${s.year} tax return`} />
         <${Bars} s=${s} />
-      </section>` : null,
+      </section>`
+      // (not read just now: said in its place, and the tax returns and audits, read apart, stand: Board QA round 15)
+      : lost.glance ? html`<section class="bp-card" aria-labelledby="yr-h" key="yr" id="glance"><h2 class="bp-h2" id="yr-h">At a glance</h2><${CouldntLoad} part="glance" /></section>` : null,
     years.length ? html`<section class="bp-card" aria-labelledby="tx-h" key="tx">
         <${SecHead} id="tx-h" title="Tax returns and audits" sub="The public copies, as on the website’s Financials page" />
         <table class="bp-table bp-ftable">
@@ -3764,7 +3768,7 @@ function FinancialsPage({ ctx }) {
     ${side.length || mixCard ? html`<div class=${`bp-fgrid bp-rise ${side.length && mixCard ? '' : 'is-one'}`} style=${rise(4)}>${side.length ? html`<div class="bp-stack">${side}</div>` : null}${mixCard}</div>` : null}
     ${lost.gifts ? html`<div class="bp-gap bp-rise" style=${rise(5)}><section class="bp-card bp-gifts bp-gifts--year" aria-labelledby="gifts-y-h" id="gifts"><h2 class="bp-h2" id="gifts-y-h">Major gifts</h2><${CouldntLoad} part="gifts" /></section></div>`
       : data.gifts ? html`<div class="bp-gap bp-rise" style=${rise(5)}><${GiftsYear} g=${data.gifts} since=${data.me.lastSeen} names=${!failed(data, 'givers')} /></div>` : null}
-    ${data.numbers.costs && !lost.money ? html`<div class="bp-gap bp-rise" style=${rise(6)}><${CostsCard} data=${data} n=${data.numbers} admin=${!!data.me.admin && !AS_BOARD && !PREVIEW}
+    ${(data.numbers.costs || lost.costs) && !lost.money ? html`<div class="bp-gap bp-rise" style=${rise(6)}><${CostsCard} data=${data} n=${data.numbers} admin=${!!data.me.admin && !AS_BOARD && !PREVIEW}
       onBalance=${(balance) => ctx.setData((x) => ({ ...x, numbers: { ...x.numbers, operating: { balance } } }))} /></div>` : null}
     <div class="bp-gap bp-rise" style=${rise(7)}>${statements}</div>
     ${papers.length ? html`<div class=${`bp-fgrid bp-fgrid--3 bp-rise is-${papers.length}`} style=${rise(8)}>${papers}</div>` : null}`;
@@ -4253,8 +4257,9 @@ function Library({ data, q = '', words = null }) {
   const cut = !all && shown.length > (terms.length ? 7 : 5);
   const list = cut ? shown.slice(0, terms.length ? 6 : 4) : shown;
   // (the meetings not read just now: their files' place says so, never a page that reads as if there were none: Board
-  // QA round 14)
-  if (failed(data, 'meetings')) return html`<section class="bp-card bp-library" aria-labelledby="lib-h"><${SecHead} id="lib-h" title="Every meeting’s files" sub="Minutes, packets and statements, newest first" /><${CouldntLoad} part="meetings" of="files" /></section>`;
+  // QA round 14; and what did load is drawn with it, never hidden behind it, as Meetings and Financials do: round 15)
+  const lost = failed(data, 'meetings');
+  if (lost && !meetings.length) return html`<section class="bp-card bp-library" aria-labelledby="lib-h"><${SecHead} id="lib-h" title="Every meeting’s files" sub="Minutes, packets and statements, newest first" /><${CouldntLoad} part="meetings" of="files" /></section>`;
   if (!meetings.length) return null;
   // A search that finds nothing here at all is said once, at the top of the page
   if (terms.length && !list.length && !elsewhere) return null;
@@ -4269,6 +4274,7 @@ function Library({ data, q = '', words = null }) {
       <${FileList} files=${files} labels=${false} kinds=${kind === 'all'} found=${terms.length && words ? { terms, words } : null} />
     </div>`) : terms.length && kind !== 'all' && elsewhere ? null : html`<p class="bp-muted">No file matches.</p>`}
     ${cut ? html`<button type="button" class="bp-more-btn" onClick=${() => setAll(true)}>${nbw(`Show ${plural(shown.length - list.length, 'earlier meeting')}`)}</button>` : null}
+    ${lost ? html`<${CouldntLoad} part="meetings" of="files" />` : null}
   </section>`;
 }
 
@@ -4679,7 +4685,7 @@ function useVocab(ctx, words, on) {
 }
 
 /** The parts of the page's read search finds things in (./searchIndex) */
-const SEARCHED = ['meetings', 'presenting', 'docs', 'money', 'history', 'gifts', 'sources', 'projects', 'events', 'facts'];
+const SEARCHED = ['meetings', 'presenting', 'docs', 'money', 'costs', 'history', 'gifts', 'sources', 'glance', 'projects', 'events', 'facts'];
 /** Those not read just now */
 const lostSearched = (data) => SEARCHED.filter((x) => failed(data, x));
 const GROUPS = ['Meetings', 'Decisions', 'In agendas and minutes', 'Files', 'People', 'Documents', 'Money', 'Makeovers', 'Coming up'];
@@ -4778,7 +4784,7 @@ function searchIndex(data, d, words = null, fams = null) {
     // (their step only when JobTread was read: else it's their application's, never said as where they are, Board QA round 13)
     out.push({ group: 'Makeovers', key: `fam:${f.id}`, title: f.name, sub: [f.kind === 'organization' ? 'Community project' : '', stageKnown(f, fams.jobs) ? stageLabel(f.stage) : '', f.season ? `${f.season} season` : '', shown ? `Shown as ${shown}` : ''].filter(Boolean).join(' · '), hay: norm([f.name, shown].join(' ')), href: `#/families/${encodeURIComponent(f.id)}`, icon: 'people' });
   }
-  if (data.numbers.costs && !lost.money) out.push({ group: 'Makeovers', key: 'costs', title: 'What makeovers cost', sub: 'Each finished makeover, the money over the operating balance, and who it starts', hay: norm('what makeovers cost price paid budget money waiting awaiting funding pipeline qualification committee operating balance typical'), href: '#/financials', focus: 'costs', icon: 'financials' });
+  if (data.numbers.costs && !lost.money && !failed(data, 'costs')) out.push({ group: 'Makeovers', key: 'costs', title: 'What makeovers cost', sub: 'Each finished makeover, the money over the operating balance, and who it starts', hay: norm('what makeovers cost price paid budget money waiting awaiting funding pipeline qualification committee operating balance typical'), href: '#/financials', focus: 'costs', icon: 'financials' });
   out.push({ group: 'Makeovers', key: 'families', title: 'Makeovers', sub: 'Every family from application to reveal: their video, photos, application and score', hay: norm('makeovers families applications applicants scores scoring ranked qualification committee approved denied in review applied building design build revealed reveal pipeline board kanban video videos photos pictures'), href: '#/families', icon: 'people' });
   out.push({ group: 'Makeovers', key: 'families-map', title: 'Makeovers map', sub: 'Where every family lives, from application to reveal, against the service area', hay: norm('map where applications applicants families homes service area boundary location makeovers'), href: '#/families/map', icon: 'people' });
   for (const r of lost.projects ? [] : data.numbers.reveals) out.push({ group: 'Coming up', key: `r:${r.name}`, title: `${r.name}’s reveal`, sub: r.confirmed && r.date ? dayOf(r.date) : r.window?.label || 'Day not set yet', hay: norm(`${r.name} reveal`), href: r.kidUrl, ext: true, icon: 'home' });

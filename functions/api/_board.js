@@ -2775,10 +2775,15 @@ export async function boardFinanceNow(env, { now = Date.now(), fresh = false } =
 export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } = {}) {
   const today = todayEastern(now);
   // A read that fails marks its part (`unread`), never a part drawn empty or as zero: the board page says that part
-  // couldn't load just now (public/admin/board/unread.js). The money is the cash, the books, Mercury's record, what
-  // makeovers cost and the operating balance it rests on; the makeovers are JobTread's projects and the reveals; the
-  // kids, those served; the events, the calendar's. Board QA round 12 (the privacy tester's sweep: each statement failing
-  // once in turn drew "0 kids served", no makeovers and no money as facts)
+  // couldn't load just now (public/admin/board/unread.js). Each read marks the part it's read for, by its own name, never
+  // a bigger part beside it, nor a name the page's own read has (portalData merges these flags with its own): the money
+  // is the cash, the books and Mercury's record; what makeovers cost (`costs`) is JobTread's figures and the operating
+  // balance kept to run SOARD, its only user; the makeovers are JobTread's projects and the reveals; the kids, those
+  // served; the events, the calendar's; the meetings on the calendar (`meetingDates`), an agenda item's list of the
+  // meetings ahead and the screen's year of them. Board QA round 12 (the privacy tester's sweep: each statement failing
+  // once in turn drew "0 kids served", no makeovers and no money as facts); round 15 (Nov 26 2026: this list of the
+  // meetings failing said every meeting couldn't load, under a full list, and hid every meeting's file on Documents; the
+  // operating balance's setting failing hid all the money)
   const unread = {};
   const lost = (part, fallback = null) => (err) => { console.error(`[board] ${part}`, err?.message || err); unread[part] = true; return fallback; };
   const [cash, projects, reveals, events, meetings, kids, finance, pages, books, costs, settings] = await Promise.all([
@@ -2786,8 +2791,9 @@ export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } =
     projectsNow(env, { fetchImpl, now }).catch(lost('projects')),
     cachedReveals(env, now).then((r) => { if (r?.unread) unread.projects = true; return r; }, lost('projects', { upcoming: [], past: [] })),
     eventsList(env.DB, today).catch(lost('events', { upcoming: [], recent: [] })),
-    // (the meetings ahead and the year's, an item's live list: not read, its part says so, Board QA round 13)
-    listMeetings(env.DB).catch((e) => { if (e?.setup) throw e; return lost('meetings', [])(e); }),
+    // (the meetings ahead and the year's, an item's live list: not read, its part says so, Board QA round 13; that list's
+    // own part, never the page's meetings, which are read apart and drawn whole: round 15)
+    listMeetings(env.DB).catch((e) => { if (e?.setup) throw e; return lost('meetingDates', [])(e); }),
     impact(env.DB).catch(lost('kids')),
     boardFinanceNow(env, { now }).catch(lost('money')),
     loadKids(env.DB).catch(() => []),
@@ -2795,8 +2801,9 @@ export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } =
     booksNow(env.DB, { now }).catch(lost('money')),
     // What finished makeovers cost, and the families waiting on the money (./_makeover-costs.js)
     // (the heartbeat's copy: a page never waits on JobTread for it)
-    makeoverCostsNow(env, { fetchImpl, now, maxAge: PAGE_MAX_AGE_MS }).catch(lost('money')),
-    readSettings(env.DB).catch(lost('money', {})),
+    makeoverCostsNow(env, { fetchImpl, now, maxAge: PAGE_MAX_AGE_MS }).catch(lost('costs')),
+    // (the operating balance kept to run SOARD: What makeovers cost rests on it, and nothing else does)
+    readSettings(env.DB).catch(lost('costs', {})),
   ]);
   // Each reveal's kid by their published page's photo (a draft page's kid has none)
   const photos = Object.fromEntries(pages.map((k) => [k.slug, photoOf(k.heroImage)]).filter(([, p]) => p));
@@ -2879,7 +2886,7 @@ export async function takeSnapshot(env, id, { by, fetchImpl = fetch, now = Date.
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
   const n = await liveNumbers(env, { fetchImpl, now });
   // (the meetings not read just now: never a packet locked with none, Board QA round 13)
-  if (n.unread?.meetings) throw Object.assign(new Error('We couldn’t read the board’s meetings just now, so nothing was changed. Please try again in a moment.'), { status: 503, unread: true });
+  if (n.unread?.meetingDates) throw Object.assign(new Error('We couldn’t read the board’s meetings just now, so nothing was changed. Please try again in a moment.'), { status: 503, unread: true });
   const snapshot = { at: n.at, by: by || '', cash: n.cash, mercury: n.mercury, finance: n.finance, books: n.books, projects: n.projects, reveals: n.reveals, pastReveals: n.pastReveals, events: n.events, recentEvents: n.recentEvents, meetings: n.meetings.filter((x) => x.id !== id), thisYear: n.thisYear || [], impact: n.impact, costs: n.costs, operating: n.operating };
   // (the server's own field, from the numbers, never from the meeting: one write, never lost to an edit saved meanwhile)
   const saved = await setOnMeeting(env.DB, id, { snapshot }, { by, was: m });
@@ -4302,7 +4309,9 @@ export async function portalData(env, { member = null, admin = false, adminEmail
     (meetingsRead || listMeetings(env.DB)).catch(lostHere('meetings')), listDocs(env.DB).catch(lostHere('docs')), liveNumbers(env, { now }), cashHistory(env.DB).catch(lostHere('history')), roster(env.DB, { withEmails: true }),
     // (the tax returns and the tax return's year, and the year's major gifts: a read that failed marks its part, as
     // liveNumbers' do, never an empty list: Board QA round 12)
-    siteDoc(env.DB, 'financials').catch(lostHere('sources')), siteDoc(env.DB, 'financial-snapshot').catch(lostHere('sources')), getSettings(env.DB).catch(lostHere('settings')), giftsNow(env.DB, { now }).catch(lostHere('gifts')),
+    // (the year at a glance, from the latest tax return, its own part: never the tax returns and audits beside it, which
+    // are read apart: Board QA round 15)
+    siteDoc(env.DB, 'financials').catch(lostHere('sources')), siteDoc(env.DB, 'financial-snapshot').catch(lostHere('glance')), getSettings(env.DB).catch(lostHere('settings')), giftsNow(env.DB, { now }).catch(lostHere('gifts')),
   ]);
   const meetings = meetingsNow || [];
   const docs = docsNow || [];
@@ -4412,8 +4421,9 @@ export async function portalData(env, { member = null, admin = false, adminEmail
     numbers: unreadHere.history ? { ...numbers, unread: { ...(numbers.unread || {}), history: true } } : numbers,
     // Each part whose read failed just now (the money, the makeovers, the kids served, the gifts, the tax returns, the
     // events, and round 13's: the meetings, the papers, the settings, the month-end balances, which files are theirs,
-    // the papers' words, their mark, their signed copies): the page says so in its place and leaves it out of search
-    // (public/admin/board/unread.js)
+    // the papers' words, their mark, their signed copies; round 15's: what makeovers cost, the meetings on the calendar,
+    // the year at a glance): the page says so in its place and leaves it out of search (public/admin/board/unread.js).
+    // Today's numbers' parts are named apart from the page's own (liveNumbers), so one never marks the other here
     // (the givers' names among them: Keep anonymous not read, every name kept hidden and said so, ./_board-gifts.js)
     unread: { ...(numbers.unread || {}), ...unreadHere, ...(gifts?.namesUnread ? { givers: true } : {}) },
     // Cash at each month's end: QuickBooks' own month-ends once it's connected (13 of them, the books'), else the banks' history

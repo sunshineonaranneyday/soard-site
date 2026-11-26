@@ -416,7 +416,9 @@ export function moneyFigures(data, { cash = null, budget = null } = {}) {
   // of the card it's written in (./costs.js: #bc-free, the answer and what it rests on; #bc-says, its sentence;
   // #bc-median; #bc-under-sum and a makeover underway's row, #bc-j-…; a family waiting, #bc-f-…; a completed makeover's
   // row, #bc-m-…), never the whole card (Board QA round 11)
-  const c = data.numbers?.costs;
+  // (what makeovers cost not read just now, its figures or the operating balance they rest on: nothing of it found, as its
+  // card says it couldn't load, never figures worked out on a balance guessed. Board QA round 15)
+  const c = lost.costs ? null : data.numbers?.costs;
   if (c) {
     const operating = operatingOf(data.numbers);
     const makeovers = c.makeovers || [];
