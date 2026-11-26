@@ -473,9 +473,13 @@ const approvedWith = (over = {}) => cleanMeeting({ id: 'm_appr0001', date: day(-
   approvedFile: STAFF_FILE.id, files: [STAFF_FILE], sections: [{ title: 'Agenda', items: [{ title: 'Roll call' }] }], ...over });
 test('r15 6: minutesToSign goes by minutesIn, the one rule for whether the board can read minutes, never a rule of its own', () => {
   const s = src('public/admin/board-shared.js');
-  const at = s.indexOf('export const minutesToSign');
+  /* r15: the rule moved into minutesCantSign, the one function the page's asking (minutesToSign) and the site's signing
+     (signMinutes) both call, so they can't drift (Board QA round 15 extra: the site signed what the page never offered) */
+  const at = s.indexOf('export function minutesCantSign');
   assert.ok(at > 0);
-  assert.match(s.slice(at, s.indexOf('\n\n', at)), /!\(minutesHeld\(m\) && !minutesIn\(m\)\)/, 'held in Board but not in for the board: not asked');
+  assert.match(s.slice(at, s.indexOf('\n}\n', at)), /if \(minutesHeld\(m\) && !minutesIn\(m\)\) return 'staff';/, 'held in Board but not in for the board: not asked');
+  const ask = s.indexOf('export const minutesToSign');
+  assert.match(s.slice(ask, s.indexOf('\n\n', ask)), /=> !minutesCantSign\(m\)/, 'the asking goes by it');
   // Still asked, as before: shared minutes, minutes read in or typed (the board reads their words whatever their file),
   // and approved minutes with none in Board yet
   for (const m of [approvedWith({ files: [{ ...STAFF_FILE, staffOnly: false }] }), approvedWith({ minutesFrom: { typed: true, name: 'Minutes typed on the board page', at: new Date().toISOString() } }), approvedWith({ approvedFile: '', files: [] })]) {

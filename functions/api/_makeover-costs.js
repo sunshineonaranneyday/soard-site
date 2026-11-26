@@ -360,7 +360,8 @@ async function partnerNames(DB, slugs) {
 /**
  * The board's copy: { at, makeovers, noBills, waiting, skipped }. JobTread once the copy is `maxAge` old (15 minutes:
  * the heartbeat; a page passes PAGE_MAX_AGE_MS), the last good copy when it doesn't answer; the waiting families'
- * scores and pledges as they are now. null with neither
+ * scores and pledges as they are now. null with neither a copy nor JobTread connected; JobTread not answering with no
+ * copy kept throws
  */
 export async function makeoverCostsNow(env, { fetchImpl = fetch, now = Date.now(), fresh = false, maxAge = FRESH_MS } = {}) {
   const cached = await readState(env.DB, 'costs');
@@ -376,6 +377,9 @@ export async function makeoverCostsNow(env, { fetchImpl = fetch, now = Date.now(
       await writeState(env.DB, 'costs', { at: value.at, value });
     } catch (err) {
       console.error('[board] costs', err.message);
+      // (the last good copy when there is one; with none, the read failed: thrown, never said as JobTread not set up.
+      // Board QA round 15: a packet locked what a read that failed left)
+      if (!value) throw err;
     }
   }
   if (!value) return null;

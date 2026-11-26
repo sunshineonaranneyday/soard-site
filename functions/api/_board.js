@@ -2838,7 +2838,9 @@ export async function cashNow(env, { fetchImpl = fetch } = {}) {
   const mercuryOn = !!String(env.MERCURY_API_TOKEN || '').trim();
   const [m, banks] = await Promise.all([
     mercuryOn ? mercury(env, '/accounts', { fetchImpl }).then((r) => r?.accounts || []) : null,
-    bankBalances(env.DB).catch((err) => { console.error('[board] banks', err.message); return null; }),
+    // (the banks' record not read is thrown, never taken for no bank connected: a total of Mercury's alone, or none,
+    // said as SOARD's cash. Board QA round 15: a packet locked the numbers a read that failed left)
+    bankBalances(env.DB),
   ]);
   if (!m && !banks) return null;
   // Mercury's own accounts only: a bank linked in Mercury for transfers isn't SOARD's Mercury money (Plaid counts it)
@@ -3005,8 +3007,39 @@ export async function boardFinanceNow(env, { now = Date.now(), fresh = false } =
   return value;
 }
 
-/** Everything an agenda's live items show, as of now */
-export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } = {}) {
+/**
+ * Each of today's numbers' reads by what it is (liveNumbers `notRead`), as an answer names one it couldn't read: a press
+ * that needs them all (takeSnapshot) and the SOARD connection (./_mcp/money.js soard_numbers). A part of the board page
+ * (`unread`) can be more than one of them: the money is the cash, Mercury's record and the books; what makeovers cost,
+ * JobTread's figures and the operating balance; the makeovers, JobTread's projects and the reveals
+ */
+export const NUMBERS_READS = {
+  cash: 'the bank balances',
+  finance: 'Mercury’s record of money in and out',
+  books: 'the year’s books from QuickBooks',
+  projects: 'the makeovers in JobTread',
+  reveals: 'the reveals',
+  events: 'the events',
+  meetings: 'the board’s meetings',
+  kids: 'the kids served',
+  costs: 'the makeover costs',
+  operating: 'the operating balance kept to run SOARD',
+};
+/** "a", "a and b", "a, b and c" */
+const andWords = (l) => (l.length > 1 ? `${l.slice(0, -1).join(', ')} and ${l.at(-1)}` : l[0] || '');
+/** What of today's numbers couldn't be read just now, in words (`notRead`: liveNumbers'), in NUMBERS_READS' order */
+export const notReadWords = (notRead) => andWords(Object.keys(NUMBERS_READS).filter((k) => notRead?.[k]).map((k) => NUMBERS_READS[k]));
+
+/**
+ * Everything an agenda's live items show, as of now. A read whose connection isn't set up at all answers none (null,
+ * or an empty list), and is never a failure: cashNow with neither Mercury's token nor a bank connected in Settings,
+ * projectsNow and makeoverCostsNow with no JobTread key and no copy kept, booksNow with QuickBooks not connected,
+ * boardFinanceNow before Mercury's record is there, no events or kids table. A read that fails throws (each falls back
+ * on its last good copy first, said with when it was read), and only a throw is marked (`lost`): so none is never a
+ * failure, and a failure is never none. `reads`: each read that failed by what it is too (`notRead`, NUMBERS_READS), for
+ * an answer that names the figure it couldn't read; the board page goes by the parts (`unread`) alone
+ */
+export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now(), reads = false } = {}) {
   const today = todayEastern(now);
   // A read that fails marks its part (`unread`), never a part drawn empty or as zero: the board page says that part
   // couldn't load just now (public/admin/board/unread.js). Each read marks the part it's read for, by its own name, never
@@ -3019,25 +3052,29 @@ export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } =
   // meetings failing said every meeting couldn't load, under a full list, and hid every meeting's file on Documents; the
   // operating balance's setting failing hid all the money)
   const unread = {};
-  const lost = (part, fallback = null) => (err) => { console.error(`[board] ${part}`, err?.message || err); unread[part] = true; return fallback; };
+  const notRead = {};
+  // (`part`: the board page's, ./unread.js; `read`: which of NUMBERS_READS it was)
+  const lost = (part, read, fallback = null) => (err) => { console.error(`[board] ${read}`, err?.message || err); unread[part] = true; notRead[read] = true; return fallback; };
   const [cash, projects, reveals, events, meetings, kids, finance, pages, books, costs, settings] = await Promise.all([
-    cachedCash(env, { fetchImpl, now }).catch(lost('money')),
-    projectsNow(env, { fetchImpl, now }).catch(lost('projects')),
-    cachedReveals(env, now).then((r) => { if (r?.unread) unread.projects = true; return r; }, lost('projects', { upcoming: [], past: [] })),
-    eventsList(env.DB, today).catch(lost('events', { upcoming: [], recent: [] })),
+    cachedCash(env, { fetchImpl, now }).catch(lost('money', 'cash')),
+    projectsNow(env, { fetchImpl, now }).catch(lost('projects', 'projects')),
+    cachedReveals(env, now).then((r) => { if (r?.unread) { unread.projects = true; notRead.reveals = true; } return r; }, lost('projects', 'reveals', { upcoming: [], past: [] })),
+    eventsList(env.DB, today).catch(lost('events', 'events', { upcoming: [], recent: [] })),
     // (the meetings ahead and the year's, an item's live list: not read, its part says so, Board QA round 13; that list's
     // own part, never the page's meetings, which are read apart and drawn whole: round 15)
-    listMeetings(env.DB).catch((e) => { if (e?.setup) throw e; return lost('meetingDates', [])(e); }),
-    impact(env.DB).catch(lost('kids')),
-    boardFinanceNow(env, { now }).catch(lost('money')),
+    listMeetings(env.DB).catch((e) => { if (e?.setup) throw e; return lost('meetingDates', 'meetings', [])(e); }),
+    impact(env.DB).catch(lost('kids', 'kids')),
+    boardFinanceNow(env, { now }).catch(lost('money', 'finance')),
     loadKids(env.DB).catch(() => []),
     // The year's revenue and expenses so far, as QuickBooks last answered (Settings → QuickBooks)
-    booksNow(env.DB, { now }).catch(lost('money')),
+    booksNow(env.DB, { now }).catch(lost('money', 'books')),
     // What finished makeovers cost, and the families waiting on the money (./_makeover-costs.js)
     // (the heartbeat's copy: a page never waits on JobTread for it)
-    makeoverCostsNow(env, { fetchImpl, now, maxAge: PAGE_MAX_AGE_MS }).catch(lost('costs')),
-    // (the operating balance kept to run SOARD: What makeovers cost rests on it, and nothing else does)
-    readSettings(env.DB).catch(lost('costs', {})),
+    makeoverCostsNow(env, { fetchImpl, now, maxAge: PAGE_MAX_AGE_MS }).catch(lost('costs', 'costs')),
+    // (the operating balance kept to run SOARD: What makeovers cost rests on it, and nothing else does. Not read, it's
+    // none (null), never SOARD's default in its place: Board QA round 15, the SOARD connection said the default
+    // $500,000 as the operating balance when the settings couldn't be read)
+    readSettings(env.DB).catch(lost('costs', 'operating')),
   ]);
   // Each reveal's kid by their published page's photo (a draft page's kid has none)
   const photos = Object.fromEntries(pages.map((k) => [k.slug, photoOf(k.heroImage)]).filter(([, p]) => p));
@@ -3063,10 +3100,14 @@ export async function liveNumbers(env, { fetchImpl = fetch, now = Date.now() } =
     thisYear: meetings.filter((m) => isDate(m.date) && m.date.slice(0, 4) === today.slice(0, 4) && boardSees(m, today)).sort((a, b) => a.date.localeCompare(b.date)).map((m) => ({ id: m.id, name: meetingName(m), date: m.date, start: m.start, shared: m.shared })),
     impact: kids,
     costs,
-    operating: { balance: Number(settings?.operatingBalance) > 0 ? Math.round(Number(settings.operatingBalance)) : OPERATING_BALANCE },
+    // (read: the one Board's settings keep, else SOARD's default, `set` false; not read: none)
+    operating: settings ? operatingIn(settings) : null,
     unread,
+    ...(reads ? { notRead } : {}),
   };
 }
+/** The operating balance as Board's settings keep it: theirs (`set`), else SOARD's default, which the board page goes by until one is set */
+const operatingIn = (s) => (Number(s?.operatingBalance) > 0 ? { balance: Math.round(Number(s.operatingBalance)), set: true } : { balance: OPERATING_BALANCE, set: false });
 
 /** Read the cash now and keep it as the board page's copy (System → Settings calls this when a bank is connected, read or disconnected) */
 export async function saveCashNow(env, { fetchImpl = fetch, now = Date.now() } = {}) {
@@ -3113,14 +3154,17 @@ async function boardSnapshot(DB, snapshot) {
 
 /**
  * Lock today's numbers into a meeting's packet. Reading them takes a while (the banks, JobTread, QuickBooks), so the
- * snapshot is put onto the meeting as it is then (patchMeeting): what was saved meanwhile stays
+ * snapshot is put onto the meeting as it is then (patchMeeting): what was saved meanwhile stays. It locks only numbers
+ * that were read: any part it keeps not read just now (liveNumbers `unread`, each read named by `notRead`) refuses it in
+ * words that name what, and nothing is written; a part with no connection set up is none, and locked as none (Board QA
+ * round 13: the meetings; round 15: every part, after the default operating balance was locked when the settings
+ * couldn't be read)
  */
 export async function takeSnapshot(env, id, { by, fetchImpl = fetch, now = Date.now() } = {}) {
   const m = await getMeeting(env.DB, id);
   if (!m) throw Object.assign(new Error('That meeting is gone'), { status: 404 });
-  const n = await liveNumbers(env, { fetchImpl, now });
-  // (the meetings not read just now: never a packet locked with none, Board QA round 13)
-  if (n.unread?.meetingDates) throw Object.assign(new Error('We couldn’t read the board’s meetings just now, so nothing was changed. Please try again in a moment.'), { status: 503, unread: true });
+  const n = await liveNumbers(env, { fetchImpl, now, reads: true });
+  if (Object.values(n.unread || {}).some(Boolean)) throw Object.assign(new Error(`We couldn’t read ${notReadWords(n.notRead) || 'today’s numbers'} just now, so nothing was changed. Please try again in a moment.`), { status: 503, unread: true });
   const snapshot = { at: n.at, by: by || '', cash: n.cash, mercury: n.mercury, finance: n.finance, books: n.books, projects: n.projects, reveals: n.reveals, pastReveals: n.pastReveals, events: n.events, recentEvents: n.recentEvents, meetings: n.meetings.filter((x) => x.id !== id), thisYear: n.thisYear || [], impact: n.impact, costs: n.costs, operating: n.operating };
   // (the server's own field, from the numbers, never from the meeting: one write, never lost to an edit saved meanwhile)
   const saved = await setOnMeeting(env.DB, id, { snapshot }, { by, was: m });

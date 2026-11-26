@@ -1221,16 +1221,34 @@ export function minutesDocOf(m, signature = null, { known = true } = {}) {
 export const staffOnlyWords = (f) => `${fileTitle(f?.name || '') || 'Their file'} is staff only, so the board can’t read these minutes. To share them, switch it to Board sees it in Every file.`;
 /** Signing on the board page starts with the minutes approved from here on: the secretary is never asked for years gone by */
 export const MINUTES_SIGN_FROM = '2026-11-01';
+/** Why minutes can't be signed, in the words the site refuses a signature with (minutesCantSign says which) */
+export const CANT_SIGN = {
+  draft: 'The board hasn’t approved these yet',
+  before: 'These were approved before minutes were signed here',
+  staff: 'These minutes’ file is staff only, so the board can’t read them yet. Once a founder shares it, you can sign.',
+};
+/**
+ * Whether minutes can be signed, the one rule the board page's asking (minutesToSign) and the site's signing
+ * (functions/api/_board-minutes-sign.js signMinutes) both go by, so the two never drift: approved, from MINUTES_SIGN_FROM
+ * on, and never minutes the board can't read: held in Board (minutesHeld) but not in for the board (minutesIn, the one
+ * rule: their only file kept Staff only), the secretary would sign what the board can't see. Approved with none in Board
+ * yet, they can be signed as before. Board QA round 15, Nov 26 2026: the page didn't ask, but the site signed them all
+ * the same. → '' (they can be signed), or why not: 'draft', 'before' or 'staff' (CANT_SIGN says each)
+ */
+export function minutesCantSign(m) {
+  if (m?.minutes !== 'approved') return 'draft';
+  if (String(m.approvedOn || '') < MINUTES_SIGN_FROM) return 'before';
+  if (minutesHeld(m) && !minutesIn(m)) return 'staff';
+  return '';
+}
 /**
  * Approved minutes still to be signed, the one rule every place that asks goes by (Home's For you, the meeting's Sign
- * the minutes): the signature on record ends the asking (`signature`: the page's minutesSigned[m.id], the moment it's
- * given, never waiting on the signed copy made from it), unless the minutes changed after it was given. With no
- * signature, a signed copy kept with them (one put in by hand) ends it. Never minutes the board can't read: held in
- * Board (minutesHeld) but not in for the board (minutesIn, the one rule: their only file kept Staff only), the secretary
- * would sign what the board can't see (Board QA round 15). Approved with none in Board yet, they're asked as before
+ * the minutes): only minutes that can be signed (minutesCantSign, the rule the site's signing goes by), and the
+ * signature on record ends the asking (`signature`: the page's minutesSigned[m.id], the moment it's given, never waiting
+ * on the signed copy made from it), unless the minutes changed after it was given. With no signature, a signed copy
+ * kept with them (one put in by hand) ends it
  */
-export const minutesToSign = (m, signature = null) => m?.minutes === 'approved' && String(m.approvedOn || '') >= MINUTES_SIGN_FROM
-  && !(minutesHeld(m) && !minutesIn(m))
+export const minutesToSign = (m, signature = null) => !minutesCantSign(m)
   && (signature ? !!signature.changed : !(m.files || []).some((f) => f.kind === 'signed'));
 
 /** The meeting an agenda's "approve the minutes" item is about: the one it names, else the last one the board had */
