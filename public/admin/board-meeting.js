@@ -1918,7 +1918,11 @@ const doubtWords = (at, what, { once = false } = {}) => (!at ? ''
  * and said as not saved. Only when that look fails too does it say it can't tell yet (UNSURE_SAVED): nothing is put back
  * that the site may not have, the save line says "Not saved" (never "Saved") and Board keeps trying by itself, which
  * finds what the site has. Board QA round 14, Nov 24 2026: Mark them approved landed with its answer lost, and the page
- * put the minutes back to draft beside "Saved", and only told the founder to reload. → whether the site has it
+ * put the minutes back to draft beside "Saved", and only told the founder to reload. Before each look, and after the
+ * last, the page checks the copy it already has from the site: Board's own try again (useAutosave) may have had the
+ * site's answer meanwhile (saved), and a copy that shows the press done settles it, in the press's own words, with no
+ * look needed; "can't tell yet" only when neither that copy nor the looks can tell. Board QA round 15, Nov 26 2026: the
+ * page said "Saved", then a second later that it couldn't tell whether that was saved. → whether the site has it
  */
 export async function pressSave({ set, save, saved, addToast, look = null, take = null }, patch, { has, back, what, again, also = '' }) {
   set(patch);
@@ -1932,10 +1936,19 @@ export async function pressSave({ set, save, saved, addToast, look = null, take 
         : `${what}: ${sentence(notSavedWhy(j))}${also ? ` ${also}` : ''}`, 'error');
   } });
   if (!lost) return has(saved.current);
+  // (the site's copy the page has now, from Board's own try again: it shows the press done, so the site has it. One that
+  // doesn't show it says nothing yet: it may be from before the press, or from another change)
+  const told = () => has(saved.current);
+  if (told()) return true;
   // (a look that fails is tried once more a moment later, before the page says it can't tell)
   let now = await look();
-  if (!now) { await new Promise((r) => setTimeout(r, 1500)); now = await look(); }
-  if (!now) { addToast(UNSURE_SAVED, 'error'); return false; }
+  if (!now) {
+    if (told()) return true;
+    await new Promise((r) => setTimeout(r, 1500));
+    if (told()) return true;
+    now = await look();
+  }
+  if (!now) { if (told()) return true; addToast(UNSURE_SAVED, 'error'); return false; }
   // (Board's data was read for it: the copy is there already. One older than the copy the page has had from the site
   // since, Board's own try again landing while the look was out, changes nothing: the page goes by the newer one)
   const sv = String(now.updatedAt || '') < String(saved.current?.updatedAt || '') ? saved.current : now;

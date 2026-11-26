@@ -41,7 +41,7 @@ import {
   longDate, timeRange, shortDate, DOC_KINDS, FILE_KINDS, RSVP, DEFAULT_TEMPLATE, newMeeting, LIMITS, repliesOf, inviteOut,
   agendaIsDraft, draftAgenda, templateAgenda, previousMeeting, draftName, callName, readAgain, AGENDA_READER, isLive, cleanLive, majority, guessItem, orgName, signsAs,
   isFilled, LIVE_TITLES, agendaItems, presentersOf, reportsOn, namesText, sectionPlan, clock, docTitle, videoOf, packetDocs, partName, minutesIn,
-  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS, minutesStaffOnly, staffOnlyWords,
+  addressesIn, followAddresses, approvedFileAfter, approvedFileOf, FILE_STAYS, minutesStaffOnly, staffOnlyWords, minutesDocOf,
 } from '../../public/admin/board-shared.js';
 import { welcomeHad, REPORT_LOOKS, SLIDE_PIECE, VISIT_GAP_MS, waitsForApproval, shareWaits, cleanTemplate, meetingHeld, heldNoSend } from '../../public/admin/board-shared.js';
 import { comparePeople, photoUrl } from '../../public/admin/team-shared.js';
@@ -3530,7 +3530,8 @@ export async function maybeSendApprovedAgendas(env, { now = Date.now() } = {}) {
  * have been held (its day come, or the chair started it), with its minutes in Board. The same as Board's After the
  * meeting goes by (public/admin/board-meeting.js), for a tab left open or a request made by hand. Minutes kept only as a
  * staff-only file (minutesStaffOnly) can be marked approved, as ever, but the board is never told they're up: they can't
- * read them (`toBoard`, the minutes notice), said in words with what to do (Board QA round 14, Nov 24 2026)
+ * read them (`toBoard`, the minutes notice), said in words with what to do (Board QA round 14, Nov 24 2026), approved
+ * or not (round 15, Nov 26 2026: once marked approved, all four were emailed "Read them" for minutes they couldn't read)
  */
 export function minutesNotReady(m, today = todayEastern(), { toBoard = false } = {}) {
   if (!m) return 'That meeting is gone';
@@ -4607,7 +4608,9 @@ async function liveReads(env, m, canAct, { member = null, adminEmail = '', me = 
   for (const id of new Set(seen.sections.flatMap((sec) => sec.items.filter((it) => it.live === 'minutes' && it.about).map((it) => it.about)))) {
     const prev = await getMeeting(env.DB, id);
     if (!boardCopy(prev)) continue;
-    const f = minutesFileOf(prev);
+    // (the document the board reads for them, by the one rule the board page and Print go by: ../../public/admin/
+    // board-shared.js minutesDocOf, with no signature to go by here, so the minutes as written. Board QA round 15)
+    const f = minutesDocOf(prev, null, { known: false }).file;
     // Its date and name for the screen's "since we last met"; its minutes for the item that approves them
     prior.push({ id: prev.id, date: prev.date, name: meetingName(prev), files: f ? [f] : [] });
   }

@@ -33,8 +33,8 @@ import { OrgFacts, factsOf, factHay, FORM_PAPERS } from './facts.js';
 import { viewerLink, openViewer, sizeText } from '../file-viewer.js';
 import {
   RSVP, DOC_KINDS, FILE_KINDS, meetingName, timeRange, clock, money, plural, noteBlocks, liveLines, attendanceCounts, isDate, todayEastern, monthName, answerOf, fileTitle,
-  videoOf, isHeic, asJpeg, isLive, agendaItems, tallyText, unzip, quorumOf, itemFiles, minutesFileOf, presentersOf, sectionPlan, sectionClock, clockText, formatOf, docTitle, itemDocs, signsAs, initialsOf, CONSENT_TEXT, SIGN_STYLES, styleFont, MEMBER_HOW, dueOn, dueWords,
-  reportsOn, namesText, showsOf, booksDraw, isStatement, mainLines, forBoard, cleanMeeting, heldEarly, minutesToSign,
+  videoOf, isHeic, asJpeg, isLive, agendaItems, tallyText, unzip, quorumOf, itemFiles, presentersOf, sectionPlan, sectionClock, clockText, formatOf, docTitle, itemDocs, signsAs, initialsOf, CONSENT_TEXT, SIGN_STYLES, styleFont, MEMBER_HOW, dueOn, dueWords,
+  reportsOn, namesText, showsOf, booksDraw, isStatement, mainLines, forBoard, cleanMeeting, heldEarly, minutesToSign, minutesDocOf, approvedNotShared,
   NOTHING_NEW, isNothingNew, LIMITS, slidesOfItem, reportAlone, decidesAlone, facesOf, hasReport, LIVE_TITLES, orderUnits,
   sendUntilAnswered, uploadId, uploadKey,
 } from '../board-shared.js';
@@ -3165,8 +3165,11 @@ function MeetingDetail({ m, ctx, notes = null, lv = null }) {
   const placed = new Set(m.sections.flatMap((s) => s.items.flatMap((it) => it.docs || [])));
   const docsOf = (it) => itemFiles(m, it, data.meetings);
   const loose = m.files.filter((f) => f.kind !== 'signed' && !placed.has(f.id) && !(upcoming && f.kind === 'minutes'));
-  const signed = m.files.filter((f) => f.kind === 'signed').at(-1);
   const signature = data.minutesSigned?.[m.id] || null;
+  // The minutes as written and the signed copy, by the one rule Print it all goes by too (../board-shared.js
+  // minutesDocOf): a signed copy that isn't on the minutes as they stand is an earlier one. Board QA round 15
+  const doc = minutesDocOf(m, signature, { known: !failed(data, 'minutesSigned') });
+  const signed = doc.copy;
   // (approved minutes whose signature wasn't read just now: their place says so)
   const lostSigned = !signature && m.minutes === 'approved' && failed(data, 'minutesSigned') ? html`<${CouldntLoad} part="minutesSigned" />` : null;
   const looking = !adminHere(ctx) && !data.me.slug;
@@ -3174,7 +3177,7 @@ function MeetingDetail({ m, ctx, notes = null, lv = null }) {
   // decisions, the action items, the minutes) as well
   const printable = !theirs && (m.files.some((f) => f.kind !== 'signed') || m.sections.some((s) => s.items.length) || m.actions.length > 0
     || (!upcoming && (m.attendance.some((p) => p.status) || m.motions.some((x) => x.text) || m.files.length > 0)));
-  const minutesFile = minutesFileOf(m);
+  const minutesFile = doc.written;
   const video = upcoming && !over ? videoOf(m) : '';
   const isNext = upcoming && m.id === d.featured?.id;
   const sections = m.sections.filter((s) => s.title || s.items.length);
@@ -3209,7 +3212,9 @@ function MeetingDetail({ m, ctx, notes = null, lv = null }) {
     loose.length ? { id: 'more-files', title: placed.size ? 'Also for this meeting' : upcoming ? 'The documents' : 'Files', icon: 'documents' } : null,
   ].filter(Boolean);
   // The minutes as written and the signed copy, under who was there
-  const recordLinks = !upcoming && (signed || minutesFile) ? html`<p class="bp-aghero__links bp-noprint">${minutesFile ? html`<a class="bp-link" ...${viewerLink(asViewer([minutesFile]), 0)}>The minutes as written</a>` : null}${signed ? html`<a class="bp-link" ...${viewerLink(asViewer([signed]), 0)}>The signed copy</a>` : null}</p>` : null;
+  // (approved minutes whose file is kept Staff only: said as approved and not shared yet, with nothing to read. Round 15)
+  const recordLinks = !upcoming && (signed || minutesFile) ? html`<p class="bp-aghero__links bp-noprint">${minutesFile ? html`<a class="bp-link" ...${viewerLink(asViewer([minutesFile]), 0)}>The minutes as written</a>` : null}${signed ? html`<a class="bp-link" ...${viewerLink(asViewer([signed]), 0)}>${doc.copyWords}</a>` : null}</p>`
+    : !upcoming && approvedNotShared(m) ? html`<p class="mfix-signed bp-unshared">The minutes are approved. They aren’t shared on the board page yet.</p>` : null;
   const said = minutesState(m);
   const status = upcoming
     ? (m.date === data.today ? dayStatus(m, phase) : inWords(m.date, data.today))
