@@ -21,6 +21,7 @@ function objectOf(key, o) {
     key,
     size: o.bytes.length,
     httpMetadata: o.httpMetadata,
+    customMetadata: o.customMetadata || {},
     httpEtag: `"${o.etag}"`,
     etag: o.etag,
     uploaded: o.uploaded,
@@ -35,11 +36,11 @@ export function createR2() {
   const objects = new Map();
   const uploads = new Map();
   let n = 0;
-  const store = (key, bytes, httpMetadata = {}) => objects.set(key, { bytes, httpMetadata, etag: `e${++n}`, uploaded: new Date() });
+  const store = (key, bytes, httpMetadata = {}, customMetadata = {}) => objects.set(key, { bytes, httpMetadata, customMetadata, etag: `e${++n}`, uploaded: new Date() });
 
   return {
     objects,
-    async put(key, body, opts = {}) { store(key, await bytesOf(body), opts.httpMetadata || {}); return objectOf(key, objects.get(key)); },
+    async put(key, body, opts = {}) { store(key, await bytesOf(body), opts.httpMetadata || {}, opts.customMetadata || {}); return objectOf(key, objects.get(key)); },
     async get(key) { const o = objects.get(key); return o ? objectOf(key, o) : null; },
     async head(key) { const o = objects.get(key); return o ? objectOf(key, o) : null; },
     async delete(keys) { for (const k of [].concat(keys)) objects.delete(k); },

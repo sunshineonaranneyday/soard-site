@@ -27,6 +27,7 @@
 import { verifyJwt } from './api/_middleware.js';
 import { isStaffEmail } from './api/_board-roles.js';
 import { staffStanding, refusedText } from './api/_staff-access.js';
+import { mediaPersonFor } from './api/_media-people.js';
 import { limit } from './api/_rate-limit.js';
 import { TOOLS, callTool, serverInstructions } from './api/_mcp-tools.js';
 import { PROMPTS, RESOURCES, TEMPLATES, readResource, complete } from './api/_mcp/guide.js';
@@ -61,6 +62,8 @@ export async function whoIs(request, env) {
   if (!isStaffEmail(email)) return { refuse: json({ error: 'The SOARD connection is for SOARD staff only.' }, 403) };
   const standing = await staffStanding(env, email);
   if (!standing.staff) return { refuse: json({ error: refusedText(standing) }, 403) };
+  // Staff limited to Photos & Videos (Admin → Photos & Videos → Who can sign in) don't get the connection either
+  if (await mediaPersonFor(env.DB, email).catch(() => null)) return { refuse: json({ error: 'This sign-in opens Photos & Videos only.' }, 403) };
   return { email };
 }
 

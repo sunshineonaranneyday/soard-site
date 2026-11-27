@@ -27413,7 +27413,16 @@ ${sections || '<p>No one yet.</p>'}
       const mine = useMemo(() => personOfIdentity(me, team), [me, team]);
       const boardAdmin = boardAdminGate.use();
       // Board members sign in with the same code; every admin API refuses them, so their page is the board's
-      useEffect(() => { if (me?.email && !/@soardcharity\.com$/i.test(me.email)) location.replace('/admin/board/'); }, [me]);
+      // Someone who signs in for Photos & Videos only (any address, a soardcharity.com one too): its own page
+      useEffect(() => {
+        if (!me?.email) return;
+        const staffMail = /@soardcharity\.com$/i.test(me.email);
+        fetch('/api/media-admin?me=1', { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+          .then((j) => {
+            if (j?.me?.role === 'media') location.replace('/admin/media/');
+            else if (!staffMail) location.replace('/admin/board/');
+          });
+      }, [me]);
       // Everyone who shows who did something (audit log, Dashboard, Publish) reads People from here
       useEffect(() => { setPeopleList(team); }, [team]);
       const myPhoto = mine?.photo ? pplPhoto(mine, 56) : '';
@@ -27746,8 +27755,7 @@ ${sections || '<p>No one yet.</p>'}
             return html`<${DemoDayPage} addToast=${addToast} />`;
 
           case 'media':
-            return html`<${MediaLazy} addToast=${addToast} kids=${kids} events=${events} communityProjects=${communityProjects}
-              listsReady=${!loading || kids.length > 0} />`;
+            return html`<${MediaLazy} addToast=${addToast} />`;
 
           case 'families':
             return html`<${FamiliesLazy} addToast=${addToast} />`;

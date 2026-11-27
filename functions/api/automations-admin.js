@@ -503,7 +503,8 @@ export async function gatherFacts(env, { fetchImpl = fetch, now = Date.now() } =
   return {
     checkedAt: new Date(now).toISOString(),
     env: envFacts(env),
-    bindings: { db: !!env.DB, files: !!env.FILES, vendorFiles: !!env.VENDOR_FILES, applicantFiles: !!env.APPLICANT_FILES, boardFiles: !!env.BOARD_FILES, ai: !!env.AI, hub: !!env.LIVE_HUB },
+    bindings: { db: !!env.DB, files: !!env.FILES, vendorFiles: !!env.VENDOR_FILES, applicantFiles: !!env.APPLICANT_FILES, boardFiles: !!env.BOARD_FILES, mediaFiles: !!env.MEDIA_FILES, images: !!env.IMAGES, ai: !!env.AI, hub: !!env.LIVE_HUB },
+    media: await mediaFacts(env).catch(() => null),
     broadcast: broadcastFacts(ok(cfg), alertTexts),
     health: healthFacts(ok(health)),
     hub: hub?.error && !hub.bound
@@ -693,4 +694,21 @@ export async function onRequestGet(context) {
     // 500, not 502: Cloudflare replaces 502 bodies with its own error page
     return Response.json({ success: false, error: err.message }, { status: 500, headers });
   }
+}
+
+/** Photos & Videos for this map: each source's last read, how far the describing has got, the intake's state (names and counts only) */
+async function mediaFacts(env) {
+  if (!env.DB) return null;
+  const [{ indexFacts }, inbox] = await Promise.all([import('./_media-index.js'), import('./_media-inbox.js')]);
+  const [facts, settings, held] = await Promise.all([
+    indexFacts(env.DB),
+    inbox.readSettings(env.DB),
+    env.DB.prepare("SELECT COUNT(*) AS n FROM media_inbox WHERE state = 'held'").first().catch(() => null),
+  ]);
+  const sources = Object.fromEntries(Object.entries(facts.sources || {}).map(([k, v]) => [k, { doneAt: v.doneAt || null, error: v.error || null, reading: v.cursor != null }]));
+  return {
+    sources, undescribed: facts.undescribed, unchecked: facts.unchecked,
+    email: { ready: !!(env.MEDIA_FILES && env.MEDIA_INBOX_SECRET && env.IMAGES) },
+    text: { number: settings.number || null }, replies: !!settings.replies, held: held?.n || 0,
+  };
 }

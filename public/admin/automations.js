@@ -1264,6 +1264,18 @@ const MAP = { t: 'SOARD', children: [
           touches: ['Cloudflare R2'], where: 'soard-board-files (binding BOARD_FILES) · boardFiles() in functions/api/_board.js', links: [{ label: 'Open R2', href: CF('/r2/overview') }],
           live: (f) => (!f.bindings || !('boardFiles' in f.bindings) ? null : f.bindings.boardFiles ? ON() : ATTN('The BOARD_FILES binding is missing, so board papers go to the public files bucket.')) },
       ]},
+      { t: 'Photos & Videos', children: [
+        { t: 'Every photo and video, in one index', s: 'live', k: 'link',
+          does: 'Admin → Photos & Videos: the website’s images, every Stream video, the Drive archive (Sunshine - Photos & Video), JobTread’s job photos and the YouTube channel, one searchable list. Read again on the heartbeat: the website, Stream and YouTube every couple of hours, the Drive and JobTread every day. Every photo is described for search by Workers AI, and the archive’s and JobTread’s Before photos get the website’s address check before the Photos & Videos sign-in sees them.',
+          touches: ['D1', 'Cloudflare Images', 'Cloudflare Stream', 'Google Drive', 'JobTread', 'YouTube', 'Workers AI'], where: 'media_items · functions/api/_media-index.js, _media-describe.js, _media-search.js',
+          live: (f) => {
+            const m = f.media;
+            if (!m) return null;
+            const bad = Object.entries(m.sources || {}).filter(([, s]) => s.error);
+            if (bad.length) return ATTN(`${bad.map(([k]) => k).join(', ')} couldn’t be read: ${bad[0][1].error}`);
+            return ON();
+          } },
+      ]},
       { t: 'Code', children: [
         { t: 'GitHub repository', s: 'live', k: 'link',
           does: 'The website’s code: the pages, the admin, the API and the live hub. Cloudflare watches its main branch, and every push there builds and publishes the site.',

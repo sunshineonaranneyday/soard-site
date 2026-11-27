@@ -21,8 +21,8 @@ const CRC_TABLE = (() => {
   return t;
 })();
 
-export function crc32(bytes) {
-  let crc = 0xFFFFFFFF;
+export function crc32(bytes, start = 0) {
+  let crc = (start ^ 0xFFFFFFFF) >>> 0;
   for (let i = 0; i < bytes.length; i++) crc = CRC_TABLE[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8);
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
@@ -38,13 +38,14 @@ function dos(date) {
 }
 
 const FLAG_UTF8 = 0x0800; // file names are UTF-8
+const FLAG_LATER = 0x0008; // the CRC and sizes follow the file (a data descriptor): it's written as it arrives
 
-function localHeader(name, crc, size, when) {
+function localHeader(name, crc, size, when, flags = FLAG_UTF8) {
   const h = new Uint8Array(30 + name.length);
   const v = new DataView(h.buffer);
   v.setUint32(0, 0x04034B50, true);
   v.setUint16(4, 20, true);
-  v.setUint16(6, FLAG_UTF8, true);
+  v.setUint16(6, flags, true);
   v.setUint16(8, 0, true); // stored
   v.setUint16(10, when.time, true);
   v.setUint16(12, when.date, true);
@@ -57,13 +58,13 @@ function localHeader(name, crc, size, when) {
   return h;
 }
 
-function centralEntry(name, crc, size, offset, when) {
+function centralEntry(name, crc, size, offset, when, flags = FLAG_UTF8) {
   const e = new Uint8Array(46 + name.length);
   const v = new DataView(e.buffer);
   v.setUint32(0, 0x02014B50, true);
   v.setUint16(4, 20, true);
   v.setUint16(6, 20, true);
-  v.setUint16(8, FLAG_UTF8, true);
+  v.setUint16(8, flags, true);
   v.setUint16(10, 0, true);
   v.setUint16(12, when.time, true);
   v.setUint16(14, when.date, true);
@@ -105,7 +106,8 @@ export function zipStream({ now = new Date() } = {}) {
   let offset = 0;
   const write = async (chunk) => { await writer.ready; await writer.write(chunk); offset += chunk.length; };
   const unique = (name) => {
-    let n = String(name || 'file').replace(/[\\/:*?"<>|\u0000-\u001f]+/g, '-');
+    // (a folder in the name stays one: each part cleaned, never an empty part or a step up)
+    let n = String(name || 'file').split('/').map((p) => p.replace(/[\\:*?"<>|\u0000-\u001f]+/g, '-').trim()).filter((p) => p && p !== '.' && p !== '..').join('/') || 'file';
     if (!used.has(n.toLowerCase())) { used.add(n.toLowerCase()); return n; }
     const dot = n.lastIndexOf('.');
     for (let i = 2; ; i++) {
@@ -126,6 +128,41 @@ export function zipStream({ now = new Date() } = {}) {
       await write(bytes);
       dir.push(centralEntry(nameBytes, crc, bytes.length, at, when));
     },
+    /**
+     * A file read as it arrives (a ReadableStream: a photo straight from Drive or JobTread), never whole in memory: its
+     * CRC and size go in a data descriptor after it. Over `max` bytes it stops and throws (the ZIP is cut short there,
+     * so the caller adds no more and closes). → the bytes written
+     */
+    async addStream(name, readable, date = now, { max = 0xFFFFFFF0 } = {}) {
+      const nameBytes = enc.encode(unique(name));
+      const when = dos(date);
+      const flags = FLAG_UTF8 | FLAG_LATER;
+      const at = offset;
+      await write(localHeader(nameBytes, 0, 0, when, flags));
+      let crc = 0;
+      let size = 0;
+      const reader = readable.getReader();
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+        size += chunk.length;
+        if (size > max) { await reader.cancel().catch(() => {}); throw new Error('too big for one ZIP'); }
+        crc = crc32(chunk, crc);
+        await write(chunk);
+      }
+      const d = new Uint8Array(16);
+      const v = new DataView(d.buffer);
+      v.setUint32(0, 0x08074B50, true);
+      v.setUint32(4, crc, true);
+      v.setUint32(8, size, true);
+      v.setUint32(12, size, true);
+      await write(d);
+      dir.push(centralEntry(nameBytes, crc, size, at, when, flags));
+      return size;
+    },
+    /** Bytes written so far */
+    get written() { return offset; },
     async close() {
       const start = offset;
       for (const e of dir) await write(e);

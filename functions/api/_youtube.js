@@ -48,6 +48,9 @@ async function yt(env, path, params) {
   return { ok: true, data };
 }
 
+/** One read of the Data API, with the API key or the channel's sign-in (Admin → Photos & Videos lists the uploads: ./_media-index.js) */
+export const ytGet = (env, path, params) => yt(env, path, params);
+
 /** What a channel URL points at: { id } for /channel/UC…, { handle } for /@name, else null. */
 export function channelRef(url) {
   const s = String(url || '').trim();

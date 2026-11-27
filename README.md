@@ -218,6 +218,7 @@ All endpoints run as Cloudflare Workers Functions under `/api/`. Admin endpoints
 | `/api/upload-video` | POST | Upload to Cloudflare Stream |
 | `/api/upload-file` | POST | Upload to R2 |
 | `/api/media-admin` | GET | Admin → Photos & Videos: the reveal schedule, live reveals and their Reels, video lengths, an MP4 made on request |
+| `/api/media-thumb` | GET | A Drive archive photo's picture, for someone who may see it |
 | `/api/media-download` | GET/POST | Admin → Photos & Videos downloads: a photo full size (no location data), a video as an MP4, an album or the photos picked as one ZIP. Only what the public pages show |
 | `/api/generate` | POST | AI content generation |
 | `/api/press-scan` | POST | Import press mentions |

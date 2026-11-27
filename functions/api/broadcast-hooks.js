@@ -39,6 +39,10 @@ import { maybeRunCompanyCam } from './_companycam-sync.js';
 import { maybeKeepTags } from './_file-tags.js';
 import { maybeSortPhotos } from './_photo-stages.js';
 import { maybeRunPastPhotos } from './_past-photos.js';
+import { maybeRunMediaIndex } from './_media-index.js';
+import { describeSome } from './_media-describe.js';
+import { buildVocab } from './_media-search.js';
+import { maybeRunInbox } from './_media-inbox.js';
 import { maybeMoveTags } from './_tag-moves.js';
 import { maybeCheckJobs } from './_companycam-jobs.js';
 import { maybeCapSelfTest } from './_application-cap.js';
@@ -157,6 +161,11 @@ export async function onRequestPost(context) {
     context.waitUntil(maybeSortPhotos(env, { deadline }));
     // Past makeovers' photos from Drive onto their JobTread jobs, once a founder turned it on (see _past-photos.js)
     context.waitUntil(maybeRunPastPhotos(env, { deadline }));
+    // Admin → Photos & Videos: every photo and video (website, Stream, the Drive archive, JobTread, YouTube) kept in one
+    // index, a step a minute; then photos described for search and Before photos checked for an address (see _media-index.js)
+    context.waitUntil(maybeRunMediaIndex(env, { deadline, describe: describeSome, vocab: buildVocab }));
+    // Photos & Videos' intake: an email to photos@ the site didn't hear about, or one that failed, taken in (see _media-inbox.js)
+    context.waitUntil(maybeRunInbox(env, { deadline }));
     // Every 2 minutes: the next files on JobTread's old tags moved onto the new ones (see _tag-moves.js)
     context.waitUntil(maybeMoveTags(env, { deadline }));
     // Every 15 minutes: the backup Worker's MP4s and Stream key, and its alert if it has stopped (see _backup.js)

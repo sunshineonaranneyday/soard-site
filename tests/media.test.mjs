@@ -303,16 +303,21 @@ function fakeCloudflare({ mp4 = 'ready', signed = false, broken = [] } = {}) {
   };
   return { seen, restore: () => { globalThis.fetch = real; } };
 }
-const get = (fn, env, qs) => fn({ env, request: new Request(`https://admin.test/api/x?${qs}`), data: { userEmail: 'staff@soardcharity.com' }, waitUntil: () => {} });
+const get = (fn, env, qs, { media = false } = {}) => fn({ env, request: new Request(`https://admin.test/api/x?${qs}`), waitUntil: () => {},
+  data: media ? { userEmail: 'sam.social@example.com', mediaOnly: { email: 'sam.social@example.com', name: 'Sam' } } : { userEmail: 'staff@soardcharity.com' } });
 
-test('GET /api/media-admin: the schedule and the live reveals, rehearsals left out, nothing private', async () => {
+test('GET /api/media-admin: the home, with What’s happening from the schedule and the live reveals (rehearsals left out)', async () => {
   const env = await world();
-  const r = await get(adminGet, env, '');
-  const j = await r.json();
+  const j = await (await get(adminGet, env, '')).json();
   assert.equal(j.ok, true);
-  assert.deepEqual(j.reveals.upcoming.map((x) => x.slug), ['dee']);
-  assert.deepEqual(j.broadcasts.map((b) => b.id), ['live-1']);
-  assert.deepEqual(Object.keys(j.broadcasts[0]).sort(), ['endedAt', 'fbPermalink', 'id', 'kidName', 'kidSlug', 'liveAt', 'reel', 'replayUid', 'test']);
+  assert.equal(j.me.role, 'staff');
+  assert.deepEqual(j.activity.ahead.map((x) => x.key), ['event:golf-2027', 'reveal:dee'], 'the event in January, then the reveal');
+  assert.ok(j.activity.recent.some((x) => x.key === 'live:live-1'));
+  assert.ok(!j.activity.recent.some((x) => x.key === 'live:live-0'), 'a rehearsal');
+  assert.ok(j.albums.some((a) => a.key === 'kid:ava' && a.photos > 0));
+  assert.ok(j.albums.some((a) => a.key === 'kid:cal' && a.public === false), 'staff see drafts, marked');
+  const m = await (await get(adminGet, env, '', { media: true })).json();
+  assert.ok(!m.albums.some((a) => a.key === 'kid:cal'));
 });
 
 test('GET /api/media-admin?videos=: lengths of the videos asked for, and whether the whole library was read', async () => {
@@ -403,8 +408,10 @@ test('GET /api/media-download?image=: one photo full size, named for the album; 
       ['album=event:nope&image=events/nope/hero', 404],
       ['album=community:hidden&image=community/hidden/a', 404],
       ['album=kid:ava', 400],
-    ]) assert.equal((await get(dlGet, env, qs)).status, status, qs);
+    ]) assert.equal((await get(dlGet, env, qs, { media: true })).status, status, qs);
     assert.equal(cf.seen.length, 1, 'nothing refused was ever fetched');
+    // Staff may have a draft's photos (the Photos & Videos sign-in may not, above)
+    assert.equal((await get(dlGet, env, 'album=kid:cal&image=kids/cal/hero')).status, 200);
   } finally { cf.restore(); }
 });
 
