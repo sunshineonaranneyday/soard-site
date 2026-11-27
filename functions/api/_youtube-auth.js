@@ -79,7 +79,9 @@ export async function ytCall(env, method, path, params = {}, body, { fetchImpl =
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
     const reason = data.error?.errors?.[0]?.reason || null;
-    const err = new Error(`YouTube ${method} ${path}: ${data.error?.message || res.status}${reason ? ` (${reason})` : ''}`);
+    // (Google's message carries HTML, "exceeded your <a href=…>quota</a>": the admin shows it as text)
+    const message = String(data.error?.message || res.status).replace(/<[^>]*>/g, '');
+    const err = new Error(`YouTube ${method} ${path}: ${message}${reason ? ` (${reason})` : ''}`);
     err.status = res.status;
     err.reason = reason;
     throw err;
