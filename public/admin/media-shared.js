@@ -140,7 +140,12 @@ function filesFrom(groups) {
       if (!id || /^(https?:|blob:|data:)/.test(id)) continue;
       // A pair keeps both halves even when one is in the gallery too; elsewhere a repeat is dropped
       const pairRole = role === 'pair-before' || role === 'pair-after';
-      if (!pairRole && seen.has(id)) continue;
+      if (!pairRole && seen.has(id)) {
+        // (the main photo is in the gallery too, usually with the alt text the main one lacks)
+        const first = files.find((f) => f.id === id);
+        if (first && !first.alt && p?.alt) first.alt = String(p.alt).trim();
+        continue;
+      }
       seen.add(id);
       count[role] = (count[role] || 0) + 1;
       files.push({ id, alt: String(p?.alt || '').trim(), role, n: pairRole ? p.n : count[role], room: p?.room || '', added: addedAt(id) });

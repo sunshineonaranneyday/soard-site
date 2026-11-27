@@ -1,0 +1,217 @@
+/* Admin → Photos & Videos on its own page (/admin/media/), for the people who sign in for it only: the admin’s
+ * design tokens and the few shared classes the area uses, copied from public/admin/index.html (keep in step). */
+:root {
+  --color-primary: #FFD500;
+  --color-primary-hover: #E6C000;
+  --color-primary-bg: rgba(255, 213, 0, 0.08);
+  --color-primary-ring: rgba(255, 213, 0, 0.25);
+  /* Text-safe values: each clears 4.5:1 on white and on the cream page */
+  --color-danger: #C53030;
+  --color-danger-bg: rgba(197, 48, 48, 0.06);
+  --color-success: #2F7D4F;
+  --color-info: #2B6CB0;
+  --color-warning: #D69E2E;
+  --color-primary-ink: #7A5C00;     /* brand yellow as readable text on light surfaces */
+  --color-bg: #F5F4F0;
+  --color-bg-card: #fff;
+  --color-bg-secondary: #FAFAF8;
+  --color-bg-hover: #F7F6F2;
+  --color-text: #2D2E33;
+  --color-text-fill-hover: #45464D; /* a dark (--color-text) fill under the pointer: selected pills */
+  --color-text-secondary: #5E5F66;
+  --color-text-muted: #65666D;
+  --color-border: #E5E4E0;
+  --color-border-strong: #D4D2CB;
+  --color-sidebar: #1A1B1F;
+  /* Aliases: older components reference these names */
+  --text-secondary: var(--color-text-secondary);
+  --text-muted: var(--color-text-muted);
+  --color-text-dim: var(--color-text-muted);
+  --color-muted: var(--color-text-muted);
+  --text-tertiary: var(--color-text-muted);
+  --c-dark: #373A36; /* the public site's dark brand ink */
+  --muted: var(--color-text-secondary);
+  --border: var(--color-border);
+  --bg-primary: var(--color-bg-card);
+  --bg-secondary: var(--color-bg-secondary);
+  --bg-alt: var(--color-bg);
+  --shadow-xs: 0 1px 1px rgba(26,27,31,0.04);
+  --shadow-sm: 0 1px 2px rgba(26,27,31,0.05), 0 1px 1px rgba(26,27,31,0.02);
+  --shadow-md: 0 6px 16px -4px rgba(26,27,31,0.10), 0 2px 4px -2px rgba(26,27,31,0.05);
+  --shadow-lg: 0 24px 48px -12px rgba(26,27,31,0.22), 0 8px 16px -8px rgba(26,27,31,0.10);
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --focus-ring: 0 0 0 3px var(--color-primary-ring);
+  /* Keyboard focus on buttons and links: a ring that reads on white, cream and yellow */
+  --focus-ring-strong: 0 0 0 2px var(--color-bg-card), 0 0 0 4px var(--color-text);
+  /* Fixed chrome on the top-bar shell (≤1024px): the bar, plus the publish strip while it shows.
+     Anything sticky or scrolled to sits below --top-h, so the strip never covers it. */
+  --bar-h: calc(56px + env(safe-area-inset-top, 0px));
+  --strip-h: 0px;
+  --top-h: calc(var(--bar-h) + var(--strip-h));
+  /* Type scale: rem on the 14px root, so the 16px root on touch screens and
+     phones scales every step with it. Every font-size in the admin is one of these. */
+  --fs-2xs: 0.7857rem;  /* 11px  small caps labels, counts, tags */
+  --fs-xs: 0.8571rem;   /* 12px  meta lines, hints */
+  --fs-sm: 0.9286rem;   /* 13px  secondary text, buttons, controls */
+  --fs-base: 1rem;      /* 14px  body, fields */
+  --fs-md: 1.0714rem;   /* 15px  card titles, row names */
+  --fs-lg: 1.2143rem;   /* 17px  section titles, status lines */
+  --fs-xl: 1.4286rem;   /* 20px  numbers, dialog titles */
+  --fs-2xl: 1.7143rem;  /* 24px  page titles */
+  --fs-3xl: 2.2857rem;  /* 32px  headline numbers */
+  /* Tones: fill + ink for tags and counts, line + surface for notices and
+     tiles, dot for status dots. Warnings are amber; red is only for what
+     deletes or fails. */
+  --tone-neutral-bg: #F1F0EC; --tone-neutral-fg: #55565C; --tone-neutral-dot: #A3A29C;
+  --tone-warn-bg: #FFF3BF; --tone-warn-fg: #6E5200; --tone-warn-line: rgba(110,82,0,0.14); --tone-warn-line-strong: #F0E3A8; --tone-warn-surface: #FFFBEA; --tone-warn-dot: #D69E2E;
+  --tone-success-bg: #E6F4EA; --tone-success-fg: #1E6B3C; --tone-success-line: #C7E5D0; --tone-success-surface: #F3FAF5; --tone-success-dot: #2F7D4F;
+  --tone-info-bg: #E8F0FA; --tone-info-fg: #1F4E85; --tone-info-line: #CADCF2; --tone-info-surface: #F4F8FD; --tone-info-dot: #2B6CB0;
+  --tone-danger-bg: #FDECEC; --tone-danger-fg: #A32B2B; --tone-danger-line: #F1C9C9; --tone-danger-surface: #FFF7F7; --tone-danger-dot: #C53030;
+  --seg-bg: #EFEEEA;
+  /* On/off switches: one look everywhere */
+  --switch-off: #BDBAB2; --switch-on: var(--tone-success-dot);
+  /* Controls: buttons and fields, and the smaller toolbar pills */
+  --control-h: 38px;
+  --control-h-sm: 34px;
+}
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* The root stays in px: every rem (and the type scale) is measured from it */
+html { font-size: 14px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+  line-height: 1.45;
+  min-height: 100vh;
+}
+::selection { background: rgba(255, 213, 0, 0.4); color: var(--color-text); }
+h1, h2, h3, h4 { letter-spacing: -0.015em; line-height: 1.25; }
+h2 { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; }
+a { color: inherit; text-decoration: none; }
+button { cursor: pointer; font-family: inherit; font-size: inherit; }
+button:disabled { cursor: default; }
+/* Not a dialog: one with no field to start in holds the focus itself, and keeps its own shape and shadow */
+button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:not(.modal):focus-visible { outline: none; box-shadow: var(--focus-ring-strong); border-radius: var(--radius-sm); }
+.modal[tabindex] { outline: none; }
+input, textarea, select { font-family: inherit; font-size: var(--fs-base); }
+.hub-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 1.75rem;
+}
+.hub-tab {
+  position: relative;
+  padding: 0.7rem 0.85rem;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: none;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+.hub-tab::after {
+  content: ''; position: absolute; left: 0.85rem; right: 0.85rem; bottom: -1px;
+  height: 2px; border-radius: 2px 2px 0 0; background: transparent;
+  transition: background 0.15s;
+}
+.hub-tab:hover { color: var(--color-text); }
+.hub-tab:hover::after { background: var(--color-border-strong); }
+.hub-tab.active { color: var(--color-text); }
+.hub-tab.active::after { background: var(--color-primary); height: 3px; }
+.hub-tab:focus-visible { box-shadow: inset 0 0 0 2px var(--color-text); border-radius: 6px; }
+.page-header {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap; gap: 0.75rem 1rem;
+}
+.page-header h2 {
+  font-size: var(--fs-2xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+}
+.page-header > div:first-child:has(> h2) { min-width: 0; }
+/* A subtitle written straight into the header (not wrapped with its title) still sits under it */
+.page-header > h2 + p { flex: 1 1 100%; order: 1; margin-top: -0.4rem; }
+.page-sub, .page-header h2 + p {
+  margin: 0.3rem 0 0;
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
+  max-width: 72ch;
+}
+
+/* Headings that don't set their own size still land on the scale */
+h3 { margin: 0; font-size: var(--fs-md); font-weight: 700; }
+h4 { font-size: var(--fs-base); font-weight: 700; }
+
+/* ─── Cards ──────────────────────────── */
+.card {
+  background: var(--color-bg-card);
+  border-radius: var(--radius-md);
+  padding: 1.5rem;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--color-border);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+.card > h3:first-child, .card-title { font-size: var(--fs-md); font-weight: 700; letter-spacing: -0.015em; }
+h2.card-title { margin: 0 0 0.3rem; }
+.card-subtitle { font-size: var(--fs-sm); line-height: 1.5; color: var(--color-text-secondary); }
+.card:has(.table-wrap) { padding: 0; }
+.card:has(.table-wrap) > div:first-child { padding: 1.5rem 1.5rem 0.5rem; }
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 1rem;
+}
+/* ─── Buttons ────────────────────────── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem;
+  min-height: 38px;
+  padding: 0.5rem 1rem;
+  border-radius: 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.005em;
+  border: 1px solid transparent;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s, transform 0.08s;
+  -webkit-tap-highlight-color: transparent;
+}
+.btn:active:not(:disabled) { transform: translateY(1px); }
+.btn:focus-visible { outline: none; box-shadow: var(--focus-ring-strong); }
+.btn-primary { background: var(--color-primary); color: #1A1B1F; border-color: #EBC400; box-shadow: inset 0 1px 0 rgba(255,255,255,0.35), 0 1px 2px rgba(26,27,31,0.08); }
+.btn-primary:hover:not(:disabled) { background: #FFDC2E; border-color: #E0BB00; }
+/* Two kinds of button: primary (yellow, one per card or page) and ghost (white). Red only for what deletes. */
+.btn-danger { background: var(--color-danger); color: #fff; border-color: #B42B2B; box-shadow: 0 1px 2px rgba(26,27,31,0.1); }
+.btn-danger:hover:not(:disabled) { background: #A82828; border-color: #A82828; }
+.btn-ghost { background: var(--color-bg-card); color: var(--color-text); border-color: var(--color-border); box-shadow: var(--shadow-xs); }
+.btn-ghost:hover:not(:disabled) { background: var(--color-bg-hover); border-color: var(--color-border-strong); }
+.btn-sm { min-height: 32px; padding: 0.35rem 0.75rem; font-size: var(--fs-xs); border-radius: 7px; }
+.btn svg { flex-shrink: 0; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
+.empty { padding: 2.25rem 1.5rem; text-align: center; }
+.empty__title { margin: 0 0 0.25rem; font-size: var(--fs-base); font-weight: 600; color: var(--color-text); }
+.empty__text { margin: 0 auto; max-width: 52ch; font-size: var(--fs-sm); line-height: 1.5; color: var(--color-text-secondary); }
+.empty__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.5rem; margin-top: 1rem; }
+.empty--inline { padding: 1rem 1.25rem; text-align: left; }
+.empty--inline .empty__text { margin: 0; max-width: none; color: var(--color-text-muted); }
+
+.spinner {
+  display: inline-block;
+  width: 18px; height: 18px;
+  border: 2px solid rgba(0,0,0,0.15);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.bc-sr, .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

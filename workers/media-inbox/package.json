@@ -1,0 +1,6 @@
+{
+  "name": "soard-media-inbox",
+  "private": true,
+  "type": "module",
+  "description": "photos@sunshineonaranneyday.com: keeps each email and tells the website (Admin → Photos & Videos)"
+}

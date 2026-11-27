@@ -22,6 +22,7 @@
 
 import { activeBoard, activeAdvisors, readState, writeState, PEOPLE_DOWN } from './_board-roles.js';
 import { isEmail } from './_broadcast-notify.js';
+import { peopleEmails } from './_media-people.js';
 
 const API = 'https://api.cloudflare.com/client/v4';
 export const GROUP_NAME = 'SOARD board (kept by the website)';
@@ -47,12 +48,15 @@ export async function boardSignIns(DB) {
 }
 
 /**
- * Everyone Access lets sign in: the board and the Advisory Board. The site says what each can reach (_board-roles.js),
- * so the one group serves both. boardSignIns stays the board's own count for Board → Members.
+ * Everyone Access lets sign in: the board, the Advisory Board, and the people who sign in for Photos & Videos only
+ * (./_media-people.js; a soardcharity.com address among them is staff's sign-in already). The site says what each can
+ * reach (_board-roles.js, the middleware), so the one group serves all three. boardSignIns stays the board's own count
+ * for Board → Members.
  */
 export async function everyoneSignIns(DB) {
-  const [{ emails }, advisors] = await Promise.all([boardSignIns(DB), activeAdvisors(DB)]);
-  return { emails: [...new Set([...emails, ...advisors.map((a) => a.email).filter(isEmail)])].sort() };
+  const [{ emails }, advisors, media] = await Promise.all([boardSignIns(DB), activeAdvisors(DB), peopleEmails(DB)]);
+  const outside = media.filter((e) => !/@soardcharity\.com$/i.test(e));
+  return { emails: [...new Set([...emails, ...advisors.map((a) => a.email).filter(isEmail), ...outside])].sort() };
 }
 
 async function hashOf(list) {

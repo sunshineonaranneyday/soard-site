@@ -1,0 +1,23 @@
+# soard-media-inbox: photos@sunshineonaranneyday.com, SOARD Photos & Videos' email address (src/index.js says what it does).
+# Deployed on its own, apart from the website:   cd workers/media-inbox && npx wrangler deploy
+# Cloudflare Email Routing hands it every message to photos@ (the route: Email → Routing rules → photos@ → this Worker).
+# Its one key is a Worker secret, never in this file: MEDIA_INBOX_SECRET, the same as the website's (Cloudflare Pages →
+# soard → Settings → Variables), set with:   npx wrangler secret put MEDIA_INBOX_SECRET
+name = "soard-media-inbox"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+# No address of its own: it only takes email
+workers_dev = false
+preview_urls = false
+
+[vars]
+SITE = "https://sunshineonaranneyday.com"
+
+# SOARD's own private bucket for the photos and videos the team sends in: the message is kept here exactly as it came
+# before anything else happens to it (the website's MEDIA_FILES)
+[[r2_buckets]]
+binding = "MEDIA_FILES"
+bucket_name = "soard-media"
+
+[observability]
+enabled = true

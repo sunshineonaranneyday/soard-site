@@ -68,18 +68,60 @@ export async function loadReveals(env, now = Date.now()) {
 
 const TABLE = { kid: 'kids', event: 'events', community: 'community' };
 
-/** One album, from its key ("kid:ava"), or null (no such record, a draft, a cancelled event) */
-export async function loadAlbum(env, key) {
+/**
+ * The Stream videos a page names that Stream no longer has (most uploads from before 2024 were purged): the ones the
+ * index's last read of Stream didn't find (./_media-index.js). null until Stream has been read once (nothing is
+ * called gone on no evidence)
+ */
+export async function goneVideos(DB) {
+  try {
+    const st = await DB.prepare("SELECT value FROM media_state WHERE key = 'sources'").first();
+    if (!parse(st?.value).stream?.doneAt) return null;
+    const rows = (await DB.prepare("SELECT id FROM media_items WHERE source = 'stream'").all()).results || [];
+    const have = new Set(rows.map((r) => r.id.slice(4)));
+    return { has: (uid) => !have.has(uid) };
+  } catch {
+    return null;
+  }
+}
+
+const isPublic = (kind, rec) => (kind === 'event' ? rec.status !== 'cancelled' : rec.publishStatus !== 'draft');
+/** A record as an album, a draft or cancelled one too (staff see those, marked public: false) */
+function albumOf(kind, rec, { broadcasts = [], reveal = null, gone = null } = {}) {
+  const open = { ...rec, publishStatus: 'published', status: kind === 'event' && rec.status === 'cancelled' ? 'past' : rec.status };
+  const a = kind === 'event' ? eventAlbum(open, { gone }) : kind === 'community' ? communityAlbum(open, { gone }) : kidAlbum(open, { broadcasts, reveal, gone });
+  return a ? { ...a, public: isPublic(kind, rec), status: rec.status || a.status } : null;
+}
+
+/**
+ * One album, from its key ("kid:ava"), or null (no such record; for anyone but staff, a draft or a cancelled event).
+ * staff: drafts too, marked public: false
+ */
+export async function loadAlbum(env, key, { staff = false } = {}) {
   const k = parseAlbumKey(key);
   if (!k || !env.DB) return null;
   const row = await env.DB.prepare(`SELECT slug, data FROM ${TABLE[k.kind]} WHERE slug = ?`).bind(k.slug).first().catch(() => null);
   if (!row) return null;
   const rec = { ...parse(row.data), slug: row.slug };
-  if (k.kind === 'event') return eventAlbum(rec);
-  if (k.kind === 'community') return communityAlbum(rec);
+  if (!staff && !isPublic(k.kind, rec)) return null;
+  const gone = await goneVideos(env.DB);
+  if (k.kind !== 'kid') return albumOf(k.kind, rec, { gone });
   const [broadcasts, reveals] = await Promise.all([loadBroadcasts(env.DB, { slug: k.slug, limit: 20 }), loadReveals(env)]);
   const reveal = [...reveals.past, ...reveals.upcoming].find((r) => r.slug === k.slug && r.date) || null;
-  return kidAlbum(rec, { broadcasts, reveal });
+  return albumOf('kid', rec, { broadcasts, reveal, gone });
+}
+
+/** Every record's album at once (the home page): { kid, event, community }, staff's with drafts (public: false) */
+export async function loadAllAlbums(env, { staff = false, broadcasts = [], reveals = null } = {}) {
+  const rows = async (t) => { try { return (await env.DB.prepare(`SELECT slug, data FROM ${t}`).all()).results || []; } catch { return []; } };
+  const [kids, events, community, gone] = await Promise.all([rows('kids'), rows('events'), rows('community'), goneVideos(env.DB)]);
+  const revealOf = new Map();
+  for (const r of [...(reveals?.past || []), ...(reveals?.upcoming || [])]) if (r?.slug && r.date) revealOf.set(r.slug, r);
+  const build = (kind, list) => list.map((r) => ({ ...parse(r.data), slug: r.slug }))
+    .filter((rec) => staff || isPublic(kind, rec))
+    .map((rec) => albumOf(kind, rec, { broadcasts, reveal: revealOf.get(rec.slug), gone }))
+    .filter(Boolean);
+  return { kid: build('kid', kids), event: build('event', events), community: build('community', community), gone };
 }
 
 /** The video of an album a download names: by its key ("live:<uid>", "reel:<broadcast id>"), or by its Stream id */

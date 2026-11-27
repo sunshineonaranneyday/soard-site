@@ -20,6 +20,7 @@ import { limit } from './_rate-limit.js';
 import { clientIp } from './_secure.js';
 import { isStaffEmail, boardMemberFor, advisorFor, routesFor, BOARD_PAGE, ADVISORY_PAGE } from './_board-roles.js';
 import { staffStanding, refusedText } from './_staff-access.js';
+import { mediaPersonFor, MEDIA_ROUTES, MEDIA_PAGE } from './_media-people.js';
 
 // Cache JWKS keys in module scope (persists across requests within same isolate)
 let _cachedKeys = null;
@@ -177,6 +178,11 @@ PUBLIC_ROUTES.push('/api/twilio-status');
 // signed with TWILIO_AUTH_TOKEN and checked inside the handler, which refuses
 // everything when the token isn't set and hears only the staff alert numbers
 PUBLIC_ROUTES.push('/api/twilio-inbound');
+// Photos & Videos' intake (./_media-inbox.js): the email Worker's word that a message came in (HMAC with
+// MEDIA_INBOX_SECRET), a text to the photos number (signed by Twilio), and the short link Stream copies a
+// sent-in video by (signed, six hours). Each checks its own signature
+PUBLIC_ROUTES.push('/api/media-inbox', '/api/media-text');
+PUBLIC_GET_ROUTES.push('/api/media-file');
 // The buttons on /over/<token> (the "Or tap:" link in that text): the link's
 // signed token is checked inside (_over-page.js, _over-link.js), a post from
 // another site is refused there, and it is rate limited below
@@ -410,19 +416,25 @@ async function handle(context) {
   // the advisors' if they run the group or sit on its committee (./_advisory.js
   // whoIs); an advisor (People → Advisory) reaches only the advisors' routes;
   // anyone else Access somehow let in reaches nothing (see _board-roles.js)
+  // Someone on Admin → Photos & Videos → Who can sign in (./_media-people.js) reaches Photos & Videos only, whatever
+  // their address: an outside one, or a soardcharity.com one staff have limited to it
+  const mediaOnly = (person) => Response.json({ success: false, error: 'This sign-in opens Photos & Videos only.', media: MEDIA_PAGE }, { status: 403, headers: cors });
   if (!isStaffEmail(context.data.userEmail)) {
     // (a read that failed is said as that, never as "not on the list": a board member told the board page isn't theirs
     // during a moment the database didn't answer. Board QA round 8, Nov 22 2026)
     let member = null;
     let advisor = null;
+    let media = null;
     try {
       member = await boardMemberFor(context.env.DB, context.data.userEmail);
       advisor = member ? null : await advisorFor(context.env.DB, context.data.userEmail);
+      media = await mediaPersonFor(context.env.DB, context.data.userEmail);
     } catch (e) {
       console.error('[middleware] who signed in', e?.message || e);
       return Response.json({ success: false, error: 'We couldn’t check your sign-in just now. Please try again in a moment.' }, { status: 503, headers: { ...cors, 'Retry-After': '5' } });
     }
-    if (!routesFor({ member, advisor }).includes(url.pathname)) {
+    if (![...routesFor({ member, advisor }), ...(media ? MEDIA_ROUTES : [])].includes(url.pathname)) {
+      if (media && !member && !advisor) return mediaOnly(media);
       return Response.json(
         member
           ? { success: false, error: 'This sign-in opens the board page only.', board: BOARD_PAGE }
@@ -434,11 +446,19 @@ async function handle(context) {
     }
     if (member) context.data.boardMember = member;
     if (advisor) context.data.advisor = advisor;
+    if (media) context.data.mediaOnly = media;
   } else {
     // A soardcharity.com sign-in opens the admin only while its Google account is active (_staff-access.js)
     const standing = await staffStanding(context.env, context.data.userEmail);
     if (!standing.staff) {
       return Response.json({ success: false, error: refusedText(standing) }, { status: 403, headers: cors });
+    }
+    // (staff are never locked out by a read that fails: the list not answering leaves them as staff, as Google not
+    // answering does in staffStanding)
+    const media = await mediaPersonFor(context.env.DB, context.data.userEmail).catch(() => null);
+    if (media) {
+      if (!MEDIA_ROUTES.includes(url.pathname)) return mediaOnly(media);
+      context.data.mediaOnly = media;
     }
   }
 
@@ -609,9 +629,10 @@ export async function isAuthenticated(request, env) {
   const jwt = request.headers.get('CF-Access-JWT-Assertion') || getCookieValue(request, 'CF_Authorization');
   if (!jwt) return false;
   try {
-    // A board member's sign-in passes Access too; only staff count here, with an active Google account
+    // A board member's sign-in passes Access too; only staff count here, with an active Google account, and never one
+    // limited to Photos & Videos (./_media-people.js)
     const payload = await verifyJwt(jwt, CF_ACCESS_TEAM_DOMAIN, CF_ACCESS_AUD);
-    return isStaffEmail(payload?.email) && (await staffStanding(env, payload.email)).staff;
+    return isStaffEmail(payload?.email) && (await staffStanding(env, payload.email)).staff && !(await mediaPersonFor(env?.DB, payload.email).catch(() => null));
   } catch {
     return false;
   }
