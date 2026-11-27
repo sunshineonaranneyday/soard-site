@@ -84,6 +84,8 @@ test('founders only; every active account searched with Drive’s read-only scop
   const q = new URL(calls.find((c) => c.kind === 'drive').url).searchParams.get('q');
   assert.match(q, /name contains 'plushie' or fullText contains 'plushie'/);
   assert.match(q, /mimeType contains 'image\/'/);
+  const search = new URL(calls.find((c) => c.kind === 'drive').url).searchParams;
+  assert.deepEqual([search.get('corpora'), search.get('includeItemsFromAllDrives'), search.get('supportsAllDrives')], ['allDrives', 'true', 'true'], 'the shared drives too, where SOARD’s files live since the cleanup');
   const log = (await env.DB.prepare('SELECT entity_name FROM audit_log').all()).results.map((x) => x.entity_name);
   assert.match(log.join(' | '), /searched every account for “plushie” \(pictures\)/);
 });
@@ -101,5 +103,6 @@ test('a file opens as a download, logged', async () => {
   assert.match(r.headers.get('Content-Disposition'), /^attachment;/);
   assert.equal(r.headers.get('X-Content-Type-Options'), 'nosniff');
   assert.match(r.headers.get('Content-Security-Policy'), /sandbox/);
+  assert.ok(calls.filter((c) => c.kind === 'drive').every((c) => new URL(c.url).searchParams.get('supportsAllDrives') === 'true'), 'a shared drive’s file opens too');
   assert.equal((await get('jane@soardcharity.com', '?account=pat@soardcharity.com&file=bad')).status, 400);
 });
