@@ -25,6 +25,7 @@ import LiveIndicator from '../components/global/LiveIndicator.astro';
 import AuctionBar from '../components/global/AuctionBar.astro';
 import ScrollReveal from '../components/ui/ScrollReveal.astro';
 import LqipReveal from '../components/ui/LqipReveal.astro';
+import FocusRings from '../components/global/FocusRings.astro';
 import { getOrgSchema, getWebPageSchema, getBreadcrumbSchema, buildSchemaGraph } from '../utils/schema';
 import { registerCard, type CardSpec } from '../utils/og-registry';
 import '../styles/global.css';
@@ -373,6 +374,7 @@ const structuredData = buildSchemaGraph(...graphSchemas);
   <LiveIndicator />
   <ScrollReveal />
   <LqipReveal />
+  <FocusRings />
   {/* Register service worker for repeat visitor speed */}
   <script is:inline>
     if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(function(){})}

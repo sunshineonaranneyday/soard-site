@@ -1,0 +1,14 @@
+---
+/**
+ * FocusRings.astro — rings follow the Tab key (src/utils/focus-rings.ts)
+ *
+ * Include once in BaseLayout. After a click or a tap, the keys someone presses to scroll or to close something
+ * don't leave a ring on what they clicked, and Escape hands the focus back to the opener without one. Tab brings
+ * rings back at once.
+ */
+---
+
+<script>
+  import { startFocusRings } from '../../utils/focus-rings';
+  startFocusRings();
+</script>

@@ -3662,7 +3662,8 @@ const planOrientation = (() => {
     -webkit-user-select: none;
   }
 
-  .ba-slider__container:focus-within {
+  /* The keyboard's ring (Tab to the slider), never one left round the photos after a drag with the mouse or a finger */
+  .ba-slider__container:has(.ba-slider__range:focus-visible) {
     outline: 3px solid var(--c-yellow);
     outline-offset: 3px;
   }

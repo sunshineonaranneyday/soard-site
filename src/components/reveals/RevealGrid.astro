@@ -583,7 +583,7 @@ function meta(r: Reveal) {
     }
     .rv-card:hover .rv-card__link { text-decoration-color: var(--c-yellow); }
   }
-  .rv-card:focus-within .rv-card__link { text-decoration-color: var(--c-yellow); }
+  .rv-card:has(:focus-visible) .rv-card__link { text-decoration-color: var(--c-yellow); }
 
   .rv-empty {
     margin: 8px 0 0;

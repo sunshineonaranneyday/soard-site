@@ -212,7 +212,7 @@ import { signInHtml } from '../../components/trade-partners/signin';
   .tpa-drop-text { margin: 0 0 14px; font-size: 16px; font-weight: 600; }
   .tpa-drop-btns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-bottom: 12px; }
   .tpa-file-input { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; font-size: 0; }
-  .tpa-drop-btns .tpa-btn:focus-within { outline: 3px solid var(--c-yellow); outline-offset: 2px; }
+  .tpa-drop-btns .tpa-btn:has(.tpa-file-input:focus-visible) { outline: 3px solid var(--c-yellow); outline-offset: 2px; }
   .tpa-files { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 10px; }
   .tpa-files:empty { display: none; }
   .tpa-file { display: grid; grid-template-columns: 56px minmax(0, 1fr) 44px; gap: 14px; align-items: center; background: #fff; border: 1.5px solid var(--tpa-line); border-radius: 16px; padding: 10px 10px 10px 12px; }

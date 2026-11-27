@@ -2085,7 +2085,8 @@ const hero = {
   }
 
   .sort-select:hover { border-color: var(--c-border); color: var(--c-text); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05); }
-  .sort-select:focus { outline: none; border-color: var(--c-dark); box-shadow: 0 0 0 3px rgba(55, 58, 54, 0.06); }
+  .sort-select:focus { outline: none; }
+  .sort-select:focus-visible { border-color: var(--c-dark); box-shadow: 0 0 0 3px rgba(55, 58, 54, 0.06); }
   .sort-select.is-active { background: var(--c-dark); color: var(--c-white); border-color: var(--c-dark); }
 
   .sort-dropdown__menu {
@@ -2296,8 +2297,8 @@ const hero = {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
   }
 
-  .year-pill-select:focus {
-    outline: none;
+  .year-pill-select:focus { outline: none; }
+  .year-pill-select:focus-visible {
     border-color: var(--c-dark);
     box-shadow: 0 0 0 3px rgba(55, 58, 54, 0.08);
   }
