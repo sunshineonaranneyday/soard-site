@@ -1,6 +1,9 @@
 /**
  * SOARD's Google Drive, read-only: a founder searches every staff account's
- * Drive at once (what each person owns or can open) and opens a file.
+ * Drive at once (what each person owns or can open, in My Drive and in every
+ * shared drive they're a member of) and opens a file. Since the Drive cleanup
+ * (Nov 2026) SOARD's files live in shared drives (SOARD Leadership, SOARD Team,
+ * SOARD Family Records…), which a My Drive search never sees.
  * ===========================================================================
  * Like the mailbox reader (./_mailbox.js): founders on People → Team only, only
  * active soardcharity.com accounts, the site's domain-wide delegation with
@@ -65,7 +68,7 @@ export async function searchDrive(env, { me, q, account = '', images = false, fe
     await Promise.all(accounts.slice(i, i + AT_ONCE).map(async (a) => {
       try {
         const token = await tokenFor(env, a.email, fetchImpl, now);
-        const got = await drive(token, `/files?q=${encodeURIComponent(query)}&fields=${encodeURIComponent(FIELDS)}&pageSize=50&corpora=user&orderBy=modifiedTime desc`, fetchImpl);
+        const got = await drive(token, `/files?q=${encodeURIComponent(query)}&fields=${encodeURIComponent(FIELDS)}&pageSize=50&corpora=allDrives&includeItemsFromAllDrives=true&supportsAllDrives=true&orderBy=modifiedTime desc`, fetchImpl);
         for (const f of got.files || []) {
           if (seen.has(f.id)) continue; // shared with several people: listed once, under whoever found it first
           seen.add(f.id);
@@ -86,10 +89,10 @@ export async function readDriveFile(env, { me, account, id, fetchImpl = fetch, n
   if (!FILE_ID.test(String(id || ''))) throw fail(400, 'That isn’t a Drive file’s id');
   const box = await resolveMailbox(env, account);
   const token = await tokenFor(env, box.email, fetchImpl, now);
-  const meta = await drive(token, `/files/${encodeURIComponent(id)}?fields=id,name,mimeType,size`, fetchImpl);
+  const meta = await drive(token, `/files/${encodeURIComponent(id)}?fields=id,name,mimeType,size&supportsAllDrives=true`, fetchImpl);
   if (/^application\/vnd\.google-apps\./.test(meta.mimeType || '')) throw fail(400, 'A Google Doc, Sheet or Slides file opens in Google Drive, not here');
   if (Number(meta.size) > MAX_FILE) throw fail(413, 'That file is over 25 MB; open it in Google Drive');
-  const res = await drive(token, `/files/${encodeURIComponent(id)}?alt=media`, fetchImpl, { raw: true });
+  const res = await drive(token, `/files/${encodeURIComponent(id)}?alt=media&supportsAllDrives=true`, fetchImpl, { raw: true });
   const bytes = new Uint8Array(await res.arrayBuffer());
   await audit(env, me, `opened ${meta.name} (${box.email})`);
   return { name: meta.name, type: meta.mimeType || '', bytes };
