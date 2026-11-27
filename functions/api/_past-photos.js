@@ -294,7 +294,16 @@ export async function maybeRunPastPhotos(env, { fetchImpl = fetch, now = Date.no
     const waiting = await DB.prepare(`SELECT count(*) AS n FROM past_photos WHERE state = 'listed'${scope ? ' AND key = ?' : ''}`).bind(...(scope ? [scope.key] : [])).first();
     const listed = (waiting?.n || 0) < KEEP_AHEAD ? await listNext(env, { scope, fetchImpl, now }) : null;
     const copied = await copySome(env, { scope, fetchImpl, now, until: Math.min(deadline - 2000, Date.now() + COPY_MS) });
-    const run = { at: iso(now), listed: listed ? `${listed.key}: ${listed.photos}` : null, ...copied };
+    // Once every job's photos are in, JobTread is asked whether it holds them all, once (the admin shows its answer)
+    let checked = null;
+    if (!scope && !listed && !copied.copied && !copied.failed && !waiting?.n) {
+      const [last, done] = await Promise.all([getState(DB, 'check'), DB.prepare("SELECT count(*) AS n FROM past_photos WHERE state = 'copied' AND jt_file_id IS NOT NULL").first()]);
+      if (done?.n && last?.site !== done.n) {
+        const c = await checkInJobTread(DB, env.JOBTREAD_GRANT_KEY, { fetchImpl, now });
+        checked = c.error ? `couldn’t: ${c.error}` : `${c.match} of ${c.jobs} jobs match`;
+      }
+    }
+    const run = { at: iso(now), listed: listed ? `${listed.key}: ${listed.photos}` : null, ...copied, ...(checked ? { checked } : {}) };
     await setState(DB, 'lastRun', run);
     return run;
   } catch (e) {
@@ -334,8 +343,64 @@ export async function photosStatus(DB) {
   const failed = (await DB.prepare("SELECT key, name, error FROM past_photos WHERE state = 'failed' ORDER BY key LIMIT 5").all()).results || [];
   // The newest copied, with the stage each was given (to set beside JobTread's own view of the same files)
   const newest = (await DB.prepare("SELECT key, name, stage, stage_how, copied_at FROM past_photos WHERE state = 'copied' ORDER BY copied_at DESC LIMIT 6").all()).results || [];
-  const [on, lastRun, lastError] = await Promise.all([getState(DB, 'on'), getState(DB, 'lastRun'), getState(DB, 'lastError')]);
-  return { by, stages, jobsListed: listed?.n || 0, jobsToList: toList?.n || 0, failed, newest, on, lastRun, lastError, today: todayEastern() };
+  const [on, lastRun, lastError, check] = await Promise.all([getState(DB, 'on'), getState(DB, 'lastRun'), getState(DB, 'lastError'), getState(DB, 'check')]);
+  return { by, stages, jobsListed: listed?.n || 0, jobsToList: toList?.n || 0, failed, newest, on, lastRun, lastError, check, today: todayEastern() };
+}
+
+/**
+ * Every past job's photos as JobTread holds them, beside the site's own count (read only). Peter, Nov 27 2026: "#56
+ * where does this stand? Finish it if you can": the copy is done when JobTread says so, not only D1.
+ *   - Each job's file count in JobTread against the photos the site copied to it (50 jobs a call).
+ *   - For a few jobs (the most photos, and the most of each stage), each copied photo's tag in JobTread against the
+ *     stage the site gave it, by JobTread's file id.
+ * Saved as the 'check' state for the admin → { at, jobs, match, short, extra, site, jobtread, tags } or { error }
+ */
+export async function checkInJobTread(DB, grant, { fetchImpl = fetch, now = Date.now(), sample = 4 } = {}) {
+  await ensurePastPhotos(DB);
+  const rows = (await DB.prepare("SELECT key, job_id, count(*) AS n FROM past_photos WHERE state = 'copied' AND jt_file_id IS NOT NULL GROUP BY key, job_id ORDER BY key").all()).results || [];
+  const held = new Map();
+  try {
+    for (let i = 0; i < rows.length; i += 50) {
+      const ids = rows.slice(i, i + 50).map((r) => r.job_id);
+      const body = await pave(grant, { organization: { $: { id: SOARD_ORG_ID }, jobs: { $: { size: 50, where: [['id'], 'in', ids] },
+        nodes: { id: {}, files: { $: { size: 1 }, count: {} } } } } }, fetchImpl);
+      for (const j of body?.organization?.jobs?.nodes || []) held.set(j.id, Number(j.files?.count ?? 0));
+    }
+    const short = [], extra = [];
+    for (const r of rows) {
+      const jt = held.has(r.job_id) ? held.get(r.job_id) : null;
+      if (jt === null || jt < r.n) short.push({ key: r.key, site: r.n, jobtread: jt });
+      else if (jt > r.n) extra.push({ key: r.key, site: r.n, jobtread: jt });
+    }
+    // The tag on each copied photo, for the jobs with the most photos and the most of each stage
+    const pick = new Set([rows.slice().sort((a, b) => b.n - a.n)[0]?.key].filter(Boolean));
+    for (const stage of ['Before', 'During', 'After']) {
+      const top = await DB.prepare("SELECT key FROM past_photos WHERE state = 'copied' AND stage = ? GROUP BY key ORDER BY count(*) DESC LIMIT 1").bind(stage).first();
+      if (top?.key && pick.size < sample) pick.add(top.key);
+    }
+    const tags = { files: 0, same: 0, differ: [] };
+    for (const key of pick) {
+      const jobId = rows.find((r) => r.key === key)?.job_id;
+      const body = await pave(grant, { job: { $: { id: jobId }, files: { $: { size: 100, sortBy: [{ field: 'createdAt', order: 'desc' }] },
+        nodes: { id: {}, name: {}, fileTags: { $: { size: 3 }, nodes: { name: {} } } } } } }, fetchImpl);
+      const theirs = new Map((body?.job?.files?.nodes || []).map((f) => [f.id, (f.fileTags?.nodes || []).map((t) => t.name).sort().join(',')]));
+      const ours = (await DB.prepare("SELECT jt_file_id, name, stage FROM past_photos WHERE key = ? AND state = 'copied'").bind(key).all()).results || [];
+      for (const p of ours) {
+        if (!theirs.has(p.jt_file_id)) continue;                  // past JobTread's first 100 on a big job
+        tags.files++;
+        if (theirs.get(p.jt_file_id) === (p.stage || '')) tags.same++;
+        else if (tags.differ.length < 5) tags.differ.push({ key, name: p.name, site: p.stage, jobtread: theirs.get(p.jt_file_id) || null });
+      }
+    }
+    const site = rows.reduce((t, r) => t + r.n, 0);
+    const jobtread = rows.reduce((t, r) => t + (held.get(r.job_id) || 0), 0);
+    const out = { at: iso(now), jobs: rows.length, match: rows.length - short.length - extra.length, short: short.slice(0, 10), shortJobs: short.length,
+      extra: extra.slice(0, 10), extraJobs: extra.length, site, jobtread, tags: { ...tags, jobs: [...pick] } };
+    await setState(DB, 'check', out);
+    return out;
+  } catch (e) {
+    return { error: String(e.message || e).slice(0, 200) };
+  }
 }
 
 /**

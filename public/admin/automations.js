@@ -848,6 +848,13 @@ const MAP = { t: 'SOARD', children: [
             if (p.lastError && (!p.lastRun || p.lastError.at > p.lastRun.at)) return ATTN(`The last run failed (${stamp(p.lastError.at)}): ${p.lastError.error}`, p.lastRun?.at);
             if (by.failed) return ATTN(`${by.failed} photos couldn’t be copied (${(p.failed || []).map((x) => x.error).filter(Boolean)[0] || 'JobTread refused'}).`, p.lastRun?.at);
             if (p.lastRun?.at && stale(p.lastRun.at, 10 * MIN)) return ATTN(`Hasn’t run since ${stamp(p.lastRun.at)}. It rides on the live hub’s heartbeat.`, p.lastRun.at);
+            // All in: JobTread's own count, read back once by the heartbeat (checkInJobTread)
+            const c = p.check;
+            if (by.copied && !by.listed && !p.jobsToList) {
+              const tagsOff = c?.tags?.files ? c.tags.files - c.tags.same : 0;
+              if (c && (c.shortJobs || tagsOff)) return ATTN(`All copied, but JobTread ${c.shortJobs ? `holds fewer on ${c.shortJobs} jobs (${(c.short || []).map((x) => x.key).join(', ')})` : `shows another tag on ${tagsOff} photos`} (checked ${stamp(c.at)}).`, p.lastRun?.at);
+              return ON(`All copied: ${by.copied.toLocaleString()} photos${by.skipped ? `, ${by.skipped} over 100 MB left in Drive` : ''}.${c ? ` JobTread holds every one on all ${c.jobs} jobs (checked ${stamp(c.at)}).` : ''}`, p.lastRun?.at);
+            }
             return ON(`${(by.copied || 0).toLocaleString()} copied, ${(by.listed || 0).toLocaleString()} waiting${p.jobsToList ? `, ${p.jobsToList} folders to read` : ''}.`, p.lastRun?.at);
           } },
         { t: 'A family replied → staff alert', s: 'live', k: 'event',

@@ -2,14 +2,14 @@
  * Past makeovers' photos onto their JobTread jobs (functions/api/_past-photos.js, functions/api/drive-file.js):
  * which files are photos, each photo's stage, the signed link JobTread fetches, listing a project's Drive folder,
  * copying with the stage tag, a lost answer never copied twice, off until a founder turns it on (the first job's
- * photos alone first), and who JobTread would tell.
+ * photos alone first), who JobTread would tell, and the check that JobTread holds what the site copied.
  * Run: node --test tests/
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createD1 } from './lib/d1-shim.mjs';
-import { isPhoto, stageFor, signDriveLink, checkDriveLink, maybeRunPastPhotos, setPhotosScope, photosStatus, uploadNotices, ensurePastPhotos, PHOTOS_DRIVE, HOLDING } from '../functions/api/_past-photos.js';
+import { isPhoto, stageFor, signDriveLink, checkDriveLink, maybeRunPastPhotos, setPhotosScope, photosStatus, uploadNotices, ensurePastPhotos, checkInJobTread, PHOTOS_DRIVE, HOLDING } from '../functions/api/_past-photos.js';
 import { checkImport, importRows, ensurePastJobs } from '../functions/api/_past-jobs.js';
 import { onRequestGet as driveFile } from '../functions/api/drive-file.js';
 
@@ -154,6 +154,48 @@ test('off until a founder turns it on; the first job’s photos alone first, eac
   assert.deepEqual(st.by, { copied: 4, skipped: 1 });
   assert.equal(st.jobsToList, 0);
   assert.equal(st.newest.length, 4);
+});
+
+test('the check: each job’s files in JobTread beside the site’s count, and the tags JobTread shows', async () => {
+  const env = await site();
+  const w = world({ files: tree });
+  const now = Date.parse('2026-11-25T21:00:00Z');
+  await setPhotosScope(env.DB, 'first');
+  await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now });
+  await setPhotosScope(env.DB, 'all');
+  await maybeRunPastPhotos(env, { fetchImpl: w.fetchImpl, now: now + 61e3 });
+  const tagName = { TA: 'After', TB: 'Before', TD: 'During' };
+  const jt = (extraOn = {}, retag = {}) => async (url, init = {}) => {
+    const q = JSON.parse(init.body).query; delete q.$;
+    if (q.organization) {
+      const ids = q.organization.jobs.$.where[2];
+      return Response.json({ organization: { jobs: { nodes: ids.map((id) => ({ id, files: { count: w.st.jtFiles.filter((f) => f.targetId === id).length + (extraOn[id] || 0) } })) } } });
+    }
+    const files = w.st.jtFiles.filter((f) => f.targetId === q.job.$.id)
+      .map((f) => ({ id: f.id, name: f.name, fileTags: { nodes: (retag[f.name] ?? f.fileTagIds ?? []).map((t) => ({ name: tagName[t] })) } }));
+    return Response.json({ job: { files: { nodes: files } } });
+  };
+  const ok = await checkInJobTread(env.DB, 'g', { fetchImpl: jt(), now });
+  assert.deepEqual([ok.jobs, ok.match, ok.site, ok.jobtread, ok.shortJobs, ok.extraJobs], [2, 2, 4, 4, 0, 0]);
+  assert.deepEqual([ok.tags.files, ok.tags.same, ok.tags.differ], [4, 4, []], 'every sampled photo has the tag the site gave it');
+  assert.deepEqual((await photosStatus(env.DB)).check.match, 2, 'kept for the admin');
+  // A job with a file someone else added, and a photo JobTread shows with another tag
+  const off = await checkInJobTread(env.DB, 'g', { fetchImpl: jt({ JGLASS: 1 }, { 'IMG_0001.jpg': ['TA'] }), now });
+  assert.deepEqual(off.extra, [{ key: 'glass-family', site: 1, jobtread: 2 }]);
+  assert.deepEqual(off.tags.differ, [{ key: 'mathew', name: 'IMG_0001.jpg', site: 'Before', jobtread: 'After' }]);
+  // A job JobTread holds fewer on, or doesn't answer for
+  const short = await checkInJobTread(env.DB, 'g', { fetchImpl: jt({ JMATHEW: -2 }), now });
+  assert.deepEqual(short.short, [{ key: 'mathew', site: 3, jobtread: 1 }]);
+  assert.match((await checkInJobTread(env.DB, 'g', { fetchImpl: async () => new Response('x', { status: 500 }), now })).error, /500/);
+  // The heartbeat asks once by itself when every photo is in, and not again until more are copied
+  await env.DB.prepare("DELETE FROM past_photos_state WHERE key = 'check'").run();
+  const asked = [];
+  const both = async (url, init) => { if (String(url).includes('jobtread')) asked.push(1); return String(url).includes('jobtread') ? jt()(url, init) : w.fetchImpl(url, init); };
+  const turn = await maybeRunPastPhotos(env, { fetchImpl: both, now: now + 5 * 61e3 });
+  assert.equal(turn.checked, '2 of 2 jobs match');
+  const n = asked.length;
+  assert.equal((await maybeRunPastPhotos(env, { fetchImpl: both, now: now + 6 * 61e3 })).checked, undefined);
+  assert.equal(asked.length, n, 'not asked again');
 });
 
 test('a lost answer: the next try finds the photo JobTread made and never copies it twice', async () => {

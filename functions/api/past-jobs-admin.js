@@ -11,13 +11,14 @@
  * POST { action: 'rest' }               → queues every ready row; the application sweep makes a few each run
  * POST { action: 'photos', scope: 'first' | 'all' | 'off' } → the past jobs' photos from Drive (./_past-photos.js)
  * POST { action: 'photo-notices' }      → who JobTread would tell about each photo (read only)
+ * POST { action: 'photo-check' }        → each job's photos in JobTread beside the site's count, and a few jobs' tags (read only)
  *
  * See ./_past-jobs.js. Founders only (People → Team), like the Drive and mail readers; never cached.
  */
 
 import { canRead } from './_mailbox.js';
 import { checkImport, importRows, planAll, answerRow, makeFirst, queueRest, pastJobsStatus, readQuickBooks, readWorkflows, readFirstCheck } from './_past-jobs.js';
-import { photosStatus, setPhotosScope, uploadNotices } from './_past-photos.js';
+import { photosStatus, setPhotosScope, uploadNotices, checkInJobTread } from './_past-photos.js';
 
 const headers = { 'Cache-Control': 'private, no-store' };
 const reply = (body, status = 200) => Response.json(body, { status, headers });
@@ -68,6 +69,10 @@ export async function onRequestPost(context) {
       }
       case 'photo-notices':
         return reply({ success: true, notices: await uploadNotices(env.JOBTREAD_GRANT_KEY) });
+      case 'photo-check': {
+        const r = await checkInJobTread(env.DB, env.JOBTREAD_GRANT_KEY);
+        return r.error ? reply({ success: false, error: r.error }, 500) : reply({ success: true, check: r });
+      }
       case 'rest': {
         const r = await queueRest(env, { by });
         return r.ok ? reply({ success: true, queued: r.queued, summary: r.summary }) : reply({ success: false, error: r.error }, 409);

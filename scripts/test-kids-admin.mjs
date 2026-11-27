@@ -122,6 +122,8 @@ function makeApi() {
       if (b.action === 'photos') {
         pj.photos.on = b.scope === 'off' ? null : { scope: b.scope };
         if (b.scope === 'first') Object.assign(pj.photos, { by: { copied: 3, listed: 1 }, stages: { Before: 1, After: 2 } });
+        // Every job's, done, and JobTread's own count read back (checkInJobTread)
+        if (b.scope === 'all') Object.assign(pj.photos, { by: { copied: 4, skipped: 1 }, jobsToList: 0, check: { at: new Date().toISOString(), jobs: 2, match: 2, shortJobs: 0, short: [], extraJobs: 0, extra: [], site: 4, jobtread: 4, tags: { files: 4, same: 4, differ: [] } } });
         return json({ success: true, photos: pj.photos });
       }
       if (b.action === 'answer') {
@@ -617,6 +619,12 @@ try {
     ok(api.st.calls.some((c) => c.body?.action === 'photos' && c.body?.scope === 'first'), `${label}: that asks for the first job’s photos only`);
     ok(await page.evaluate(() => /3 copied, 1 waiting/.test(document.querySelector('.pj-photos').textContent) && /1 Before, 2 After/.test(document.querySelector('.pj-photos').textContent)), `${label}: then the counts and the stages show`);
     ok(await page.evaluate(() => [...document.querySelectorAll('.pj-photos .btn')].map((b) => b.textContent.trim()).join('|') === 'Copy every job’s photos|Stop'), `${label}: then every job’s photos, or stop`);
+    ok(await clickText(page, '.pj-photos .btn', 'Copy every job’s photos'), `${label}: every job’s photos can be copied`);
+    await sleep(400);
+    const done = await page.evaluate(() => document.querySelector('.pj-photos').textContent);
+    ok(/Every job’s photos copied/.test(done) && /4 copied, 0 waiting, 1 over 100 MB/.test(done), `${label}: once all are in, it says so (${done.slice(0, 160)})`);
+    ok(!/&amp;/.test(done), `${label}: no HTML code shows as text`);
+    ok(/Checked in JobTread .+: 2 of 2 jobs hold exactly the photos copied to them\. Tags read back on 4 photos: every one as given\./.test(done), `${label}: and what JobTread itself holds`);
     await clickText(page, '.kd-dialog__foot .btn', 'Make the rest');
     await sleep(500);
     ok(await page.evaluate(() => [...document.querySelectorAll('.pj-group h3')].some((h) => /^Being made 3/.test(h.textContent.trim()))), `${label}: the rest are being made`);

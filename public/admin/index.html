@@ -11714,6 +11714,15 @@
     }
 
     // The past jobs' photos from Drive (functions/api/_past-photos.js): the first job's alone, then every job's
+    // JobTread's own count of each past job's files beside the site's (./functions/api/_past-photos.js checkInJobTread)
+    function pjCheckWords(c) {
+      const parts = [`${c.match.toLocaleString()} of ${kdPlural(c.jobs, 'job')} hold exactly the photos copied to them`];
+      if (c.shortJobs) parts.push(`${kdPlural(c.shortJobs, 'job')} hold fewer: ${c.short.map((s) => `${s.key} (${s.jobtread ?? 'none'} of ${s.site})`).join(', ')}`);
+      if (c.extraJobs) parts.push(`${kdPlural(c.extraJobs, 'job')} also hold files added in JobTread`);
+      const tags = c.tags?.files ? ` Tags read back on ${c.tags.files.toLocaleString()} photos: ${c.tags.same === c.tags.files ? 'every one as given' : `${(c.tags.files - c.tags.same).toLocaleString()} differ`}.` : '';
+      return `Checked in JobTread ${kdFoldWhen(c.at)}: ${parts.join('; ')}.${tags}`;
+    }
+
     function PastPhotos({ data, busy, run }) {
       const ph = data.photos;
       const [notices, setNotices] = useState(null);
@@ -11726,13 +11735,14 @@
       const stageWords = ['Before', 'During', 'After'].map((k) => (ph.stages?.[k] ? `${ph.stages[k].toLocaleString()} ${k}` : null)).filter(Boolean);
       return html`<section class="pj-group pj-photos">
         <h3>Photos from Drive</h3>
-        <p class="kd-fold__hint">Each past job gets the photos from its folder in Drive (Photos &amp; Video → _Makeover Photos (to JobTread)), tagged Before, During or After when its folder or the day it was taken says so; the rest stay untagged, for staff only. Videos and papers wait for their own steps, and Drive keeps every original.</p>
+        <p class="kd-fold__hint">Each past job gets the photos from its folder in Drive (Photos & Video → _Makeover Photos (to JobTread)), tagged Before, During or After when its folder or the day it was taken says so; the rest stay untagged, for staff only. Videos and papers wait for their own steps, and Drive keeps every original.</p>
         <div class="kd-fold__done">
-          <span>${scope === 'all' ? 'Copying every job’s photos' : scope === 'first' ? `Copying ${firstName}’s photos first` : 'Not started'}</span>
+          <span>${scope === 'all' ? (copied && !waiting && !ph.jobsToList ? 'Every job’s photos copied' : 'Copying every job’s photos') : scope === 'first' ? `Copying ${firstName}’s photos first` : 'Not started'}</span>
           ${copied || waiting ? html`<span>${copied.toLocaleString()} copied, ${waiting.toLocaleString()} waiting${failed ? `, ${failed} couldn’t be copied` : ''}${skipped ? `, ${skipped} over 100 MB` : ''}</span>` : null}
           ${scope === 'all' && ph.jobsToList ? html`<span>${kdPlural(ph.jobsToList, 'folder')} still to read</span>` : null}
           ${stageWords.length ? html`<span>${stageWords.join(', ')}</span>` : null}
         </div>
+        ${ph.check ? html`<p class="kd-fold__hint">${pjCheckWords(ph.check)}</p>` : null}
         ${notices ? html`<p class="kd-fold__hint">${notices.error ? `Who JobTread tells about new files couldn’t be read (${notices.error}).` : notices.subscribed?.length ? `JobTread tells these people about each new file on a job: ${notices.subscribed.join(', ')}.` : 'Nobody is set up in JobTread to hear about new files on a job, so the copying notifies no one.'}</p>` : null}
         ${ph.lastError ? html`<p class="kd-fold__err">Last problem (${kdFoldWhen(ph.lastError.at)}): ${ph.lastError.error}</p>` : null}
         ${failed && ph.failed?.length ? html`<p class="kd-fold__err">${ph.failed.map((f) => `${f.name}: ${f.error || 'JobTread refused'}`).join('; ')}</p>` : null}
